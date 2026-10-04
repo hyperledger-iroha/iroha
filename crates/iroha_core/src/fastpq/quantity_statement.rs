@@ -1,5 +1,7 @@
 //! Exact full-domain ordinary-source statements and private touched-tree paths.
 
+use iroha_allocation::{AllocationBudget, AllocationReservation};
+
 use fastpq_prover::{
     ProofSemantics,
     gadgets::public_transfer_statement::{
@@ -49,6 +51,9 @@ impl FastpqQuantityStatement {
 /// no public value is repaired. Supplied private paths are not used or copied. Derived
 /// old/new roots describe the touched-balance tree; other caller inputs are retained.
 /// Empty input preserves unchanged caller roots under ordinary-transfer semantics.
+/// The original pool/reservation fund private SMT backing and its retained paths.
+/// Public projections and canonical statement backing remain separate obligations;
+/// this function never creates a replacement allocation pool.
 ///
 /// The ordinary prover lane binds this exact full-domain statement to its canonical
 /// compact artifact. Source authentication and finality remain the caller's responsibility.
@@ -61,7 +66,12 @@ pub fn quantity_statement_from_finalized_transcripts(
     transcripts: &[TransferTranscript],
     public_limits: PublicTransferLimits,
     tree_limits: TransferSmtBuildLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
 ) -> fastpq_prover::Result<FastpqQuantityStatement> {
+    if !reservation.belongs_to(budget) {
+        return Err(fastpq_prover::Error::AllocationForeignPool);
+    }
     let claims = public_claims_from_transcripts(transcripts, public_limits)?;
     #[cfg(test)]
     MATERIALIZER_INVOCATIONS.with(|count| count.set(count.get() + 1));
@@ -71,6 +81,8 @@ pub fn quantity_statement_from_finalized_transcripts(
         ProofSemantics::StateTransition,
         public_limits,
         tree_limits,
+        budget,
+        reservation,
     )?;
     let (transitions, inputs, ordering_hash, witnesses) = materialized.into_parts();
     let statement = FastpqPublicTransferStatementV1 {
@@ -83,6 +95,37 @@ pub fn quantity_statement_from_finalized_transcripts(
         statement,
         witnesses,
     })
+}
+
+/// Fixture-only funding for existing semantic controls; production passes its original pool.
+#[cfg(test)]
+pub(crate) fn quantity_statement_from_finalized_transcripts_for_testing(
+    public_inputs: FastpqPublicInputs,
+    transcripts: &[TransferTranscript],
+    public_limits: PublicTransferLimits,
+    tree_limits: TransferSmtBuildLimits,
+) -> fastpq_prover::Result<FastpqQuantityStatement> {
+    let updates = transcripts
+        .iter()
+        .try_fold(0_usize, |count, transcript| {
+            count.checked_add(transcript.deltas.len().checked_mul(2)?)
+        })
+        .ok_or(iroha_allocation::AllocationRefusal::DemandOverflow)?;
+    // Fund from actual fixture counts, independently of deliberately deficient
+    // policy limits under test. Production still enforces the supplied policy.
+    let funding = TransferSmtBuildLimits::for_update_limit(updates)
+        .ok_or(iroha_allocation::AllocationRefusal::DemandOverflow)?;
+    let bytes = funding.allocation_bytes(updates, updates)?;
+    let budget = AllocationBudget::new(bytes);
+    let mut reservation = budget.try_reserve_bytes(bytes)?;
+    quantity_statement_from_finalized_transcripts(
+        public_inputs,
+        transcripts,
+        public_limits,
+        tree_limits,
+        &budget,
+        &mut reservation,
+    )
 }
 
 #[cfg(test)]

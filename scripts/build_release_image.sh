@@ -38,7 +38,6 @@ Build inputs and outputs:
   --prebuilt-bin-dir <path>          Required reviewed target binaries.
   --trusted-prebuilt-provenance-sha256 <hex>
                                       Reviewed SHA256 of the prebuilt provenance manifest.
-  --trusted-cuda-key-sha256 <hex>  Reviewed nonzero public-key SHA256 for CUDA targets.
   --features <list>                  Canonical comma-separated Cargo features.
   --binaries "<list>"                Space-separated binary inventory.
   --tag <tag>                        OCI reference annotation.
@@ -97,7 +96,6 @@ features=""
 binaries=""
 prebuilt_bin_dir=""
 trusted_prebuilt_provenance_sha256=""
-trusted_cuda_key_sha256=""
 source_commit=""
 source_date_epoch=""
 platform=""
@@ -116,11 +114,6 @@ manifest_out=""
 
 while (($#)); do
   case "$1" in
-    --trusted-cuda-key-sha256)
-      require_value "$1" "${2-}"
-      trusted_cuda_key_sha256="$2"
-      shift 2
-      ;;
     --features)
       require_value "$1" "${2-}"
       features="$2"
@@ -439,26 +432,12 @@ trap cleanup EXIT
 features="$(
   "${release_python[@]}" --stdin "$repo_root/scripts" "$target" "$features" <<'ACCEL_FEATURES_PY'
 import sys
-from release_artifact_contract import release_acceleration_features
+from pathlib import Path
+from release_artifact_contract import release_acceleration_features, require_release_cuda_source_inputs
+require_release_cuda_source_inputs(Path(sys.argv[1]).parent, sys.argv[2])
 print(",".join(release_acceleration_features(sys.argv[2], filter(None, sys.argv[3].split(",")))))
 ACCEL_FEATURES_PY
 )"
-cuda_provenance_args=()
-case "$target" in
-  *-linux-*|*-windows-*)
-    if [[ ! "$trusted_cuda_key_sha256" =~ ^[0-9a-f]{64}$ || "$trusted_cuda_key_sha256" == "$(printf '%064d' 0)" ]]; then
-      printf '%s\n' 'CUDA release requires --trusted-cuda-key-sha256 from independent review' >&2
-      exit 1
-    fi
-    cuda_provenance_args=(--trusted-cuda-key-sha256 "$trusted_cuda_key_sha256")
-    ;;
-  *-apple-darwin)
-    if [[ -n "$trusted_cuda_key_sha256" ]]; then
-      printf '%s\n' 'Metal release must not carry a CUDA trust input' >&2
-      exit 1
-    fi
-    ;;
-esac
 provenance_features="$features"
 provenance_binaries=()
 requires_external_signer_feature=0
@@ -504,7 +483,6 @@ prebuilt_provenance_sha256="$(
     --target "$target" \
     --cargo-profile deploy \
     --features "$provenance_features" \
-    "${cuda_provenance_args[@]}" \
     "${provenance_binaries[@]}" \
     --output-directory "$prebuilt_snapshot"
 )"
@@ -677,7 +655,6 @@ docker_build_args=(
   --output "type=oci,dest=${oci_layout},tar=false,rewrite-timestamp=true,name=${image_tag}"
   --build-arg "PROFILE=deploy"
   --build-arg "FEATURES=${features}"
-  --build-arg "IVM_CUDA_TRUSTED_KEY_SHA256=${trusted_cuda_key_sha256}"
   --build-arg "CONFIG_PROFILE=${config}"
   --build-arg "BINARIES=${binaries}"
   --build-arg "IROHA_GIT_COMMIT_HASH=${source_commit}"

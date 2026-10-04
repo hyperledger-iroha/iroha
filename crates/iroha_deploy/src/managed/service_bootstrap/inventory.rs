@@ -1,7 +1,7 @@
 //! Closed read-only dependency census. Presence can refuse signing, never establish native state.
 
 use super::*;
-use crate::managed::service_authority::ProviderPurpose;
+use crate::managed::service_authority::{ProviderPurpose, ServiceChildInventory};
 
 impl ManagedServiceBootstrap {
     /// Inspect the retained parent and its child purposes without granting dispatch authority.
@@ -24,6 +24,7 @@ impl ManagedServiceBootstrap {
         policies: &GeneratedServicePolicies,
         progress: Option<&ServiceBootstrapProgress>,
     ) -> Result<()> {
+        let inventory = ServiceChildInventory::begin(&self.authority)?;
         let mut stages = Vec::with_capacity(20);
         stages.push(ServiceBootstrapStep::ReservePolicy);
         for selected in &policies.providers {
@@ -58,10 +59,14 @@ impl ManagedServiceBootstrap {
         for (index, step) in stages.iter().enumerate() {
             let later = progress.is_none() || first_incomplete.is_some_and(|first| index > first);
             match *step {
-                ServiceBootstrapStep::ReservePolicy => {
-                    self.census_network(NetworkPurpose::InitialReservePolicy, "set", later)?
-                }
+                ServiceBootstrapStep::ReservePolicy => self.census_network(
+                    &inventory,
+                    NetworkPurpose::InitialReservePolicy,
+                    "set",
+                    later,
+                )?,
                 ServiceBootstrapStep::CustodyPolicy { provider_id } => self.census_provider(
+                    &inventory,
                     provider_id,
                     ProviderPurpose::Custody,
                     "configure",
@@ -69,6 +74,7 @@ impl ManagedServiceBootstrap {
                     progress.is_none() || first_incomplete.is_some(),
                 )?,
                 ServiceBootstrapStep::CustodyEnrollment { provider_id } => self.census_provider(
+                    &inventory,
                     provider_id,
                     ProviderPurpose::Custody,
                     "enroll",
@@ -76,6 +82,7 @@ impl ManagedServiceBootstrap {
                     progress.is_none() || first_incomplete.is_some(),
                 )?,
                 ServiceBootstrapStep::ReserveAccount { provider_id } => self.census_provider(
+                    &inventory,
                     provider_id,
                     ProviderPurpose::ReserveAccountRegistration,
                     "register",
@@ -92,10 +99,18 @@ impl ManagedServiceBootstrap {
                         (ProviderPurpose::InitialProviderCredit, "install"),
                         (ProviderPurpose::ProviderCapacityDeclaration, "declare"),
                     ] {
-                        self.census_provider(provider_id, purpose, operation, later, false)?;
+                        self.census_provider(
+                            &inventory,
+                            provider_id,
+                            purpose,
+                            operation,
+                            later,
+                            false,
+                        )?;
                     }
                 }
                 ServiceBootstrapStep::ProviderIngest { provider_id } => self.census_provider(
+                    &inventory,
                     provider_id,
                     ProviderPurpose::InitialProviderIngestAuthority,
                     "setup",
@@ -103,24 +118,31 @@ impl ManagedServiceBootstrap {
                     false,
                 )?,
                 ServiceBootstrapStep::Gateway { provider_id } => self.census_provider(
+                    &inventory,
                     provider_id,
                     ProviderPurpose::InitialGatewaySetup,
                     "setup",
                     later,
                     false,
                 )?,
-                ServiceBootstrapStep::Reputation => {
-                    self.census_network(NetworkPurpose::InitialReputationPolicy, "setup", later)?
-                }
+                ServiceBootstrapStep::Reputation => self.census_network(
+                    &inventory,
+                    NetworkPurpose::InitialReputationPolicy,
+                    "setup",
+                    later,
+                )?,
             }
         }
-        self.authority.validate_profile()?;
-        Ok(())
+        inventory.finish()
     }
-    fn census_network(&self, purpose: NetworkPurpose, operation: &str, later: bool) -> Result<()> {
-        if let Some(owner) =
-            ServiceAuthority::open_network_existing(&self.authority.prepared, purpose)?
-        {
+    fn census_network(
+        &self,
+        inventory: &ServiceChildInventory<'_>,
+        purpose: NetworkPurpose,
+        operation: &str,
+        later: bool,
+    ) -> Result<()> {
+        if let Some(owner) = inventory.open_network(purpose)? {
             validate_checkpoint(&owner)?;
             census(&owner.directory, operation, later, false, false)?;
         }
@@ -128,6 +150,7 @@ impl ManagedServiceBootstrap {
     }
     fn census_provider(
         &self,
+        inventory: &ServiceChildInventory<'_>,
         provider: ProviderId,
         purpose: ProviderPurpose,
         operation: &str,
@@ -135,9 +158,7 @@ impl ManagedServiceBootstrap {
         incomplete: bool,
     ) -> Result<()> {
         let custody = matches!(purpose, ProviderPurpose::Custody);
-        if let Some(owner) =
-            ServiceAuthority::open_provider_existing(&self.authority.prepared, provider, purpose)?
-        {
+        if let Some(owner) = inventory.open_provider(provider, purpose)? {
             validate_checkpoint(&owner)?;
             census(&owner.directory, operation, later, custody, incomplete)?;
             if custody {

@@ -94,20 +94,22 @@ impl Fixture {
                 .height,
             3
         );
-        let now = now_ms().unwrap();
-        let initial = ManagedCustodyEnrollmentInterval {
-            issued_at_unix_ms: now,
-            expires_at_unix_ms: now + validity_ms,
-            deadline_unix_ms: now + validity_ms,
-        };
-        assert_eq!(
-            owner
-                .bootstrap_native_enroll(&mut native, &policy, initial, &options)
-                .finalized
-                .unwrap()
-                .height,
-            4
+        let (initial, enrolled) = owner.bootstrap_native_enroll_with_interval(
+            &mut native,
+            &policy,
+            |now| ManagedCustodyEnrollmentInterval {
+                issued_at_unix_ms: now,
+                expires_at_unix_ms: now.checked_add(validity_ms).unwrap(),
+                deadline_unix_ms: now.checked_add(validity_ms).unwrap(),
+            },
+            &options,
         );
+        assert_eq!(
+            initial.expires_at_unix_ms - initial.issued_at_unix_ms,
+            validity_ms
+        );
+        assert_eq!(initial.deadline_unix_ms, initial.expires_at_unix_ms);
+        assert_eq!(enrolled.finalized.unwrap().height, 4);
         Self {
             _temporary: temporary,
             prepared,
@@ -1004,7 +1006,7 @@ impl Fixture {
 
     // Only transport is replaced by an actually executed NativeFixture. The fresh predecessor
     // predicate, sealed live authorization, attempt transition and canonical wallet stay shared.
-    fn retain_generated_attempt(
+    pub(super) fn retain_generated_attempt(
         &self,
         turn: &mut renewal::GeneratedRenewalTurn,
         history: &BodyHistory,

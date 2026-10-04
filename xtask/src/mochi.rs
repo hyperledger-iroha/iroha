@@ -413,6 +413,7 @@ fn runtime_build_args(profile: &str) -> Vec<OsString> {
     }
     args.extend([
         OsString::from("--locked"),
+        OsString::from("--message-format=json-render-diagnostics"),
         OsString::from("-p"),
         OsString::from("mochi-ui"),
         OsString::from("-p"),
@@ -676,6 +677,18 @@ mod tests {
     fn runtime_build_is_locked_and_includes_every_runtime_package() {
         let args = runtime_build_args("debug");
         assert!(args.contains(&OsString::from("--locked")));
+        assert_eq!(
+            args.iter()
+                .filter(|arg| *arg == "--message-format=json-render-diagnostics")
+                .count(),
+            1
+        );
+        for binary in RUNTIME_BINARIES {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == [OsString::from("--bin"), OsString::from(binary)])
+            );
+        }
         for package in ["mochi-ui", "iroha_kagami", "irohad"] {
             assert!(
                 args.windows(2)

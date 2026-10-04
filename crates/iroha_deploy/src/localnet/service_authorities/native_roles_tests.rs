@@ -1,10 +1,11 @@
 //! Original generated signer roles, native genesis grants and closed runtime-selection controls.
 
 use super::*;
-use iroha_core::{smartcontracts::ValidSingularQuery as _, state::WorldReadOnly as _};
+use iroha_core::{
+    smartcontracts::ValidSingularQuery as _,
+    state::{StorageReadOnly as _, WorldReadOnly as _},
+};
 use iroha_fs::{PrivateDirectory, PublishMode};
-
-use mv::storage::StorageReadOnly as _;
 
 fn fixture() -> (tempfile::TempDir, PreparedLocalnet) {
     let temporary = tempfile::tempdir().unwrap();
@@ -137,6 +138,10 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
                                 provider_id: provider.provider_id,
                             }),
                             Permission::from(CanDeclareSorafsCapacity),
+                            // Native provider establishment also grants repair authority to its owner.
+                            Permission::from(CanOperateSorafsRepair {
+                                provider_id: provider.provider_id,
+                            }),
                         ]),
                     ),
                     (

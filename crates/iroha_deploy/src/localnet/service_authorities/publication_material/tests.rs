@@ -152,8 +152,9 @@ fn publication_plan_mutation_cannot_replace_signed_original_or_select_another_pr
     let temporary = tempfile::tempdir().unwrap();
     let generation = temporary.path().join("generation");
     let prepared = prepared(&generation, LocalnetServiceProfile::StreamTokenAuthorities);
+    let root = prepared.context.client_config.parent().unwrap();
     let directory =
-        PrivateDirectory::open_exact(generation.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY))
+        PrivateDirectory::open_exact(root.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY))
             .unwrap();
     let original = directory.read(MANIFEST, MAX_MANIFEST).unwrap();
     let manifest: StreamTokenAuthorityManifest = norito::json::from_slice(&original).unwrap();

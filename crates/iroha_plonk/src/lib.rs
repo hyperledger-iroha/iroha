@@ -33,25 +33,30 @@
 //!   RP57 Poseidon transcript (injective point absorption in production), the
 //!   canonical proof-message decoding and the instance-frame prelude.
 //! - [`pcs`]: commitments, the BGH19 IPA whose prover returns the folded
-//!   generator, succinct verification into a `#[must_use]` pending
-//!   accumulator, `decide` and the deterministic `batch_decide`, and the
-//!   multiopen with static query grouping.
+//!   generator, succinct accumulation into a `#[must_use]` pending
+//!   accumulator (never a verdict), `decide` and the deterministic
+//!   `batch_decide`, the complete-formula verifier MSM, and the multiopen
+//!   with static query grouping.
 //!
 //! Stage ENGINE-3 (tasks T12, T13):
 //!
 //! - [`protocol`]: the tables the prover and verifier share, derived from the
 //!   descriptor alone: the shape, the opening queries of spec 9.1 and their
 //!   static plan, the exact proof length, the Lagrange and Direct-instance
-//!   evaluations, the explicit-stack expression evaluator and the S7
-//!   zero-knowledge budget computed from the opening plan.
+//!   evaluations, the explicit-stack expression evaluator, the S7
+//!   zero-knowledge budget computed from the opening plan, and the
+//!   declarative constraint-term and transcript-schedule tables every
+//!   verifier walks (S11).
 //! - [`prover`]: [`prover::create_proof`] with the `BlindingScheduleV1` draw
 //!   order from an opaque [`prover::ProverRandomness`] (OS, hedged, or a
-//!   recovery stream bound to the witness digest), the advice, lookup,
+//!   recovery stream this crate keys with the witness and statement digests),
+//!   the advice, lookup,
 //!   permutation and vanishing commitments, the quotient on exactly `d - 1`
 //!   cosets evaluated by a compiled, hash-consed expression DAG, and the
 //!   multiopen; [`prover::Witness`] checks a circuit against its key.
-//! - [`verifier`]: [`verifier::verify_full`], [`verifier::verify_succinct`]
-//!   and [`verifier::batch_verify`] with typed [`verifier::VerifyError`]
+//! - [`verifier`]: [`verifier::verify_full`], [`verifier::accumulate_succinct`]
+//!   (deferral into an accumulator, never a verdict) and
+//!   [`verifier::batch_verify`] with typed [`verifier::VerifyError`]
 //!   rejections: canonical decoding, the exact proof length, exact instance
 //!   shapes in both modes, pinned parameters, the descriptor-bound
 //!   `transcript_repr`, degenerate-challenge rejection and static opening
@@ -87,17 +92,41 @@
 //!   absorbed, the proof length is exact (trailing bytes are rejected),
 //!   `x = 0` and `x^n = 1` are rejected, and only `verify_full`,
 //!   `batch_verify`, `decide` and `batch_decide` accept (S9, spec section
-//!   11).
+//!   11). [`accumulate_succinct`] is satisfiable for false statements until
+//!   its accumulator is decided, so its `Ok` is never a verdict.
+//! - Verifier MSMs use complete formulas only ([`pcs::ipa::commit::msm_complete`]);
+//!   budgets change speed, never verdicts (S10).
 //! - Provers draw randomness only from [`prover::ProverRandomness`]; fixed
 //!   seeds exist only in unit tests and oracle builds (S8).
 //!
 //! # Oracle mode
 //!
-//! The vendored `transcript_repr` injection and the `fe_to_fe` Poseidon point
-//! absorption exist only with `--cfg iroha_plonk_oracle` (passed through
-//! `RUSTFLAGS` by the oracle CI job) or in this crate's unit tests; they are
-//! never a Cargo feature.
+//! The vendored `transcript_repr` injection, the `fe_to_fe` Poseidon point
+//! absorption and caller-seeded prover randomness exist only with
+//! `--cfg iroha_plonk_oracle` (passed through `RUSTFLAGS` into a separate
+//! target directory; today that run is manual, see
+//! `crates/iroha_plonk_oracle/README.md`; TODO: an oracle CI job) or in this
+//! crate's unit tests; they are never a Cargo feature. [`ORACLE_BUILD`] says
+//! whether they were compiled in: every shipping root that links this crate
+//! must assert `!ORACLE_BUILD` at compile time (spec 6.4).
 #![forbid(unsafe_code)]
+
+/// Whether this build compiled the oracle-mode hooks (`--cfg
+/// iroha_plonk_oracle`): vendored `transcript_repr` injection, `fe_to_fe`
+/// Poseidon absorption and caller-seeded prover randomness.
+///
+/// The cfg comes from `RUSTFLAGS`, so a stray global setting would compile
+/// the hooks into any binary. Every shipping root that links `iroha_plonk`
+/// (node, CLI, SDK and wallet bridges) must therefore fail its build in
+/// that case (spec 6.4), with this item in its crate root:
+///
+/// ```text
+/// const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");
+/// ```
+///
+/// (It is not a doctest, because an oracle build of this crate would fail
+/// it by design.)
+pub const ORACLE_BUILD: bool = cfg!(iroha_plonk_oracle);
 
 pub mod check;
 pub mod cs;
@@ -108,6 +137,13 @@ pub mod protocol;
 pub mod prover;
 #[cfg(test)]
 mod test_circuits;
+#[cfg(test)]
+mod lib_tests {
+    #[test]
+    fn oracle_build_reflects_the_cfg() {
+        assert_eq!(super::ORACLE_BUILD, cfg!(iroha_plonk_oracle));
+    }
+}
 pub mod transcript;
 pub mod verifier;
 
@@ -128,5 +164,5 @@ pub use prover::{
 };
 pub use transcript::{Transcript, TranscriptError, TranscriptRead, TranscriptWrite};
 pub use verifier::{
-    BatchItem, VerifyError, batch_verify, verify_full, verify_full_from_bytes, verify_succinct,
+    BatchItem, VerifyError, accumulate_succinct, batch_verify, verify_full, verify_full_from_bytes,
 };

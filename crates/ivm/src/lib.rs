@@ -47,9 +47,14 @@ mod cuda_dispatch;
 #[cfg(all(test, not(feature = "cuda")))]
 #[path = "cuda_dispatch/admission.rs"]
 mod cuda_admission_tests;
+#[cfg(feature = "cuda")]
+mod cuda_artifact;
+#[cfg(any(feature = "cuda", test))]
+mod cuda_build_policy;
 #[cfg(test)]
-#[path = "cuda_provenance.rs"]
-mod cuda_provenance_tests;
+mod cuda_bundle_files;
+#[cfg(any(feature = "cuda", test))]
+mod cuda_provenance;
 mod decoder;
 mod dev_env;
 pub mod encoding;
@@ -239,8 +244,6 @@ pub use ivm_abi::error_types;
 pub use ivm_abi::state_cursor;
 /// Canonical schemas and records used for durable Kotodama V1 state values.
 pub use ivm_abi::state_value;
-#[cfg(test)]
-mod ptx_tests;
 /// Public Norito-typed request envelopes for VRF syscalls.
 pub mod vrf;
 /// Optional acceleration policy applied at runtime by hosts.
@@ -321,7 +324,8 @@ pub fn set_acceleration_config(cfg: AccelerationConfig) {
     // CUDA policy
     #[cfg(feature = "cuda")]
     {
-        let installed = iroha_accel::cuda::CudaProcess::install(cfg.resource_limits).is_ok();
+        let installed = crate::cuda_artifact::eligible()
+            && iroha_accel::cuda::CudaProcess::install(cfg.resource_limits).is_ok();
         crate::cuda_dispatch::configure(cfg.enable_cuda && installed, cfg.max_gpus);
         crate::cuda::set_cuda_enabled(cfg.enable_cuda);
     }

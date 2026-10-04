@@ -407,10 +407,15 @@ where
     C::ScalarExt: PoseidonField,
 {
     fn absorb_point(&mut self, point: &C::AffineExt) -> Result<(), TranscriptError> {
-        match self {
+        let result = match self {
             Self::Blake2b(hash) => hash.absorb_point(point),
             Self::Poseidon(hash) => hash.absorb_point(point),
+        };
+        #[cfg(test)]
+        if result.is_ok() {
+            recording::note(crate::protocol::HashOperation::AbsorbPoint);
         }
+        result
     }
 
     fn absorb_scalar(&mut self, scalar: &C::ScalarExt) {
@@ -418,13 +423,64 @@ where
             Self::Blake2b(hash) => hash.absorb_scalar(scalar),
             Self::Poseidon(hash) => hash.absorb_scalar(scalar),
         }
+        #[cfg(test)]
+        recording::note(crate::protocol::HashOperation::AbsorbScalar);
     }
 
     fn squeeze(&mut self) -> C::ScalarExt {
+        #[cfg(test)]
+        recording::note(crate::protocol::HashOperation::Squeeze);
         match self {
             Self::Blake2b(hash) => hash.squeeze(),
             Self::Poseidon(hash) => hash.squeeze(),
         }
+    }
+}
+
+/// Unit-test recording of the hash operations a [`DescriptorHash`] performs
+/// on the current thread, for the transcript-schedule tests (S11). The
+/// prover and the verifier touch their transcript only on the calling
+/// thread, so a thread-local log sees every operation in order.
+#[cfg(test)]
+pub(crate) mod recording {
+    use core::cell::RefCell;
+
+    use crate::protocol::HashOperation;
+
+    std::thread_local! {
+        static LOG: RefCell<Option<Vec<HashOperation>>> = const { RefCell::new(None) };
+    }
+
+    /// Appends `operation` while a recording is active.
+    pub fn note(operation: HashOperation) {
+        LOG.with(|log| {
+            if let Some(log) = log.borrow_mut().as_mut() {
+                log.push(operation);
+            }
+        });
+    }
+
+    /// Runs `f` and returns its result and the operations it performed.
+    pub fn record<R>(f: impl FnOnce() -> R) -> (R, Vec<HashOperation>) {
+        LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
+        let result = f();
+        let operations = LOG.with(|log| log.borrow_mut().take()).unwrap_or_default();
+        (result, operations)
+    }
+
+    #[test]
+    fn recording_is_scoped_to_the_closure() {
+        note(HashOperation::Squeeze);
+        let ((), operations) = record(|| {
+            note(HashOperation::AbsorbPoint);
+            note(HashOperation::Squeeze);
+        });
+        assert_eq!(
+            operations,
+            [HashOperation::AbsorbPoint, HashOperation::Squeeze]
+        );
+        let ((), empty) = record(|| ());
+        assert!(empty.is_empty());
     }
 }
 
@@ -595,6 +651,8 @@ mod tests {
         );
     }
 
+    /// DEV-02 (spec section 14): production absorbs the instance frame (tag, column count,
+    /// lengths) before any instance data; the vendored transcript has none.
     #[test]
     fn prelude_frames_the_instance_shape() {
         let repr = Fq::from(11);

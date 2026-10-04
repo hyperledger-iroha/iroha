@@ -5,7 +5,9 @@ use crate::{
     sumeragi::native_journal::NativeJournalCursor,
     validator_committee_evidence::VerifiedValidatorCommitteeSelectionV1,
 };
-use iroha_crypto::threshold_bls::checkpoint::DkgCheckpointSourceV1;
+use iroha_crypto::threshold_bls::{
+    aggregate_checkpoint::DkgAggregateCheckpointBindingV1, checkpoint::DkgCheckpointSourceV1,
+};
 use iroha_data_model::{NetworkId, block::SignedBlock, parameter::system::ConsensusMode};
 use iroha_model_base::chain::ChainId;
 
@@ -26,6 +28,52 @@ pub struct VerifiedGlobalBeaconDkgCheckpointContextV1 {
     session: GlobalThresholdBeaconDkgSessionV1,
     binding: DkgCheckpointBindingV1,
 }
+/// Checked native-finalized aggregate source, separate from phase1..3 authorization.
+///
+/// Private fields prohibit promotion of raw crypto bindings into protocol
+/// authority. A zero intent digest is permitted only while preparing immutable
+/// intent bytes; private production/restore requires the actual nonzero hash.
+pub struct VerifiedGlobalBeaconDkgAggregateContextV1 {
+    session: GlobalThresholdBeaconDkgSessionV1,
+    binding: DkgAggregateCheckpointBindingV1,
+}
+impl VerifiedGlobalBeaconDkgAggregateContextV1 {
+    /// Borrow the complete original cryptographic context, not a new authorization.
+    #[must_use]
+    pub fn binding(&self) -> &DkgAggregateCheckpointBindingV1 {
+        &self.binding
+    }
+    /// Original authenticated frozen session.
+    #[must_use]
+    pub fn session(&self) -> &GlobalThresholdBeaconDkgSessionV1 {
+        &self.session
+    }
+    pub(super) fn matches_public(
+        &self,
+        public: &super::super::ValidatedGlobalThresholdBeaconSessionV1,
+        lifecycle: &KeyPair,
+    ) -> Result<(), LocalGlobalThresholdBeaconDkgErrorV1> {
+        if public.record().adaptive_dkg.session != self.session
+            || public.record().adaptive_dkg.finalized_at_height != self.binding.finalized_at_height
+            || self.binding.public_session_hash
+                != DkgAggregateCheckpointBindingV1::public_session_digest(public.record())
+                    .map_err(DkgCheckpointErrorV1::from)?
+            || self.binding.transcript_hash != *public.transcript().transcript_hash()
+            || self.binding.extraction_intent_hash == [0; 32]
+            || self.binding.lifecycle_key_hash
+                != DkgCheckpointBindingV1::lifecycle_key_digest(lifecycle.public_key())
+                    .map_err(DkgCheckpointErrorV1::from)?
+            || public.record().adaptive_dkg.recipient_keys[usize::from(self.binding.seat_index - 1)]
+                .validator
+                .public_key()
+                != lifecycle.public_key()
+        {
+            return Err(DkgCheckpointErrorV1::Binding.into());
+        }
+        Ok(())
+    }
+}
+
 impl VerifiedGlobalBeaconDkgCheckpointContextV1 {
     /// Borrow canonical authenticated context; the DTO alone cannot grant authority.
     #[must_use]
@@ -184,16 +232,93 @@ impl AuthenticatedGlobalBeaconDkgAttemptV1 {
         let tip = clock
             .tip()
             .ok_or(GlobalThresholdBeaconError::InvalidDkgSession)?;
+        #[cfg(all(test, sumeragi_core_mutation = "HC114"))]
+        let finalized_height_matches = true;
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC114")))]
+        let finalized_height_matches = tip.height() >= self.session.acceptances_end_height
+            && session.record().adaptive_dkg.finalized_at_height == tip.height();
         if clock.network_id() != self.session.network_id
             || Hash::new(clock.chain_id().as_str().as_bytes()) != self.chain_hash
-            || tip.height() != self.session.acceptances_end_height
+            || !finalized_height_matches
             || tip.height() >= self.cutoff
             || session.record().adaptive_dkg.session != self.session
-            || session.record().adaptive_dkg.finalized_at_height != tip.height()
         {
             return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
         }
         Ok(source_from_tip(tip))
+    }
+
+    /// Derive the exact original aggregate context from the genuine finalized native tip.
+    ///
+    /// Accepted checkpoint/head and extraction intent hashes refer to original
+    /// authenticated durable files; the daemon verifies that complete chain and
+    /// frozen expiry before private production/adoption. A zero intent hash is
+    /// allowed only to prepare the immutable intent, never to seal or restore.
+    ///
+    /// # Errors
+    /// Refuses a foreign source/session/seat/lifecycle/provider, cutoff or prior head.
+    pub fn aggregate_context(
+        &self,
+        clock: &NativeJournalCursor,
+        public: &super::super::ValidatedGlobalThresholdBeaconSessionV1,
+        seat: u16,
+        lifecycle: &KeyPair,
+        provider_handle: &str,
+        provider_revision: u64,
+        accepted_checkpoint_hash: [u8; 32],
+        accepted_head_hash: [u8; 32],
+        extraction_intent_hash: [u8; 32],
+    ) -> Result<VerifiedGlobalBeaconDkgAggregateContextV1, LocalGlobalThresholdBeaconDkgErrorV1>
+    {
+        let source = self.finalized_source(clock, public)?;
+        if seat == 0
+            || seat > self.session.committee_size
+            || lifecycle.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal
+            || public.record().adaptive_dkg.recipient_keys[usize::from(seat - 1)]
+                .validator
+                .public_key()
+                != lifecycle.public_key()
+            || provider_revision == 0
+            || iroha_config::parameters::validate_production_runtime_handle(provider_handle)
+                .is_err()
+            || accepted_checkpoint_hash == [0; 32]
+            || accepted_head_hash == [0; 32]
+        {
+            return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
+        }
+        let binding = DkgAggregateCheckpointBindingV1 {
+            network_id: *self.session.network_id.as_bytes(),
+            attempt_id: self.session.attempt_id,
+            authority_generation: self.session.authority_generation,
+            session_id: self.session.session_id,
+            roster_hash: self.session.roster_hash,
+            seat_index: seat,
+            lifecycle_key_hash: DkgCheckpointBindingV1::lifecycle_key_digest(
+                lifecycle.public_key(),
+            )
+            .map_err(DkgCheckpointErrorV1::from)?,
+            provider_handle_hash: Hash::new(provider_handle.as_bytes()).into(),
+            provider_revision,
+            start_height: self.session.start_height,
+            commitments_end_height: self.session.commitments_end_height,
+            deliveries_end_height: self.session.deliveries_end_height,
+            acceptances_end_height: self.session.acceptances_end_height,
+            finalized_at_height: public.record().adaptive_dkg.finalized_at_height,
+            source,
+            cutoff_height: self.cutoff,
+            public_session_hash: DkgAggregateCheckpointBindingV1::public_session_digest(
+                public.record(),
+            )
+            .map_err(DkgCheckpointErrorV1::from)?,
+            transcript_hash: *public.transcript().transcript_hash(),
+            accepted_checkpoint_hash,
+            accepted_head_hash,
+            extraction_intent_hash,
+        };
+        Ok(VerifiedGlobalBeaconDkgAggregateContextV1 {
+            session: self.session,
+            binding,
+        })
     }
 
     /// Original authenticated schedule; no caller-supplied replacement is accepted.

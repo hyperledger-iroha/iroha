@@ -1,8 +1,10 @@
 # Environment toggle inventory
 
-_Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
+_Original full-tree inventory generated via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **890** · Unique variables: **208**
+Total references: **868** · Unique variables: **202**
+
+Scoped CUDA refresh: source-owned admission replaces ordinary CUDA compiler, mode, and trust environment inputs. Only approved CUDA-owner references and their locations were refreshed; unrelated inventory rows retain the prior generator provenance.
 
 ## CARGO (test: 3)
 
@@ -74,14 +76,13 @@ Total references: **890** · Unique variables: **208**
 - tool: xtask/src/poseidon_bench.rs:80 — `arch: std::env::var("CARGO_CFG_TARGET_ARCH")`
 - tool: xtask/src/stage1_bench.rs:55 — `arch: std::env::var("CARGO_CFG_TARGET_ARCH")`
 
-## CARGO_CFG_TARGET_OS (build: 6, prod: 2, tool: 2)
+## CARGO_CFG_TARGET_OS (build: 5, prod: 2, tool: 2)
 
 - build: crates/fastpq_prover/build.rs:22 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - build: crates/gpuzstd_cuda/build.rs:28 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - build: crates/gpuzstd_metal/build.rs:8 — `let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - prod: crates/iroha_crypto/src/bin/sm_perf_check.rs:654 — `let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| env::consts::OS.to_owned());`
 - prod: crates/iroha_crypto/src/bin/sm_perf_check.rs:684 — `let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| env::consts::OS.to_owned());`
-- build: crates/ivm/build.rs:676 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:31 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - build: crates/norito/accelerators/jsonstage1_metal/build.rs:8 — `let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - tool: xtask/src/poseidon_bench.rs:82 — `os: std::env::var("CARGO_CFG_TARGET_OS")`
@@ -103,7 +104,7 @@ Total references: **890** · Unique variables: **208**
 
 ## CARGO_FEATURE_METAL (test: 1)
 
-- test: crates/ivm/build.rs:90 — `&& env::var_os("CARGO_FEATURE_METAL").is_some()`
+- test: crates/ivm/build.rs:71 — `&& env::var_os("CARGO_FEATURE_METAL").is_some()`
 
 ## CARGO_FEATURE_MUTATION_TESTING (build: 2)
 
@@ -458,8 +459,8 @@ Total references: **890** · Unique variables: **208**
 - test: crates/irohad/src/soracloud_runtime/tests/part_01.rs:1348 — `let path = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/irohad/src/sorafs_provider_ingest_finalized_query.rs:716 — `let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");`
 - test: crates/irohad/src/taira_runtime_signer.rs:1776 — `let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
-- build: crates/ivm/build.rs:398 — `let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);`
-- build: crates/ivm/build.rs:529 — `let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);`
+- build: crates/ivm/build.rs:379 — `let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);`
+- build: crates/ivm/build.rs:512 — `let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);`
 - prod: crates/ivm/src/bin/gen_abi_hash_doc.rs:16 — `let manifest_dir = env!("CARGO_MANIFEST_DIR");`
 - prod: crates/ivm/src/bin/gen_header_doc.rs:113 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - prod: crates/ivm/src/bin/gen_pointer_types_doc.rs:89 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
@@ -672,11 +673,10 @@ Total references: **890** · Unique variables: **208**
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:87 — `.chain(env::var_os("CUDA_PATH"))`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:105 — `.or_else(|| env::var_os("CUDA_PATH"))`
 
-## CXX (build: 4)
+## CXX (build: 3)
 
 - build: crates/fastpq_prover/build.rs:134 — `env::var_os("CXX").is_some()`
 - build: crates/gpuzstd_cuda/build.rs:130 — `env::var_os("CXX").is_some()`
-- build: crates/ivm/build.rs:833 — `env::var_os("CXX").is_some()`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:135 — `env::var_os("CXX").is_some()`
 
 ## DOCS_RS (build: 1)
@@ -753,11 +753,10 @@ Total references: **890** · Unique variables: **208**
 - prod: crates/musubi/src/command.rs:3197 — `let root = std::env::var_os("HOME").map(PathBuf::from).map(|path| {`
 - prod: crates/musubi/src/command.rs:3208 — `std::env::var_os("HOME")`
 
-## HOST_CXX (build: 4)
+## HOST_CXX (build: 3)
 
 - build: crates/fastpq_prover/build.rs:135 — `|| env::var_os("HOST_CXX").is_some()`
 - build: crates/gpuzstd_cuda/build.rs:131 — `|| env::var_os("HOST_CXX").is_some()`
-- build: crates/ivm/build.rs:834 — `|| env::var_os("HOST_CXX").is_some()`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:136 — `|| env::var_os("HOST_CXX").is_some()`
 
 ## IROHA_ALLOW_NET (test: 1)
@@ -1042,29 +1041,9 @@ Total references: **890** · Unique variables: **208**
 
 - test: crates/kotodama_lang/src/compiler.rs:8796 — `if cfg!(any(test, debug_assertions)) && std::env::var_os("IVM_COMPILER_DEBUG").is_some() {`
 
-## IVM_CUDA_GENCODE (build: 1)
-
-- build: crates/ivm/build.rs:679 — `env::var("IVM_CUDA_GENCODE").unwrap_or_else(|_| DEFAULT_CUDA_GENCODE.to_string());`
-
-## IVM_CUDA_NVCC (build: 1)
-
-- build: crates/ivm/build.rs:673 — `let executable = env::var("IVM_CUDA_NVCC")`
-
-## IVM_CUDA_NVCC_EXTRA (build: 1)
-
-- build: crates/ivm/build.rs:680 — `let extra_flags = env::var("IVM_CUDA_NVCC_EXTRA")`
-
-## IVM_CUDA_PTX_MODE (build: 1)
-
-- build: crates/ivm/build.rs:657 — `match env::var("IVM_CUDA_PTX_MODE") {`
-
 ## IVM_CUDA_SELFTEST_TRACE (test: 1)
 
-- test: crates/ivm/src/cuda.rs:131 — `if std::env::var_os("IVM_CUDA_SELFTEST_TRACE").is_some() {`
-
-## IVM_CUDA_TRUSTED_KEY_SHA256 (build: 1)
-
-- build: crates/ivm/build.rs:587 — `let trusted_key_sha256 = env::var("IVM_CUDA_TRUSTED_KEY_SHA256").map_err(`
+- test: crates/ivm/src/cuda.rs:158 — `if std::env::var_os("IVM_CUDA_SELFTEST_TRACE").is_some() {`
 
 ## IVM_DEBUG_AED_ASSET_DEFINITION (test: 1)
 
@@ -1233,34 +1212,19 @@ Total references: **890** · Unique variables: **208**
 
 - test: crates/irohad/src/runtime_provider_broker/launcher.rs:693 — `let notify_socket = std::env::var_os("NOTIFY_SOCKET")`
 
-## NVCC (build: 1)
-
-- build: crates/ivm/build.rs:674 — `.or_else(|_| env::var("NVCC"))`
-
-## OUT_DIR (build: 5, prod: 15, test: 8)
+## OUT_DIR (build: 5, prod: 6, test: 6)
 
 - build: crates/iroha_test_samples/build.rs:46 — `let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR"));`
 - test: crates/iroha_test_samples/src/lib.rs:231 — `PathBuf::from(env!("OUT_DIR"))`
 - test: crates/iroha_test_samples/src/lib.rs:239 — `PathBuf::from(env!("OUT_DIR")).join("ivm/build_config.toml")`
 - test: crates/iroha_test_samples/src/lib.rs:322 — `Path::new(env!("OUT_DIR")).join("ivm/samples")`
 - test: crates/iroha_test_samples/src/lib.rs:330 — `Path::new(env!("OUT_DIR")).join("ivm/build_config.toml")`
-- build: crates/ivm/build.rs:393 — `let out_dir = PathBuf::from(env::var("OUT_DIR")?);`
-- build: crates/ivm/build.rs:468 — `let out_dir = PathBuf::from(env::var("OUT_DIR")?);`
-- build: crates/ivm/build.rs:532 — `let out_dir = PathBuf::from(env::var("OUT_DIR")?);`
-- prod: crates/ivm/src/cuda/aes_api.rs:12 — `concat!(include_str!(concat!(env!("OUT_DIR"), "/aes.ptx")), "\0").as_bytes(),`
-- prod: crates/ivm/src/cuda/bitonic_api.rs:11 — `include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx")),`
-- prod: crates/ivm/src/cuda/bn254_api.rs:12 — `concat!(include_str!(concat!(env!("OUT_DIR"), "/bn254.ptx")), "\0").as_bytes(),`
-- prod: crates/ivm/src/cuda/hash_api.rs:12 — `concat!(include_str!(concat!(env!("OUT_DIR"), "/sha256.ptx")), "\0").as_bytes(),`
-- prod: crates/ivm/src/cuda/hash_api.rs:20 — `concat!(include_str!(concat!(env!("OUT_DIR"), "/sha3.ptx")), "\0").as_bytes(),`
-- prod: crates/ivm/src/cuda/merkle_api.rs:13 — `include_str!(concat!(env!("OUT_DIR"), "/sha256_leaves.ptx")),`
-- prod: crates/ivm/src/cuda/merkle_api.rs:25 — `include_str!(concat!(env!("OUT_DIR"), "/sha256_pairs_reduce.ptx")),`
-- prod: crates/ivm/src/cuda/poseidon_api.rs:12 — `include_str!(concat!(env!("OUT_DIR"), "/poseidon.ptx")),`
-- prod: crates/ivm/src/cuda/signature_api.rs:14 — `include_str!(concat!(env!("OUT_DIR"), "/signature.ptx")),`
-- prod: crates/ivm/src/cuda/vector_api.rs:16 — `concat!(include_str!(concat!(env!("OUT_DIR"), "/vector.ptx")), "\0").as_bytes(),`
+- build: crates/ivm/build.rs:374 — `let out_dir = PathBuf::from(env::var("OUT_DIR")?);`
+- build: crates/ivm/build.rs:449 — `let out_dir = PathBuf::from(env::var("OUT_DIR")?);`
+- build: crates/ivm/build.rs:515 — `let out_dir = PathBuf::from(env::var("OUT_DIR")?);`
+- prod: crates/ivm/src/cuda_artifact.rs:31 — `include!(concat!(env!("OUT_DIR"), "/cuda_bundle.rs"));`
 - prod: crates/ivm/src/iso20022.rs:237 — `include!(concat!(env!("OUT_DIR"), "/iso20022_schema_v1.rs"));`
 - prod: crates/ivm/src/ivm.rs:144 — `include!(concat!(env!("OUT_DIR"), "/syscall_signatures.rs"));`
-- test: crates/ivm/src/ptx_tests.rs:6 — `let out_dir = env!("OUT_DIR");`
-- test: crates/ivm/tests/ptx_kernels.rs:6 — `let out_dir = env!("OUT_DIR");`
 - build: crates/kotodama_lang/build.rs:597 — `let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));`
 - prod: crates/kotodama_lang/src/diagnostic.rs:76 — `env!("OUT_DIR"),`
 - prod: crates/kotodama_lang/src/i18n/mod.rs:10 — `include_bytes!(concat!(env!("OUT_DIR"), "/kotodama_i18n_v1_offsets.bin"));`
@@ -1294,11 +1258,10 @@ Total references: **890** · Unique variables: **208**
 
 - test: crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs:954 — `if std::env::var("PRINT_TORII_SPEC").is_ok() {`
 
-## PROFILE (build: 2, test: 3)
+## PROFILE (build: 1, test: 3)
 
 - test: crates/iroha_test_network/src/lib.rs:1967 — `if let Ok(profile) = std::env::var("PROFILE") {`
 - build: crates/iroha_test_samples/build.rs:49 — `let profile = if env::var("PROFILE").ok().as_deref() == Some("release") {`
-- build: crates/ivm/build.rs:535 — `reject_generated_release_ptx(mode, &env::var("PROFILE").unwrap_or_default())?;`
 - test: integration_tests/src/binary_resolver.rs:217 — `if let Ok(profile) = std::env::var("PROFILE")`
 - test: integration_tests/src/kagami.rs:66 — `let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned());`
 
@@ -1420,11 +1383,10 @@ Total references: **890** · Unique variables: **208**
 
 - test: crates/iroha_test_network/tests/support/production_beacon_bootstrap.rs:127 — `let root = std::env::var_os("TAIRA_TESTNET_BEACON_FIXTURE_DIR")`
 
-## TARGET (prod: 1, test: 2, tool: 2)
+## TARGET (prod: 1, test: 1, tool: 2)
 
 - prod: crates/build-support/src/lib.rs:27 — `let target = env::var("TARGET").unwrap_or_else(|_| "unknown".to_owned());`
-- test: crates/ivm/build.rs:78 — `if let Ok(target) = env::var("TARGET") {`
-- test: crates/ivm/build.rs:89 — `if env::var("TARGET").is_ok_and(|target| target.contains("apple-darwin"))`
+- test: crates/ivm/build.rs:70 — `if env::var("TARGET").is_ok_and(|target| target.contains("apple-darwin"))`
 - tool: xtask/src/poseidon_bench.rs:78 — `target: std::env::var("TARGET")`
 - tool: xtask/src/stage1_bench.rs:53 — `target: std::env::var("TARGET")`
 

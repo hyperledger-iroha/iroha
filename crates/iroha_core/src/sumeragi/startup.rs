@@ -142,7 +142,7 @@ pub fn apply_genesis(
     overlay
         .take_sumeragi_lanes()
         .map_err(StartupError::LaneStep)?;
-    let witness = overlay
+    let mut witness = overlay
         .take_exec_witness()
         .ok_or_else(|| StartupError::Local("genesis witness was not captured".into()))?;
     let budget = state.ivm_execution_budget();
@@ -153,9 +153,14 @@ pub fn apply_genesis(
     let transition = overlay
         .world_state_transition()
         .map_err(StartupError::Local)?;
-    let retained_result =
-        execution_result(&witness, valid.as_ref(), &transition, inputs, native_lanes)
-            .map_err(StartupError::ExecutionCommitment)?;
+    let retained_result = execution_result(
+        &mut witness,
+        valid.as_ref(),
+        &transition,
+        inputs,
+        native_lanes,
+    )
+    .map_err(StartupError::ExecutionCommitment)?;
     let preimage = encode_result_preimage(&retained_result, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
     let result = result_of_preimage(preimage.as_slice());

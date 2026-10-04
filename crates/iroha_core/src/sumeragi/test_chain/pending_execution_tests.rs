@@ -16,11 +16,11 @@ fn pending_execution_retains_one_source_and_publishes_once() {
     let inspect = |original: super::super::super::executor::PendingExecutionView<'_, '_>| {
         original
             .state
-            .verify_sumeragi_execution_witness(original.block.as_ref(), original.witness)
+            .verify_sumeragi_execution_witness(original.block.as_ref(), original.witness.wire())
             .unwrap();
         (
             original.block.as_ref().hash(),
-            iroha_crypto::HashOf::new(original.witness),
+            iroha_crypto::HashOf::new(original.witness.wire()),
         )
     };
     let first = pending.inspect(inspect).unwrap();
@@ -75,10 +75,13 @@ fn original_wire_witness_and_world_tampering_fail_before_durable_staging() {
         let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
         let original_result = pending.result();
         pending
-            .inspect(move |original| {
+            .inspect(move |mut original| {
                 original
                     .state
-                    .verify_sumeragi_execution_witness(original.block.as_ref(), original.witness)
+                    .verify_sumeragi_execution_witness(
+                        original.block.as_ref(),
+                        original.witness.wire(),
+                    )
                     .unwrap();
                 match mutation {
                     0 => {
@@ -97,12 +100,15 @@ fn original_wire_witness_and_world_tampering_fail_before_durable_staging() {
                         assert_ne!(original.block.as_ref().encode_wire().unwrap(), wire);
                     }
                     1 => {
-                        let write = original
-                            .witness
-                            .writes
-                            .first_mut()
-                            .expect("genuine native witness has writes");
-                        write.value.push(0xFF);
+                        // Reconstruct altered offered bytes; the exact funded original
+                        // remains protected and its original credits stay retained.
+                        original.witness.offer_reconstructed_tamper(|offered| {
+                            let write = offered
+                                .writes
+                                .first_mut()
+                                .expect("genuine native witness has writes");
+                            write.value.push(0xFF);
+                        });
                     }
                     _ => original.state.world.sumeragi_lanes.get_mut().incarnations += 1,
                 }
@@ -111,7 +117,7 @@ fn original_wire_witness_and_world_tampering_fail_before_durable_staging() {
                         .state
                         .verify_sumeragi_execution_witness(
                             original.block.as_ref(),
-                            original.witness
+                            original.witness.wire()
                         )
                         .is_err()
                 );

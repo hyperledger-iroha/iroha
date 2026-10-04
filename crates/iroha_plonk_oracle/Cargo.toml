@@ -13,6 +13,10 @@ categories = ["cryptography"]
 # Test infrastructure only. Use it as a dev-dependency; no shipping crate may
 # depend on it. It is deleted together with the vendored halo2 stack.
 publish = false
+# `build.rs` declares the `iroha_plonk_oracle` cfg for check-cfg and copies the
+# vendored golden file into OUT_DIR in an `include!`-able form (its `//!` lines
+# become `//`); it edits nothing under vendor/.
+build = "build.rs"
 
 [lints]
 workspace = true
@@ -21,11 +25,11 @@ workspace = true
 default = ["circuit-params"]
 # Mirrors halo2-axiom's `circuit-params`, which is always enabled below. The
 # vendored goldens (`tests/vendored_goldens.rs` includes
-# vendor/halo2-axiom/tests/golden_proof_bytes.rs through `#[path]`) declare
-# `type Params = ()` under `#[cfg(feature = "circuit-params")]`; compiled here,
-# that cfg names this crate's feature. It changes no behaviour. Without it the
-# `vendored_goldens` target is skipped (see `[[test]]` below) instead of failing
-# to compile.
+# vendor/halo2-axiom/tests/golden_proof_bytes.rs through the copy `build.rs`
+# writes) declare `type Params = ()` under `#[cfg(feature = "circuit-params")]`;
+# compiled here, that cfg names this crate's feature. It changes no behaviour.
+# Without it the `vendored_goldens` target is skipped (see `[[test]]` below)
+# instead of failing to compile.
 circuit-params = []
 
 [[test]]
@@ -38,6 +42,9 @@ required-features = ["circuit-params"]
 # the exact production behaviour. Every entry is already in the lockfile.
 [dependencies]
 iroha_pasta = { workspace = true }
+# `export` replays vendored constraint systems and assignment tables into the
+# native IR and generates native keys from them.
+iroha_plonk = { workspace = true }
 halo2-axiom = { version = "0.5.1", features = ["batch", "multicore", "circuit-params"] }
 halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
 snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
@@ -48,9 +55,6 @@ rayon = { workspace = true }
 # (vendor/halo2-axiom/tests/golden_proof_bytes.rs) and seed the parity inputs;
 # norito::json reads and writes fixtures/native_prover/kats_v1.json.
 [dev-dependencies]
-# tests/plonk_cs_parity.rs compares the native constraint system, selector
-# compression and SimpleFloorPlanner layout with the vendored ones.
-iroha_plonk = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 rand_chacha = "0.3.1"
 rand_core = "0.6.4"

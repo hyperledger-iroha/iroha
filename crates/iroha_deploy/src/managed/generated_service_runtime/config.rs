@@ -11,6 +11,7 @@ use iroha_config::{
     sora_profile::SoraProfileSelection,
 };
 use sorafs_manifest::signer::custody::SignerCustodyAuthorityV1;
+use std::time::Duration;
 use toml::{Table, Value};
 use zeroize::Zeroizing;
 
@@ -36,6 +37,13 @@ fn number(table: &mut Table, key: &str, value: u64) -> Result<()> {
                 .map_err(|_| invalid("generated runtime integer exceeds TOML bound"))?,
         ),
     );
+    Ok(())
+}
+fn duration(table: &mut Table, key: &str, value: Duration) -> Result<()> {
+    let mut encoded = Table::new();
+    number(&mut encoded, "secs", value.as_secs())?;
+    number(&mut encoded, "nanos", u64::from(value.subsec_nanos()))?;
+    table.insert(key.into(), Value::Table(encoded));
     Ok(())
 }
 fn flag(table: &mut Table, key: &str, value: bool) {
@@ -407,11 +415,11 @@ fn configure_compliance(
     ] {
         config.insert(name.into(), Value::Array(Vec::new()));
     }
-    text(
+    duration(
         config,
         "max_catalog_validity",
-        format!("{}s", plan.catalog_validity_seconds()),
-    );
+        Duration::from_secs(plan.catalog_validity_seconds()),
+    )?;
     Ok(())
 }
 fn public_authority(
@@ -812,4 +820,39 @@ fn configure_attestation_journal(
         number(table, field, value)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Generated duration fields use the canonical configuration reader's exact representation.
+
+    use super::*;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    #[test]
+    fn duration_projection_preserves_canonical_seconds_and_nanoseconds() {
+        for expected in [Duration::from_secs(300), Duration::new(3, 123_456_789)] {
+            let mut table = Table::new();
+            duration(&mut table, "max_catalog_validity", expected).unwrap();
+            let rendered = toml::to_string(&table).unwrap();
+            let mut reader =
+                ConfigReader::new().with_toml_source(TomlSource::inline(rendered.parse().unwrap()));
+            let parsed = reader
+                .read_parameter::<Duration>(["max_catalog_validity"])
+                .value_required()
+                .finish();
+            reader.into_result().unwrap();
+            assert_eq!(parsed.unwrap(), expected);
+        }
+        let mut table = Table::new();
+        assert!(
+            duration(
+                &mut table,
+                "max_catalog_validity",
+                Duration::from_secs(1_u64 << 63),
+            )
+            .is_err()
+        );
+        assert!(table.is_empty());
+    }
 }

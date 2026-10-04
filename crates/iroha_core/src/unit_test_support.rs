@@ -66,8 +66,24 @@ pub(crate) fn prove_axt_bound_batch_when_available(
     batch: &fastpq_prover::TransitionBatch,
     binding: &iroha_data_model::nexus::AxtFastpqBinding,
 ) -> Vec<u8> {
+    let limits = fastpq_prover::offline_compact::ProvingLimits::default().private_smt;
+    let tree_bytes = limits
+        .allocation_bytes(limits.max_updates, limits.max_unique_keys)
+        .expect("the maintained fixture tree policy fits");
+    let budget = iroha_allocation::AllocationBudget::new(tree_bytes);
     loop {
-        match fastpq_prover::prove_axt_bound_batch(batch, binding) {
+        let mut reservation = budget
+            .try_reserve_bytes(tree_bytes)
+            .expect("the original fixture pool is reusable after contention");
+        let result =
+            fastpq_prover::prove_axt_bound_batch(batch, binding, &budget, &mut reservation);
+        drop(reservation);
+        assert_eq!(
+            budget.reserved_bytes(),
+            0,
+            "private tree backing was released"
+        );
+        match result {
             Ok(proof) => return proof,
             Err(fastpq_prover::Error::ProducerBusy) => {
                 std::thread::sleep(std::time::Duration::from_millis(10));

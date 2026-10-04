@@ -174,14 +174,14 @@ pub fn execution_commitment(
 /// See [`CommitmentError`].
 #[allow(unsafe_code)]
 pub(crate) fn execution_result(
-    witness: &ExecWitness,
+    witness: &mut crate::state::CapturedExecWitness,
     executed: &SignedBlock,
     transition: &WorldStateTransition,
     inputs: RetainedPayload<NativeExecutionInputs>,
     native_lanes: NativeLaneStateProof,
 ) -> Result<RetainedPayload<ExecutionResultCommitment>, CommitmentError> {
     let height = executed.header().height().get();
-    let execution = execution_commitment(witness, executed, transition)?;
+    let execution = witness.prepare_native_execution(executed, transition)?;
     // SAFETY: only the two original canonical fields move, without clone, growth, sharing or
     // extraction. The new height, slim execution commitment and fixed context proof contain
     // no owned allocations.
@@ -1161,29 +1161,6 @@ mod tests {
                 let actual_allocations = allocations_during(|| {
                     commitment = Some(execution_commitment(&empty_witness, &block, &transition));
                 });
-                if actual_allocations != 0 {
-                    // TODO: remove this failure-only diagnostic after retiring the original
-                    // serializer scratch. The first real census remains the assertion below.
-                    let validation = allocations_during(|| {
-                        block.validate_output_merkle_cache().unwrap();
-                    });
-                    let wire = allocations_during(|| {
-                        block.canonical_wire_identity().unwrap();
-                    });
-                    let roots = allocations_during(|| {
-                        let (reads, writes) = witness_pairs(&empty_witness);
-                        compute_post_state_root(&reads, &writes);
-                        parent_state_from_witness(&empty_witness);
-                        kagemusha_top_ups(&empty_witness).unwrap();
-                    });
-                    let inputs = allocations_during(|| {
-                        block.network_input_merkle_commitment();
-                        block.output_merkle_commitment();
-                    });
-                    eprintln!(
-                        "original census={actual_allocations}; validation={validation}; wire={wire}; roots={roots}; input_commitments={inputs}"
-                    );
-                }
                 assert_eq!(
                     actual_allocations, 0,
                     "the real production producer must not allocate either complete wire buffer"

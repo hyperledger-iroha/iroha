@@ -42,7 +42,7 @@ pub(crate) fn interpolate_at<F: Field>(points: &[F], evals: &[F], x: F) -> F {
 ///
 /// The caller accepts the returned opening with
 /// [`PendingOpening::verify_full`] or turns it into an accumulator with
-/// [`PendingOpening::verify_succinct`].
+/// [`PendingOpening::accumulate`] (which is not an acceptance).
 ///
 /// # Errors
 ///

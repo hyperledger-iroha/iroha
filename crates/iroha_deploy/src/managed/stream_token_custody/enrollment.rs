@@ -537,6 +537,8 @@ pub(super) fn decode_enrollment(bytes: &[u8]) -> Result<SignerCustodyRecordV1> {
 
 #[cfg(test)]
 mod local_inspection_tests {
+    //! Optional inspection preserves absence and refuses changed retained material.
+
     use super::*;
 
     #[test]

@@ -3,6 +3,136 @@
 use super::*;
 use iroha_fs::{PrivateDirectory, PublishMode};
 
+fn inventory_codec_fixture() -> StreamTokenAuthorityManifest {
+    let account = |seed| {
+        let pair =
+            KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519).unwrap();
+        AccountId::new(pair.public_key().clone())
+    };
+    StreamTokenAuthorityManifest {
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"service inventory codec fixture"),
+        )),
+        manager: account(1),
+        network: NetworkServiceInventory {
+            authorities: NETWORK_ROLES
+                .iter()
+                .enumerate()
+                .map(|(index, role)| NetworkServiceAuthority {
+                    role: *role,
+                    account: account(u8::try_from(index + 2).unwrap()),
+                })
+                .collect(),
+            reserve_accounts: reserve_accounts(&account(2)).unwrap(),
+            network_plan: vec![1, 2, 3],
+            // Canonical codec input; this fixture does not claim publication admission.
+            publication_plan: norito::encode_canonical(&NetworkServiceAuthorityRole::MusubiPin)
+                .unwrap(),
+        },
+        providers: std::array::from_fn(|slot| ProviderServiceInventory {
+            slot: u8::try_from(slot).unwrap(),
+            provider_id: ProviderId::new([u8::try_from(slot + 1).unwrap(); 32]),
+            authorities: ROLES
+                .iter()
+                .enumerate()
+                .map(|(index, role)| StreamTokenAuthority {
+                    role: *role,
+                    account: account(u8::try_from(10 + slot * ROLES.len() + index).unwrap()),
+                })
+                .collect(),
+            provider_plan: vec![4, u8::try_from(slot).unwrap(), 5],
+            compliance_plan: vec![6, u8::try_from(slot).unwrap(), 7],
+        }),
+    }
+}
+
+#[test]
+fn inventory_json_roundtrips_with_exactly_three_typed_providers() {
+    let original = inventory_codec_fixture();
+    let encoded = norito::json::to_json(&original).unwrap();
+    assert_eq!(
+        norito::json::from_str::<StreamTokenAuthorityManifest>(&encoded).unwrap(),
+        original
+    );
+    assert_eq!(
+        norito::json::to_json_bounded(&original, encoded.len()).unwrap(),
+        encoded
+    );
+    assert!(norito::json::to_json_bounded(&original, encoded.len() - 1).is_err());
+
+    let document = norito::json::to_value(&original).unwrap();
+    let providers = document.get("providers").unwrap().as_array().unwrap();
+    assert_eq!(providers.len(), PROVIDER_COUNT);
+    for count in [0, 1, 2, 4] {
+        let mut changed = document.clone();
+        changed.as_object_mut().unwrap().insert(
+            "providers".into(),
+            norito::json::Value::Array(providers.iter().cycle().take(count).cloned().collect()),
+        );
+        assert!(
+            norito::json::from_value::<StreamTokenAuthorityManifest>(changed).is_err(),
+            "provider count {count}"
+        );
+    }
+    let mut missing = document.clone();
+    missing.as_object_mut().unwrap().remove("providers");
+    assert!(norito::json::from_value::<StreamTokenAuthorityManifest>(missing).is_err());
+    let mut malformed = document;
+    malformed
+        .as_object_mut()
+        .unwrap()
+        .get_mut("providers")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()[1] = norito::json::Value::Null;
+    assert!(norito::json::from_value::<StreamTokenAuthorityManifest>(malformed).is_err());
+}
+
+#[test]
+fn service_inventory_schema_owners_and_owned_borrowed_commitments_are_canonical() {
+    macro_rules! assert_owner {
+        ($($owner:ty),+ $(,)?) => {$(
+            let expected = concat!(
+                "iroha_deploy::localnet::service_authorities::",
+                stringify!($owner)
+            );
+            assert_eq!(<$owner as norito::NoritoSchema>::nominal_name(), expected);
+            assert_eq!(<$owner as norito::NoritoSchema>::frame_name(), expected);
+        )+};
+    }
+    assert_owner! {
+        StreamTokenAuthorityRole,
+        StreamTokenAuthority,
+        StreamTokenReserveAccounts,
+        NetworkServiceAuthorityRole,
+        NetworkServiceAuthority,
+        NetworkServiceInventory,
+        ProviderServiceInventory,
+        ServiceProfileCommitmentV1,
+    }
+    let original = inventory_codec_fixture();
+    let owned = ServiceProfileCommitmentV1 {
+        manager: original.manager.clone(),
+        network: original.network.clone(),
+        providers: original.providers.clone(),
+    };
+    let frame = norito::encode_canonical(&owned).unwrap();
+    let borrowed = ServiceProfileCommitmentRef {
+        manager: ProfileValue(&original.manager),
+        network: ProfileValue(&original.network),
+        providers: ProfileValue(&original.providers),
+    };
+    assert_eq!(norito::encode_canonical(&borrowed).unwrap(), frame);
+    let decoded: ServiceProfileCommitmentV1 = norito::decode_canonical(&frame).unwrap();
+    assert_eq!(decoded.manager, original.manager);
+    assert_eq!(decoded.network, original.network);
+    assert_eq!(decoded.providers, original.providers);
+    assert_eq!(
+        Hash::new(frame),
+        profile_commitment(&original.manager, &original.network, &original.providers).unwrap()
+    );
+}
+
 fn fixture() -> (
     crate::localnet::localnet_test_helpers::PrivateTempDir,
     PreparedLocalnet,

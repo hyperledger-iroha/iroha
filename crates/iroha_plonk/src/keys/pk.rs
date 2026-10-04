@@ -28,7 +28,10 @@
 //! finalized constraint system, the fixed and permutation (`sigma`) columns
 //! in evaluation and coefficient form, the masks `l_0`, `l_last` and
 //! `l_active = 1 - l_last - l_blind`, the fixed-coset cache and optional
-//! commitment-key tables. The cache holds every fixed, `sigma` and mask
+//! commitment-key tables, and the digest of the copy mapping it was built
+//! from ([`ProvingKey::copy_digest`]), which is how a synthesized circuit is
+//! checked against the key without recomputing `sigma`. The cache holds
+//! every fixed, `sigma` and mask
 //! polynomial evaluated on every quotient coset
 //! ([`CosetCachePolicy::Eager`]), or nothing, in which case
 //! [`ProvingKey::coset_values`] computes the same values on demand
@@ -266,6 +269,9 @@ pub struct ProvingKey<C: PastaCurve> {
     /// `cache[poly][coset]` in [`ProvingKey::cache_order`] order.
     cache: Option<Vec<Vec<Vec<C::ScalarExt>>>>,
     tables: CommitmentTables<C>,
+    /// [`PermutationAssembly::mapping_digest`](crate::cs::PermutationAssembly::mapping_digest)
+    /// of the copies the key was generated from.
+    copy_digest: [u8; 32],
 }
 
 /// Interpolates evaluation-form columns.
@@ -290,12 +296,14 @@ impl<C: PastaCurve> ProvingKey<C> {
     ///
     /// [`KeyError::Shape`] when the columns do not match the descriptor;
     /// [`KeyError::UnsupportedDegree`] or [`KeyError::Fft`] from the domains.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         vk: VerifyingKey<C>,
         binding: DescriptorBinding,
         finalized: FinalizedConstraintSystem<C::ScalarExt>,
         fixed_values: Vec<Vec<C::ScalarExt>>,
         permutation_values: Vec<Vec<C::ScalarExt>>,
+        copy_digest: [u8; 32],
         policy: CosetCachePolicy,
         tables: CommitmentTables<C>,
     ) -> Result<Self, KeyError> {
@@ -370,6 +378,7 @@ impl<C: PastaCurve> ProvingKey<C> {
             mask_polys,
             cache: None,
             tables,
+            copy_digest,
         };
         if policy == CosetCachePolicy::Eager {
             let mut cache = Vec::new();
@@ -518,6 +527,13 @@ impl<C: PastaCurve> ProvingKey<C> {
     #[must_use]
     pub fn permutation_values(&self) -> &[Vec<C::ScalarExt>] {
         &self.permutation_values
+    }
+
+    /// The digest of the copy mapping the key was generated from
+    /// ([`PermutationAssembly::mapping_digest`](crate::cs::PermutationAssembly::mapping_digest)).
+    #[must_use]
+    pub fn copy_digest(&self) -> &[u8; 32] {
+        &self.copy_digest
     }
 
     /// `sigma_j` in coefficient form.

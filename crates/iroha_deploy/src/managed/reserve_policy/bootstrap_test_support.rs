@@ -39,8 +39,30 @@ impl ManagedInitialReservePolicy {
         let directory = self.authority.directory.ensure_child("set").unwrap();
         let original =
             super::tests::retain_explicit_request(self, &directory, &original, utc, options);
-        let path = original.directory().path().join("transaction");
         let wallet = AccountService::new(self.authority.config.clone()).unwrap();
+        self.bootstrap_native_selected(native, &original, &wallet, options)
+    }
+
+    // Both explicit and generated fixtures prepare only their already-retained exact request.
+    pub(super) fn bootstrap_native_selected(
+        &mut self,
+        native: &mut NativeFixture,
+        original: &Selected<Original>,
+        wallet: &AccountService,
+        options: &BoundedTransactionOptions,
+    ) -> ManagedReservePolicyProgress {
+        let path = original.directory().path().join("transaction");
+        assert_eq!(
+            wallet
+                .inspect_initial_reserve_policy_preparation(
+                    &path,
+                    &original.request(options.deadline),
+                )
+                .unwrap()
+                .phase(),
+            iroha_wallet::operations::NativePreparationPhase::RequestOnly,
+        );
+        let retained_request = std::fs::read(path.join("preparation.json")).unwrap();
         let mut http =
             NativeReadHttp::start_config(&self.authority.config, Arc::clone(native.chain.state()));
         wallet
@@ -50,14 +72,18 @@ impl ManagedInitialReservePolicy {
             )
             .unwrap();
         let signed = self
-            .verify_wallet(original.directory(), &original, options.deadline)
+            .verify_wallet(original.directory(), original, options.deadline)
             .unwrap();
         http.finish();
+        assert_eq!(
+            std::fs::read(path.join("preparation.json")).unwrap(),
+            retained_request
+        );
         assert!(!path.join("submission.json").exists());
         let carrier = native.bootstrap_commit(&self.authority, &signed);
         let finalized =
             crate::managed::native_operation::verify_carrier(&carrier, &signed).unwrap();
-        self.validate_carrier(&original, &finalized).unwrap();
+        self.validate_carrier(original, &finalized).unwrap();
         original
             .directory()
             .write_atomic(
@@ -67,7 +93,7 @@ impl ManagedInitialReservePolicy {
             )
             .unwrap();
         self.recover_selected_if_present(
-            policy,
+            &original.policy,
             &Fees::from_options(options).unwrap(),
             options.deadline,
         )

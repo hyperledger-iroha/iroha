@@ -71,7 +71,7 @@ impl Clone for CloneFault {
 #[test]
 fn commit_slot_failed_cursor_keeps_both_locks_until_caller_abandons_original() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

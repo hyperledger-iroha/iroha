@@ -139,6 +139,16 @@ pub enum KeyError {
     },
     /// A coset-cache request named a missing polynomial or coset.
     CosetIndex,
+    /// A key-generation table touches a row at or beyond the usable rows: a
+    /// copy, an enabled selector or a nonzero fixed value.
+    UnusableRow {
+        /// `"copy"`, `"selector"` or `"fixed"`.
+        what: &'static str,
+        /// The equality position, selector or fixed column.
+        column: usize,
+        /// The row.
+        row: usize,
+    },
 }
 
 impl fmt::Display for KeyError {
@@ -164,6 +174,9 @@ impl fmt::Display for KeyError {
                 write!(f, "key commitment {index} is the identity")
             }
             Self::CosetIndex => f.write_str("no such coset polynomial"),
+            Self::UnusableRow { what, column, row } => {
+                write!(f, "{what} column {column} touches unusable row {row}")
+            }
         }
     }
 }

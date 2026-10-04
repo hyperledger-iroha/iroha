@@ -646,6 +646,24 @@ pub(super) fn finish_after_real_detector_penalty(
         panic!("the original report belongs to the authenticated fixed lane")
     };
     let view = chain.state().view();
+    let closing_lane = view
+        .world()
+        .sumeragi_lanes()
+        .lanes
+        .iter()
+        .find(|row| row.incarnation == scope.incarnation)
+        .expect("the committed close policy retains the lane through its retirement fence");
+    let retirement = closing_lane
+        .retirement_height()
+        .expect("the committed policy update closed the original lane");
+    assert!(
+        retirement < EPOCH,
+        "real retirement completes before frozen selection"
+    );
+    assert!(retirement > chain.height());
+    drop(view);
+    advance(chain, retirement, &bootstrap);
+    let view = chain.state().view();
     let old_lane = view
         .world()
         .sumeragi_lanes()
@@ -659,6 +677,14 @@ pub(super) fn finish_after_real_detector_penalty(
         })
         .expect("the original report retains its exact retired lane custody");
     old_lane.validate().unwrap();
+    assert_eq!(old_lane.retired_at, Some(retirement));
+    assert!(
+        view.world()
+            .sumeragi_lanes()
+            .lanes
+            .iter()
+            .all(|row| row.incarnation != scope.incarnation)
+    );
     assert!(
         old_lane
             .admits_at(expected_evidence.recorded_at_height)

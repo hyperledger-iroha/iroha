@@ -185,7 +185,7 @@ fn derived_preparation_and_tree_limit_overflows_reject_without_changing_input() 
         },
     ] {
         assert!(
-            derive_fastpq_ordinary_source_manifest_v1(
+            prepare_transfer_archive_diagnostic(
                 source,
                 &entries,
                 123,
@@ -214,7 +214,7 @@ fn statement_bytes(
         new_root: [0; 32],
     }
     .with_tx_set_hash(transaction_wire_hash());
-    let produced = quantity_statement_from_finalized_transcripts(
+    let produced = quantity_statement_from_finalized_transcripts_for_testing(
         inputs,
         &transcripts[&entry.entry_hash],
         PublicTransferLimits::default(),
@@ -232,12 +232,12 @@ fn statement_bytes(
 }
 
 #[test]
-fn derives_complete_ordered_archive_and_exact_canonical_statement_digests() {
+fn prepares_complete_ordered_diagnostics_and_exact_canonical_statement_digests() {
     let (source, mut entries, transcripts) = fixture();
     // Execution order intentionally differs from transcript-map key order.
     entries[1..].sort_by(|left, right| right.entry_hash.cmp(&left.entry_hash));
     let before = norito::encode_canonical(&transcripts).unwrap();
-    let (manifest, leaves) = derive_fastpq_ordinary_source_manifest_v1(
+    let (manifest, leaves) = prepare_transfer_archive_diagnostic(
         source,
         &entries,
         123,
@@ -277,37 +277,13 @@ fn derives_complete_ordered_archive_and_exact_canonical_statement_digests() {
         );
     }
     assert_eq!(norito::encode_canonical(&transcripts).unwrap(), before);
-    let witness = iroha_data_model::block::consensus::ExecWitness {
-        writes: vec![iroha_data_model::block::consensus::ExecKv {
-            key: iroha_data_model::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1.to_vec(),
-            value: norito::encode_canonical(&manifest).unwrap(),
-        }],
-        ..Default::default()
-    };
-    let (opening, root) = crate::fastpq::fastpq_ordinary_source_statement_opening_v1(
-        &witness,
-        source,
-        &entries,
-        &leaves,
-        1,
-        crate::fastpq::FastpqSourceOpeningBuildLimits {
-            max_ordinary_writes: 1,
-            max_ordinary_write_bytes: 4096,
-            max_executed_entries: 3,
-            max_statements: 3,
-            manifest_decode: norito::DecodeLimits::new(1024, 32 * 1024, 64 * 1024, 512 * 1024, 32),
-        },
-    )
-    .unwrap();
-    assert!(
-        iroha_data_model::fastpq::verify_fastpq_ordinary_source_statement_opening_v1(
-            &opening, &leaves[1], root, 3, 3
-        )
-    );
+    // D7 inclusion is exercised with the genuine complete-effect journal in
+    // witness_custody::genuine_complete_effect_openings_keep_whole_entries.
+    // This diagnostic summary deliberately has no Norito encoding or D7 projection.
 }
 
 #[test]
-fn captured_native_and_call_routes_flow_into_derived_bounded_openings() {
+fn supplied_native_and_call_routes_bind_transfer_diagnostics() {
     let (source, original_entries, transcripts) = fixture();
     let incarnation = Hash::new(b"full lane incarnation");
     let context = crate::fastpq::FastpqBlockStartSourceContext {
@@ -337,7 +313,7 @@ fn captured_native_and_call_routes_flow_into_derived_bounded_openings() {
                     dataspace_id: captured.dataspace_id(),
                 };
             }
-            let (manifest, leaves) = derive_fastpq_ordinary_source_manifest_v1(
+            let (manifest, leaves) = prepare_transfer_archive_diagnostic(
                 source,
                 &entries,
                 123,
@@ -347,14 +323,8 @@ fn captured_native_and_call_routes_flow_into_derived_bounded_openings() {
                 limits(),
             )
             .unwrap();
-            assert!(roots.insert(manifest.statement_root));
-            let witness = iroha_data_model::block::consensus::ExecWitness {
-                writes: vec![iroha_data_model::block::consensus::ExecKv {
-                    key: iroha_data_model::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1.to_vec(),
-                    value: norito::encode_canonical(&manifest).unwrap(),
-                }], ..Default::default()
-            };
-            for (index, leaf) in leaves.iter().enumerate() {
+            assert!(roots.insert(manifest.diagnostic_digest));
+            for leaf in &leaves {
                 assert_eq!(
                     leaf.execution_kind,
                     entries[leaf.entry_index as usize].execution_kind
@@ -368,47 +338,15 @@ fn captured_native_and_call_routes_flow_into_derived_bounded_openings() {
                         &transcripts
                     )))
                 );
-                let (opening, root) = crate::fastpq::fastpq_ordinary_source_statement_opening_v1(
-                    &witness,
-                    source,
-                    &entries,
-                    &leaves,
-                    index as u32,
-                    crate::fastpq::FastpqSourceOpeningBuildLimits {
-                        max_ordinary_writes: 1,
-                        max_ordinary_write_bytes: 4096,
-                        max_executed_entries: 3,
-                        max_statements: 3,
-                        manifest_decode: norito::DecodeLimits::new(
-                            1024,
-                            32 * 1024,
-                            64 * 1024,
-                            512 * 1024,
-                            32,
-                        ),
-                    },
-                )
-                .unwrap();
-                let frame = norito::encode_canonical(&opening).unwrap();
-                let decoded =
-                    iroha_data_model::fastpq::decode_fastpq_ordinary_source_statement_opening_v1(
-                        &frame,
-                        frame.len(),
-                        norito::DecodeLimits::new(1024, 32 * 1024, 64 * 1024, 512 * 1024, 32),
-                    )
-                    .unwrap();
-                assert!(
-                    iroha_data_model::fastpq::verify_fastpq_ordinary_source_statement_opening_v1(
-                        &decoded, leaf, root, 3, 3
-                    )
-                );
+                // Actual route/context membership uses the native call/protocol
+                // controls; supplied diagnostics cannot create that authority.
             }
         }
     }
 }
 
 #[test]
-fn empty_manifests_include_nontransfer_entries_without_statement_budget() {
+fn empty_diagnostics_include_nontransfer_entries_without_statement_budget() {
     let (source, entries, _) = fixture();
     let bounds = FastpqSourceStatementBuildLimits {
         max_transcripts: 0,
@@ -419,7 +357,7 @@ fn empty_manifests_include_nontransfer_entries_without_statement_budget() {
         ..limits()
     };
     for count in [0, 3] {
-        let (manifest, leaves) = derive_fastpq_ordinary_source_manifest_v1(
+        let (manifest, leaves) = prepare_transfer_archive_diagnostic(
             source,
             &entries[..count],
             123,
@@ -433,19 +371,19 @@ fn empty_manifests_include_nontransfer_entries_without_statement_budget() {
         assert_eq!(manifest.statement_count, 0);
         assert!(leaves.is_empty());
         assert_eq!(
-            manifest.statement_root,
-            iroha_data_model::fastpq::fastpq_ordinary_source_statement_empty_root_v1()
+            manifest.diagnostic_digest,
+            transfer_diagnostic::empty_diagnostic_digest()
         );
     }
 }
 
 #[test]
-fn one_entry_opens_its_whole_bundle_with_independent_statement_limit() {
+fn one_entry_prepares_its_whole_bundle_with_independent_statement_limit() {
     let (source, entries, mut transcripts) = fixture();
     let entry = entries[1];
     let entries = [entry];
     transcripts.retain(|hash, _| *hash == entry.entry_hash);
-    let (manifest, leaves) = derive_fastpq_ordinary_source_manifest_v1(
+    let (manifest, leaves) = prepare_transfer_archive_diagnostic(
         source,
         &[entry],
         123,
@@ -462,62 +400,33 @@ fn one_entry_opens_its_whole_bundle_with_independent_statement_limit() {
         (manifest.executed_entry_count, manifest.statement_count),
         (1, 1)
     );
-    let witness = iroha_data_model::block::consensus::ExecWitness {
-        writes: vec![iroha_data_model::block::consensus::ExecKv {
-            key: iroha_data_model::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1.to_vec(),
-            value: norito::encode_canonical(&manifest).unwrap(),
-        }], ..Default::default()
-    };
-    let bounds = crate::fastpq::FastpqSourceOpeningBuildLimits {
-        max_ordinary_writes: 1,
-        max_ordinary_write_bytes: 4096,
-        max_executed_entries: 1,
-        max_statements: 1,
-        manifest_decode: norito::DecodeLimits::new(1024, 32 * 1024, 64 * 1024, 512 * 1024, 32),
-    };
-    for (index, leaf) in leaves.iter().enumerate() {
-        let (opening, root) = crate::fastpq::fastpq_ordinary_source_statement_opening_v1(
-            &witness,
-            source,
-            &entries,
-            &leaves,
-            index as u32,
-            bounds,
-        )
-        .unwrap();
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(leaves[0].entry_transcript_count, 2);
+    for changed in [
+        FastpqSourceStatementBuildLimits {
+            max_executed_entries: 0,
+            ..limits()
+        },
+        FastpqSourceStatementBuildLimits {
+            max_transcripts: 0,
+            ..limits()
+        },
+    ] {
         assert!(
-            iroha_data_model::fastpq::verify_fastpq_ordinary_source_statement_opening_v1(
-                &opening, leaf, root, 1, 1,
+            prepare_transfer_archive_diagnostic(
+                source,
+                &entries,
+                123,
+                [9; 32],
+                transaction_wire_hash(),
+                &transcripts,
+                changed,
             )
+            .is_err()
         );
-        assert!(
-            !iroha_data_model::fastpq::verify_fastpq_ordinary_source_statement_opening_v1(
-                &opening, leaf, root, 1, 0,
-            )
-        );
-        for changed in [
-            crate::fastpq::FastpqSourceOpeningBuildLimits {
-                max_statements: 0,
-                ..bounds
-            },
-            crate::fastpq::FastpqSourceOpeningBuildLimits {
-                max_executed_entries: 0,
-                ..bounds
-            },
-        ] {
-            assert!(
-                crate::fastpq::fastpq_ordinary_source_statement_opening_v1(
-                    &witness,
-                    source,
-                    &entries,
-                    &leaves,
-                    index as u32,
-                    changed
-                )
-                .is_err()
-            );
-        }
     }
+    // Exact one-entry D7 membership and zero leaf caps are covered by the
+    // genuine original-source opening control, never by this unanchored summary.
 }
 
 #[test]
@@ -529,7 +438,7 @@ fn atomic_multi_delta_occurrences_remain_whole_and_reject_internal_discontinuity
     bundle[0].poseidon_preimage_digest = None;
     assert_eq!(bundle[0].deltas.len(), 2);
     let before = norito::encode_canonical(&transcripts).unwrap();
-    let (manifest, leaves) = derive_fastpq_ordinary_source_manifest_v1(
+    let (manifest, leaves) = prepare_transfer_archive_diagnostic(
         source,
         &entries,
         123,
@@ -550,7 +459,7 @@ fn atomic_multi_delta_occurrences_remain_whole_and_reject_internal_discontinuity
     delta.from_balance_before = Quantity::from(95_u32);
     delta.from_balance_after = Quantity::from(85_u32);
     let invalid = norito::encode_canonical(&transcripts).unwrap();
-    let error = derive_fastpq_ordinary_source_manifest_v1(
+    let error = prepare_transfer_archive_diagnostic(
         source,
         &entries,
         123,
@@ -598,7 +507,7 @@ fn rejects_omissions_duplicate_execution_calls_and_inconsistent_bundles() {
         }
         let before = norito::encode_canonical(&transcripts).unwrap();
         assert!(
-            derive_fastpq_ordinary_source_manifest_v1(
+            prepare_transfer_archive_diagnostic(
                 source,
                 &entries,
                 123,
@@ -631,7 +540,7 @@ fn accepts_exact_cumulative_limits_and_rejects_each_one_below() {
         max_total_statement_bytes: frames.iter().map(Vec::len).sum(),
         ..limits()
     };
-    derive_fastpq_ordinary_source_manifest_v1(
+    prepare_transfer_archive_diagnostic(
         source,
         &entries,
         123,
@@ -653,7 +562,7 @@ fn accepts_exact_cumulative_limits_and_rejects_each_one_below() {
             _ => unreachable!(),
         }
         assert!(
-            derive_fastpq_ordinary_source_manifest_v1(
+            prepare_transfer_archive_diagnostic(
                 source,
                 &entries,
                 123,
@@ -671,7 +580,7 @@ fn accepts_exact_cumulative_limits_and_rejects_each_one_below() {
 #[test]
 fn binds_full_source_route_order_slot_permission_and_nontransfer_identity() {
     let (source, entries, transcripts) = fixture();
-    let original = derive_fastpq_ordinary_source_manifest_v1(
+    let original = prepare_transfer_archive_diagnostic(
         source,
         &entries,
         123,
@@ -726,7 +635,7 @@ fn binds_full_source_route_order_slot_permission_and_nontransfer_identity() {
             11 => tx_set_hash[0] ^= 1,
             _ => unreachable!(),
         }
-        let changed = derive_fastpq_ordinary_source_manifest_v1(
+        let changed = prepare_transfer_archive_diagnostic(
             source,
             &entries,
             slot,
@@ -741,14 +650,14 @@ fn binds_full_source_route_order_slot_permission_and_nontransfer_identity() {
         if mutation == 8 {
             // A non-transfer source is bound by the complete inventory digest,
             // independently of the unchanged transaction wires and statement tree.
-            assert_eq!(changed.statement_root, original.statement_root);
+            assert_eq!(changed.diagnostic_digest, original.diagnostic_digest);
             assert_ne!(
                 changed.source_entries_digest,
                 original.source_entries_digest
             );
         } else {
             assert_ne!(
-                changed.statement_root, original.statement_root,
+                changed.diagnostic_digest, original.diagnostic_digest,
                 "mutation {mutation}"
             );
         }
@@ -773,7 +682,7 @@ fn rejects_public_repair_and_missing_finalized_digest_without_mutating_archive()
             _ => unreachable!(),
         }
         let before = norito::encode_canonical(&transcripts).unwrap();
-        let error = derive_fastpq_ordinary_source_manifest_v1(
+        let error = prepare_transfer_archive_diagnostic(
             source,
             &entries,
             123,
@@ -791,7 +700,7 @@ fn rejects_public_repair_and_missing_finalized_digest_without_mutating_archive()
 #[test]
 fn canonical_source_derivation_restores_ambient_codec_flags() {
     let (source, entries, transcripts) = fixture();
-    let original = derive_fastpq_ordinary_source_manifest_v1(
+    let original = prepare_transfer_archive_diagnostic(
         source,
         &entries,
         123,
@@ -806,7 +715,7 @@ fn canonical_source_derivation_restores_ambient_codec_flags() {
     {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
-            derive_fastpq_ordinary_source_manifest_v1(
+            prepare_transfer_archive_diagnostic(
                 source,
                 &entries,
                 123,
@@ -1060,7 +969,7 @@ fn missing_canonical_wire_commitment_rejects_before_private_construction() {
     let (source, entries, transcripts) = fixture();
     let before = norito::encode_canonical(&transcripts).unwrap();
     let calls = quantity_materializer_invocations_for_testing();
-    let error = derive_fastpq_ordinary_source_manifest_v1(
+    let error = prepare_transfer_archive_diagnostic(
         source,
         &entries,
         123,
@@ -1090,7 +999,7 @@ fn empty_statement_archive_commits_complete_nontransfer_inventory() {
         ..limits()
     };
     let derive = |entries: &[FastpqSourceExecutionEntryV1]| {
-        derive_fastpq_ordinary_source_manifest_v1(
+        prepare_transfer_archive_diagnostic(
             source,
             entries,
             123,
@@ -1117,7 +1026,7 @@ fn empty_statement_archive_commits_complete_nontransfer_inventory() {
         }
         let (manifest, leaves) = derive(&changed);
         assert!(leaves.is_empty());
-        assert_eq!(manifest.statement_root, original.statement_root);
+        assert_eq!(manifest.diagnostic_digest, original.diagnostic_digest);
         assert_ne!(
             manifest.source_entries_digest, original.source_entries_digest,
             "mutation {mutation}"
@@ -1156,7 +1065,7 @@ fn whole_entry_binds_cross_transcript_scales_and_independent_assets() {
         .map(iroha_data_model::fastpq::FastpqPublicTransferTranscriptV1::from)
         .collect::<Vec<_>>();
     let before = norito::encode_canonical(&transcripts).unwrap();
-    let (manifest, leaves) = derive_fastpq_ordinary_source_manifest_v1(
+    let (manifest, leaves) = prepare_transfer_archive_diagnostic(
         source,
         &[entry],
         123,
@@ -1186,7 +1095,7 @@ fn whole_entry_binds_cross_transcript_scales_and_independent_assets() {
     assert_eq!(norito::encode_canonical(&transcripts).unwrap(), before);
     let mut changed = transcripts.clone();
     changed.get_mut(&entry.entry_hash).unwrap().swap(1, 2);
-    let reordered = derive_fastpq_ordinary_source_manifest_v1(
+    let reordered = prepare_transfer_archive_diagnostic(
         source,
         &[entry],
         123,
@@ -1198,13 +1107,13 @@ fn whole_entry_binds_cross_transcript_scales_and_independent_assets() {
     .unwrap();
     // Independent-asset reordering is arithmetically valid but retains a distinct full statement.
     assert_ne!(reordered.1[0].statement_digest, leaves[0].statement_digest);
-    assert_ne!(reordered.0.statement_root, manifest.statement_root);
+    assert_ne!(reordered.0.diagnostic_digest, manifest.diagnostic_digest);
 }
 
 #[test]
 fn valid_whole_entry_occurrence_tampering_changes_committed_statement() {
     let (source, entries, transcripts) = fixture();
-    let baseline = derive_fastpq_ordinary_source_manifest_v1(
+    let baseline = prepare_transfer_archive_diagnostic(
         source,
         &entries,
         123,
@@ -1231,7 +1140,7 @@ fn valid_whole_entry_occurrence_tampering_changes_committed_statement() {
                 bundle[0].poseidon_preimage_digest = None;
             }
         }
-        let actual = derive_fastpq_ordinary_source_manifest_v1(
+        let actual = prepare_transfer_archive_diagnostic(
             source,
             &entries,
             123,
@@ -1246,7 +1155,7 @@ fn valid_whole_entry_occurrence_tampering_changes_committed_statement() {
             "mutation {mutation}"
         );
         assert_ne!(
-            actual.0.statement_root, baseline.0.statement_root,
+            actual.0.diagnostic_digest, baseline.0.diagnostic_digest,
             "mutation {mutation}"
         );
         assert_eq!(

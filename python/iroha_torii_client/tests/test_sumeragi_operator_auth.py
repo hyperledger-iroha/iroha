@@ -111,7 +111,7 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
                     ),
                     _sumeragi_native_evidence_record(
                         penalty_status={
-                            "status": "cancelled",
+                            "status": "applied",
                             "details": {"height": 43},
                         }
                     ),
@@ -147,7 +147,7 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
     assert page.items[1].penalty_status.details.height == 42
     assert isinstance(
         page.items[2].penalty_status,
-        client_module.SumeragiEvidenceCancelledPenaltyStatus,
+        client_module.SumeragiEvidenceAppliedPenaltyStatus,
     )
     assert page.items[2].penalty_status.details.height == 43
     call = session.calls[0]

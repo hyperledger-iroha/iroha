@@ -489,3 +489,106 @@ impl PreparedGlobalThresholdBeaconDkgInputsV1 {
             .ok_or(GlobalThresholdBeaconInputErrorV1::Phase)
     }
 }
+
+/// One original canonical final-session graph for a completed aggregate prefix.
+///
+/// This distinct boundary prepares only the final public session destination and
+/// its two decode controls. It shares the existing generated field walk, source
+/// fingerprint, canonical comparison and move-only bank used by complete phase
+/// inputs. It does not prepare commitments, deliveries or any private ceremony
+/// owner. Codec validity grants no native authority: the caller must replay the
+/// actual finalized proof and pass the retained graph to the existing verifier.
+pub struct PreparedGlobalThresholdBeaconFinalSessionInputV1 {
+    final_session: Bank<session::Session>,
+    workspace: PreparedDecodeWorkspace,
+    session: GlobalThresholdBeaconDkgSessionV1,
+    budget: AllocationBudget,
+    final_bound: bool,
+}
+impl PreparedGlobalThresholdBeaconFinalSessionInputV1 {
+    /// Prepare exact final public geometry from the authenticated session and roster.
+    ///
+    /// # Errors
+    /// Returns original shape, pool or physical allocation refusal before claim.
+    pub fn new(
+        session: GlobalThresholdBeaconDkgSessionV1,
+        roster: &[PeerId],
+        budget: &AllocationBudget,
+    ) -> Result<Self, GlobalThresholdBeaconInputErrorV1> {
+        let final_session = Bank::new(session::Session::new(session, roster, budget)?);
+        let mut reservation = budget
+            .try_reserve_layouts(PreparedDecodeWorkspace::allocation_layouts())
+            .map_err(crate::beacon::GlobalThresholdBeaconSessionError::from)?;
+        let workspace = PreparedDecodeWorkspace::from_reservation(budget, &mut reservation)?;
+        Ok(Self {
+            final_session,
+            workspace,
+            session,
+            budget: budget.clone(),
+            final_bound: false,
+        })
+    }
+
+    /// Whether the prepared graph and its controls retain the supplied original pool.
+    #[must_use]
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.budget.same_pool(budget) && self.workspace.belongs_to(budget)
+    }
+
+    /// Decode the complete original final frame into its prepaid destination once.
+    ///
+    /// A finalization can occur at or after the frozen acceptance boundary. Its
+    /// exact native tip and cutoff are checked by aggregate authority; the
+    /// enclosing daemon verifies the original intent's frozen same-boot expiry.
+    /// The existing final verifier checks all signatures/proofs. Every retry requires the same
+    /// original source address, length and bytes, including after a scope refusal.
+    ///
+    /// # Errors
+    /// Preserves the original codec, source, session or finalization-height cause.
+    pub fn decode_final_session(
+        &mut self,
+        bytes: &[u8],
+        limits: norito::DecodeLimits,
+    ) -> Result<(), GlobalThresholdBeaconInputErrorV1> {
+        let record = self
+            .final_session
+            .decode(&mut self.workspace, bytes, limits)?;
+        if record.adaptive_dkg.session != self.session
+            || record.adaptive_dkg.finalized_at_height < self.session.acceptances_end_height
+        {
+            return Err(GlobalThresholdBeaconInputErrorV1::Binding);
+        }
+        self.final_bound = true;
+        Ok(())
+    }
+
+    /// Borrow the complete canonically bound graph without copying a row.
+    #[must_use]
+    pub fn final_session(&self) -> Option<&GlobalThresholdBeaconKeySessionV1> {
+        self.final_bound
+            .then(|| {
+                self.final_session
+                    .retained
+                    .as_ref()
+                    .map(RetainedPayload::get)
+            })
+            .flatten()
+    }
+
+    /// Move the original final graph once to the existing final session verifier.
+    ///
+    /// # Errors
+    /// Returns a phase refusal before complete binding or after the original move.
+    pub fn take_final_session(
+        &mut self,
+    ) -> Result<RetainedPayload<GlobalThresholdBeaconKeySessionV1>, GlobalThresholdBeaconInputErrorV1>
+    {
+        if !self.final_bound {
+            return Err(GlobalThresholdBeaconInputErrorV1::Phase);
+        }
+        self.final_session
+            .retained
+            .take()
+            .ok_or(GlobalThresholdBeaconInputErrorV1::Phase)
+    }
+}

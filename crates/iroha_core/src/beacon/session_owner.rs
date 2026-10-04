@@ -434,6 +434,7 @@ mod prepared_input;
 pub use prepared_input::{
     GlobalThresholdBeaconInputDestinationErrorV1, GlobalThresholdBeaconInputErrorV1,
     PreparedGlobalThresholdBeaconDkgInputsV1, PreparedGlobalThresholdBeaconDkgPublicationV1,
+    PreparedGlobalThresholdBeaconFinalSessionInputV1,
 };
 mod lifecycle;
 mod validated;

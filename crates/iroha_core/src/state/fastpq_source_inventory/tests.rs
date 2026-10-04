@@ -230,7 +230,7 @@ fn inventory_covers_nontransfer_calls_and_every_applied_source() {
     assert_eq!(block.fastpq_tx_set_hash, Some(inventory.tx_set_hash()));
     let transcripts = block.drain_transfer_transcripts();
     let (manifest, leaves) = inventory
-        .derive_manifest(7, [3; 32], &transcripts, limits())
+        .prepare_transfer_diagnostic(7, [3; 32], &transcripts, limits())
         .unwrap();
     assert_eq!(manifest.executed_entry_count, 6);
     assert_eq!(manifest.statement_count, 4);
@@ -242,11 +242,14 @@ fn inventory_covers_nontransfer_calls_and_every_applied_source() {
         vec![0, 2, 4, 5]
     );
     assert_eq!(block.fastpq_source_inventory().unwrap(), Some(&inventory));
-    block.capture_exec_witness().unwrap();
-    let context = block.take_fastpq_witness_context().unwrap();
-    assert_eq!(context._source_inventory.as_deref(), Some(&inventory));
-    assert_eq!(context.tx_set_hash, Some(inventory.tx_set_hash()));
-    assert_eq!(context.entry_dataspaces.len(), 6);
+    assert_eq!(block.fastpq_tx_set_hash, Some(inventory.tx_set_hash()));
+    assert_eq!(block.fastpq_entry_dataspaces.len(), 6);
+    // The supplied-array component source has no mandatory completed-effect journal.
+    // Genuine capture/context retention is exercised by native_capture_fixture and
+    // witness_custody; this local diagnostic grants neither D7 nor publication.
+    assert!(block.capture_exec_witness().is_err());
+    assert!(block.take_exec_witness().is_none());
+    assert!(block.take_fastpq_witness_context().is_none());
 }
 
 #[test]
@@ -264,12 +267,12 @@ fn owned_inventory_prevents_joint_entry_and_bundle_omission() {
     let mut transcripts = block.drain_transfer_transcripts();
     assert!(
         inventory
-            .derive_manifest(7, [3; 32], &transcripts, limits())
+            .prepare_transfer_diagnostic(7, [3; 32], &transcripts, limits())
             .is_ok()
     );
     assert!(
         inventory
-            .derive_manifest(7, [3; 32], &BTreeMap::new(), limits())
+            .prepare_transfer_diagnostic(7, [3; 32], &BTreeMap::new(), limits())
             .unwrap_err()
             .contains("owned inventory")
     );
@@ -277,21 +280,21 @@ fn owned_inventory_prevents_joint_entry_and_bundle_omission() {
     extra.insert(Hash::new(b"extra"), transcripts[&hash].clone());
     assert!(
         inventory
-            .derive_manifest(7, [3; 32], &extra, limits())
+            .prepare_transfer_diagnostic(7, [3; 32], &extra, limits())
             .is_err()
     );
     // Missing finalized digests cannot be repaired by the source producer.
     transcripts.get_mut(&hash).unwrap()[0].poseidon_preimage_digest = None;
     assert!(
         inventory
-            .derive_manifest(7, [3; 32], &transcripts, limits())
+            .prepare_transfer_diagnostic(7, [3; 32], &transcripts, limits())
             .is_err()
     );
     let mut too_small = limits();
     too_small.max_executed_entries = 0;
     assert!(
         inventory
-            .derive_manifest(7, [3; 32], &transcripts, too_small)
+            .prepare_transfer_diagnostic(7, [3; 32], &transcripts, too_small)
             .is_err()
     );
 }
@@ -308,7 +311,7 @@ fn empty_inventory_is_explicit_and_cannot_be_resealed() {
     assert!(inventory.entries().is_empty());
     assert!(inventory.transcript_entry_hashes().is_empty());
     let (manifest, leaves) = inventory
-        .derive_manifest(7, [0; 32], &BTreeMap::new(), limits())
+        .prepare_transfer_diagnostic(7, [0; 32], &BTreeMap::new(), limits())
         .unwrap();
     assert_eq!(manifest.executed_entry_count, 0);
     assert_eq!(manifest.statement_count, 0);
@@ -510,7 +513,7 @@ fn owned_public_seal_rejects_valid_archive_replacement_and_regrouping() {
     let inventory = block.fastpq_source_inventory().unwrap().unwrap().clone();
     let original = block.drain_transfer_transcripts();
     let expected = inventory
-        .derive_manifest(7, [3; 32], &original, limits())
+        .prepare_transfer_diagnostic(7, [3; 32], &original, limits())
         .unwrap();
     assert_eq!(expected.0.statement_count, 1);
     assert_eq!(expected.1[0].entry_transcript_count, 2);
@@ -549,7 +552,7 @@ fn owned_public_seal_rejects_valid_archive_replacement_and_regrouping() {
         let unchanged_input = changed.clone();
         // The whole-entry relation rejects broken chronology. Even alterations that
         // remain valid complete bundles must fail against the unchanged execution seal.
-        let supplied = derive_fastpq_ordinary_source_manifest_v1(
+        let supplied = prepare_transfer_archive_diagnostic(
             inventory.source(),
             inventory.entries(),
             7,
@@ -576,7 +579,7 @@ fn owned_public_seal_rejects_valid_archive_replacement_and_regrouping() {
         }
         assert!(
             inventory
-                .derive_manifest(7, [3; 32], &changed, limits())
+                .prepare_transfer_diagnostic(7, [3; 32], &changed, limits())
                 .unwrap_err()
                 .contains("owned inventory seal"),
             "mutation {mutation}"
@@ -586,7 +589,7 @@ fn owned_public_seal_rejects_valid_archive_replacement_and_regrouping() {
     }
     assert_eq!(
         inventory
-            .derive_manifest(7, [3; 32], &original, limits())
+            .prepare_transfer_diagnostic(7, [3; 32], &original, limits())
             .unwrap(),
         expected
     );
@@ -606,7 +609,7 @@ fn owned_public_seal_excludes_private_paths_but_preserves_input_caps() {
     let inventory = block.fastpq_source_inventory().unwrap().unwrap().clone();
     let original = block.drain_transfer_transcripts();
     let expected = inventory
-        .derive_manifest(7, [3; 32], &original, limits())
+        .prepare_transfer_diagnostic(7, [3; 32], &original, limits())
         .unwrap();
     let mut changed = original.clone();
     for transcript in changed.values_mut().flatten() {
@@ -625,7 +628,7 @@ fn owned_public_seal_excludes_private_paths_but_preserves_input_caps() {
     assert!(exact.max_input_transcript_bytes > canonical_transcript_bytes(&original));
     assert_eq!(
         inventory
-            .derive_manifest(7, [3; 32], &changed, exact)
+            .prepare_transfer_diagnostic(7, [3; 32], &changed, exact)
             .unwrap(),
         expected
     );
@@ -635,7 +638,7 @@ fn owned_public_seal_excludes_private_paths_but_preserves_input_caps() {
     };
     assert!(
         inventory
-            .derive_manifest(7, [3; 32], &changed, too_small)
+            .prepare_transfer_diagnostic(7, [3; 32], &changed, too_small)
             .unwrap_err()
             .contains("canonical input transcript")
     );
@@ -663,7 +666,7 @@ fn owned_public_seal_preflights_resources_before_rejecting_substitution() {
         ..limits()
     };
     inventory
-        .derive_manifest(7, [3; 32], &original, exact)
+        .prepare_transfer_diagnostic(7, [3; 32], &original, exact)
         .unwrap();
     let mut changed = original.clone();
     changed.get_mut(&hash).unwrap()[0].authority_digest = Hash::new(b"substituted authority");
@@ -692,14 +695,14 @@ fn owned_public_seal_preflights_resources_before_rejecting_substitution() {
     ] {
         assert!(
             inventory
-                .derive_manifest(7, [3; 32], &changed, small)
+                .prepare_transfer_diagnostic(7, [3; 32], &changed, small)
                 .unwrap_err()
                 .contains(expected_error)
         );
     }
     assert!(
         inventory
-            .derive_manifest(7, [3; 32], &changed, exact)
+            .prepare_transfer_diagnostic(7, [3; 32], &changed, exact)
             .unwrap_err()
             .contains("owned inventory seal")
     );
@@ -756,7 +759,7 @@ fn pending_entrypoint_and_synchronous_sealing_commit_finalized_digests() {
         );
         let transcripts = block.drain_transfer_transcripts_with_pending(None);
         let manifest = inventory
-            .derive_manifest(7, [3; 32], &transcripts, limits())
+            .prepare_transfer_diagnostic(7, [3; 32], &transcripts, limits())
             .unwrap();
         assert_eq!(inventory.transcript_seal.transcript_count, 2);
         assert_eq!(inventory.transcript_seal.delta_count, 3);
@@ -815,7 +818,7 @@ fn nontransfer_time_sources_change_entry_digest_without_replacing_wire_commitmen
             .unwrap();
         let inventory = block.fastpq_source_inventory().unwrap().unwrap();
         let (manifest, leaves) = inventory
-            .derive_manifest(7, [0; 32], &BTreeMap::new(), limits())
+            .prepare_transfer_diagnostic(7, [0; 32], &BTreeMap::new(), limits())
             .unwrap();
         assert!(leaves.is_empty());
         assert_eq!(inventory.tx_set_hash(), wire_hash);
@@ -823,7 +826,10 @@ fn nontransfer_time_sources_change_entry_digest_without_replacing_wire_commitmen
         results.push((manifest, wire_hash));
     }
     assert_eq!(results[0].1, results[1].1);
-    assert_eq!(results[0].0.statement_root, results[1].0.statement_root);
+    assert_eq!(
+        results[0].0.diagnostic_digest,
+        results[1].0.diagnostic_digest
+    );
     assert_eq!(results[0].0.statement_count, 0);
     assert_eq!(results[1].0.statement_count, 0);
     assert_eq!(results[0].0.executed_entry_count, 0);

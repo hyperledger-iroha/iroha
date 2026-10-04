@@ -1,5 +1,5 @@
 //! The halo2 permuted lookup (spec section 2 "Lookup", section 7 rows 2 and
-//! 4, BlindingScheduleV1 items 2 and 4).
+//! 4, `BlindingScheduleV1` items 2 and 4).
 //!
 //! For each lookup the prover compresses the input and table expressions
 //! with `theta` (`A = fold(acc * theta + a_i)`, likewise `S`), permutes the
@@ -45,8 +45,8 @@ use crate::{
 pub(super) struct Permuted<F> {
     compressed_input: Vec<F>,
     compressed_table: Vec<F>,
-    permuted_input: Vec<F>,
-    permuted_table: Vec<F>,
+    input_values: Vec<F>,
+    table_values: Vec<F>,
     input_poly: Vec<F>,
     input_blind: F,
     table_poly: Vec<F>,
@@ -69,6 +69,48 @@ pub(super) struct Committed<F> {
     pub(super) product_blind: F,
 }
 
+/// How the prover permutes one lookup's usable rows into `(A', S')`, padded
+/// to `n` rows (`A'` padding first, then `S'` padding).
+///
+/// Production proofs always use [`VendoredPermutation`]. The trait exists so
+/// that the malicious-prover tests can substitute a forged permutation and
+/// drive a lookup violation through the verifier while every other prover
+/// step stays the real one.
+pub(super) trait LookupPermutation<F> {
+    /// The permuted input and table columns of lookup `lookup`.
+    ///
+    /// # Errors
+    ///
+    /// [`ProverError::LookupInputMissing`] when no permutation exists.
+    fn permute<R: RngCore>(
+        &mut self,
+        input: &[F],
+        table: &[F],
+        usable_rows: usize,
+        n: usize,
+        lookup: usize,
+        rng: &mut R,
+    ) -> Result<(Vec<F>, Vec<F>), ProverError>;
+}
+
+/// The vendored permutation ([`permute`]), the only production strategy.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct VendoredPermutation;
+
+impl<F: PastaField> LookupPermutation<F> for VendoredPermutation {
+    fn permute<R: RngCore>(
+        &mut self,
+        input: &[F],
+        table: &[F],
+        usable_rows: usize,
+        n: usize,
+        lookup: usize,
+        rng: &mut R,
+    ) -> Result<(Vec<F>, Vec<F>), ProverError> {
+        permute(input, table, usable_rows, n, lookup, rng)
+    }
+}
+
 /// The vendored permutation of the usable rows of `input` and `table`
 /// (see the module documentation), padded to `n` rows: `A'` padding first,
 /// then `S'` padding.
@@ -85,17 +127,20 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
     lookup: usize,
     rng: &mut R,
 ) -> Result<(Vec<F>, Vec<F>), ProverError> {
-    let missing = ProverError::LookupInputMissing { lookup };
-    let input = input.get(..usable_rows).ok_or(missing.clone())?;
-    let table = table.get(..usable_rows).ok_or(missing.clone())?;
+    let missing = || ProverError::LookupInputMissing { lookup };
+    let input = input.get(..usable_rows).ok_or_else(missing)?;
+    let table = table.get(..usable_rows).ok_or_else(missing)?;
     let mut counts: BTreeMap<F, usize> = BTreeMap::new();
     for value in input {
         *counts.entry(*value).or_insert(0) += 1;
     }
     let mut sorted = table.to_vec();
     sorted.sort_unstable();
-    if counts.keys().any(|value| sorted.binary_search(value).is_err()) {
-        return Err(missing);
+    if counts
+        .keys()
+        .any(|value| sorted.binary_search(value).is_err())
+    {
+        return Err(missing());
     }
     let leftover: Vec<F> = sorted
         .iter()
@@ -112,11 +157,9 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
         permuted_input.push(*value);
         permuted_table.push(*value);
         // [start - g, end - g - 1) with end = start + count.
-        let from = start.checked_sub(group).ok_or(missing.clone())?;
-        let to = (start + count)
-            .checked_sub(group + 1)
-            .ok_or(missing.clone())?;
-        let extra = leftover.get(from..to).ok_or(missing.clone())?;
+        let from = start.checked_sub(group).ok_or_else(missing)?;
+        let to = (start + count).checked_sub(group + 1).ok_or_else(missing)?;
+        let extra = leftover.get(from..to).ok_or_else(missing)?;
         for table_value in extra {
             permuted_input.push(*value);
             permuted_table.push(*table_value);
@@ -124,7 +167,7 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
         start += count;
     }
     if permuted_input.len() != usable_rows {
-        return Err(missing);
+        return Err(missing());
     }
     let pad = n - usable_rows;
     permuted_input.extend(random_values::<F, _>(rng, pad));
@@ -132,14 +175,14 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
     Ok((permuted_input, permuted_table))
 }
 
-/// Compresses, permutes, blinds, commits and writes every lookup's `A'` and
-/// `S'` (BlindingScheduleV1 item 2).
+/// Compresses, permutes (with `permutation`), blinds, commits and writes
+/// every lookup's `A'` and `S'` (`BlindingScheduleV1` item 2).
 ///
 /// # Errors
 ///
 /// [`ProverError::LookupInputMissing`], or MSM, FFT and transcript errors.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn commit_permuted<C, T, R>(
+pub(super) fn commit_permuted<C, T, R, P>(
     params: &PinnedParams<C>,
     pk: &ProvingKey<C>,
     shape: &Shape,
@@ -147,6 +190,7 @@ pub(super) fn commit_permuted<C, T, R>(
     advice_values: &[Vec<C::ScalarExt>],
     instance_values: &[Vec<C::ScalarExt>],
     theta: C::ScalarExt,
+    permutation: &mut P,
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
@@ -155,6 +199,7 @@ where
     C: PastaCurve,
     T: TranscriptWrite<C>,
     R: RngCore,
+    P: LookupPermutation<C::ScalarExt>,
 {
     if shape.lookups == 0 {
         return Ok(Vec::new());
@@ -169,7 +214,7 @@ where
     let tables = pk.commitment_tables();
     let mut permuted = Vec::with_capacity(compressed.len());
     for (lookup, (compressed_input, compressed_table)) in compressed.into_iter().enumerate() {
-        let (permuted_input, permuted_table) = permute(
+        let (permuted_input, permuted_table) = permutation.permute(
             &compressed_input,
             &compressed_table,
             shape.usable_rows,
@@ -206,8 +251,8 @@ where
         permuted.push(Permuted {
             compressed_input,
             compressed_table,
-            permuted_input,
-            permuted_table,
+            input_values: permuted_input,
+            table_values: permuted_table,
             input_poly,
             input_blind,
             table_poly,
@@ -218,7 +263,7 @@ where
 }
 
 /// Builds, blinds, commits and writes every lookup's product `z`
-/// (BlindingScheduleV1 item 4).
+/// (`BlindingScheduleV1` item 4).
 ///
 /// # Errors
 ///
@@ -245,9 +290,9 @@ where
     let mut committed = Vec::with_capacity(permuted.len());
     for lookup in permuted {
         // Denominators (A'_i + beta)(S'_i + gamma) of the usable rows.
-        let mut fractions: Vec<C::ScalarExt> = lookup.permuted_input[..u]
+        let mut fractions: Vec<C::ScalarExt> = lookup.input_values[..u]
             .iter()
-            .zip(&lookup.permuted_table[..u])
+            .zip(&lookup.table_values[..u])
             .map(|(a, s)| (beta + a) * (gamma + s))
             .collect();
         batch_invert(&mut fractions);
@@ -331,6 +376,23 @@ mod tests {
         let pads: Vec<Fp> = random_values(&mut replay, 4);
         assert_eq!(&a[6..], &pads[..2]);
         assert_eq!(&s[6..], &pads[2..]);
+    }
+
+    #[test]
+    fn the_vendored_strategy_is_the_vendored_permutation() {
+        let input = values(&[3, 1, 3, 2, 1, 3, 0, 0]);
+        let table = values(&[1, 2, 3, 4, 3, 5, 0, 0]);
+        let direct = permute(&input, &table, 6, 8, 0, &mut ChaCha20Rng::seed_from_u64(5));
+        let strategy = VendoredPermutation.permute(
+            &input,
+            &table,
+            6,
+            8,
+            0,
+            &mut ChaCha20Rng::seed_from_u64(5),
+        );
+        assert_eq!(direct, strategy);
+        assert!(direct.is_ok());
     }
 
     #[test]

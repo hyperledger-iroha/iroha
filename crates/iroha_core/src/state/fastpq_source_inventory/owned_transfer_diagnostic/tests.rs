@@ -62,13 +62,13 @@ fn empty_witness() -> ExecWitness {
 }
 
 #[test]
-fn checked_raw_drain_prepares_final_context_without_publishing_or_inserting_d7() {
+fn checked_raw_drain_prepares_transfer_diagnostics_without_source_publication() {
     let _guard = exec_witness::exec_witness_guard();
     exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
-    let source = Hash::new(b"owned D7 raw recorder callback");
+    let source = Hash::new(b"owned transfer diagnostic raw recorder callback");
     let archive = seal_source(&mut block, source);
     assert!(block.fastpq_transcripts.is_empty());
     let inventory = block
@@ -85,12 +85,12 @@ fn checked_raw_drain_prepares_final_context_without_publishing_or_inserting_d7()
     let perm_root = crate::fastpq::permission_table_root(block.world.roles.iter());
     assert_ne!(perm_root, [0; 32]);
     let expected = inventory
-        .derive_manifest(23_000_000, perm_root, &archive, limits())
+        .prepare_transfer_diagnostic(23_000_000, perm_root, &archive, limits())
         .unwrap();
     let mut prepared = None;
     let drained = exec_witness::drain_exec_witness_checked(|raw| {
         assert_eq!(raw, &archive);
-        prepared = Some(block.prepare_owned_fastpq_d7_capture(raw, limits())?);
+        prepared = Some(block.prepare_owned_transfer_diagnostic(raw, limits())?);
         assert_eq!(raw, &archive);
         Ok(())
     })
@@ -109,7 +109,7 @@ fn checked_raw_drain_prepares_final_context_without_publishing_or_inserting_d7()
     assert_unpublished(&block);
 
     let prepared = prepared.unwrap();
-    let leaf_allocation = prepared.leaves.as_ptr();
+    let leaf_allocation = prepared.statements.as_ptr();
     let (manifest, leaves, context) = prepared.into_parts();
     assert_eq!((manifest, &leaves), (expected.0, &expected.1));
     assert_eq!(
@@ -146,7 +146,7 @@ fn checked_raw_drain_prepares_final_context_without_publishing_or_inserting_d7()
         expected_limits.max_total_statement_bytes
     );
     drop(leaves);
-    assert_eq!(*context.manifest(), manifest);
+    assert_eq!(*context.summary(), manifest);
     assert!(context.verify_current(&block).is_ok());
     assert_unpublished(&block);
 }
@@ -159,7 +159,8 @@ fn empty_and_nontransfer_inventories_keep_complete_entry_counts() {
         exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
-        let times = nontransfer.then(|| Hash::new(b"D7 nontransfer time invocation"));
+        let times =
+            nontransfer.then(|| Hash::new(b"transfer diagnostic nontransfer time invocation"));
         let times = times.into_iter().collect::<Vec<_>>();
         for hash in &times {
             block.admit_fastpq_source_for_testing(*hash);
@@ -174,7 +175,7 @@ fn empty_and_nontransfer_inventories_keep_complete_entry_counts() {
             ..limits()
         };
         let (manifest, leaves, context) = block
-            .prepare_owned_fastpq_d7_capture(&archive, exact)
+            .prepare_owned_transfer_diagnostic(&archive, exact)
             .unwrap()
             .into_parts();
         assert_eq!(manifest.executed_entry_count, u32::from(nontransfer));
@@ -192,7 +193,7 @@ fn empty_and_nontransfer_inventories_keep_complete_entry_counts() {
             };
             assert!(
                 block
-                    .prepare_owned_fastpq_d7_capture(&archive, too_small)
+                    .prepare_owned_transfer_diagnostic(&archive, too_small)
                     .is_err()
             );
         }
@@ -219,7 +220,7 @@ fn slot_boundaries_match_existing_template_and_retain_exact_milliseconds() {
             .unwrap();
         block._curr_block.creation_time_ms = timestamp;
         let (_, _, context) = block
-            .prepare_owned_fastpq_d7_capture(&TranscriptMap::new(), limits())
+            .prepare_owned_transfer_diagnostic(&TranscriptMap::new(), limits())
             .unwrap()
             .into_parts();
         let template = crate::fastpq::public_inputs_template_from_block(
@@ -243,14 +244,14 @@ fn slot_boundaries_match_existing_template_and_retain_exact_milliseconds() {
             );
             assert_eq!(
                 context.verify_current(&block).unwrap_err(),
-                "FASTPQ prepared D7 carrier timestamp changed"
+                "FASTPQ prepared transfer diagnostic carrier timestamp changed"
             );
         }
     }
 }
 
 #[test]
-fn empty_manifest_does_not_itself_commit_timestamp_or_permission_rows() {
+fn empty_diagnostic_does_not_itself_commit_timestamp_or_permission_rows() {
     let _guard = exec_witness::exec_witness_guard();
     exec_witness::start_block();
     let state = state();
@@ -260,14 +261,14 @@ fn empty_manifest_does_not_itself_commit_timestamp_or_permission_rows() {
         .finalize_fastpq_source_inventory(&[], &[], &[])
         .unwrap();
     let (before, _, context) = block
-        .prepare_owned_fastpq_d7_capture(&TranscriptMap::new(), limits())
+        .prepare_owned_transfer_diagnostic(&TranscriptMap::new(), limits())
         .unwrap()
         .into_parts();
     block._curr_block.creation_time_ms += 1;
     let changed = role("d7_empty_context", "d7_empty_permission", 0);
     block.world.roles.insert(changed.id.clone(), changed);
     let (after, leaves, later) = block
-        .prepare_owned_fastpq_d7_capture(&TranscriptMap::new(), limits())
+        .prepare_owned_transfer_diagnostic(&TranscriptMap::new(), limits())
         .unwrap()
         .into_parts();
     assert_eq!(
@@ -291,7 +292,7 @@ fn retained_context_rejects_equal_inventory_reallocated_under_another_owner() {
         .finalize_fastpq_source_inventory(&[], &[], &[])
         .unwrap();
     let (_, _, mut context) = block
-        .prepare_owned_fastpq_d7_capture(&TranscriptMap::new(), limits())
+        .prepare_owned_transfer_diagnostic(&TranscriptMap::new(), limits())
         .unwrap()
         .into_parts();
     let original = Arc::clone(&context.inventory);
@@ -303,7 +304,7 @@ fn retained_context_rejects_equal_inventory_reallocated_under_another_owner() {
     context.inventory = Arc::clone(&replacement);
     assert_eq!(
         context.verify_current(&block).unwrap_err(),
-        "FASTPQ prepared D7 inventory owner changed"
+        "FASTPQ prepared transfer diagnostic inventory owner changed"
     );
     context.inventory = Arc::clone(&original);
     assert!(context.verify_current(&block).is_ok());
@@ -335,13 +336,15 @@ fn context_and_preparation_reject_missing_failed_or_stale_owned_source() {
             .unwrap();
         let archive = TranscriptMap::new();
         let (_, _, context) = block
-            .prepare_owned_fastpq_d7_capture(&archive, limits())
+            .prepare_owned_transfer_diagnostic(&archive, limits())
             .unwrap()
             .into_parts();
         match mutation {
             0 => block.fastpq_source_inventory = None,
             1 => {
-                block.fastpq_source_inventory = Some(Err("retained D7 construction failure".into()))
+                block.fastpq_source_inventory = Some(Err(
+                    "retained transfer diagnostic construction failure".into(),
+                ))
             }
             2 => block.fastpq_source_captures = Default::default(),
             3 => block.fastpq_source_context = None,
@@ -360,10 +363,10 @@ fn context_and_preparation_reject_missing_failed_or_stale_owned_source() {
             "mutation {mutation}"
         );
         let error = block
-            .prepare_owned_fastpq_d7_capture(&archive, limits())
+            .prepare_owned_transfer_diagnostic(&archive, limits())
             .unwrap_err();
         if mutation == 1 {
-            assert_eq!(error, "retained D7 construction failure");
+            assert_eq!(error, "retained transfer diagnostic construction failure");
         }
     }
 }
@@ -385,7 +388,7 @@ fn permission_row_id_value_and_epoch_drift_invalidate_retained_context() {
             .finalize_fastpq_source_inventory(&[], &[], &[])
             .unwrap();
         let (_, _, context) = block
-            .prepare_owned_fastpq_d7_capture(&TranscriptMap::new(), limits())
+            .prepare_owned_transfer_diagnostic(&TranscriptMap::new(), limits())
             .unwrap()
             .into_parts();
         let replacement = match mutation {
@@ -402,7 +405,7 @@ fn permission_row_id_value_and_epoch_drift_invalidate_retained_context() {
             .insert(replacement.id.clone(), replacement);
         assert_eq!(
             context.verify_current(&block).unwrap_err(),
-            "FASTPQ prepared D7 permission context changed"
+            "FASTPQ prepared transfer diagnostic permission context changed"
         );
         block.world.roles.remove(replacement_id);
         block.world.roles.insert(original.id.clone(), original);
@@ -411,7 +414,7 @@ fn permission_row_id_value_and_epoch_drift_invalidate_retained_context() {
 }
 
 #[test]
-fn unrelated_header_fields_do_not_rewrite_d7_inputs() {
+fn unrelated_header_fields_do_not_rewrite_transfer_diagnostic_inputs() {
     let _guard = exec_witness::exec_witness_guard();
     exec_witness::start_block();
     let state = state();
@@ -421,14 +424,14 @@ fn unrelated_header_fields_do_not_rewrite_d7_inputs() {
         .finalize_fastpq_source_inventory(&[], &[], &[])
         .unwrap();
     let (_, _, context) = block
-        .prepare_owned_fastpq_d7_capture(&TranscriptMap::new(), limits())
+        .prepare_owned_transfer_diagnostic(&TranscriptMap::new(), limits())
         .unwrap()
         .into_parts();
     block._curr_block.view_change_index += 1;
     assert!(context.verify_current(&block).is_ok());
     assert!(
         block
-            .prepare_owned_fastpq_d7_capture(&TranscriptMap::new(), limits())
+            .prepare_owned_transfer_diagnostic(&TranscriptMap::new(), limits())
             .is_ok()
     );
     assert_unpublished(&block);
@@ -442,16 +445,16 @@ fn late_applied_occurrences_reject_even_when_their_archive_is_drained() {
         exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
-        let source = Hash::new(b"D7 original occurrence");
+        let source = Hash::new(b"transfer diagnostic original occurrence");
         let archive = seal_source(&mut block, source);
         let (_, _, context) = block
-            .prepare_owned_fastpq_d7_capture(&archive, limits())
+            .prepare_owned_transfer_diagnostic(&archive, limits())
             .unwrap()
             .into_parts();
         let late = if same_key {
             source
         } else {
-            Hash::new(b"D7 late source")
+            Hash::new(b"transfer diagnostic late source")
         };
         {
             // A sealed fixture may reuse an existing owner, but must not mint one.
@@ -475,7 +478,7 @@ fn late_applied_occurrences_reject_even_when_their_archive_is_drained() {
         assert!(context.verify_current(&block).is_err());
         assert!(
             block
-                .prepare_owned_fastpq_d7_capture(&archive, limits())
+                .prepare_owned_transfer_diagnostic(&archive, limits())
                 .is_err()
         );
     }
@@ -488,10 +491,10 @@ fn rolled_back_occurrence_and_empty_apply_preserve_prepared_context() {
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
-    let source = Hash::new(b"D7 retained source through rollback");
+    let source = Hash::new(b"transfer diagnostic retained source through rollback");
     let archive = seal_source(&mut block, source);
     let (_, _, context) = block
-        .prepare_owned_fastpq_d7_capture(&archive, limits())
+        .prepare_owned_transfer_diagnostic(&archive, limits())
         .unwrap()
         .into_parts();
     {
@@ -506,7 +509,7 @@ fn rolled_back_occurrence_and_empty_apply_preserve_prepared_context() {
     assert!(context.verify_current(&block).is_ok());
     assert!(
         block
-            .prepare_owned_fastpq_d7_capture(&archive, limits())
+            .prepare_owned_transfer_diagnostic(&archive, limits())
             .is_ok()
     );
 }
@@ -518,7 +521,7 @@ fn changed_raw_public_content_keys_and_occurrence_count_fail_without_latching() 
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
-    let source = Hash::new(b"D7 immutable public archive");
+    let source = Hash::new(b"transfer diagnostic immutable public archive");
     let original = seal_source(&mut block, source);
     for mutation in 0..5 {
         let mut changed = original.clone();
@@ -527,11 +530,14 @@ fn changed_raw_public_content_keys_and_occurrence_count_fail_without_latching() 
                 changed.remove(&source);
             }
             1 => {
-                changed.insert(Hash::new(b"D7 invented bundle"), changed[&source].clone());
+                changed.insert(
+                    Hash::new(b"transfer diagnostic invented bundle"),
+                    changed[&source].clone(),
+                );
             }
             2 => {
                 changed.get_mut(&source).unwrap()[0].authority_digest =
-                    Hash::new(b"D7 changed authority")
+                    Hash::new(b"transfer diagnostic changed authority")
             }
             3 => changed.get_mut(&source).unwrap()[0].poseidon_preimage_digest = None,
             4 => {
@@ -543,7 +549,7 @@ fn changed_raw_public_content_keys_and_occurrence_count_fail_without_latching() 
         let retained = changed.clone();
         assert!(
             block
-                .prepare_owned_fastpq_d7_capture(&changed, limits())
+                .prepare_owned_transfer_diagnostic(&changed, limits())
                 .is_err(),
             "mutation {mutation}"
         );
@@ -552,7 +558,7 @@ fn changed_raw_public_content_keys_and_occurrence_count_fail_without_latching() 
     }
     assert!(
         block
-            .prepare_owned_fastpq_d7_capture(&original, limits())
+            .prepare_owned_transfer_diagnostic(&original, limits())
             .is_ok()
     );
     exec_witness::drain_exec_witness_checked(|raw| {
@@ -572,7 +578,7 @@ fn every_explicit_construction_cap_is_enforced_without_partial_publication() {
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
-    let source = Hash::new(b"D7 independent construction caps");
+    let source = Hash::new(b"transfer diagnostic independent construction caps");
     let archive = seal_source(&mut block, source);
     for cap in 0..6 {
         let mut reduced = limits();
@@ -587,7 +593,7 @@ fn every_explicit_construction_cap_is_enforced_without_partial_publication() {
         }
         assert!(
             block
-                .prepare_owned_fastpq_d7_capture(&archive, reduced)
+                .prepare_owned_transfer_diagnostic(&archive, reduced)
                 .is_err(),
             "cap {cap}"
         );
@@ -595,7 +601,7 @@ fn every_explicit_construction_cap_is_enforced_without_partial_publication() {
     }
     assert!(
         block
-            .prepare_owned_fastpq_d7_capture(&archive, limits())
+            .prepare_owned_transfer_diagnostic(&archive, limits())
             .is_ok()
     );
 }
@@ -607,10 +613,10 @@ fn changed_private_paths_are_bounded_but_do_not_change_prepared_public_leaves() 
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
-    let source = Hash::new(b"D7 private paths stay outside the public seal");
+    let source = Hash::new(b"transfer diagnostic private paths stay outside the public seal");
     let original = seal_source(&mut block, source);
     let (expected_manifest, expected_leaves, _) = block
-        .prepare_owned_fastpq_d7_capture(&original, limits())
+        .prepare_owned_transfer_diagnostic(&original, limits())
         .unwrap()
         .into_parts();
     let mut changed = original.clone();
@@ -626,7 +632,7 @@ fn changed_private_paths_are_bounded_but_do_not_change_prepared_public_leaves() 
         ..limits()
     };
     let (manifest, leaves, context) = block
-        .prepare_owned_fastpq_d7_capture(&changed, exact)
+        .prepare_owned_transfer_diagnostic(&changed, exact)
         .unwrap()
         .into_parts();
     assert_eq!((manifest, leaves), (expected_manifest, expected_leaves));
@@ -637,7 +643,7 @@ fn changed_private_paths_are_bounded_but_do_not_change_prepared_public_leaves() 
     };
     assert!(
         block
-            .prepare_owned_fastpq_d7_capture(&changed, too_small)
+            .prepare_owned_transfer_diagnostic(&changed, too_small)
             .is_err()
     );
     assert!(context.verify_current(&block).is_ok());
@@ -651,7 +657,7 @@ fn full_domain_quantity_preparation_uses_the_strict_source_producer() {
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
-    let source = Hash::new(b"D7 quantity above legacy u64");
+    let source = Hash::new(b"transfer diagnostic quantity above legacy u64");
     let mut transfer = delta();
     transfer.amount = "18446744073709551616".parse().unwrap();
     transfer.from_balance_before = "36893488147419103232".parse().unwrap();
@@ -666,7 +672,7 @@ fn full_domain_quantity_preparation_uses_the_strict_source_producer() {
         .unwrap();
     let archive = block.drain_transfer_transcripts_with_pending(None);
     let (manifest, leaves, context) = block
-        .prepare_owned_fastpq_d7_capture(&archive, limits())
+        .prepare_owned_transfer_diagnostic(&archive, limits())
         .unwrap()
         .into_parts();
     assert_eq!(manifest.executed_entry_count, 1);
@@ -675,233 +681,4 @@ fn full_domain_quantity_preparation_uses_the_strict_source_producer() {
     assert_eq!(leaves[0].entry_hash, source);
     assert!(context.verify_current(&block).is_ok());
     assert_unpublished(&block);
-}
-
-fn publication_witness(archive: &TranscriptMap) -> ExecWitness {
-    let mut witness = empty_witness();
-    witness.fastpq_transcripts = archive
-        .iter()
-        .map(
-            |(entry_hash, transcripts)| iroha_data_model::fastpq::TransferTranscriptBundle {
-                entry_hash: *entry_hash,
-                transcripts: transcripts.clone(),
-            },
-        )
-        .collect();
-    witness
-}
-
-#[test]
-fn conditional_publication_moves_exact_archive_and_releases_only_after_recheck() {
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
-    let state = state();
-    let mut block = state.block(header());
-    cache_canonical_test_transaction_set(&mut block, &[]);
-    let source = Hash::new(b"D7 atomic local publication owner");
-    let archive = seal_source(&mut block, source);
-    let prepared = block
-        .prepare_owned_fastpq_d7_capture(&archive, limits())
-        .unwrap();
-    let leaves_pointer = prepared.leaves.as_ptr();
-    let expected_manifest = *prepared.context.manifest();
-    let mut witness = publication_witness(&archive);
-    witness.writes = vec![
-        iroha_data_model::block::consensus::ExecKv {
-            key: vec![1],
-            value: vec![9],
-        },
-        iroha_data_model::block::consensus::ExecKv {
-            key: vec![255],
-            value: vec![8],
-        },
-    ];
-    let original_bundles = witness.fastpq_transcripts.clone();
-    let publication = prepared.bind_witness(&block, witness).unwrap();
-    assert!(publication.verify_current(&block).is_ok());
-    assert_unpublished(&block);
-    let (witness, leaves, context) = publication.into_parts_verified(&block).unwrap();
-    assert_eq!(leaves.as_ptr(), leaves_pointer);
-    assert_eq!(context.manifest(), &expected_manifest);
-    assert_eq!(witness.fastpq_transcripts, original_bundles);
-    assert_eq!(witness.writes.len(), 3);
-    assert_eq!(witness.writes[0].value, vec![9]);
-    assert_eq!(witness.writes[2].value, vec![8]);
-    assert_eq!(
-        witness.writes[1].key,
-        FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1
-    );
-    assert_eq!(
-        witness.writes[1].value,
-        norito::encode_canonical(&expected_manifest).unwrap()
-    );
-    assert_unpublished(&block);
-}
-
-#[test]
-fn conditional_publication_refuses_existing_family_duplicate_or_unsorted_writes() {
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
-    let state = state();
-    let mut block = state.block(header());
-    cache_canonical_test_transaction_set(&mut block, &[]);
-    let archive = seal_source(&mut block, Hash::new(b"D7 existing write refusal"));
-    for keys in [
-        vec![vec![0xD7]],
-        vec![vec![0xD7, 0]],
-        vec![vec![2], vec![2]],
-        vec![vec![3], vec![2]],
-    ] {
-        let prepared = block
-            .prepare_owned_fastpq_d7_capture(&archive, limits())
-            .unwrap();
-        let mut witness = publication_witness(&archive);
-        witness.writes = keys
-            .into_iter()
-            .map(|key| iroha_data_model::block::consensus::ExecKv {
-                key,
-                value: vec![0],
-            })
-            .collect();
-        assert!(prepared.bind_witness(&block, witness).is_err());
-        assert_unpublished(&block);
-    }
-}
-
-#[test]
-fn conditional_publication_rejects_each_changed_d7_archive_and_transcript_owner() {
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
-    let state = state();
-    let mut block = state.block(header());
-    cache_canonical_test_transaction_set(&mut block, &[]);
-    let archive = seal_source(&mut block, Hash::new(b"D7 retained value mutations"));
-    for mutation in 0..7 {
-        let prepared = block
-            .prepare_owned_fastpq_d7_capture(&archive, limits())
-            .unwrap();
-        let mut publication = prepared
-            .bind_witness(&block, publication_witness(&archive))
-            .unwrap();
-        match mutation {
-            0 => publication.witness.writes.clear(),
-            1 => publication.witness.writes[0].value[0] ^= 1,
-            2 => publication.witness.writes[0].key.push(0),
-            3 => publication
-                .witness
-                .writes
-                .push(publication.witness.writes[0].clone()),
-            4 => publication.prepared.leaves[0].entry_hash = Hash::new(b"foreign archive"),
-            5 => publication.witness.fastpq_transcripts.clear(),
-            6 => {
-                publication.witness.fastpq_transcripts[0].transcripts[0].authority_digest =
-                    Hash::new(b"foreign authority")
-            }
-            _ => unreachable!(),
-        }
-        assert!(
-            publication.verify_current(&block).is_err(),
-            "mutation {mutation}"
-        );
-        assert!(
-            publication.into_parts_verified(&block).is_err(),
-            "mutation {mutation}"
-        );
-        assert_unpublished(&block);
-    }
-}
-
-#[test]
-fn conditional_publication_refuses_context_change_at_last_extraction_boundary() {
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
-    let state = state();
-    let mut block = state.block(header());
-    cache_canonical_test_transaction_set(&mut block, &[]);
-    let archive = seal_source(&mut block, Hash::new(b"D7 last context check"));
-    let prepared = block
-        .prepare_owned_fastpq_d7_capture(&archive, limits())
-        .unwrap();
-    let publication = prepared
-        .bind_witness(&block, publication_witness(&archive))
-        .unwrap();
-    block._curr_block.creation_time_ms += 1;
-    assert!(publication.into_parts_verified(&block).is_err());
-    assert_unpublished(&block);
-}
-
-#[test]
-fn conditional_publication_preserves_empty_and_nontransfer_source_entries() {
-    let _guard = exec_witness::exec_witness_guard();
-    let state = state();
-    for nontransfer in [false, true] {
-        exec_witness::start_block();
-        let mut block = state.block(header());
-        cache_canonical_test_transaction_set(&mut block, &[]);
-        let time = nontransfer.then(|| Hash::new(b"D7 empty publication time owner"));
-        let times = time.into_iter().collect::<Vec<_>>();
-        for hash in &times {
-            block.admit_fastpq_source_for_testing(*hash);
-        }
-        block
-            .finalize_fastpq_source_inventory(&[], &[], &times)
-            .unwrap();
-        let archive = block.drain_transfer_transcripts_with_pending(None);
-        let prepared = block
-            .prepare_owned_fastpq_d7_capture(&archive, limits())
-            .unwrap();
-        let publication = prepared
-            .bind_witness(&block, publication_witness(&archive))
-            .unwrap();
-        let (witness, leaves, context) = publication.into_parts_verified(&block).unwrap();
-        assert_eq!(
-            context.manifest().executed_entry_count,
-            u32::from(nontransfer)
-        );
-        assert_eq!(context.manifest().statement_count, 0);
-        assert!(leaves.is_empty());
-        assert_eq!(witness.writes.len(), 1);
-        assert_eq!(
-            context.inventory().entries().len(),
-            usize::from(nontransfer)
-        );
-        assert_unpublished(&block);
-    }
-}
-
-#[test]
-fn conditional_publication_never_accepts_prebuilt_batches_or_incomplete_bundles() {
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
-    let state = state();
-    let mut block = state.block(header());
-    cache_canonical_test_transaction_set(&mut block, &[]);
-    let archive = seal_source(&mut block, Hash::new(b"D7 ordinary input owner"));
-    for prebuilt in [false, true] {
-        let prepared = block
-            .prepare_owned_fastpq_d7_capture(&archive, limits())
-            .unwrap();
-        let mut witness = publication_witness(&archive);
-        if prebuilt {
-            witness
-                .fastpq_batches
-                .push(iroha_data_model::fastpq::FastpqTransitionBatch {
-                    parameter: "unowned prebuilt batch".to_owned(),
-                    public_inputs: iroha_data_model::fastpq::FastpqPublicInputs {
-                        dsid: [0; 16],
-                        slot: 0,
-                        old_root: [0; 32],
-                        new_root: [0; 32],
-                        perm_root: [0; 32],
-                        tx_set_hash: [0; 32],
-                    },
-                    transitions: Vec::new(),
-                    metadata: BTreeMap::new(),
-                });
-        } else {
-            witness.fastpq_transcripts.clear();
-        }
-        assert!(prepared.bind_witness(&block, witness).is_err());
-        assert_unpublished(&block);
-    }
 }

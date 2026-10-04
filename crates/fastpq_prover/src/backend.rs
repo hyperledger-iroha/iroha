@@ -78,6 +78,8 @@ mod compact_axt_batch;
 mod compact_axt_context;
 #[path = "backend/compact_bundle.rs"]
 mod compact_bundle;
+#[path = "backend/compact_execution_effect_batch.rs"]
+mod compact_execution_effect_batch;
 #[path = "backend/compact_hash_quotient.rs"]
 mod compact_hash_quotient;
 #[path = "backend/compact_model_statement.rs"]

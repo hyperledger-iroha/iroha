@@ -70,6 +70,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.crypto.SoftwareKeyProviderBouncyCastleTests",
         "org.hyperledger.iroha.android.crypto.SoftwareKeyProviderStorageTests",
         "org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests",
+        "org.hyperledger.iroha.android.crypto.keystore.AndroidKeystoreAliasProbeTests",
         "org.hyperledger.iroha.android.crypto.keystore.AndroidKeystoreBackendDetectionTests",
         "org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests",
         "org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests",

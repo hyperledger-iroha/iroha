@@ -9185,12 +9185,12 @@ mod evidence_json_contract_tests {
         for status in [
             r#"{"status":"pending","details":null}"#,
             r#"{"status":"applied","details":{"height":44}}"#,
-            r#"{"status":"cancelled","details":{"height":45}}"#,
         ] {
             norito::json::from_str::<SumeragiEvidencePenaltyStatus>(status)
                 .expect("valid evidence penalty status");
         }
         for invalid in [
+            r#"{"status":"cancelled","details":{"height":45}}"#,
             r#"{"status":"pending","details":{"height":44}}"#,
             r#"{"status":"applied","details":null}"#,
             r#"{"status":"cancelled","details":{}}"#,

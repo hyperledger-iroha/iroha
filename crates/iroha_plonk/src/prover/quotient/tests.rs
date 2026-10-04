@@ -32,9 +32,9 @@ struct RowEvaluator<'a, F> {
 
 impl<F: PastaField> RowEvaluator<'_, F> {
     fn read(&self, columns: &[Vec<F>], column: usize, rotation: i32) -> F {
-        let n = columns[column].len() as i64;
-        let row = (self.row as i64 + i64::from(rotation)).rem_euclid(n);
-        columns[column][row as usize]
+        let n = i64::try_from(columns[column].len()).expect("small");
+        let row = i64::try_from(self.row).expect("small") + i64::from(rotation);
+        columns[column][usize::try_from(row.rem_euclid(n)).expect("in range")]
     }
 }
 
@@ -111,13 +111,12 @@ fn tables<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
 /// `tables` and on a random replacement of every column.
 fn compiled_matches_direct<C: PastaCurve>(pk: &ProvingKey<C>, tables: &Tables<C::ScalarExt>) {
     let n = pk.binding().n();
-    let compiled =
-        CompiledExpressions::compile(pk.binding().descriptor(), true).expect("compile");
+    let compiled = CompiledExpressions::compile(pk.binding().descriptor(), true).expect("compile");
     let cs = pk.constraint_system().constraint_system();
     let polys: Vec<&Expression<C::ScalarExt>> = cs
         .gates()
         .iter()
-        .flat_map(|gate| gate.polynomials())
+        .flat_map(crate::cs::Gate::polynomials)
         .collect();
     assert_eq!(compiled.gate_count(), polys.len());
     let mut rng = ChaCha20Rng::seed_from_u64(n as u64);
@@ -218,8 +217,7 @@ fn compiled_agrees_with_checker<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         })
         .collect();
     let tables = tables(pk, circuit, instances);
-    let compiled =
-        CompiledExpressions::compile(pk.binding().descriptor(), true).expect("compile");
+    let compiled = CompiledExpressions::compile(pk.binding().descriptor(), true).expect("compile");
     let values = compiled
         .gate_values(&tables.fixed, &tables.advice, &tables.instance, n)
         .expect("gate values");
@@ -254,8 +252,11 @@ fn the_compiled_evaluator_agrees_with_the_constraint_checker() {
             rows: 9,
             tamper,
         };
-        failures +=
-            compiled_agrees_with_checker(&setup_arithmetic.pk, &circuit, &circuit.instances::<Fq>());
+        failures += compiled_agrees_with_checker(
+            &setup_arithmetic.pk,
+            &circuit,
+            &circuit.instances::<Fq>(),
+        );
     }
     assert!(failures > 0, "the tampered rows must fail some gate");
     let honest = Lookups {
@@ -345,8 +346,8 @@ fn lookup_compression_matches_direct_folding() {
     let tables = tables(&setup.pk, &circuit, &[]);
     let n = setup.pk.binding().n();
     let theta = Fp::from(1_000_003);
-    let compiled =
-        CompiledExpressions::<Fp>::compile(setup.pk.binding().descriptor(), false).expect("compile");
+    let compiled = CompiledExpressions::<Fp>::compile(setup.pk.binding().descriptor(), false)
+        .expect("compile");
     let compressed = compiled
         .compress_lookups(&tables.fixed, &tables.advice, &tables.instance, theta, n)
         .expect("compress");

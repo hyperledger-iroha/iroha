@@ -117,6 +117,16 @@ impl BodyDispatchScope {
         }
     }
     fn revalidate(&self) -> Result<()> {
+        self.revalidate_local()?;
+        if let Some(prior) = &self.state.predecessor {
+            retained_graph::validate_predecessor(prior)?;
+            self.revalidate_local()?;
+        }
+        Ok(())
+    }
+    // Does not descend through another History. The graph owner validates every retained
+    // predecessor separately while preserving this exact evidence and native handle graph.
+    fn revalidate_local(&self) -> Result<()> {
         let value = &self.state;
         value.evidence.revalidate()?;
         if value.evidence.root().identity()? != value.root_identity
@@ -124,8 +134,27 @@ impl BodyDispatchScope {
         {
             return Err(invalid("enrollment dispatch scope custody changed"));
         }
+        let binding = value.evidence.binding();
+        if binding.predecessor_closure
+            != value
+                .predecessor
+                .as_ref()
+                .map(VerifiedUnsignedClosure::digest)
+        {
+            return Err(invalid("enrollment predecessor closure changed"));
+        }
+        value.evidence.fees().validate()?;
         if let Some(prior) = &value.predecessor {
-            prior.require_retained()?;
+            if prior.purpose() != binding.purpose
+                || prior.outer_intent() != binding.outer_intent
+                || prior.root_identity() != value.root_identity
+                || prior.fees() != value.evidence.fees()
+                || prior.cumulative_reserved_count() > MAX_ATTEMPTS
+            {
+                return Err(invalid(
+                    "enrollment predecessor closure changed its original scope",
+                ));
+            }
         }
         Ok(())
     }
@@ -155,25 +184,62 @@ impl HistoryScope {
         semantic: [u8; 32],
     ) -> Result<()> {
         match self {
-            Self::FixedBody if !is_enrollment(purpose) => Ok(()),
-            Self::Enrollment(value) if is_enrollment(purpose) => {
-                value.revalidate()?;
-                let evidence = &value.state.evidence;
-                let binding = evidence.binding();
-                if binding.purpose != purpose
-                    || binding.semantic != semantic
-                    || evidence.operation().path() != operation.path()
-                    || value.state.operation_identity != operation.identity()?
-                {
-                    return Err(invalid(
-                        "enrollment scope selected another body or directory",
-                    ));
-                }
-                Ok(())
+            Self::FixedBody if !is_enrollment(purpose) => {}
+            Self::Enrollment(value) if is_enrollment(purpose) => value.revalidate()?,
+            _ => {
+                return Err(invalid(
+                    "dispatch purpose requires its exact closed body scope",
+                ));
             }
-            _ => Err(invalid(
-                "dispatch purpose requires its exact closed body scope",
-            )),
+        }
+        self.validate_binding(operation, purpose, semantic)
+    }
+    // Private to attempts and its children; callers outside the sole graph owner must use
+    // validate above, which includes every predecessor's exact retained history.
+    pub(super) fn validate_local(
+        &self,
+        operation: &PrivateDirectory,
+        purpose: Purpose,
+        semantic: [u8; 32],
+    ) -> Result<()> {
+        match self {
+            Self::FixedBody if !is_enrollment(purpose) => {}
+            Self::Enrollment(value) if is_enrollment(purpose) => value.revalidate_local()?,
+            _ => {
+                return Err(invalid(
+                    "dispatch purpose requires its exact closed body scope",
+                ));
+            }
+        }
+        self.validate_binding(operation, purpose, semantic)
+    }
+    // Both entries above revalidate exactly once before joining immutable scope intent to the
+    // caller's original operation. This helper never repeats the sealed snapshot traversal.
+    fn validate_binding(
+        &self,
+        operation: &PrivateDirectory,
+        purpose: Purpose,
+        semantic: [u8; 32],
+    ) -> Result<()> {
+        if let Self::Enrollment(value) = self {
+            let evidence = &value.state.evidence;
+            let binding = evidence.binding();
+            if binding.purpose != purpose
+                || binding.semantic != semantic
+                || evidence.operation().path() != operation.path()
+                || value.state.operation_identity != operation.identity()?
+            {
+                return Err(invalid(
+                    "enrollment scope selected another body or directory",
+                ));
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn predecessor(&self) -> Option<&VerifiedUnsignedClosure> {
+        match self {
+            Self::FixedBody => None,
+            Self::Enrollment(value) => value.state.predecessor.as_ref(),
         }
     }
     pub(super) fn require_active(&self) -> Result<()> {

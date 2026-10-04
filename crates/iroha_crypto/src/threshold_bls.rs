@@ -58,6 +58,10 @@ use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
 #[cfg(feature = "pqc")]
+/// Prepaid move-only original aggregate checkpoint custody; no protocol authority.
+pub mod aggregate_checkpoint;
+
+#[cfg(feature = "pqc")]
 /// Opaque authenticated local DKG secret checkpoints; no public plaintext codec.
 pub mod checkpoint;
 

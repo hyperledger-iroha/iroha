@@ -136,8 +136,8 @@ fn prepared_local_outputs_are_complete_before_randomness_at_four_and_thirty_one(
         });
         assert_eq!(
             allocations,
-            32 + 6 * usize::from(n),
-            "exact existing outputs plus three checkpoint banks with four backing allocations and two decode controls each"
+            37 + 6 * usize::from(n),
+            "exact existing outputs plus three six-allocation phase banks and the five-allocation aggregate-only bank"
         );
         let prepared = prepared.unwrap();
         let original_frame = prepared.public_frame.backing();
@@ -429,10 +429,11 @@ fn original_publication_and_private_decode_refusals_keep_same_banks_and_sources_
     let narrow = norito::DecodeLimits::new(0, 0, 0, 0, 0);
     let public_limits = norito::canonical_decode_limits(public.as_slice().len());
     let private_limits = norito::canonical_decode_limits(encrypted.as_slice().len());
-    let error = with_decode_limits_scope(narrow, || bank.decode(public.as_slice(), public_limits))
-        .unwrap_err();
+    let public_refusal =
+        with_decode_limits_scope(narrow, || bank.decode(public.as_slice(), public_limits))
+            .unwrap_err();
     assert!(
-        matches!(error, GlobalThresholdBeaconInputErrorV1::Decode(PreparedDecodeError::Codec(ref cause)) if cause.kind() == DecodeAttemptErrorKind::EnclosingLimit)
+        matches!(&public_refusal, GlobalThresholdBeaconInputErrorV1::Decode(PreparedDecodeError::Codec(cause)) if cause.kind() == DecodeAttemptErrorKind::EnclosingLimit)
     );
     assert!(bank.publication().is_none());
     let foreign = public.as_slice().to_vec();
@@ -449,7 +450,7 @@ fn original_publication_and_private_decode_refusals_keep_same_banks_and_sources_
     assert!(bank.decode_retirement_bytes().is_none());
     let floor = after_public_decode;
     let original_publication_pointer = bank.publication().unwrap().recipient_keys.as_ptr();
-    let (prepared, error) = with_decode_limits_scope(narrow, || {
+    let (prepared, private_refusal) = with_decode_limits_scope(narrow, || {
         prepared.restore_generated(
             &context,
             bank.publication().unwrap(),
@@ -462,13 +463,13 @@ fn original_publication_and_private_decode_refusals_keep_same_banks_and_sources_
     .err()
     .unwrap();
     assert!(
-        matches!(error, LocalGlobalThresholdBeaconDkgErrorV1::Checkpoint(DkgCheckpointErrorV1::Decode(PreparedDecodeError::Codec(ref cause))) if cause.kind() == DecodeAttemptErrorKind::EnclosingLimit)
+        matches!(&private_refusal, LocalGlobalThresholdBeaconDkgErrorV1::Checkpoint(DkgCheckpointErrorV1::Decode(PreparedDecodeError::Codec(cause))) if cause.kind() == DecodeAttemptErrorKind::EnclosingLimit)
     );
     assert_eq!(prepared.recipient.restoration_backing(), recipient_backing);
     assert_eq!(prepared.dealer.restoration_backing(), dealer_backing);
     let mut corrupted = encrypted.as_slice().to_vec();
     corrupted[0] ^= 1;
-    let (prepared, error) = prepared
+    let (prepared, changed_source_refusal) = prepared
         .restore_generated(
             &context,
             bank.publication().unwrap(),
@@ -480,7 +481,7 @@ fn original_publication_and_private_decode_refusals_keep_same_banks_and_sources_
         .err()
         .unwrap();
     assert!(matches!(
-        error,
+        &changed_source_refusal,
         LocalGlobalThresholdBeaconDkgErrorV1::Checkpoint(DkgCheckpointErrorV1::Binding)
     ));
     assert_eq!(prepared.recipient.restoration_backing(), recipient_backing);
@@ -522,7 +523,27 @@ fn original_publication_and_private_decode_refusals_keep_same_banks_and_sources_
     drop(blocker);
     drop(public);
     drop(encrypted);
+    // Each original enclosing-limit error still owns its prepared derived
+    // counter after the corresponding decoder and source backing retire.
+    // Its exact physical layout, rather than a fixed numeric refund, remains
+    // charged through the last error reader and every unchanged-source retry.
+    let counter_bytes = norito::core::PreparedDecodeWorkspace::allocation_layouts()[0].size();
+    assert!(
+        matches!(&public_refusal, GlobalThresholdBeaconInputErrorV1::Decode(PreparedDecodeError::Codec(cause)) if cause.kind() == DecodeAttemptErrorKind::EnclosingLimit)
+    );
+    assert!(
+        matches!(&private_refusal, LocalGlobalThresholdBeaconDkgErrorV1::Checkpoint(DkgCheckpointErrorV1::Decode(PreparedDecodeError::Codec(cause))) if cause.kind() == DecodeAttemptErrorKind::EnclosingLimit)
+    );
+    assert!(matches!(
+        &changed_source_refusal,
+        LocalGlobalThresholdBeaconDkgErrorV1::Checkpoint(DkgCheckpointErrorV1::Binding)
+    ));
+    assert_eq!(budget.reserved_bytes(), counter_bytes * 2);
+    drop(public_refusal);
+    assert_eq!(budget.reserved_bytes(), counter_bytes);
+    drop(private_refusal);
     assert_eq!(budget.reserved_bytes(), 0);
+    drop(changed_source_refusal);
 }
 
 #[test]
@@ -907,15 +928,15 @@ fn prepared_public_frame_maximum_matches_canonical_full_transcripts_at_four_and_
         deliveries.share_acceptances.clear();
         deliveries.last_updated_height = session.commitments_end_height;
         assert_eq!(
-            prepared.public_frame.input_bounds[0],
+            prepared.input_frame_bounds()[0],
             norito::canonical_frame_len(&commitments).unwrap()
         );
         assert_eq!(
-            prepared.public_frame.input_bounds[1],
+            prepared.input_frame_bounds()[1],
             norito::canonical_frame_len(&deliveries).unwrap()
         );
         assert_eq!(
-            prepared.public_frame.input_bounds[2],
+            prepared.input_frame_bounds()[2],
             norito::canonical_frame_len(fixture.session.record()).unwrap(),
             "complete signed aggregate keeps every n² input acknowledgment"
         );
@@ -1084,7 +1105,7 @@ fn local_phase_frames_preserve_exact_input_and_prepaid_pointer_without_late_grow
         validate_global_threshold_beacon_session_v1(record, &binding, &foreign_budget).unwrap();
     for seat in &mut local {
         assert!(matches!(
-            seat.finalize_private_share(&foreign),
+            seat.aggregate_private_share(&foreign),
             Err(LocalGlobalThresholdBeaconDkgErrorV1::Session(
                 GlobalThresholdBeaconSessionError::ForeignReservation
             ))
@@ -1100,7 +1121,7 @@ fn local_phase_frames_preserve_exact_input_and_prepaid_pointer_without_late_grow
     for seat in &mut local {
         assert_eq!(
             allocations_during(|| {
-                let _ = seat.finalize_private_share(&sealed).unwrap();
+                let _ = seat.aggregate_private_share(&sealed).unwrap();
             }),
             0
         );

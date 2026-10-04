@@ -1095,3 +1095,264 @@ fn explicit_reserved_recovery_reuses_original_signing_cap_under_a_later_io_budge
     assert!(peers.requests.lock().unwrap().is_empty());
     peers.finish();
 }
+
+#[test]
+fn full_bound_revalidation_preserves_originals_and_refuses_record_or_directory_substitution() {
+    let _resources = crate::managed::native_test_guard();
+    let fixture = Fixture::new();
+    let mut previous = fixture.reserve();
+    for ordinal in 2..=MAX_ATTEMPTS {
+        let next = fixture
+            .history()
+            .unwrap()
+            .reserve(
+                &fixture.operation,
+                Origin::Generated {
+                    ordinal: u8::try_from(ordinal - 1).unwrap(),
+                    epoch: [u8::try_from(ordinal).unwrap(); 32],
+                    parent_intent: [0x71; 32],
+                },
+                fixture.terms.clone(),
+            )
+            .unwrap();
+        retire_missing(&previous, &next).unwrap();
+        previous = next;
+    }
+    let history = fixture.history().unwrap();
+    let history = history.reread().unwrap();
+    assert_eq!(history.reserved_attempt_count(), MAX_ATTEMPTS);
+    assert_eq!(history.cumulative_reserved_count(), MAX_ATTEMPTS);
+    history.require_current().unwrap();
+    // A fixed semantic body can contain all 64 attempts without any body predecessor.
+    // Its existing local census already checks every record/identity before and after.
+    let (validated, census) = history.test_require_current(1);
+    validated.unwrap();
+    assert_eq!(census.visits, 1);
+    assert_eq!(census.distinct_histories, 1);
+    history
+        .verify_wallets(|attempt| fixture.inspect(attempt))
+        .unwrap();
+    let root_names = fixture.operation.entries(3).unwrap();
+    let original = fixture
+        .operation
+        .read(
+            "original.nrt",
+            super::super::MAX_CHECKPOINT_BYTES + 3 * 1024 * 1024,
+        )
+        .unwrap();
+    let mut changed = original.to_vec();
+    *changed.last_mut().unwrap() ^= 1;
+    fixture
+        .operation
+        .write_atomic("original.nrt", &changed, PublishMode::Replace)
+        .unwrap();
+    assert!(history.require_current().is_err());
+    let (refused, census) = history.test_require_current(1);
+    assert!(refused.is_err());
+    assert_eq!(census.visits, 1);
+    assert_eq!(census.distinct_histories, 1);
+    fixture
+        .operation
+        .write_atomic("original.nrt", &original, PublishMode::Replace)
+        .unwrap();
+    let (restored, census) = history.test_require_current(1);
+    restored.unwrap();
+    assert_eq!(census.visits, 1);
+    assert_eq!(census.distinct_histories, 1);
+
+    let dispatch = fixture
+        .operation
+        .read("dispatch.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    let mut changed = history.dispatch.clone().unwrap();
+    changed.first[0] ^= 1;
+    fixture
+        .operation
+        .write_atomic(
+            "dispatch.nrt",
+            &encode(&changed, MAX_RECORD_BYTES).unwrap(),
+            PublishMode::Replace,
+        )
+        .unwrap();
+    assert!(history.require_current().is_err());
+    fixture
+        .operation
+        .write_atomic("dispatch.nrt", &dispatch, PublishMode::Replace)
+        .unwrap();
+
+    let interior = &history.attempts[31];
+    let authorization = interior
+        .directory
+        .read("authorization.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    let mut changed = interior.authorization.clone();
+    changed.terms.requested_deadline_unix_ms += 1;
+    interior
+        .directory
+        .write_atomic(
+            "authorization.nrt",
+            &encode(&changed, MAX_RECORD_BYTES).unwrap(),
+            PublishMode::Replace,
+        )
+        .unwrap();
+    assert!(history.require_current().is_err());
+    interior
+        .directory
+        .write_atomic("authorization.nrt", &authorization, PublishMode::Replace)
+        .unwrap();
+    interior
+        .directory
+        .write_atomic(
+            "observation.nrt",
+            &encode(&Observation::ordinary(), MAX_RECORD_BYTES).unwrap(),
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    assert!(history.require_current().is_err());
+    std::fs::remove_file(interior.directory.path().join("observation.nrt")).unwrap();
+    let retirement = interior
+        .directory
+        .read("retired.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    let mut changed = interior.retirement.clone().unwrap();
+    changed.successor[0] ^= 1;
+    interior
+        .directory
+        .write_atomic(
+            "retired.nrt",
+            &encode(&changed, MAX_RECORD_BYTES).unwrap(),
+            PublishMode::Replace,
+        )
+        .unwrap();
+    assert!(history.require_current().is_err());
+    interior
+        .directory
+        .write_atomic("retired.nrt", &retirement, PublishMode::Replace)
+        .unwrap();
+    for name in ["foreign", "carrier.nrt"] {
+        interior
+            .directory
+            .write_atomic(name, b"not-authority", PublishMode::CreateNew)
+            .unwrap();
+        assert!(history.require_current().is_err());
+        std::fs::remove_file(interior.directory.path().join(name)).unwrap();
+    }
+    history.require_current().unwrap();
+    assert_eq!(fixture.operation.entries(3).unwrap(), root_names);
+    assert_eq!(
+        fixture
+            .operation
+            .read("original.nrt", original.len())
+            .unwrap()
+            .as_slice(),
+        original.as_slice()
+    );
+    assert_eq!(
+        interior
+            .directory
+            .read("authorization.nrt", MAX_RECORD_BYTES)
+            .unwrap()
+            .as_slice(),
+        authorization.as_slice()
+    );
+    assert_eq!(
+        interior
+            .directory
+            .read("retired.nrt", MAX_RECORD_BYTES)
+            .unwrap()
+            .as_slice(),
+        retirement.as_slice()
+    );
+    assert!(!fixture.operation.path().join("attempts/0065").exists());
+
+    #[cfg(unix)]
+    {
+        // Same canonical records at the same path cannot replace the retained native identity.
+        let last = history.last().unwrap();
+        let exact = last
+            .directory
+            .read("authorization.nrt", MAX_RECORD_BYTES)
+            .unwrap();
+        let saved = fixture._temporary.path().join("displaced-attempt");
+        std::fs::rename(last.directory.path(), &saved).unwrap();
+        let root = fixture.operation.open_child("attempts").unwrap();
+        let substitute = root.create_child("0064").unwrap();
+        substitute
+            .write_atomic("authorization.nrt", &exact, PublishMode::CreateNew)
+            .unwrap();
+        assert_eq!(fixture.operation.entries(3).unwrap(), root_names);
+        assert!(history.require_current().is_err());
+        assert_eq!(
+            substitute
+                .read("authorization.nrt", MAX_RECORD_BYTES)
+                .unwrap()
+                .as_slice(),
+            exact.as_slice()
+        );
+        assert_eq!(
+            std::fs::read(saved.join("authorization.nrt")).unwrap(),
+            exact.to_vec()
+        );
+        assert!(history.reread().is_err());
+    }
+}
+
+#[test]
+fn reserved_empty_tail_keeps_original_parser_semantics_without_losing_published_custody() {
+    let _resources = crate::managed::native_test_guard();
+    let fixture = Fixture::new();
+    fixture
+        .history()
+        .unwrap()
+        .reserve_pending(&fixture.operation, Origin::Explicit, fixture.terms.clone())
+        .unwrap();
+    let no_root = fixture.history().unwrap();
+    no_root.require_current().unwrap();
+    let dispatch_bytes = fixture
+        .operation
+        .read("dispatch.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    let root = fixture.operation.create_child("attempts").unwrap();
+    assert!(no_root.require_current().is_err());
+    drop(no_root);
+
+    let missing = fixture.history().unwrap();
+    assert!(missing.empty_tail);
+    assert!(missing.attempts.is_empty());
+    missing.require_current().unwrap();
+    let empty = root.create_child("0001").unwrap();
+    drop(empty);
+    // The sole parser treats both reserved missing and reserved empty leaves as the same
+    // unfinished prefix. An empty leaf has no retained authorization or native authority.
+    missing.require_current().unwrap();
+    let witnessed_empty = fixture.history().unwrap();
+    assert!(witnessed_empty.empty_tail);
+    assert!(witnessed_empty.attempts.is_empty());
+    std::fs::remove_dir(root.path().join("0001")).unwrap();
+    missing.require_current().unwrap();
+    witnessed_empty.require_current().unwrap();
+    assert_eq!(
+        fixture
+            .operation
+            .read("dispatch.nrt", MAX_RECORD_BYTES)
+            .unwrap(),
+        dispatch_bytes
+    );
+    assert!(!root.path().join("0001").exists());
+
+    let attempt = witnessed_empty
+        .finish_reserved(&fixture.operation, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(attempt.ordinal(), 1);
+    assert!(!attempt.wallet_path().exists());
+    assert!(missing.require_current().is_err());
+    assert!(witnessed_empty.require_current().is_err());
+    let published = fixture.history().unwrap();
+    assert!(!published.empty_tail);
+    published.require_current().unwrap();
+    std::fs::remove_file(attempt.directory.path().join("authorization.nrt")).unwrap();
+    assert!(published.require_current().is_err());
+    assert!(fixture.history().is_err());
+    assert!(!attempt.wallet_path().exists());
+}

@@ -11,21 +11,19 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.UserManager
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
-import java.security.KeyPairGenerator
-import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
-import java.security.spec.ECGenParameterSpec
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreAliasStateV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidSystemKeystoreV1
 
 /**
  * Collects raw, explicitly non-qualified Pixel 6 testnet observations.
@@ -123,7 +121,8 @@ internal interface Pixel6TestnetObservationDeviceV1 {
     fun isUserUnlocked(): Boolean
     fun hasStrongBox(): Boolean
     fun newNonce(): ByteArray
-    fun hasAlias(alias: String): Boolean
+    /** Tri-state Keystore probe: a definitive answer, or a throw when the Keystore cannot answer. */
+    fun aliasState(alias: String): AndroidKeystoreAliasStateV1
     fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1
     fun sign(alias: String, message: ByteArray): ByteArray
     fun delete(alias: String)
@@ -226,8 +225,14 @@ internal class Pixel6TestnetObservationRunnerV1(
         val attestationNonce = nonce.copyOf()
         nonce.fill(0)
         // The reservation must precede every alias inspection, key generation, and signature.
-        val aliasExists = try { device.hasAlias(alias) } catch (_: Exception) { true }
-        if (aliasExists) {
+        // Only a definitive absence permits generation: a present key or a Keystore that cannot
+        // answer freezes the slot before anything is generated or deleted.
+        val aliasAbsent = try {
+            device.aliasState(alias) == AndroidKeystoreAliasStateV1.ABSENT
+        } catch (_: Exception) {
+            false
+        }
+        if (!aliasAbsent) {
             return Pixel6TestnetObservationResultV1.Frozen("alias", "testnet alias exists or cannot be inspected")
         }
         var stage = "generate"
@@ -271,8 +276,12 @@ internal class Pixel6TestnetObservationRunnerV1(
 internal fun isPixel6HardwareV1(manufacturer: String, device: String): Boolean =
     manufacturer.equals("Google", ignoreCase = true) && device == "oriole"
 
-private class AndroidPixel6StrongBoxDeviceV1(private val context: Context) :
-    Pixel6TestnetObservationDeviceV1 {
+private class AndroidPixel6StrongBoxDeviceV1(
+    private val context: Context,
+    keyStore: AndroidKeystoreV1 = AndroidSystemKeystoreV1(),
+) : Pixel6TestnetObservationDeviceV1 {
+    private val keys = AndroidKeystoreOneUseKeysV1(keyStore, strongBox = true)
+
     override val apiLevel: Int get() = Build.VERSION.SDK_INT
     override fun isPixel6(): Boolean = isPixel6HardwareV1(Build.MANUFACTURER, Build.DEVICE)
     override fun isUserUnlocked(): Boolean =
@@ -280,49 +289,13 @@ private class AndroidPixel6StrongBoxDeviceV1(private val context: Context) :
     override fun hasStrongBox(): Boolean =
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
     override fun newNonce(): ByteArray = ByteArray(32).also(SecureRandom()::nextBytes)
-    override fun hasAlias(alias: String): Boolean =
-        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.containsAlias(alias)
+    override fun aliasState(alias: String): AndroidKeystoreAliasStateV1 = keys.aliasState(alias)
 
-    override fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1 {
-        check(apiLevel >= 31)
-        check(!hasAlias(alias))
-        val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
-            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-            .setDigests(KeyProperties.DIGEST_SHA256)
-            .setAttestationChallenge(challenge.copyOf())
-            .setIsStrongBoxBacked(true)
-            .setMaxUsageCount(1)
-            .build()
-        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-        generator.initialize(spec)
-        val pair = generator.generateKeyPair()
-        val chain = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            .getCertificateChain(alias)?.map { it.encoded }
-            ?: throw IllegalStateException("no StrongBox attestation chain")
-        val leaf = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            .getCertificate(alias) ?: throw IllegalStateException("no StrongBox certificate")
-        val publicKey = uncompressedP256Sec1V1(pair.public)
-        check(publicKey.contentEquals(uncompressedP256Sec1V1(leaf.publicKey))) {
-            "generated key differs from attested certificate"
-        }
-        return ProbeKeyMaterialV1(publicKey, chain)
-    }
+    override fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1 = keys.generate(alias, challenge)
 
-    override fun sign(alias: String, message: ByteArray): ByteArray {
-        val entry = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            .getEntry(alias, null) as? KeyStore.PrivateKeyEntry
-            ?: throw IllegalStateException("testnet StrongBox key unavailable")
-        return Signature.getInstance("SHA256withECDSA").run {
-            initSign(entry.privateKey)
-            update(message)
-            sign()
-        }
-    }
+    override fun sign(alias: String, message: ByteArray): ByteArray = keys.sign(alias, message)
 
-    override fun delete(alias: String) {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        if (store.containsAlias(alias)) store.deleteEntry(alias)
-    }
+    override fun delete(alias: String) = keys.delete(alias)
 }
 
 /** App-private persistence is only a local accident guard; it is not hardware rollback protection. */

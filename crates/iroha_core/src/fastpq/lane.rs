@@ -1,19 +1,24 @@
-//! Canonical masked FASTPQ proving for finalized full-domain transfer statements.
+//! Background complete-effect work retaining its original authenticated native source.
+mod source;
 use crate::{
-    fastpq::{FastpqWitnessContext, quantity_statement_from_finalized_transcripts},
-    kura::{FastpqProofEnqueueResult, FastpqProofSnapshot, Kura},
+    fastpq::finalized_source::{
+        AdmittedFinalizedFastpqSource, FinalizedFastpqSource, FinalizedFastpqWorkError,
+    },
+    kura::Kura,
 };
 use fastpq_prover::{
     DigestExecutionV1, MetalOverrides, apply_metal_overrides,
-    offline_compact::{self, ExpectedStatement, ProvingError, ProvingLimits, VerificationLimits},
+    gadgets::public_transfer_statement::execution_effect::SourceExecutionEffectStatement,
+    offline_compact::{
+        self, ExecutionEffectVerificationLimits, ExpectedExecutionEffects, ProvingError,
+        ProvingLimits,
+    },
     set_metal_queue_policy,
 };
+use iroha_allocation::{AllocationBudget, AllocationReservation};
 use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    block::{BlockHeader, consensus::ExecWitness},
-    fastpq::{FastpqArtifactIdentityDescriptionV1, FastpqPublicTransferStatementV1},
-};
+use iroha_crypto::HashOf;
+use iroha_data_model::{block::BlockHeader, fastpq::FastpqArtifactIdentityDescriptionV1};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, info, warn};
 use std::{
@@ -23,22 +28,43 @@ use std::{
     },
     time::Instant,
 };
-use tokio::sync::mpsc;
-/// Handle used to submit FASTPQ prover jobs.
+use tokio::sync::{mpsc, oneshot};
+
+/// Handle for a bounded original-source work queue.
 #[derive(Clone)]
 pub struct FastpqLaneHandle {
-    tx: mpsc::Sender<FastpqWitnessJob>,
+    tx: mpsc::Sender<WorkRequest>,
+    generation: u64,
     backpressure: Option<crate::queue::BackpressureHandle>,
     ready: Arc<AtomicBool>,
 }
+/// Local queue refusal; it never consumes the original source owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FastpqQueueRefusal {
+    Unavailable,
+    Backpressure,
+    Full,
+    Closed,
+}
 impl FastpqLaneHandle {
-    /// Submit a prover job to the lane.
-    pub fn submit(&self, job: FastpqWitnessJob) -> bool {
+    /// Retain the returned receiver until it yields the original source and result.
+    /// A refusal returns the exact original job; retry never reconstructs authority.
+    pub(crate) fn submit(
+        &self,
+        job: FastpqWitnessJob,
+    ) -> Result<oneshot::Receiver<FastpqJobOutcome>, (FastpqWitnessJob, FastpqQueueRefusal)> {
+        if self.generation != 0
+            && !lock_global_lane().current.as_ref().is_some_and(|active| {
+                active.generation == self.generation && !active.shutdown.is_sent()
+            })
+        {
+            return Err((job, FastpqQueueRefusal::Closed));
+        }
         if !self.ready.load(Ordering::Acquire) {
             debug!(
-                height = job.height,
-                view = job.view,
-                "fastpq lane: queueing background prover job while backend is initialising"
+                height = job.height(),
+                view = job.view(),
+                "fastpq lane: queueing while backend is initialising"
             );
         }
         if self
@@ -46,78 +72,219 @@ impl FastpqLaneHandle {
             .as_ref()
             .is_some_and(|handle| handle.snapshot().is_saturated())
         {
-            debug!(
-                height = job.height,
-                view = job.view,
-                "fastpq lane: deferring background prover job while queue is saturated"
-            );
-            return false;
+            return Err((job, FastpqQueueRefusal::Backpressure));
         }
-        self.tx.try_send(job).is_ok()
+        let (reply, receiver) = oneshot::channel();
+        match self.tx.try_send(WorkRequest {
+            job: Some(job),
+            reply: Some(reply),
+        }) {
+            Ok(()) => Ok(receiver),
+            Err(mpsc::error::TrySendError::Full(request)) => {
+                Err((request.into_parts().0, FastpqQueueRefusal::Full))
+            }
+            Err(mpsc::error::TrySendError::Closed(request)) => {
+                Err((request.into_parts().0, FastpqQueueRefusal::Closed))
+            }
+        }
     }
     #[cfg(test)]
     fn is_ready_for_test(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 }
-/// Execution witness metadata forwarded to the prover lane.
-#[derive(Clone)]
-pub struct FastpqWitnessJob {
-    /// Hash of the block this witness belongs to.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Block height.
-    pub height: u64,
-    /// Consensus view.
-    pub view: u64,
-    /// Execution witness carrying FASTPQ transcripts/batches.
-    pub witness: ExecWitness,
-    /// Local-only batch construction context captured outside the witness wire payload.
-    pub(crate) context: FastpqWitnessContext,
+struct WorkRequest {
+    job: Option<FastpqWitnessJob>,
+    reply: Option<oneshot::Sender<FastpqJobOutcome>>,
 }
-/// Canonical artifact bytes and their independently recomputed verified identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FastpqProofOutput {
-    /// Complete canonical ordinary compact artifact, including its public statement.
-    pub proof_bytes: Vec<u8>,
-    /// Recomputed content identity and ordered AIR row commitments.
-    pub identity: FastpqArtifactIdentityDescriptionV1,
+impl WorkRequest {
+    fn into_parts(mut self) -> (FastpqWitnessJob, oneshot::Sender<FastpqJobOutcome>) {
+        (
+            self.job.take().expect("original queued job"),
+            self.reply.take().expect("original completion sender"),
+        )
+    }
 }
-/// Prover abstraction for exact finalized public statements.
-pub trait FastpqProofEngine: Send + Sync + 'static {
-    /// Prove the complete original quantities, identities and ordered occurrences.
-    ///
-    /// # Errors
-    /// Returns errors for invalid statements, resource bounds or proving failures.
+impl Drop for WorkRequest {
+    fn drop(&mut self) {
+        // Receiver destruction (including async supervisor cancellation) returns
+        // every not-yet-started original job instead of silently dropping custody.
+        if let (Some(job), Some(reply)) = (self.job.take(), self.reply.take()) {
+            deliver(
+                reply,
+                FastpqJobOutcome::Deferred {
+                    job,
+                    error: FastpqWorkRefusal::WorkerStopped,
+                },
+            );
+        }
+    }
+}
+/// Move-only job; metadata comes only from the retained actual native result.
+/// TODO: connect completed entries to durable proof admission before automatic dispatch.
+pub(crate) struct FastpqWitnessJob {
+    source: AdmittedFinalizedFastpqSource,
+    next_statement: usize,
+}
+impl std::fmt::Debug for FastpqWitnessJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FastpqWitnessJob")
+            .field("height", &self.height())
+            .field("next_statement", &self.next_statement)
+            .finish_non_exhaustive()
+    }
+}
+impl FastpqWitnessJob {
+    pub(crate) fn from_finalized(
+        source: FinalizedFastpqSource,
+    ) -> Result<Self, (FinalizedFastpqSource, FinalizedFastpqWorkError)> {
+        Ok(Self {
+            source: source.into_work()?,
+            next_statement: 0,
+        })
+    }
+    pub(crate) fn height(&self) -> u64 {
+        self.source.native().committed().height()
+    }
+    pub(crate) fn block_hash(&self) -> HashOf<BlockHeader> {
+        self.source.native().block().hash()
+    }
+    pub(crate) fn view(&self) -> u64 {
+        self.source.native().block().header().view_change_index()
+    }
+}
+/// Production output is the original successful facade owner. Component-only
+/// test outputs cannot manufacture its private verification receipt.
+#[derive(Debug)]
+enum FastpqProofOutput {
+    Produced(offline_compact::ProducedExecutionEffectArtifact),
+    #[cfg(test)]
+    Component {
+        proof_bytes: Vec<u8>,
+        identity: FastpqArtifactIdentityDescriptionV1,
+    },
+}
+impl FastpqProofOutput {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Produced(value) => value.bytes(),
+            #[cfg(test)]
+            Self::Component { proof_bytes, .. } => proof_bytes,
+        }
+    }
+    fn identity(&self) -> &FastpqArtifactIdentityDescriptionV1 {
+        match self {
+            Self::Produced(value) => value.verified().identity(),
+            #[cfg(test)]
+            Self::Component { identity, .. } => identity,
+        }
+    }
+}
+/// A completed entry keeps the exact original source and complete artifact inseparable.
+/// Metadata-only Kura sidecars do not consume or acknowledge this owner.
+pub(crate) struct FastpqCompletedEntry {
+    job: FastpqWitnessJob,
+    output: FastpqProofOutput,
+    generation: u64,
+}
+impl FastpqCompletedEntry {
+    /// Original worker generation. It is not a durable-storage acknowledgement.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+    /// A point-in-time lifecycle observation, never authority to persist after shutdown.
+    pub(crate) fn generation_is_current(&self) -> bool {
+        lock_global_lane().current.as_ref().is_some_and(|active| {
+            active.generation == self.generation && !active.shutdown.is_sent()
+        })
+    }
+    pub(crate) fn source(&self) -> &FinalizedFastpqSource {
+        self.job.source.original()
+    }
+    pub(crate) fn statement_index(&self) -> usize {
+        self.job.next_statement
+    }
+    pub(crate) fn bytes(&self) -> &[u8] {
+        self.output.bytes()
+    }
+    pub(crate) fn identity(&self) -> &FastpqArtifactIdentityDescriptionV1 {
+        self.output.identity()
+    }
+    pub(crate) fn verified(&self) -> Option<&offline_compact::VerifiedArtifact> {
+        match &self.output {
+            FastpqProofOutput::Produced(value) => Some(value.verified()),
+            #[cfg(test)]
+            FastpqProofOutput::Component { .. } => None,
+        }
+    }
+    /// Explicit retry preserves the original cursor/source; it grants no durable acknowledgement.
+    pub(crate) fn retry(self) -> FastpqWitnessJob {
+        self.job
+    }
+}
+/// One entry per turn bounds retained artifacts independently of source entry count.
+pub(crate) enum FastpqJobOutcome {
+    Complete(FastpqCompletedEntry),
+    Deferred {
+        job: FastpqWitnessJob,
+        error: FastpqWorkRefusal,
+    },
+    Exhausted(FastpqWitnessJob),
+}
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FastpqWorkRefusal {
+    #[error("FASTPQ completion receiver was explicitly cancelled")]
+    ReceiverCancelled,
+    #[error("FASTPQ lane is shutting down")]
+    Shutdown,
+    #[error("FASTPQ worker stopped before processing the queued original source")]
+    WorkerStopped,
+    #[error("FASTPQ background producer panicked; original source returned")]
+    BackendPanicked,
+    #[error("FASTPQ backend is unavailable")]
+    BackendUnavailable,
+    #[error(transparent)]
+    Source(#[from] source::SourceWorkError),
+    #[error(transparent)]
+    Prove(#[from] ProvingError),
+}
+/// Private backend injection cannot create a finalized job or replace source expectations.
+trait FastpqProofEngine: Send + Sync + 'static {
+    fn limits(&self) -> (ProvingLimits, ExecutionEffectVerificationLimits);
     fn prove(
         &self,
-        statement: &FastpqPublicTransferStatementV1,
+        statement: &SourceExecutionEffectStatement<'_>,
+        expected: ExpectedExecutionEffects<'_>,
+        budget: &AllocationBudget,
+        reservation: &mut AllocationReservation,
     ) -> Result<FastpqProofOutput, ProvingError>;
 }
 struct RealProofEngine {
     proving: ProvingLimits,
-    verification: VerificationLimits,
+    verification: ExecutionEffectVerificationLimits,
 }
 impl FastpqProofEngine for RealProofEngine {
+    fn limits(&self) -> (ProvingLimits, ExecutionEffectVerificationLimits) {
+        (self.proving, self.verification)
+    }
     fn prove(
         &self,
-        statement: &FastpqPublicTransferStatementV1,
+        statement: &SourceExecutionEffectStatement<'_>,
+        expected: ExpectedExecutionEffects<'_>,
+        budget: &AllocationBudget,
+        reservation: &mut AllocationReservation,
     ) -> Result<FastpqProofOutput, ProvingError> {
-        let expected = ExpectedStatement::from_statement(statement)?;
-        let proof_bytes = offline_compact::prove_quantity_ordinary_artifact(
+        // The facade owner retains the mandatory self-verifier identity;
+        // no extra verification or second allocation reservation is performed here.
+        let produced = offline_compact::prove_quantity_ordinary_artifact(
             statement,
             expected,
             self.proving,
             self.verification,
+            budget,
+            reservation,
         )?;
-        let verified = offline_compact::verify_quantity_ordinary_artifact(
-            &proof_bytes,
-            expected,
-            self.verification,
-        )?;
-        Ok(FastpqProofOutput {
-            proof_bytes,
-            identity: verified.identity().clone(),
-        })
+        Ok(FastpqProofOutput::Produced(produced))
     }
 }
 struct RegisteredFastpqLane {
@@ -160,7 +327,9 @@ fn lock_global_lane() -> MutexGuard<'static, FastpqLaneRegistry> {
 pub fn start(cfg: &Fastpq) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<()>)> {
     start_with_backpressure(cfg, None, None)
 }
-/// Start the FASTPQ prover lane with optional queue backpressure and Kura proof persistence.
+/// Start the FASTPQ prover lane with optional queue backpressure.
+/// Kura lifecycle context remains supplied by the node, but metadata snapshots do not
+/// acknowledge the complete artifact; automatic durable dispatch is still pending.
 pub fn start_with_backpressure(
     cfg: &Fastpq,
     backpressure: Option<crate::queue::BackpressureHandle>,
@@ -203,10 +372,11 @@ fn start_with_builder(
         .checked_add(1)
         .expect("FASTPQ lane generation exhausted");
     let generation = registry.generation;
-    let (tx, rx) = mpsc::channel::<FastpqWitnessJob>(32);
+    let (tx, rx) = mpsc::channel::<WorkRequest>(32);
     let ready = Arc::new(AtomicBool::new(false));
     let handle = FastpqLaneHandle {
         tx,
+        generation,
         backpressure,
         ready: Arc::clone(&ready),
     };
@@ -232,13 +402,18 @@ fn start_with_builder(
     );
     Some((handle, task))
 }
-/// Submit a prover job if the lane is running.
-pub fn try_submit(job: FastpqWitnessJob) -> bool {
+/// Submit only an original native source job, preserving it on every queue refusal.
+pub(crate) fn try_submit(
+    job: FastpqWitnessJob,
+) -> Result<oneshot::Receiver<FastpqJobOutcome>, (FastpqWitnessJob, FastpqQueueRefusal)> {
     let handle = lock_global_lane()
         .current
         .as_ref()
         .map(|registered| registered.handle.clone());
-    handle.is_some_and(|handle| handle.submit(job))
+    match handle {
+        Some(handle) => handle.submit(job),
+        None => Err((job, FastpqQueueRefusal::Unavailable)),
+    }
 }
 /// Request shutdown of the active FASTPQ lane, if any.
 pub fn shutdown() {
@@ -282,7 +457,7 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
             return None;
         }
     };
-    let mut verification = VerificationLimits::default();
+    let mut verification = ExecutionEffectVerificationLimits::default();
     verification.transport.max_wire_bytes = verification
         .transport
         .max_wire_bytes
@@ -325,9 +500,9 @@ fn configured_digest_execution(cfg: &Fastpq) -> fastpq_prover::Result<DigestExec
     })
 }
 fn spawn_worker(
-    mut rx: mpsc::Receiver<FastpqWitnessJob>,
+    mut rx: mpsc::Receiver<WorkRequest>,
     ready: Arc<AtomicBool>,
-    kura: Option<Arc<Kura>>,
+    _kura: Option<Arc<Kura>>,
     generation_lease: Arc<FastpqLaneGenerationLease>,
     shutdown: ShutdownSignal,
     external_shutdown: Option<ShutdownSignal>,
@@ -349,6 +524,7 @@ fn spawn_worker(
             // registered until initialisation actually finishes so a retry cannot race global
             // Metal/prover setup from the retiring worker.
             let _ = engine_task.await;
+            return_buffered(&mut rx, true);
             return;
         };
         let engine = match engine_result {
@@ -356,6 +532,7 @@ fn spawn_worker(
             Ok(None) => {
                 warn!("fastpq lane: failed to initialise prover backend; lane disabled");
                 rx.close();
+                return_buffered(&mut rx, false);
                 return;
             }
             Err(err) => {
@@ -364,6 +541,7 @@ fn spawn_worker(
                     "fastpq lane: prover backend initialisation task panicked"
                 );
                 rx.close();
+                return_buffered(&mut rx, false);
                 return;
             }
         };
@@ -376,23 +554,37 @@ fn spawn_worker(
                     None
                 },
             };
-            let Some(job) = job else {
+            let Some(request) = job else {
                 break;
             };
+            let (job, reply) = request.into_parts();
+            if reply.is_closed() {
+                // Caller explicitly abandoned its receipt before proof work. Drop
+                // this original owner with an observable cancellation disposition.
+                deliver(
+                    reply,
+                    FastpqJobOutcome::Deferred {
+                        job,
+                        error: FastpqWorkRefusal::ReceiverCancelled,
+                    },
+                );
+                continue;
+            }
             let engine = Arc::clone(&engine);
-            let kura = kura.clone();
             let prove_shutdown = shutdown.clone();
             let prove_external_shutdown = external_shutdown.clone();
             let prove_generation_lease = Arc::clone(&generation_lease);
             let mut prove_task = tokio::task::spawn_blocking(move || {
+                let generation = prove_generation_lease.generation;
                 let _generation_lease = prove_generation_lease;
-                process_job(
+                let outcome = process_job(
                     &engine,
-                    &job,
-                    kura.as_deref(),
+                    job,
+                    generation,
                     &prove_shutdown,
                     prove_external_shutdown.as_ref(),
                 );
+                deliver(reply, outcome);
             });
             tokio::select! {
                 result = &mut prove_task => {
@@ -402,8 +594,8 @@ fn spawn_worker(
                 }
                 () = wait_for_shutdown(shutdown.clone(), external_shutdown.clone()) => {
                     rx.close();
-                    // Proof work may persist a sidecar before returning. Await it before releasing
-                    // the generation so no old worker can write after a same-process restart.
+                    // Blocking work finishes naturally. Keep its generation until it
+                    // returns original custody; no old worker can cross a restart unnoticed.
                     if let Err(err) = prove_task.await {
                         warn!(?err, "fastpq lane: prover task panicked during shutdown");
                     }
@@ -411,6 +603,7 @@ fn spawn_worker(
                 }
             }
         }
+        return_buffered(&mut rx, true);
         ready.store(false, Ordering::Release);
     })
 }
@@ -432,156 +625,108 @@ fn metal_overrides_from_config(cfg: &Fastpq) -> MetalOverrides {
         debug_enum: cfg.metal_debug_enum,
     }
 }
+fn return_buffered(rx: &mut mpsc::Receiver<WorkRequest>, shutdown: bool) {
+    rx.close();
+    while let Ok(request) = rx.try_recv() {
+        let error = if shutdown {
+            FastpqWorkRefusal::Shutdown
+        } else {
+            FastpqWorkRefusal::BackendUnavailable
+        };
+        let (job, reply) = request.into_parts();
+        deliver(reply, FastpqJobOutcome::Deferred { job, error });
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    DeliveredToReceiver,
+    ReceiverAbandoned,
+}
+fn deliver(reply: oneshot::Sender<FastpqJobOutcome>, outcome: FastpqJobOutcome) -> Delivery {
+    match reply.send(outcome) {
+        Ok(()) => Delivery::DeliveredToReceiver,
+        Err(abandoned) => {
+            let (job, artifact_bytes) = match &abandoned {
+                FastpqJobOutcome::Complete(completed) => (&completed.job, completed.bytes().len()),
+                FastpqJobOutcome::Deferred { job, .. } | FastpqJobOutcome::Exhausted(job) => {
+                    (job, 0)
+                }
+            };
+            warn!(
+                height = job.height(),
+                statement_index = job.next_statement,
+                artifact_bytes,
+                "fastpq lane: receiver abandoned completion; original source and local artifact are being dropped, no durable retention acknowledged"
+            );
+            drop(abandoned);
+            Delivery::ReceiverAbandoned
+        }
+    }
+}
 fn process_job(
     engine: &Arc<dyn FastpqProofEngine>,
-    job: &FastpqWitnessJob,
-    kura: Option<&Kura>,
+    job: FastpqWitnessJob,
+    generation: u64,
     shutdown: &ShutdownSignal,
     external_shutdown: Option<&ShutdownSignal>,
-) {
+) -> FastpqJobOutcome {
     if shutdown_requested(shutdown, external_shutdown) {
-        return;
+        return FastpqJobOutcome::Deferred {
+            job,
+            error: FastpqWorkRefusal::Shutdown,
+        };
     }
-    if job.witness.fastpq_transcripts.is_empty() && job.witness.fastpq_batches.is_empty() {
-        debug!(
-            height = job.height,
-            view = job.view,
-            "fastpq lane: witness contains no transcripts"
-        );
-        return;
+    if job.next_statement == job.source.leaves().len() {
+        return FastpqJobOutcome::Exhausted(job);
     }
-    let statements = match statements_for_job(job) {
-        Ok(statements) => statements,
-        Err(err) => {
-            warn!(
-                height = job.height,
-                view = job.view,
-                ?err,
-                "fastpq lane: failed to construct canonical statements"
+    let started = Instant::now();
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prove_entry(engine, &job)))
+            .unwrap_or_else(|_| Err(FastpqWorkRefusal::BackendPanicked));
+    // Blocking proof work finishes naturally, but shutdown prevents handing a
+    // completion to persistence. Return original source for an explicit later retry.
+    if shutdown_requested(shutdown, external_shutdown) {
+        return FastpqJobOutcome::Deferred {
+            job,
+            error: FastpqWorkRefusal::Shutdown,
+        };
+    }
+    match result {
+        Ok(output) => {
+            info!(
+                height = job.height(),
+                view = job.view(),
+                statement_index = job.next_statement,
+                proof_bytes = output.bytes().len(),
+                elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
+                "fastpq lane: produced local completion awaiting receiver handoff"
             );
-            return;
+            FastpqJobOutcome::Complete(FastpqCompletedEntry {
+                job,
+                output,
+                generation,
+            })
         }
+        Err(error) => FastpqJobOutcome::Deferred { job, error },
+    }
+}
+fn prove_entry(
+    engine: &Arc<dyn FastpqProofEngine>,
+    job: &FastpqWitnessJob,
+) -> Result<FastpqProofOutput, FastpqWorkRefusal> {
+    let (proving, verification) = engine.limits();
+    let mut prepared = source::prepare(&job.source, job.next_statement, proving, verification)?;
+    let expected = ExpectedExecutionEffects {
+        source: prepared.original.leaf(),
+        statement: prepared.expectations,
     };
-    if statements.is_empty() {
-        debug!(
-            height = job.height,
-            view = job.view,
-            "fastpq lane: no statements produced from witness"
-        );
-        return;
-    }
-    let batch_count = statements.len();
-    let job_started = Instant::now();
-    let mut proved = 0usize;
-    let mut failed = 0usize;
-    let mut persisted = 0usize;
-    let mut transition_count = 0usize;
-    for (idx, (entry_hash, statement)) in statements.into_iter().enumerate() {
-        if shutdown_requested(shutdown, external_shutdown) {
-            break;
-        }
-        let entry_hash_hex = hex::encode(entry_hash.as_ref());
-        transition_count = transition_count.saturating_add(statement.transitions.len());
-        let started = Instant::now();
-        let proof_result = engine.prove(&statement);
-        // `spawn_blocking` continues after its async JoinHandle is aborted. In particular,
-        // the node supervisor may stop waiting for this lane after its shutdown timeout.
-        // Discard a proof completed after either shutdown signal so the detached task cannot
-        // enqueue a sidecar after the node has begun shutting down.
-        if shutdown_requested(shutdown, external_shutdown) {
-            debug!(
-                height = job.height,
-                view = job.view,
-                batch_index = idx,
-                "fastpq lane: discarding proof result completed during shutdown"
-            );
-            break;
-        }
-        match proof_result {
-            Ok(output) => {
-                proved = proved.saturating_add(1);
-                if let Some(kura) = kura {
-                    if let Ok(batch_index) = u32::try_from(idx) {
-                        let snapshot = FastpqProofSnapshot::from_statement(
-                            job.height,
-                            job.block_hash,
-                            entry_hash,
-                            batch_index,
-                            &statement,
-                            output.identity.clone(),
-                        );
-                        if shutdown_requested(shutdown, external_shutdown) {
-                            break;
-                        }
-                        match kura.enqueue_fastpq_proof_snapshot_unless(snapshot, || {
-                            shutdown_requested(shutdown, external_shutdown)
-                        }) {
-                            FastpqProofEnqueueResult::Enqueued { .. } => {
-                                persisted = persisted.saturating_add(1);
-                            }
-                            FastpqProofEnqueueResult::RejectedShutdown => {
-                                debug!(
-                                    height = job.height,
-                                    view = job.view,
-                                    entry_hash = entry_hash_hex,
-                                    "fastpq lane: proof snapshot enqueue cancelled during shutdown"
-                                );
-                                break;
-                            }
-                            result => {
-                                warn!(
-                                    height = job.height,
-                                    view = job.view,
-                                    entry_hash = entry_hash_hex,
-                                    ?result,
-                                    "fastpq lane: proof snapshot was not enqueued for persistence"
-                                );
-                            }
-                        }
-                    } else {
-                        kura.record_fastpq_missing_entry_hash();
-                        warn!(
-                            height = job.height,
-                            view = job.view,
-                            batch_index = idx,
-                            "fastpq lane: missing entry hash; proof snapshot not persisted"
-                        );
-                    }
-                }
-                debug!(
-                    height = job.height,
-                    view = job.view,
-                    entry_hash = entry_hash_hex,
-                    transitions = statement.transitions.len(),
-                    proof_bytes = output.proof_bytes.len(),
-                    artifact_digest = ?output.identity.artifact_digest,
-                    elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
-                    "fastpq lane: generated proof"
-                );
-            }
-            Err(err) => {
-                failed = failed.saturating_add(1);
-                warn!(
-                    height = job.height,
-                    view = job.view,
-                    entry_hash = entry_hash_hex,
-                    ?err,
-                    "fastpq lane: prover error"
-                );
-            }
-        }
-    }
-    info!(
-        height = job.height,
-        view = job.view,
-        batch_count,
-        proved,
-        failed,
-        persisted,
-        transition_count,
-        elapsed_ms = job_started.elapsed().as_secs_f64() * 1_000.0,
-        "fastpq lane: processed prover job"
-    );
+    let output = engine.prove(
+        &prepared.materialized.statement(),
+        expected,
+        prepared.original.pool(),
+        &mut prepared.reservation,
+    )?;
+    Ok(output)
 }
 fn shutdown_requested(
     shutdown: &ShutdownSignal,
@@ -594,7 +739,7 @@ fn shutdown_requested(
 /// This lets unit tests inject a mock [`FastpqProofEngine`] so the lane can
 /// exercise batching logic without spawning the real GPU/CPU prover pipeline.
 #[cfg(test)]
-pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
+fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
     let _ = TEST_ENGINE.set(engine);
 }
 #[cfg(test)]
@@ -605,13 +750,14 @@ mod tests {
         authority_digest, batches_from_bundles, transition_batch_to_dto,
     };
     use fastpq_prover::TransitionBatch;
+    use iroha_crypto::Hash;
     use iroha_data_model::fastpq::{
         TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
     };
     use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
+    use std::{sync::atomic::AtomicBool, time::Duration};
     static LANE_REGISTRY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     fn gpu_execution_cpu_poseidon_config() -> Fastpq {
         Fastpq {
@@ -674,41 +820,8 @@ mod tests {
             );
             sleep(Duration::from_millis(10)).await;
         }
-        let bundle = sample_bundle();
-        let template = FastpqPublicInputsTemplate {
-            dsid: [0u8; 16],
-            slot: 0,
-            old_root: [0u8; 32],
-            new_root: [0u8; 32],
-            perm_root: [0u8; 32],
-        };
-        let tx_set_hash = [0x44; 32];
-        let batches = batches_from_bundles(
-            FASTPQ_CANONICAL_PARAMETER_SET,
-            template,
-            tx_set_hash,
-            [&bundle],
-        )
-        .expect("batches");
-        let witness = ExecWitness {
-            reads: Vec::new(),
-            writes: Vec::new(),
-            fastpq_transcripts: vec![bundle],
-            fastpq_batches: batches.iter().map(transition_batch_to_dto).collect(),
-        };
-        let job = FastpqWitnessJob {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
-            height: 42,
-            view: 7,
-            witness,
-            context: FastpqWitnessContext {
-                public_inputs: Some(template),
-                tx_set_hash: Some(tx_set_hash),
-                entry_dataspaces: BTreeMap::new(),
-                _source_inventory: None,
-            },
-        };
-        assert!(try_submit(job));
+        let job = sample_job();
+        let receipt = try_submit(job).expect("native job queues");
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             if *calls.lock().unwrap() > 0 {
@@ -720,6 +833,10 @@ mod tests {
             );
             sleep(Duration::from_millis(10)).await;
         }
+        assert!(matches!(
+            receipt.await.unwrap(),
+            FastpqJobOutcome::Complete(_)
+        ));
         shutdown();
         tokio::time::timeout(Duration::from_secs(1), task)
             .await
@@ -730,7 +847,7 @@ mod tests {
     async fn worker_start_does_not_wait_for_backend_initialisation() {
         use std::time::Instant as StdInstant;
         use tokio::time::sleep;
-        let (_tx, rx) = mpsc::channel::<FastpqWitnessJob>(1);
+        let (_tx, rx) = mpsc::channel::<WorkRequest>(1);
         let ready = Arc::new(AtomicBool::new(false));
         let started_at = StdInstant::now();
         let task = spawn_worker(
@@ -830,15 +947,10 @@ mod tests {
             "shutdown generation must release the global lane registration"
         );
         assert!(
-            !handle.submit(FastpqWitnessJob {
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0xCD; 32]
-                )),
-                height: 1,
-                view: 0,
-                witness: ExecWitness::default(),
-                context: FastpqWitnessContext::default(),
-            }),
+            matches!(
+                handle.submit(sample_job()),
+                Err((_, FastpqQueueRefusal::Closed))
+            ),
             "closed lane receiver must reject submissions"
         );
     }
@@ -930,35 +1042,60 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(1);
         let handle = FastpqLaneHandle {
             tx,
+            generation: 0,
             backpressure: None,
             ready: Arc::new(AtomicBool::new(false)),
         };
-        let job = FastpqWitnessJob {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32])),
-            height: 42,
-            view: 7,
-            witness: ExecWitness::default(),
-            context: FastpqWitnessContext::default(),
-        };
-
-        assert!(handle.submit(job));
-        let queued = rx.try_recv().expect("pre-ready job is buffered");
-        assert_eq!(queued.height, 42);
-        assert_eq!(queued.view, 7);
+        let job = sample_job();
+        let height = job.height();
+        let view = job.view();
+        let original = std::ptr::from_ref(job.source.entry(0).unwrap().effects()) as usize;
+        let _receipt = handle.submit(job).expect("native pre-ready job queues");
+        let queued = rx
+            .try_recv()
+            .expect("pre-ready job is buffered")
+            .into_parts()
+            .0;
+        assert_eq!(queued.height(), height);
+        assert_eq!(queued.view(), view);
+        assert_eq!(
+            std::ptr::from_ref(queued.source.entry(0).unwrap().effects()) as usize,
+            original
+        );
     }
     #[derive(Clone)]
     struct MockEngine {
         calls: Arc<std::sync::Mutex<usize>>,
     }
     impl FastpqProofEngine for MockEngine {
+        fn limits(&self) -> (ProvingLimits, ExecutionEffectVerificationLimits) {
+            (
+                ProvingLimits::default(),
+                ExecutionEffectVerificationLimits::default(),
+            )
+        }
         fn prove(
             &self,
-            statement: &FastpqPublicTransferStatementV1,
+            statement: &SourceExecutionEffectStatement<'_>,
+            expected: ExpectedExecutionEffects<'_>,
+            budget: &AllocationBudget,
+            reservation: &mut AllocationReservation,
         ) -> Result<FastpqProofOutput, ProvingError> {
+            assert!(reservation.belongs_to(budget));
+            assert_eq!(
+                expected.source.effects_digest,
+                <[u8; 32]>::from(expected.statement.effects_digest)
+            );
+            assert_eq!(expected.statement.public_inputs, statement.public_inputs());
+            assert_eq!(
+                expected.statement.statement_digest,
+                statement
+                    .digest(self.limits().1.public_statement.max_public_bytes)
+                    .unwrap()
+            );
             *self.calls.lock().unwrap() += 1;
-
-            let proof_bytes = b"mock-fastpq-proof".to_vec();
-            Ok(FastpqProofOutput {
+            let proof_bytes = b"component-only-fastpq-proof".to_vec();
+            Ok(FastpqProofOutput::Component {
                 identity: mock_identity(statement, &proof_bytes),
                 proof_bytes,
             })
@@ -968,14 +1105,23 @@ mod tests {
         shutdown: ShutdownSignal,
     }
     impl FastpqProofEngine for ShutdownDuringProofEngine {
+        fn limits(&self) -> (ProvingLimits, ExecutionEffectVerificationLimits) {
+            (
+                ProvingLimits::default(),
+                ExecutionEffectVerificationLimits::default(),
+            )
+        }
         fn prove(
             &self,
-            _statement: &FastpqPublicTransferStatementV1,
+            statement: &SourceExecutionEffectStatement<'_>,
+            _expected: ExpectedExecutionEffects<'_>,
+            _budget: &AllocationBudget,
+            _reservation: &mut AllocationReservation,
         ) -> Result<FastpqProofOutput, ProvingError> {
             self.shutdown.send();
             let proof_bytes = b"proof-completed-after-shutdown".to_vec();
-            Ok(FastpqProofOutput {
-                identity: mock_identity(_statement, &proof_bytes),
+            Ok(FastpqProofOutput::Component {
+                identity: mock_identity(statement, &proof_bytes),
                 proof_bytes,
             })
         }
@@ -1034,51 +1180,22 @@ mod tests {
         let engine: Arc<dyn FastpqProofEngine> = Arc::new(ShutdownDuringProofEngine {
             shutdown: supervisor_shutdown.clone(),
         });
-        let bundle = sample_bundle();
-        let batches = sample_batches(&bundle);
-        let template = FastpqPublicInputsTemplate {
-            dsid: [0; 16],
-            slot: 0,
-            old_root: [0; 32],
-            new_root: [0; 32],
-            perm_root: [0; 32],
-        };
-        // This fixture has an internal transcript and no external transaction wires.
-        // Supply the real empty-wire commitment so admission reaches the prover.
-        let entrypoints: [iroha_data_model::transaction::TransactionEntrypoint; 0] = [];
-        let tx_set_hash =
-            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(&entrypoints)
-                .expect("canonical empty transaction-wire commitment")
-                .into();
-        let job = FastpqWitnessJob {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; 32])),
-            height: 7,
-            view: 3,
-            witness: ExecWitness {
-                fastpq_transcripts: vec![bundle],
-                fastpq_batches: batches.iter().map(transition_batch_to_dto).collect(),
-                ..ExecWitness::default()
-            },
-            context: FastpqWitnessContext {
-                public_inputs: Some(template),
-                tx_set_hash: Some(tx_set_hash),
-                entry_dataspaces: BTreeMap::new(),
-                _source_inventory: None,
-            },
-        };
-        let admitted = statements_for_job(&job).expect("shutdown fixture reaches the prover");
-        assert_eq!(admitted.len(), 1);
-        assert_eq!(admitted[0].1.public_inputs.tx_set_hash, tx_set_hash);
-        let kura = Kura::blank_kura_for_testing();
-
-        process_job(
-            &engine,
-            &job,
-            Some(&kura),
-            &lane_shutdown,
-            Some(&supervisor_shutdown),
+        let job = sample_job();
+        let original_hash = job.block_hash();
+        let tx_set_hash = job.source.leaves()[0].tx_set_hash;
+        let prepared = prepare_job(&job);
+        assert_eq!(job.source.leaves().len(), 1);
+        assert_eq!(
+            prepared
+                .materialized
+                .statement()
+                .public_inputs()
+                .tx_set_hash,
+            tx_set_hash
         );
-
+        drop(prepared);
+        let kura = Kura::blank_kura_for_testing();
+        let outcome = process_job(&engine, job, 0, &lane_shutdown, Some(&supervisor_shutdown));
         assert!(supervisor_shutdown.is_sent());
         assert!(!lane_shutdown.is_sent());
         assert_eq!(
@@ -1086,6 +1203,15 @@ mod tests {
             0,
             "a detached proof must not persist after shutdown"
         );
+        let FastpqJobOutcome::Deferred {
+            job,
+            error: FastpqWorkRefusal::Shutdown,
+        } = outcome
+        else {
+            panic!("shutdown returns original custody without completion")
+        };
+        assert_eq!(job.block_hash(), original_hash);
+        job.source.verify_current().unwrap();
     }
     #[test]
     fn maps_config_to_metal_overrides() {
@@ -1115,7 +1241,7 @@ mod tests {
         assert!(overrides.debug_enum);
     }
     fn mock_identity(
-        statement: &FastpqPublicTransferStatementV1,
+        statement: &SourceExecutionEffectStatement<'_>,
         bytes: &[u8],
     ) -> FastpqArtifactIdentityDescriptionV1 {
         use iroha_data_model::fastpq::{
@@ -1123,13 +1249,18 @@ mod tests {
         };
         FastpqArtifactIdentityDescriptionV1 {
             proof_kind: FastpqProofKindV1::OrdinaryCompact,
-            profile_id: offline_compact::quantity_profile_id(),
-            public_statement_digest: ExpectedStatement::from_statement(statement)
+            profile_id: offline_compact::execution_effect_profile_id(),
+            public_statement_digest: statement
+                .digest(
+                    ExecutionEffectVerificationLimits::default()
+                        .public_statement
+                        .max_public_bytes,
+                )
                 .unwrap()
-                .public_statement_digest,
+                .into(),
             artifact_digest: Hash::new(bytes).into(),
             inner_bundle_digest: Hash::new(b"mock inner bundle").into(),
-            artifact_bytes: bytes.len() as u64,
+            artifact_bytes: u64::try_from(bytes.len()).unwrap(),
             commitments: FastpqCommitmentDescriptionV1::OrderedCompactAir(
                 FastpqOrderedCompactAirCommitmentsV1 {
                     segment_count: 1,
@@ -1141,135 +1272,231 @@ mod tests {
         }
     }
     fn sample_job() -> FastpqWitnessJob {
-        let bundle = sample_bundle();
-        let entry_hash = bundle.entry_hash;
-        FastpqWitnessJob {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
-            height: 42,
-            view: 7,
-            witness: ExecWitness {
-                fastpq_transcripts: vec![bundle],
-                ..ExecWitness::default()
-            },
-            context: FastpqWitnessContext {
-                public_inputs: Some(FastpqPublicInputsTemplate {
-                    dsid: [1; 16],
-                    slot: 23,
-                    old_root: [2; 32],
-                    new_root: [3; 32],
-                    perm_root: [4; 32],
-                }),
-                tx_set_hash: Some([5; 32]),
-                entry_dataspaces: BTreeMap::from([(entry_hash, [6; 16])]),
-                _source_inventory: None,
-            },
+        native_job(Quantity::from(100_u32), &[10])
+    }
+    fn native_job(balance: Quantity, amounts: &[u32]) -> FastpqWitnessJob {
+        let (_chain, source) =
+            crate::fastpq::finalized_source::test_fixture::original_source(balance, amounts);
+        match FastpqWitnessJob::from_finalized(source) {
+            Ok(job) => job,
+            Err((_, error)) => panic!("genuine source admission failed: {error}"),
         }
+    }
+    fn prepare_job(job: &FastpqWitnessJob) -> source::PreparedSourceEntry<'_> {
+        source::prepare(
+            &job.source,
+            job.next_statement,
+            ProvingLimits::default(),
+            ExecutionEffectVerificationLimits::default(),
+        )
+        .unwrap()
     }
     #[test]
     fn finalized_job_preserves_full_quantities_context_and_original_entry_identity() {
-        let mut job = sample_job();
-        let transcript = &mut job.witness.fastpq_transcripts[0].transcripts[0];
-        let delta = &mut transcript.deltas[0];
-        delta.from_balance_before = Quantity::from(u128::MAX);
-        delta.from_balance_after = delta.from_balance_before.try_sub(&delta.amount).unwrap();
-        transcript.poseidon_preimage_digest = Some(crate::fastpq::poseidon_preimage_digest(
-            delta,
-            &transcript.batch_hash,
-        ));
-        let original = norito::encode_canonical(&job.witness.fastpq_transcripts).unwrap();
-        let statements = statements_for_job(&job).unwrap();
-        assert_eq!(statements.len(), 1);
-        let (entry, statement) = &statements[0];
-        assert_eq!(*entry, job.witness.fastpq_transcripts[0].entry_hash);
-        assert_eq!(statement.public_inputs.dsid, [6; 16]);
-        assert_eq!(statement.public_inputs.slot, 23);
-        assert_eq!(statement.public_inputs.perm_root, [4; 32]);
-        assert_eq!(statement.public_inputs.tx_set_hash, [5; 32]);
+        use iroha_data_model::fastpq::FastpqExecutionEffectKindV1;
+        let job = native_job(Quantity::from(u128::MAX), &[10]);
+        let original_entry = job.source.entry(0).unwrap();
+        let original = norito::encode_canonical(original_entry.effects()).unwrap();
+        let original_pointer = std::ptr::from_ref(original_entry.effects());
+        let leaf = original_entry.leaf();
+        let prepared = prepare_job(&job);
+        assert_eq!(job.source.leaves().len(), 1);
+        let statement = prepared.materialized.statement();
         assert_eq!(
-            statement.transcripts[0].deltas[0].from_balance_before,
-            Quantity::from(u128::MAX)
+            leaf.entry_hash,
+            statement.effects().context.entry.entry_hash
         );
-        assert_eq!(statement.transitions.len(), 2);
+        let mut dsid = [0; 16];
+        dsid[..8].copy_from_slice(&leaf.dataspace_id.as_u64().to_le_bytes());
+        assert_eq!(statement.public_inputs().dsid, dsid);
+        assert_eq!(statement.public_inputs().slot, leaf.slot);
+        assert_eq!(statement.public_inputs().perm_root, leaf.perm_root);
+        assert_eq!(statement.public_inputs().tx_set_hash, leaf.tx_set_hash);
+        let FastpqExecutionEffectKindV1::Transfer(effect) = &statement.effects().effects[0].kind
+        else {
+            panic!("genuine transfer")
+        };
+        assert_eq!(effect.source_before, Quantity::from(u128::MAX));
+        let owned: iroha_data_model::fastpq::FastpqExecutionEffectStatementV1 =
+            norito::decode_canonical(&norito::encode_canonical(&statement).unwrap()).unwrap();
+        assert_eq!(owned.transitions.len(), 2);
         assert_eq!(
-            norito::encode_canonical(&job.witness.fastpq_transcripts).unwrap(),
+            norito::encode_canonical(original_entry.effects()).unwrap(),
             original
         );
+        assert!(std::ptr::eq(statement.effects(), original_pointer));
     }
     #[test]
     fn finalized_job_requires_source_context_and_rejects_missing_digest_without_repair() {
-        let original = sample_job();
+        // Mutate offered wire before the consuming immutable work admission.
+        let (_, mut source) = crate::fastpq::finalized_source::test_fixture::original_source(
+            Quantity::from(100_u32),
+            &[10],
+        );
         for mutation in 0..5 {
-            let mut job = original.clone();
-            match mutation {
-                0 => job.context.public_inputs = None,
-                1 => job.context.tx_set_hash = None,
-                2 => job.context.tx_set_hash = Some([0; 32]),
-                3 => {
-                    job.witness.fastpq_transcripts[0].transcripts[0].poseidon_preimage_digest = None
+            source.offer_reconstructed_tamper_for_test(|offered| {
+                let key=iroha_data_model::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1;
+                match mutation {
+                    0=>offered.writes.retain(|write|write.key!=key),
+                    1=>offered.writes.iter_mut().find(|write|write.key==key).unwrap().value.clear(),
+                    2=>offered.writes.iter_mut().find(|write|write.key==key).unwrap().value.push(0),
+                    3=>offered.fastpq_transcripts[0].transcripts[0].poseidon_preimage_digest=None,
+                    _=>{offered.fastpq_batches=sample_batches(&sample_bundle()).iter().map(transition_batch_to_dto).collect();offered.fastpq_transcripts.clear();}
                 }
-                _ => {
-                    job.witness.fastpq_batches = sample_batches(&job.witness.fastpq_transcripts[0])
-                        .iter()
-                        .map(transition_batch_to_dto)
-                        .collect();
-                    job.witness.fastpq_transcripts.clear();
-                }
-            }
-            let before = norito::encode_canonical(&job.witness).unwrap();
-            assert!(statements_for_job(&job).is_err());
-            assert_eq!(norito::encode_canonical(&job.witness).unwrap(), before);
+            });
+            let before = norito::encode_canonical(source.offered_wire_for_test()).unwrap();
+            let counts = AdmittedFinalizedFastpqSource::scan_counts_for_test();
+            let (returned, error) = match FastpqWitnessJob::from_finalized(source) {
+                Ok(_) => panic!("substituted source admitted"),
+                Err(rejected) => rejected,
+            };
+            assert!(matches!(error, FinalizedFastpqWorkError::Native(_)));
+            assert_eq!(
+                norito::encode_canonical(returned.offered_wire_for_test()).unwrap(),
+                before
+            );
+            assert_eq!(
+                AdmittedFinalizedFastpqSource::scan_counts_for_test().2,
+                counts.2,
+                "substitution must fail before any archive digest visit"
+            );
+            source = returned;
         }
-        let mut empty = original;
-        empty.witness = ExecWitness::default();
-        assert!(statements_for_job(&empty).unwrap().is_empty());
+        let empty = native_job(Quantity::from(100_u32), &[]);
+        assert!(empty.source.leaves().is_empty());
+        empty.source.verify_current().unwrap();
+    }
+    #[test]
+    fn finalized_job_requires_every_dataspace_before_any_private_materialization() {
+        let (_, mut source) = crate::fastpq::finalized_source::test_fixture::original_source(
+            Quantity::from(100_u32),
+            &[3, 5],
+        );
+        let original_root = source.native().committed().result();
+        for missing_position in 0..2 {
+            source.offer_reconstructed_tamper_for_test(|offered| {
+                offered.fastpq_transcripts.remove(missing_position);
+            });
+            let before = norito::encode_canonical(source.offered_wire_for_test()).unwrap();
+            let reserved = source.pool().reserved_bytes();
+            let (returned, error) = match FastpqWitnessJob::from_finalized(source) {
+                Ok(_) => panic!("missing original source admitted"),
+                Err(rejected) => rejected,
+            };
+            assert!(matches!(error, FinalizedFastpqWorkError::Native(_)));
+            assert_eq!(
+                returned.pool().reserved_bytes(),
+                reserved,
+                "missing source position {missing_position} reached private construction"
+            );
+            assert_eq!(
+                norito::encode_canonical(returned.offered_wire_for_test()).unwrap(),
+                before
+            );
+            assert_eq!(returned.native().committed().result(), original_root);
+            source = returned;
+        }
+        source.offer_reconstructed_tamper_for_test(|_| {});
+        let job = match FastpqWitnessJob::from_finalized(source) {
+            Ok(job) => job,
+            Err((_, error)) => panic!("original restored: {error}"),
+        };
+        let prepared = prepare_job(&job);
+        let mut dsid = [0; 16];
+        dsid[..8].copy_from_slice(&job.source.leaves()[0].dataspace_id.as_u64().to_le_bytes());
+        assert_eq!(
+            prepared.materialized.statement().public_inputs().dsid,
+            dsid,
+            "only the actual source dataspace supplies this input"
+        );
     }
     #[test]
     fn precomputed_batches_cannot_override_finalized_statement_or_entry() {
-        let mut job = sample_job();
-        let expected = statements_for_job(&job).unwrap();
-        let mut batch = sample_batches(&job.witness.fastpq_transcripts[0]).remove(0);
-        batch.public_inputs.tx_set_hash = [0xE1; 32];
-        batch.public_inputs.dsid = [0xE2; 16];
-        batch.metadata.clear();
-        job.witness.fastpq_batches = vec![transition_batch_to_dto(&batch)];
-        assert_eq!(statements_for_job(&job).unwrap(), expected);
+        let (_, mut source) = crate::fastpq::finalized_source::test_fixture::original_source(
+            Quantity::from(100_u32),
+            &[10],
+        );
+        let original = norito::encode_canonical(source.entry(0).unwrap().effects()).unwrap();
+        source.offer_reconstructed_tamper_for_test(|offered| {
+            let mut batch = sample_batches(&sample_bundle()).remove(0);
+            batch.public_inputs.tx_set_hash = [0xE1; 32];
+            batch.public_inputs.dsid = [0xE2; 16];
+            batch.metadata.clear();
+            offered.fastpq_batches = vec![transition_batch_to_dto(&batch)];
+        });
+        let (mut source, error) = match FastpqWitnessJob::from_finalized(source) {
+            Ok(_) => panic!("prebuilt offered source admitted"),
+            Err(rejected) => rejected,
+        };
+        assert!(matches!(error, FinalizedFastpqWorkError::Native(_)));
+        source.offer_reconstructed_tamper_for_test(|_| {});
+        let job = match FastpqWitnessJob::from_finalized(source) {
+            Ok(job) => job,
+            Err((_, error)) => panic!("original restored: {error}"),
+        };
+        let prepared = prepare_job(&job);
+        assert_eq!(
+            norito::encode_canonical(prepared.materialized.effects()).unwrap(),
+            original
+        );
+        assert_eq!(
+            prepared.expectations.public_inputs.tx_set_hash,
+            job.source.leaves()[0].tx_set_hash
+        );
     }
     #[test]
     fn statement_expectations_are_canonical_and_bind_every_ambient_layout() {
-        let statement = statements_for_job(&sample_job()).unwrap().remove(0).1;
+        use fastpq_prover::gadgets::public_transfer_statement::execution_effect::ExecutionEffectExpectations;
+        let job = sample_job();
+        let prepared = prepare_job(&job);
+        let statement = prepared.materialized.statement();
         let canonical = norito::encode_canonical(&statement).unwrap();
-        let expected = ExpectedStatement::from_statement(&statement).unwrap();
-        assert_eq!(
-            expected.public_statement_digest,
-            <[u8; 32]>::from(Hash::new(&canonical))
-        );
+        let expected = prepared.expectations;
+        let mut frame = b"fastpq:execution-effects:v1:statement|".to_vec();
+        frame.extend_from_slice(&canonical);
+        assert_eq!(expected.statement_digest, Hash::new(&frame));
         for flags in
             (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
         {
             let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(
-                ExpectedStatement::from_statement(&statement).unwrap(),
-                expected
+                statement
+                    .digest(
+                        ExecutionEffectVerificationLimits::default()
+                            .public_statement
+                            .max_public_bytes
+                    )
+                    .unwrap(),
+                expected.statement_digest
             );
             assert_eq!(norito::core::effective_decode_flags(), Some(flags));
         }
-        let mut changed = statement;
+        let mut changed: iroha_data_model::fastpq::FastpqExecutionEffectStatementV1 =
+            norito::decode_canonical(&canonical).unwrap();
         changed.ordering_hash[0] ^= 1;
-        assert_ne!(
-            ExpectedStatement::from_statement(&changed).unwrap(),
-            expected
-        );
+        let altered = SourceExecutionEffectStatement::from_owned(&changed);
+        let altered_expected = ExecutionEffectExpectations {
+            statement_digest: altered
+                .digest(
+                    ExecutionEffectVerificationLimits::default()
+                        .public_statement
+                        .max_public_bytes,
+                )
+                .unwrap(),
+            ..expected
+        };
+        assert_ne!(altered_expected, expected);
     }
     #[test]
     fn real_engine_enforces_artifact_output_limit_before_proof_work() {
-        let statement = statements_for_job(&sample_job()).unwrap().remove(0).1;
-        let mut verification = VerificationLimits::default();
+        let job = sample_job();
+        let mut verification = ExecutionEffectVerificationLimits::default();
         verification.transport.max_wire_bytes = 0;
-        let engine = RealProofEngine {
+        let engine: Arc<dyn FastpqProofEngine> = Arc::new(RealProofEngine {
             proving: ProvingLimits::default(),
             verification,
-        };
-        assert!(engine.prove(&statement).is_err());
+        });
+        assert!(prove_entry(&engine, &job).is_err());
     }
     #[test]
     fn cpu_policy_uses_canonical_producer_without_device_readiness() {
@@ -1291,53 +1518,429 @@ mod tests {
         cfg.poseidon_mode = FastpqPoseidonMode::Gpu;
         assert!(configured_digest_execution(&cfg).is_err());
     }
-}
-fn statements_for_job(
-    job: &FastpqWitnessJob,
-) -> fastpq_prover::Result<Vec<(Hash, FastpqPublicTransferStatementV1)>> {
-    let invalid = |details: &str| fastpq_prover::Error::InvalidTraceShape {
-        details: details.to_owned(),
-    };
-    if job.witness.fastpq_transcripts.is_empty() {
-        return if job.witness.fastpq_batches.is_empty() {
-            Ok(Vec::new())
-        } else {
-            Err(invalid(
-                "FASTPQ proving requires original finalized transcript bundles",
-            ))
+    #[test]
+    fn full_queue_returns_the_exact_original_source_without_reconstruction() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let handle = FastpqLaneHandle {
+            tx,
+            generation: 0,
+            backpressure: None,
+            ready: Arc::new(AtomicBool::new(true)),
         };
+        let first = sample_job();
+        let first_hash = first.block_hash();
+        let _first_receipt = handle.submit(first).expect("first queue slot");
+        let second = sample_job();
+        let pointer = std::ptr::from_ref(second.source.entry(0).unwrap().effects()) as usize;
+        let credits = second.source.pool().reserved_bytes();
+        let Err((returned, refusal)) = handle.submit(second) else {
+            panic!("bounded queue refuses");
+        };
+        assert_eq!(refusal, FastpqQueueRefusal::Full);
+        assert_eq!(
+            std::ptr::from_ref(returned.source.entry(0).unwrap().effects()) as usize,
+            pointer
+        );
+        assert_eq!(returned.source.pool().reserved_bytes(), credits);
+        returned.source.verify_current().unwrap();
+        assert_eq!(
+            rx.try_recv().unwrap().into_parts().0.block_hash(),
+            first_hash
+        );
     }
-    let public_inputs = job
-        .context
-        .public_inputs
-        .ok_or_else(|| invalid("FASTPQ source public inputs are missing"))?;
-    let tx_set_hash = job
-        .context
-        .tx_set_hash
-        .filter(|hash| *hash != [0; 32])
-        .ok_or_else(|| invalid("FASTPQ source transaction-set commitment is missing"))?;
-    let verification = VerificationLimits::default();
-    let proving = ProvingLimits::default();
-    job.witness
-        .fastpq_transcripts
-        .iter()
-        .map(|bundle| {
-            let mut inputs = public_inputs.with_tx_set_hash(tx_set_hash);
-            inputs.dsid = job
-                .context
-                .entry_dataspaces
-                .get(&bundle.entry_hash)
-                .copied()
-                .unwrap_or(inputs.dsid);
-            let (statement, witnesses) = quantity_statement_from_finalized_transcripts(
-                inputs,
-                &bundle.transcripts,
-                verification.public_statement,
-                proving.private_smt,
-            )?
-            .into_parts();
-            drop(witnesses);
-            Ok((bundle.entry_hash, statement))
+    #[test]
+    fn receiver_destruction_returns_queued_original_source_to_waiting_submitter() {
+        let (tx, rx) = mpsc::channel(1);
+        let handle = FastpqLaneHandle {
+            tx,
+            generation: 0,
+            backpressure: None,
+            ready: Arc::new(AtomicBool::new(false)),
+        };
+        let job = sample_job();
+        let pointer = std::ptr::from_ref(job.source.entry(0).unwrap().effects()) as usize;
+        let mut receipt = handle.submit(job).expect("queued source");
+        drop(rx);
+        let FastpqJobOutcome::Deferred {
+            job,
+            error: FastpqWorkRefusal::WorkerStopped,
+        } = receipt.try_recv().unwrap()
+        else {
+            panic!("worker destruction must return custody")
+        };
+        assert_eq!(
+            std::ptr::from_ref(job.source.entry(0).unwrap().effects()) as usize,
+            pointer
+        );
+        job.source.verify_current().unwrap();
+    }
+    #[test]
+    fn original_pool_capacity_refusal_preserves_job_and_can_retry_after_release() {
+        let calls = Arc::new(std::sync::Mutex::new(0));
+        let engine: Arc<dyn FastpqProofEngine> = Arc::new(MockEngine {
+            calls: Arc::clone(&calls),
+        });
+        let job = sample_job();
+        let pool = job.source.pool().clone();
+        let before = pool.reserved_bytes();
+        let demand = source::allocation_bytes(
+            &job.source.entry(0).unwrap(),
+            ProvingLimits::default(),
+            ExecutionEffectVerificationLimits::default(),
+        )
+        .unwrap();
+        assert!(
+            demand <= pool.limit_bytes(),
+            "configured original pool must cover the ordinary native fixture"
+        );
+        let occupied = pool.try_reserve_bytes(pool.limit_bytes() - before).unwrap();
+        let result = process_job(&engine, job, 0, &ShutdownSignal::new(), None);
+        let FastpqJobOutcome::Deferred {
+            job,
+            error:
+                FastpqWorkRefusal::Source(source::SourceWorkError::Allocation(
+                    iroha_allocation::AllocationRefusal::Capacity {
+                        requested_bytes,
+                        reserved_bytes,
+                        limit_bytes,
+                        ..
+                    },
+                )),
+        } = result
+        else {
+            panic!("exact original capacity refusal required")
+        };
+        assert_eq!(requested_bytes, demand);
+        assert_eq!(reserved_bytes, pool.limit_bytes());
+        assert_eq!(limit_bytes, pool.limit_bytes());
+        assert_eq!(*calls.lock().unwrap(), 0);
+        job.source.verify_current().unwrap();
+        drop(occupied);
+        assert_eq!(pool.reserved_bytes(), before);
+        let FastpqJobOutcome::Complete(completed) =
+            process_job(&engine, job, 0, &ShutdownSignal::new(), None)
+        else {
+            panic!("same original job retries")
+        };
+        assert_eq!(*calls.lock().unwrap(), 1);
+        assert_eq!(completed.statement_index(), 0);
+        assert_eq!(
+            pool.reserved_bytes(),
+            before,
+            "temporary backing owners finish before completion; original source remains"
+        );
+    }
+    struct RefusingEngine {
+        panic: bool,
+    }
+    impl FastpqProofEngine for RefusingEngine {
+        fn limits(&self) -> (ProvingLimits, ExecutionEffectVerificationLimits) {
+            (
+                ProvingLimits::default(),
+                ExecutionEffectVerificationLimits::default(),
+            )
+        }
+        fn prove(
+            &self,
+            _statement: &SourceExecutionEffectStatement<'_>,
+            _expected: ExpectedExecutionEffects<'_>,
+            _budget: &AllocationBudget,
+            _reservation: &mut AllocationReservation,
+        ) -> Result<FastpqProofOutput, ProvingError> {
+            assert!(!self.panic, "component backend panic probe");
+            Err(ProvingError::Busy)
+        }
+    }
+    #[test]
+    fn backend_refusal_and_panic_return_original_job_and_release_only_work_credit() {
+        for panic in [false, true] {
+            let job = sample_job();
+            let pointer = std::ptr::from_ref(job.source.entry(0).unwrap().effects()) as usize;
+            let credits = job.source.pool().reserved_bytes();
+            let engine: Arc<dyn FastpqProofEngine> = Arc::new(RefusingEngine { panic });
+            let FastpqJobOutcome::Deferred { job, error } =
+                process_job(&engine, job, 0, &ShutdownSignal::new(), None)
+            else {
+                panic!("backend cannot consume source on refusal")
+            };
+            assert!(if panic {
+                matches!(error, FastpqWorkRefusal::BackendPanicked)
+            } else {
+                matches!(error, FastpqWorkRefusal::Prove(ProvingError::Busy))
+            });
+            assert_eq!(
+                std::ptr::from_ref(job.source.entry(0).unwrap().effects()) as usize,
+                pointer
+            );
+            assert_eq!(job.source.pool().reserved_bytes(), credits);
+            job.source.verify_current().unwrap();
+        }
+    }
+    #[test]
+    fn receiver_cancellation_is_explicit_abandonment_not_retention() {
+        let engine: Arc<dyn FastpqProofEngine> = Arc::new(MockEngine {
+            calls: Arc::new(std::sync::Mutex::new(0)),
+        });
+        let job = sample_job();
+        let pool = job.source.pool().clone();
+        let before = pool.reserved_bytes();
+        let outcome = process_job(&engine, job, 0, &ShutdownSignal::new(), None);
+        let FastpqJobOutcome::Complete(ref completed) = outcome else {
+            panic!("component completion")
+        };
+        assert!(!completed.bytes().is_empty());
+        assert!(
+            completed.verified().is_none(),
+            "component mock does not manufacture verified proof authority"
+        );
+        assert_eq!(pool.reserved_bytes(), before);
+        let (reply, receiver) = oneshot::channel();
+        drop(receiver);
+        assert_eq!(deliver(reply, outcome), Delivery::ReceiverAbandoned);
+        assert!(
+            pool.reserved_bytes() < before,
+            "explicit abandoned receiver releases original owners"
+        );
+    }
+    #[tokio::test]
+    async fn completed_receipt_retains_source_and_bytes_across_generation_retirement() {
+        let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
+        let _digest_guard = DigestAccelerationTestGuard::new();
+        let (handle, task) = start_with_builder(None, None, None, || {
+            Some(Arc::new(MockEngine {
+                calls: Arc::new(std::sync::Mutex::new(0)),
+            }))
         })
-        .collect()
+        .expect("lane starts");
+        let job = sample_job();
+        let original_hash = job.block_hash();
+        let original_pointer = std::ptr::from_ref(job.source.entry(0).unwrap().effects()) as usize;
+        let receipt = handle.submit(job).expect("native source queues");
+        let FastpqJobOutcome::Complete(completed) =
+            tokio::time::timeout(Duration::from_secs(30), receipt)
+                .await
+                .expect("bounded native preparation completes")
+                .unwrap()
+        else {
+            panic!("one retained completion")
+        };
+        assert_eq!(completed.generation(), handle.generation);
+        assert!(completed.generation_is_current());
+        assert!(!completed.bytes().is_empty());
+        assert_eq!(
+            completed.identity().artifact_bytes,
+            u64::try_from(completed.bytes().len()).unwrap()
+        );
+        shutdown();
+        task.await.unwrap();
+        assert!(
+            !completed.generation_is_current(),
+            "retired completion is not a live-generation admission"
+        );
+        assert_eq!(completed.source().native().block().hash(), original_hash);
+        assert_eq!(
+            std::ptr::from_ref(completed.source().entry(0).unwrap().effects()) as usize,
+            original_pointer
+        );
+        assert!(
+            !completed.bytes().is_empty(),
+            "receipt retains actual artifact bytes until explicitly consumed"
+        );
+        let retry = completed.retry();
+        assert_eq!(
+            retry.next_statement, 0,
+            "retry grants no fabricated persistence acknowledgement"
+        );
+        assert_eq!(
+            std::ptr::from_ref(retry.source.entry(0).unwrap().effects()) as usize,
+            original_pointer
+        );
+    }
+    #[tokio::test]
+    async fn cancelled_receiver_prevents_background_proof_work() {
+        let calls = Arc::new(std::sync::Mutex::new(0));
+        let engine_calls = Arc::clone(&calls);
+        let (tx, rx) = mpsc::channel(1);
+        let job = sample_job();
+        let (reply, receiver) = oneshot::channel();
+        tx.try_send(WorkRequest {
+            job: Some(job),
+            reply: Some(reply),
+        })
+        .unwrap_or_else(|_| panic!("queue"));
+        drop(receiver);
+        drop(tx);
+        let task = spawn_worker(
+            rx,
+            Arc::new(AtomicBool::new(false)),
+            None,
+            Arc::new(FastpqLaneGenerationLease { generation: 0 }),
+            ShutdownSignal::new(),
+            None,
+            move || {
+                Some(Arc::new(MockEngine {
+                    calls: engine_calls,
+                }))
+            },
+        );
+        task.await.unwrap();
+        assert_eq!(
+            *calls.lock().unwrap(),
+            0,
+            "explicit cancellation precedes private work"
+        );
+    }
+    #[tokio::test]
+    async fn failed_initialization_returns_buffered_original_source() {
+        let (tx, rx) = mpsc::channel(1);
+        let job = sample_job();
+        let pointer = std::ptr::from_ref(job.source.entry(0).unwrap().effects()) as usize;
+        let (reply, receiver) = oneshot::channel();
+        tx.try_send(WorkRequest {
+            job: Some(job),
+            reply: Some(reply),
+        })
+        .unwrap_or_else(|_| panic!("queue"));
+        let task = spawn_worker(
+            rx,
+            Arc::new(AtomicBool::new(false)),
+            None,
+            Arc::new(FastpqLaneGenerationLease { generation: 0 }),
+            ShutdownSignal::new(),
+            None,
+            || None,
+        );
+        task.await.unwrap();
+        let FastpqJobOutcome::Deferred {
+            job,
+            error: FastpqWorkRefusal::BackendUnavailable,
+        } = receiver.await.unwrap()
+        else {
+            panic!("failed initialization returns original source")
+        };
+        assert_eq!(
+            std::ptr::from_ref(job.source.entry(0).unwrap().effects()) as usize,
+            pointer
+        );
+        job.source.verify_current().unwrap();
+    }
+    #[test]
+    fn authenticated_zero_effect_job_finishes_without_proving_or_inventing_artifact() {
+        let calls = Arc::new(std::sync::Mutex::new(0));
+        let engine: Arc<dyn FastpqProofEngine> = Arc::new(MockEngine {
+            calls: Arc::clone(&calls),
+        });
+        let job = native_job(Quantity::from(100_u32), &[]);
+        let hash = job.block_hash();
+        let FastpqJobOutcome::Exhausted(job) =
+            process_job(&engine, job, 0, &ShutdownSignal::new(), None)
+        else {
+            panic!("zero effects has no ordinary proof")
+        };
+        assert_eq!(job.block_hash(), hash);
+        assert!(job.source.leaves().is_empty());
+        assert_eq!(*calls.lock().unwrap(), 0);
+        job.source.verify_current().unwrap();
+    }
+    #[test]
+    fn work_admission_scans_source_once_and_each_original_tape_once() {
+        for count in [1_usize, 2, 4] {
+            let amounts = (1..=u32::try_from(count).unwrap()).collect::<Vec<_>>();
+            let (_, source) = crate::fastpq::finalized_source::test_fixture::original_source(
+                Quantity::from(100_u32),
+                &amounts,
+            );
+            let before = AdmittedFinalizedFastpqSource::scan_counts_for_test();
+            let source_bytes = norito::encode_canonical(source.manifest()).unwrap();
+            let pool = source.pool().clone();
+            let reserved = pool.reserved_bytes();
+            let job = match FastpqWitnessJob::from_finalized(source) {
+                Ok(job) => job,
+                Err((_, error)) => panic!("genuine source: {error}"),
+            };
+            let admitted = AdmittedFinalizedFastpqSource::scan_counts_for_test();
+            assert_eq!(
+                (
+                    admitted.0 - before.0,
+                    admitted.1 - before.1,
+                    admitted.2 - before.2,
+                    admitted.3 - before.3
+                ),
+                (1, 2, count, 0),
+                "one native check, two bounded wire passes and each original tape exactly once"
+            );
+            assert_eq!(
+                pool.reserved_bytes(),
+                reserved,
+                "admission only shares the original charged handles"
+            );
+            for index in 0..count {
+                let prepared = source::prepare(
+                    &job.source,
+                    index,
+                    ProvingLimits::default(),
+                    ExecutionEffectVerificationLimits::default(),
+                )
+                .unwrap();
+                assert_eq!(prepared.original.leaf(), &job.source.leaves()[index]);
+                assert!(std::ptr::eq(
+                    prepared.materialized.effects(),
+                    prepared.original.effects()
+                ));
+                drop(prepared);
+                let now = AdmittedFinalizedFastpqSource::scan_counts_for_test();
+                assert_eq!(
+                    (now.0, now.1, now.2),
+                    (admitted.0, admitted.1, admitted.2),
+                    "turn {index} must not rescan original source or rehash unrelated tape"
+                );
+                assert_eq!(
+                    now.3 - admitted.3,
+                    index + 1,
+                    "one admitted selection per turn"
+                );
+                assert_eq!(pool.reserved_bytes(), reserved);
+            }
+            assert_eq!(
+                norito::encode_canonical(job.source.original().manifest()).unwrap(),
+                source_bytes
+            );
+        }
+    }
+    #[test]
+    fn unavailable_or_unsupported_optional_archive_never_creates_work_admission() {
+        for issue in [
+            crate::state::QuantityCaptureIssue::Capacity,
+            crate::state::QuantityCaptureIssue::UnsupportedOwner,
+        ] {
+            let (_, mut source) = crate::fastpq::finalized_source::test_fixture::original_source(
+                Quantity::from(100_u32),
+                &[3, 5],
+            );
+            let manifest = norito::encode_canonical(source.manifest()).unwrap();
+            let native = source.native().committed().result();
+            // Explicit local optional-archive fault before admission. It changes no
+            // mandatory D7 facts, source coverage or native authority.
+            source.withhold_optional_archive_for_test(issue);
+            source.verify_current().unwrap();
+            let reserved = source.pool().reserved_bytes();
+            let before = AdmittedFinalizedFastpqSource::scan_counts_for_test();
+            let (source, error) = match FastpqWitnessJob::from_finalized(source) {
+                Ok(_) => panic!("unavailable archive admitted"),
+                Err(rejected) => rejected,
+            };
+            assert!(matches!(error,FinalizedFastpqWorkError::Archive(actual) if actual==issue));
+            assert_eq!(source.pool().reserved_bytes(), reserved);
+            assert_eq!(
+                AdmittedFinalizedFastpqSource::scan_counts_for_test().2,
+                before.2
+            );
+            assert_eq!(source.native().committed().result(), native);
+            assert_eq!(
+                norito::encode_canonical(source.manifest()).unwrap(),
+                manifest
+            );
+            source.verify_current().unwrap();
+        }
+    }
 }

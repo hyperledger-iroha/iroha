@@ -1,7 +1,7 @@
 //! Test-only generated selection using a real native cut, followed by the existing wallet/carrier owner.
 use super::*;
-use crate::managed::native_operation::Fees;
 use crate::managed::native_operation::test_support::native_fixture::NativeFixture;
+use crate::managed::native_operation::{Fees, authorization::DispatchAuthorization};
 
 impl ManagedInitialReservePolicy {
     pub(in crate::managed) fn bootstrap_native_generated(
@@ -92,8 +92,8 @@ impl ManagedInitialReservePolicy {
                 .join("transaction/payload.json")
                 .exists()
         );
-        let utc = selected.terms.requested_deadline_unix_ms;
-        // Existing native helper prepares the same selected request and retains its actual carrier.
-        self.bootstrap_native(native, policy, utc, options)
+        assert!(selected.attempt().origin() == &authorization.origin().unwrap());
+        // Preserve the actual generated selection; the explicit setup helper requires empty custody.
+        self.bootstrap_native_selected(native, &selected, &account, options)
     }
 }

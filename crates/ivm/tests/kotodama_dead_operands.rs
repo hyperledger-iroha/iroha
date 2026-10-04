@@ -130,3 +130,6 @@ mod frame_emission;
 
 #[path = "kotodama_compact_emission.rs"]
 mod compact_emission;
+
+#[path = "kotodama_local_emission.rs"]
+mod local_emission;

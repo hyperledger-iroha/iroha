@@ -130,7 +130,7 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "9db6655a28e5cde66111195e612aa0c3b9787bdaf3dc3c35892baf43b916f719"
+    "70a6eaea80cff6b0e22c569234bdd34572c1cf14b780c89dea238a92e48f2b67"
 )
 HOSTILE_CARGO_ENVIRONMENT = frozenset(
     {
@@ -146,6 +146,7 @@ HOSTILE_CARGO_ENVIRONMENT = frozenset(
     }
 )
 FORBIDDEN_FEATURES = (
+    'irohad_lib feature "mutation-testing"',
     'iroha feature "test-fixtures"',
     'iroha_core feature "iroha-core-tests"',
     'iroha_core_zk feature "test-utils"',
@@ -225,7 +226,6 @@ SHIPPING_ROOT_FEATURE_ALLOWLIST = {
             "expensive-telemetry",
             "external-software-signer-bin",
             "gost",
-            "ivm-cuda",
             "schema-endpoint",
             "sm",
             "telemetry",
@@ -868,6 +868,20 @@ def _cargo_subprocess_environment() -> dict[str, str]:
         if _hostile_cargo_environment_name(name):
             environment.pop(name, None)
     return environment
+
+
+def validate_daemon_cuda_target_dependency(repo: Path) -> None:
+    """Require the sole mandatory Linux/Windows IVM CUDA target dependency."""
+    runtime = tomllib.loads((repo / "crates/irohad/Cargo.toml").read_text(encoding="utf-8"))
+    binary = tomllib.loads((repo / "crates/irohad/bins/Cargo.toml").read_text(encoding="utf-8"))
+    scope = 'cfg(any(target_os = "linux", target_os = "windows"))'
+    expected = {"workspace": True, "features": ["cuda"]}
+    targets = runtime.get("target", {})
+    if (runtime.get("dependencies", {}).get("ivm") != {"workspace": True}
+            or targets.get(scope, {}).get("dependencies", {}).get("ivm") != expected
+            or any("ivm" in value.get("dependencies", {}) for key, value in targets.items() if key != scope)
+            or any("ivm-cuda" in document.get("features", {}) for document in (runtime, binary))):
+        raise RuntimeError("daemon CUDA must use the exact mandatory Linux/Windows target dependency; aliases are retired")
 
 
 def workspace_catalog(repo: Path) -> WorkspaceCatalog:
@@ -1673,10 +1687,6 @@ def docker_publish_invocations(repo: Path) -> tuple[DockerInvocation, ...]:
                     f"{relative}: Docker build arguments are not declared by "
                     f"{dockerfile_relative}: {', '.join(sorted(undeclared_args))}"
                 )
-            if "ARG IVM_CUDA_TRUSTED_KEY_SHA256" in dockerfile_source and args.get(
-                "IVM_CUDA_TRUSTED_KEY_SHA256"
-            ) != "${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}":
-                raise RuntimeError(f"{relative}: reviewed CUDA public-key configuration is not forwarded")
             if "USE_PREBUILT" in args:
                 raise RuntimeError(
                     f"{relative}: official workflow may not override USE_PREBUILT"
@@ -1721,15 +1731,12 @@ def _validate_docker_acceleration_inputs(source: str, path: Path) -> None:
     """Keep every Linux image build bound to its signed bundled CUDA input."""
 
     markers = (
-        "ARG IVM_CUDA_TRUSTED_KEY_SHA256",
-        "ENV IVM_CUDA_TRUSTED_KEY_SHA256=${IVM_CUDA_TRUSTED_KEY_SHA256}",
-        "ENV IVM_CUDA_PTX_MODE=bundled",
-        'case ",${FEATURES}," in *,irohad/ivm-cuda,*)',
-        'test "${#IVM_CUDA_TRUSTED_KEY_SHA256}" -eq 64',
-        '*[!0-9a-f]*|0000000000000000000000000000000000000000000000000000000000000000)',
+        "for input in aes.ptx bitonic_sort.ptx bn254.ptx poseidon.ptx sha256.ptx sha256_leaves.ptx sha256_pairs_reduce.ptx sha3.ptx signature.ptx vector.ptx provenance.v1 provenance.v1.pub provenance.v1.sig; do",
+        'test -f "crates/ivm/cuda/${input}" && test ! -L "crates/ivm/cuda/${input}" || exit 1;',
     )
-    if any(source.count(marker) != 1 for marker in markers):
-        raise RuntimeError(f"{path}: signed CUDA build-input handoff changed")
+    if (any(source.count(marker) != 1 for marker in markers)
+            or any(token in source for token in ("ivm-cuda", "IVM_CUDA_TRUSTED_KEY_SHA256", "IVM_CUDA_PTX_MODE"))):
+        raise RuntimeError(f"{path}: fixed CUDA inventory preflight or retired input changed")
 
 
 def docker_shipping_targets(
@@ -1758,8 +1765,6 @@ def docker_shipping_targets(
         pair for value in global_features for pair in declared_feature_owners(value, catalog)
     }
     if any(target.package == "irohad" for target in resolved):
-        if ("irohad", "ivm-cuda") not in owned_features:
-            raise RuntimeError(f"{dockerfile}: shipping daemon omits mandatory CUDA")
         _validate_docker_acceleration_inputs(source, dockerfile)
 
     targets: list[ShippingTarget] = []
@@ -2118,14 +2123,14 @@ def _validate_nix_cargo_envelope(source: str, relative: Path) -> None:
     capability_markers = (
         'includesDaemon = builtins.any (binary: binary.package == "irohad") binaries;',
         'needsCuda = includesDaemon && (lib.hasInfix "-linux-" targetTriple || lib.hasInfix "-windows-" targetTriple);',
-        'releaseFeatures = lib.unique (features ++ lib.optional needsCuda "irohad/ivm-cuda");',
-        'IVM_CUDA_PTX_MODE = "bundled";',
-        'IVM_CUDA_TRUSTED_KEY_SHA256 = checkedCudaKey;',
-        'builtins.match "[0-9a-f]{64}" cudaTrustedKeySha256 != null',
-        'cudaTrustedKeySha256 != "0000000000000000000000000000000000000000000000000000000000000000"',
+        'releaseFeatures = lib.unique features;',
+        "preBuild = lib.optionalString needsCuda ''",
+        "test -f \"crates/ivm/cuda/''${input}\" && test ! -L \"crates/ivm/cuda/''${input}\" || exit 1",
+        'for input in aes.ptx bitonic_sort.ptx bn254.ptx poseidon.ptx sha256.ptx sha256_leaves.ptx sha256_pairs_reduce.ptx sha3.ptx signature.ptx vector.ptx provenance.v1 provenance.v1.pub provenance.v1.sig; do',
     )
-    if any(source.count(marker) != 1 for marker in capability_markers):
-        raise RuntimeError(f"{relative}: target-qualified acceleration or reviewed CUDA trust input changed")
+    if (any(source.count(marker) != 1 for marker in capability_markers)
+            or any(token in source for token in ("ivm-cuda", "IVM_CUDA_PTX_MODE", "IVM_CUDA_TRUSTED_KEY_SHA256", "cudaTrustedKeySha256"))):
+        raise RuntimeError(f"{relative}: target-qualified acceleration inventory preflight changed")
 
     rustflag_assignments = tuple(
         re.findall(
@@ -2312,10 +2317,6 @@ def nix_shipping_targets(
         for package, binary in pairs:
             resolved = _resolve_binary(catalog, binary, package)
             features = set(feature_sets[package])
-            if package == "irohad":
-                if "ivm-cuda" not in catalog.package_features[package]:
-                    raise RuntimeError(f"{relative}: daemon lacks mandatory shipping CUDA feature")
-                features.add("ivm-cuda")
             features.update(resolved.required_features)
             targets.append(
                 ShippingTarget(
@@ -2649,7 +2650,6 @@ def canonical_release_bundle_policy(repo: Path) -> str:
         "--cargo-profile",
         "--features",
         '"${provenance_binaries[@]}"',
-        '"${cuda_provenance_args[@]}"',
         "--output-directory",
     )
     for script, source in (
@@ -2659,7 +2659,7 @@ def canonical_release_bundle_policy(repo: Path) -> str:
         capability_markers = (
             "from release_artifact_contract import release_acceleration_features",
             'release_acceleration_features(sys.argv[2], filter(None, sys.argv[3].split(",")))',
-            'cuda_provenance_args=(--trusted-cuda-key-sha256 "$trusted_cuda_key_sha256")',
+            'require_release_cuda_source_inputs(Path(sys.argv[1]).parent, sys.argv[2])',
         )
         if any(source.count(marker) != 1 for marker in capability_markers):
             raise RuntimeError(f"{script}: target acceleration or independent CUDA trust handoff changed")
@@ -2886,11 +2886,7 @@ def release_bundle_targets(
             catalog, target.package, fixed_features, RELEASE_BUNDLE_SCRIPT
         )
         features.update(target.required_features)
-        # This graph is the union over canonical Linux/macOS/Windows targets.
-        if target.package == "irohad":
-            if "ivm-cuda" not in catalog.package_features[target.package]:
-                raise RuntimeError("canonical daemon lacks required shipping CUDA feature")
-            features.add("ivm-cuda")
+        # Mandatory platform dependencies carry the canonical target union.
         targets.append(
             ShippingTarget(
                 package=target.package,
@@ -3095,6 +3091,7 @@ def main() -> int:
         )
         print("trusted release source commit and surface passed")
         return 0
+    validate_daemon_cuda_target_dependency(repo)
     profiles = shipping_profiles(repo)
     if args.packages:
         selected: list[ShippingProfile] = []

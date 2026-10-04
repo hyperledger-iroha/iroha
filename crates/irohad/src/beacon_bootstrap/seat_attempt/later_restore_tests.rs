@@ -93,7 +93,7 @@ pub(super) fn through_original_later_phase(
     iroha_core::sumeragi::test_chain::CertifiedTestChain,
 ) {
     use iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1;
-    assert!((2..=3).contains(&phase));
+    assert!((2..=4).contains(&phase));
     let (mut attempt, writers, inherited) = prepare_restartable(root, budget).unwrap();
     let mut chain = genuine_chain();
     assert_eq!(chain.network_id(), attempt.session.network_id);
@@ -230,6 +230,75 @@ pub(super) fn through_original_later_phase(
     assert_eq!(
         attempt.finality.clock().tip().unwrap().result(),
         chain.committed(3).result()
+    );
+    if phase == 3 {
+        return (attempt, writers, inherited, chain);
+    }
+    let crypto = iroha_core::beacon::AdaptiveGlobalThresholdBeaconDkgCryptoV1;
+    let mut reducer =
+        iroha_core::beacon::GlobalThresholdBeaconDkgStateV1::new(session, &crypto, budget).unwrap();
+    for recipient in &deliveries.recipient_keys {
+        reducer
+            .record_recipient_key(session.start_height, recipient)
+            .unwrap();
+    }
+    for dealer in &deliveries.dealer_commitments {
+        reducer
+            .record_dealer_commitment(session.start_height, dealer, &crypto)
+            .unwrap();
+    }
+    for edge in &deliveries.encrypted_shares {
+        reducer
+            .record_encrypted_share(session.commitments_end_height, edge)
+            .unwrap();
+    }
+    let original_acceptance: GlobalThresholdBeaconDkgSnapshotV1 =
+        norito::decode_canonical(attempt.local.as_ref().unwrap().encoded_public_frame()).unwrap();
+    for acceptance in &original_acceptance.share_acceptances {
+        reducer
+            .record_share_acceptance(session.deliveries_end_height, acceptance)
+            .unwrap();
+    }
+    for (peer, key) in peers.iter_mut().zip(keys.iter().skip(1)) {
+        // The original all-edge input is already durably published by this fixture.
+        // This peer fixture does not claim its own restart or filesystem qualification.
+        peer.retire_durably_published_dealer().unwrap();
+        for acceptance in peer
+            .accept(&deliveries, session.deliveries_end_height, key)
+            .unwrap()
+        {
+            reducer
+                .record_share_acceptance(session.deliveries_end_height, acceptance)
+                .unwrap();
+        }
+    }
+    reducer
+        .finalize(session.acceptances_end_height, &crypto)
+        .unwrap();
+    let finalized = reducer.into_finalized().unwrap();
+    let input = norito::encode_canonical(finalized.record()).unwrap();
+    drop(finalized);
+    chain.commit_at(40_000, Vec::new());
+    assert_eq!(chain.height(), session.acceptances_end_height);
+    let proof = native_proof(&chain, 4);
+    let [public, finality] = [&writers[0], &writers[1]].map(|file| file.try_clone().unwrap());
+    let producer = std::thread::spawn(move || {
+        write_original_frame(&public, &input)?;
+        write_original_frame(&finality, &proof)
+    });
+    for expected in [
+        Phase::SessionDecoded,
+        Phase::SessionFinalized,
+        Phase::SessionSealed,
+        Phase::ExportPrepared,
+    ] {
+        attempt.step().unwrap();
+        assert_eq!(attempt.phase, expected);
+    }
+    producer.join().unwrap().unwrap();
+    assert_eq!(
+        attempt.finality.clock().tip().unwrap().result(),
+        chain.committed(4).result()
     );
     (attempt, writers, inherited, chain)
 }

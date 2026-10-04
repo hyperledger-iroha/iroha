@@ -323,7 +323,11 @@ fn print_sidecar(writer: &mut dyn Write, block_store_path: &Path, height: u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_core::{block::BlockBuilder, kura::PipelineDagSnapshot, tx::AcceptedTransaction};
+    use iroha_core::{
+        block::{BlockBuilder, reserve_block_for_tests},
+        kura::PipelineDagSnapshot,
+        tx::AcceptedTransaction,
+    };
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::{BlockHeader, SharedSignedBlock, SignedBlock},
@@ -381,6 +385,7 @@ mod tests {
         assert!(error.to_string().contains("from must be positive"));
     }
     fn fixture_block(prev: Option<&SignedBlock>) -> SharedSignedBlock {
+        let shell = reserve_block_for_tests();
         let network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                 b"kagami-kura-fixture-network",
@@ -404,11 +409,7 @@ mod tests {
             .expect("sign Kagami Kura fixture block")
             .unpack(|_| {})
             .into();
-        let budget =
-            iroha_core::state::AllocationBudget::new(SharedSignedBlock::allocation_layout().size());
-        SharedSignedBlock::try_new(sb, &budget)
-            .map_err(|(_, error)| error)
-            .expect("admit the fixture's canonical shared block owner")
+        shell.initialize(sb)
     }
     fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> SharedSignedBlock {
         let block = fixture_block(prev);

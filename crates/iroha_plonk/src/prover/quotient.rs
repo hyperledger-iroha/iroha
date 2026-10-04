@@ -50,7 +50,7 @@ use crate::{
         descriptor::{ColumnKindV1, ExprNodeV1, ExprV1, MAX_EXPRESSION_STACK, QueryV1},
     },
     keys::{CosetPolynomial, KeyError, ProvingKey},
-    protocol::{Protocol, ProtocolError},
+    protocol::{ConstraintFilter, ConstraintTerm, LookupConstraint, Protocol, ProtocolError},
     transcript::decode_scalar,
 };
 
@@ -172,6 +172,9 @@ impl<F: PastaField> Builder<'_, F> {
         }
     }
 }
+
+/// One lookup's compressed input `A` and table `S` on every row.
+pub type CompressedLookup<F> = (Vec<F>, Vec<F>);
 
 /// Borrows every column as a slice.
 fn slices<F>(columns: &[Vec<F>]) -> Vec<&[F]> {
@@ -318,28 +321,41 @@ impl<F: PastaField> CompiledExpressions<F> {
             .fold(F::ZERO, |acc, root| acc * theta + scratch[*root as usize])
     }
 
-    /// Evaluates `width` outputs per row on the base domain, row-major.
-    fn rows_major(
+    /// Evaluates `width` outputs per row on the base domain into `width`
+    /// column vectors of `n` rows (no row-major staging buffer).
+    fn evaluate_columns(
         &self,
         columns: &BoundColumns<'_, F>,
         n: usize,
         width: usize,
         emit: impl Fn(&[F], &mut [F]) + Sync,
-    ) -> Vec<F> {
-        let mut out = vec![F::ZERO; n * width];
-        if width == 0 {
-            return out;
+    ) -> Vec<Vec<F>> {
+        let mut outputs = vec![vec![F::ZERO; n]; width];
+        let mut tasks: Vec<Vec<&mut [F]>> = (0..n.div_ceil(ROWS_PER_TASK))
+            .map(|_| Vec::with_capacity(width))
+            .collect();
+        for output in &mut outputs {
+            for (task, chunk) in tasks.iter_mut().zip(output.chunks_mut(ROWS_PER_TASK)) {
+                task.push(chunk);
+            }
         }
-        out.par_chunks_mut(width * ROWS_PER_TASK)
+        tasks
+            .into_par_iter()
             .enumerate()
-            .for_each(|(task, chunk)| {
+            .for_each(|(task, mut chunks)| {
+                let start = task * ROWS_PER_TASK;
+                let rows = chunks.first().map_or(0, |chunk| chunk.len());
                 let mut scratch = vec![F::ZERO; self.nodes.len()];
-                for (offset, row_out) in chunk.chunks_mut(width).enumerate() {
-                    self.evaluate_row(columns, task * ROWS_PER_TASK + offset, &mut scratch);
-                    emit(&scratch, row_out);
+                let mut row_out = vec![F::ZERO; width];
+                for offset in 0..rows {
+                    self.evaluate_row(columns, start + offset, &mut scratch);
+                    emit(&scratch, &mut row_out);
+                    for (chunk, value) in chunks.iter_mut().zip(&row_out) {
+                        chunk[offset] = *value;
+                    }
                 }
             });
-        out
+        outputs
     }
 
     /// The compressed input `A` and table `S` of every lookup on every row of
@@ -355,24 +371,22 @@ impl<F: PastaField> CompiledExpressions<F> {
         instance: &[Vec<F>],
         theta: F,
         n: usize,
-    ) -> Result<Vec<(Vec<F>, Vec<F>)>, ProverError> {
+    ) -> Result<Vec<CompressedLookup<F>>, ProverError> {
         let (fixed, advice, instance) = (slices(fixed), slices(advice), slices(instance));
         let columns = self.bind(&fixed, &advice, &instance, n)?;
         let width = self.lookups.len() * 2;
-        let out = self.rows_major(&columns, n, width, |scratch, row_out| {
+        let outputs = self.evaluate_columns(&columns, n, width, |scratch, row_out| {
             for (lookup, pair) in self.lookups.iter().zip(row_out.chunks_mut(2)) {
                 pair[0] = Self::compress(&lookup.inputs, scratch, theta);
                 pair[1] = Self::compress(&lookup.tables, scratch, theta);
             }
         });
-        Ok((0..self.lookups.len())
-            .map(|lookup| {
-                let column = |side: usize| -> Vec<F> {
-                    (0..n).map(|row| out[row * width + 2 * lookup + side]).collect()
-                };
-                (column(0), column(1))
-            })
-            .collect())
+        let mut outputs = outputs.into_iter();
+        let mut compressed = Vec::with_capacity(self.lookups.len());
+        while let (Some(input), Some(table)) = (outputs.next(), outputs.next()) {
+            compressed.push((input, table));
+        }
+        Ok(compressed)
     }
 
     /// The value of every compiled gate polynomial on every row of the base
@@ -392,15 +406,13 @@ impl<F: PastaField> CompiledExpressions<F> {
     ) -> Result<Vec<Vec<F>>, ProverError> {
         let (fixed, advice, instance) = (slices(fixed), slices(advice), slices(instance));
         let columns = self.bind(&fixed, &advice, &instance, n)?;
-        let width = self.gates.len();
-        let out = self.rows_major(&columns, n, width, |scratch, row_out| {
-            for (root, value) in self.gates.iter().zip(row_out.iter_mut()) {
-                *value = scratch[*root as usize];
-            }
-        });
-        Ok((0..width)
-            .map(|gate| (0..n).map(|row| out[row * width + gate]).collect())
-            .collect())
+        Ok(
+            self.evaluate_columns(&columns, n, self.gates.len(), |scratch, row_out| {
+                for (root, value) in self.gates.iter().zip(row_out.iter_mut()) {
+                    *value = scratch[*root as usize];
+                }
+            }),
+        )
     }
 }
 
@@ -430,7 +442,9 @@ pub(super) struct QuotientInputs<'a, F> {
 type LookupCoset<F> = [Vec<F>; 3];
 
 /// Computes the `(d - 1) n` coefficients of `h` (see the module
-/// documentation).
+/// documentation). `filter` is [`AllTerms`](crate::protocol::AllTerms) for
+/// every real proof (inlined away); the malicious-prover tests omit the
+/// terms a forged witness violates, so that the forged `h` is a polynomial.
 ///
 /// # Errors
 ///
@@ -442,6 +456,7 @@ pub(super) fn evaluate<C: PastaCurve>(
     compiled: &CompiledExpressions<C::ScalarExt>,
     inputs: &QuotientInputs<'_, C::ScalarExt>,
     challenges: Challenges<C::ScalarExt>,
+    filter: &(impl ConstraintFilter + Sync),
 ) -> Result<Vec<C::ScalarExt>, ProverError> {
     let shape = protocol.shape();
     let n = shape.n;
@@ -541,21 +556,41 @@ pub(super) fn evaluate<C: PastaCurve>(
                     let r_prev = (row + mask) & mask;
                     compiled.evaluate_row(&bound, row, &mut scratch);
                     let mut value = C::ScalarExt::ZERO;
-                    for root in &compiled.gates {
-                        value = value * y + scratch[*root as usize];
+                    // Every term is computed; a filtered term adds zero but
+                    // keeps its power of y.
+                    let mut push = |term: ConstraintTerm, contribution: C::ScalarExt| {
+                        value = value * y
+                            + if filter.keeps(term) {
+                                contribution
+                            } else {
+                                C::ScalarExt::ZERO
+                            };
+                    };
+                    for (polynomial, root) in compiled.gates.iter().enumerate() {
+                        push(ConstraintTerm::Gate { polynomial }, scratch[*root as usize]);
                     }
                     if let (Some(first), Some(last)) = (products.first(), products.last()) {
                         let r_last = (row + last_offset) & mask;
-                        value = value * y + (one - first[row]) * l0[row];
-                        value = value * y + (last[row].square() - last[row]) * l_last[row];
-                        for pair in products.windows(2) {
-                            value = value * y + (pair[1][row] - pair[0][r_last]) * l0[row];
+                        push(
+                            ConstraintTerm::PermutationFirst,
+                            (one - first[row]) * l0[row],
+                        );
+                        push(
+                            ConstraintTerm::PermutationLast,
+                            (last[row].square() - last[row]) * l_last[row],
+                        );
+                        for (index, pair) in products.windows(2).enumerate() {
+                            push(
+                                ConstraintTerm::PermutationLink { set: index + 1 },
+                                (pair[1][row] - pair[0][r_last]) * l0[row],
+                            );
                         }
                         let mut current_delta = beta * x_row;
-                        for ((set, set_columns), set_sigma) in products
+                        for (set_index, ((set, set_columns), set_sigma)) in products
                             .iter()
                             .zip(permutation_columns.chunks(shape.chunk_len))
                             .zip(sigma_refs.chunks(shape.chunk_len))
+                            .enumerate()
                         {
                             let mut left = set[r_next];
                             for (column, sigma) in set_columns.iter().zip(set_sigma) {
@@ -566,25 +601,44 @@ pub(super) fn evaluate<C: PastaCurve>(
                                 right *= column[row] + current_delta + gamma;
                                 current_delta *= delta;
                             }
-                            value = value * y + (left - right) * l_active[row];
+                            push(
+                                ConstraintTerm::PermutationProduct { set: set_index },
+                                (left - right) * l_active[row],
+                            );
                         }
                     }
-                    for (lookup, [product, input, table]) in compiled.lookups.iter().zip(&lookups) {
+                    for (index, (lookup, [product, input, table])) in
+                        compiled.lookups.iter().zip(&lookups).enumerate()
+                    {
                         let compressed_input =
                             CompiledExpressions::compress(&lookup.inputs, &scratch, theta);
                         let compressed_table =
                             CompiledExpressions::compress(&lookup.tables, &scratch, theta);
                         let table_value = (compressed_input + beta) * (compressed_table + gamma);
                         let a_minus_s = input[row] - table[row];
-                        value = value * y + (one - product[row]) * l0[row];
-                        value =
-                            value * y + (product[row].square() - product[row]) * l_last[row];
-                        value = value * y
-                            + (product[r_next] * (input[row] + beta) * (table[row] + gamma)
+                        let term = |part| ConstraintTerm::Lookup {
+                            lookup: index,
+                            part,
+                        };
+                        push(
+                            term(LookupConstraint::First),
+                            (one - product[row]) * l0[row],
+                        );
+                        push(
+                            term(LookupConstraint::Last),
+                            (product[row].square() - product[row]) * l_last[row],
+                        );
+                        push(
+                            term(LookupConstraint::Product),
+                            (product[r_next] * (input[row] + beta) * (table[row] + gamma)
                                 - product[row] * table_value)
-                                * l_active[row];
-                        value = value * y + a_minus_s * l0[row];
-                        value = value * y + a_minus_s * (input[row] - input[r_prev]) * l_active[row];
+                                * l_active[row],
+                        );
+                        push(term(LookupConstraint::Start), a_minus_s * l0[row]);
+                        push(
+                            term(LookupConstraint::Step),
+                            a_minus_s * (input[row] - input[r_prev]) * l_active[row],
+                        );
                     }
                     *out = value;
                     x_row *= omega;

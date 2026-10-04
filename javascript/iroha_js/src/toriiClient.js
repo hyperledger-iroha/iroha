@@ -28269,8 +28269,8 @@ function normalizeSumeragiEvidencePenaltyStatus(value, context) {
     }
     return { status, details: null };
   }
-  if (status !== "applied" && status !== "cancelled") {
-    rejectRange(`${context}.status must be pending, applied, or cancelled`);
+  if (status !== "applied") {
+    rejectRange(`${context}.status must be pending or applied`);
   }
   const details = ensureRecord(record.details, `${context}.details`);
   assertExactSumeragiEvidenceFields(details, `${context}.details`, ["height"]);

@@ -1,9 +1,18 @@
 //! Temporary instruction storage owned by its original admission pool.
 
-use super::{ContractArtifactError, DecodedOp, MAX_CONTRACT_IMAGE_BYTES, VMError};
+use super::{ContractArtifactError, MAX_CONTRACT_IMAGE_BYTES, VMError};
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
-pub(super) enum Instructions {
+/// One fixed-width decoded instruction in the executable stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecodedOp {
+    /// Byte offset within the executable instruction stream.
+    pub pc: u64,
+    /// Exact little-endian instruction word.
+    pub inst: u32,
+}
+
+pub enum Instructions {
     Diagnostic(Vec<DecodedOp>),
     Funded(ChargedBuffer<DecodedOp>),
 }
@@ -18,7 +27,7 @@ impl std::ops::Deref for Instructions {
     }
 }
 
-pub(super) fn instructions(
+pub fn instructions(
     code: &[u8],
     budget: Option<&AllocationBudget>,
 ) -> Result<Instructions, ContractArtifactError> {

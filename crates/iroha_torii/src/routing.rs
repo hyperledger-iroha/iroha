@@ -9090,11 +9090,6 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
             details.insert("height".into(), Value::from(height));
             ("applied", Value::Object(details))
         }
-        EvidencePenaltyStatus::Cancelled { height } => {
-            let mut details = json::Map::new();
-            details.insert("height".into(), Value::from(height));
-            ("cancelled", Value::Object(details))
-        }
     };
     let mut lifecycle = json::Map::new();
     lifecycle.insert("status".into(), Value::from(status));

@@ -27,13 +27,15 @@ use iroha_data_model::consensus::{
 use iroha_model_base::peer::PeerId;
 use norito::codec::Encode as _;
 use std::alloc::Layout;
-use zeroize::Zeroizing;
 
+mod aggregate;
+pub use aggregate::{GlobalBeaconAggregateOwnerV1, PreparedGlobalBeaconAggregateRestoreV1};
 mod checkpoint_authority;
 mod public_frames;
 mod restore;
 pub use checkpoint_authority::{
-    AuthenticatedGlobalBeaconDkgAttemptV1, VerifiedGlobalBeaconDkgCheckpointContextV1,
+    AuthenticatedGlobalBeaconDkgAttemptV1, VerifiedGlobalBeaconDkgAggregateContextV1,
+    VerifiedGlobalBeaconDkgCheckpointContextV1,
 };
 use public_frames::{PublicFrame, public_commitments_hash};
 
@@ -93,6 +95,11 @@ pub struct PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
     workspace: DkgMessageWorkspace,
     public_frame: PublicFrame,
     checkpoints: [PreparedDkgSecretsCheckpointV1<BeaconPurpose>; 3],
+    aggregate_checkpoint: Option<
+        iroha_crypto::threshold_bls::aggregate_checkpoint::PreparedDkgAggregateCheckpointV1<
+            BeaconPurpose,
+        >,
+    >,
     budget: AllocationBudget,
 }
 struct LocalOutputs {
@@ -196,6 +203,7 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
             PreparedDkgSecretsCheckpointV1::new(&parameters, seat_index, budget)?,
             PreparedDkgSecretsCheckpointV1::new(&parameters, seat_index, budget)?,
         ];
+        let aggregate_checkpoint = Some(iroha_crypto::threshold_bls::aggregate_checkpoint::PreparedDkgAggregateCheckpointV1::new(&parameters, seat_index, budget)?);
         Ok(Self {
             session,
             seat_index,
@@ -211,6 +219,7 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
             workspace,
             public_frame,
             checkpoints,
+            aggregate_checkpoint,
             budget: budget.clone(),
         })
     }
@@ -219,6 +228,15 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
     #[must_use]
     pub fn private_checkpoint_bytes(&self) -> usize {
         self.checkpoints[0].encrypted_record_capacity()
+    }
+
+    /// Exact aggregate ciphertext extent physically owned before the attempt is claimed.
+    #[must_use]
+    pub fn aggregate_checkpoint_bytes(&self) -> usize {
+        self.aggregate_checkpoint
+            .as_ref()
+            .expect("prepaid original aggregate bank")
+            .encrypted_record_capacity()
     }
 
     /// Prepare the final input graph's verifier and shared shell before claiming this attempt.
@@ -276,6 +294,7 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
             workspace: self.workspace,
             public_frame: self.public_frame,
             checkpoints: self.checkpoints,
+            aggregate_checkpoint: self.aggregate_checkpoint,
             budget: self.budget,
             delivered: false,
             accepted: false,
@@ -300,6 +319,11 @@ pub struct LocalGlobalThresholdBeaconDkgSeatV1 {
     workspace: DkgMessageWorkspace,
     public_frame: PublicFrame,
     checkpoints: [PreparedDkgSecretsCheckpointV1<BeaconPurpose>; 3],
+    aggregate_checkpoint: Option<
+        iroha_crypto::threshold_bls::aggregate_checkpoint::PreparedDkgAggregateCheckpointV1<
+            BeaconPurpose,
+        >,
+    >,
     budget: AllocationBudget,
     delivered: bool,
     accepted: bool,
@@ -643,58 +667,6 @@ impl LocalGlobalThresholdBeaconDkgSeatV1 {
             .map(RetainedPayload::get))
     }
 
-    /// Aggregate only this seat's private contributions after exact same-pool transcript finality.
-    ///
-    /// # Errors
-    /// Rejects a changed transcript, foreign owner, missing shares or repeated extraction.
-    pub fn finalize_private_share(
-        &mut self,
-        validated: &super::ValidatedGlobalThresholdBeaconSessionV1,
-    ) -> Result<Zeroizing<[[u8; 32]; 3]>, LocalGlobalThresholdBeaconDkgErrorV1> {
-        if !self.accepted || self.extracted || self.aborted {
-            return Err(GlobalThresholdBeaconError::DkgTerminal.into());
-        }
-        if !validated.belongs_to(&self.budget) {
-            return Err(GlobalThresholdBeaconSessionError::ForeignReservation.into());
-        }
-        let transcript = &validated.record().adaptive_dkg;
-        if transcript.session != self.session
-            || transcript.recipient_keys[usize::from(self.seat_index - 1)]
-                != *self.recipient_key.get()
-            || transcript.dealer_commitments[usize::from(self.seat_index - 1)]
-                != *self.dealer_commitment.get()
-            || transcript
-                .encrypted_shares
-                .iter()
-                .filter(|edge| edge.dealer_index == self.seat_index)
-                .ne(self
-                    .outputs
-                    .outgoing
-                    .as_slice()
-                    .iter()
-                    .map(RetainedPayload::get))
-            || transcript
-                .share_acceptances
-                .iter()
-                .filter(|ack| ack.recipient_index == self.seat_index)
-                .ne(self
-                    .outputs
-                    .acceptances
-                    .as_slice()
-                    .iter()
-                    .map(RetainedPayload::get))
-        {
-            return Err(GlobalThresholdBeaconError::TranscriptMismatch.into());
-        }
-        let aggregate = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
-            validated.transcript(),
-            self.outputs.shares.as_slice(),
-        )?;
-        self.outputs.shares.truncate(0);
-        self.outputs.acceptances.truncate(0);
-        self.extracted = true;
-        Ok(aggregate.into_components_for_runtime_custody())
-    }
     /// Stable authenticated attempt identity for the operator's one-shot journal.
     #[must_use]
     pub fn attempt_id(&self) -> [u8; 32] {
@@ -873,8 +845,13 @@ mod tests {
             )
             .expect("complete authenticated public graph");
             let components = local
-                .iter_mut()
-                .map(|owner| owner.finalize_private_share(&sealed).expect("local share"))
+                .iter()
+                .map(|owner| {
+                    owner
+                        .aggregate_private_share(&sealed)
+                        .expect("local share")
+                        .into_components_for_runtime_custody()
+                })
                 .collect::<Vec<_>>();
             assert_eq!(components.len(), usize::from(seats));
             assert_eq!(

@@ -21,25 +21,36 @@
 //! (`EpAffine`, scalars `Fq`, coordinates in `Fp`). Generic parity tests run
 //! once per bridge.
 
-use halo2_axiom::halo2curves::{
-    Coordinates, CurveAffine,
-    ff::{PrimeField, WithSmallOrderMulGroup},
-    group::{Curve, GroupEncoding, prime::PrimeCurveAffine},
-    pasta,
+use halo2_axiom::{
+    SerdeCurveAffine, SerdePrimeField,
+    halo2curves::{
+        Coordinates, CurveAffine,
+        ff::{FromUniformBytes, PrimeField, WithSmallOrderMulGroup},
+        group::{Curve, GroupEncoding, prime::PrimeCurveAffine},
+        pasta,
+    },
 };
-use iroha_pasta::{PastaAffine, PastaCurve};
+use iroha_pasta::{PastaAffine, PastaCurve, poseidon::PoseidonField};
 
 /// One half of the Pasta cycle, named on the vendored and the native side.
 pub trait CurveBridge: Copy + Send + Sync + 'static {
-    /// The vendored scalar field (`pasta_curves::Fp` or `Fq`).
-    type VScalar: PrimeField<Repr = [u8; 32]> + WithSmallOrderMulGroup<3> + Ord;
+    /// The vendored scalar field (`pasta_curves::Fp` or `Fq`), with the
+    /// bounds the vendored key generator, prover and verifier require.
+    type VScalar: PrimeField<Repr = [u8; 32]>
+        + WithSmallOrderMulGroup<3>
+        + FromUniformBytes<64>
+        + SerdePrimeField
+        + Ord;
     /// The vendored base field, in which the point coordinates live.
     type VBase: PrimeField<Repr = [u8; 32]> + WithSmallOrderMulGroup<3> + Ord;
-    /// The vendored affine point type.
+    /// The vendored affine point type (serializable, as verifying keys and
+    /// parameters require).
     type Vendored: CurveAffine<ScalarExt = Self::VScalar, Base = Self::VBase>
-        + GroupEncoding<Repr = [u8; 32]>;
-    /// The native projective point type.
-    type Native: PastaCurve;
+        + GroupEncoding<Repr = [u8; 32]>
+        + SerdeCurveAffine;
+    /// The native projective point type (its scalars carry the Poseidon
+    /// tables, as native proving requires).
+    type Native: PastaCurve<ScalarExt: PoseidonField>;
     /// Short curve label used in vectors and messages (`"eq"` or `"ep"`).
     const NAME: &'static str;
 }

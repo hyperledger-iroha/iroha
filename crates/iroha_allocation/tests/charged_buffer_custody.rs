@@ -290,7 +290,7 @@ fn capacity_refusal_precedes_allocation_and_original_wait_allows_retry() {
     assert!(FREED.load(SeqCst));
     assert_eq!(
         budget.reserved_bytes(),
-        0 + ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
 }
 

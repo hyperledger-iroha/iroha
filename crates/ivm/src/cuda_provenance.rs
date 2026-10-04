@@ -2,186 +2,13 @@
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
-use std::{fs, io::Read as _, path::Path};
 
-const MANIFEST_NAME: &str = "provenance.v1";
-const MANIFEST_SIGNATURE_NAME: &str = "provenance.v1.sig";
-const MANIFEST_PUBLIC_KEY_NAME: &str = "provenance.v1.pub";
 const MANIFEST_HEADER: &str = "ivm-cuda-ptx-provenance-v1";
 const GENERATION_DOMAIN: &[u8] = b"ivm-cuda-ptx-generation-v1\0";
-const MAX_MANIFEST_BYTES: usize = 16 * 1024;
-const MAX_PTX_BYTES: usize = 8 * 1024 * 1024;
+pub(super) const MAX_MANIFEST_BYTES: usize = 16 * 1024;
+pub(super) const MAX_PTX_BYTES: usize = 8 * 1024 * 1024;
 
-/// Bundle bytes that passed signed provenance and exact source/PTX hashing.
-#[derive(Debug)]
-pub(super) struct VerifiedCudaBundle {
-    /// PTX bytes in the pinned family order, kept live through installation.
-    pub artifacts: Vec<Vec<u8>>,
-    /// Signed CUDA toolkit-image digest for independent release-runner comparison.
-    pub cuda_image_sha256: String,
-    /// Exact signed `nvcc --version` output digest.
-    pub nvcc_version_sha256: String,
-    /// Exact signed compiler flags, excluding source and output paths.
-    pub nvcc_flags: String,
-    /// Signed GPU code-generation target.
-    pub target_profile: String,
-}
-
-fn same_regular_inode(before: &fs::Metadata, after: &fs::Metadata) -> bool {
-    if !before.file_type().is_file()
-        || !after.file_type().is_file()
-        || before.len() != after.len()
-        || before.modified().ok() != after.modified().ok()
-    {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        before.dev() == after.dev()
-            && before.ino() == after.ino()
-            && before.ctime() == after.ctime()
-            && before.ctime_nsec() == after.ctime_nsec()
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly",
-    target_os = "linux",
-    target_os = "android"
-))]
-fn no_follow_nonblocking_flags() -> i32 {
-    // Match the platform file-admission flags in state_overlay_fs. This module
-    // also belongs to build.rs, so it cannot depend on the runtime overlay owner.
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd",
-        target_os = "dragonfly"
-    ))]
-    {
-        0x100 | 0x4
-    }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    {
-        let no_follow = if cfg!(any(
-            target_arch = "arm",
-            target_arch = "aarch64",
-            target_arch = "m68k",
-            target_arch = "powerpc",
-            target_arch = "powerpc64"
-        )) {
-            0x8000
-        } else {
-            0x0002_0000
-        };
-        let nonblocking = if cfg!(any(target_arch = "mips", target_arch = "mips64")) {
-            0x80
-        } else if cfg!(any(target_arch = "sparc", target_arch = "sparc64")) {
-            0x4000
-        } else {
-            0x800
-        };
-        no_follow | nonblocking
-    }
-}
-
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd",
-        target_os = "dragonfly",
-        target_os = "linux",
-        target_os = "android"
-    ))
-))]
-fn open_regular_file(_path: &Path) -> std::io::Result<fs::File> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "CUDA provenance requires no-follow nonblocking file admission",
-    ))
-}
-
-#[cfg(any(
-    not(unix),
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly",
-    target_os = "linux",
-    target_os = "android"
-))]
-fn open_regular_file(path: &Path) -> std::io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(no_follow_nonblocking_flags());
-    }
-    options.open(path)
-}
-
-fn read_regular_file(path: &Path, maximum: Option<usize>) -> Result<Vec<u8>, String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
-    if !metadata.file_type().is_file() {
-        return Err(format!("{} must be a regular file", path.display()));
-    }
-    if maximum.is_some_and(|maximum| metadata.len() > maximum as u64) {
-        return Err(format!("{} exceeds its byte limit", path.display()));
-    }
-    let mut file = open_regular_file(path)
-        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
-    let opened = file
-        .metadata()
-        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
-    if !same_regular_inode(&metadata, &opened) {
-        return Err(format!("{} changed before read", path.display()));
-    }
-    let limit = opened
-        .len()
-        .checked_add(1)
-        .ok_or_else(|| format!("{} has an invalid inode size", path.display()))?;
-    let mut bytes = Vec::new();
-    file.by_ref()
-        .take(limit)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    if maximum.is_some_and(|maximum| bytes.len() > maximum) {
-        return Err(format!("{} grew beyond its byte limit", path.display()));
-    }
-    let after = file
-        .metadata()
-        .map_err(|error| format!("cannot recheck {}: {error}", path.display()))?;
-    let after_path = fs::symlink_metadata(path)
-        .map_err(|error| format!("cannot recheck {}: {error}", path.display()))?;
-    if bytes.len() as u64 != opened.len()
-        || !same_regular_inode(&opened, &after)
-        || !same_regular_inode(&opened, &after_path)
-    {
-        return Err(format!("{} changed while read", path.display()));
-    }
-    Ok(bytes)
-}
-
+#[cfg(test)]
 pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = Sha256::digest(bytes);
@@ -193,7 +20,7 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-fn is_lower_sha256(value: &str) -> bool {
+pub(super) fn is_lower_sha256(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -211,62 +38,345 @@ fn canonical_text(value: &str, maximum: usize) -> bool {
             .all(|byte| byte == b' ' || byte.is_ascii_graphic())
 }
 
-fn field<'a>(lines: &mut impl Iterator<Item = &'a str>, name: &str) -> Result<&'a str, String> {
-    let line = lines
-        .next()
-        .ok_or_else(|| format!("CUDA provenance missing {name}"))?;
+/// Canonical refusal storage stays on the stack; build diagnostics format the
+/// same original vocabulary without adding runtime field-name/hex buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProvenanceRefusal {
+    TrustedFingerprint,
+    PublicKeyLength,
+    SignatureLength,
+    PublicKeyFingerprint,
+    PublicKeyEncoding,
+    Signature,
+    ManifestText,
+    ManifestUtf8,
+    Header,
+    MissingField(&'static str),
+    ExpectedField(&'static str),
+    InvalidDigest(&'static str),
+    ArtifactField {
+        stem: &'static str,
+        source: bool,
+        missing: bool,
+    },
+    ArtifactDigest {
+        stem: &'static str,
+        source: bool,
+    },
+    Flags,
+    Target,
+    DigestMismatch(&'static str),
+    PtxLimit(&'static str),
+    Trailing,
+    Generation,
+    ManifestPin,
+    Traversal,
+}
+impl std::fmt::Display for ProvenanceRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TrustedFingerprint => f.write_str(
+                "CUDA trusted public-key fingerprint must be a reviewed lowercase SHA-256",
+            ),
+            Self::PublicKeyLength => f.write_str("CUDA provenance public key must be 32 raw bytes"),
+            Self::SignatureLength => f.write_str("CUDA provenance signature must be 64 raw bytes"),
+            Self::PublicKeyFingerprint => {
+                f.write_str("CUDA provenance public key differs from the reviewed fingerprint")
+            }
+            Self::PublicKeyEncoding => {
+                f.write_str("CUDA provenance public key is not canonical Ed25519")
+            }
+            Self::Signature => f.write_str("CUDA provenance signature does not verify"),
+            Self::ManifestText => {
+                f.write_str("CUDA provenance must be canonical LF text with a final LF")
+            }
+            Self::ManifestUtf8 => f.write_str("CUDA provenance must be UTF-8"),
+            Self::Header => f.write_str("CUDA provenance has an unknown V1 header"),
+            Self::MissingField(name) => write!(f, "CUDA provenance missing {name}"),
+            Self::ExpectedField(name) => {
+                write!(f, "CUDA provenance expected {name} in fixed order")
+            }
+            Self::InvalidDigest(name) => write!(
+                f,
+                "CUDA provenance {name} must be a nonzero lowercase SHA-256"
+            ),
+            Self::ArtifactField {
+                stem,
+                source,
+                missing,
+            } => {
+                let suffix = if *source {
+                    "source_sha256"
+                } else {
+                    "ptx_sha256"
+                };
+                if *missing {
+                    write!(f, "CUDA provenance missing artifact.{stem}.{suffix}")
+                } else {
+                    write!(
+                        f,
+                        "CUDA provenance expected artifact.{stem}.{suffix} in fixed order"
+                    )
+                }
+            }
+            Self::ArtifactDigest { stem, source } => write!(
+                f,
+                "CUDA provenance artifact.{stem}.{} must be a nonzero lowercase SHA-256",
+                if *source {
+                    "source_sha256"
+                } else {
+                    "ptx_sha256"
+                }
+            ),
+            Self::Flags => f.write_str("CUDA provenance has invalid exact nvcc flags"),
+            Self::Target => f.write_str("CUDA provenance has invalid or unbound target profile"),
+            Self::DigestMismatch(stem) => {
+                write!(f, "CUDA provenance source/PTX digest mismatch for {stem}")
+            }
+            Self::PtxLimit(stem) => write!(f, "CUDA PTX {stem} exceeds its byte limit"),
+            Self::Trailing => f.write_str("CUDA provenance has an unexpected trailing field"),
+            Self::Generation => {
+                f.write_str("CUDA provenance two-run generation digests differ from bundled PTX")
+            }
+            Self::ManifestPin => f.write_str(
+                "CUDA provenance manifest differs from the source-owned reviewed fingerprint",
+            ),
+            Self::Traversal => f.write_str("CUDA provenance original row traversal is incomplete"),
+        }
+    }
+}
+impl std::error::Error for ProvenanceRefusal {}
+
+fn field<'a>(
+    lines: &mut impl Iterator<Item = &'a str>,
+    name: &'static str,
+) -> Result<&'a str, ProvenanceRefusal> {
+    let line = lines.next().ok_or(ProvenanceRefusal::MissingField(name))?;
     line.strip_prefix(name)
         .and_then(|value| value.strip_prefix('='))
-        .ok_or_else(|| format!("CUDA provenance expected {name} in fixed order"))
+        .ok_or(ProvenanceRefusal::ExpectedField(name))
 }
-
 fn digest_field<'a>(
     lines: &mut impl Iterator<Item = &'a str>,
-    name: &str,
-) -> Result<&'a str, String> {
+    name: &'static str,
+) -> Result<&'a str, ProvenanceRefusal> {
     let value = field(lines, name)?;
     if !is_lower_sha256(value) {
-        return Err(format!(
-            "CUDA provenance {name} must be a nonzero lowercase SHA-256"
-        ));
+        return Err(ProvenanceRefusal::InvalidDigest(name));
     }
     Ok(value)
 }
-
-fn signed_manifest(cuda_dir: &Path, trusted_key_sha256: &str) -> Result<Vec<u8>, String> {
-    if !is_lower_sha256(trusted_key_sha256) {
-        return Err(
-            "CUDA trusted public-key fingerprint must be a reviewed lowercase SHA-256".into(),
-        );
+fn artifact_digest_field<'a>(
+    lines: &mut impl Iterator<Item = &'a str>,
+    stem: &'static str,
+    source: bool,
+) -> Result<&'a str, ProvenanceRefusal> {
+    let line = lines.next().ok_or(ProvenanceRefusal::ArtifactField {
+        stem,
+        source,
+        missing: true,
+    })?;
+    let suffix = if source {
+        ".source_sha256="
+    } else {
+        ".ptx_sha256="
+    };
+    let value = line
+        .strip_prefix("artifact.")
+        .and_then(|line| line.strip_prefix(stem))
+        .and_then(|line| line.strip_prefix(suffix))
+        .ok_or(ProvenanceRefusal::ArtifactField {
+            stem,
+            source,
+            missing: false,
+        })?;
+    if !is_lower_sha256(value) {
+        return Err(ProvenanceRefusal::ArtifactDigest { stem, source });
     }
-    let manifest = read_regular_file(&cuda_dir.join(MANIFEST_NAME), Some(MAX_MANIFEST_BYTES))?;
-    let public_key = read_regular_file(&cuda_dir.join(MANIFEST_PUBLIC_KEY_NAME), Some(32))?;
-    let signature = read_regular_file(&cuda_dir.join(MANIFEST_SIGNATURE_NAME), Some(64))?;
-    let public_key: [u8; 32] = public_key
-        .try_into()
-        .map_err(|_| "CUDA provenance public key must be 32 raw bytes")?;
-    let signature: [u8; 64] = signature
-        .try_into()
-        .map_err(|_| "CUDA provenance signature must be 64 raw bytes")?;
-    if sha256_hex(&public_key) != trusted_key_sha256 {
-        return Err("CUDA provenance public key differs from the reviewed fingerprint".into());
+    Ok(value)
+}
+/// Compare a borrowed canonical hex digest using only a stack digest.
+pub(super) fn matches_sha256(bytes: &[u8], expected: &str) -> bool {
+    let digest = Sha256::digest(bytes);
+    digest_matches(&digest, expected)
+}
+fn digest_matches(digest: &[u8], expected: &str) -> bool {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let expected = expected.as_bytes();
+    expected.len() == 64
+        && digest.iter().enumerate().all(|(index, byte)| {
+            expected[2 * index] == HEX[(byte >> 4) as usize]
+                && expected[2 * index + 1] == HEX[(byte & 0x0f) as usize]
+        })
+}
+fn update_generation(hasher: &mut Sha256, stem: &str, bytes: &[u8]) {
+    hasher.update((stem.len() as u16).to_le_bytes());
+    hasher.update(stem.as_bytes());
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BorrowedCudaMetadata<'a> {
+    pub cuda_image_sha256: &'a str,
+    pub nvcc_version_sha256: &'a str,
+    pub nvcc_flags: &'a str,
+    pub target_profile: &'a str,
+}
+#[derive(Clone, Copy)]
+struct RowDigests<'a> {
+    source: &'a str,
+    ptx: &'a str,
+}
+/// The sole authenticated fixed-order reader. Expected row fields precede the
+/// adapter's original file reads; borrowed bytes never escape their actual owner.
+pub(super) struct BorrowedCudaReader<'a> {
+    manifest: &'a [u8],
+    stems: &'a [&'static str],
+    lines: std::str::SplitTerminator<'a, char>,
+    metadata: BorrowedCudaMetadata<'a>,
+    first_generation: &'a str,
+    second_generation: &'a str,
+    generation: Sha256,
+    index: usize,
+    pending: Option<RowDigests<'a>>,
+}
+impl<'a> BorrowedCudaReader<'a> {
+    pub(super) fn new(
+        manifest: &'a [u8],
+        public_key: &[u8],
+        signature: &[u8],
+        stems: &'a [&'static str],
+        trusted_key_sha256: &str,
+    ) -> Result<Self, ProvenanceRefusal> {
+        if !is_lower_sha256(trusted_key_sha256) {
+            return Err(ProvenanceRefusal::TrustedFingerprint);
+        }
+        if manifest.len() > MAX_MANIFEST_BYTES {
+            return Err(ProvenanceRefusal::ManifestText);
+        }
+        let public_key: &[u8; 32] = public_key
+            .try_into()
+            .map_err(|_| ProvenanceRefusal::PublicKeyLength)?;
+        let signature: &[u8; 64] = signature
+            .try_into()
+            .map_err(|_| ProvenanceRefusal::SignatureLength)?;
+        if !matches_sha256(public_key, trusted_key_sha256) {
+            return Err(ProvenanceRefusal::PublicKeyFingerprint);
+        }
+        let verifier = VerifyingKey::from_bytes(public_key)
+            .map_err(|_| ProvenanceRefusal::PublicKeyEncoding)?;
+        verifier
+            .verify_strict(manifest, &Signature::from_bytes(signature))
+            .map_err(|_| ProvenanceRefusal::Signature)?;
+        if !manifest.ends_with(b"\n") || manifest.contains(&b'\r') || manifest.contains(&b'\0') {
+            return Err(ProvenanceRefusal::ManifestText);
+        }
+        let text = std::str::from_utf8(manifest).map_err(|_| ProvenanceRefusal::ManifestUtf8)?;
+        let mut lines = text.split_terminator('\n');
+        if lines.next() != Some(MANIFEST_HEADER) {
+            return Err(ProvenanceRefusal::Header);
+        }
+        // These private slots are not published until every original phase passes.
+        let mut metadata = BorrowedCudaMetadata {
+            cuda_image_sha256: "",
+            nvcc_version_sha256: "",
+            nvcc_flags: "",
+            target_profile: "",
+        };
+        metadata.cuda_image_sha256 = field(&mut lines, "cuda_image_sha256")?;
+        if !is_lower_sha256(metadata.cuda_image_sha256) {
+            return Err(ProvenanceRefusal::InvalidDigest("cuda_image_sha256"));
+        }
+        metadata.nvcc_version_sha256 = field(&mut lines, "nvcc_version_sha256")?;
+        if !is_lower_sha256(metadata.nvcc_version_sha256) {
+            return Err(ProvenanceRefusal::InvalidDigest("nvcc_version_sha256"));
+        }
+        metadata.nvcc_flags = field(&mut lines, "nvcc_flags")?;
+        if !canonical_text(metadata.nvcc_flags, 512)
+            || !metadata.nvcc_flags.starts_with("-ptx -std=c++14 ")
+        {
+            return Err(ProvenanceRefusal::Flags);
+        }
+        metadata.target_profile = field(&mut lines, "target_profile")?;
+        if !canonical_text(metadata.target_profile, 128)
+            || !metadata.target_profile.starts_with("arch=compute_")
+            || !metadata.target_profile.contains(",code=sm_")
+            || !metadata.nvcc_flags.contains(metadata.target_profile)
+        {
+            return Err(ProvenanceRefusal::Target);
+        }
+        let first_generation = digest_field(&mut lines, "generation_1_sha256")?;
+        let second_generation = digest_field(&mut lines, "generation_2_sha256")?;
+        let mut generation = Sha256::new();
+        generation.update(GENERATION_DOMAIN);
+        Ok(Self {
+            manifest,
+            stems,
+            lines,
+            metadata,
+            first_generation,
+            second_generation,
+            generation,
+            index: 0,
+            pending: None,
+        })
     }
-    let verifier = VerifyingKey::from_bytes(&public_key)
-        .map_err(|_| "CUDA provenance public key is not canonical Ed25519")?;
-    verifier
-        .verify_strict(&manifest, &Signature::from_bytes(&signature))
-        .map_err(|_| "CUDA provenance signature does not verify")?;
-    Ok(manifest)
+    pub(super) fn next_row(&mut self) -> Result<&'static str, ProvenanceRefusal> {
+        if self.pending.is_some() || self.index >= self.stems.len() {
+            return Err(ProvenanceRefusal::Traversal);
+        }
+        let stem = self.stems[self.index];
+        let source = artifact_digest_field(&mut self.lines, stem, true)?;
+        let ptx = artifact_digest_field(&mut self.lines, stem, false)?;
+        self.pending = Some(RowDigests { source, ptx });
+        Ok(stem)
+    }
+    pub(super) fn accept_row(
+        &mut self,
+        source: &[u8],
+        ptx: &[u8],
+    ) -> Result<(), ProvenanceRefusal> {
+        let digests = self.pending.ok_or(ProvenanceRefusal::Traversal)?;
+        let stem = self.stems[self.index];
+        if ptx.len() > MAX_PTX_BYTES {
+            return Err(ProvenanceRefusal::PtxLimit(stem));
+        }
+        if !matches_sha256(source, digests.source) || !matches_sha256(ptx, digests.ptx) {
+            return Err(ProvenanceRefusal::DigestMismatch(stem));
+        }
+        update_generation(&mut self.generation, stem, ptx);
+        self.index += 1;
+        self.pending = None;
+        Ok(())
+    }
+    pub(super) fn finish(
+        mut self,
+        manifest_sha256: &str,
+    ) -> Result<BorrowedCudaMetadata<'a>, ProvenanceRefusal> {
+        if self.index != self.stems.len() || self.pending.is_some() {
+            return Err(ProvenanceRefusal::Traversal);
+        }
+        if self.lines.next().is_some() {
+            return Err(ProvenanceRefusal::Trailing);
+        }
+        if self.first_generation != self.second_generation
+            || !digest_matches(&self.generation.finalize(), self.first_generation)
+        {
+            return Err(ProvenanceRefusal::Generation);
+        }
+        if !is_lower_sha256(manifest_sha256) || !matches_sha256(self.manifest, manifest_sha256) {
+            return Err(ProvenanceRefusal::ManifestPin);
+        }
+        Ok(self.metadata)
+    }
 }
 
+#[cfg(test)]
 fn generation_sha256(stems: &[&str], artifacts: &[Vec<u8>]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(GENERATION_DOMAIN);
     for (stem, bytes) in stems.iter().zip(artifacts) {
-        hasher.update((stem.len() as u16).to_le_bytes());
-        hasher.update(stem.as_bytes());
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(bytes);
+        update_generation(&mut hasher, stem, bytes);
     }
     let digest = hasher.finalize();
     let mut encoded = String::with_capacity(64);
@@ -278,77 +388,17 @@ fn generation_sha256(stems: &[&str], artifacts: &[Vec<u8>]) -> String {
     encoded
 }
 
-/// Verify the signed manifest and all ten source/PTX byte pairs before installation.
-///
-/// The trusted public-key fingerprint is an explicit reviewed build input, not
-/// a value supplied by the artifact being admitted. The manifest's two
-/// generation digests attest independent clean runs; the release runner must
-/// separately verify those runs against its pinned toolkit image.
-pub(super) fn verify_bundle(
-    cuda_dir: &Path,
-    stems: &[&str],
-    trusted_key_sha256: &str,
-) -> Result<VerifiedCudaBundle, String> {
-    let manifest = signed_manifest(cuda_dir, trusted_key_sha256)?;
-    if !manifest.ends_with(b"\n") || manifest.contains(&b'\r') || manifest.contains(&b'\0') {
-        return Err("CUDA provenance must be canonical LF text with a final LF".into());
-    }
-    let text = std::str::from_utf8(&manifest).map_err(|_| "CUDA provenance must be UTF-8")?;
-    let mut lines = text.split_terminator('\n');
-    if lines.next() != Some(MANIFEST_HEADER) {
-        return Err("CUDA provenance has an unknown V1 header".into());
-    }
-    let cuda_image_sha256 = digest_field(&mut lines, "cuda_image_sha256")?.to_owned();
-    let nvcc_version_sha256 = digest_field(&mut lines, "nvcc_version_sha256")?.to_owned();
-    let nvcc_flags = field(&mut lines, "nvcc_flags")?;
-    if !canonical_text(nvcc_flags, 512) || !nvcc_flags.starts_with("-ptx -std=c++14 ") {
-        return Err("CUDA provenance has invalid exact nvcc flags".into());
-    }
-    let target_profile = field(&mut lines, "target_profile")?;
-    if !canonical_text(target_profile, 128)
-        || !target_profile.starts_with("arch=compute_")
-        || !target_profile.contains(",code=sm_")
-        || !nvcc_flags.contains(target_profile)
-    {
-        return Err("CUDA provenance has invalid or unbound target profile".into());
-    }
-    let first_generation = digest_field(&mut lines, "generation_1_sha256")?;
-    let second_generation = digest_field(&mut lines, "generation_2_sha256")?;
-    let mut artifacts = Vec::with_capacity(stems.len());
-    for stem in stems {
-        let source_digest = digest_field(&mut lines, &format!("artifact.{stem}.source_sha256"))?;
-        let ptx_digest = digest_field(&mut lines, &format!("artifact.{stem}.ptx_sha256"))?;
-        let source = read_regular_file(&cuda_dir.join(format!("{stem}.cu")), None)?;
-        let ptx = read_regular_file(&cuda_dir.join(format!("{stem}.ptx")), Some(MAX_PTX_BYTES))?;
-        if sha256_hex(&source) != source_digest || sha256_hex(&ptx) != ptx_digest {
-            return Err(format!(
-                "CUDA provenance source/PTX digest mismatch for {stem}"
-            ));
-        }
-        artifacts.push(ptx);
-    }
-    if lines.next().is_some() {
-        return Err("CUDA provenance has an unexpected trailing field".into());
-    }
-    let actual_generation = generation_sha256(stems, &artifacts);
-    if first_generation != second_generation || first_generation != actual_generation {
-        return Err("CUDA provenance two-run generation digests differ from bundled PTX".into());
-    }
-    Ok(VerifiedCudaBundle {
-        artifacts,
-        cuda_image_sha256,
-        nvcc_version_sha256,
-        nvcc_flags: nvcc_flags.to_owned(),
-        target_profile: target_profile.to_owned(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cuda_bundle_files::{
+        MANIFEST_NAME, MANIFEST_PUBLIC_KEY_NAME, MANIFEST_SIGNATURE_NAME, VerifiedCudaBundle,
+        open_regular_file, read_regular_file, same_regular_inode, verify_bundle,
+    };
     use ed25519_dalek::{Signer, SigningKey};
     use std::{
         fmt::Write as _,
+        fs,
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
     };
@@ -442,7 +492,12 @@ mod tests {
             .expect("signature fixture");
         }
         fn verify(&self) -> Result<VerifiedCudaBundle, String> {
-            verify_bundle(&self.directory, &STEMS, &self.trusted_fingerprint)
+            verify_bundle(
+                &self.directory,
+                &STEMS,
+                &self.trusted_fingerprint,
+                &sha256_hex(self.manifest.as_bytes()),
+            )
         }
     }
 
@@ -565,9 +620,14 @@ mod tests {
                 .contains("signature does not verify")
         );
         assert!(
-            verify_bundle(&fixture.directory, &STEMS, &sha256_hex(b"unreviewed key"))
-                .unwrap_err()
-                .contains("reviewed fingerprint")
+            verify_bundle(
+                &fixture.directory,
+                &STEMS,
+                &sha256_hex(b"unreviewed key"),
+                &sha256_hex(fixture.manifest.as_bytes())
+            )
+            .unwrap_err()
+            .contains("reviewed fingerprint")
         );
     }
 
@@ -600,5 +660,429 @@ mod tests {
                 .unwrap_err()
                 .contains("unexpected trailing field")
         );
+    }
+    fn borrowed_fixture<'a>(
+        fixture: &'a Fixture,
+        manifest_pin: &str,
+    ) -> Result<BorrowedCudaMetadata<'a>, ProvenanceRefusal> {
+        let public_key = fixture.signing_key.verifying_key().to_bytes();
+        let signature = fixture
+            .signing_key
+            .sign(fixture.manifest.as_bytes())
+            .to_bytes();
+        let mut reader = BorrowedCudaReader::new(
+            fixture.manifest.as_bytes(),
+            &public_key,
+            &signature,
+            &STEMS,
+            &fixture.trusted_fingerprint,
+        )?;
+        for (index, stem) in STEMS.iter().enumerate() {
+            assert_eq!(reader.next_row()?, *stem);
+            let source = fs::read(fixture.directory.join(format!("{stem}.cu"))).unwrap();
+            reader.accept_row(&source, &fixture.artifacts[index])?;
+        }
+        reader.finish(manifest_pin)
+    }
+
+    #[test]
+    fn original_file_and_borrowed_adapters_share_exact_canonical_metadata_and_inputs() {
+        // This original synthetic signed fixture exercises only the canonical
+        // relation. It never enters the production source-owned artifact owner.
+        let fixture = Fixture::new();
+        let pin = sha256_hex(fixture.manifest.as_bytes());
+        let file = fixture.verify().unwrap();
+        let borrowed = borrowed_fixture(&fixture, &pin).unwrap();
+        assert_eq!(file.manifest, fixture.manifest.as_bytes());
+        assert_eq!(
+            file.public_key,
+            fixture.signing_key.verifying_key().to_bytes()
+        );
+        assert_eq!(
+            file.signature,
+            fixture
+                .signing_key
+                .sign(fixture.manifest.as_bytes())
+                .to_bytes()
+        );
+        assert_eq!(borrowed.cuda_image_sha256, file.cuda_image_sha256);
+        assert_eq!(borrowed.nvcc_version_sha256, file.nvcc_version_sha256);
+        assert_eq!(borrowed.nvcc_flags, file.nvcc_flags);
+        assert_eq!(borrowed.target_profile, file.target_profile);
+        let original = fixture.manifest.as_bytes().as_ptr_range();
+        for field in [
+            borrowed.cuda_image_sha256,
+            borrowed.nvcc_version_sha256,
+            borrowed.nvcc_flags,
+            borrowed.target_profile,
+        ] {
+            assert!(original.contains(&field.as_ptr()));
+            assert!(field.as_bytes().as_ptr_range().end <= original.end);
+        }
+        for (index, stem) in STEMS.iter().enumerate() {
+            assert_eq!(
+                file.sources[index],
+                format!("// source for {stem}\n").as_bytes()
+            );
+            assert_eq!(file.artifacts[index], fixture.artifacts[index]);
+        }
+    }
+
+    #[test]
+    fn exact_manifest_approval_cannot_be_selected_by_resigning_or_rehashing_material() {
+        let mut fixture = Fixture::new();
+        let original_pin = sha256_hex(fixture.manifest.as_bytes());
+        let original_flags = "nvcc_flags=-ptx -std=c++14 -gencode arch=compute_86,code=sm_86";
+        fixture.manifest = fixture.manifest.replacen(
+            original_flags,
+            "nvcc_flags=-ptx -std=c++14 -O3 -gencode arch=compute_86,code=sm_86",
+            1,
+        );
+        fixture.resign();
+        assert_eq!(
+            borrowed_fixture(&fixture, &original_pin).unwrap_err(),
+            ProvenanceRefusal::ManifestPin
+        );
+        assert!(
+            verify_bundle(
+                &fixture.directory,
+                &STEMS,
+                &fixture.trusted_fingerprint,
+                &original_pin
+            )
+            .unwrap_err()
+            .contains("source-owned reviewed fingerprint")
+        );
+        // Original semantic refusals precede the new final approval comparison.
+        fixture.manifest.push_str("unexpected=field\n");
+        fixture.resign();
+        assert_eq!(
+            borrowed_fixture(&fixture, &original_pin).unwrap_err(),
+            ProvenanceRefusal::Trailing
+        );
+        assert!(
+            verify_bundle(
+                &fixture.directory,
+                &STEMS,
+                &fixture.trusted_fingerprint,
+                &original_pin
+            )
+            .unwrap_err()
+            .contains("unexpected trailing field")
+        );
+        fs::write(fixture.directory.join("aes.cu"), b"changed original source").unwrap();
+        assert_eq!(
+            borrowed_fixture(&fixture, &original_pin).unwrap_err(),
+            ProvenanceRefusal::DigestMismatch("aes")
+        );
+        assert!(
+            verify_bundle(
+                &fixture.directory,
+                &STEMS,
+                &fixture.trusted_fingerprint,
+                &original_pin
+            )
+            .unwrap_err()
+            .contains("digest mismatch")
+        );
+    }
+
+    #[test]
+    fn original_row_order_traversal_and_authentication_refuse_before_any_partial_owner() {
+        let fixture = Fixture::new();
+        let public_key = fixture.signing_key.verifying_key().to_bytes();
+        let signature = fixture
+            .signing_key
+            .sign(fixture.manifest.as_bytes())
+            .to_bytes();
+        let new_reader = || {
+            BorrowedCudaReader::new(
+                fixture.manifest.as_bytes(),
+                &public_key,
+                &signature,
+                &STEMS,
+                &fixture.trusted_fingerprint,
+            )
+        };
+        assert_eq!(
+            new_reader()
+                .unwrap()
+                .finish(&sha256_hex(fixture.manifest.as_bytes()))
+                .unwrap_err(),
+            ProvenanceRefusal::Traversal
+        );
+        let mut reader = new_reader().unwrap();
+        assert_eq!(
+            reader.accept_row(&[], &[]),
+            Err(ProvenanceRefusal::Traversal)
+        );
+        assert_eq!(reader.next_row(), Ok("aes"));
+        assert_eq!(reader.next_row(), Err(ProvenanceRefusal::Traversal));
+        assert_eq!(
+            reader
+                .finish(&sha256_hex(fixture.manifest.as_bytes()))
+                .unwrap_err(),
+            ProvenanceRefusal::Traversal
+        );
+        assert!(matches!(
+            BorrowedCudaReader::new(
+                fixture.manifest.as_bytes(),
+                &public_key[..31],
+                &signature,
+                &STEMS,
+                &fixture.trusted_fingerprint
+            ),
+            Err(ProvenanceRefusal::PublicKeyLength)
+        ));
+        assert!(matches!(
+            BorrowedCudaReader::new(
+                fixture.manifest.as_bytes(),
+                &public_key,
+                &signature[..63],
+                &STEMS,
+                &fixture.trusted_fingerprint
+            ),
+            Err(ProvenanceRefusal::SignatureLength)
+        ));
+        let wrong = sha256_hex(b"unreviewed fixture key");
+        assert!(matches!(
+            BorrowedCudaReader::new(
+                fixture.manifest.as_bytes(),
+                &public_key,
+                &signature,
+                &STEMS,
+                &wrong
+            ),
+            Err(ProvenanceRefusal::PublicKeyFingerprint)
+        ));
+        assert!(matches!(
+            BorrowedCudaReader::new(
+                fixture.manifest.as_bytes(),
+                &public_key,
+                &[0; 64],
+                &STEMS,
+                &fixture.trusted_fingerprint
+            ),
+            Err(ProvenanceRefusal::Signature)
+        ));
+        assert_eq!(
+            borrowed_fixture(&fixture, &"0".repeat(64)).unwrap_err(),
+            ProvenanceRefusal::ManifestPin
+        );
+        let mut reordered = fixture;
+        let first = "artifact.aes.source_sha256=";
+        reordered.manifest =
+            reordered
+                .manifest
+                .replacen(first, "artifact.vector.source_sha256=", 1);
+        reordered.resign();
+        assert_eq!(
+            borrowed_fixture(&reordered, &sha256_hex(reordered.manifest.as_bytes())).unwrap_err(),
+            ProvenanceRefusal::ArtifactField {
+                stem: "aes",
+                source: true,
+                missing: false
+            }
+        );
+    }
+
+    #[test]
+    fn shared_walk_preserves_canonical_text_truncation_and_original_byte_limits() {
+        let mut fixture = Fixture::new();
+        fixture.manifest = fixture.manifest.replacen("\n", "\r\n", 1);
+        fixture.resign();
+        assert_eq!(
+            borrowed_fixture(&fixture, &sha256_hex(fixture.manifest.as_bytes())).unwrap_err(),
+            ProvenanceRefusal::ManifestText
+        );
+        let mut fixture = Fixture::new();
+        let offset = fixture
+            .manifest
+            .find("artifact.vector.ptx_sha256=")
+            .unwrap();
+        fixture.manifest.truncate(offset);
+        fixture.resign();
+        assert_eq!(
+            borrowed_fixture(&fixture, &sha256_hex(fixture.manifest.as_bytes())).unwrap_err(),
+            ProvenanceRefusal::ArtifactField {
+                stem: "vector",
+                source: false,
+                missing: true
+            }
+        );
+        let mut fixture = Fixture::new();
+        fixture.manifest.push_str(&"x".repeat(MAX_MANIFEST_BYTES));
+        fixture.resign();
+        assert_eq!(
+            borrowed_fixture(&fixture, &sha256_hex(fixture.manifest.as_bytes())).unwrap_err(),
+            ProvenanceRefusal::ManifestText
+        );
+        let fixture = Fixture::new();
+        let public_key = fixture.signing_key.verifying_key().to_bytes();
+        let signature = fixture
+            .signing_key
+            .sign(fixture.manifest.as_bytes())
+            .to_bytes();
+        let mut reader = BorrowedCudaReader::new(
+            fixture.manifest.as_bytes(),
+            &public_key,
+            &signature,
+            &STEMS,
+            &fixture.trusted_fingerprint,
+        )
+        .unwrap();
+        assert_eq!(reader.next_row(), Ok("aes"));
+        let oversized = vec![0; MAX_PTX_BYTES + 1];
+        assert_eq!(
+            reader.accept_row(b"// source for aes\n", &oversized),
+            Err(ProvenanceRefusal::PtxLimit("aes"))
+        );
+        assert_eq!(
+            reader.accept_row(b"// source for aes\n", &fixture.artifacts[0]),
+            Ok(())
+        );
+        assert_eq!(reader.next_row(), Ok("vector"));
+        assert_eq!(
+            reader.accept_row(b"// source for vector\n", &fixture.artifacts[1]),
+            Ok(())
+        );
+        assert_eq!(reader.next_row(), Err(ProvenanceRefusal::Traversal));
+        assert!(
+            reader
+                .finish(&sha256_hex(fixture.manifest.as_bytes()))
+                .is_ok()
+        );
+    }
+    #[test]
+    fn file_adapter_retains_every_admitted_original_input() {
+        let fixture = Fixture::new();
+        let original_sources: Vec<_> = STEMS
+            .iter()
+            .map(|stem| fs::read(fixture.directory.join(format!("{stem}.cu"))).unwrap())
+            .collect();
+        let original_artifacts: Vec<_> = STEMS
+            .iter()
+            .map(|stem| fs::read(fixture.directory.join(format!("{stem}.ptx"))).unwrap())
+            .collect();
+        let original_manifest = fs::read(fixture.directory.join(MANIFEST_NAME)).unwrap();
+        let original_key = fs::read(fixture.directory.join(MANIFEST_PUBLIC_KEY_NAME)).unwrap();
+        let original_signature = fs::read(fixture.directory.join(MANIFEST_SIGNATURE_NAME)).unwrap();
+        assert_eq!(original_manifest, fixture.manifest.as_bytes());
+        assert_eq!(original_key, fixture.signing_key.verifying_key().to_bytes());
+        assert_eq!(
+            original_signature,
+            fixture.signing_key.sign(&original_manifest).to_bytes()
+        );
+        for (index, stem) in STEMS.iter().enumerate() {
+            assert_eq!(
+                original_sources[index],
+                format!("// source for {stem}\n").as_bytes()
+            );
+            assert_eq!(original_artifacts[index], fixture.artifacts[index]);
+        }
+        let verified = fixture.verify().expect("actual signed private originals");
+        // Replace every admitted pathname after admission. The returned owner
+        // must still contain all original bytes, not a later pathname read.
+        for stem in STEMS {
+            fs::write(
+                fixture.directory.join(format!("{stem}.cu")),
+                b"replaced source",
+            )
+            .unwrap();
+            fs::write(
+                fixture.directory.join(format!("{stem}.ptx")),
+                b"replaced PTX",
+            )
+            .unwrap();
+        }
+        for name in [
+            MANIFEST_NAME,
+            MANIFEST_PUBLIC_KEY_NAME,
+            MANIFEST_SIGNATURE_NAME,
+        ] {
+            fs::write(fixture.directory.join(name), b"replaced authentic input").unwrap();
+        }
+        assert_eq!(verified.sources, original_sources);
+        assert_eq!(verified.artifacts, original_artifacts);
+        assert_eq!(verified.manifest, original_manifest);
+        assert_eq!(verified.public_key.as_slice(), original_key);
+        assert_eq!(verified.signature.as_slice(), original_signature);
+        assert_eq!(verified.cuda_image_sha256, sha256_hex(b"pinned CUDA image"));
+        assert_eq!(
+            verified.nvcc_version_sha256,
+            sha256_hex(b"nvcc --version output")
+        );
+        assert_eq!(
+            verified.nvcc_flags,
+            "-ptx -std=c++14 -gencode arch=compute_86,code=sm_86"
+        );
+        assert_eq!(verified.target_profile, "arch=compute_86,code=sm_86");
+    }
+
+    #[test]
+    fn borrowed_metadata_preserves_original_first_fault_order_and_values() {
+        let fixture = Fixture::new();
+        let pin = sha256_hex(fixture.manifest.as_bytes());
+        let metadata = borrowed_fixture(&fixture, &pin).expect("actual signed private metadata");
+        assert_eq!(metadata.cuda_image_sha256, sha256_hex(b"pinned CUDA image"));
+        assert_eq!(
+            metadata.nvcc_version_sha256,
+            sha256_hex(b"nvcc --version output")
+        );
+        assert_eq!(
+            metadata.nvcc_flags,
+            "-ptx -std=c++14 -gencode arch=compute_86,code=sm_86"
+        );
+        assert_eq!(metadata.target_profile, "arch=compute_86,code=sm_86");
+
+        let image = format!("cuda_image_sha256={}\n", sha256_hex(b"pinned CUDA image"));
+        let version = format!(
+            "nvcc_version_sha256={}\n",
+            sha256_hex(b"nvcc --version output")
+        );
+        let flags = "nvcc_flags=-ptx -std=c++14 -gencode arch=compute_86,code=sm_86\n";
+        let target = "target_profile=arch=compute_86,code=sm_86\n";
+        let zero = "0".repeat(64);
+        let cases = [
+            (
+                format!("cuda_image_sha256={zero}\n"),
+                ProvenanceRefusal::InvalidDigest("cuda_image_sha256"),
+            ),
+            (
+                image.clone(),
+                ProvenanceRefusal::MissingField("nvcc_version_sha256"),
+            ),
+            (
+                format!("{image}nvcc_version_sha256={zero}\n"),
+                ProvenanceRefusal::InvalidDigest("nvcc_version_sha256"),
+            ),
+            (
+                format!("{image}{version}"),
+                ProvenanceRefusal::MissingField("nvcc_flags"),
+            ),
+            (
+                format!("{image}{version}nvcc_flags=invalid\n"),
+                ProvenanceRefusal::Flags,
+            ),
+            (
+                format!("{image}{version}{flags}"),
+                ProvenanceRefusal::MissingField("target_profile"),
+            ),
+            (
+                format!("{image}{version}{flags}target_profile=invalid\n"),
+                ProvenanceRefusal::Target,
+            ),
+            (
+                format!("{image}{version}{flags}{target}"),
+                ProvenanceRefusal::MissingField("generation_1_sha256"),
+            ),
+        ];
+        for (prefix, expected) in cases {
+            let mut fixture = Fixture::new();
+            fixture.manifest = format!("ivm-cuda-ptx-provenance-v1\n{prefix}");
+            fixture.resign();
+            let pin = sha256_hex(fixture.manifest.as_bytes());
+            assert_eq!(borrowed_fixture(&fixture, &pin).unwrap_err(), expected);
+        }
     }
 }

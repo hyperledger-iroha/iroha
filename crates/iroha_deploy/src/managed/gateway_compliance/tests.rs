@@ -135,6 +135,9 @@ impl RuntimeHttp {
             while !worker_stop.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
+                        // macOS inherits the listener's nonblocking mode; request reads use the
+                        // bounded socket timeouts rather than failing between packet arrivals.
+                        socket.set_nonblocking(false)?;
                         let request = wallet_request(&mut socket)?;
                         let step = worker_remaining
                             .lock()

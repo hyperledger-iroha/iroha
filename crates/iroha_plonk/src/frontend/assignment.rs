@@ -762,6 +762,13 @@ impl<F> AssignedTables<F> {
         self.advice.as_deref()
     }
 
+    /// Moves the advice values out (`None` for key generation or when they
+    /// were already taken), so a prover can own the secret witness without
+    /// leaving an unzeroized copy behind.
+    pub fn take_advice(&mut self) -> Option<Vec<Vec<F>>> {
+        self.advice.take()
+    }
+
     /// Whether each advice cell was assigned.
     #[must_use]
     pub fn advice_assigned(&self) -> &[Vec<bool>] {
@@ -952,6 +959,12 @@ mod tests {
         assert_eq!((tables.k(), tables.n(), tables.usable_rows()), (4, 16, 10));
         assert_eq!(tables.instance_lengths(), &[2]);
         assert!(tables.fixed_assigned()[0][0] && !tables.fixed_assigned()[0][1]);
+        // The advice moves out once; nothing is left behind.
+        let mut tables = tables;
+        let taken = tables.take_advice().expect("witness advice");
+        assert_eq!(taken[0][2], Fp::from(7));
+        assert!(tables.advice().is_none());
+        assert!(tables.take_advice().is_none());
     }
 
     #[test]

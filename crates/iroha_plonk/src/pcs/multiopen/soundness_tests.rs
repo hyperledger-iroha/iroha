@@ -237,7 +237,7 @@ fn honest_round_trip<C: PastaCurve, H: TranscriptHash<C>>(k: u32, fresh: impl Fn
         .verify_full(&case.params, Some(&folded), BUDGET)
         .expect("full");
     pending
-        .verify_succinct(&case.params, &folded, &C::ScalarExt::ONE, BUDGET)
+        .accumulate(&case.params, &folded, &C::ScalarExt::ONE, BUDGET)
         .expect("succinct")
         .decide(&case.params, BUDGET)
         .expect("decide");

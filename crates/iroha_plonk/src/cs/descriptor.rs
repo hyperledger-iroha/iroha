@@ -704,19 +704,50 @@ fn is_canonical(value: &[u8; 32], modulus: &[u8; 32]) -> bool {
     false
 }
 
+/// Incremental personalised `BLAKE2b` with an `N`-byte output (`N <= 64`):
+/// the streaming form of [`blake2b_personal`], for digests over data too
+/// large to concatenate (witness and copy-mapping digests). Updates may be
+/// split anywhere; the digest depends only on the concatenated input.
+pub(crate) struct Blake2bPersonal<const N: usize> {
+    core: Blake2bVarCore,
+    buffer: Buffer<Blake2bVarCore>,
+}
+
+impl<const N: usize> Blake2bPersonal<N> {
+    /// A fresh state with personalization `persona`.
+    pub(crate) fn new(persona: &[u8; 16]) -> Self {
+        Self {
+            core: Blake2bVarCore::new_with_params(&[], persona, 0, N),
+            buffer: Buffer::<Blake2bVarCore>::default(),
+        }
+    }
+
+    /// Absorbs `part`.
+    pub(crate) fn update(&mut self, part: &[u8]) {
+        let core = &mut self.core;
+        self.buffer
+            .digest_blocks(part, |blocks| core.update_blocks(blocks));
+    }
+
+    /// The `N`-byte digest.
+    pub(crate) fn finalize(mut self) -> [u8; N] {
+        let mut full = blake2::digest::Output::<Blake2bVarCore>::default();
+        self.core
+            .finalize_variable_core(&mut self.buffer, &mut full);
+        let mut out = [0_u8; N];
+        out.copy_from_slice(&full[..N]);
+        out
+    }
+}
+
 /// Personalised `BLAKE2b` with an `N`-byte output (`N <= 64`) over the
 /// concatenation of `parts`.
 pub(crate) fn blake2b_personal<const N: usize>(persona: &[u8; 16], parts: &[&[u8]]) -> [u8; N] {
-    let mut core = Blake2bVarCore::new_with_params(&[], persona, 0, N);
-    let mut buffer = Buffer::<Blake2bVarCore>::default();
+    let mut hasher = Blake2bPersonal::<N>::new(persona);
     for part in parts {
-        buffer.digest_blocks(part, |blocks| core.update_blocks(blocks));
+        hasher.update(part);
     }
-    let mut full = blake2::digest::Output::<Blake2bVarCore>::default();
-    core.finalize_variable_core(&mut buffer, &mut full);
-    let mut out = [0_u8; N];
-    out.copy_from_slice(&full[..N]);
-    out
+    hasher.finalize()
 }
 
 /// `BLAKE2b(32, person "PIPA-v1-CircDesc", encoded)`.
@@ -1535,6 +1566,19 @@ mod tests {
         let three =
             blake2b_personal::<64>(TRANSCRIPT_REPR_PERSONA, &[&long[..128], &[], &long[128..]]);
         assert_eq!(whole, three);
+        // The streaming hasher equals the one-shot digest for any split.
+        for split in [0, 1, 63, 64, 65, 128, 200, 256] {
+            let mut hasher = Blake2bPersonal::<64>::new(TRANSCRIPT_REPR_PERSONA);
+            hasher.update(&long[..split]);
+            for byte in &long[split..] {
+                hasher.update(core::slice::from_ref(byte));
+            }
+            assert_eq!(hasher.finalize(), whole, "split {split}");
+        }
+        let mut short = Blake2bPersonal::<32>::new(DESCRIPTOR_DIGEST_PERSONA);
+        short.update(b"ab");
+        short.update(b"c");
+        assert_eq!(short.finalize(), descriptor_digest(b"abc"));
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -1676,6 +1720,9 @@ mod tests {
     }
 
     /// Every rule is reachable by a single-field mutation.
+    ///
+    /// DEV-10 (spec section 14): the descriptor rules of section 4 are enforced at build time; the
+    /// vendored stack has none.
     #[test]
     fn mutations_fail_the_named_rule() {
         type Mutation = fn(&mut CircuitDescriptorV1);

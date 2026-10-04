@@ -42,7 +42,7 @@ pub(super) struct Head {
     pub(super) checkpoint_hash: [u8; 32],
     previous_head_hash: [u8; 32],
 }
-fn empty_context() -> DkgCheckpointBindingV1 {
+pub(super) fn empty_context() -> DkgCheckpointBindingV1 {
     DkgCheckpointBindingV1 {
         network_id: [0; 32],
         attempt_id: [0; 32],
@@ -189,7 +189,7 @@ inline_field!(DurableDeadline, 1, u128, origin_nanos);
 inline_field!(DurableDeadline, 2, u128, expiry_nanos);
 
 // Only the five fixed scalar/array source slots can use this stack destination.
-struct SourceFields;
+pub(super) struct SourceFields;
 impl FieldDestination for SourceFields {
     type Error = Infallible;
 }
@@ -307,7 +307,7 @@ impl PreparedRecordDestination<Head> for DestinationFor<'_, Head> {
         self.owner.head.as_mut_slice()[0] = Head::empty();
     }
 }
-struct Bytes<'a>(&'a mut ChargedBuffer<u8>);
+pub(super) struct Bytes<'a>(pub(super) &'a mut ChargedBuffer<u8>);
 impl std::io::Write for Bytes<'_> {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
         self.0.append(b)?;
@@ -317,15 +317,23 @@ impl std::io::Write for Bytes<'_> {
         Ok(())
     }
 }
-const INTENT_FILES: [&str; 7] = [
+const INTENT_FILES: [&str; 6] = [
     "producer-1-intent.norito",
     "producer-2-intent.norito",
     "producer-3-intent.norito",
-    "producer-extraction-intent.norito",
     "input-consumption.norito",
     "delivery-input-consumption.norito",
     "session-input-consumption.norito",
 ];
+// Extraction has its own final aggregate intent; no retired phase4 format,
+// encoder, source bank or writer remains in this phase1..3 owner.
+fn intent_index(operation: u16) -> Result<usize, AttemptError> {
+    match operation {
+        1..=3 => Ok(usize::from(operation - 1)),
+        5..=7 => Ok(usize::from(operation - 2)),
+        _ => Err(AttemptError::Phase),
+    }
+}
 const CHECKPOINT_FILES: [&str; 3] = [
     "private-checkpoint-1.norito",
     "private-checkpoint-2.norito",
@@ -352,10 +360,10 @@ impl CheckpointSource {
     }
 }
 #[derive(Default)]
-struct Loaded {
-    descriptor: Option<File>,
-    identity: Option<fs::Metadata>,
-    synced: bool,
+pub(super) struct Loaded {
+    pub(super) descriptor: Option<File>,
+    pub(super) identity: Option<fs::Metadata>,
+    pub(super) synced: bool,
 }
 
 /// Held source extents for one completed later phase. Controls are inline in the
@@ -399,11 +407,11 @@ const LATER_FILES: [[(&str, bool); 7]; 2] = [
 /// All byte arrays, fixed records and canonical control owners precede claim/RNG.
 pub(super) struct PreparedDurableDkg {
     expiry: DurableDeadline,
-    intents: [ChargedBuffer<u8>; 7],
-    intent_records: [Option<Intent>; 7],
+    intents: [ChargedBuffer<u8>; 6],
+    intent_records: [Option<Intent>; 6],
     heads: [ChargedBuffer<u8>; 3],
     head_records: [Option<Head>; 3],
-    intent_progress: [seat_export::FileProgress; 6],
+    intent_progress: [seat_export::FileProgress; 5],
     checkpoint_progress: [seat_export::FileProgress; 3],
     checkpoint_sources: [Option<CheckpointSource>; 3],
     checkpoint_terminal: [bool; 3],
@@ -432,28 +440,27 @@ impl PreparedDurableDkg {
         let head_len =
             norito::canonical_frame_len(&Head::empty()).map_err(seat_export::ExportError::from)?;
         let controls = PreparedDecodeWorkspace::allocation_layouts();
-        let mut layouts = [Layout::new::<u8>(); 18];
-        for slot in &mut layouts[..7] {
+        let mut layouts = [Layout::new::<u8>(); 17];
+        for slot in &mut layouts[..6] {
             *slot =
                 Layout::array::<u8>(intent_len).map_err(|_| AllocationRefusal::DemandOverflow)?;
         }
-        for slot in &mut layouts[7..10] {
+        for slot in &mut layouts[6..9] {
             *slot = Layout::array::<u8>(head_len).map_err(|_| AllocationRefusal::DemandOverflow)?;
         }
-        layouts[10] = layouts[0];
-        layouts[11] = layouts[7];
-        layouts[12] =
+        layouts[9] = layouts[0];
+        layouts[10] = layouts[6];
+        layouts[11] =
             Layout::array::<u8>(public_bound).map_err(|_| AllocationRefusal::DemandOverflow)?;
-        layouts[13] =
+        layouts[12] =
             Layout::array::<u8>(private_bound).map_err(|_| AllocationRefusal::DemandOverflow)?;
-        layouts[14] = Layout::array::<Intent>(1).map_err(|_| AllocationRefusal::DemandOverflow)?;
-        layouts[15] = Layout::array::<Head>(1).map_err(|_| AllocationRefusal::DemandOverflow)?;
-        layouts[16] = controls[0];
-        layouts[17] = controls[1];
+        layouts[13] = Layout::array::<Intent>(1).map_err(|_| AllocationRefusal::DemandOverflow)?;
+        layouts[14] = Layout::array::<Head>(1).map_err(|_| AllocationRefusal::DemandOverflow)?;
+        layouts[15] = controls[0];
+        layouts[16] = controls[1];
         let mut reservation = budget.try_reserve_layouts(layouts)?;
         let mut make = |capacity| ChargedBuffer::from_reservation(capacity, &mut reservation);
         let intents = [
-            make(intent_len)?,
             make(intent_len)?,
             make(intent_len)?,
             make(intent_len)?,
@@ -478,7 +485,7 @@ impl PreparedDurableDkg {
         Ok(Self {
             expiry,
             intents,
-            intent_records: [None; 7],
+            intent_records: [None; 6],
             heads,
             head_records: [None; 3],
             intent_progress: std::array::from_fn(|_| seat_export::FileProgress::default()),
@@ -529,10 +536,7 @@ impl PreparedDurableDkg {
         source_hashes: [[u8; 32]; 2],
         stream_generations: [u64; 2],
     ) -> Result<(), AttemptError> {
-        let index = usize::from(operation.checked_sub(1).ok_or(AttemptError::Phase)?);
-        if index >= self.intents.len() {
-            return Err(AttemptError::Phase);
-        }
+        let index = intent_index(operation)?;
         let previous_head_hash = if operation == 1 {
             [0; 32]
         } else {
@@ -569,7 +573,7 @@ impl PreparedDurableDkg {
         Ok(())
     }
     pub(super) fn intent_bytes(&self, operation: u16) -> Result<&[u8], AttemptError> {
-        let index = usize::from(operation.checked_sub(1).ok_or(AttemptError::Phase)?);
+        let index = intent_index(operation)?;
         self.intents
             .get(index)
             .filter(|b| !b.as_slice().is_empty())
@@ -584,10 +588,10 @@ impl PreparedDurableDkg {
         directory: &Directory,
         operation: u16,
     ) -> Result<(), AttemptError> {
-        if !(2..=7).contains(&operation) {
+        if operation == 1 {
             return Err(AttemptError::Phase);
         }
-        let index = usize::from(operation - 1);
+        let index = intent_index(operation)?;
         let bytes = self.intent_bytes(operation)?;
         // Split immutable source and original descriptor progress without copying bytes.
         let _ = bytes;
@@ -710,6 +714,87 @@ impl PreparedDurableDkg {
         )?;
         Ok(())
     }
+    pub(super) fn aggregate_prefix_record_bounds(&self) -> [usize; 2] {
+        [self.read_head.capacity(), self.read_intent.capacity()]
+    }
+    pub(super) fn verify_aggregate_accepted_prefix(
+        &mut self,
+        intent: &super::aggregate_durable::AggregateIntent,
+        binding: &iroha_crypto::threshold_bls::aggregate_checkpoint::DkgAggregateCheckpointBindingV1,
+        head_bytes: &[u8],
+        checkpoint_bytes: &[u8],
+        marker_bytes: &[u8],
+        intent_bytes: &[u8],
+        output_bytes: &[u8],
+    ) -> Result<Head, AttemptError> {
+        self.workspace
+            .decode_canonical_into::<Head, _>(
+                head_bytes,
+                norito::canonical_decode_limits(head_bytes.len()),
+                &mut DestinationFor::<Head> {
+                    owner: &mut self.destination,
+                    expiry: self.expiry,
+                    marker: std::marker::PhantomData,
+                },
+            )
+            .map_err(AttemptError::DurableDecode)?;
+        let head = self.destination.head.as_slice()[0];
+        let mut decode = |bytes: &[u8]| -> Result<Intent, AttemptError> {
+            self.workspace
+                .decode_canonical_into::<Intent, _>(
+                    bytes,
+                    norito::canonical_decode_limits(bytes.len()),
+                    &mut DestinationFor::<Intent> {
+                        owner: &mut self.destination,
+                        expiry: self.expiry,
+                        marker: std::marker::PhantomData,
+                    },
+                )
+                .map_err(AttemptError::DurableDecode)?;
+            Ok(self.destination.intent.as_slice()[0])
+        };
+        let marker = decode(marker_bytes)?;
+        let original_intent = decode(intent_bytes)?;
+        let head_hash: [u8; 32] = Hash::new(head_bytes).into();
+        let mut original = head.context;
+        original.public_output_hash = [0; 32];
+        original.producer_intent_hash = [0; 32];
+        if head.version != 1
+            || head.context.phase != 3
+            || head_hash != binding.accepted_head_hash
+            || head.checkpoint_hash != binding.accepted_checkpoint_hash
+            || head.checkpoint_hash != <[u8; 32]>::from(Hash::new(checkpoint_bytes))
+            || head.context.public_output_hash != <[u8; 32]>::from(Hash::new(output_bytes))
+            || head.context.producer_intent_hash != <[u8; 32]>::from(Hash::new(intent_bytes))
+            || original_intent.version != 1
+            || original_intent.operation != 3
+            || original_intent.context != original
+            || original_intent.previous_head_hash != head.previous_head_hash
+            || original_intent.expiry != intent.expiry
+            || original_intent.claim_identity != intent.claim_identity
+            || original_intent.claim_path_hash != intent.claim_path_hash
+            || original_intent.fifo_identity != intent.fifo_identity
+            || original_intent.stream_generations[0] != 1
+            || marker.version != 1
+            || marker.operation != 7
+            || marker.context != head.context
+            || marker.previous_head_hash != head_hash
+            || marker.expiry != intent.expiry
+            || marker.claim_identity != intent.claim_identity
+            || marker.claim_path_hash != intent.claim_path_hash
+            || marker.fifo_identity != intent.fifo_identity
+            || marker.source_hashes != [[0; 32]; 2]
+            || marker.continuation_hash != [0; 32]
+            || marker.continuation_source != head.context.source
+            || marker.stream_generations[0] != 2
+            || marker.stream_generations[1] != original_intent.stream_generations[1]
+            || intent.stream_generations[1] <= marker.stream_generations[1]
+        {
+            return Err(AttemptError::Binding);
+        }
+        Ok(head)
+    }
+
     pub(super) fn latest_context(&self) -> Result<&DkgCheckpointBindingV1, AttemptError> {
         self.head_records
             .iter()
@@ -730,7 +815,7 @@ impl PreparedDurableDkg {
                 .ok_or(AttemptError::Phase)
         }
     }
-    fn latest_head_hash(&self) -> Result<[u8; 32], AttemptError> {
+    pub(super) fn latest_head_hash(&self) -> Result<[u8; 32], AttemptError> {
         self.heads
             .iter()
             .rev()
@@ -771,8 +856,10 @@ impl PreparedDurableDkg {
         // as the preceding head. All complete later phases require their full prefix.
         #[cfg(not(all(test, sumeragi_daemon_mutation = "HC111")))]
         for name in [
-            INTENT_FILES[3],
-            INTENT_FILES[6],
+            "producer-extraction-intent.norito",
+            INTENT_FILES[5],
+            "private-aggregate-checkpoint.norito",
+            "aggregate-head.norito",
             "input-final-session.norito",
             "proof-final-session.norito",
             "public-session.norito",
@@ -1064,7 +1151,7 @@ impl PreparedDurableDkg {
             &mut self.heads[index + 1],
             &mut self.later[index].files[1],
         )?;
-        let marker_index = usize::from(phase + 2);
+        let marker_index = intent_index(phase + 3)?;
         let (name, private) = LATER_FILES[index][6];
         read_file(
             directory,
@@ -1228,7 +1315,7 @@ impl PreparedDurableDkg {
             let bytes = match slot {
                 0 => &mut self.intents[index + 1],
                 1 => &mut self.heads[index + 1],
-                6 => &mut self.intents[usize::from(phase + 2)],
+                6 => &mut self.intents[intent_index(phase + 3)?],
                 _ => later.bytes[slot - 2].as_mut().ok_or(AttemptError::Phase)?,
             };
             read_file(directory, name, private, bytes, &mut later.files[slot])?;
@@ -1278,7 +1365,7 @@ impl PreparedDurableDkg {
         &self,
         phase: u16,
     ) -> Result<[std::os::fd::RawFd; 4], AttemptError> {
-        use std::os::fd::AsRawFd as _;
+        use std::os::fd::AsRawFd;
         let index = usize::from(phase.checked_sub(2).ok_or(AttemptError::Phase)?);
         let later = self.later.get(index).ok_or(AttemptError::Phase)?;
         let descriptor = |slot: usize| {
@@ -1336,14 +1423,14 @@ impl PreparedDurableDkg {
         Ok(())
     }
 }
-fn file_present(directory: &Directory, name: &str) -> Result<bool, AttemptError> {
+pub(super) fn file_present(directory: &Directory, name: &str) -> Result<bool, AttemptError> {
     match rustix::fs::statat(&directory.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
         Err(rustix::io::Errno::NOENT) => Ok(false),
         Ok(_) => Ok(true),
         Err(error) => Err(seat_export::ExportError::Io(error.into()).into()),
     }
 }
-fn open_original_file(
+pub(super) fn open_original_file(
     directory: &Directory,
     name: &'static str,
     private: bool,
@@ -1409,7 +1496,7 @@ fn open_original_file(
     seat_export::revalidate_directory(directory)?;
     Ok(())
 }
-fn read_file(
+pub(super) fn read_file(
     directory: &Directory,
     name: &'static str,
     private: bool,

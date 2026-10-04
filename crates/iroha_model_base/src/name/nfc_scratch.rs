@@ -66,7 +66,7 @@ mod tests {
         assert_eq!(request_bytes(257), 16256 + 1028 * 4);
         assert_eq!(
             request_bytes(crate::state_path::MAX_STATE_PATH_BYTES),
-            524160 + 262144
+            524_160 + 262_144
         );
         assert_eq!(request_bytes(usize::MAX), usize::MAX);
         assert_eq!(request_bytes(usize::MAX / 4), usize::MAX);

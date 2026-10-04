@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11
     import tomli as tomllib
 
 import pytest
+from scripts.tests.release_builder_fixture import prepare_source_fixture
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1193,8 +1194,6 @@ def test_release_pipeline_requires_explicit_image_contract_before_outputs(
         [
             sys.executable,
             str(REPO_ROOT / "scripts" / "run_release_pipeline.py"),
-            "--trusted-cuda-key-sha256",
-            "9" * 64,
             "--version",
             version,
             "--output-dir",
@@ -1240,21 +1239,21 @@ def test_release_pipeline_prebuilt_matrix_requires_reviewed_manifest_digest() ->
 def test_release_pipeline_dry_run_uses_closed_oci_image_contract(
     tmp_path: Path,
 ) -> None:
+    environment = os.environ.copy()
+    source = prepare_source_fixture(REPO_ROOT, tmp_path / "private-source", environment)
     output_dir = tmp_path / "release-output"
     version = tomllib.loads(
-        (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        (source / "Cargo.toml").read_text(encoding="utf-8")
     )["workspace"]["package"]["version"]
     commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"],
-        cwd=REPO_ROOT,
+        cwd=source, env=environment,
         text=True,
     ).strip()
     result = subprocess.run(
         [
             sys.executable,
-            str(REPO_ROOT / "scripts" / "run_release_pipeline.py"),
-            "--trusted-cuda-key-sha256",
-            "9" * 64,
+            str(source / "scripts" / "run_release_pipeline.py"),
             "--version",
             version,
             "--source-commit",
@@ -1300,13 +1299,13 @@ def test_release_pipeline_dry_run_uses_closed_oci_image_contract(
             "--skip-cbdc-rollout-check",
             "--dry-run",
         ],
-        cwd=REPO_ROOT,
+        cwd=source, env=environment,
         text=True,
         capture_output=True,
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("--trusted-cuda-key-sha256") == 2
+    assert "--trusted-cuda-key-sha256" not in result.stdout
     assert "-linux-amd64-image.oci.tar" in result.stdout
     assert "-linux-arm64-image.oci.tar" in result.stdout
     assert "oci-archive" in result.stdout
@@ -1319,13 +1318,15 @@ def test_release_pipeline_dry_run_uses_closed_oci_image_contract(
 def test_release_pipeline_dry_run_uses_complete_bundle_target_matrix(
     tmp_path: Path,
 ) -> None:
+    environment = os.environ.copy()
+    source = prepare_source_fixture(REPO_ROOT, tmp_path / "private-source", environment)
     output_dir = tmp_path / "release-output"
     version = tomllib.loads(
-        (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        (source / "Cargo.toml").read_text(encoding="utf-8")
     )["workspace"]["package"]["version"]
     commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"],
-        cwd=REPO_ROOT,
+        cwd=source, env=environment,
         text=True,
     ).strip()
     targets = (
@@ -1337,10 +1338,8 @@ def test_release_pipeline_dry_run_uses_complete_bundle_target_matrix(
     )
     command = [
         sys.executable,
-        str(REPO_ROOT / "scripts" / "run_release_pipeline.py"),
-        "--trusted-cuda-key-sha256",
-            "9" * 64,
-            "--version",
+        str(source / "scripts" / "run_release_pipeline.py"),
+        "--version",
         version,
         "--source-commit",
         commit,
@@ -1372,13 +1371,13 @@ def test_release_pipeline_dry_run_uses_complete_bundle_target_matrix(
         )
     result = subprocess.run(
         command,
-        cwd=REPO_ROOT,
+        cwd=source, env=environment,
         text=True,
         capture_output=True,
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("--trusted-cuda-key-sha256") == 3
+    assert "--trusted-cuda-key-sha256" not in result.stdout
     assert result.stdout.count("--prebuilt-bin-dir") == 5
     for target in targets:
         assert target in result.stdout

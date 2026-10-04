@@ -240,6 +240,10 @@ fn the_descriptor_binds_transcript_repr_but_not_vk_bytes() {
     assert_ne!(blake.transcript_repr(), direct.transcript_repr());
 }
 
+/// DEV-06 (spec section 14): the strict `0x02` reader rejects a wrong
+/// version, `k`, compress flag or fixed count, any other length (trailing
+/// bytes included), identity and invalid points, and bitmaps that change the
+/// selector plan, where the vendored reader trusts a prefix.
 #[test]
 fn the_reader_rejects_every_malformed_field() {
     let params = params::<Ep>();
@@ -593,6 +597,85 @@ fn keygen_from_tables_checks_shapes() {
             &config
         )),
         "permutation columns"
+    );
+}
+
+/// Imported key-generation tables follow the frontend's row rule (spec 6.4):
+/// a copy, an enabled selector or a nonzero fixed value at or beyond the
+/// usable rows is refused, and the key stores the digest of its copies.
+#[test]
+fn keygen_from_tables_refuses_unusable_rows() {
+    let params = params::<Eq>();
+    let synthesized = crate::frontend::synthesize(&CIRCUIT, K, None).expect("synthesize");
+    let tables = synthesized.tables;
+    let usable = tables.usable_rows();
+    let config = config(TranscriptV1::Blake2bChallenge255, false);
+    let keygen = |fixed: Vec<Vec<Fp>>, selectors: Vec<Vec<bool>>, copies: &PermutationAssembly| {
+        keygen_from_tables(
+            &params,
+            synthesized.cs.clone(),
+            fixed,
+            selectors,
+            copies,
+            &config,
+        )
+    };
+    let fixed = tables.fixed().to_vec();
+    let selectors = tables.selectors().to_vec();
+    let pk = keygen(fixed.clone(), selectors.clone(), tables.permutation()).expect("pk");
+    assert_eq!(pk.copy_digest(), &tables.permutation().mapping_digest());
+
+    // A copy into the first blinding row (the row of l_last is u).
+    let mut copies = tables.permutation().clone();
+    let column = copies.columns()[0];
+    copies
+        .copy(column, 0, column, usable)
+        .expect("in the domain");
+    assert_eq!(
+        keygen(fixed.clone(), selectors.clone(), &copies).err(),
+        Some(KeyError::UnusableRow {
+            what: "copy",
+            column: 0,
+            row: usable
+        })
+    );
+    // A copy on the last usable row is fine.
+    let mut copies = tables.permutation().clone();
+    copies
+        .copy(column, 0, column, usable - 1)
+        .expect("in the domain");
+    let pk = keygen(fixed.clone(), selectors.clone(), &copies).expect("usable copy");
+    assert_ne!(pk.copy_digest(), &tables.permutation().mapping_digest());
+
+    let mut late_selector = selectors.clone();
+    late_selector[1][usable + 1] = true;
+    assert_eq!(
+        keygen(fixed.clone(), late_selector, tables.permutation()).err(),
+        Some(KeyError::UnusableRow {
+            what: "selector",
+            column: 1,
+            row: usable + 1
+        })
+    );
+    let mut late_fixed = fixed;
+    let last = late_fixed[1].len() - 1;
+    late_fixed[1][last] = Fp::ONE;
+    assert_eq!(
+        keygen(late_fixed, selectors, tables.permutation()).err(),
+        Some(KeyError::UnusableRow {
+            what: "fixed",
+            column: 1,
+            row: last
+        })
+    );
+    assert!(
+        KeyError::UnusableRow {
+            what: "copy",
+            column: 2,
+            row: 60
+        }
+        .to_string()
+        .contains("unusable row 60")
     );
 }
 

@@ -97,6 +97,7 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
             workspace: self.workspace,
             public_frame: self.public_frame,
             checkpoints: self.checkpoints,
+            aggregate_checkpoint: self.aggregate_checkpoint,
             budget: self.budget,
             delivered: false,
             accepted: false,

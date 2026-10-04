@@ -72,7 +72,6 @@ jobs:
             hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
           labels: commit=${{ github.sha }}
           build-args: |
-            "IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}"
             "IROHA_CROSS_XX_IMAGE=${{ env.IROHA_CROSS_XX_IMAGE }}"
             "IROHA_CROSS_RUST_IMAGE=${{ env.IROHA_CROSS_RUST_IMAGE }}"
             "IROHA_CROSS_RUNTIME_IMAGE=${{ env.IROHA_CROSS_RUNTIME_IMAGE }}"
@@ -89,12 +88,11 @@ jobs:
             hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
           labels: commit=${{ github.sha }}
           build-args: |
-            "IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}"
             "IROHA_CROSS_XX_IMAGE=${{ env.IROHA_CROSS_XX_IMAGE }}"
             "IROHA_CROSS_RUST_IMAGE=${{ env.IROHA_CROSS_RUST_IMAGE }}"
             "IROHA_CROSS_RUNTIME_IMAGE=${{ env.IROHA_CROSS_RUNTIME_IMAGE }}"
             "PROFILE=profiling"
             "RUSTFLAGS=-C force-frame-pointers=on"
-            "FEATURES=profiling,irohad/ivm-cuda"
+            "FEATURES=profiling"
             "CARGOFLAGS=-Z build-std"
           context: .

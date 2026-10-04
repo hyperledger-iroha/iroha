@@ -130,12 +130,20 @@ validation or encoding outcome; native replacement or State publication invalida
 the capture. The frozen adapter retains all three exact State targets in the same
 mode and uses the original State pool. See the [scoped relation](frozen_account_identity_relation.md).
 
-Scoped NFT and RWA captures check their exact owner/domain and owner/status/frozen
-groups, respectively, on both retained native images. Empty buckets, omitted
-members and foreign members fail before leaf encoding; absent undo rows still
-consume bounded local work. Captures retain all original source/index readers
-through encoding and reject native identity changes or overlapping State
-publication. These checks do not repair derived state or establish finality.
+Committed and frozen NFT/RWA capture share one sealed relation over the actual
+three NFT and four RWA original owners. Both images require exact nonempty
+owner/domain and owner/status/frozen membership; `None` status is a populated
+key. Physical advances, complete predecessor masks, lookup/member tails and both
+full typed equality operands are prepaid. The 4,332/4,626 singleton references
+are local scheduling, with wider or denser cuts able to defer without changing
+validity or gas. Every committed native currentness Result precedes the held
+encoding result, reader drop and final State fence. Frozen capture requires the
+actual State targets, equal Ordinary/Replace modes and the original State pool;
+canonical restoration retains untouched rollback memberships and redundant or
+absent touches. Original physical limits remain unchanged. These scoped checks
+add no account/domain existence, economic, reference or finalized authority;
+fresh runtime qualification and complete State publication remain open. See the
+[source-coupled relations](frozen_nft_rwa_owner_relations.md).
 
 Committed and frozen escrow capture share one sealed relation over the actual
 source and seller, optional-buyer and status indexes in both original images.
@@ -151,12 +159,21 @@ retains optional buyer changes and untouched rollback memberships. The original
 [scoped relation](frozen_escrow_owner_relation.md); complete State publication,
 physical funding and finalized-anchor authority remain open.
 
-The actual table catalog routes escrow and repo-agreement rows through these
-retained grouping checks before encoding. Repo initiator, counterparty and
-optional custodian groups are exact in both images; snapshot restoration derives
-both images, preserving untouched members of changed buckets through rollback.
-The former unchecked readers are removed. This does not replace the separate
-agreement-admission, complete-State publication or finalized-anchor requirements.
+Committed and frozen repo-agreement capture share one sealed relation over the
+original rows and initiator, counterparty and optional-custodian indexes. Both
+images require exact nonempty inverse membership; custodianless records cannot
+appear in a custodian group. Physical advances, complete masks, lookups and member
+tails admit both full Name UTF-8 or account-controller operands before equality.
+The 1,222-unit reference is local scheduling, with wider or denser cuts able to
+defer without changing validity or gas. All four committed currentness Results
+precede the held encoding result, reader drop and final State fence. Frozen
+capture requires four actual State targets, equal Ordinary/Replace modes and the
+original State pool. Snapshot restoration preserves untouched rollback members
+and optional custody changes. Original physical limits remain unchanged; fresh
+runtime qualification, remaining physical backing and complete State publication
+remain open. See the [scoped relation](frozen_repo_agreement_owner_relation.md).
+These checks add no agreement-admission, economic, settlement or finalized-anchor
+authority.
 
 Asset lookup recovery projects all eight derived indexes from both retained
 definition/domain/balance images. Owning-domain changes also move untouched
@@ -337,8 +354,8 @@ freeze and exact State target ownership, and use the original State encoding poo
 They return only existing scoped paired-table snapshots. Raw encoding does not
 validate dependent indexes or other fields' modes and identities. Verifier and
 domain-owner, account-identity, account-alias, asset-definition, asset-balance,
-proof-status, validation-fee, contract-alias, contract-subject and escrow captures
-use their complete bounded inverse relations; 14 other
+proof-status, validation-fee, contract-alias, contract-subject, escrow and
+repo-agreement captures use their complete bounded inverse relations; 13 other
 structural, trigger, Musubi and membership outputs report an explicit missing
 original adapter instead
 of yielding partial success. Complete structural/cell/history checks and the sole
@@ -613,14 +630,20 @@ retained-owner classification and funding missing active/scratch owners remain o
 these gauges do not represent complete process RSS. The new
 pool and buffer APIs are not evidence that those production paths are funded.
 
-G6 shipping Linux recipes enable the narrow `irohad/ivm-cuda` feature, whose
-driver is loaded at runtime without CUDA toolkit or driver linkage. Plain Cargo
-daemon builds still omit that feature. The ten CUDA source families are present,
-but their PTX files and signed provenance bundle are absent; bundled release
-builds reject that missing input. Complete automatic defaults and supply the
-reproducible, authenticated and physically qualified bundle before CUDA release
-readiness can be claimed. Generated diagnostic kernels and loader-only tests do
-not satisfy that gate.
+G6 ordinary Linux and Windows daemon dependencies now include IVM CUDA, including
+builds without default features. Apple builds retain target-appropriate Metal;
+CPU SIMD remains capability-selected. The CUDA driver is loaded at runtime without
+toolkit or driver linkage. One source-owned optional approval descriptor admits
+only the exact signed manifest/key pins and ten unchanged kernel families through
+the shared canonical borrowed verifier. Genuine bundle absence preserves ordinary
+CPU builds and startup; supplied unreviewed, partial or nonregular material is an
+error. Runtime admission retains the original immutable inputs before device or
+private staging. Retired mode/environment/trust-input paths, daemon aliases and
+placeholder PTX tests are removed. Ordinary startup neither compiles nor downloads
+kernels. The approval remains `None`: authentic reproducible signed PTX, two clean
+offline runs, twenty actual kernel completions, calibrated selection and hardware
+parity remain open gates. Source and driverless tests do not qualify GPU execution
+or a release candidate.
 
 FASTPQ Metal has one private immutable compiled-bundle admission owner before
 device discovery or private staging. Ordinary builds and startup no longer invoke

@@ -285,11 +285,10 @@ impl GlobalBeaconCeremonyPlanV1 {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Encode a test fixture seat's runtime credential from its aggregated private share.
     ///
-    /// `components` is the seat's own
-    /// [`LocalGlobalThresholdBeaconDkgSeatV1::finalize_private_share`] output
-    /// for `public`; the credential codec re-imports it against the public
-    /// transcript before writing the prepared secret frame. Production callers
-    /// prepare output before extracting the share and retain its owner on failure.
+    /// `components` is this seat's diagnostic aggregate from the same
+    /// side-effect-free arithmetic used by the production checkpoint. The
+    /// credential codec verifies its exact public equation before writing the
+    /// prepared secret frame. This fixture grants no native extraction authority.
     ///
     /// # Errors
     ///
@@ -558,8 +557,10 @@ pub fn deal_global_beacon_at_logical_clock_v1(
         },
     )?;
     let mut credentials = Vec::with_capacity(seats.len());
-    for mut seat in seats {
-        let components = seat.finalize_private_share(&sealed)?;
+    for seat in seats {
+        let components = seat
+            .aggregate_private_share(&sealed)?
+            .into_components_for_runtime_custody();
         credentials.push(plan.seat_credential(
             sealed.clone(),
             seat.seat_index(),

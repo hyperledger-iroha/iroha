@@ -188,7 +188,7 @@ fn generated_native_registration_retains_exact_reserve_operator_wallet_and_disti
     // This is a genuine independently verified original checkpoint, not a codec-only fixture.
     // ObserveOnly on the unprepared intent is positive read-only recovery with zero HTTP.
     let mut unprepared_peers = UnavailablePeers::start(&prepared);
-    let selected = coordinator
+    let selected_recovery = coordinator
         .recover_selected_if_present(
             &policy,
             &underwriting,
@@ -197,8 +197,11 @@ fn generated_native_registration_retains_exact_reserve_operator_wallet_and_disti
         )
         .unwrap()
         .unwrap();
-    assert_eq!(selected.transaction_status, OperationStatus::Absent);
-    assert!(selected.finalized.is_none() && selected.current.is_none());
+    assert_eq!(
+        selected_recovery.transaction_status,
+        OperationStatus::Absent
+    );
+    assert!(selected_recovery.finalized.is_none() && selected_recovery.current.is_none());
     let unprepared = coordinator
         .recover(Instant::now() + Duration::from_secs(30))
         .unwrap();

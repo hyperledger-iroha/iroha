@@ -243,6 +243,15 @@ impl GeneratedProvider {
             retention_epoch,
             tls_keys,
         )?;
+        // Retain the current registry's exact negotiation handles in every profile projection.
+        // The admitted body must already satisfy the advert consumer before genesis is signed.
+        let profile_aliases: Vec<String> =
+            sorafs_manifest::chunker_registry::lookup_by_handle(PROFILE)
+                .ok_or_else(|| eyre!("generated provider chunker profile is absent"))?
+                .aliases
+                .iter()
+                .map(|alias| (*alias).to_owned())
+                .collect();
         let pricing = &network.pricing;
         let stake = StakePointer {
             pool_id: tagged_identity(b"iroha.localnet.provider.stake-pool.v1\0", provider),
@@ -273,7 +282,7 @@ impl GeneratedProvider {
             version: 1,
             provider_id: *provider.as_bytes(),
             profile_id: PROFILE.into(),
-            profile_aliases: None,
+            profile_aliases: Some(profile_aliases.clone()),
             stake: stake.clone(),
             capabilities: capabilities.clone(),
             endpoints: vec![EndpointAdmissionV1 {
@@ -302,7 +311,7 @@ impl GeneratedProvider {
             advert_body: ProviderAdvertBodyV1 {
                 provider_id: *provider.as_bytes(),
                 profile_id: PROFILE.into(),
-                profile_aliases: None,
+                profile_aliases: Some(profile_aliases.clone()),
                 stake: stake.clone(),
                 qos: QosHints {
                     availability: AvailabilityTier::Hot,
@@ -344,7 +353,7 @@ impl GeneratedProvider {
                 committed_capacity_gib: 1,
                 chunker_commitments: vec![ChunkerCommitmentV1 {
                     profile_id: PROFILE.into(),
-                    profile_aliases: None,
+                    profile_aliases: Some(profile_aliases),
                     committed_gib: 1,
                     capability_refs: vec![
                         CapabilityType::ToriiGateway,
@@ -368,6 +377,7 @@ impl GeneratedProvider {
             },
             material,
         };
+        plan.material.advert_body.validate()?;
         plan.validate(provider, operator, network)?;
         encode(&plan)?;
         Ok(Self { plan, _port: port })

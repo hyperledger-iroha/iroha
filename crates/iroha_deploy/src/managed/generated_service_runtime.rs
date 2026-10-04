@@ -21,6 +21,7 @@ use std::{
     sync::Arc,
     time::Instant,
 };
+use zeroize::Zeroizing;
 mod carriers;
 mod components;
 mod config;
@@ -464,7 +465,7 @@ impl GeneratedServiceRuntime {
     fn publication_intent(
         &self,
         selection: &RuntimeSelection,
-        originals: &[zeroize::Zeroizing<Vec<u8>>],
+        originals: &[Zeroizing<Vec<u8>>],
         components: Option<[[u8; 32]; 3]>,
         required: Option<&RequiredTransactions>,
     ) -> Result<Intent> {

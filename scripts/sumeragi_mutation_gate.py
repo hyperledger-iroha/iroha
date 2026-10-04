@@ -698,6 +698,10 @@ CORE_MUTATIONS = [
       ["beacon::dkg_local_seat::restore::tests::actual_native_heads_restore_original_delivery_then_acceptance_without_signing_or_growth"]),
     m("HC113", "DKG acceptance restore: omit original signed capsule decryption and private component equality",
       ["beacon::dkg_local_seat::restore::tests::original_signed_capsule_relation_is_checked_before_any_accepted_owner_or_row_moves"]),
+    m("HC114", "DKG aggregate authority: omit the actual finalized native-tip height binding",
+      ["beacon::dkg_local_seat::aggregate::tests::aggregate_checked_context_refuses_nonfinal_native_tip_zero_intent_and_changed_original_checkpoint"]),
+    m("HC115", "DKG aggregate production: erase original contributions and acknowledgments before durable handoff",
+      ["beacon::dkg_local_seat::aggregate::tests::actual_native_h4_aggregate_stays_original_until_explicit_retirement_and_restores_small_owner"]),
 ]
 
 
@@ -715,6 +719,10 @@ DAEMON_MUTATIONS = [
       ["beacon_bootstrap::seat_attempt::finality::tests::original_verified_target_proof_publication_refusal_retains_frame_and_never_advances_twice"]),
     m("HC111", "DKG later restore: ignore a surviving partial extraction or final-session intent",
       ["beacon_bootstrap::seat_attempt::later_restore_tests::complete_original_later_head_never_reopens_partial_next_read_or_extraction_intent"]),
+    m("HC116", "DKG aggregate restore: omit original held-source file and directory durability barriers",
+      ["beacon_bootstrap::seat_attempt::aggregate_tests::original_complete_aggregate_and_four_output_heads_restore_genuine_h3_h4_ancestry_same_claim_and_exact_private_bytes"]),
+    m("HC117", "DKG aggregate export restore: treat a partial output set as an empty fresh destination",
+      ["beacon_bootstrap::seat_attempt::aggregate_tests::original_aggregate_head_rejects_partial_final_output_prefix_before_private_export_adoption"]),
     m("HC93", "broker beacon operation: reconstruct the authenticated session at every phase",
       ["runtime_provider_broker::protocol::platform::tests::beacon_operation_reuses_original_graph_across_ingress_dispatch_and_response"]),
 ]

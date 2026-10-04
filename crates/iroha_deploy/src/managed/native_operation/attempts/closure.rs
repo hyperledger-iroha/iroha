@@ -72,10 +72,35 @@ impl VerifiedUnsignedClosure {
     }
     pub(super) fn require_retained(&self) -> Result<()> {
         self.history.require_current()?;
-        if self.history.closed.as_ref().map(digest).transpose()? != Some(self.digest) {
+        self.require_receipt()
+    }
+    pub(super) fn retained_history(&self) -> &History {
+        &self.history
+    }
+    // The bounded graph owner invokes this only as part of its complete before/after passes.
+    pub(super) fn require_retained_local(&self) -> Result<()> {
+        self.history.require_current_local()?;
+        self.require_receipt()
+    }
+    pub(super) fn require_receipt(&self) -> Result<()> {
+        let evidence = self.history.scope.enrollment()?;
+        let plan = self
+            .history
+            .closing
+            .as_ref()
+            .ok_or_else(|| invalid("verified unsigned closure lost its closing plan"))?;
+        if self.history.closed.as_ref().map(digest).transpose()? != Some(self.digest)
+            || plan.successor != self.successor
+            || usize::from(plan.cumulative_reserved) != self.cumulative_reserved
+            || self.history.cumulative_reserved != self.cumulative_reserved
+            || evidence.binding().outer_intent != self.outer_intent
+            || evidence.root().identity()? != self.root_identity
+            || evidence.fees() != &self.fees
+        {
             return Err(invalid("verified unsigned closure was lost or changed"));
         }
-        Ok(())
+        self.history.require_fees(&self.fees)?;
+        self.history.validate_closure_records()
     }
 }
 impl History {
@@ -252,7 +277,7 @@ impl History {
         if self.reservation_pending() {
             self.finish_reserved(&self.operation, true)?;
         }
-        let history = Self::read(&self.operation, self.purpose, self.semantic, &self.scope)?;
+        let history = self.reread()?;
         history.check_successor(successor)?;
         if history.closing.is_none() {
             // Finish only an existing same-body retirement prefix. The exact Published successor
@@ -267,7 +292,7 @@ impl History {
                 }
             }
         }
-        let history = Self::read(&self.operation, self.purpose, self.semantic, &self.scope)?;
+        let history = history.reread()?;
         history.check_successor(successor)?;
         authorization.check(history.purpose, deadline)?;
         if history.closing.is_none() {
@@ -294,7 +319,7 @@ impl History {
         } else {
             history.verify_unsigned_closure(successor, &mut inspect)?;
         }
-        let history = Self::read(&self.operation, self.purpose, self.semantic, &self.scope)?;
+        let history = history.reread()?;
         authorization.check(history.purpose, deadline)?;
         Ok(PendingUnsignedClosure { history })
     }
@@ -414,12 +439,7 @@ impl PendingUnsignedClosure {
                 tail: plan.tail.clone(),
             },
         )?;
-        let history = History::read(
-            &self.history.operation,
-            self.history.purpose,
-            self.history.semantic,
-            &self.history.scope,
-        )?;
+        let history = self.history.reread()?;
         authorization.check(history.purpose, deadline)?;
         history
             .verify_unsigned_closure(successor, &mut inspect)?

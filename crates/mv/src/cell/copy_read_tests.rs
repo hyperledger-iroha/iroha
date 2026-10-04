@@ -24,7 +24,7 @@ fn committed_copy_preserves_exact_value_without_foreign_or_equal_republication()
 #[test]
 fn committed_copy_busy_retains_actual_current_writer_release() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

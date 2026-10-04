@@ -9,22 +9,26 @@ use packet::{
 };
 
 #[derive(Clone)]
-struct Fixture {
-    dispatch: [F; super::super::WIDTH],
-    descriptor: [F; frame_descriptor::WIDTH],
-    frame_work: [F; FRAME_WORK_WIDTH],
-    packets: [[F; packet::WIDTH]; PORTS],
-    schedule: Schedule,
+pub(super) struct Fixture {
+    pub(super) dispatch: [F; super::super::WIDTH],
+    pub(super) descriptor: [F; frame_descriptor::WIDTH],
+    pub(super) frame_work: [F; FRAME_WORK_WIDTH],
+    pub(super) packets: [[F; packet::WIDTH]; PORTS],
+    pub(super) schedule: Schedule,
 }
 impl Fixture {
-    fn new(program: &Program, slot: usize) -> Self {
+    pub(super) fn new(program: &Program, slot: usize) -> Self {
         Self::from_dispatch(
             program,
             slot,
             dispatch_tests::Fixture::with_controls(program, slot, false, 0, 10_000_000, 100),
         )
     }
-    fn from_dispatch(program: &Program, slot: usize, dispatch: dispatch_tests::Fixture) -> Self {
+    pub(super) fn from_dispatch(
+        program: &Program,
+        slot: usize,
+        dispatch: dispatch_tests::Fixture,
+    ) -> Self {
         let shape = callable(program, slot).map(|c| {
             (
                 c.entry_pc,
@@ -83,10 +87,10 @@ impl Fixture {
             schedule,
         }
     }
-    fn padding(program: &Program) -> Self {
+    pub(super) fn padding(program: &Program) -> Self {
         Self::from_dispatch(program, usize::MAX, dispatch_tests::Fixture::padding())
     }
-    fn borrowed(&self) -> Row<'_> {
+    pub(super) fn borrowed(&self) -> Row<'_> {
         Row {
             dispatch: &self.dispatch,
             descriptor: &self.descriptor,
@@ -94,12 +98,12 @@ impl Fixture {
             packets: core::array::from_fn(|slot| &self.packets[slot]),
         }
     }
-    fn residues(&self, program: &Program) -> Vec<F> {
+    pub(super) fn residues(&self, program: &Program) -> Vec<F> {
         let mut out = Vec::new();
         append_semantics(&mut out, program, self.schedule, &self.borrowed());
         out
     }
-    fn accepts(&self, program: &Program) -> bool {
+    pub(super) fn accepts(&self, program: &Program) -> bool {
         self.residues(program).iter().all(|x| *x == F::ZERO)
     }
 }

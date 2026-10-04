@@ -1,25 +1,11 @@
 //! Poseidon CUDA publication from one complete charged state owner.
 
 use super::policy::{Kernel, public_workload_task_id};
-use iroha_accel::{PtxArtifact, cuda::CudaFailure};
-use std::ffi::CStr;
+use iroha_accel::cuda::CudaFailure;
 #[path = "poseidon_cost.rs"]
 mod cost;
 #[path = "poseidon_launch.rs"]
 mod launch;
-
-static ARTIFACT: PtxArtifact = PtxArtifact::new(
-    match CStr::from_bytes_with_nul(
-        concat!(
-            include_str!(concat!(env!("OUT_DIR"), "/poseidon.ptx")),
-            "\0"
-        )
-        .as_bytes(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => panic!("embedded Poseidon artifact must have exactly one terminal NUL"),
-    },
-);
 
 #[derive(Clone, Copy)]
 enum Input<'a> {
@@ -62,7 +48,8 @@ impl Input<'_> {
 }
 
 fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output, CudaFailure> {
-    let result = crate::cuda_dispatch::with_selected(input.kernel(), ARTIFACT, |device| {
+    let artifact = crate::cuda_artifact::artifact(input.kernel())?;
+    let result = crate::cuda_dispatch::with_selected(input.kernel(), artifact, |device| {
         match input {
             Input::Two(_) => {
                 let (constants, matrix) = crate::poseidon::poseidon2_params();
@@ -71,7 +58,7 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output,
                 unsafe {
                     launch::output(
                         device,
-                        ARTIFACT,
+                        artifact,
                         geometry,
                         |i| input.word(i),
                         |i| constants[i / 12][(i / 4) % 3].0[i % 4],
@@ -85,7 +72,7 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output,
                 unsafe {
                     launch::output(
                         device,
-                        ARTIFACT,
+                        artifact,
                         geometry,
                         |i| input.word(i),
                         |i| constants[i / 24][(i / 4) % 6].0[i % 4],
@@ -122,7 +109,10 @@ fn valid_output(output: &launch::Output, input: Input<'_>) -> bool {
 }
 
 pub(super) fn admit(kernel: Kernel) -> bool {
-    crate::cuda_dispatch::admit_kernel(kernel, ARTIFACT, || {
+    let Ok(artifact) = crate::cuda_artifact::artifact(kernel) else {
+        return false;
+    };
+    crate::cuda_dispatch::admit_kernel(kernel, artifact, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
             return Err(CudaFailure::Busy);
         };
@@ -196,8 +186,9 @@ fn complete_current(
     if !valid_request(input, destination.len()) {
         return Err(CudaFailure::InvalidRequest);
     }
+    let artifact = crate::cuda_artifact::artifact(input.kernel())?;
     if !super::imp::cuda_policy_allows_attempt()
-        || !crate::cuda_dispatch::current_is_admitted(input.kernel(), ARTIFACT)
+        || !crate::cuda_dispatch::current_is_admitted(input.kernel(), artifact)
     {
         return Err(CudaFailure::Unavailable);
     }
@@ -212,7 +203,7 @@ fn complete_current(
         destination,
         || {
             super::imp::cuda_policy_allows_attempt()
-                && crate::cuda_dispatch::current_is_admitted(input.kernel(), ARTIFACT)
+                && crate::cuda_dispatch::current_is_admitted(input.kernel(), artifact)
                 && still_selected()
         },
     );
@@ -220,7 +211,7 @@ fn complete_current(
         crate::cuda_dispatch::quarantine_current_kernel();
     }
     result?;
-    super::imp::record_completed_cuda_dispatch(input.kernel(), ARTIFACT);
+    super::imp::record_completed_cuda_dispatch(input.kernel(), artifact);
     Ok(())
 }
 
@@ -233,9 +224,12 @@ fn automatic_into(input: Input<'_>, destination: &mut [u64]) -> bool {
     }
     let cpu = crate::field_dispatch::field_impl();
     let kernel = input.kernel();
+    let Ok(artifact) = crate::cuda_artifact::artifact(kernel) else {
+        return false;
+    };
     let Some(selected) = crate::cuda_dispatch::measured::select(
         kernel,
-        ARTIFACT,
+        artifact,
         input.len(),
         cpu,
         || super::imp::ensure_cuda_kernel(kernel),
@@ -466,9 +460,11 @@ mod tests {
                     );
                     return;
                 }
+                let artifact = crate::cuda_artifact::artifact(input.kernel())
+                    .expect("original admitted artifact");
                 assert!(crate::cuda_dispatch::current_is_admitted(
                     input.kernel(),
-                    ARTIFACT
+                    artifact
                 ));
                 let result = stage(
                     input,

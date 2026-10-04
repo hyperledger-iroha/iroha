@@ -308,16 +308,27 @@ checks lengths only in Committed mode and absorbs none.
 
 ### 6.4 Oracle mode (test only)
 
-Oracle mode differs from production in three ways:
+Oracle mode differs from production in four ways:
 
 - It injects the vendored `transcript_repr`: the `Halo2-Verify-Key` BLAKE2b of the length-prefixed
   `Debug` rendering, computed by `iroha_plonk_oracle`.
 - It absorbs points with `fe_to_fe`.
 - It omits the instance frame.
+- The prover accepts a caller-seeded random stream, to reproduce vendored proofs from their seeds.
 
-It is compiled only with `--cfg iroha_plonk_oracle`, which the oracle CI job passes through
-`RUSTFLAGS` into its own target directory. It is never a Cargo feature, because resolver-2 feature
-unification would leak it into shipping binaries. The assignment-import hook shares this gate.
+It is compiled only with `--cfg iroha_plonk_oracle`, passed through `RUSTFLAGS` into a separate
+target directory. That run is manual today (`crates/iroha_plonk_oracle/README.md` lists the
+commands); TODO: an oracle CI job on x86_64 and aarch64. It is never a Cargo feature, because
+resolver-2 feature unification would leak it into shipping binaries. A stray `RUSTFLAGS` setting
+could still compile it in, so `iroha_plonk::ORACLE_BUILD` reports the cfg and every shipping root
+that links `iroha_plonk` (node, CLI, SDK and wallet bridges) must fail its build on it with
+`const _: () = assert!(!iroha_plonk::ORACLE_BUILD);`. No shipping root links the crate yet; the
+first one adds the assertion.
+
+Assignment-table import (`keygen_from_tables`, `Witness::from_columns`) is public API, not an
+oracle hook. It has no soundness effect, because the verifier evaluates only `D` and the key.
+Imported key tables obey the frontend's row rule: no copy, enabled selector or nonzero fixed
+value at or beyond `u` (`KeyError::UnusableRow`).
 
 ## 7. Proof layout and canonical decoding
 
@@ -360,7 +371,7 @@ Decoding:
 
 ## 8. Verifier checklist
 
-`verify_full` and `verify_succinct` share steps 1-8. Each failure is a typed rejection; the
+`verify_full` and `accumulate_succinct` share steps 1-8. Each failure is a typed rejection; the
 verifier never panics.
 
 1. Validate `D`, derive the params or check their pinned digest, and decode the VK.
@@ -370,12 +381,13 @@ verifier never panics.
    on `x^n = 1`.
 5. Read rows 7-11, or compute the Direct instance evaluations. Compute `l_0`, `l_last` and
    `l_blind`.
-6. Fold the constraints in section 2 order, `E = fold(acc * y + c_j)`; then
-   `expected_h = E / (x^n - 1)` and `H = sum_i x^{n i} H_i`.
+6. Fold the constraints in section 2 order, `E = fold(acc * y + c_j)`, by interpreting the
+   constraint-term table (S11); then `expected_h = E / (x^n - 1)` and `H = sum_i x^{n i} H_i`.
 7. Multiopen (9.1): reject if `x_3` equals a query point.
 8. IPA (9.2): reject if any `u_j = 0`.
 9. `verify_full` accepts iff the equation below holds, with `G'_0 = <s, g>`. A `FoldedGenerator`
-   suffix must also equal `G'_0`. `verify_succinct` follows section 11 instead.
+   suffix must also equal `G'_0`. `accumulate_succinct` follows section 11 instead and never
+   accepts.
 
    ```text
    P' + sum_j (u_j^{-1} L_j + u_j R_j) - c*G'_0 - c*b(x_3)*zeta_ipa*U - f*W = O
@@ -444,11 +456,19 @@ The thread count changes no draw and no output byte.
 **ProverRandomness [P].** Randomness is an opaque value with exactly three sources:
 
 - the OS CSPRNG;
-- a hedged derivation over fresh entropy, the witness digest and the statement;
-- `KagemushaRecoverySeedV1`, with the witness digest in its context.
+- a hedged derivation over fresh entropy, the witness digest and the statement. It protects
+  against a weak or repeating OS generator that still returns bytes; a failing one is an error;
+- a recovery seed such as `KagemushaRecoverySeedV1`. The prover computes
+  `context = BLAKE2b(32, "PIPA-v1-Recovery", statement || witness)`, draws 32 bytes `r` from the
+  stream the caller's derivation returns for `context`, and proves with
+  `ChaCha20(BLAKE2b(32, "PIPA-v1-RecovKey", r || context))`. The binding happens inside the
+  prover, so a derivation that ignores the context cannot make two witnesses share blinds.
+  Secrecy still needs a secret seed: with a public derivation the blinds are a public function of
+  the witness.
 
 Fixed seeds exist only under `cfg(test)` or in oracle mode, and no seed crosses FFI. Two witnesses
-proved under one recovery seed must get unrelated blinds. Proving keys are local caches, not an
+proved under one recovery seed get unrelated blinds (named test:
+`a_constant_recovery_derivation_still_separates_witnesses`). Proving keys are local caches, not an
 interchange format.
 
 ## 11. Accumulation
@@ -456,13 +476,24 @@ interchange format.
 **Encoding.** `AccumulatorV1 = transcript_repr || u8 curve || u8 k || G || u_0..u_{k-1}`, which is
 `66 + 32k` bytes. It decodes canonically: `G != O`, every `u_j != 0`, and no trailing bytes.
 
-**Succinct verification.** `verify_succinct` requires the `FoldedGenerator` suffix. It runs steps
-1-8, decodes `G` from the suffix, and checks step 9 with `G` in place of `<s, g>`; the MSM size
-does not depend on `n`. It returns a `#[must_use]` pending accumulator, which is not an
+**Succinct accumulation.** `accumulate_succinct` requires the `FoldedGenerator` suffix. It runs
+steps 1-8, decodes `G` from the suffix, and checks step 9 with `G` in place of `<s, g>`; the MSM
+size does not depend on `n`. It returns a `#[must_use]` pending accumulator, which is not an
 acceptance.
 
-**Acceptance.** `decide` accepts iff `G = <s(u), g[0..2^k)>`. Only `verify_full`, `decide` and
-`batch_decide` accept, and the types enforce this.
+Its `Ok` is satisfiable for false statements. `G` is read after every challenge (the round
+challenges, `c` and `f`) and is not absorbed, so a prover can write well-formed messages for any
+statement and solve the equation for
+`G = c^-1 (P' + sum_j (u_j^-1 L_j + u_j R_j) - c b(x_3) zeta_ipa U - f W)`. `Ok` therefore
+carries no evidence until the accumulator is decided. The API is named for accumulation, not
+verification, and its documentation says so. `#[must_use]` does not stop
+`accumulate_succinct(..).is_ok()`, so it is not an enforcement. Named test:
+`a_folded_generator_solved_from_the_equation_is_accumulated_but_never_accepted`. The forgery passes
+succinct accumulation and is rejected by `decide`, `batch_decide`, `verify_full`
+(`FoldedGeneratorMismatch`) and `batch_verify` (`BatchRejected`).
+
+**Acceptance.** `decide` accepts iff `G = <s(u), g[0..2^k)>`. Only `verify_full`, `batch_verify`,
+`decide` and `batch_decide` accept.
 
 **Absorption.** A consumer absorbs `transcript_repr`, `G` and every `u_j` before any challenge
 that depends on them. An appended `G` is never trusted until it is decided.
@@ -524,12 +555,25 @@ error, the oracle model and unbounded lineage depth (BCMS20 ePrint 2020/499; BCL
   - `O` is rejected everywhere, including a verifier-computed instance commitment.
   - The degenerate challenges of section 8 are rejected.
 - **S10 Verdict determinism.** Architecture, threads, features, `asm`, budgets and `iroha_config`
-  never change a verdict. Limits stop or slow work but never reject a valid proof. Consensus uses
-  the plain verifier core, with a portable complete-formula decide, until the optimized decide is
-  audited and differentially qualified.
+  never change a verdict. Limits stop or slow work but never reject a valid proof. Every verifier
+  MSM runs `msm_complete`: the instance commitments, the opening and batch equations, `G'_0`,
+  `decide` and `batch_decide`. `msm_complete` is a portable Pippenger whose buckets, running sums
+  and window combination use only complete projective formulas. It has no batch-affine or
+  incomplete-formula path, so prover-chosen bases never meet an exceptional case, and the budget
+  only narrows its window. The batch-affine `iroha_pasta::msm::msm_public` stays prover-only until
+  it is audited and differentially qualified for consensus.
 - **S11 One acceptance predicate.** In-circuit verifiers implement sections 6-9 under these rules
   and report malformed input as unsatisfiable, never as a panic. Every adversarial case runs
-  through both the in-circuit and the native verifier.
+  through both the in-circuit and the native verifier. Both walk the same declarative tables,
+  derived from `D` alone:
+  - `Protocol::constraint_terms()`: the section 2 fold. The native verifier folds by interpreting
+    it term by term, and the prover's quotient uses the same order.
+  - `Protocol::transcript_schedule()`: every absorb, message and squeeze of sections 6.3 and 7.
+    The native prover and verifier are tested against it operation for operation, and a tampered
+    proof stops on a prefix of it.
+
+  An in-circuit verifier interprets the same tables instead of re-deriving the walk. TODO(T18): a
+  parity test of the native and the loader-based walk over the same proofs and tamper corpora.
 
 ## 13. Zero-knowledge argument (summary)
 
@@ -552,14 +596,24 @@ adoption.
 
 **[V]** The oracle enforces byte identity for:
 
-- params and VK bytes;
+- params and VK bytes, with native keygen and params at 1, 2, 4 and 7 threads;
 - selector compression and permutation keygen;
-- both transcripts in oracle mode;
-- oracle-mode proof bytes, with imported tables and an equal seed;
+- both transcripts in oracle mode (transcript KATs);
+- oracle-mode proof bytes, with imported tables and an equal seed, on both proving paths over the
+  vendored golden circuits: the halo2-axiom Blake2b goldens (golden SHA-256), and the KAGEMUSHA
+  path (RP57 Poseidon with `fe_to_fe` and the `FoldedGenerator` suffix) against the vendored
+  `iroha_core_zk` path (snark-verifier `PoseidonTranscript`, then the vendored `G'_0` appended);
 - BlindingScheduleV1, the multiopen and the IPA.
 
+TODO(T16, `iroha_core_zk`): re-prove the KAGEMUSHA goldens themselves (`sigma_native_k11`,
+`p256_k16`, `rec_*`) natively. Their circuits live in `iroha_core_zk`'s private test module.
+
 Every verdict difference from the vendored verifier is a stricter rejection listed below with a
-named test. A mismatch missing from this list fails the oracle CI.
+named test. The oracle's `deviation_registry` test ties every row to a named native test that
+mentions it, and every verdict-corpus deviation to its row. A mismatch missing from this list fails
+the oracle run, which is manual today (TODO: a CI job, see 6.4). The tamper corpora run on both
+proving paths. On the KAGEMUSHA path only DEV-04 occurs, because the vendored augmented verifier
+already requires the exact length.
 
 | ID | Item | Vendored | PIPA-v1 | Modes |
 | --- | --- | --- | --- | --- |
@@ -580,14 +634,23 @@ named test. A mismatch missing from this list fails the oracle CI.
 The owners are T8-T15 and `iroha_plonk_oracle`. Every check has a named test that asserts its
 typed rejection.
 
-- **Oracle.** All vendored and KAGEMUSHA goldens are re-proved natively at 1, 2, 4 and 7 threads.
-  VK and params bytes match. Verdicts match on the tamper corpora, apart from registered
-  deviations.
+- **Oracle.** All vendored goldens are re-proved natively at 1, 2, 4 and 7 threads, on the Blake2b
+  path and on the KAGEMUSHA path. VK and params bytes match, and native keygen is checked at the
+  same thread counts. Verdicts match on the tamper corpora of both paths, apart from registered
+  deviations. TODO(T16): the `iroha_core_zk` KAGEMUSHA goldens (see section 14).
 - **Malicious prover.** The harness rewrites one message, recomputes every later message and
-  challenge, and expects one specific reason. Its cases are equal advice commitments with
-  different evaluations (S1, S3), a wrong Direct length, an inconsistent `g_lagrange`, identity
-  points, trailing bytes, injected degenerate challenges, `G` substituted after its challenge,
-  cancelling invalid accumulators and a swapped history.
+  challenge, and expects one specific reason. Its cases:
+  - equal advice commitments with different evaluations (S1, S3);
+  - a wrong Direct length and an inconsistent `g_lagrange`;
+  - identity points, trailing bytes and injected degenerate challenges;
+  - `G` substituted after its challenge (a suffix solved from the equation);
+  - cancelling invalid accumulators and a swapped history;
+  - forged lookup permutations: an input missing from its table with sorted `A'`/`S'`, with
+    `S' = A'`, and an honest witness with sorted columns.
+
+  The lookup cases leave exactly the violated constraint (`Step` or `Last`) out of the prover's
+  quotient, so the forged `h` is a polynomial. The verifier rejects, and a verifier filtered to
+  omit that term accepts, so each rejection is attributable to one constraint term.
 - **Verifier mutation gate.** Modelled on `scripts/sumeragi_mutation_gate.py`; a named test must
   kill each mutation.
 

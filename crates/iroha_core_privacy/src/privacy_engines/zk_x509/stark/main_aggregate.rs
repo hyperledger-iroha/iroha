@@ -41,6 +41,8 @@ pub(super) mod main_key_joins;
 mod main_native_boundary_tests;
 #[path = "main_oods.rs"]
 mod main_oods;
+#[cfg(test)]
+pub(super) use main_oods::verify_standalone_der_oods_v1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_quotient_cache.rs"]
 mod main_quotient_cache;

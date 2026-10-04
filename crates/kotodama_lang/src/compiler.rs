@@ -15,6 +15,9 @@ mod compact_emission;
 mod emission_profile;
 mod entrypoint_descriptors;
 mod frame_emission;
+mod local_emission;
+#[cfg(test)]
+mod local_structural_controls;
 #[cfg(test)]
 mod numeric_operands;
 #[cfg(test)]
@@ -2500,107 +2503,13 @@ mod test_mode_tests {
     }
     #[test]
     fn leaf_identity_uses_the_same_bounded_table_frame_as_all_functions() {
-        let source = include_str!("compiler/fixtures/v1/c186.ko");
-        let (artifact, _manifest, report) = Compiler::new()
-            .compile_source_with_manifest_and_report(source)
-            .expect("compile leaf table fixture");
-        let identity = report
-            .budget_report
-            .iter()
-            .find(|entry| entry.function_name == "identity")
-            .unwrap();
-        assert_eq!(
-            identity.frame_bytes, 16,
-            "only saved argument/result bases are needed"
-        );
-        let metadata = ProgramMetadata::parse(&artifact).unwrap();
-        let callable = metadata
-            .contract_interface
-            .as_ref()
-            .unwrap()
-            .callables
-            .iter()
-            .find(|callable| callable.entry_pc == identity.pc_start)
-            .unwrap();
-        assert_eq!(
-            callable
-                .argument_word_count()
-                .expect("valid argument schema"),
-            1
-        );
-        assert_eq!(
-            callable.result_word_count().expect("valid result schema"),
-            1
-        );
-        let words = artifact[metadata.code_offset + identity.pc_start as usize
-            ..metadata.code_offset + identity.pc_end as usize]
-            .chunks_exact(4)
-            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            words
-                .iter()
-                .filter(
-                    |word| instruction::wide::opcode(**word) == instruction::wide::memory::LOAD64
-                )
-                .count(),
-            3
-        );
-        assert_eq!(
-            words
-                .iter()
-                .filter(
-                    |word| instruction::wide::opcode(**word) == instruction::wide::memory::STORE64
-                )
-                .count(),
-            3
-        );
-        assert_eq!(
-            instruction::wide::opcode(*words.last().unwrap()),
-            instruction::wide::control::JALR
-        );
+        super::local_structural_controls::leaf_identity(include_str!(
+            "compiler/fixtures/v1/c186.ko"
+        ));
     }
     #[test]
     fn call_local_values_avoid_callee_save_and_spill_stack_traffic() {
-        let source = include_str!("compiler/fixtures/v1/c187.ko");
-        let (artifact, _manifest, report) = Compiler::new()
-            .compile_source_with_manifest_and_report(source)
-            .expect("compile call-aware allocation fixture");
-        assert_eq!(
-            artifact,
-            Compiler::new()
-                .compile_source(source)
-                .expect("repeat call-aware allocation fixture"),
-            "call-aware allocation and ABI shuffles must be deterministic"
-        );
-        let implementation = report
-            .budget_report
-            .iter()
-            .find(|entry| entry.function_name == "run")
-            .expect("run implementation budget report");
-        assert_eq!(
-            implementation.frame_bytes, 64,
-            "calls reserve only the return link, saved table bases, and reusable outgoing tables"
-        );
-        let metadata = ProgramMetadata::parse(&artifact).expect("parse call-aware artifact");
-        let words = artifact[metadata.code_offset + implementation.pc_start as usize
-            ..metadata.code_offset + implementation.pc_end as usize]
-            .chunks_exact(4)
-            .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
-            .collect::<Vec<_>>();
-        let loads = words
-            .iter()
-            .filter(|word| instruction::wide::opcode(**word) == instruction::wide::memory::LOAD64)
-            .count();
-        let stores = words
-            .iter()
-            .filter(|word| instruction::wide::opcode(**word) == instruction::wide::memory::STORE64)
-            .count();
-        assert_eq!(
-            (loads, stores),
-            (6, 8),
-            "one swap and two retained relay calls add only exact table traffic, with no value spills: {words:08x?}"
-        );
+        super::local_structural_controls::call_local(include_str!("compiler/fixtures/v1/c187.ko"));
     }
     #[test]
     fn whole_program_dce_removes_unused_private_code_and_extra_dispatch_wrappers() {
@@ -2716,101 +2625,7 @@ mod test_mode_tests {
     }
     #[test]
     fn split_spill_cluster_reloads_once_and_reuses_a_real_register() {
-        let source = include_str!("compiler/fixtures/v1/c190.ko");
-        let parsed = crate::parser::parse(source).expect("parse split-spill fixture");
-        let typed = crate::semantic::analyze(&parsed).expect("analyze split-spill fixture");
-        let implementation_name = typed
-            .items
-            .iter()
-            .find_map(|item| {
-                let semantic::TypedItem::Function(function) = item;
-                (function.name == "reuse").then(|| super::entrypoint_ir_symbol_name(function))
-            })
-            .expect("reuse typed function");
-        let lowered = crate::ir::lower(&typed).expect("lower split-spill fixture");
-        let mut optimized = crate::ssa::Program::from_ir(lowered).expect("construct SSA fixture");
-        optimized
-            .optimize_and_retain(
-                &std::collections::BTreeSet::from([implementation_name.clone()]),
-                &super::private_literal_candidates(&typed),
-            )
-            .expect("optimize SSA fixture");
-        let lowered = optimized.into_ir().expect("destroy SSA fixture");
-        let function = lowered
-            .functions
-            .iter()
-            .find(|function| function.name == implementation_name)
-            .expect("reuse implementation IR function");
-        let a0 = function
-            .blocks
-            .iter()
-            .flat_map(|block| &block.instrs)
-            .find_map(|instruction| match instruction {
-                ir::Instr::LoadVar { dest, name } if name == "a0" => Some(*dest),
-                _ => None,
-            })
-            .expect("a0 parameter temporary");
-        let plan = crate::regalloc::allocate_with_splitting(function);
-        let split_stack_offset = *plan.stack.get(&a0).expect("a0 stack home");
-        assert!(
-            !crate::regalloc::has_internal_calls(function),
-            "fixture spill offsets assume no return-address prefix"
-        );
-        let split_register = plan.first_split_register(a0).expect("a0 split register");
-        let (artifact, _manifest, report) = Compiler::new()
-            .compile_source_with_manifest_and_report(source)
-            .expect("compile split-spill fixture");
-        let second = Compiler::new()
-            .compile_source(source)
-            .expect("repeat split-spill compile");
-        assert_eq!(
-            artifact, second,
-            "split code generation must be deterministic"
-        );
-        let metadata = ProgramMetadata::parse(&artifact).expect("parse split-spill artifact");
-        let budget = report
-            .budget_report
-            .iter()
-            .find(|entry| entry.function_name == implementation_name)
-            .expect("reuse implementation budget report");
-        let words = artifact[metadata.code_offset + budget.pc_start as usize
-            ..metadata.code_offset + budget.pc_end as usize]
-            .chunks_exact(4)
-            .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
-            .collect::<Vec<_>>();
-        let split_register = split_register as u8;
-        let split_reloads = words
-            .iter()
-            .enumerate()
-            .filter_map(|(index, word)| {
-                let (opcode, destination, base, offset) = encoding::wide::decode_mem(*word);
-                (opcode == instruction::wide::memory::LOAD64
-                    && destination == split_register
-                    && base == crate::regalloc::SP_REG as u8
-                    && i64::from(offset) == (16 + split_stack_offset) as i64)
-                    .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            split_reloads.len(),
-            1,
-            "the a0 stack home must be reloaded once for its split segment: {words:08x?}"
-        );
-        let reload = split_reloads[0];
-        let arithmetic_uses = words[reload + 1..]
-            .iter()
-            .filter(|word| {
-                if instruction::wide::opcode(**word) != instruction::wide::arithmetic::ADDI {
-                    return false;
-                }
-                let (_, _, source, immediate) = encoding::wide::decode_ri(**word);
-                source == split_register && immediate == 0
-            })
-            .count();
-        assert!(
-            arithmetic_uses >= 3,
-            "the split register must feed every clustered checked numeric syscall: {words:08x?}"
-        );
+        super::local_structural_controls::split_spill(include_str!("compiler/fixtures/v1/c190.ko"));
     }
     #[test]
     fn structured_branches_use_two_words_and_fuse_signed_comparisons() {
@@ -4100,6 +3915,7 @@ impl Compiler {
             let is_entry = false;
             let saves_return_address = !is_entry && regalloc::has_internal_calls(func);
             let alloc = regalloc::allocate_with_splitting(func);
+            let local_sources = local_emission::Plan::new(func, &alloc)?;
             let mut saved_regs: Vec<u8> = if is_entry {
                 Vec::new()
             } else {
@@ -4186,6 +4002,12 @@ impl Compiler {
             let scratchd: u8 = 29;
             let sp = regalloc::SP_REG as u8;
             let allocation_position = std::cell::Cell::new(0usize);
+            let retained_result = std::cell::Cell::new(None::<local_emission::RetainedResult>);
+            let retained_register = |value: ir::Temp| {
+                retained_result
+                    .get()
+                    .and_then(|result| result.register(value, allocation_position.get()))
+            };
             let publish_tlv_word = encoding::wide::encode_sys(
                 instruction::wide::system::SCALL,
                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -4236,7 +4058,10 @@ impl Compiler {
             };
             // Helpers to handle spilled temporaries at use/def sites
             let src_reg = |t: &ir::Temp, scratch: u8, code: &mut Vec<u8>| -> Result<u8, String> {
-                if let Some(register) = alloc.register_for_use(*t, allocation_position.get()) {
+                if let Some(register) = retained_register(*t) {
+                    Ok(register)
+                } else if let Some(register) = alloc.register_for_use(*t, allocation_position.get())
+                {
                     Ok(register as u8)
                 } else if let Some(off) = alloc.stack.get(t) {
                     let total = stack_slot_offset_bytes(spill_base, *off);
@@ -4291,6 +4116,8 @@ impl Compiler {
                         && let Some(value) = string_map.get(&(func_idx, *temp)).cloned()
                     {
                         literal_loads.push((target, literal_data_key(temp, kind, &value)));
+                    } else if let Some(source) = retained_register(*temp) {
+                        register_moves.push((target, source));
                     } else if let Some(source) =
                         alloc.register_for_use(*temp, allocation_position.get())
                     {
@@ -4417,8 +4244,12 @@ impl Compiler {
             };
             let spill_syscall_result =
                 |dest: &ir::Temp, code: &mut Vec<u8>| -> Result<(), String> {
+                    if let Some(result) = local_sources.output(*dest, allocation_position.get()) {
+                        retained_result.set(Some(result));
+                        return Ok(());
+                    }
                     let (rd, spilled, offset) = dst_reg(dest);
-                    push_word(code, encode_addi(rd, 10, 0)?);
+                    local_emission::emit_move(code, rd, 10)?;
                     spill_back(dest, rd, spilled, offset, code)
                 };
             let shared_epilogue = frame_emission::shared_epilogue_label(func, saved_regs.len());
@@ -4449,14 +4280,16 @@ impl Compiler {
                         let ra = 1u8;
                         emit_store64(&mut code, &fixups, sp, ra, 0, scratch_base)?;
                     }
-                    emit_store64(
-                        &mut code,
-                        &fixups,
-                        sp,
-                        10,
-                        frame.argument_base_slot as i64,
-                        scratch_base,
-                    )?;
+                    if local_sources.stores_argument_base {
+                        emit_store64(
+                            &mut code,
+                            &fixups,
+                            sp,
+                            10,
+                            frame.argument_base_slot as i64,
+                            scratch_base,
+                        )?;
+                    }
                     emit_store64(
                         &mut code,
                         &fixups,
@@ -4472,6 +4305,12 @@ impl Compiler {
                         save_base,
                         false,
                     )?;
+                }
+                if bb.label == func.entry && local_sources.parameter_prefix_words > 0 {
+                    // The incoming authenticated table is already captured by
+                    // the original call kernel. Keep its exact base through the
+                    // consecutive parameter reads; private frame geometry stays.
+                    local_emission::emit_move(&mut code, scratch1, 10)?;
                 }
                 let fused_relational = match (&bb.terminator, bb.instrs.last()) {
                     (
@@ -4855,14 +4694,18 @@ impl Compiler {
                                 func.params.iter().position(|p| p == name).ok_or_else(|| {
                                     i18n::translate(self.lang, Message::UnknownParam(name))
                                 })?;
-                            emit_load64(
-                                &mut code,
-                                &fixups,
-                                scratch1,
-                                sp,
-                                frame.argument_base_slot as i64,
-                                Some(scratch2),
-                            )?;
+                            if bb.label != func.entry
+                                || instruction_index >= local_sources.parameter_prefix_words
+                            {
+                                emit_load64(
+                                    &mut code,
+                                    &fixups,
+                                    scratch1,
+                                    sp,
+                                    frame.argument_base_slot as i64,
+                                    Some(scratch2),
+                                )?;
+                            }
                             emit_load64(
                                 &mut code,
                                 &fixups,
@@ -6671,7 +6514,7 @@ impl Compiler {
                                     ));
                                 }
                                 let rs = src_reg(value, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                                local_emission::emit_move(&mut code, 10, rs)?;
                             }
                             // The existing synchronous consumer validates the original owned
                             // public envelope before reading it; no pointer escapes this call.
@@ -6940,7 +6783,7 @@ impl Compiler {
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r, 0)?);
+                                local_emission::emit_move(&mut code, 10, r)?;
                             }
                             // The existing synchronous consumer validates the original owned
                             // public envelope before reading it; no pointer escapes this call.
@@ -7793,8 +7636,13 @@ impl Compiler {
                                 push_syscall(&mut code, *syscall);
                                 spill_syscall_result(dest, &mut code)?;
                             } else {
-                                for (idx, arg) in args.iter().enumerate() {
-                                    let target = 10u8.checked_add(idx as u8).ok_or_else(|| {
+                                if local_emission::parallel_state_decode(*syscall, args.len()) {
+                                    // The original schema/data decoder consumes its owned
+                                    // canonical inputs after every register source is staged.
+                                    emit_values_to_syscall_registers(args, &mut code)?;
+                                } else {
+                                    for (idx, arg) in args.iter().enumerate() {
+                                        let target = 10u8.checked_add(idx as u8).ok_or_else(|| {
                                         i18n::translate(
                                             self.lang,
                                             Message::SemanticError(
@@ -7802,21 +7650,22 @@ impl Compiler {
                                             ),
                                         )
                                     })?;
-                                    if let Some(kind) =
-                                        dataref_kind_map.get(&(func_idx, *arg)).copied()
-                                        && let Some(lit) =
-                                            string_map.get(&(func_idx, *arg)).cloned()
-                                    {
-                                        let key = literal_data_key(arg, kind, &lit);
-                                        emit_literal_load(&mut code, &fixups, target, key);
-                                    } else {
-                                        let scratch = if target == scratch1 {
-                                            scratch2
+                                        if let Some(kind) =
+                                            dataref_kind_map.get(&(func_idx, *arg)).copied()
+                                            && let Some(lit) =
+                                                string_map.get(&(func_idx, *arg)).cloned()
+                                        {
+                                            let key = literal_data_key(arg, kind, &lit);
+                                            emit_literal_load(&mut code, &fixups, target, key);
                                         } else {
-                                            scratch1
-                                        };
-                                        let r = src_reg(arg, scratch, &mut code)?;
-                                        push_word(&mut code, encode_addi(target, r, 0)?);
+                                            let scratch = if target == scratch1 {
+                                                scratch2
+                                            } else {
+                                                scratch1
+                                            };
+                                            let r = src_reg(arg, scratch, &mut code)?;
+                                            push_word(&mut code, encode_addi(target, r, 0)?);
+                                        }
                                     }
                                 }
                                 push_syscall(&mut code, *syscall);

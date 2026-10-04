@@ -13,7 +13,13 @@
 
 use core::{fmt, ops::Range};
 
-use super::expression::{Any, Column};
+use super::{
+    descriptor::Blake2bPersonal,
+    expression::{Any, Column},
+};
+
+/// `BLAKE2b` personalization of [`PermutationAssembly::mapping_digest`].
+pub const COPY_MAPPING_PERSONA: &[u8; 16] = b"PIPA-v1-CopyMapD";
 
 /// The columns of the permutation argument.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -253,6 +259,42 @@ impl PermutationAssembly {
         Some((target / self.n, target % self.n))
     }
 
+    /// A digest of the permutation: `BLAKE2b(32, "PIPA-v1-CopyMapD",
+    /// u64_le(columns) || u64_le(n) || (u32_le(column') || u32_le(row')) for
+    /// every cell in column-major order)`, where `(column', row')` is the
+    /// cell's image. Equal digests mean equal permutations, and so equal
+    /// `sigma` polynomials, so a proving key stores this digest instead of
+    /// recomputing field-valued `sigma` columns to check a circuit. It
+    /// streams in constant memory.
+    #[must_use]
+    pub fn mapping_digest(&self) -> [u8; 32] {
+        /// Cells hashed per update.
+        const CELLS_PER_UPDATE: usize = 512;
+        let mut hasher = Blake2bPersonal::<32>::new(COPY_MAPPING_PERSONA);
+        let count = |value: usize| u64::try_from(value).unwrap_or(u64::MAX).to_le_bytes();
+        hasher.update(&count(self.columns.len()));
+        hasher.update(&count(self.n));
+        let mut chunk = Vec::with_capacity(8 * CELLS_PER_UPDATE);
+        for cell in 0..self.cells {
+            let target = self
+                .union_find
+                .as_ref()
+                .map_or(cell, |union_find| union_find.mapping[cell]);
+            // Columns are at most 65,535 and rows below 2^28 (spec section 1).
+            for coordinate in [target / self.n, target % self.n] {
+                chunk.extend_from_slice(
+                    &u32::try_from(coordinate).unwrap_or(u32::MAX).to_le_bytes(),
+                );
+            }
+            if chunk.len() == chunk.capacity() {
+                hasher.update(&chunk);
+                chunk.clear();
+            }
+        }
+        hasher.update(&chunk);
+        hasher.finalize()
+    }
+
     /// Whether the cell is in a cycle of length at least two (it is copied).
     #[must_use]
     pub fn is_copied(&self, column: usize, row: usize) -> bool {
@@ -391,5 +433,52 @@ mod tests {
         ] {
             assert!(!error.to_string().is_empty());
         }
+    }
+
+    #[test]
+    fn mapping_digests_identify_the_permutation() {
+        let columns: Vec<Column<Any>> = (0..2).map(|i| Column::new(i, Any::Advice)).collect();
+        let identity = PermutationAssembly::new(4, &argument(&columns)).expect("assembly");
+        // Python: hashlib.blake2b(struct.pack('<QQ', 2, 4) + b''.join(
+        // struct.pack('<II', c, r) for c in range(2) for r in range(4)),
+        // digest_size=32, person=b'PIPA-v1-CopyMapD').
+        let hex = |bytes: &[u8]| {
+            use core::fmt::Write as _;
+            bytes.iter().fold(String::new(), |mut out, byte| {
+                let _ = write!(out, "{byte:02x}");
+                out
+            })
+        };
+        assert_eq!(
+            hex(&identity.mapping_digest()),
+            "8664f9d53fe1af622ef43dc9e0670577611afc599e88adb2619833185119cfe8"
+        );
+        let mut copied = identity.clone();
+        copied.copy(columns[0], 1, columns[1], 2).expect("copy");
+        assert_ne!(copied.mapping_digest(), identity.mapping_digest());
+        let mut again = identity.clone();
+        again.copy(columns[0], 1, columns[1], 2).expect("copy");
+        assert_eq!(again.mapping_digest(), copied.mapping_digest());
+        // A different row count is a different permutation.
+        let wider = PermutationAssembly::new(8, &argument(&columns)).expect("assembly");
+        assert_ne!(wider.mapping_digest(), identity.mapping_digest());
+        // Streaming across update chunks equals the one-shot digest.
+        let mut large = PermutationAssembly::new(1024, &argument(&columns)).expect("assembly");
+        large.copy(columns[1], 1000, columns[0], 3).expect("copy");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        bytes.extend_from_slice(&1024_u64.to_le_bytes());
+        for column in 0..2 {
+            for row in 0..1024 {
+                let (target_column, target_row) = large.mapping(column, row).expect("cell");
+                bytes
+                    .extend_from_slice(&u32::try_from(target_column).expect("small").to_le_bytes());
+                bytes.extend_from_slice(&u32::try_from(target_row).expect("small").to_le_bytes());
+            }
+        }
+        assert_eq!(
+            large.mapping_digest(),
+            crate::cs::descriptor::blake2b_personal::<32>(COPY_MAPPING_PERSONA, &[&bytes])
+        );
     }
 }

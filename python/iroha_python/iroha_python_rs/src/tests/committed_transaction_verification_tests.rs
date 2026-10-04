@@ -13,17 +13,17 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
-    block::{SignedBlock, execution_output::ExecutionOutputV1},
+    block::{SharedSignedBlock, execution_output::ExecutionOutputV1},
     isi::{InstructionBox, Log, Unregister},
     query::{QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse},
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use pyo3::types::PyBytesMethods;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 struct Fixture {
     chain: CertifiedTestChain,
-    block: Arc<SignedBlock>,
+    block: SharedSignedBlock,
     selected: CommittedTransaction,
     checkpoint: SumeragiFinalityCheckpoint,
     proofs: Vec<SumeragiFinalityProof>,

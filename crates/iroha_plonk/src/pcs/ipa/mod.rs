@@ -8,7 +8,7 @@
 //!   `c` and `f`, and returns the folded generator `G'_0`;
 //! - [`verifier`]: [`verifier::read_opening`] reads an opening into a
 //!   [`verifier::PendingOpening`], which [`verifier::PendingOpening::verify_full`]
-//!   accepts or [`verifier::PendingOpening::verify_succinct`] turns into a
+//!   accepts or [`verifier::PendingOpening::accumulate`] turns into a
 //!   pending accumulator;
 //! - [`accumulator`]: [`accumulator::PendingAccumulator`] (`AccumulatorV1`),
 //!   `decide` and the deterministic `batch_decide` (spec section 11).
@@ -335,6 +335,8 @@ mod tests {
         );
     }
 
+    /// DEV-08 (spec section 14): verifiers accept only derived parameters or bytes matching the
+    /// pinned digest; the vendored verifier trusts any parameters.
     #[test]
     fn pinned_params_accept_only_pinned_bytes() {
         let derived = PinnedParams::<Ep>::derive(6).expect("derive k = 6");

@@ -13,9 +13,21 @@
 //! - [`PendingOpening::verify_full`] computes `G'_0 = <s(u), g>` (an MSM of
 //!   size `2^k`) and accepts iff the equation holds, also requiring a supplied
 //!   `FoldedGenerator` suffix to equal `G'_0`;
-//! - [`PendingOpening::verify_succinct`] checks the equation with a claimed
-//!   `G` (an MSM whose size does not depend on `n`) and returns a
+//! - [`PendingOpening::accumulate`] checks the equation with a claimed `G`
+//!   (an MSM whose size does not depend on `n`) and returns a
 //!   [`PendingAccumulator`], which only `decide` or `batch_decide` accept.
+//!
+//! # Why `accumulate` is not a verification
+//!
+//! The claimed `G` is read after every challenge, including the round
+//! challenges, `c` and `f`, and it is not absorbed. A prover that writes
+//! arbitrary well-formed messages for a false statement can therefore pick
+//! `c != 0` and `f` and solve the equation for
+//! `G = c^-1 (P' + sum_j (u_j^-1 L_j + u_j R_j) - c b(x) z U - f W)`, and
+//! [`PendingOpening::accumulate`] returns `Ok`. Its `Ok` only says that the
+//! proof decoded and that the equation holds *for the claimed `G`*; the claim
+//! `G = <s(u), g>` is what carries the soundness, and only deciding it
+//! (`decide`, `batch_decide` or [`PendingOpening::verify_full`]) accepts.
 
 use ff::{BatchInvert, Field};
 use group::prime::PrimeCurveAffine;
@@ -24,7 +36,7 @@ use iroha_pasta::{PastaCurve, msm::MemoryBudget};
 use super::{
     IpaError, PinnedParams,
     accumulator::PendingAccumulator,
-    commit::{Msm, msm_public_or_naive},
+    commit::{Msm, msm_complete},
     fold_evaluation, fold_scalars,
 };
 use crate::transcript::TranscriptRead;
@@ -136,7 +148,7 @@ impl<C: PastaCurve> PendingOpening<C> {
         params.require_k(self.k)?;
         let s = fold_scalars(&self.challenges, C::ScalarExt::ONE);
         let g = &params.params().g()[..s.len()];
-        Ok(msm_public_or_naive::<C>(&s, g, budget).to_affine())
+        Ok(msm_complete::<C>(&s, g, budget).to_affine())
     }
 
     /// The left-hand side with `g` standing for `G'_0`.
@@ -196,9 +208,15 @@ impl<C: PastaCurve> PendingOpening<C> {
         }
     }
 
-    /// Succinct verification: checks the equation with the claimed folded
-    /// generator `folded` and returns the pending accumulator
-    /// `(transcript_repr, k, G, u)`. The MSM size does not depend on `n`.
+    /// Turns the opening into the pending accumulator `(transcript_repr, k,
+    /// G, u)` after checking the equation with the claimed folded generator
+    /// `folded` in place of `G'_0`. The MSM size does not depend on `n`.
+    ///
+    /// `Ok` is **not** an acceptance and carries no evidence about the
+    /// statement: `folded` comes after every challenge, so a prover can solve
+    /// the equation for it for any statement (see the module documentation).
+    /// Only deciding the returned accumulator (`decide`, `batch_decide`)
+    /// accepts.
     ///
     /// `transcript_repr` binds the accumulator to its proof (spec section
     /// 11); the PLONK verifier passes the proof's value.
@@ -208,7 +226,7 @@ impl<C: PastaCurve> PendingOpening<C> {
     /// [`IpaError::ParamsTooSmall`] or [`IpaError::OpeningFailed`] (an
     /// identity `folded` fails the equation's precondition and is rejected
     /// the same way).
-    pub fn verify_succinct(
+    pub fn accumulate(
         self,
         params: &PinnedParams<C>,
         folded: &C::AffineExt,
@@ -238,7 +256,7 @@ pub(crate) fn folded_generator_of<C: PastaCurve>(
     budget: MemoryBudget,
 ) -> C {
     let s = fold_scalars(challenges, C::ScalarExt::ONE);
-    msm_public_or_naive::<C>(&s, &params.params().g()[..s.len()], budget)
+    msm_complete::<C>(&s, &params.params().g()[..s.len()], budget)
 }
 
 #[cfg(test)]
@@ -365,7 +383,7 @@ mod tests {
         let repr = C::ScalarExt::from(77);
         let accumulator = pending
             .clone()
-            .verify_succinct(&params, &opening.folded, &repr, budget)
+            .accumulate(&params, &opening.folded, &repr, budget)
             .expect("succinct");
         accumulator.decide(&params, budget).expect("decide");
 
@@ -378,13 +396,13 @@ mod tests {
         assert_eq!(
             pending
                 .clone()
-                .verify_succinct(&params, &other, &repr, budget)
+                .accumulate(&params, &other, &repr, budget)
                 .err(),
             Some(IpaError::OpeningFailed)
         );
         assert_eq!(
             pending
-                .verify_succinct(&params, &C::AffineExt::identity(), &repr, budget)
+                .accumulate(&params, &C::AffineExt::identity(), &repr, budget)
                 .err(),
             Some(IpaError::OpeningFailed)
         );
@@ -493,7 +511,7 @@ mod tests {
         );
         assert_eq!(
             pending
-                .verify_succinct(&small, &opening.folded, &Fq::ONE, MemoryBudget::DEFAULT)
+                .accumulate(&small, &opening.folded, &Fq::ONE, MemoryBudget::DEFAULT)
                 .err(),
             Some(IpaError::ParamsTooSmall {
                 needed: 3,

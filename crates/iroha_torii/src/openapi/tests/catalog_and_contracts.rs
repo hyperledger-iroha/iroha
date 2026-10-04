@@ -2379,9 +2379,9 @@ fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
         .and_then(Value::as_object)
         .and_then(|schema| schema.get("oneOf"))
         .and_then(Value::as_array)
-        .expect("closed evidence penalty variants");
-    assert_eq!(variants.len(), 3);
-    for status in ["pending", "applied", "cancelled"] {
+        .expect("closed pending and applied evidence penalty variants");
+    assert_eq!(variants.len(), 2);
+    for status in ["pending", "applied"] {
         let variant = variants
             .iter()
             .find(|variant| {

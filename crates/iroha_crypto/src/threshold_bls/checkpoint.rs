@@ -453,12 +453,7 @@ impl<P: ThresholdBlsPurpose> PreparedDkgSecretsCheckpointV1<P> {
         budget: &AllocationBudget,
     ) -> Result<Self, DkgCheckpointErrorV1> {
         validate_participant_index(parameters.session(), seat_index)?;
-        let mut count = CountWriter(0);
-        norito::core::write_canonical_to_writer(&PrivateRecord::empty(), &mut count)?;
-        let envelope_len = count
-            .0
-            .checked_add(28)
-            .ok_or(AllocationRefusal::DemandOverflow)?;
+        let envelope_len = Self::encrypted_record_bound()?;
         let shares_len = usize::from(parameters.session().committee_size());
         let controls = PreparedDecodeWorkspace::allocation_layouts();
         let mut reservation = budget.try_reserve_layouts([
@@ -500,6 +495,22 @@ impl<P: ThresholdBlsPurpose> PreparedDkgSecretsCheckpointV1<P> {
             terminal: false,
         })
     }
+    /// Exact canonical encrypted-source bound without preparing any private graph.
+    ///
+    /// The same fixed record walk is used by the constructor. It performs no
+    /// allocation, RNG or secret reconstruction and grants no protocol authority.
+    ///
+    /// # Errors
+    /// Preserves canonical serialization or checked length overflow.
+    pub fn encrypted_record_bound() -> Result<usize, DkgCheckpointErrorV1> {
+        let mut count = CountWriter(0);
+        norito::core::write_canonical_to_writer(&PrivateRecord::empty(), &mut count)?;
+        Ok(count
+            .0
+            .checked_add(28)
+            .ok_or(AllocationRefusal::DemandOverflow)?)
+    }
+
     /// Fixed canonical encrypted-source length admitted before claim and production.
     #[must_use]
     pub fn encrypted_record_capacity(&self) -> usize {

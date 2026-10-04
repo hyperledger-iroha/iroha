@@ -316,3 +316,160 @@ fn prepared_banks_refund_real_nested_allocator_failure_and_keep_original_capacit
     drop(prepared);
     assert_eq!(exact.reserved_bytes(), 0);
 }
+
+#[test]
+fn final_only_bank_moves_exact_generated_graph_without_prior_phase_or_private_preparation() {
+    for seats in [4, 31] {
+        let (fixture, keys, roster) = fixture(seats);
+        let session = fixture.session.adaptive_dkg.session;
+        let frame = norito::encode_canonical(fixture.session.record()).unwrap();
+        let pool = fixture_budget();
+        let (bounds, verifier) =
+            crate::beacon::PreparedGlobalBeaconAggregateRestoreV1::prepare_public_source(
+                session, &roster, 1, &keys[0], &pool,
+            )
+            .unwrap();
+        assert_eq!(bounds[2], frame.len());
+        let mut bank = None;
+        let count = allocations_during(|| {
+            bank = Some(
+                PreparedGlobalThresholdBeaconFinalSessionInputV1::new(session, &roster, &pool)
+                    .unwrap(),
+            )
+        });
+        let mut bank = bank.unwrap();
+        let full_pool = fixture_budget();
+        let mut full = None;
+        let full_count = allocations_during(|| {
+            full = Some(
+                PreparedGlobalThresholdBeaconDkgInputsV1::new(session, &roster, &full_pool)
+                    .unwrap(),
+            )
+        });
+        assert!(
+            count < full_count,
+            "final-only decoder physically omits two original phase graphs"
+        );
+        assert!(bank.belongs_to(&pool));
+        assert!(!bank.belongs_to(&full_pool));
+        drop(full);
+        assert_eq!(full_pool.reserved_bytes(), 0);
+        let before = pool.reserved_bytes();
+        let blocker = pool.try_reserve_bytes(pool.limit_bytes() - before).unwrap();
+        let mut graph = None;
+        assert_eq!(
+            allocations_during(|| {
+                bank.decode_final_session(&frame, norito::canonical_decode_limits(frame.len()))
+                    .unwrap();
+                graph = Some(bank.take_final_session().unwrap());
+            }),
+            0
+        );
+        let graph = graph.unwrap();
+        assert_eq!(graph.get(), fixture.session.record());
+        let public_pointer = graph.get().public_shares.as_ptr();
+        let ciphertext_pointer = graph.get().adaptive_dkg.encrypted_shares[0]
+            .encrypted_share
+            .as_ptr();
+        let mut sealed = None;
+        assert_eq!(
+            allocations_during(|| sealed = Some(verifier.seal(graph, &fixture.binding))),
+            0
+        );
+        let sealed = sealed
+            .unwrap()
+            .unwrap_or_else(|(_, _, error)| panic!("original final-only graph: {error}"));
+        assert_eq!(sealed.record().public_shares.as_ptr(), public_pointer);
+        assert_eq!(
+            sealed.record().adaptive_dkg.encrypted_shares[0]
+                .encrypted_share
+                .as_ptr(),
+            ciphertext_pointer
+        );
+        assert!(matches!(
+            bank.take_final_session(),
+            Err(GlobalThresholdBeaconInputErrorV1::Phase)
+        ));
+        assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
+        drop(bank);
+        drop(sealed);
+        drop(blocker);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn final_only_scope_refusal_pins_original_complete_source_and_retries_in_same_bank() {
+    let (fixture, _, roster) = fixture(4);
+    let session = fixture.session.adaptive_dkg.session;
+    let frame = norito::encode_canonical(fixture.session.record()).unwrap();
+    let pool = fixture_budget();
+    let mut bank =
+        PreparedGlobalThresholdBeaconFinalSessionInputV1::new(session, &roster, &pool).unwrap();
+    let before = pool.reserved_bytes();
+    let error =
+        norito::core::with_decode_limits_scope(norito::DecodeLimits::new(0, 0, 0, 0, 0), || {
+            bank.decode_final_session(&frame, norito::canonical_decode_limits(frame.len()))
+        })
+        .unwrap_err();
+    let GlobalThresholdBeaconInputErrorV1::Decode(PreparedDecodeError::Codec(original)) = error
+    else {
+        panic!("exact original final scope refusal")
+    };
+    assert_eq!(original.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+    assert!(bank.final_session().is_none());
+    assert_eq!(pool.reserved_bytes(), before);
+    let replaced = frame.clone();
+    assert_ne!(frame.as_ptr(), replaced.as_ptr());
+    assert!(matches!(
+        bank.decode_final_session(&replaced, norito::canonical_decode_limits(replaced.len())),
+        Err(GlobalThresholdBeaconInputErrorV1::SourceChanged)
+    ));
+    let blocker = pool.try_reserve_bytes(pool.limit_bytes() - before).unwrap();
+    assert_eq!(
+        allocations_during(|| bank
+            .decode_final_session(&frame, norito::canonical_decode_limits(frame.len()))
+            .unwrap()),
+        0
+    );
+    assert_eq!(bank.final_session().unwrap(), fixture.session.record());
+    let graph = bank.take_final_session().unwrap();
+    // Keep the original classified cause through successful same-source retry,
+    // then retire its real counter reader before asserting all credits return.
+    drop(original);
+    drop(graph);
+    drop(bank);
+    drop(blocker);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn final_only_graph_refuses_its_actual_share_layout_and_exact_occupied_capacity() {
+    let (fixture, _, roster) = fixture(4);
+    let session = fixture.session.adaptive_dkg.session;
+    let pool = fixture_budget();
+    let bank =
+        PreparedGlobalThresholdBeaconFinalSessionInputV1::new(session, &roster, &pool).unwrap();
+    let exact = pool.reserved_bytes();
+    drop(bank);
+    assert_eq!(pool.reserved_bytes(), 0);
+    let layout = std::alloc::Layout::array::<GlobalThresholdBeaconPublicShareV1>(4).unwrap();
+    let (result, refused) = refuse_one_layout_during(layout, || {
+        PreparedGlobalThresholdBeaconFinalSessionInputV1::new(session, &roster, &pool)
+    });
+    assert!(refused);
+    assert!(result.is_err());
+    assert_eq!(pool.reserved_bytes(), 0);
+    let bounded = iroha_allocation::AllocationBudget::new(exact);
+    let occupied = bounded.try_reserve_bytes(1).unwrap();
+    assert!(
+        PreparedGlobalThresholdBeaconFinalSessionInputV1::new(session, &roster, &bounded).is_err()
+    );
+    assert_eq!(bounded.reserved_bytes(), 1);
+    drop(occupied);
+    let bank =
+        PreparedGlobalThresholdBeaconFinalSessionInputV1::new(session, &roster, &bounded).unwrap();
+    assert_eq!(bounded.reserved_bytes(), exact);
+    drop(bank);
+    assert_eq!(bounded.reserved_bytes(), 0);
+}

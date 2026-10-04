@@ -1219,3 +1219,18 @@ fn checkpoint_source_shared_walk_preserves_each_original_destination_refusal_wit
         }
     }
 }
+
+#[test]
+fn phase_checkpoint_bound_matches_original_physical_source_without_preparing_private_graph() {
+    for n in [4, THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1] {
+        let parameters = parameters::<BeaconPurpose>(n);
+        let bound = without_allocations(|| {
+            PreparedDkgSecretsCheckpointV1::<BeaconPurpose>::encrypted_record_bound().unwrap()
+        });
+        let pool = AllocationBudget::new(512 * 1024);
+        let checkpoint = PreparedDkgSecretsCheckpointV1::new(&parameters, n, &pool).unwrap();
+        assert_eq!(bound, checkpoint.encrypted_record_capacity());
+        drop(checkpoint);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+}

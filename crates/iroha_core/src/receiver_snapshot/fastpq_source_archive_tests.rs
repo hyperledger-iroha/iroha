@@ -1,4 +1,5 @@
 //! Shared FASTPQ archive construction preserves bounded opening semantics.
+//! Synthetic source leaves exercise codec/membership binding; no native execution or finality is claimed.
 
 use super::*;
 use iroha_crypto::{HashOf, MerkleTree};
@@ -51,12 +52,15 @@ fn leaves() -> Vec<FastpqOrdinarySourceStatementLeafV1> {
             source: source(),
             statement_index: index,
             entry_index: index * 2,
-            entry_transcript_count: if index < 2 { 2 } else { 1 },
+            effect_count: if index < 2 { 2 } else { 1 },
             entry_hash: source_entries(5)[(index * 2) as usize].entry_hash,
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
             route: FastpqSourceRouteV1::Unrouted,
             dataspace_id: DataSpaceId::new(4),
-            statement_digest: [index as u8 + 9; 32],
+            effects_digest: [index as u8 + 9; 32],
+            slot: 19_000_000,
+            perm_root: Hash::new(b"synthetic source permission root").into(),
+            tx_set_hash: Hash::new(b"synthetic ordered source transactions").into(),
         })
         .collect()
 }
@@ -289,15 +293,18 @@ fn shared_archive_rejects_the_entire_malformed_or_duplicate_reserved_key_family(
 fn shared_archive_requires_exact_complete_leaves_and_manifest_counts() {
     let leaves = leaves();
     let (witness, manifest) = fixture(&leaves, 5);
-    for mutation in 0..4 {
+    for mutation in 0..7 {
         let mut changed = leaves.clone();
         match mutation {
             0 => {
                 changed.pop();
             }
-            1 => changed[0].statement_digest[0] ^= 1,
+            1 => changed[0].effects_digest[0] ^= 1,
             2 => changed.swap(0, 1),
-            3 => changed[1].entry_transcript_count += 1,
+            3 => changed[1].effect_count += 1,
+            4 => changed[0].slot += 1,
+            5 => changed[0].perm_root[0] ^= 1,
+            6 => changed[0].tx_set_hash[0] ^= 1,
             _ => unreachable!(),
         }
         assert!(
@@ -661,5 +668,31 @@ fn shared_archive_binds_complete_entries_without_transfer_leaves() {
             "FASTPQ source opening exceeds its write or entry count cap",
             "entry cap must be checked before manifest decode or tree allocation",
         );
+    }
+}
+
+#[test]
+fn shared_archive_refuses_unsupported_coverage_even_with_exact_source_and_leaves() {
+    for leaves in [Vec::new(), leaves()] {
+        let (mut witness, mut manifest) = fixture(&leaves, 5);
+        manifest.coverage = iroha_data_model::fastpq::FastpqSourceEffectCoverageV1::Unsupported;
+        let frame = norito::encode_canonical(&manifest).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<FastpqOrdinarySourceStatementManifestV1>(&frame).unwrap(),
+            manifest
+        );
+        witness.writes[2].value = frame;
+        let original = witness.clone();
+        assert!(
+            prepare_fastpq_ordinary_source_archive_v1(
+                &witness,
+                source(),
+                &source_entries(5),
+                &leaves,
+                limits()
+            )
+            .is_err()
+        );
+        assert_eq!(witness, original);
     }
 }

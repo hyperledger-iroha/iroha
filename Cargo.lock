@@ -3100,6 +3100,7 @@ dependencies = [
  "fastpq_isi",
  "halo2curves",
  "hex",
+ "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_model_base",

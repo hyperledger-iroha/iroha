@@ -56,6 +56,9 @@ thread_local! {
 thread_local! { static QUALIFICATION: Cell<Option<usize>> = const { Cell::new(None) }; }
 
 fn physical_process() -> Option<&'static CudaProcess> {
+    if !crate::cuda_artifact::eligible() {
+        return None;
+    }
     CudaProcess::get().or_else(|| {
         let config = crate::acceleration_config();
         CudaProcess::install(config.resource_limits).ok()
@@ -390,7 +393,7 @@ pub(crate) fn with_device_for_qualification<T>(
     index: usize,
     call: impl FnOnce() -> T,
 ) -> Option<T> {
-    CudaProcess::get()?.device(index)?;
+    physical_process()?.device(index)?;
     struct Restore(Option<usize>);
     impl Drop for Restore {
         fn drop(&mut self) {

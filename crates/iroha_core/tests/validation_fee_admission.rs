@@ -415,20 +415,23 @@ fn admission_fixture_authenticates_network_xor_identity_and_precision_in_signed_
         npos.xor_asset_definition_id.canonical_address()
     );
     assert_eq!(
-        iroha_core::block::resolve_network_xor_asset_definition(
-            world,
-            &nexus.fees.fee_asset_id,
-            1_700_000_000_000
-        )
-        .unwrap(),
-        Some(npos.xor_asset_definition_id.clone())
+        AssetDefinitionId::parse_address_literal(&nexus.fees.fee_asset_id)
+            .expect("the fee selector is the canonical authenticated currency address"),
+        npos.xor_asset_definition_id
     );
     assert_eq!(nexus.fees.base_fee, Quantity::zero());
     assert_eq!(nexus.fees.per_byte_fee, Quantity::zero());
     assert_eq!(nexus.fees.per_instruction_fee, Quantity::zero());
     assert_eq!(nexus.fees.per_gas_unit_fee, Quantity::zero());
-    iroha_core::state::validate_network_xor_asset(world, &npos.xor_asset_definition_id)
-        .expect("the authenticated original currency may fund native rewards");
+    // Inspect the committed native-currency definition through its public model
+    // contract; internal resolver and admission guards retain their own unit tests.
+    assert_eq!(
+        world
+            .asset_definition(&npos.xor_asset_definition_id)
+            .unwrap()
+            .balance_scope_policy(),
+        iroha_data_model::asset::AssetBalancePolicy::Global
+    );
     assert_eq!(
         world
             .asset_definition(&npos.xor_asset_definition_id)

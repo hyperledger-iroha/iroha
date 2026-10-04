@@ -5,7 +5,7 @@ use super::*;
 fn observation_reopens_exact_promoted_original_without_mutating_any_retained_bytes() {
     let _resources = crate::managed::native_test_guard();
     let (_temporary, prepared) = fixture("compliance-observe");
-    let provider = crate::managed::native_operation::test_support::provider_id(&prepared, 0);
+    let provider = provider(&prepared);
     let publisher = ManagedGatewayCompliance::open(&prepared, provider).unwrap();
     let path = operation(&publisher);
     let mut script = complete_script();
@@ -34,7 +34,7 @@ fn observation_reopens_exact_promoted_original_without_mutating_any_retained_byt
 fn observation_requires_exact_original_ack_and_live_guard_before_http() {
     let _resources = crate::managed::native_test_guard();
     let (_temporary, prepared) = fixture("compliance-observe-refusal");
-    let provider = crate::managed::native_operation::test_support::provider_id(&prepared, 0);
+    let provider = provider(&prepared);
     let publisher = ManagedGatewayCompliance::open(&prepared, provider).unwrap();
     let path = operation(&publisher);
     let mut http = RuntimeHttp::start(&prepared, provider, &path, complete_script());
@@ -115,7 +115,7 @@ fn observation_rejects_live_guard_loss_or_original_change_during_status_without_
         ),
     ] {
         let (_temporary, prepared) = fixture(&format!("compliance-observe-{label}"));
-        let provider = crate::managed::native_operation::test_support::provider_id(&prepared, 0);
+        let provider = provider(&prepared);
         let publisher = ManagedGatewayCompliance::open(&prepared, provider).unwrap();
         let path = operation(&publisher);
         let mut script = complete_script();
@@ -142,7 +142,7 @@ fn observation_rejects_live_guard_loss_or_original_change_during_status_without_
 fn absent_catalog_observation_does_not_create_catalog_custody() {
     let _resources = crate::managed::native_test_guard();
     let (_temporary, prepared) = fixture("compliance-observe-absent");
-    let provider = crate::managed::native_operation::test_support::provider_id(&prepared, 0);
+    let provider = provider(&prepared);
     let publisher = ManagedGatewayCompliance::open(&prepared, provider).unwrap();
     let path = operation(&publisher);
     let mut http = RuntimeHttp::start(&prepared, provider, &path, vec![]);

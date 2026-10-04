@@ -11,7 +11,9 @@ use super::*;
 /// GENERALIZED near the end of the calendar columns and retain the full row.
 const fn prefix_width_v1(family: usize) -> usize {
     if family == ZkX509Rfc5280StarkFamilyV1::SourceNode as usize {
-        name_policy::NODE_PREFIX_END // Time and exact Name-role classifications.
+        profile_identity::NODE_PREFIX_END // Time, Name and exact extension identity classifications.
+    } else if family == ZkX509Rfc5280StarkFamilyV1::BasicConstraints as usize {
+        path_len::PREFIX_END
     } else if family == ZkX509Rfc5280StarkFamilyV1::Grammar as usize {
         BASE_ORDINAL_EQUAL_CONTINUE + 1
     } else if family == ZkX509Rfc5280StarkFamilyV1::Calendar as usize
@@ -225,7 +227,11 @@ mod tests {
         );
         assert_eq!(
             prefix_width_v1(ZkX509Rfc5280StarkFamilyV1::SourceNode as usize),
-            134
+            144
+        );
+        assert_eq!(
+            prefix_width_v1(ZkX509Rfc5280StarkFamilyV1::BasicConstraints as usize),
+            145
         );
         assert_eq!(
             prefix_width_v1(ZkX509Rfc5280StarkFamilyV1::Grammar as usize),

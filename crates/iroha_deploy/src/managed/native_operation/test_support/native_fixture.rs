@@ -453,6 +453,9 @@ impl NativeReadHttp {
             while !thread_stop.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
+                        // macOS inherits the listener's nonblocking flag on accepted streams.
+                        // wallet_request owns bounded blocking reads/writes for this connection.
+                        socket.set_nonblocking(false)?;
                         let request = wallet_request(&mut socket)?;
                         let (content_type, bytes) =
                             read_response(&request, &state, &manager, &thread_quote);

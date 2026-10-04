@@ -350,7 +350,13 @@ scenario_test!(f20_cross_instance_replay, "F20", scenarios::f20);
 scenario_test!(f21_divergent_executor, "F21", scenarios::f21);
 /// An idle chain keeps its genesis tip while timers continue within the live-state bound.
 fn assert_idle_chain(world: &World) {
-    assert!(world.oracle.refs.iter().all(|blocks| blocks.is_empty()));
+    assert!(
+        world
+            .oracle
+            .refs
+            .iter()
+            .all(std::collections::BTreeMap::is_empty)
+    );
     for replica in world.honest() {
         assert_eq!(
             world.committed(replica),

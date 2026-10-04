@@ -176,6 +176,8 @@ mod tests {
         panic!("no Vesta point with x >= p among the first multiples");
     }
 
+    /// DEV-03 (spec section 14): production Poseidon absorption is injective, unlike the vendored
+    /// `fe_to_fe`.
     #[test]
     fn injective_encoding_recovers_the_point() {
         for point in [

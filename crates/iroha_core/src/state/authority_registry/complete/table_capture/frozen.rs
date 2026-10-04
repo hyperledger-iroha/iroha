@@ -5,8 +5,8 @@
 //! derive the encoding pool from the original State. Raw row encoding does not
 //! validate a table's derived indexes, record invariants or cross-table relations.
 //! Verifier, proof-status, validation-fee, contract-alias, contract-subject,
-//! domain-owner, account-identity, account-alias and asset-definition adapters
-//! check complete bounded relations.
+//! domain-owner, account-identity, account-alias, asset-definition, asset-balance,
+//! escrow, repo-agreement and NFT/RWA adapters check complete bounded relations.
 //!
 //! TODO: adapt every other structural group, trigger Set, Musubi semantic source
 //! and membership pair/frontier. Then retain every canonical cell and history
@@ -133,6 +133,16 @@ pub(in crate::state) fn capture_original_table_once(
             id: "world.asset_escrows",
             ..
         } => super::super::frozen_escrows::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.repo_agreements",
+            ..
+        } => super::super::frozen_repo_agreements::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.nfts", ..
+        } => super::super::frozen_nfts_rwas::capture_nfts(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.rwas", ..
+        } => super::super::frozen_nfts_rwas::capture_rwas(block, limits, max_relation_work),
         // The two membership outputs must eventually come from one original
         // owner together with its frontier, never independent raw callbacks.
         // The same rule applies to all semantic/structural checked groups.

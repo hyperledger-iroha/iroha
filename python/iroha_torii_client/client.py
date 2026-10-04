@@ -127,7 +127,6 @@ from .client_status_models import (
     PeerTelemetryLocation,
     QueueConfig,
     SumeragiEvidenceAppliedPenaltyStatus,
-    SumeragiEvidenceCancelledPenaltyStatus,
     SumeragiEvidenceListPage,
     SumeragiEvidencePenaltyDetails,
     SumeragiEvidencePenaltyStatus,
@@ -759,7 +758,6 @@ __all__ = [
     "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidencePendingPenaltyStatus",
     "SumeragiEvidenceAppliedPenaltyStatus",
-    "SumeragiEvidenceCancelledPenaltyStatus",
     "SumeragiEvidenceOffender",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
@@ -11021,7 +11019,7 @@ class ToriiClient(
                     details=None,
                 )
             )
-        elif penalty_literal in {"applied", "cancelled"}:
+        elif penalty_literal == "applied":
             penalty_details = ToriiClient._ensure_mapping(
                 penalty["details"], f"{context}.penalty_status.details"
             )
@@ -11039,19 +11037,13 @@ class ToriiClient(
                     f"{context}.penalty_status.details.height must be a non-negative JSON u64"
                 )
             typed_details = SumeragiEvidencePenaltyDetails(height=penalty_height)
-            if penalty_literal == "applied":
-                penalty_status = SumeragiEvidenceAppliedPenaltyStatus(
-                    status="applied",
-                    details=typed_details,
-                )
-            else:
-                penalty_status = SumeragiEvidenceCancelledPenaltyStatus(
-                    status="cancelled",
-                    details=typed_details,
-                )
+            penalty_status = SumeragiEvidenceAppliedPenaltyStatus(
+                status="applied",
+                details=typed_details,
+            )
         else:
             raise RuntimeError(
-                f"{context}.penalty_status.status must be pending, applied, or cancelled"
+                f"{context}.penalty_status.status must be pending or applied"
             )
         return SumeragiEvidenceRecord(
             kind="NativeSumeragiEvidence",

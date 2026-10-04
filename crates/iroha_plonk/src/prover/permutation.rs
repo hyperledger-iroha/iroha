@@ -1,5 +1,5 @@
 //! The permutation grand products (spec section 2 "Permutation", section 7
-//! row 3, BlindingScheduleV1 item 3).
+//! row 3, `BlindingScheduleV1` item 3).
 //!
 //! The equality columns are split into sets of `d - 2` columns. For set `s`
 //! the prover builds

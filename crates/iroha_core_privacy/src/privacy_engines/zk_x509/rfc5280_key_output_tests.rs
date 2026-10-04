@@ -157,7 +157,7 @@ fn key_output_local_relation_covers_both_depths_all_slots_and_fp4_lift() {
                     &all[begin..begin + OUTPUT_SOURCE_RESIDUES_V1],
                     &[F::ZERO; OUTPUT_SOURCE_RESIDUES_V1]
                 );
-                assert_eq!(all.len(), 1_945);
+                assert_eq!(all.len(), 2_149);
             }
         }
         assert_eq!(live, if cert2 == 0 { 260 } else { 325 });
@@ -361,7 +361,7 @@ fn key_output_arbitrary_selectors_and_complete_degree_inventory_are_polynomial()
             ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1,
             ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1
         ),
-        (285, 280, 147, 1945, 4)
+        (285, 280, 147, 2149, 4)
     );
 }
 
@@ -520,6 +520,7 @@ fn key_output_complete_source_multiplicity_and_auxiliary_replay_closes() {
     }
     let mut table = [F::ZERO; 2];
     let mut queries = [F::ZERO; 2];
+    let mut added_node_queries = [F::ZERO; 2];
     let mut key_rows = 0;
     for family in 0..FAMILY_COUNT_V1 {
         for ordinal in 0..material.family_rows[family].len() {
@@ -535,13 +536,19 @@ fn key_output_complete_source_multiplicity_and_auxiliary_replay_closes() {
                     .mul(row[SERIAL_NODE_TABLE_MULTIPLICITY]),
             );
             queries[0] = queries[0].add(row[BASE_SERIAL_BYTE_QUERY_ACTIVE]);
+            let basic_constraints_query = path_len::node_query_gate(&row, &fixed);
+            let complete_copy_query = copy_census::node_query_gate(&row, &fixed);
+            added_node_queries[0] = added_node_queries[0].add(basic_constraints_query);
+            added_node_queries[1] = added_node_queries[1].add(complete_copy_query);
             queries[1] = queries[1]
                 .add(active_family_gate_v1(
                     &row,
                     &fixed,
                     ZkX509Rfc5280StarkFamilyV1::SerialSource,
                 ))
-                .add(output_source_node_query_gate_v1(&row, &fixed));
+                .add(output_source_node_query_gate_v1(&row, &fixed))
+                .add(basic_constraints_query)
+                .add(complete_copy_query);
             if fixed[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize] == F::ONE {
                 assert_eq!(
                     output_source_residues_v1(&row, &fixed),
@@ -557,6 +564,19 @@ fn key_output_complete_source_multiplicity_and_auxiliary_replay_closes() {
             }
         }
     }
+    let depth = trace.certificates.len();
+    assert!((2..=3).contains(&depth));
+    // One signed BC parent per certificate. Equality has 2 * (depth + 1) pairs;
+    // each pair and each of the 4 * depth + 3 embedded payloads has two endpoints.
+    let equality_endpoints = 4 * (depth + 1);
+    let embedded_endpoints = 2 * (4 * depth + 3);
+    assert_eq!(
+        added_node_queries,
+        [
+            F(u64::try_from(depth).unwrap()),
+            F(u64::try_from(equality_endpoints + embedded_endpoints).unwrap()),
+        ]
+    );
     assert_eq!(table, queries);
     assert_eq!(
         key_rows,

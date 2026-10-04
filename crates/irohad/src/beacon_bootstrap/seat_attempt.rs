@@ -16,15 +16,20 @@ use iroha_allocation::{
     AllocationBudget, AllocationRefusal, ChargedBuffer, PrepaidBufferError, RetainedPayload,
 };
 use iroha_core::beacon::{
-    AuthenticatedGlobalBeaconDkgAttemptV1, GlobalThresholdBeaconInputErrorV1,
-    LocalGlobalThresholdBeaconDkgSeatV1, PreparedGlobalThresholdBeaconDkgInputsV1,
+    AuthenticatedGlobalBeaconDkgAttemptV1, GlobalBeaconAggregateOwnerV1,
+    GlobalThresholdBeaconInputErrorV1, LocalGlobalThresholdBeaconDkgSeatV1,
+    PreparedGlobalBeaconAggregateRestoreV1, PreparedGlobalThresholdBeaconDkgInputsV1,
     PreparedGlobalThresholdBeaconDkgPublicationV1,
-    PreparedGlobalThresholdBeaconSessionVerificationV1, VerifiedGlobalBeaconDkgCheckpointContextV1,
+    PreparedGlobalThresholdBeaconFinalSessionInputV1,
+    PreparedGlobalThresholdBeaconSessionVerificationV1, VerifiedGlobalBeaconDkgAggregateContextV1,
+    VerifiedGlobalBeaconDkgCheckpointContextV1,
 };
 use publication::{PhaseFile, PhasePublication};
 
+mod aggregate_durable;
 mod claim;
 mod durable;
+use aggregate_durable::PreparedAggregateDurable;
 mod durable_deadline;
 use durable::PreparedDurableDkg;
 use durable_deadline::DurableDeadline;
@@ -42,6 +47,8 @@ enum Phase {
     RestoringGeneration,
     RestoringDeliveries,
     RestoringAcceptances,
+    RestoringAggregate,
+    RestoringExport,
     Claiming,
     Claimed,
     GenerationIntentDurable,
@@ -62,6 +69,9 @@ enum Phase {
     SessionFinalized,
     SessionSealed,
     ExportPrepared,
+    AggregateIntentDurable,
+    AggregateProduced,
+    AggregateDurable,
     ShareExtracted,
     Complete,
     Terminal,
@@ -140,6 +150,8 @@ impl AttemptError {
                     Phase::RestoringGeneration
                         | Phase::RestoringDeliveries
                         | Phase::RestoringAcceptances
+                        | Phase::RestoringAggregate
+                        | Phase::RestoringExport
                 ) =>
             {
                 use iroha_crypto::{
@@ -169,6 +181,8 @@ impl AttemptError {
                     Phase::RestoringGeneration
                         | Phase::RestoringDeliveries
                         | Phase::RestoringAcceptances
+                        | Phase::RestoringAggregate
+                        | Phase::RestoringExport
                 ) =>
             {
                 !matches!(error, iroha_crypto::hybrid::HybridError::RandomBytes { .. })
@@ -179,6 +193,8 @@ impl AttemptError {
                     Phase::RestoringGeneration
                         | Phase::RestoringDeliveries
                         | Phase::RestoringAcceptances
+                        | Phase::RestoringAggregate
+                        | Phase::RestoringExport
                 ) =>
             {
                 !matches!(
@@ -194,6 +210,8 @@ impl AttemptError {
                 Phase::RestoringGeneration
                     | Phase::RestoringDeliveries
                     | Phase::RestoringAcceptances
+                    | Phase::RestoringAggregate
+                    | Phase::RestoringExport
             ) =>
             {
                 true
@@ -250,21 +268,64 @@ impl AttemptError {
     }
 }
 
+/// Disjoint physical input banks selected before any private restore or fresh claim.
+/// A complete aggregate prefix never reconstructs discarded private producer graphs.
+enum AttemptInputBanks {
+    Full(PreparedGlobalThresholdBeaconDkgInputsV1),
+    Final(PreparedGlobalThresholdBeaconFinalSessionInputV1),
+}
+impl AttemptInputBanks {
+    fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        match self {
+            Self::Full(owner) => owner.belongs_to(budget),
+            Self::Final(owner) => owner.belongs_to(budget),
+        }
+    }
+    fn full(&self) -> std::result::Result<&PreparedGlobalThresholdBeaconDkgInputsV1, AttemptError> {
+        match self {
+            Self::Full(owner) => Ok(owner),
+            Self::Final(_) => Err(AttemptError::Phase),
+        }
+    }
+    fn full_mut(
+        &mut self,
+    ) -> std::result::Result<&mut PreparedGlobalThresholdBeaconDkgInputsV1, AttemptError> {
+        match self {
+            Self::Full(owner) => Ok(owner),
+            Self::Final(_) => Err(AttemptError::Phase),
+        }
+    }
+    fn final_mut(
+        &mut self,
+    ) -> std::result::Result<&mut PreparedGlobalThresholdBeaconFinalSessionInputV1, AttemptError>
+    {
+        match self {
+            Self::Final(owner) => Ok(owner),
+            Self::Full(_) => Err(AttemptError::Phase),
+        }
+    }
+}
+
 /// Every phase's actual owner remains in this receiver until success or explicit drop.
 pub(crate) struct SeatDkgAttempt {
     prepared: Option<PreparedLocalGlobalThresholdBeaconDkgSeatV1>,
     local: Option<LocalGlobalThresholdBeaconDkgSeatV1>,
-    inputs: PreparedGlobalThresholdBeaconDkgInputsV1,
+    inputs: AttemptInputBanks,
     final_graph: Option<RetainedPayload<GlobalThresholdBeaconKeySessionV1>>,
     verifier: Option<PreparedGlobalThresholdBeaconSessionVerificationV1>,
     sealed: Option<ValidatedGlobalThresholdBeaconSessionV1>,
     export: Option<seat_export::PreparedSeatExport>,
-    rejected_components: Option<Zeroizing<[[u8; 32]; 3]>>,
+    rejected_aggregate: Option<GlobalBeaconAggregateOwnerV1>,
+    aggregate_restore: Option<PreparedGlobalBeaconAggregateRestoreV1>,
+    aggregate_owner: Option<GlobalBeaconAggregateOwnerV1>,
+    aggregate_accepted_context: Option<VerifiedGlobalBeaconDkgCheckpointContextV1>,
+    restore_complete_export: Option<bool>,
     public_input: FrameInput,
     finality: FinalityInput,
     claim: PreparedAttemptClaim,
     authority: AuthenticatedGlobalBeaconDkgAttemptV1,
     durable: PreparedDurableDkg,
+    aggregate_durable: PreparedAggregateDurable,
     original_publications: [Option<PreparedGlobalThresholdBeaconDkgPublicationV1>; 3],
     restore_target: Option<u16>,
     restored_private_phase: u16,
@@ -313,22 +374,59 @@ impl SeatDkgAttempt {
         {
             return Err(AttemptError::Binding);
         }
-        let prepared = PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
-            session,
-            roster,
+        let mut claim = PreparedAttemptClaim::new(
+            attempt_root,
+            &session.attempt_id,
             signer_index,
-            &signer,
+            deadline,
             budget,
         )?;
-        let input_bounds = prepared.input_frame_bounds();
+        let expiry = DurableDeadline::freeze(deadline)?;
+        let existing = claim.existing()?;
+        if existing {
+            claim.open_existing()?;
+        }
+        let restore_aggregate = existing
+            && PreparedAggregateDurable::present(
+                claim.read_directory().ok_or(AttemptError::Phase)?,
+            )?;
+        let (prepared, input_bounds, verifier, inputs, private_bound) = if restore_aggregate {
+            let (bounds, verifier) = PreparedGlobalBeaconAggregateRestoreV1::prepare_public_source(
+                session,
+                roster,
+                signer_index,
+                &signer,
+                budget,
+            )?;
+            let inputs =
+                PreparedGlobalThresholdBeaconFinalSessionInputV1::new(session, roster, budget)?;
+            (None, bounds, verifier, AttemptInputBanks::Final(inputs), 0)
+        } else {
+            let prepared = PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
+                session,
+                roster,
+                signer_index,
+                &signer,
+                budget,
+            )?;
+            let bounds = prepared.input_frame_bounds();
+            let verifier = prepared.prepare_final_session_verifier()?;
+            let private_bound = prepared.private_checkpoint_bytes();
+            let inputs = PreparedGlobalThresholdBeaconDkgInputsV1::new(session, roster, budget)?;
+            (
+                Some(prepared),
+                bounds,
+                verifier,
+                AttemptInputBanks::Full(inputs),
+                private_bound,
+            )
+        };
         if input_bounds
             .iter()
             .any(|size| *size == 0 || *size > MAX_PUBLIC_BYTES)
         {
             return Err(AttemptError::Binding);
         }
-        let verifier = prepared.prepare_final_session_verifier()?;
-        let inputs = PreparedGlobalThresholdBeaconDkgInputsV1::new(session, roster, budget)?;
         let public_input = FrameInput::new(public_input, input_bounds[0], deadline, budget)
             .map_err(|(_source, error)| error)?;
         let finality_input = FrameInput::new(
@@ -339,20 +437,13 @@ impl SeatDkgAttempt {
         )
         .map_err(|(_source, error)| error)?;
         public_input.require_distinct_source(&finality_input)?;
-        let mut claim = PreparedAttemptClaim::new(
-            attempt_root,
-            &session.attempt_id,
-            signer_index,
-            deadline,
-            budget,
-        )?;
-        let expiry = DurableDeadline::freeze(deadline)?;
         // Reload decoders are independent original-source banks, needed only
         // for an existing claimed prefix. Metadata grants bounded preparation,
         // never source or phase authority. Pin the owner-private child first;
         // all banks precede any private restoration or publication adoption.
-        let (original_publications, restore_target) = if claim.existing()? {
-            claim.open_existing()?;
+        let (original_publications, restore_target) = if restore_aggregate {
+            ([None, None, None], Some(4))
+        } else if existing {
             let phase = PreparedDurableDkg::restore_phase_hint(
                 claim.read_directory().ok_or(AttemptError::Phase)?,
             )?;
@@ -394,10 +485,15 @@ impl SeatDkgAttempt {
         };
         let durable = PreparedDurableDkg::new(
             expiry,
-            input_bounds[0],
-            prepared.private_checkpoint_bytes(),
+            if restore_aggregate {
+                0
+            } else {
+                input_bounds[0]
+            },
+            private_bound,
             budget,
         )?;
+        let aggregate_durable = PreparedAggregateDurable::new(expiry, budget)?;
         let total = provider_handle
             .len()
             .checked_add(std::mem::size_of::<SeatDkgAttempt>())
@@ -412,19 +508,24 @@ impl SeatDkgAttempt {
             return Err(AttemptError::Phase);
         }
         owner.push_reserved(Self {
-            prepared: Some(prepared),
+            prepared,
             local: None,
             inputs,
             final_graph: None,
             verifier: Some(verifier),
             sealed: None,
             export: None,
-            rejected_components: None,
+            rejected_aggregate: None,
+            aggregate_restore: None,
+            aggregate_owner: None,
+            aggregate_accepted_context: None,
+            restore_complete_export: None,
             public_input,
             finality: FinalityInput::new(finality_input, clock, session.start_height)?,
             claim,
             authority,
             durable,
+            aggregate_durable,
             original_publications,
             restore_target,
             restored_private_phase: 0,
@@ -461,8 +562,8 @@ impl SeatDkgAttempt {
             return Ok([0; 32]);
         }
         let source = match phase {
-            2 => self.inputs.commitments(),
-            3 => self.inputs.deliveries(),
+            2 => self.inputs.full()?.commitments(),
+            3 => self.inputs.full()?.deliveries(),
             _ => None,
         }
         .ok_or(AttemptError::Phase)?;
@@ -599,31 +700,62 @@ impl SeatDkgAttempt {
             Ok(())
         })
     }
+    fn aggregate_context(
+        &self,
+        intent_hash: [u8; 32],
+    ) -> std::result::Result<VerifiedGlobalBeaconDkgAggregateContextV1, AttemptError> {
+        let handle = std::str::from_utf8(self.provider_handle.as_slice())
+            .map_err(|_| AttemptError::Binding)?;
+        Ok(self.authority.aggregate_context(
+            self.finality.clock(),
+            self.sealed.as_ref().ok_or(AttemptError::Phase)?,
+            self.signer_index,
+            &self.signer,
+            handle,
+            self.provider_revision,
+            self.durable.previous_checkpoint_hash(4)?,
+            self.durable.latest_head_hash()?,
+            intent_hash,
+        )?)
+    }
     fn prepare_extraction_intent(&mut self) -> std::result::Result<(), AttemptError> {
-        let sealed = self.sealed.as_ref().ok_or(AttemptError::Phase)?;
-        let source = self
-            .authority
-            .finalized_source(self.finality.clock(), sealed)?;
-        let continuation = sealed.record().transcript_hash;
-        let context = *self.durable.latest_context()?;
+        let context = self.aggregate_context([0; 32])?;
         let (claim, path, fifos) = self.claim_and_fifo_identity()?;
-        let source_hashes = [
+        let sources = [
             self.source_publications[2].complete_hash()?,
             self.source_publications[5].complete_hash()?,
         ];
-        let generations = self.stream_generations();
-        self.durable.prepare_intent(
-            4,
-            &context,
+        self.aggregate_durable.prepare_intent(
+            context.binding(),
             claim,
             path,
             fifos,
-            Some((continuation, source)),
-            source_hashes,
-            generations,
+            sources,
+            self.stream_generations(),
         )?;
-        self.durable
-            .publish_intent(self.claim.directory().ok_or(AttemptError::Phase)?, 4)
+        self.aggregate_durable
+            .publish_intent(self.claim.directory().ok_or(AttemptError::Phase)?)
+    }
+    fn publish_aggregate(&mut self) -> std::result::Result<(), AttemptError> {
+        let context = self.aggregate_context(self.aggregate_durable.intent_hash()?)?;
+        let encrypted = self
+            .local
+            .as_mut()
+            .ok_or(AttemptError::Phase)?
+            .produce_aggregate_checkpoint(
+                &context,
+                self.sealed.as_ref().ok_or(AttemptError::Phase)?,
+                &self.signer,
+            )?;
+        let directory = self.claim.directory().ok_or(AttemptError::Phase)?;
+        self.aggregate_durable
+            .publish_checkpoint(directory, context.binding(), encrypted)?;
+        self.aggregate_durable
+            .publish_head(directory, context.binding())?;
+        if !self.aggregate_durable.complete() {
+            return Err(AttemptError::Phase);
+        }
+        Ok(())
     }
     fn seal_and_publish_checkpoint(&mut self, phase: u16) -> std::result::Result<(), AttemptError> {
         let public_hash = Hash::new(
@@ -781,6 +913,233 @@ impl SeatDkgAttempt {
         Ok(())
     }
 
+    fn tighten_from_original_expiry(
+        &mut self,
+        expiry: DurableDeadline,
+    ) -> std::result::Result<(), AttemptError> {
+        let deadline = expiry.restore(self.deadline)?;
+        self.deadline = self.deadline.min(deadline);
+        self.public_input.tighten_deadline(deadline);
+        self.finality.tighten_deadline(deadline);
+        self.claim.tighten_deadline(deadline);
+        Ok(())
+    }
+    /// Restore the original completed aggregate without reconstructing erased private phases.
+    /// Every raw extent precedes private decryption; hashes alone never initialize the clock.
+    fn restore_aggregate(&mut self) -> std::result::Result<(), AttemptError> {
+        if self.restore_target != Some(4) || self.prepared.is_some() || self.local.is_some() {
+            return Err(AttemptError::Binding);
+        }
+        let directory = self.claim.read_directory().ok_or(AttemptError::Phase)?;
+        let [head_bound, intent_bound] = self.durable.aggregate_prefix_record_bounds();
+        let checkpoint_bound = PreparedGlobalBeaconAggregateRestoreV1::phase_checkpoint_bytes()?;
+        let aggregate_bound = PreparedGlobalBeaconAggregateRestoreV1::aggregate_checkpoint_bytes()?;
+        let proof_bound = self.finality.clock().limits().journal_bytes;
+        self.aggregate_durable.prepare_restore(
+            directory,
+            [
+                aggregate_bound,
+                self.input_bounds[2],
+                proof_bound,
+                head_bound,
+                checkpoint_bound,
+                intent_bound,
+                proof_bound,
+                intent_bound,
+                self.input_bounds[2],
+            ],
+        )?;
+        let (intent, head) = self.aggregate_durable.load(directory)?;
+        self.tighten_from_original_expiry(intent.expiry)?;
+        if self.claim_and_fifo_identity()?
+            != (
+                intent.claim_identity,
+                intent.claim_path_hash,
+                intent.fifo_identity,
+            )
+        {
+            return Err(AttemptError::Binding);
+        }
+        let accepted_head = self.durable.verify_aggregate_accepted_prefix(
+            &intent,
+            &head.binding,
+            self.aggregate_durable.source(3)?,
+            self.aggregate_durable.source(4)?,
+            self.aggregate_durable.source(5)?,
+            self.aggregate_durable.source(7)?,
+            self.aggregate_durable.source(8)?,
+        )?;
+        let handle = std::str::from_utf8(self.provider_handle.as_slice())
+            .map_err(|_| AttemptError::Binding)?;
+        if self.aggregate_accepted_context.is_none() {
+            self.finality.restore_target_from_original_frame(
+                self.aggregate_durable.source(6)?,
+                self.session.deliveries_end_height,
+                self.cutoff,
+            )?;
+            let context = self.authority.checkpoint_context(
+                self.finality.clock(),
+                3,
+                self.signer_index,
+                &self.signer,
+                handle,
+                self.provider_revision,
+                accepted_head.context.public_output_hash,
+                accepted_head.context.phase_input_hash,
+                accepted_head.context.previous_checkpoint_hash,
+                accepted_head.context.producer_intent_hash,
+            )?;
+            if context.binding() != &accepted_head.context {
+                return Err(AttemptError::Binding);
+            }
+            self.aggregate_accepted_context = Some(context);
+        } else if self
+            .aggregate_accepted_context
+            .as_ref()
+            .is_none_or(|context| context.binding() != &accepted_head.context)
+        {
+            return Err(AttemptError::Binding);
+        }
+        self.finality.restore_target_from_original_frame(
+            self.aggregate_durable.source(2)?,
+            self.session.acceptances_end_height,
+            self.cutoff,
+        )?;
+        if self.sealed.is_none() {
+            if self.final_graph.is_none() {
+                let source = self.aggregate_durable.source(1)?;
+                self.inputs
+                    .final_mut()?
+                    .decode_final_session(source, norito::canonical_decode_limits(source.len()))?;
+                self.final_graph = Some(self.inputs.final_mut()?.take_final_session()?);
+            }
+            let graph = self.final_graph.take().ok_or(AttemptError::Phase)?;
+            let binding = GlobalThresholdBeaconSessionBindingV1 {
+                network_id: self.session.network_id,
+                session_id: self.session.session_id,
+                roster_hash: self.session.roster_hash,
+                transcript_hash: graph.get().transcript_hash,
+            };
+            let verifier = self.verifier.take().ok_or(AttemptError::Phase)?;
+            match verifier.seal(graph, &binding) {
+                Ok(sealed) => self.sealed = Some(sealed),
+                Err((verifier, graph, cause)) => {
+                    self.verifier = Some(verifier);
+                    self.final_graph = Some(graph);
+                    return Err(cause.into());
+                }
+            }
+        }
+        let context = self.authority.aggregate_context(
+            self.finality.clock(),
+            self.sealed.as_ref().ok_or(AttemptError::Phase)?,
+            self.signer_index,
+            &self.signer,
+            handle,
+            self.provider_revision,
+            accepted_head.checkpoint_hash,
+            Hash::new(self.aggregate_durable.source(3)?).into(),
+            self.aggregate_durable.intent_hash()?,
+        )?;
+        if context.binding() != &head.binding {
+            return Err(AttemptError::Binding);
+        }
+        if self.restore_complete_export.is_none() {
+            self.restore_complete_export = Some(seat_export::complete_output_prefix(
+                self.claim.read_directory().ok_or(AttemptError::Phase)?,
+            )?);
+        }
+        if self.export.is_none() {
+            self.export = Some(seat_export::PreparedSeatExport::new(
+                self.claim.read_directory().ok_or(AttemptError::Phase)?,
+                self.sealed.as_ref().ok_or(AttemptError::Phase)?,
+                self.signer_index,
+                handle,
+                self.provider_revision,
+                &self.budget,
+            )?);
+        }
+        if self.aggregate_owner.is_none() {
+            if self.aggregate_restore.is_none() {
+                self.aggregate_restore = Some(PreparedGlobalBeaconAggregateRestoreV1::new(
+                    self.sealed.as_ref().ok_or(AttemptError::Phase)?,
+                    self.signer_index,
+                    &self.budget,
+                )?);
+            }
+            let prepared = self.aggregate_restore.take().ok_or(AttemptError::Phase)?;
+            let encrypted = self.aggregate_durable.source(0)?;
+            match prepared.restore(
+                &context,
+                encrypted,
+                &self.signer,
+                norito::canonical_decode_limits(encrypted.len()),
+            ) {
+                Ok(owner) => self.aggregate_owner = Some(owner),
+                Err((prepared, cause)) => {
+                    self.aggregate_restore = Some(prepared);
+                    return Err(cause.into());
+                }
+            }
+        }
+        // Visible bytes are not durability. Sync every same held descriptor and parent.
+        #[cfg(not(all(test, sumeragi_daemon_mutation = "HC116")))]
+        {
+            self.aggregate_durable
+                .sync_restored(self.claim.read_directory().ok_or(AttemptError::Phase)?)?;
+            if !self.aggregate_durable.restored_sources_synced() {
+                return Err(AttemptError::Binding);
+            }
+        }
+        self.tighten_from_original_expiry(intent.expiry)?;
+        self.public_input.restore_empty_cursor(
+            intent.stream_generations[0]
+                .checked_add(1)
+                .ok_or(AttemptError::Binding)?,
+            self.input_bounds[2],
+            [intent.fifo_identity[0], intent.fifo_identity[1]],
+        )?;
+        self.finality.restore_stream_generation(
+            intent.stream_generations[1],
+            [intent.fifo_identity[2], intent.fifo_identity[3]],
+        )?;
+        self.claim.authenticate_restored(
+            intent.claim_identity,
+            intent.claim_path_hash,
+            self.deadline,
+        )?;
+        self.tighten_from_original_expiry(intent.expiry)?;
+        // Check the destination before taking the original move-only private owner.
+        let export = self.export.as_mut().ok_or(AttemptError::Phase)?;
+        let source = self.aggregate_owner.take().ok_or(AttemptError::Phase)?;
+        if let Err((source, cause)) = export.accept(source) {
+            self.aggregate_owner = Some(source);
+            return Err(cause.into());
+        }
+        self.phase = if self.restore_complete_export == Some(true) {
+            Phase::RestoringExport
+        } else {
+            Phase::ShareExtracted
+        };
+        Ok(())
+    }
+    fn restore_export(&mut self) -> std::result::Result<(), AttemptError> {
+        self.export
+            .as_mut()
+            .ok_or(AttemptError::Phase)?
+            .restore_complete(self.claim.directory().ok_or(AttemptError::Phase)?)?;
+        if !self.export.as_ref().ok_or(AttemptError::Phase)?.complete() {
+            return Err(AttemptError::Phase);
+        }
+        let deadline = self.aggregate_durable.tightened_deadline(self.deadline)?;
+        self.deadline = self.deadline.min(deadline);
+        self.public_input.tighten_deadline(deadline);
+        self.finality.tighten_deadline(deadline);
+        self.claim.tighten_deadline(deadline);
+        self.phase = Phase::Complete;
+        Ok(())
+    }
+
     /// Replay a complete original later phase without reading/reopening the FIFO,
     /// generating another private primitive or importing a recorded tip hash.
     fn restore_later(&mut self, phase: u16) -> std::result::Result<(), AttemptError> {
@@ -808,9 +1167,11 @@ impl SeatDkgAttempt {
         let (_, _, input, proof) = self.durable.later_sources(phase)?;
         if phase == 2 {
             self.inputs
+                .full_mut()?
                 .decode_commitments(input, norito::canonical_decode_limits(input.len()))?;
         } else {
             self.inputs
+                .full_mut()?
                 .decode_deliveries(input, norito::canonical_decode_limits(input.len()))?;
         }
         self.finality
@@ -831,9 +1192,9 @@ impl SeatDkgAttempt {
             bank.decode(output, norito::canonical_decode_limits(output.len()))?;
             let publication = bank.publication().ok_or(AttemptError::Phase)?;
             let phase_input = if phase == 2 {
-                self.inputs.commitments()
+                self.inputs.full()?.commitments()
             } else {
-                self.inputs.deliveries()
+                self.inputs.full()?.deliveries()
             }
             .ok_or(AttemptError::Phase)?;
             let local = self.local.take().ok_or(AttemptError::Phase)?;
@@ -971,7 +1332,11 @@ impl SeatDkgAttempt {
         Ok(())
     }
     fn step(&mut self) -> std::result::Result<(), AttemptError> {
-        self.deadline = self.durable.tightened_deadline(self.deadline)?;
+        self.deadline = if self.restore_target == Some(4) {
+            self.aggregate_durable.tightened_deadline(self.deadline)?
+        } else {
+            self.durable.tightened_deadline(self.deadline)?
+        };
         self.public_input.tighten_deadline(self.deadline);
         self.finality.tighten_deadline(self.deadline);
         self.claim.tighten_deadline(self.deadline);
@@ -981,8 +1346,13 @@ impl SeatDkgAttempt {
         match self.phase {
             Phase::Prepared => {
                 if self.claim.existing()? {
-                    self.phase = Phase::RestoringGeneration;
-                    self.restore_generation()?;
+                    if self.restore_target == Some(4) {
+                        self.phase = Phase::RestoringAggregate;
+                        self.restore_aggregate()?;
+                    } else {
+                        self.phase = Phase::RestoringGeneration;
+                        self.restore_generation()?;
+                    }
                 } else {
                     self.phase = Phase::Claiming;
                     self.claim.make_durable()?;
@@ -995,6 +1365,12 @@ impl SeatDkgAttempt {
             }
             Phase::RestoringGeneration => {
                 self.restore_generation()?;
+            }
+            Phase::RestoringAggregate => {
+                self.restore_aggregate()?;
+            }
+            Phase::RestoringExport => {
+                self.restore_export()?;
             }
             Phase::RestoringDeliveries => {
                 self.restore_later(2)?;
@@ -1032,6 +1408,7 @@ impl SeatDkgAttempt {
                 self.public_input.read_until_complete()?;
                 let frame = self.public_input.frame().ok_or(AttemptError::Phase)?;
                 self.inputs
+                    .full_mut()?
                     .decode_commitments(frame, norito::canonical_decode_limits(frame.len()))?;
                 self.phase = Phase::CommitmentsDecoded;
             }
@@ -1044,7 +1421,11 @@ impl SeatDkgAttempt {
                 self.prepare_intent(2)?;
                 self.durable
                     .publish_intent(self.claim.directory().ok_or(AttemptError::Phase)?, 2)?;
-                let source = self.inputs.commitments().ok_or(AttemptError::Phase)?;
+                let source = self
+                    .inputs
+                    .full()?
+                    .commitments()
+                    .ok_or(AttemptError::Phase)?;
                 self.phase = Phase::Terminal;
                 let _ = self.local.as_mut().ok_or(AttemptError::Phase)?.deliver(
                     &source.recipient_keys,
@@ -1059,7 +1440,12 @@ impl SeatDkgAttempt {
                 self.local
                     .as_mut()
                     .ok_or(AttemptError::Phase)?
-                    .delivery_frame(self.inputs.commitments().ok_or(AttemptError::Phase)?)?;
+                    .delivery_frame(
+                        self.inputs
+                            .full()?
+                            .commitments()
+                            .ok_or(AttemptError::Phase)?,
+                    )?;
                 self.phase = Phase::DeliveriesEncoded;
             }
             Phase::DeliveriesEncoded => {
@@ -1079,6 +1465,7 @@ impl SeatDkgAttempt {
                 self.public_input.read_until_complete()?;
                 let frame = self.public_input.frame().ok_or(AttemptError::Phase)?;
                 self.inputs
+                    .full_mut()?
                     .decode_deliveries(frame, norito::canonical_decode_limits(frame.len()))?;
                 self.phase = Phase::EdgesDecoded;
             }
@@ -1091,7 +1478,11 @@ impl SeatDkgAttempt {
                 self.prepare_intent(3)?;
                 self.durable
                     .publish_intent(self.claim.directory().ok_or(AttemptError::Phase)?, 3)?;
-                let source = self.inputs.deliveries().ok_or(AttemptError::Phase)?;
+                let source = self
+                    .inputs
+                    .full()?
+                    .deliveries()
+                    .ok_or(AttemptError::Phase)?;
                 self.phase = Phase::Terminal;
                 let _ = self.local.as_mut().ok_or(AttemptError::Phase)?.accept(
                     source,
@@ -1105,7 +1496,12 @@ impl SeatDkgAttempt {
                 self.local
                     .as_mut()
                     .ok_or(AttemptError::Phase)?
-                    .acceptance_frame(self.inputs.deliveries().ok_or(AttemptError::Phase)?)?;
+                    .acceptance_frame(
+                        self.inputs
+                            .full()?
+                            .deliveries()
+                            .ok_or(AttemptError::Phase)?,
+                    )?;
                 self.phase = Phase::AcceptancesEncoded;
             }
             Phase::AcceptancesEncoded => {
@@ -1119,8 +1515,9 @@ impl SeatDkgAttempt {
                 self.public_input.read_until_complete()?;
                 let frame = self.public_input.frame().ok_or(AttemptError::Phase)?;
                 self.inputs
+                    .full_mut()?
                     .decode_final_session(frame, norito::canonical_decode_limits(frame.len()))?;
-                self.final_graph = Some(self.inputs.take_final_session()?);
+                self.final_graph = Some(self.inputs.full_mut()?.take_final_session()?);
                 self.phase = Phase::SessionDecoded;
             }
             Phase::SessionDecoded => {
@@ -1166,21 +1563,50 @@ impl SeatDkgAttempt {
             }
             Phase::ExportPrepared => {
                 self.prepare_extraction_intent()?;
-                self.phase = Phase::Terminal;
-                let components = self
+                self.phase = Phase::AggregateIntentDurable;
+            }
+            Phase::AggregateIntentDurable => {
+                self.publish_aggregate()?;
+                self.phase = Phase::AggregateProduced;
+            }
+            Phase::AggregateProduced => {
+                // All original checkpoint/head file and directory barriers are complete.
+                if !self.aggregate_durable.complete() {
+                    return Err(AttemptError::Phase);
+                }
+                self.phase = Phase::AggregateDurable;
+            }
+            Phase::AggregateDurable => {
+                // Every potentially fallible destination/cursor check precedes
+                // contribution retirement and original secret ownership transfer.
+                if self.public_input.frame().is_none()
+                    || self.public_input.generation().checked_add(1).is_none()
+                {
+                    return Err(AttemptError::Phase);
+                }
+                self.public_input.source_identity()?;
+                let context = self.aggregate_context(self.aggregate_durable.intent_hash()?)?;
+                let export = self.export.as_mut().ok_or(AttemptError::Phase)?;
+                let source = self
                     .local
                     .as_mut()
                     .ok_or(AttemptError::Phase)?
-                    .finalize_private_share(self.sealed.as_ref().ok_or(AttemptError::Phase)?)?;
-                if let Err((components, cause)) = self
-                    .export
-                    .as_mut()
-                    .ok_or(AttemptError::Phase)?
-                    .accept(components)
-                {
-                    self.rejected_components = Some(components);
+                    .retire_durably_published_aggregate(
+                        &context,
+                        self.sealed.as_ref().ok_or(AttemptError::Phase)?,
+                        &self.signer,
+                    )?;
+                if let Err((source, cause)) = export.accept(source) {
+                    self.rejected_aggregate = Some(source);
                     return Err(cause.into());
                 }
+                // The exact final public source is authenticated, sealed and durably
+                // bound by the aggregate head. Advance its original FIFO cursor once
+                // before refunding the consumed raw body; reload restores this same
+                // empty generation from the immutable intent, never reopens the stream.
+                self.public_input.consume_verified_frame()?;
+                // Drop all retired producer scaffold; original96/ciphertext remain in export.
+                self.local = None;
                 self.phase = Phase::ShareExtracted;
             }
             Phase::ShareExtracted => {
@@ -1191,6 +1617,11 @@ impl SeatDkgAttempt {
                 if !self.export.as_ref().ok_or(AttemptError::Phase)?.complete() {
                     return Err(AttemptError::Phase);
                 }
+                let deadline = self.aggregate_durable.tightened_deadline(self.deadline)?;
+                self.deadline = self.deadline.min(deadline);
+                self.public_input.tighten_deadline(deadline);
+                self.finality.tighten_deadline(deadline);
+                self.claim.tighten_deadline(deadline);
                 self.phase = Phase::Complete;
             }
             Phase::Complete => {}
@@ -1265,3 +1696,6 @@ mod restore_error_tests;
 
 #[cfg(test)]
 mod later_restore_tests;
+
+#[cfg(test)]
+pub(super) mod aggregate_tests;

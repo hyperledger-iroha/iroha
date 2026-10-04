@@ -33,7 +33,9 @@ fn borrowed_message_matches_serialized_points_and_digest_for_both_roles_and_payl
             255,
             THRESHOLD_BLS_MAX_MESSAGE_PAYLOAD_BYTES_V1,
         ] {
-            let payload: Vec<_> = (0..length).map(|offset| (offset % 251) as u8).collect();
+            let payload: Vec<_> = (0..length)
+                .map(|offset| u8::try_from(offset % 251).unwrap())
+                .collect();
             let expected = serialized(&session, &payload);
             let mut role_bound = vec![P::ROLE_TAG];
             role_bound.extend_from_slice(&expected);
@@ -121,7 +123,7 @@ fn borrowed_message_preserves_partial_rejection_precedence() {
         .sign_payload_with_rng(&fixture.transcript, b"valid", &mut rng)
         .unwrap();
     let oversized = vec![0; THRESHOLD_BLS_MAX_MESSAGE_PAYLOAD_BYTES_V1 + 1];
-    let mut wrong = partial.clone();
+    let mut wrong = partial;
     wrong.session_id = binding(87);
     assert_eq!(
         fixture
@@ -129,7 +131,7 @@ fn borrowed_message_preserves_partial_rejection_precedence() {
             .verify_partial_signature(&oversized, &wrong),
         Err(ThresholdBlsError::SessionMismatch)
     );
-    wrong = partial.clone();
+    wrong = partial;
     wrong.index = 0;
     assert_eq!(
         fixture

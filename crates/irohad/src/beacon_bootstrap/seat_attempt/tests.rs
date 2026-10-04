@@ -179,7 +179,7 @@ fn local_attempt_claim_follows_complete_original_pool_preparation() {
     assert!(attempt.inputs.belongs_to(&budget));
     assert!(attempt.verifier.as_ref().unwrap().belongs_to(&budget));
     assert!(attempt.durable.belongs_to(&budget));
-    assert!(attempt.original_publication.belongs_to(&budget));
+    assert!(attempt.original_publications.iter().all(Option::is_none));
     assert!(attempt.provider_handle.belongs_to(&budget));
     attempt.step().unwrap();
     let directory = attempt.claim.directory().unwrap();
@@ -360,6 +360,8 @@ fn original_dealer_retirement_waits_for_complete_durable_delivery_publication() 
     let encoded = norito::encode_canonical(&commitments).unwrap();
     attempt
         .inputs
+        .full_mut()
+        .unwrap()
         .decode_commitments(&encoded, norito::canonical_decode_limits(encoded.len()))
         .unwrap();
     let signer = &keys[0];
@@ -391,7 +393,7 @@ fn original_dealer_retirement_waits_for_complete_durable_delivery_publication() 
             .local
             .as_mut()
             .unwrap()
-            .delivery_frame(attempt.inputs.commitments().unwrap())
+            .delivery_frame(attempt.inputs.full().unwrap().commitments().unwrap())
             .unwrap();
     }
     let deliveries: iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1 =

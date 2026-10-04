@@ -1,5 +1,5 @@
 //! The vanishing argument (spec section 2 "Degree and vanishing", section 7
-//! rows 5 and 6, BlindingScheduleV1 items 5 and 6).
+//! rows 5 and 6, `BlindingScheduleV1` items 5 and 6).
 //!
 //! - `R`: `n` random coefficients and a random blind, committed in
 //!   coefficient form before `y`; `R(x)` masks `h(x_3)` in the multiopen
@@ -46,7 +46,7 @@ pub(super) struct CombinedQuotient<F> {
     pub(super) blind: F,
 }
 
-/// Draws, commits and writes `R` (BlindingScheduleV1 item 5).
+/// Draws, commits and writes `R` (`BlindingScheduleV1` item 5).
 ///
 /// # Errors
 ///
@@ -74,7 +74,7 @@ where
     Ok(RandomPoly { coeffs, blind })
 }
 
-/// Splits `h` into `d - 1` pieces, draws their blinds (BlindingScheduleV1
+/// Splits `h` into `d - 1` pieces, draws their blinds (`BlindingScheduleV1`
 /// item 6), commits them and writes the commitments in order.
 ///
 /// # Errors
@@ -85,7 +85,7 @@ pub(super) fn commit_quotient<C, T, R>(
     params: &PinnedParams<C>,
     pk: &ProvingKey<C>,
     shape: &Shape,
-    h: Vec<C::ScalarExt>,
+    h: &[C::ScalarExt],
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
@@ -98,7 +98,9 @@ where
     let expected = shape
         .quotient_pieces
         .checked_mul(shape.n)
-        .ok_or(ProverError::Protocol(crate::protocol::ProtocolError::Overflow))?;
+        .ok_or(ProverError::Protocol(
+            crate::protocol::ProtocolError::Overflow,
+        ))?;
     if h.len() != expected {
         return Err(ProverError::Key(KeyError::Shape {
             what: "quotient coefficients",

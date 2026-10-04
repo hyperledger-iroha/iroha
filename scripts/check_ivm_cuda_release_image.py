@@ -2,7 +2,8 @@
 """Bind reviewed CUDA release inputs to a Docker image inspection and source bundle.
 
 Requires Python 3.10+, an explicit digest-pinned image reference, independently
-reviewed nonzero image/key SHA-256 values, and `docker image inspect --format
+reviewed nonzero image SHA-256 and the source-owned key/manifest approval, and
+`docker image inspect --format
 '{{json .}}'` output. Does not pull images, run builds, or assert a signature/GPU
 qualification pass. Rust bundled admission still owns signature and PTX validation.
 The create-only receipt is local input-binding evidence, not release approval.
@@ -20,13 +21,14 @@ if __package__:
 else:
     import release_artifact_contract as custody
 
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE = re.compile(r"[a-z0-9][a-z0-9./:_-]*@sha256:([0-9a-f]{64})\Z")
 
 
-def configured_image(reference: str, key_digest: str, image_digest: str) -> str:
+def configured_image(reference: str, image_digest: str) -> str:
     """Require explicit reviewed inputs before any image pull or Cargo work."""
-    for label, value in (("trusted CUDA key", key_digest), ("CUDA image", image_digest)):
+    for label, value in (("CUDA image", image_digest),):
         if not SHA256.fullmatch(value) or value == "0" * 64:
             raise custody.ReleaseArtifactError(f"{label} requires an explicit reviewed nonzero SHA256")
     match = IMAGE.fullmatch(reference)
@@ -35,10 +37,13 @@ def configured_image(reference: str, key_digest: str, image_digest: str) -> str:
     return reference
 
 
-def verify(reference: str, key_digest: str, image_digest: str,
+def verify(reference: str, image_digest: str,
            inspection: Path, bundle: Path, output: Path) -> Path:
     """Bind Docker's measured repository/config identities to the reviewed inputs."""
-    configured_image(reference, key_digest, image_digest)
+    pins = custody.require_release_cuda_source_inputs(SOURCE_ROOT, "x86_64-unknown-linux-gnu")
+    assert pins is not None
+    key_digest = pins.public_key_sha256
+    configured_image(reference, image_digest)
     inspection_info, data = custody.stable_read_path(inspection, max_size=1024 * 1024)
     observed = custody.load_json_object(data, "Docker image inspection")
     identities = observed.get("RepoDigests")
@@ -53,6 +58,8 @@ def verify(reference: str, key_digest: str, image_digest: str,
     public_info, public = custody.stable_read_relative(bundle, "provenance.v1.pub", max_size=32, return_payload=True)
     if len(public) != 32 or public_info.sha256 != key_digest:
         raise custody.ReleaseArtifactError("CUDA source public key differs from independently reviewed fingerprint")
+    if manifest_info.sha256 != pins.manifest_sha256:
+        raise custody.ReleaseArtifactError("CUDA source manifest differs from source approval")
     try:
         lines = manifest.decode("ascii").splitlines()
     except UnicodeDecodeError as error:
@@ -79,14 +86,13 @@ def verify(reference: str, key_digest: str, image_digest: str,
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image-reference", required=True)
-    parser.add_argument("--trusted-key-sha256", required=True)
     parser.add_argument("--image-sha256", required=True)
     parser.add_argument("--inspection", type=Path, required=True)
     parser.add_argument("--bundle-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        output = verify(args.image_reference, args.trusted_key_sha256, args.image_sha256,
+        output = verify(args.image_reference, args.image_sha256,
                         args.inspection, args.bundle_dir, args.output)
     except (custody.ReleaseArtifactError, OSError) as error:
         print(f"CUDA release image binding failed: {error}", file=sys.stderr)

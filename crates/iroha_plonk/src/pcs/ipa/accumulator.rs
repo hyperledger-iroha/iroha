@@ -42,7 +42,7 @@ use core::fmt;
 use ff::{Field, FromUniformBytes, PrimeField};
 use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
 
-use super::{IpaError, PinnedParams, commit::msm_public_or_naive, fold_scalars, verifier};
+use super::{IpaError, PinnedParams, commit::msm_complete, fold_scalars, verifier};
 use crate::{
     cs::{CurveV1, constraint_system::MAX_K, descriptor::blake2b_personal},
     pcs::curve_v1,
@@ -454,7 +454,7 @@ fn decide_weighted<C: PastaCurve>(
     }
     scalars.extend(combined.iter().map(|value| -*value));
     bases.extend_from_slice(&g[..combined.len()]);
-    if bool::from(msm_public_or_naive::<C>(&scalars, &bases, budget).is_identity()) {
+    if bool::from(msm_complete::<C>(&scalars, &bases, budget).is_identity()) {
         Ok(())
     } else {
         Err(AccumulatorError::BatchRejected)
@@ -691,6 +691,8 @@ mod tests {
         );
     }
 
+    /// DEV-09 (spec section 14): batch weights are derived deterministically from every item
+    /// instead of `OsRng`, and still reject cancelling errors.
     #[test]
     fn cancelling_errors_are_rejected_under_derived_weights() {
         // MV4: two invalid accumulators whose errors cancel under equal

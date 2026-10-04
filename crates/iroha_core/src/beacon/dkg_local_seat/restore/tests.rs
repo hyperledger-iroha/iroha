@@ -9,6 +9,7 @@ use crate::{
     sumeragi::{native_journal::NativeJournalCursor, test_chain::CertifiedTestChain},
     test_allocations::{allocations_during, refuse_one_layout_during},
 };
+use iroha_crypto::Signature;
 use iroha_data_model::sumeragi::finality::{
     NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits,
 };
@@ -647,7 +648,7 @@ fn original_delivery_refusal_keeps_public_prefix_source_chain_and_same_private_b
         .unwrap()
         .restoration_backing();
     let floor = budget.reserved_bytes();
-    let (owner, error) = local
+    let (owner, original_private_refusal) = local
         .restore_delivered(
             &original.contexts[1],
             &original.commitments,
@@ -660,10 +661,30 @@ fn original_delivery_refusal_keeps_public_prefix_source_chain_and_same_private_b
         .err()
         .unwrap();
     local = owner;
-    assert!(matches!(
-        error,
-        LocalGlobalThresholdBeaconDkgErrorV1::Checkpoint(_)
-    ));
+    let assert_original_refusal = |error: &LocalGlobalThresholdBeaconDkgErrorV1| {
+        let LocalGlobalThresholdBeaconDkgErrorV1::Checkpoint(
+            iroha_crypto::threshold_bls::checkpoint::DkgCheckpointErrorV1::Decode(
+                norito::core::PreparedDecodeError::Codec(cause),
+            ),
+        ) = error
+        else {
+            panic!("original private decoder must retain its exact typed resource refusal");
+        };
+        // The explicit limits belong to this protocol attempt, rather than an
+        // enclosing caller. Preserve that distinction and its opaque original
+        // scope after the decoder is reused and ultimately retired.
+        assert_eq!(cause.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
+        let original = std::error::Error::source(cause)
+            .unwrap()
+            .downcast_ref::<norito::Error>()
+            .unwrap();
+        assert!(matches!(original, norito::Error::ScopedDecodeResource(_)));
+        assert!(matches!(
+            original.decode_resource_error(),
+            Some(norito::core::DecodeResourceError::FieldLengthExceeded { length, limit: 1 }) if length > 1
+        ));
+    };
+    assert_original_refusal(&original_private_refusal);
     assert!(!local.delivered && local.outputs.outgoing.as_slice().is_empty());
     assert_eq!(
         local.outputs.pending_edges.as_slice()[0]
@@ -673,18 +694,24 @@ fn original_delivery_refusal_keeps_public_prefix_source_chain_and_same_private_b
         pointer
     );
     assert_eq!(budget.reserved_bytes(), floor);
-    local = local
-        .restore_delivered(
-            &original.contexts[1],
-            &original.commitments,
-            bank.publication().unwrap(),
-            &original.public[1],
-            &original.private[1],
-            &original.signer,
-            norito::canonical_decode_limits(original.private[1].len()),
-        )
-        .map_err(|(_, error)| error)
-        .unwrap();
+    let mut restored = None;
+    assert_eq!(
+        allocations_during(|| {
+            restored = Some(local.restore_delivered(
+                &original.contexts[1],
+                &original.commitments,
+                bank.publication().unwrap(),
+                &original.public[1],
+                &original.private[1],
+                &original.signer,
+                norito::canonical_decode_limits(original.private[1].len()),
+            ));
+        }),
+        0
+    );
+    local = restored.unwrap().map_err(|(_, error)| error).unwrap();
+    assert_eq!(budget.reserved_bytes(), floor);
+    assert_original_refusal(&original_private_refusal);
     assert_eq!(original.public[1].as_ptr(), actual_source);
     assert_eq!(Hash::new(&original.public[1]), actual_hash);
     assert_eq!(
@@ -697,6 +724,12 @@ fn original_delivery_refusal_keeps_public_prefix_source_chain_and_same_private_b
     );
     drop(local);
     drop(bank);
+    // The original typed refusal remains the last reader of this decoder's
+    // actual derived control. Its layout is funded until that reader retires.
+    let counter_bytes = norito::core::PreparedDecodeWorkspace::allocation_layouts()[0].size();
+    assert_original_refusal(&original_private_refusal);
+    assert_eq!(budget.reserved_bytes(), counter_bytes);
+    drop(original_private_refusal);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

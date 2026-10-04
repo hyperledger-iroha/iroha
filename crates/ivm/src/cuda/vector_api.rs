@@ -6,19 +6,9 @@
 
 use super::policy::{Kernel, public_workload_task_id};
 use iroha_accel::{HostOutput, PtxArtifact, cuda::CudaFailure};
-use std::ffi::CStr;
 
 #[path = "vector_launch.rs"]
 mod launch;
-
-static ARTIFACT: PtxArtifact = PtxArtifact::new(
-    match CStr::from_bytes_with_nul(
-        concat!(include_str!(concat!(env!("OUT_DIR"), "/vector.ptx")), "\0").as_bytes(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => panic!("embedded vector PTX must have exactly one terminal NUL"),
-    },
-);
 
 fn staged32(
     kernel: Kernel,
@@ -26,30 +16,33 @@ fn staged32(
     left: &[u32],
     right: &[u32],
 ) -> Result<HostOutput<u32>, CudaFailure> {
-    let result = crate::cuda_dispatch::with_selected(kernel, ARTIFACT, |device| {
+    let artifact = crate::cuda_artifact::artifact(kernel)?;
+    let result = crate::cuda_dispatch::with_selected(kernel, artifact, |device| {
         // SAFETY: this module binds the embedded artifact to the existing vector
         // ABI; launch validates lengths and selects only its fixed u32 symbols.
-        unsafe { launch::launch_u32_output(device, ARTIFACT, name, left, right) }
+        unsafe { launch::launch_u32_output(device, artifact, name, left, right) }
     });
-    complete_attempt(kernel, left.len(), result)
+    complete_attempt(kernel, artifact, left.len(), result)
 }
 
 fn staged64(left: &[u64], right: &[u64]) -> Result<HostOutput<u64>, CudaFailure> {
-    let result = crate::cuda_dispatch::with_selected(Kernel::Add64, ARTIFACT, |device| {
+    let artifact = crate::cuda_artifact::artifact(Kernel::Add64)?;
+    let result = crate::cuda_dispatch::with_selected(Kernel::Add64, artifact, |device| {
         // SAFETY: the exact embedded artifact supplies the fixed vadd64 ABI.
-        unsafe { launch::launch_u64_output(device, ARTIFACT, left, right) }
+        unsafe { launch::launch_u64_output(device, artifact, left, right) }
     });
-    complete_attempt(Kernel::Add64, left.len(), result)
+    complete_attempt(Kernel::Add64, artifact, left.len(), result)
 }
 
 fn complete_attempt<T>(
     kernel: Kernel,
+    artifact: PtxArtifact,
     expected_count: usize,
     result: Result<HostOutput<T>, CudaFailure>,
 ) -> Result<HostOutput<T>, CudaFailure> {
     match result {
         Ok(output) if output.len() == expected_count && expected_count != 0 => {
-            super::imp::record_completed_cuda_dispatch(kernel, ARTIFACT);
+            super::imp::record_completed_cuda_dispatch(kernel, artifact);
             Ok(output)
         }
         Ok(_) => {
@@ -78,7 +71,10 @@ fn failure_quarantines(error: CudaFailure) -> bool {
 /// Run actual bounded public vectors on each candidate, preserving exact artifact
 /// and device identity. Scalar fallback never establishes kernel admission.
 pub(super) fn admit(kernel: Kernel) -> bool {
-    crate::cuda_dispatch::admit_kernel(kernel, ARTIFACT, || {
+    let Ok(artifact) = crate::cuda_artifact::artifact(kernel) else {
+        return false;
+    };
+    crate::cuda_dispatch::admit_kernel(kernel, artifact, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
             return Err(CudaFailure::Busy);
         };

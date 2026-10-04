@@ -19,6 +19,8 @@ mod selection;
 pub(in crate::managed) use selection::{generated, initial};
 #[path = "attempts/closure.rs"]
 mod closure;
+#[path = "attempts/retained_graph.rs"]
+mod retained_graph;
 #[path = "attempts/scope.rs"]
 mod scope;
 use closure::{ClosurePlan, ClosureRecord};
@@ -222,6 +224,29 @@ impl Attempt {
         }
         Ok(())
     }
+    fn validate_inventory(&self, names: &[std::ffi::OsString], reserved: bool) -> Result<()> {
+        if reserved
+            && (names.len() != 1 || names.first().is_none_or(|name| name != "authorization.nrt"))
+        {
+            return Err(invalid(
+                "reserved dispatch contains effects before publication",
+            ));
+        }
+        let native = names
+            .iter()
+            .any(|name| name == "replay.nrt" || name == "carrier.nrt");
+        if self.commit.is_none() && native {
+            return Err(invalid(
+                "uncommitted dispatch contains native execution material",
+            ));
+        }
+        if self.retirement.is_some() && native {
+            return Err(invalid(
+                "retired dispatch contains changed or execution material",
+            ));
+        }
+        Ok(())
+    }
     fn retain_observation(&self, observation: Observation) -> Result<()> {
         self.verify_authorization()?;
         observation.validate(&self.authorization)?;
@@ -302,29 +327,9 @@ impl History {
     ) -> Result<Self> {
         scope.validate(operation, purpose, semantic)?;
         operation.revalidate()?;
-        let enrollment = scope::is_enrollment(purpose);
-        let names = operation.entries(6)?;
-        if names.iter().any(|name| {
-            name != "original.nrt"
-                && name != "dispatch.nrt"
-                && name != "attempts"
-                && !(enrollment
-                    && ["reserved.nrt", "closing.nrt", "closed.nrt"]
-                        .iter()
-                        .any(|allowed| name == *allowed))
-        }) {
-            return Err(invalid("dispatch operation contains unknown material"));
-        }
-        let intent = read_optional(
-            operation,
-            "original.nrt",
-            super::MAX_CHECKPOINT_BYTES + 3 * 1024 * 1024,
-        )?
-        .ok_or_else(|| invalid("dispatch lost its original semantic intent"))?;
-        if *Hash::new(&intent).as_ref() != semantic {
-            return Err(invalid("dispatch semantic original was changed"));
-        }
-        let retained_operation = PrivateDirectory::open_exact(operation.path())?;
+        operation_inventory(operation, purpose)?;
+        require_semantic_original(operation, semantic)?;
+        let retained_operation = operation.retain()?;
         if retained_operation.identity()? != operation.identity()? {
             return Err(invalid("dispatch operation custody changed"));
         }
@@ -403,22 +408,7 @@ impl History {
                 ));
             }
             let directory = root.open_child(name)?;
-            let inventory = directory.entries(7)?;
-            if inventory.iter().any(|name| {
-                ![
-                    "authorization.nrt",
-                    "observation.nrt",
-                    "committed.nrt",
-                    "retired.nrt",
-                    "transaction",
-                    "replay.nrt",
-                    "carrier.nrt",
-                ]
-                .iter()
-                .any(|allowed| name == OsStr::new(allowed))
-            }) {
-                return Err(invalid("dispatch attempt contains unknown material"));
-            }
+            let inventory = attempt_inventory(&directory)?;
             let Some(authorization): Option<Authorization> =
                 read_record(&directory, "authorization.nrt")?
             else {
@@ -452,18 +442,6 @@ impl History {
             if let Some(prior) = attempts.last() {
                 validate_successor(&prior.authorization, &authorization)?;
             }
-            if dispatch.as_ref().is_some_and(|value| {
-                value.state == ReservationState::Reserved
-                    && usize::from(value.highest.ordinal) == index + 1
-            }) && (inventory.len() != 1
-                || inventory
-                    .first()
-                    .is_none_or(|name| name != "authorization.nrt"))
-            {
-                return Err(invalid(
-                    "reserved dispatch contains effects before publication",
-                ));
-            }
             let observation: Option<Observation> = read_record(&directory, "observation.nrt")?;
             if let Some(observation) = observation {
                 observation.validate(&authorization)?;
@@ -477,6 +455,13 @@ impl History {
                 commit,
                 retirement,
             };
+            attempt.validate_inventory(
+                &inventory,
+                dispatch.as_ref().is_some_and(|value| {
+                    value.state == ReservationState::Reserved
+                        && usize::from(value.highest.ordinal) == index + 1
+                }),
+            )?;
             if let Some(commit) = &attempt.commit {
                 let observed = attempt
                     .observation
@@ -497,24 +482,11 @@ impl History {
                 {
                     return Err(invalid("dispatch commit differs from original custody"));
                 }
-            } else if inventory.iter().any(|name| {
-                ["replay.nrt", "carrier.nrt"]
-                    .iter()
-                    .any(|later| name == OsStr::new(later))
-            }) {
-                return Err(invalid(
-                    "uncommitted dispatch contains native execution material",
-                ));
             }
             if let Some(retirement) = &attempt.retirement {
                 if retirement.authorization != attempt.digest()?
                     || retirement.successor == [0; 32]
                     || matches!(&retirement.kind, RetirementKind::Request { request_sha256 } if !valid_sha256(request_sha256))
-                    || inventory.iter().any(|name| {
-                        ["replay.nrt", "carrier.nrt"]
-                            .iter()
-                            .any(|later| name == OsStr::new(later))
-                    })
                 {
                     return Err(invalid(
                         "retired dispatch contains changed or execution material",
@@ -726,14 +698,109 @@ impl History {
     }
 
     fn require_current(&self) -> Result<()> {
+        retained_graph::validate(self)
+    }
+
+    // Only the complete retained-graph owner may omit predecessor descent here. Every local
+    // native handle, original record and before/after inventory check remains authoritative.
+    fn require_current_local(&self) -> Result<()> {
+        #[cfg(test)]
+        retained_graph::record_validation_visit(self)?;
+        // The original identity-aware handles remain live. Re-read their bounded canonical
+        // records one at a time instead of retaining another complete directory graph.
+        self.scope
+            .validate_local(&self.operation, self.purpose, self.semantic)?;
         self.operation.revalidate()?;
+        let operation_names = operation_inventory(&self.operation, self.purpose)?;
+        require_semantic_original(&self.operation, self.semantic)?;
+        self.require_metadata()?;
+        match &self.root {
+            None => {
+                if operation_names.iter().any(|name| name == "attempts") {
+                    return Err(invalid(
+                        "dispatch inventory changed during native operation",
+                    ));
+                }
+            }
+            Some(root) => {
+                root.revalidate()?;
+                let names = root.entries(MAX_ATTEMPTS)?;
+                if names.len() < self.attempts.len()
+                    || names.len() > self.attempts.len() + usize::from(self.empty_tail)
+                    || names
+                        .iter()
+                        .enumerate()
+                        .any(|(index, name)| name != OsStr::new(&format!("{:04}", index + 1)))
+                {
+                    return Err(invalid(
+                        "dispatch inventory changed during native operation",
+                    ));
+                }
+                for attempt in &self.attempts {
+                    attempt.directory.revalidate()?;
+                    let inventory = attempt_inventory(&attempt.directory)?;
+                    attempt.validate_inventory(
+                        &inventory,
+                        self.dispatch.as_ref().is_some_and(|value| {
+                            value.state == ReservationState::Reserved
+                                && value.highest.ordinal == attempt.ordinal()
+                        }),
+                    )?;
+                    attempt.verify_authorization()?;
+                    if read_record::<Observation>(&attempt.directory, "observation.nrt")?
+                        != attempt.observation
+                        || read_record::<Commit>(&attempt.directory, "committed.nrt")?
+                            != attempt.commit
+                        || read_record::<Retirement>(&attempt.directory, "retired.nrt")?
+                            != attempt.retirement
+                        || attempt_inventory(&attempt.directory)? != inventory
+                    {
+                        return Err(invalid(
+                            "retained dispatch metadata changed during native operation",
+                        ));
+                    }
+                    attempt.directory.revalidate()?;
+                }
+                // A Reserved prefix may have its last empty directory but no authorization.
+                // It is inspected transiently; Published custody can never use this branch.
+                if names.len() > self.attempts.len() {
+                    let tail = root.open_child(&names[self.attempts.len()])?;
+                    if !tail.entries(1)?.is_empty() {
+                        return Err(invalid("reserved dispatch empty tail changed"));
+                    }
+                    tail.revalidate()?;
+                }
+                if root.entries(MAX_ATTEMPTS)? != names {
+                    return Err(invalid("dispatch inventory changed during inspection"));
+                }
+                root.revalidate()?;
+            }
+        }
+        self.require_metadata()?;
+        require_semantic_original(&self.operation, self.semantic)?;
+        if operation_inventory(&self.operation, self.purpose)? != operation_names {
+            return Err(invalid(
+                "dispatch operation inventory changed during inspection",
+            ));
+        }
+        self.operation.revalidate()?;
+        self.scope
+            .validate_local(&self.operation, self.purpose, self.semantic)
+    }
+
+    // Re-read after a permitted local transition while keeping every original native handle
+    // alive through acquisition and identity comparison. Only then release the obsolete graph.
+    fn reread(self) -> Result<Self> {
+        self.operation.revalidate()?;
+        if let Some(root) = &self.root {
+            root.revalidate()?;
+        }
+        for attempt in &self.attempts {
+            attempt.directory.revalidate()?;
+        }
         let current = Self::read(&self.operation, self.purpose, self.semantic, &self.scope)?;
-        if self.dispatch != current.dispatch
-            || self.closing != current.closing
-            || self.closed != current.closed
-            || self.empty_tail != current.empty_tail
-            || self.attempts.len() != current.attempts.len()
-            || self
+        if (self.root.is_some()
+            && self
                 .root
                 .as_ref()
                 .map(PrivateDirectory::identity)
@@ -742,23 +809,39 @@ impl History {
                     .root
                     .as_ref()
                     .map(PrivateDirectory::identity)
-                    .transpose()?
+                    .transpose()?)
+            || current.attempts.len() < self.attempts.len()
+        {
+            return Err(invalid(
+                "dispatch custody changed across its local transition",
+            ));
+        }
+        for (before, after) in self.attempts.iter().zip(&current.attempts) {
+            before.directory.revalidate()?;
+            after.directory.revalidate()?;
+            if before.directory.identity()? != after.directory.identity()? {
+                return Err(invalid(
+                    "dispatch attempt custody changed across its local transition",
+                ));
+            }
+        }
+        if let Some(root) = &self.root {
+            root.revalidate()?;
+        }
+        self.operation.revalidate()?;
+        current.operation.revalidate()?;
+        drop(self);
+        Ok(current)
+    }
+
+    fn require_metadata(&self) -> Result<()> {
+        if read_record::<Dispatch>(&self.operation, "dispatch.nrt")? != self.dispatch
+            || read_record::<ClosurePlan>(&self.operation, "closing.nrt")? != self.closing
+            || read_record::<ClosureRecord>(&self.operation, "closed.nrt")? != self.closed
         {
             return Err(invalid(
                 "dispatch inventory changed during native operation",
             ));
-        }
-        for (before, after) in self.attempts.iter().zip(&current.attempts) {
-            if before.directory.identity()? != after.directory.identity()?
-                || before.authorization != after.authorization
-                || before.observation != after.observation
-                || before.commit != after.commit
-                || before.retirement != after.retirement
-            {
-                return Err(invalid(
-                    "retained dispatch metadata changed during native operation",
-                ));
-            }
         }
         Ok(())
     }
@@ -870,7 +953,7 @@ impl History {
             return Ok(None);
         };
         let root = match &self.root {
-            Some(root) => PrivateDirectory::open_exact(root.path())?,
+            Some(root) => root.retain()?,
             None => operation.create_child("attempts")?,
         };
         let name = format!("{:04}", old.highest.ordinal);
@@ -963,6 +1046,59 @@ impl History {
         };
         replace_dispatch(operation, self.dispatch.as_ref(), &reserved)
     }
+}
+
+fn operation_inventory(
+    operation: &PrivateDirectory,
+    purpose: Purpose,
+) -> Result<Vec<std::ffi::OsString>> {
+    let enrollment = scope::is_enrollment(purpose);
+    let names = operation.entries(6)?;
+    if names.iter().any(|name| {
+        name != "original.nrt"
+            && name != "dispatch.nrt"
+            && name != "attempts"
+            && !(enrollment
+                && ["reserved.nrt", "closing.nrt", "closed.nrt"]
+                    .iter()
+                    .any(|allowed| name == *allowed))
+    }) {
+        return Err(invalid("dispatch operation contains unknown material"));
+    }
+    Ok(names)
+}
+
+fn require_semantic_original(operation: &PrivateDirectory, semantic: [u8; 32]) -> Result<()> {
+    let intent = read_optional(
+        operation,
+        "original.nrt",
+        super::MAX_CHECKPOINT_BYTES + 3 * 1024 * 1024,
+    )?
+    .ok_or_else(|| invalid("dispatch lost its original semantic intent"))?;
+    if *Hash::new(&intent).as_ref() != semantic {
+        return Err(invalid("dispatch semantic original was changed"));
+    }
+    Ok(())
+}
+
+fn attempt_inventory(directory: &PrivateDirectory) -> Result<Vec<std::ffi::OsString>> {
+    let names = directory.entries(7)?;
+    if names.iter().any(|name| {
+        ![
+            "authorization.nrt",
+            "observation.nrt",
+            "committed.nrt",
+            "retired.nrt",
+            "transaction",
+            "replay.nrt",
+            "carrier.nrt",
+        ]
+        .iter()
+        .any(|allowed| name == OsStr::new(allowed))
+    }) {
+        return Err(invalid("dispatch attempt contains unknown material"));
+    }
+    Ok(names)
 }
 
 fn replace_dispatch(

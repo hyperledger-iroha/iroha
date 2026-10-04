@@ -9284,7 +9284,7 @@ class TriggerCompletionList:
 
 @dataclass(frozen=True)
 class SumeragiEvidencePenaltyDetails:
-    """Committed block height for an applied or cancelled penalty."""
+    """Canonical block height that applied the consensus penalty."""
 
     height: int
 
@@ -9305,18 +9305,9 @@ class SumeragiEvidenceAppliedPenaltyStatus:
     details: SumeragiEvidencePenaltyDetails
 
 
-@dataclass(frozen=True)
-class SumeragiEvidenceCancelledPenaltyStatus:
-    """Penalty lifecycle state for evidence cancelled in a committed block."""
-
-    status: Literal["cancelled"]
-    details: SumeragiEvidencePenaltyDetails
-
-
 SumeragiEvidencePenaltyStatus = Union[
     SumeragiEvidencePendingPenaltyStatus,
     SumeragiEvidenceAppliedPenaltyStatus,
-    SumeragiEvidenceCancelledPenaltyStatus,
 ]
 
 
@@ -9338,8 +9329,8 @@ def _parse_sumeragi_evidence_penalty_status(
         if payload["details"] is not None:
             raise TypeError(f"{context}.details must be null when status is pending")
         return SumeragiEvidencePendingPenaltyStatus(status="pending", details=None)
-    if status not in {"applied", "cancelled"}:
-        raise ValueError(f"{context}.status must be pending, applied, or cancelled")
+    if status != "applied":
+        raise ValueError(f"{context}.status must be pending or applied")
     details = payload["details"]
     if not isinstance(details, Mapping):
         raise TypeError(f"{context}.details must be an object")
@@ -9351,13 +9342,8 @@ def _parse_sumeragi_evidence_penalty_status(
     typed_details = SumeragiEvidencePenaltyDetails(
         height=_require_u64(details["height"], f"{context}.details.height")
     )
-    if status == "applied":
-        return SumeragiEvidenceAppliedPenaltyStatus(
-            status="applied",
-            details=typed_details,
-        )
-    return SumeragiEvidenceCancelledPenaltyStatus(
-        status="cancelled",
+    return SumeragiEvidenceAppliedPenaltyStatus(
+        status="applied",
         details=typed_details,
     )
 
@@ -11440,7 +11426,6 @@ __all__ = [
     "SumeragiEvidencePenaltyDetails",
     "SumeragiEvidencePendingPenaltyStatus",
     "SumeragiEvidenceAppliedPenaltyStatus",
-    "SumeragiEvidenceCancelledPenaltyStatus",
     "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",

@@ -10,7 +10,7 @@ env:
   DEFAULTS_DIR: defaults
   IROHA_PROFILE: profiling
   IROHA_RUSTFLAGS: -C force-frame-pointers=on
-  IROHA_FEATURES: profiling,irohad/ivm-cuda
+  IROHA_FEATURES: profiling
   IROHA_CARGOFLAGS: -Z build-std
   IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}
   IROHA_RUST_BUILDER_IMAGE: ${{ vars.IROHA_RUST_BUILDER_IMAGE }}
@@ -57,7 +57,6 @@ jobs:
           load: true
           tags: iroha-release-candidate:${{ env.TAG }}
           build-args: |
-            "IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}"
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
             "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
           cache-from: type=gha
@@ -158,7 +157,6 @@ jobs:
           tags: iroha-release-candidate:${{ env.TAG }}-${{ env.IROHA_PROFILE }}
           labels: commit=${{ github.sha }}
           build-args: |
-            "IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}"
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
             "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
             "PROFILE=${{ env.IROHA_PROFILE }}"

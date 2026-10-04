@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use ff::{Field, PrimeField};
 use group::Curve;
-use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, poseidon::PoseidonField};
+use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, PastaField, poseidon::PoseidonField};
 use rand_chacha::ChaCha20Rng;
 use rand_core_06::SeedableRng;
 
@@ -23,17 +23,15 @@ use super::{
 };
 use crate::{
     check::{CheckMode, check_circuit},
-    cs::{InstanceModeV1, ProofSuffixV1, TranscriptV1},
+    cs::ProofSuffixV1,
     frontend::Circuit,
-    pcs::ipa::{
-        IpaError, commit::Secrecy, commit::commit_lagrange, evaluate_polynomial,
-    },
+    pcs::ipa::{IpaError, commit::Secrecy, commit::commit_lagrange, evaluate_polynomial},
     protocol::{Protocol, check_zero_knowledge_budget, evaluate_expression, rotate},
     test_circuits::{
         Arithmetic, BUDGET, CHOICES, Choice, Forgeable, K, Lookups, Permutations, Setup, setup,
     },
     transcript::MESSAGE_BYTES,
-    verifier::{VerifyError, verify_full, verify_full_from_bytes, verify_succinct},
+    verifier::{VerifyError, accumulate_succinct, verify_full, verify_full_from_bytes},
 };
 
 const ARITHMETIC: Arithmetic = Arithmetic {
@@ -80,7 +78,7 @@ where
             Ok(()),
             "{choice:?}"
         );
-        let succinct = verify_succinct(
+        let succinct = accumulate_succinct(
             &setup.params,
             setup.pk.binding(),
             setup.pk.vk(),
@@ -90,7 +88,10 @@ where
         );
         if choice.2 == ProofSuffixV1::FoldedGenerator {
             let accumulator = succinct.expect("succinct");
-            assert_eq!(accumulator.transcript_repr(), setup.pk.vk().transcript_repr());
+            assert_eq!(
+                accumulator.transcript_repr(),
+                setup.pk.vk().transcript_repr()
+            );
             assert_eq!(accumulator.decide(&setup.params, BUDGET), Ok(()));
         } else {
             assert_eq!(succinct.err(), Some(VerifyError::SuffixRequired));
@@ -124,11 +125,7 @@ fn permutation_heavy_proofs_verify_on_both_curves() {
 }
 
 /// The checker's verdict and the proof's verdict for one witness.
-fn verdicts<C, Ci>(
-    setup: &Setup<C>,
-    circuit: &Ci,
-    instances: &[Vec<C::ScalarExt>],
-) -> (bool, bool)
+fn verdicts<C, Ci>(setup: &Setup<C>, circuit: &Ci, instances: &[Vec<C::ScalarExt>]) -> (bool, bool)
 where
     C: PastaCurve,
     C::ScalarExt: PoseidonField,
@@ -227,19 +224,27 @@ where
 fn proofs_do_not_depend_on_the_thread_count() {
     thread_independent::<Ep, _>(&ARITHMETIC, &ARITHMETIC.instances::<Fq>(), CHOICES[0]);
     thread_independent::<Eq, _>(&LOOKUPS, &[], CHOICES[1]);
-    thread_independent::<Ep, _>(
-        &PERMUTATIONS,
-        &PERMUTATIONS.instances::<Fq>(),
-        CHOICES[3],
-    );
+    thread_independent::<Ep, _>(&PERMUTATIONS, &PERMUTATIONS.instances::<Fq>(), CHOICES[3]);
 }
 
 #[test]
 fn the_zero_knowledge_budget_holds_for_every_relation() {
     let descriptors = [
-        setup::<Ep, _>(&ARITHMETIC, CHOICES[0]).pk.binding().descriptor().clone(),
-        setup::<Eq, _>(&LOOKUPS, CHOICES[1]).pk.binding().descriptor().clone(),
-        setup::<Ep, _>(&PERMUTATIONS, CHOICES[2]).pk.binding().descriptor().clone(),
+        setup::<Ep, _>(&ARITHMETIC, CHOICES[0])
+            .pk
+            .binding()
+            .descriptor()
+            .clone(),
+        setup::<Eq, _>(&LOOKUPS, CHOICES[1])
+            .pk
+            .binding()
+            .descriptor()
+            .clone(),
+        setup::<Ep, _>(&PERMUTATIONS, CHOICES[2])
+            .pk
+            .binding()
+            .descriptor()
+            .clone(),
     ];
     for descriptor in &descriptors {
         let protocol = Protocol::new(descriptor).expect("protocol");
@@ -304,9 +309,8 @@ fn recording_derivation(
 ) -> impl FnOnce(&[u8; 32]) -> Result<ChaCha20Rng, ()> + Send {
     move |context: &[u8; 32]| {
         log.lock().map_err(|_| ())?.push(*context);
-        let key = crate::cs::descriptor::blake2b_personal::<32>(b"recovery-test-v1", &[
-            &seed, context,
-        ]);
+        let key =
+            crate::cs::descriptor::blake2b_personal::<32>(b"recovery-test-v1", &[&seed, context]);
         Ok(ChaCha20Rng::from_seed(key))
     }
 }
@@ -326,7 +330,7 @@ fn recovery_streams_bind_the_witness() {
             circuit,
             &[],
             ProverRandomness::recovery(recording_derivation([9; 32], Arc::clone(&log))),
-            &ProverConfig::default(),
+            ProverConfig::default(),
         )
         .expect("proof")
     };
@@ -356,10 +360,110 @@ fn recovery_streams_bind_the_witness() {
             &LOOKUPS,
             &[],
             ProverRandomness::recovery(|_: &[u8; 32]| Err::<ChaCha20Rng, ()>(())),
-            &ProverConfig::default(),
+            ProverConfig::default(),
         ),
         Err(ProverError::RecoveryStream)
     );
+}
+
+/// A stream whose every read fails.
+struct FailingRng;
+
+impl rand_core_06::RngCore for FailingRng {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        dest.fill(0);
+    }
+    fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
+        Err(rand_core_06::Error::from(
+            core::num::NonZeroU32::new(rand_core_06::Error::CUSTOM_START).expect("nonzero"),
+        ))
+    }
+}
+
+impl rand_core_06::CryptoRng for FailingRng {}
+
+/// S8 regression (spec section 10): a recovery derivation that ignores its
+/// context and returns one constant stream cannot make two witnesses share
+/// blinds, because this crate keys the stream it proves with from the
+/// context itself. With the context only advisory, both proofs below would
+/// reuse every blind (and `C_a - C_b` would be an unblinded commitment to the
+/// witness difference).
+#[test]
+fn a_constant_recovery_derivation_still_separates_witnesses() {
+    let setup = setup::<Ep, _>(&LOOKUPS, CHOICES[0]);
+    let other = Lookups {
+        offset: 4,
+        ..LOOKUPS
+    };
+    let prove = |circuit: &Lookups| {
+        prove_circuit(
+            &setup.params,
+            &setup.pk,
+            circuit,
+            &[],
+            ProverRandomness::recovery(|_: &[u8; 32]| Ok::<_, ()>(ChaCha20Rng::from_seed([0; 32]))),
+            ProverConfig::default(),
+        )
+        .expect("proof")
+    };
+    let first = prove(&LOOKUPS);
+    let again = prove(&LOOKUPS);
+    let different = prove(&other);
+    assert_eq!(first, again, "recovery stays deterministic per witness");
+    assert_eq!(setup.verify(&[], &first), Ok(()));
+    assert_eq!(setup.verify(&[], &different), Ok(()));
+    // R is drawn at a fixed stream position, so equal streams would give
+    // equal R commitments; the bound streams differ. So does every blinded
+    // commitment and evaluation of the two proofs.
+    let protocol = Protocol::new(setup.pk.binding().descriptor()).expect("protocol");
+    let shape = protocol.shape();
+    let r_index = shape.num_advice + 3 * shape.lookups + shape.permutation_sets;
+    assert_ne!(messages(&first)[r_index], messages(&different)[r_index]);
+    for (index, (a, b)) in messages(&first)
+        .iter()
+        .zip(messages(&different))
+        .enumerate()
+    {
+        assert_ne!(*a, b, "message {index}");
+    }
+    // A stream that fails is a typed error, not a fallback.
+    assert_eq!(
+        prove_circuit(
+            &setup.params,
+            &setup.pk,
+            &LOOKUPS,
+            &[],
+            ProverRandomness::recovery(|_: &[u8; 32]| Ok::<_, ()>(FailingRng)),
+            ProverConfig::default(),
+        ),
+        Err(ProverError::RecoveryStream)
+    );
+}
+
+#[test]
+fn recovery_stream_keys_bind_the_drawn_bytes_and_the_context() {
+    // Python: hashlib.blake2b(bytes([1] * 32) + bytes([2] * 32),
+    // digest_size=32, person=b"PIPA-v1-RecovKey").
+    let key = recovery_stream_key(&[1; 32], &[2; 32]);
+    let hex = key.iter().fold(String::new(), |mut out, byte| {
+        use core::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+        out
+    });
+    assert_eq!(
+        hex,
+        "ad11af26d312c03851c876361564593989fa05d1918cf760b9d890e254d781bc"
+    );
+    assert_ne!(recovery_stream_key(&[1; 32], &[3; 32]), key);
+    assert_ne!(recovery_stream_key(&[3; 32], &[2; 32]), key);
+    // Distinct from the context persona.
+    assert_ne!(recovery_context(&[1; 32], &[2; 32]), key);
 }
 
 #[test]
@@ -373,7 +477,7 @@ fn production_randomness_sources_prove() {
             &ARITHMETIC,
             &instances,
             randomness,
-            &ProverConfig::default(),
+            ProverConfig::default(),
         )
         .expect("proof")
     };
@@ -414,8 +518,7 @@ fn the_prover_rejects_mismatched_inputs() {
         })
     );
     assert_eq!(
-        Witness::<Fq>::from_columns(&setup.pk, vec![vec![Fq::ZERO; 3]; 3], instances.clone())
-            .err(),
+        Witness::<Fq>::from_columns(&setup.pk, vec![vec![Fq::ZERO; 3]; 3], instances.clone()).err(),
         Some(ProverError::WitnessShape {
             expected: 64,
             found: 3
@@ -439,7 +542,7 @@ fn the_prover_rejects_mismatched_inputs() {
             &setup.pk,
             &witness,
             ProverRandomness::fixed_seed_for_tests([1; 32]),
-            &ProverConfig::default(),
+            ProverConfig::default(),
         ),
         Err(ProverError::ParamsMismatch)
     );
@@ -480,7 +583,7 @@ fn oracle_mode_binds_the_injected_repr() {
         &setup.pk,
         &witness,
         ProverRandomness::fixed_seed_for_tests([4; 32]),
-        &ProverConfig::default(),
+        ProverConfig::default(),
         vendored,
     )
     .expect("proof");
@@ -577,10 +680,11 @@ fn equal_advice_commitments_with_different_evaluations_are_rejected() {
             gamma,
             y,
         },
+        &crate::protocol::AllTerms,
     )
     .expect("quotient");
-    let quotient = commit_quotient(params, pk, &shape, h, &mut rng, &mut transcript, BUDGET)
-        .expect("pieces");
+    let quotient =
+        commit_quotient(params, pk, &shape, &h, &mut rng, &mut transcript, BUDGET).expect("pieces");
     let x = transcript.squeeze_challenge();
     let xn = x.pow_vartime([shape.n as u64]);
     let combined = quotient.combine(xn);
@@ -602,9 +706,8 @@ fn equal_advice_commitments_with_different_evaluations_are_rejected() {
     let honest = evaluate_polynomial(&poly, x);
     // The gate is s (a - b - 1); solve s (a* - b - 1) = h(x) (x^n - 1).
     let selector = fixed_evals[0];
-    let forged = honest
-        + Fq::ONE
-        + h_at_x * (xn - Fq::ONE) * selector.invert().expect("nonzero selector");
+    let forged =
+        honest + Fq::ONE + h_at_x * (xn - Fq::ONE) * selector.invert().expect("nonzero selector");
     assert_ne!(forged, honest);
     let advice_evals = [forged, honest];
     assert_eq!(
@@ -642,16 +745,348 @@ fn equal_advice_commitments_with_different_evaluations_are_rejected() {
     );
 }
 
+/// How [`Forged`] builds the permuted columns of its target lookup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ForgedStrategy {
+    /// `A' = sort(A)`, `S' = sort(S)` over the usable rows.
+    Sorted,
+    /// `A' = sort(A)` and `S' = A'`.
+    TableCopiesInput,
+}
+
+/// The usable rows `(A, S, A', S')` of a forged lookup.
+type ForgedColumns<F> = (Vec<F>, Vec<F>, Vec<F>, Vec<F>);
+
+/// A malicious lookup permutation: lookup `target` gets forged columns, every
+/// other lookup the vendored permutation. Padding rows are drawn like the
+/// vendored ones.
+struct Forged<F> {
+    target: usize,
+    strategy: ForgedStrategy,
+    recorded: Vec<ForgedColumns<F>>,
+}
+
+impl<F: PastaField> super::lookup::LookupPermutation<F> for Forged<F> {
+    fn permute<R: rand_core_06::RngCore>(
+        &mut self,
+        input: &[F],
+        table: &[F],
+        usable_rows: usize,
+        n: usize,
+        lookup: usize,
+        rng: &mut R,
+    ) -> Result<(Vec<F>, Vec<F>), ProverError> {
+        if lookup != self.target {
+            return super::lookup::VendoredPermutation.permute(
+                input,
+                table,
+                usable_rows,
+                n,
+                lookup,
+                rng,
+            );
+        }
+        let mut forged_input = input[..usable_rows].to_vec();
+        forged_input.sort_unstable();
+        let mut forged_table = match self.strategy {
+            ForgedStrategy::Sorted => {
+                let mut sorted = table[..usable_rows].to_vec();
+                sorted.sort_unstable();
+                sorted
+            }
+            ForgedStrategy::TableCopiesInput => forged_input.clone(),
+        };
+        self.recorded.push((
+            input[..usable_rows].to_vec(),
+            table[..usable_rows].to_vec(),
+            forged_input.clone(),
+            forged_table.clone(),
+        ));
+        forged_input.extend(random_values::<F, _>(rng, n - usable_rows));
+        forged_table.extend(random_values::<F, _>(rng, n - usable_rows));
+        Ok((forged_input, forged_table))
+    }
+}
+
+/// A constraint filter that omits the listed terms.
+struct Omit(Vec<crate::protocol::ConstraintTerm>);
+
+impl crate::protocol::ConstraintFilter for Omit {
+    fn keeps(&self, term: crate::protocol::ConstraintTerm) -> bool {
+        !self.0.contains(&term)
+    }
+}
+
+/// Proves `circuit` with the real prover except for lookup `target`, whose
+/// columns `strategy` forges and whose violated constraints `omit` leaves out
+/// of the quotient (so the forged `h` is a polynomial). Returns the proof,
+/// the forged columns and the setup.
+fn forged_lookup_proof<C: PastaCurve>(
+    setup: &Setup<C>,
+    circuit: &Lookups,
+    target: usize,
+    strategy: ForgedStrategy,
+    omit: &Omit,
+) -> (Vec<u8>, Vec<ForgedColumns<C::ScalarExt>>)
+where
+    C::ScalarExt: PoseidonField,
+{
+    let witness = Witness::from_circuit(&setup.pk, circuit, &[]).expect("witness");
+    let mut forged = Forged {
+        target,
+        strategy,
+        recorded: Vec::new(),
+    };
+    let proof = prove(
+        &setup.params,
+        &setup.pk,
+        &witness,
+        ProverRandomness::fixed_seed_for_tests([21; 32]),
+        ProverConfig::default(),
+        Mode {
+            oracle: false,
+            transcript_repr: *setup.pk.vk().transcript_repr(),
+        },
+        &mut forged,
+        omit,
+    )
+    .expect("the forged permutation does not refuse");
+    let protocol = Protocol::new(setup.pk.binding().descriptor()).expect("protocol");
+    assert_eq!(proof.len(), protocol.proof_length());
+    (proof, forged.recorded)
+}
+
+/// The lookup constraints that forged usable columns `(A, S, A', S')`
+/// violate: `Start` when `A'_0 != S'_0`; `Step` when that holds or some
+/// usable row has `A'_i != S'_i` and `A'_i != A'_{i-1}`; `Last` when `A'` or
+/// `S'` is not a permutation of `A` or `S` (the grand product does not close
+/// at `l_last`). `First` and `Product` hold by construction of `z`.
+fn violated_lookup_terms<F: Ord + Clone>(
+    lookup: usize,
+    (input, table, forged_input, forged_table): &ForgedColumns<F>,
+) -> Vec<crate::protocol::ConstraintTerm> {
+    use crate::protocol::{ConstraintTerm, LookupConstraint};
+    let start = forged_input[0] != forged_table[0];
+    let step = start
+        || (1..forged_input.len()).any(|row| {
+            forged_input[row] != forged_table[row] && forged_input[row] != forged_input[row - 1]
+        });
+    let last = different_multisets(input, forged_input) || different_multisets(table, forged_table);
+    [
+        (start, LookupConstraint::Start),
+        (step, LookupConstraint::Step),
+        (last, LookupConstraint::Last),
+    ]
+    .into_iter()
+    .filter(|(violated, _)| *violated)
+    .map(|(_, part)| ConstraintTerm::Lookup { lookup, part })
+    .collect()
+}
+
+/// Whether two columns hold different multisets.
+fn different_multisets<F: Ord + Clone>(left: &[F], right: &[F]) -> bool {
+    let mut left = left.to_vec();
+    let mut right = right.to_vec();
+    left.sort_unstable();
+    right.sort_unstable();
+    left != right
+}
+
+/// One malicious-prover case: forges lookup `target` with `strategy`,
+/// requires the violated terms to be `expected`, and checks that the real
+/// verifier rejects with `OpeningFailed` while a verifier that omits exactly
+/// those terms accepts.
+fn forged_lookup_case<C: PastaCurve>(
+    circuit: &Lookups,
+    choice: Choice,
+    target: usize,
+    strategy: ForgedStrategy,
+    expected: &[crate::protocol::LookupConstraint],
+) where
+    C::ScalarExt: PoseidonField,
+{
+    let label = format!("{strategy:?} lookup {target}, {choice:?}");
+    let setup = setup::<C, _>(circuit, choice);
+    // Pass 1 records the forged columns (theta, and so the columns, depend
+    // only on the advice commitments and the seed).
+    let (_, recorded) = forged_lookup_proof(&setup, circuit, target, strategy, &Omit(Vec::new()));
+    let violated = violated_lookup_terms(target, &recorded[0]);
+    let expected: Vec<_> = expected
+        .iter()
+        .map(|part| crate::protocol::ConstraintTerm::Lookup {
+            lookup: target,
+            part: *part,
+        })
+        .collect();
+    assert_eq!(violated, expected, "{label}");
+    // Pass 2: the quotient leaves the violated terms out.
+    let omit = Omit(violated);
+    let (proof, again) = forged_lookup_proof(&setup, circuit, target, strategy, &omit);
+    assert_eq!(again, recorded, "{label}: deterministic columns");
+    assert_eq!(
+        setup.verify(&[], &proof),
+        Err(VerifyError::Ipa(IpaError::OpeningFailed)),
+        "{label}"
+    );
+    assert_eq!(
+        crate::verifier::verify_full_filtered(
+            &setup.params,
+            setup.pk.binding(),
+            setup.pk.vk(),
+            &[],
+            &proof,
+            &omit,
+        ),
+        Ok(()),
+        "{label}: without the violated terms the forgery would pass"
+    );
+}
+
+/// Malicious prover for the halo2 permuted lookup (spec section 2,
+/// "Lookup"; spec section 15). The vendored permutation refuses an input
+/// missing from its table, so the prover-side refusal never exercises the
+/// verifier. Here the prover skips it, commits forged `A'`/`S'`, computes
+/// `z` and the opening with the real prover and leaves exactly the violated
+/// constraints out of its quotient, so `h` is a genuine polynomial. The
+/// verifier must reject with `OpeningFailed`, and a verifier without those
+/// constraints would accept: the rejection is attributable to them alone.
+///
+/// - An input missing from its table (`out_of_range`: `x + 1 = 16` fails
+///   the `range` lookup only; the square gate and the pair lookup hold) with
+///   `A' = sort(A)` and `S' = sort(S)`: both are permutations, so the grand
+///   product closes and only `Step` is violated.
+/// - The same input with `S' = A' = sort(A)`: `Start` and `Step` vanish
+///   identically and `S'` is not a permutation of `S`, so only `Last`
+///   (`l_last (z^2 - z)`) is violated.
+/// - An honest witness (every input in its table) with sorted columns: only
+///   `Step` is violated; it checks the positional structure, not only
+///   membership.
+#[test]
+fn forged_lookup_permutations_are_rejected_by_the_verifier() {
+    use crate::protocol::LookupConstraint::{Last, Step};
+    let missing = Lookups {
+        out_of_range: true,
+        ..LOOKUPS
+    };
+    // The honest prover refuses the missing input before any message.
+    assert_eq!(
+        setup::<Ep, _>(&missing, CHOICES[0]).prove(&missing, &[], 21),
+        Err(ProverError::LookupInputMissing { lookup: 1 })
+    );
+    // Harness control: forging and omitting nothing yields an accepted proof.
+    let control = setup::<Ep, _>(&LOOKUPS, CHOICES[0]);
+    let (proof, recorded) = forged_lookup_proof(
+        &control,
+        &LOOKUPS,
+        usize::MAX,
+        ForgedStrategy::Sorted,
+        &Omit(Vec::new()),
+    );
+    assert!(recorded.is_empty());
+    assert_eq!(control.verify(&[], &proof), Ok(()));
+
+    for choice in [CHOICES[0], CHOICES[1]] {
+        forged_lookup_case::<Ep>(&missing, choice, 1, ForgedStrategy::Sorted, &[Step]);
+        forged_lookup_case::<Eq>(
+            &missing,
+            choice,
+            1,
+            ForgedStrategy::TableCopiesInput,
+            &[Last],
+        );
+        forged_lookup_case::<Ep>(&LOOKUPS, choice, 0, ForgedStrategy::Sorted, &[Step]);
+    }
+}
+
+/// The circuit check compares copies through the key's copy digest: a key
+/// whose copies differ only by one extra usable-row copy refuses the
+/// circuit, the matching key accepts it.
+#[test]
+fn witnesses_are_checked_against_the_key_copy_digest() {
+    let setup = setup::<Ep, _>(&ARITHMETIC, CHOICES[0]);
+    let instances = ARITHMETIC.instances::<Fq>();
+    assert!(Witness::from_circuit(&setup.pk, &ARITHMETIC, &instances).is_ok());
+    let synthesized = crate::frontend::synthesize(&ARITHMETIC, K, None).expect("synthesize");
+    let tables = synthesized.tables;
+    let mut copies = tables.permutation().clone();
+    let column = copies.columns()[0];
+    copies
+        .copy(column, 0, column, tables.usable_rows() - 1)
+        .expect("in the domain");
+    let other = crate::keys::keygen_from_tables(
+        &setup.params,
+        synthesized.cs,
+        tables.fixed().to_vec(),
+        tables.selectors().to_vec(),
+        &copies,
+        &crate::test_circuits::keygen_config(CHOICES[0]),
+    )
+    .expect("pk");
+    assert_eq!(other.binding(), setup.pk.binding());
+    assert_ne!(other.copy_digest(), setup.pk.copy_digest());
+    assert_eq!(
+        Witness::from_circuit(&other, &ARITHMETIC, &instances).err(),
+        Some(ProverError::CircuitMismatch)
+    );
+}
+
+/// The digests stream exactly the documented bytes (spec section 10).
+#[test]
+fn witness_and_statement_digests_stream_the_documented_bytes() {
+    let setup = setup::<Ep, _>(&ARITHMETIC, CHOICES[0]);
+    let instances = ARITHMETIC.instances::<Fq>();
+    let witness = Witness::from_circuit(&setup.pk, &ARITHMETIC, &instances).expect("witness");
+    let usable = Protocol::new(setup.pk.binding().descriptor())
+        .expect("protocol")
+        .shape()
+        .usable_rows;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&3_u32.to_le_bytes());
+    bytes.extend_from_slice(&u32::try_from(usable).expect("small").to_le_bytes());
+    for column in witness.advice() {
+        for value in &column[..usable] {
+            bytes.extend_from_slice(&value.to_repr());
+        }
+    }
+    assert_eq!(
+        witness.digest(usable),
+        crate::cs::descriptor::blake2b_personal::<32>(WITNESS_PERSONA, &[&bytes])
+    );
+    let repr = Fq::from(5);
+    let mut bytes = vec![7_u8; 32];
+    bytes.extend_from_slice(&repr.to_repr());
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    bytes.extend_from_slice(&2_u32.to_le_bytes());
+    for value in &instances[0] {
+        bytes.extend_from_slice(&value.to_repr());
+    }
+    assert_eq!(
+        statement_digest(&[7; 32], &repr, &instances),
+        crate::cs::descriptor::blake2b_personal::<32>(STATEMENT_PERSONA, &[&bytes])
+    );
+}
+
 #[test]
 fn statement_digests_frame_the_instances() {
     let digest = [3_u8; 32];
     let repr = Fq::from(5);
     let base = statement_digest(&digest, &repr, &[vec![Fq::ONE], vec![]]);
-    assert_ne!(base, statement_digest(&digest, &repr, &[vec![], vec![Fq::ONE]]));
-    assert_ne!(base, statement_digest(&digest, &(repr + Fq::ONE), &[vec![Fq::ONE], vec![]]));
-    assert_eq!(base, statement_digest(&digest, &repr, &[vec![Fq::ONE], vec![]]));
-    assert_ne!(recovery_context(&[1; 32], &[2; 32]), recovery_context(&[2; 32], &[1; 32]));
-    let _ = Fq::from_repr([0; 32]);
+    assert_ne!(
+        base,
+        statement_digest(&digest, &repr, &[vec![], vec![Fq::ONE]])
+    );
+    assert_ne!(
+        base,
+        statement_digest(&digest, &(repr + Fq::ONE), &[vec![Fq::ONE], vec![]])
+    );
+    assert_eq!(
+        base,
+        statement_digest(&digest, &repr, &[vec![Fq::ONE], vec![]])
+    );
+    assert_ne!(
+        recovery_context(&[1; 32], &[2; 32]),
+        recovery_context(&[2; 32], &[1; 32])
+    );
 }
 
 #[test]
@@ -671,9 +1106,10 @@ fn errors_display_their_cause() {
     }
     assert_eq!(
         ProverError::from(CsError::Overflow),
-        ProverError::Synthesis(frontend::Error::ConstraintSystem(Box::new(CsError::Overflow)))
+        ProverError::Synthesis(frontend::Error::ConstraintSystem(Box::new(
+            CsError::Overflow
+        )))
     );
-    let _ = (InstanceModeV1::Direct, TranscriptV1::Blake2bChallenge255);
 }
 
 /// Prove and verify timings of the arithmetic chain filling the usable rows
@@ -716,7 +1152,7 @@ fn measure_prove_and_verify() {
                         &pk,
                         &witness,
                         ProverRandomness::fixed_seed_for_tests([1; 32]),
-                        &ProverConfig::default(),
+                        ProverConfig::default(),
                     )
                 })
                 .expect("proof");

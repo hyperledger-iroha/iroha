@@ -236,6 +236,9 @@ mod imp {
         if !cuda_policy_allows_attempt() {
             return false;
         }
+        if !crate::cuda_artifact::eligible() {
+            return false;
+        }
         match kernel {
             Kernel::BnAdd | Kernel::BnSub | Kernel::BnMul => super::bn254_batches::admit(kernel),
             Kernel::AesEnc | Kernel::AesDec | Kernel::AesEncFused | Kernel::AesDecFused => {

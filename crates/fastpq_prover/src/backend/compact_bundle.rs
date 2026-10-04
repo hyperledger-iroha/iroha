@@ -1759,3 +1759,6 @@ mod tests {
         );
     }
 }
+
+#[path = "compact_bundle/execution_effect.rs"]
+pub(super) mod execution_effect;

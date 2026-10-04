@@ -97,6 +97,17 @@ fn original_checkpoint_enclosing_refusal_keeps_the_prepared_owner_and_same_sourc
     let restored = &mut *owner;
     restored.claim.open_existing().unwrap();
     restored.phase = Phase::RestoringGeneration;
+    assert!(
+        restored.original_publications[0]
+            .as_ref()
+            .unwrap()
+            .belongs_to(&budget)
+    );
+    assert!(
+        restored.original_publications[1..]
+            .iter()
+            .all(Option::is_none)
+    );
     let (_, head) = restored
         .durable
         .load_generation(restored.claim.read_directory().unwrap())
@@ -117,15 +128,17 @@ fn original_checkpoint_enclosing_refusal_keeps_the_prepared_owner_and_same_sourc
         )
         .unwrap();
     let public_limits = norito::canonical_decode_limits(restored.durable.public_source().len());
-    restored
-        .original_publication
+    restored.original_publications[0]
+        .as_mut()
+        .unwrap()
         .decode(restored.durable.public_source(), public_limits)
         .unwrap();
     let receiver = std::ptr::from_ref(&*restored);
     let private_pointer = restored.durable.private_source().as_ptr();
     let public_pointer = restored.durable.public_source().as_ptr();
-    let original_rows = restored
-        .original_publication
+    let original_rows = restored.original_publications[0]
+        .as_ref()
+        .unwrap()
         .publication()
         .unwrap()
         .recipient_keys
@@ -134,7 +147,11 @@ fn original_checkpoint_enclosing_refusal_keeps_the_prepared_owner_and_same_sourc
     let mut noncanonical = restored.durable.public_source().to_vec();
     noncanonical.push(0);
     let canonical_error = norito::verify_exact_canonical_frame(
-        restored.original_publication.publication().unwrap(),
+        restored.original_publications[0]
+            .as_ref()
+            .unwrap()
+            .publication()
+            .unwrap(),
         &noncanonical,
     )
     .unwrap_err();
@@ -167,7 +184,11 @@ fn original_checkpoint_enclosing_refusal_keeps_the_prepared_owner_and_same_sourc
         with_decode_limits_scope(norito::DecodeLimits::new(0, 0, 0, 0, 0), || {
             prepared.restore_generated(
                 &context,
-                restored.original_publication.publication().unwrap(),
+                restored.original_publications[0]
+                    .as_ref()
+                    .unwrap()
+                    .publication()
+                    .unwrap(),
                 restored.durable.public_source(),
                 restored.durable.private_source(),
                 &restored.signer,
@@ -189,8 +210,9 @@ fn original_checkpoint_enclosing_refusal_keeps_the_prepared_owner_and_same_sourc
     assert_eq!(restored.durable.private_source().as_ptr(), private_pointer);
     assert_eq!(Hash::new(restored.durable.private_source()), source_hash);
     assert_eq!(
-        restored
-            .original_publication
+        restored.original_publications[0]
+            .as_ref()
+            .unwrap()
             .publication()
             .unwrap()
             .recipient_keys

@@ -322,6 +322,22 @@ device-protected context. It cannot detect a replaced rules attribute. The retur
 handle has no public operation: only the Rust provider's role-checked signers reach
 the payment key through it.
 
+### Android Keystore existence decisions
+
+`KeyStore.containsAlias`, `getEntry`, `aliases`, `isKeyEntry` and `getCertificate*`
+report every Keystore error as an absent alias (AOSP `AndroidKeyStoreSpi`), and
+generating under an occupied alias replaces its key (keystore2 `rebind_alias`;
+keystore1 deletes the alias first). `client-android` therefore decides existence
+only through `KeyStore.getKey(alias, null)`: a key is present, null is absent and
+any throw stops the call. Only keystore2 (API 31+) makes that null definitive, so
+`KagemushaAndroidHardwareAppKeyStoreV1` (issue, recovery and signing), the KeyMint
+and Pixel 6 one-use diagnostics, and `SystemAndroidKeystoreBackend` refuse below
+API 31. There `KagemushaAndroidHardwareAppKeyStoreV1.isPlatformApiAvailable()` is
+false and `KeystoreKeyProvider.maybeCreate` returns null, so
+`IrohaKeyManager.withDefaultProviders` keeps only its software provider. On API 31+
+`IrohaKeyManager.generateOrLoad` stops instead of generating when the Keystore cannot
+answer. No key is deleted or regenerated in response to a Keystore error.
+
 ### Attestation command
 
 The `tools` application verifies collected Android key evidence using the pure

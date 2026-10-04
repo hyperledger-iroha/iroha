@@ -5726,7 +5726,6 @@ def test_sumeragi_native_evidence_accepts_exact_classes(evidence_class: str) -> 
     ("status", "status_type"),
     [
         ("applied", client_module.SumeragiEvidenceAppliedPenaltyStatus),
-        ("cancelled", client_module.SumeragiEvidenceCancelledPenaltyStatus),
     ],
 )
 def test_sumeragi_evidence_accepts_committed_penalty_statuses(
@@ -5844,10 +5843,10 @@ def test_sumeragi_native_evidence_rejects_missing_fields(
         ({"status": "pending", "details": {}}, r"details must be null"),
         ({"status": "applied", "details": None}, r"must be a JSON object"),
         (
-            {"status": "cancelled", "details": {"height": 4, "note": "x"}},
+            {"status": "applied", "details": {"height": 4, "note": "x"}},
             r"must contain exactly height",
         ),
-        ({"status": "retired", "details": None}, r"must be pending, applied, or cancelled"),
+        ({"status": "retired", "details": None}, r"must be pending or applied"),
     ],
 )
 def test_sumeragi_evidence_rejects_invalid_penalty_status(
@@ -6694,3 +6693,12 @@ def test_retired_generic_multisig_proposal_has_no_shipping_base_api() -> None:
         assert not hasattr(client, name)
     assert not hasattr(torii_module, "MultisigDraftIntent")
     assert session.calls == []
+
+
+@pytest.mark.parametrize("details", [{"height": 44}, None, {}, {"height": 44, "note": "x"}])
+def test_sumeragi_evidence_rejects_retired_cancelled_status(details: Any) -> None:
+    record = _sumeragi_native_evidence_record(
+        penalty_status={"status": "cancelled", "details": details}
+    )
+    with pytest.raises(RuntimeError, match="status must be pending or applied"):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")

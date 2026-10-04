@@ -2,14 +2,13 @@ package org.hyperledger.iroha.android.crypto.keystore;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.security.Key;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
-import java.security.KeyStore.PrivateKeyEntry;
 import java.security.PrivateKey;
 import java.security.ProviderException;
-import java.security.PublicKey;
 import java.security.spec.AlgorithmParameterSpec;
 import java.time.Duration;
 import java.util.Objects;
@@ -24,8 +23,18 @@ import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
  * <p>The implementation avoids compile-time dependencies on {@code android.*} packages so the
  * desktop JVM build remains compilable. When the runtime does not expose the Android Keystore
  * classes (for example, on desktop tests), the factory returns {@link Optional#empty()}.
+ *
+ * <p>Alias existence is the tri-state {@code KeyStore.getKey(alias, null)} probe ({@link
+ * #probeAlias}). {@code containsAlias}, {@code getEntry}, {@code aliases}, {@code isKeyEntry} and
+ * {@code getCertificate*} turn every Keystore error into "absent" (AOSP {@code
+ * AndroidKeyStoreSpi}), and generating under an occupied alias replaces its key, so {@link #load}
+ * returns empty only for a definitive keystore2 absence and throws when the Keystore cannot
+ * answer. The backend is offered only on keystore2 (API 31+), where that absence is definitive.
  */
 final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
+
+  /** Lowest API level with keystore2, whose {@code KeyStore.getKey} distinguishes "no key" from an error. */
+  static final int KEYSTORE2_MIN_API = 31;
 
   private static final String ANDROID_KEYSTORE = "AndroidKeyStore";
   private static final String KEY_GEN_SPEC_BUILDER_CLASS =
@@ -42,18 +51,18 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
   }
 
   static Optional<AndroidKeystoreBackend> create() {
-    if (!isAndroidRuntime()) {
+    // keystore1 (API < 31) cannot prove that an alias is empty, so the platform backend is not
+    // offered there. Its default algorithm, Ed25519, needs API 33 for Keystore keys.
+    if (androidApiLevel() < KEYSTORE2_MIN_API) {
       return Optional.empty();
     }
-    final KeyStore keyStore;
     try {
-      keyStore = KeyStore.getInstance(ANDROID_KEYSTORE);
-      keyStore.load(null);
+      KeyStore.getInstance(ANDROID_KEYSTORE).load(null);
     } catch (final GeneralSecurityException | IOException ex) {
       return Optional.empty();
     }
 
-    final boolean supportsStrongBox = detectStrongBoxSupport(keyStore);
+    final boolean supportsStrongBox = detectStrongBoxSupport();
 
     final KeyProviderMetadata.Builder metadataBuilder =
         KeyProviderMetadata.builder("android-keystore")
@@ -70,13 +79,49 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
     return Optional.of(new SystemAndroidKeystoreBackend(metadata));
   }
 
-  private static boolean isAndroidRuntime() {
+  /** The platform API level ({@code android.os.Build.VERSION.SDK_INT}), or 0 off Android. */
+  private static int androidApiLevel() {
     try {
-      Class.forName("android.os.Build");
-      return true;
-    } catch (final ClassNotFoundException ignored) {
-      return false;
+      return Class.forName("android.os.Build$VERSION").getField("SDK_INT").getInt(null);
+    } catch (final ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+      return 0;
     }
+  }
+
+  /** {@code KeyStore.getKey(alias, null)}: a key, null for no key entry, or a throw. */
+  @FunctionalInterface
+  interface KeyLookup {
+    Key getKey(String alias) throws Exception;
+  }
+
+  /**
+   * Tri-state alias probe. On keystore2 (API 31+) a key is present, null is {@code KEY_NOT_FOUND}
+   * and any throw means the Keystore did not answer. keystore1 {@code getKey} returns null whenever
+   * its {@code KeyStore.contains} probe fails, so a null there is never definitive.
+   *
+   * @return the present key, or empty for a definitive absence
+   * @throws KeyManagementException when the lookup throws, or below API 31 when it reports no key
+   */
+  static Optional<Key> probeAlias(
+      final int apiLevel, final String alias, final KeyLookup lookup, final String failure)
+      throws KeyManagementException {
+    final Key key;
+    try {
+      key = lookup.getKey(alias);
+    } catch (final Exception ex) {
+      throw new KeyManagementException(
+          failure + ": the Keystore could not answer, so the alias is not treated as absent", ex);
+    }
+    if (key == null && apiLevel < KEYSTORE2_MIN_API) {
+      throw new KeyManagementException(
+          failure + ": keystore1 (API " + apiLevel + ") cannot prove that an alias is empty");
+    }
+    return Optional.ofNullable(key);
+  }
+
+  private static Optional<Key> probeAlias(final String alias, final String failure)
+      throws KeyManagementException {
+    return probeAlias(androidApiLevel(), alias, a -> loadKeyStore().getKey(a, null), failure);
   }
 
   @Override
@@ -85,21 +130,23 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
     if (alias.trim().isEmpty()) {
       throw new IllegalArgumentException("alias must not be blank");
     }
+    final Optional<Key> key = probeAlias(alias, "Failed to load key from Android Keystore");
+    if (key.isEmpty()) {
+      return Optional.empty();
+    }
+    if (!(key.get() instanceof PrivateKey privateKey)) {
+      throw new KeyManagementException("Android Keystore alias does not hold a private key");
+    }
+    final java.security.cert.Certificate[] chain;
     try {
-      final KeyStore keyStore = loadKeyStore();
-      if (!keyStore.containsAlias(alias)) {
-        return Optional.empty();
-      }
-      final KeyStore.Entry entry = keyStore.getEntry(alias, null);
-      if (!(entry instanceof PrivateKeyEntry privateKeyEntry)) {
-        return Optional.empty();
-      }
-      final PublicKey publicKey = privateKeyEntry.getCertificate().getPublicKey();
-      final PrivateKey privateKey = privateKeyEntry.getPrivateKey();
-      return Optional.of(new KeyPair(publicKey, privateKey));
+      chain = loadKeyStore().getCertificateChain(alias);
     } catch (final GeneralSecurityException | IOException ex) {
       throw new KeyManagementException("Failed to load key from Android Keystore", ex);
     }
+    if (chain == null || chain.length == 0) {
+      throw new KeyManagementException("Android Keystore key has no certificate");
+    }
+    return Optional.of(new KeyPair(chain[0].getPublicKey(), privateKey));
   }
 
   @Override
@@ -306,11 +353,11 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       throw new IllegalArgumentException("alias must not be blank");
     }
     final byte[] challengeCopy = challenge == null ? new byte[0] : challenge.clone();
+    if (probeAlias(alias, "Failed to read Android Keystore attestation").isEmpty()) {
+      return Optional.empty();
+    }
     try {
       final KeyStore keyStore = loadKeyStore();
-      if (!keyStore.containsAlias(alias)) {
-        return Optional.empty();
-      }
       if (challengeCopy.length > 0) {
         throw new KeyManagementException(
             "Android Keystore cannot re-attest an existing alias; provision a new alias with "
@@ -457,7 +504,9 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
     }
   }
 
-  private static boolean detectStrongBoxSupport(final KeyStore keyStore) {
+  // `initialize` only validates the spec and never creates an entry, so there is no probe alias
+  // to clean up (and no entry this backend did not create is ever deleted).
+  private static boolean detectStrongBoxSupport() {
     try {
       final KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519", ANDROID_KEYSTORE);
       final KeyGenParameters parameters =
@@ -465,22 +514,11 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       final AlgorithmParameterSpec spec =
           buildKeyGenParameterSpec("__iroha_strongbox_probe__", parameters, true);
       generator.initialize(spec);
-      cleanupProbeAlias(keyStore);
       return true;
     } catch (final ProviderException ex) {
       return false;
     } catch (final GeneralSecurityException ex) {
       return false;
-    }
-  }
-
-  private static void cleanupProbeAlias(final KeyStore keyStore) {
-    try {
-      if (keyStore.containsAlias("__iroha_strongbox_probe__")) {
-        keyStore.deleteEntry("__iroha_strongbox_probe__");
-      }
-    } catch (final GeneralSecurityException ignored) {
-      // Probe cleanup is best-effort; failures are logged by callers if needed.
     }
   }
 

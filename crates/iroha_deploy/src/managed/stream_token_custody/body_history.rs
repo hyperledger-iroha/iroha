@@ -1576,3 +1576,7 @@ mod tests;
 #[cfg(test)]
 #[path = "body_history/initial_tests.rs"]
 mod initial_tests;
+
+#[cfg(test)]
+#[path = "body_history/deep_history_tests.rs"]
+mod deep_history_tests;

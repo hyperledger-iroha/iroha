@@ -257,7 +257,10 @@ fn scalar_reference_v1(
         )?;
         let fixed = material.fixed_row(row_index)?;
         let query_gate = if lookup.node {
-            serial_gate.add(output_source_node_query_gate_v1(&row, &fixed))
+            serial_gate
+                .add(output_source_node_query_gate_v1(&row, &fixed))
+                .add(path_len::node_query_gate(&row, &fixed))
+                .add(copy_census::node_query_gate(&row, &fixed))
         } else {
             row[BASE_SERIAL_BYTE_QUERY_ACTIVE]
         };

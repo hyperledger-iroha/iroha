@@ -96,19 +96,25 @@ struct Outputs {
     credential: PreparedGlobalBeaconCredentialV1,
     public: ChargedBuffer<u8>,
     provider: ChargedBuffer<u8>,
-    pending: Zeroizing<[u8; 96]>,
+    pending: ChargedBuffer<u8>,
 }
 impl Outputs {
     fn bytes(&self, index: usize) -> std::result::Result<&[u8], ExportError> {
         match index {
             0 => self.credential.encoded().ok_or(ExportError::Phase),
-            1 => Ok(self.pending.as_ref()),
+            1 if self.pending.as_slice().len() == 96 => Ok(self.pending.as_slice()),
             2 => Ok(self.public.as_slice()),
             3 => Ok(self.provider.as_slice()),
             _ => Err(ExportError::Phase),
         }
     }
 }
+impl Drop for Outputs {
+    fn drop(&mut self) {
+        self.pending.as_mut_slice().zeroize();
+    }
+}
+
 const FILES: [(&str, bool); 4] = [
     (GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1, true),
     (ROTATION_PENDING_SHARE_NAME, true),
@@ -116,15 +122,49 @@ const FILES: [(&str, bool); 4] = [
     ("provider.json", false),
 ];
 
+/// Original canonical output names, used by actual file/drop/reload controls.
+#[cfg(test)]
+pub(super) fn output_names() -> [&'static str; 4] {
+    FILES.map(|(name, _)| name)
+}
+
+/// A reload may select only no outputs or a complete four-file prefix.
+/// Actual content, modes, named inode and descriptor barriers are checked later.
+pub(super) fn complete_output_prefix(
+    directory: &Directory,
+) -> std::result::Result<bool, ExportError> {
+    revalidate_directory(directory)?;
+    let mut present = 0;
+    for (name, _) in FILES {
+        match rustix::fs::statat(&directory.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(_) => present += 1,
+            Err(rustix::io::Errno::NOENT) => {}
+            Err(error) => return Err(ExportError::Io(error.into())),
+        }
+    }
+    revalidate_directory(directory)?;
+    match present {
+        0 => Ok(false),
+        4 => Ok(true),
+        #[cfg(not(all(test, sumeragi_daemon_mutation = "HC117")))]
+        _ => Err(ExportError::Custody),
+        #[cfg(all(test, sumeragi_daemon_mutation = "HC117"))]
+        _ => Ok(false),
+    }
+}
+
 /// Move-only source for every byte and exact file descriptor of one final seat export.
 pub(crate) struct PreparedSeatExport {
     directory_identity: DirectoryIdentity,
     public: ValidatedGlobalThresholdBeaconSessionV1,
     seat: u16,
-    source: Option<RuntimeGlobalBeaconShareProvisioningV1>,
+    source: Option<iroha_core::beacon::GlobalBeaconAggregateOwnerV1>,
     outputs: Outputs,
     files: [FileProgress; 4],
     terminal_custody_failure: bool,
+    budget: AllocationBudget,
+    provider_handle_hash: [u8; 32],
+    provider_revision: u64,
 }
 impl PreparedSeatExport {
     /// Prepare both public files and the secret output backing before extracting a share.
@@ -165,11 +205,13 @@ impl PreparedSeatExport {
         }
         let total = count
             .0
-            .checked_add(public_len)
+            .checked_add(96)
+            .and_then(|bytes| bytes.checked_add(public_len))
             .ok_or(AllocationRefusal::DemandOverflow)?;
         let mut reservation = budget.try_reserve_bytes(total)?;
         let mut public_bytes = ChargedBuffer::from_reservation(public_len, &mut reservation)?;
         let mut provider_bytes = ChargedBuffer::from_reservation(count.0, &mut reservation)?;
+        let pending = ChargedBuffer::from_reservation(96, &mut reservation)?;
         norito::core::write_canonical_to_writer(
             public.record(),
             &mut ByteWriter(&mut public_bytes),
@@ -189,35 +231,78 @@ impl PreparedSeatExport {
                 credential,
                 public: public_bytes,
                 provider: provider_bytes,
-                pending: Zeroizing::new([0; 96]),
+                pending,
             },
             files: std::array::from_fn(|_| FileProgress::default()),
             terminal_custody_failure: false,
+            budget: budget.clone(),
+            provider_handle_hash: Hash::new(handle.as_bytes()).into(),
+            provider_revision: revision,
         })
     }
 
-    /// Move extracted components into this original owner exactly once, then encode by borrow.
-    /// The source remains owned here on any local primitive or encoding failure.
+    /// Observe the actual retained source without introducing a test-only protocol owner.
+    #[cfg(test)]
+    pub(super) fn source_is_empty(&self) -> bool {
+        self.source.is_none()
+    }
+    /// Borrow the same original retained ciphertext used by production export.
+    #[cfg(test)]
+    pub(super) fn source_checkpoint(&self) -> Option<&[u8]> {
+        self.source
+            .as_ref()
+            .map(|source| source.encrypted_checkpoint())
+    }
+
+    /// Move the authenticated original aggregate owner once, retaining it on every refusal.
+    /// Private/public equations and actual native source validation precede this move.
     pub(crate) fn accept(
         &mut self,
-        components: Zeroizing<[[u8; 32]; 3]>,
-    ) -> std::result::Result<(), (Zeroizing<[[u8; 32]; 3]>, ExportError)> {
-        if self.source.is_some() {
-            return Err((components, ExportError::Phase));
-        }
-        for (destination, component) in self
-            .outputs
-            .pending
-            .chunks_exact_mut(32)
-            .zip(components.iter())
+        source: iroha_core::beacon::GlobalBeaconAggregateOwnerV1,
+    ) -> std::result::Result<
+        (),
+        (
+            iroha_core::beacon::GlobalBeaconAggregateOwnerV1,
+            ExportError,
+        ),
+    > {
+        if self.source.is_some()
+            || !source.authenticated_session().ptr_eq(&self.public)
+            || source.signer_index() != self.seat
+            || !source.belongs_to(&self.budget)
+            || source.binding().provider_handle_hash != self.provider_handle_hash
+            || source.binding().provider_revision != self.provider_revision
         {
-            destination.copy_from_slice(component);
+            return Err((source, ExportError::Phase));
         }
-        self.source = Some(RuntimeGlobalBeaconShareProvisioningV1::new(
-            self.public.clone(),
-            self.seat,
-            components,
-        ));
+        self.source = Some(source);
+        Ok(())
+    }
+
+    fn encode_original_outputs(&mut self) -> std::result::Result<(), ExportError> {
+        let source = self.source.as_ref().ok_or(ExportError::Phase)?;
+        if !source.authenticated_session().ptr_eq(&self.public)
+            || source.signer_index() != self.seat
+            || !source.belongs_to(&self.budget)
+            || source.binding().provider_handle_hash != self.provider_handle_hash
+            || source.binding().provider_revision != self.provider_revision
+        {
+            return Err(ExportError::Phase);
+        }
+        if self.outputs.pending.as_slice().is_empty() {
+            source
+                .write_pending_share_for_runtime_custody(&mut ByteWriter(&mut self.outputs.pending))
+                .map_err(ExportError::Io)?;
+        }
+        if self.outputs.pending.as_slice().len() != 96 {
+            return Err(ExportError::Phase);
+        }
+        if self.outputs.credential.encoded().is_none() {
+            encode_global_beacon_partial_signer_credential_v1(
+                &mut self.outputs.credential,
+                std::iter::once(source.credential_source()),
+            )?;
+        }
         Ok(())
     }
 
@@ -234,13 +319,7 @@ impl PreparedSeatExport {
             self.terminal_custody_failure = true;
             return Err(ExportError::Custody);
         }
-        if self.outputs.credential.encoded().is_none() {
-            let source = self.source.as_ref().ok_or(ExportError::Phase)?;
-            encode_global_beacon_partial_signer_credential_v1(
-                &mut self.outputs.credential,
-                std::iter::once(source.credential_source()),
-            )?;
-        }
+        self.encode_original_outputs()?;
         for (index, (name, private)) in FILES.iter().copied().enumerate() {
             let result = publish_file(
                 directory,
@@ -258,6 +337,40 @@ impl PreparedSeatExport {
     }
 
     /// Whether all four exact outputs have been durably verified under their original names.
+    /// Adopt only complete existing exact output files after authenticating the aggregate.
+    /// Partial/mixed outputs cannot manufacture a replacement destination or original offset.
+    pub(crate) fn restore_complete(
+        &mut self,
+        directory: &Directory,
+    ) -> std::result::Result<(), ExportError> {
+        if self.terminal_custody_failure || !self.directory_identity.matches(directory)? {
+            self.terminal_custody_failure = true;
+            return Err(ExportError::Custody);
+        }
+        self.encode_original_outputs()?;
+        for (index, (name, private)) in FILES.iter().copied().enumerate() {
+            restore_published_file(
+                directory,
+                name,
+                private,
+                self.outputs.bytes(index)?,
+                &mut self.files[index],
+            )?;
+        }
+        directory.file.sync_all().map_err(ExportError::Io)?;
+        revalidate_directory(directory)?;
+        for (index, (name, private)) in FILES.iter().copied().enumerate() {
+            restore_published_file(
+                directory,
+                name,
+                private,
+                self.outputs.bytes(index)?,
+                &mut self.files[index],
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn complete(&self) -> bool {
         self.files.iter().all(|file| file.complete)
     }

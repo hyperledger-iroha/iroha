@@ -31,7 +31,7 @@ impl ClonePlanning<usize, usize> for ScalarPolicy {
 #[test]
 fn acquired_writer_footprint_refusal_retries_same_guard_without_early_release() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -98,7 +98,7 @@ fn acquired_writer_footprint_refusal_retries_same_guard_without_early_release() 
 #[test]
 fn acquired_admission_refusal_retains_actual_writer_and_deferred_release() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -152,7 +152,7 @@ fn acquired_admission_refusal_retains_actual_writer_and_deferred_release() {
 #[test]
 fn acquired_admission_busy_poison_and_unwind_preserve_real_custody() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

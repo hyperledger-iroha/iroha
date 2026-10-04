@@ -88,10 +88,7 @@ impl<F: PastaField> Opened<'_, F> {
         };
         if shape.committed_instances {
             for query in &descriptor.instance_queries {
-                write(
-                    indexed(&self.instance.polys, query.column)?,
-                    query.rotation,
-                );
+                write(indexed(&self.instance.polys, query.column)?, query.rotation);
             }
         }
         for query in &descriptor.advice_queries {
@@ -179,7 +176,7 @@ impl<F: PastaField> Opened<'_, F> {
         })
     }
 
-    /// Runs the multiopen and its IPA (BlindingScheduleV1 items 7 and 8) and
+    /// Runs the multiopen and its IPA (`BlindingScheduleV1` items 7 and 8) and
     /// returns the folded generator `G'_0`.
     ///
     /// # Errors

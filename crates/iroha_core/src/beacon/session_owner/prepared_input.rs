@@ -26,6 +26,7 @@ pub use common::GlobalThresholdBeaconInputDestinationErrorV1;
 pub use owner::{
     GlobalThresholdBeaconInputErrorV1, PreparedGlobalThresholdBeaconDkgInputsV1,
     PreparedGlobalThresholdBeaconDkgPublicationV1,
+    PreparedGlobalThresholdBeaconFinalSessionInputV1,
 };
 
 #[cfg(test)]

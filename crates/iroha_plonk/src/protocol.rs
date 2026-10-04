@@ -13,7 +13,10 @@
 //! - [`lagrange_evaluations`] and [`instance_evaluation`]: Lagrange basis
 //!   values at the challenge `x`;
 //! - [`check_zero_knowledge_budget`]: the S7 zero-knowledge budget computed
-//!   from the opening plan itself, independently of descriptor rule 9.
+//!   from the opening plan itself, independently of descriptor rule 9;
+//! - [`Protocol::constraint_terms`] and [`Protocol::transcript_schedule`]
+//!   ([`schedule`]): the constraint fold and the transcript schedule as data,
+//!   which every verifier (native and in-circuit) walks (S11).
 //!
 //! The prover and the verifier derive the proof layout, the opening queries
 //! and their grouping from these tables only, so the two sides cannot drift
@@ -35,6 +38,14 @@ use crate::{
         multiopen::{MultiopenError, OpeningPlan, OpeningQuery, Slot, SlotKind},
     },
     transcript::{MESSAGE_BYTES, decode_scalar},
+};
+
+pub mod schedule;
+
+pub(crate) use schedule::{AllTerms, ConstraintFilter};
+pub use schedule::{
+    Challenge, CommonInput, ConstraintTerm, HashOperation, LookupAt, LookupConstraint,
+    PermutationAt, ProofMessage, RoundSide, TranscriptStep,
 };
 
 /// A protocol table could not be derived from a descriptor.
@@ -225,6 +236,8 @@ pub struct Protocol {
     plan: OpeningPlan,
     permutation: Vec<PermutationColumn>,
     proof_length: usize,
+    constraint_terms: Vec<ConstraintTerm>,
+    schedule: Vec<TranscriptStep>,
 }
 
 /// A count as a slot index.
@@ -271,12 +284,16 @@ impl Protocol {
         let proof_length = messages
             .checked_mul(MESSAGE_BYTES)
             .ok_or(ProtocolError::Overflow)?;
+        let constraint_terms = schedule::constraint_terms(descriptor, &shape)?;
+        let schedule = schedule::transcript_schedule(descriptor, &shape, plan.sets().len());
         Ok(Self {
             shape,
             queries,
             plan,
             permutation,
             proof_length,
+            constraint_terms,
+            schedule,
         })
     }
 
@@ -308,6 +325,21 @@ impl Protocol {
     #[must_use]
     pub fn proof_length(&self) -> usize {
         self.proof_length
+    }
+
+    /// The constraints in fold order (spec section 2): gate polynomials, the
+    /// permutation items 1-4, then the five constraints of every lookup. The
+    /// verifier folds exactly this list (S11).
+    #[must_use]
+    pub fn constraint_terms(&self) -> &[ConstraintTerm] {
+        &self.constraint_terms
+    }
+
+    /// Every absorb, message and squeeze of a production proof in order
+    /// (spec sections 6.3 and 7), the unabsorbed suffix included (S11).
+    #[must_use]
+    pub fn transcript_schedule(&self) -> &[TranscriptStep] {
+        &self.schedule
     }
 }
 

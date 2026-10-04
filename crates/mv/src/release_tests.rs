@@ -36,7 +36,7 @@ fn busy<'a, E>(
 #[test]
 fn storage_revert_preimage_clone_panic_wakes_an_already_registered_retry() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);
@@ -113,7 +113,7 @@ fn storage_revert_preimage_clone_panic_wakes_an_already_registered_retry() {
 #[test]
 fn cell_abort_detach_and_publication_release_the_actual_busy_writer() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);
@@ -169,7 +169,7 @@ fn cell_abort_detach_and_publication_release_the_actual_busy_writer() {
 #[test]
 fn storage_prepared_drop_abort_and_publish_release_the_original_writers() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);
@@ -214,7 +214,7 @@ fn storage_prepared_drop_abort_and_publish_release_the_original_writers() {
 #[test]
 fn partial_writer_acquisition_does_not_wake_its_own_refused_lock() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);
@@ -256,7 +256,7 @@ fn cell_prepared_and_storage_original_guards_notify_every_release_path() {
         crate::release_test_support::registration(&helper_release_budget);
 
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -318,7 +318,7 @@ fn cell_prepared_and_storage_original_guards_notify_every_release_path() {
 #[test]
 fn a_nonpoisoning_guard_unwind_does_not_poison_later_contention() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -344,7 +344,7 @@ fn a_nonpoisoning_guard_unwind_does_not_poison_later_contention() {
 #[test]
 fn inner_guard_destructor_panic_still_signals_after_its_physical_lock_releases() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

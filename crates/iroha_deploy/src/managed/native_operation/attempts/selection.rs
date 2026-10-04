@@ -36,7 +36,7 @@ pub(in crate::managed) fn initial(
         require_deadline(deadline)?;
         history.finish_reserved(operation, false)?;
     }
-    let history = History::read(operation, purpose, semantic, scope)?;
+    let history = history.reread()?;
     if let Some(last) = history.last() {
         last.terms()
             .matches(terms.requested_deadline_unix_ms, &terms.options(deadline))?;
@@ -92,7 +92,7 @@ pub(in crate::managed) fn generated(
         authorization.check(purpose, deadline)?;
         history.finish_reserved(operation, false)?;
     }
-    let history = History::read(operation, purpose, semantic, scope)?;
+    let history = history.reread()?;
     history.verify_wallets(&mut inspect)?;
     let origin = authorization.origin()?;
     if let Some(last) = history.last() {
@@ -168,7 +168,7 @@ pub(in crate::managed) fn generated(
     }
     // Retirement or root publication may have completed an interrupted local prefix. Re-read
     // all metadata and inspect all canonical wallets before adding the next authorization.
-    let history = History::read(operation, purpose, semantic, scope)?;
+    let history = history.reread()?;
     history.verify_wallets(&mut inspect)?;
     authorization.check(purpose, deadline)?;
     let terms = authorization.terms(deadline, body_expiry)?;

@@ -2148,7 +2148,7 @@ mod tests {
                 65 * chunk - 3,
             ] {
                 let data: Vec<_> = (0..len)
-                    .map(|index| (index as u8).wrapping_mul(37))
+                    .map(|index| u8::try_from(index % 256).unwrap().wrapping_mul(37))
                     .collect();
                 let mut leaves: Vec<[u8; 32]> = data
                     .chunks(chunk)

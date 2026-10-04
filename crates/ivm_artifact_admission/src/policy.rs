@@ -541,10 +541,12 @@ fn validate_callable_tables(
             .ok_or_else(|| {
                 ContractArtifactError::invalid("entrypoint has no callable descriptor")
             })?;
-        let arguments_match = match &entrypoint.argument_schema {
-            None => callable.arguments.nodes.is_empty(),
-            Some(schema) => callable.arguments.matches_entrypoint_arguments(schema),
-        };
+        let arguments_match = entrypoint
+            .argument_schema
+            .as_ref()
+            .map_or(callable.arguments.nodes.is_empty(), |schema| {
+                callable.arguments.matches_entrypoint_arguments(schema)
+            });
         let results_match = entrypoint
             .return_schema
             .as_ref()
@@ -1559,9 +1561,7 @@ mod tests {
         assert_ne!(current, erased_schema_surface);
         bytes[17..49].copy_from_slice(&erased_schema_surface);
         assert_eq!(
-            crate::verify_contract_artifact(&bytes)
-                .err()
-                .expect("retired surface must reject"),
+            crate::verify_contract_artifact(&bytes).expect_err("retired surface must reject"),
             ContractArtifactError::abi_hash_mismatch(current, erased_schema_surface)
         );
     }

@@ -274,16 +274,19 @@ The patched `cust_raw` boundary loads the CUDA driver at runtime. A CPU-only
 machine can start a CUDA-enabled binary without a driver. Linux loads
 `libcuda.so.1` (including the WSL system path); Windows restricts
 `nvcuda.dll` to System32. Missing drivers or symbols leave the CPU path
-available. CUDA is not yet a default Cargo feature because the required ten
-checked-in PTX files and signed provenance are absent.
+available. Linux/Windows daemon dependencies now select the existing CUDA
+feature automatically; macOS retains Metal. The one private source-owned
+`REVIEWED_CUDA_BUNDLE_PINS` is currently `None`. Genuine absence permits
+CPU-capable ordinary builds in every profile; supplied unreviewed, partial or
+malformed material is an integrity error. Cargo and startup invoke no CUDA tool
+and obtain no approval from environment values.
 
-`build.rs` has three explicit build-time modes:
-
-- `bundled` (default for CUDA builds) copies validated checked-in PTX and fails
-  if any family is missing.
-- `generate` invokes `nvcc` only for a qualification candidate.
-- `check` regenerates every family and requires byte identity with its bundled
-  artifact.
+One immutable optional owner retains the exact ten-family authenticated bytes.
+The build and runtime adapters share the sole canonical signed V1 relation.
+Runtime absence refuses before CUDA discovery/private staging and grants no
+native completion or calibrated-profile credit. Shipping and required-hardware
+gates refuse without genuine source approval and actual completions. Explicit
+two-run candidate generation uses only the existing offline producer.
 
 The ten source families are AES, bitonic sort, BN254, Poseidon, SHA-256,
 SHA-256 leaves, SHA-256 pair reduction, SHA-3, signature, and vector. The

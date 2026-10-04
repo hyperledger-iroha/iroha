@@ -450,7 +450,7 @@ mod provider_inventories_json {
 
     use super::{PROVIDER_COUNT, ProviderServiceInventory};
 
-    pub fn serialize(value: &[ProviderServiceInventory; PROVIDER_COUNT], out: &mut String) {
+    pub(super) fn serialize(value: &[ProviderServiceInventory; PROVIDER_COUNT], out: &mut String) {
         out.push('[');
         for (index, provider) in value.iter().enumerate() {
             if index != 0 {
@@ -461,7 +461,7 @@ mod provider_inventories_json {
         out.push(']');
     }
 
-    pub fn serialize_bounded(
+    pub(super) fn serialize_bounded(
         value: &[ProviderServiceInventory; PROVIDER_COUNT],
         out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
@@ -478,7 +478,7 @@ mod provider_inventories_json {
         Ok(())
     }
 
-    pub fn deserialize(
+    pub(super) fn deserialize(
         parser: &mut Parser<'_>,
     ) -> Result<[ProviderServiceInventory; PROVIDER_COUNT], json::Error> {
         // Prove the fixed boundary without constructing inventories or traversing a fourth body.

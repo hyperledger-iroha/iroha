@@ -1938,6 +1938,7 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
         })
     }
     /// Direct committed arithmetic row or canonical zero padding.
+    #[cfg(test)]
     pub(crate) fn base_row_v1(
         &self,
         row: usize,

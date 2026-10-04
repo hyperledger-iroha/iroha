@@ -28,14 +28,14 @@ use crate::{
 };
 
 /// The MSM budget of the tests.
-pub(crate) const BUDGET: MemoryBudget = MemoryBudget::DEFAULT;
+pub const BUDGET: MemoryBudget = MemoryBudget::DEFAULT;
 
 /// A protocol configuration: transcript, instance mode, suffix and selector
 /// compression.
-pub(crate) type Choice = (TranscriptV1, InstanceModeV1, ProofSuffixV1, bool);
+pub type Choice = (TranscriptV1, InstanceModeV1, ProofSuffixV1, bool);
 
 /// Configurations that together cover every protocol option.
-pub(crate) const CHOICES: [Choice; 4] = [
+pub const CHOICES: [Choice; 4] = [
     (
         TranscriptV1::Blake2bChallenge255,
         InstanceModeV1::Committed,
@@ -63,7 +63,7 @@ pub(crate) const CHOICES: [Choice; 4] = [
 ];
 
 /// The key-generation configuration of a choice.
-pub(crate) fn keygen_config(choice: Choice) -> KeygenConfig {
+pub fn keygen_config(choice: Choice) -> KeygenConfig {
     let (transcript, instance_mode, proof_suffix, compress) = choice;
     let mut config = KeygenConfig::new(transcript);
     config.instance_mode = instance_mode;
@@ -73,21 +73,22 @@ pub(crate) fn keygen_config(choice: Choice) -> KeygenConfig {
 }
 
 /// Parameters and a proving key.
-pub(crate) struct Setup<C: PastaCurve> {
+pub struct Setup<C: PastaCurve> {
     /// The parameters at [`K`].
-    pub(crate) params: PinnedParams<C>,
+    pub params: PinnedParams<C>,
     /// The proving key.
-    pub(crate) pk: ProvingKey<C>,
+    pub pk: ProvingKey<C>,
 }
 
 /// Derives the parameters and generates the proving key of `circuit`.
-pub(crate) fn setup<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
-    circuit: &Ci,
-    choice: Choice,
-) -> Setup<C> {
+pub fn setup<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(circuit: &Ci, choice: Choice) -> Setup<C> {
     let params = PinnedParams::<C>::derive(K).expect("params");
-    let pk = keygen_pk(&params, &circuit.without_witnesses(), &keygen_config(choice))
-        .expect("proving key");
+    let pk = keygen_pk(
+        &params,
+        &circuit.without_witnesses(),
+        &keygen_config(choice),
+    )
+    .expect("proving key");
     Setup { params, pk }
 }
 
@@ -95,8 +96,8 @@ impl<C: PastaCurve> Setup<C>
 where
     C::ScalarExt: PoseidonField,
 {
-    /// Proves `circuit` with a fixed ChaCha20 seed.
-    pub(crate) fn prove<Ci: Circuit<C::ScalarExt>>(
+    /// Proves `circuit` with a fixed `ChaCha20` seed.
+    pub fn prove<Ci: Circuit<C::ScalarExt>>(
         &self,
         circuit: &Ci,
         instances: &[Vec<C::ScalarExt>],
@@ -108,12 +109,12 @@ where
             circuit,
             instances,
             ProverRandomness::fixed_seed_for_tests([seed; 32]),
-            &ProverConfig::default(),
+            ProverConfig::default(),
         )
     }
 
     /// Verifies a proof in full.
-    pub(crate) fn verify(
+    pub fn verify(
         &self,
         instances: &[Vec<C::ScalarExt>],
         proof: &[u8],
@@ -130,11 +131,11 @@ where
 }
 
 /// The `k` of every test circuit.
-pub(crate) const K: u32 = 6;
+pub const K: u32 = 6;
 
 /// Columns of [`Arithmetic`].
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ArithmeticConfig {
+pub struct ArithmeticConfig {
     a: Column<Advice>,
     b: Column<Advice>,
     c: Column<Advice>,
@@ -149,13 +150,13 @@ pub(crate) struct ArithmeticConfig {
 /// `a_{i+1} = c_i`, starting from the public input and ending at the public
 /// output.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Arithmetic {
+pub struct Arithmetic {
     /// The public input `a_0`.
-    pub(crate) start: u64,
+    pub start: u64,
     /// Rows of the chain.
-    pub(crate) rows: usize,
+    pub rows: usize,
     /// A row whose `c` is off by one.
-    pub(crate) tamper: Option<usize>,
+    pub tamper: Option<usize>,
 }
 
 impl Arithmetic {
@@ -165,7 +166,11 @@ impl Arithmetic {
         (0..self.rows)
             .map(|row| {
                 let b = F::from(3 + row as u64);
-                let c = if row % 2 == 0 { a * b } else { a + F::from(5) * b };
+                let c = if row % 2 == 0 {
+                    a * b
+                } else {
+                    a + F::from(5) * b
+                };
                 let out = (a, b, c);
                 a = c;
                 out
@@ -174,7 +179,7 @@ impl Arithmetic {
     }
 
     /// The instances `[[a_0, c_last]]`.
-    pub(crate) fn instances<F: PastaField>(&self) -> Vec<Vec<F>> {
+    pub fn instances<F: PastaField>(&self) -> Vec<Vec<F>> {
         let last = self.chain::<F>().last().map_or(F::ZERO, |row| row.2);
         vec![vec![F::from(self.start), last]]
     }
@@ -286,7 +291,7 @@ impl<F: PastaField> Circuit<F> for Arithmetic {
 
 /// Columns of [`Lookups`].
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct LookupsConfig {
+pub struct LookupsConfig {
     x: Column<Advice>,
     y: Column<Advice>,
     square: Selector,
@@ -298,15 +303,15 @@ pub(crate) struct LookupsConfig {
 /// `y = x^2` checked by a gate and by a lookup into the table `(i, i^2)`,
 /// `i < 16`, plus a range check of `x + 1` against the first table column.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Lookups {
+pub struct Lookups {
     /// Rows of witness values.
-    pub(crate) rows: usize,
+    pub rows: usize,
     /// A row whose `y` is off by one.
-    pub(crate) tamper: Option<usize>,
+    pub tamper: Option<usize>,
     /// Use `x = 15` on row 0, which fails the range check of `x + 1`.
-    pub(crate) out_of_range: bool,
+    pub out_of_range: bool,
     /// Shifts every `x`: equal shapes, different witnesses.
-    pub(crate) offset: u64,
+    pub offset: u64,
 }
 
 impl<F: PastaField> Circuit<F> for Lookups {
@@ -353,7 +358,11 @@ impl<F: PastaField> Circuit<F> for Lookups {
         }
     }
 
-    fn synthesize(&self, config: LookupsConfig, mut layouter: impl Layouter<F>) -> Result<(), Error> {
+    fn synthesize(
+        &self,
+        config: LookupsConfig,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
         layouter.assign_table(
             || "squares",
             |mut table| {
@@ -397,7 +406,7 @@ impl<F: PastaField> Circuit<F> for Lookups {
 
 /// Columns of [`Permutations`].
 #[derive(Clone, Debug)]
-pub(crate) struct PermutationsConfig {
+pub struct PermutationsConfig {
     columns: Vec<Column<Advice>>,
     instance: Column<Instance>,
     sum: Selector,
@@ -409,11 +418,11 @@ pub(crate) struct PermutationsConfig {
 /// 0` and `c_1 - c_2 + 1 = 0`, every `c_{j+1}` of row `r` is copied from `c_j` of row `r + 1`, the
 /// first cell is a constant and three cells are public.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Permutations {
+pub struct Permutations {
     /// Rows of the grid.
-    pub(crate) rows: usize,
+    pub rows: usize,
     /// A row whose last column is off by one (breaking a copy cycle).
-    pub(crate) tamper: Option<usize>,
+    pub tamper: Option<usize>,
 }
 
 impl Permutations {
@@ -424,7 +433,7 @@ impl Permutations {
 
     /// The instances: the first and last values of column 0 and the last of
     /// column 5.
-    pub(crate) fn instances<F: PastaField>(&self) -> Vec<Vec<F>> {
+    pub fn instances<F: PastaField>(&self) -> Vec<Vec<F>> {
         let last = self.rows - 1;
         vec![vec![
             Self::value(0, 0),
@@ -517,17 +526,17 @@ impl<F: PastaField> Circuit<F> for Permutations {
 
 /// Columns of [`Forgeable`].
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ForgeableConfig {
-    pub(crate) a: Column<Advice>,
-    pub(crate) b: Column<Advice>,
+pub struct ForgeableConfig {
+    pub a: Column<Advice>,
+    pub b: Column<Advice>,
     selector: Selector,
 }
 
 /// `s (a - b - 1) = 0` on the first `rows` rows.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Forgeable {
+pub struct Forgeable {
     /// Enabled rows.
-    pub(crate) rows: usize,
+    pub rows: usize,
 }
 
 impl<F: PastaField> Circuit<F> for Forgeable {

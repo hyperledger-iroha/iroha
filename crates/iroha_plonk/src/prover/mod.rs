@@ -17,7 +17,7 @@
 //!    static query grouping, whose IPA returns the folded generator `G'_0`
 //!    ([`multiopen`]); with a `FoldedGenerator` suffix, `G'_0` ends the proof.
 //!
-//! # Randomness (BlindingScheduleV1, S8)
+//! # Randomness (`BlindingScheduleV1`, S8)
 //!
 //! Every random value is a `Field::random` draw (eight `next_u64` words) from
 //! one stream consumed on the calling thread, in the order of spec section 10:
@@ -35,9 +35,10 @@
 //!
 //! The stream comes from an opaque [`ProverRandomness`] with exactly three
 //! production sources (the OS CSPRNG, a hedged derivation over fresh entropy,
-//! the witness digest and the statement, and a recovery seed whose context
-//! binds the witness digest). Fixed seeds exist only in this crate's unit
-//! tests and in oracle builds (`--cfg iroha_plonk_oracle`).
+//! the witness digest and the statement, and a recovery seed whose stream
+//! this crate keys with the witness and statement digests, so a caller
+//! cannot opt out of the binding). Fixed seeds exist only in this crate's
+//! unit tests and in oracle builds (`--cfg iroha_plonk_oracle`).
 //!
 //! # Determinism
 //!
@@ -61,12 +62,13 @@ use rand_core_06::{CryptoRng, RngCore, SeedableRng};
 
 use crate::{
     cs::{
-        CircuitDescriptorV1, CsError, DescriptorConfig, DescriptorError, descriptor::blake2b_personal,
+        CircuitDescriptorV1, CsError, DescriptorConfig, DescriptorError,
+        descriptor::{Blake2bPersonal, blake2b_personal},
     },
     frontend::{self, Circuit, synthesize},
-    keys::{KeyError, ProvingKey, permutation_values},
+    keys::{KeyError, ProvingKey},
     pcs::{ipa::PinnedParams, multiopen::MultiopenError},
-    protocol::{Protocol, ProtocolError},
+    protocol::{AllTerms, ConstraintFilter, Protocol, ProtocolError},
     transcript::{
         DescriptorHash, Transcript, TranscriptError, TranscriptWrite, TranscriptWriter,
         absorb_prelude,
@@ -90,6 +92,9 @@ pub const WITNESS_PERSONA: &[u8; 16] = b"PIPA-v1-WitnessD";
 pub const HEDGED_PERSONA: &[u8; 16] = b"PIPA-v1-ProveRng";
 /// `BLAKE2b` personalization of the recovery-stream context.
 pub const RECOVERY_PERSONA: &[u8; 16] = b"PIPA-v1-Recovery";
+/// `BLAKE2b` personalization of the recovery-stream key, which binds the
+/// bytes drawn from the caller's derivation to the context inside this crate.
+pub const RECOVERY_KEY_PERSONA: &[u8; 16] = b"PIPA-v1-RecovKey";
 /// The purpose label a recovery-seed derivation should use for prover
 /// randomness (for example `KagemushaRecoverySeedV1::rng(RECOVERY_PURPOSE,
 /// context)`).
@@ -267,9 +272,9 @@ type RecoveryDerivation<'a> =
 
 /// Where the prover's random stream comes from.
 enum Source<'a> {
-    /// A ChaCha20 stream keyed by 32 bytes of OS entropy.
+    /// A `ChaCha20` stream keyed by 32 bytes of OS entropy.
     Os,
-    /// A ChaCha20 stream keyed by `BLAKE2b(OS entropy, statement, witness)`.
+    /// A `ChaCha20` stream keyed by `BLAKE2b(OS entropy, statement, witness)`.
     Hedged,
     /// A caller derivation from the recovery context.
     Recovery(RecoveryDerivation<'a>),
@@ -281,17 +286,22 @@ enum Source<'a> {
 /// The prover's randomness: an opaque value with exactly three production
 /// sources (spec section 10, S8).
 ///
-/// - [`ProverRandomness::os`]: a ChaCha20 stream keyed by 32 bytes of OS
+/// - [`ProverRandomness::os`]: a `ChaCha20` stream keyed by 32 bytes of OS
 ///   entropy;
-/// - [`ProverRandomness::hedged`]: a ChaCha20 stream keyed by
+/// - [`ProverRandomness::hedged`]: a `ChaCha20` stream keyed by
 ///   `BLAKE2b(32, "PIPA-v1-ProveRng", os_entropy || statement || witness)`,
-///   so a failing OS generator still yields distinct streams for distinct
-///   witnesses and statements;
-/// - [`ProverRandomness::recovery`]: a deterministic stream derived by the
-///   caller from a recovery seed (for example `KagemushaRecoverySeedV1`) and
-///   the context digest `BLAKE2b(32, "PIPA-v1-Recovery", statement ||
-///   witness)` that the prover computes from the actual witness, so two
-///   witnesses proved under one seed get unrelated blinds.
+///   so a weak or repeating OS generator that still returns bytes yields
+///   distinct streams for distinct witnesses and statements; an OS generator
+///   that fails is an error ([`ProverError::Entropy`]), never a fallback;
+/// - [`ProverRandomness::recovery`]: a deterministic stream for a recovery
+///   seed (for example `KagemushaRecoverySeedV1`). The prover computes the
+///   context `BLAKE2b(32, "PIPA-v1-Recovery", statement || witness)` from the
+///   actual witness, hands it to the caller's derivation, draws 32 bytes
+///   `r` from the stream the derivation returns, and keys the stream it
+///   actually uses itself: `ChaCha20(BLAKE2b(32, "PIPA-v1-RecovKey", r ||
+///   context))` ([`recovery_stream_key`]). Two witnesses or statements proved
+///   under one seed therefore get unrelated blinds even when the derivation
+///   ignores the context.
 ///
 /// The statement digest is `BLAKE2b(32, "PIPA-v1-Statemnt",
 /// descriptor_digest || transcript_repr || u32_le(columns) || (u32_le(len)
@@ -336,7 +346,7 @@ fn os_entropy() -> Result<[u8; 32], ProverError> {
 }
 
 impl<'a> ProverRandomness<'a> {
-    /// A ChaCha20 stream keyed by 32 bytes of OS entropy.
+    /// A `ChaCha20` stream keyed by 32 bytes of OS entropy.
     #[must_use]
     pub fn os() -> Self {
         Self { source: Source::Os }
@@ -352,11 +362,17 @@ impl<'a> ProverRandomness<'a> {
     }
 
     /// A deterministic recovery stream: `derive` receives the context digest
-    /// `BLAKE2b(32, "PIPA-v1-Recovery", statement || witness)` and returns
-    /// the stream, typically `seed.rng(RECOVERY_PURPOSE, context)` of a
-    /// `KagemushaRecoverySeedV1`. The derivation must be a pseudorandom
-    /// function of the context; the prover fails with
-    /// [`ProverError::RecoveryStream`] when it returns an error.
+    /// `BLAKE2b(32, "PIPA-v1-Recovery", statement || witness)` and returns a
+    /// stream, typically `seed.rng(RECOVERY_PURPOSE, context)` of a
+    /// `KagemushaRecoverySeedV1`. The prover draws 32 bytes `r` from it and
+    /// proves with `ChaCha20(`[`recovery_stream_key`]`(r, context))`, so the
+    /// witness and statement binding is enforced here and cannot be skipped
+    /// by a derivation that ignores the context (two witnesses never share
+    /// blinds). Secrecy of the blinds still requires the derivation to be
+    /// keyed by a secret seed: with a public or constant derivation the
+    /// blinds are a public function of the witness. The prover fails with
+    /// [`ProverError::RecoveryStream`] when the derivation returns an error
+    /// or its stream fails.
     #[must_use]
     pub fn recovery<R, E, D>(derive: D) -> Self
     where
@@ -384,7 +400,7 @@ impl<'a> ProverRandomness<'a> {
         }
     }
 
-    /// A ChaCha20 stream from a fixed seed. Unit tests and oracle builds
+    /// A `ChaCha20` stream from a fixed seed. Unit tests and oracle builds
     /// only.
     #[cfg(any(test, iroha_plonk_oracle))]
     #[doc(hidden)]
@@ -416,9 +432,14 @@ impl<'a> ProverRandomness<'a> {
             Source::Recovery(derive) => {
                 let binding = binding.ok_or(ProverError::RecoveryStream)?;
                 let context = recovery_context(&binding.statement, &binding.witness);
-                derive(&context)
-                    .map(StreamRng::Boxed)
-                    .ok_or(ProverError::RecoveryStream)
+                let mut caller = derive(&context).ok_or(ProverError::RecoveryStream)?;
+                let mut drawn = [0_u8; 32];
+                caller
+                    .try_fill_bytes(&mut drawn)
+                    .map_err(|_| ProverError::RecoveryStream)?;
+                let key = recovery_stream_key(&drawn, &context);
+                drawn.fill(0);
+                Ok(StreamRng::ChaCha(Box::new(ChaCha20Rng::from_seed(key))))
             }
             #[cfg(any(test, iroha_plonk_oracle))]
             Source::External(rng) => Ok(StreamRng::Boxed(rng)),
@@ -432,9 +453,21 @@ pub fn recovery_context(statement: &[u8; 32], witness: &[u8; 32]) -> [u8; 32] {
     blake2b_personal::<32>(RECOVERY_PERSONA, &[statement, witness])
 }
 
+/// The `ChaCha20` key of a recovery stream: `BLAKE2b(32, "PIPA-v1-RecovKey",
+/// drawn || context)`, where `drawn` are the first 32 bytes of the caller's
+/// derived stream and `context` is [`recovery_context`].
+#[must_use]
+pub fn recovery_stream_key(drawn: &[u8; 32], context: &[u8; 32]) -> [u8; 32] {
+    blake2b_personal::<32>(RECOVERY_KEY_PERSONA, &[drawn, context])
+}
+
 /// The opened random stream.
 enum StreamRng<'a> {
     ChaCha(Box<ChaCha20Rng>),
+    /// A caller-supplied stream: only [`ProverRandomness::from_rng_for_tests`]
+    /// (unit tests and oracle builds) constructs it; production streams are
+    /// always the `ChaCha20` streams this crate keys.
+    #[cfg_attr(not(any(test, iroha_plonk_oracle)), allow(dead_code))]
     Boxed(Box<dyn ProverRng + Send + 'a>),
 }
 
@@ -528,7 +561,11 @@ fn check_instances<F>(
 impl<F: PastaField> Witness<F> {
     /// Synthesizes `circuit` with `instances` and checks that its constraint
     /// system, fixed columns, selectors and copy constraints are the ones
-    /// `pk` was generated for.
+    /// `pk` was generated for. The copies are compared through the key's
+    /// [`ProvingKey::copy_digest`], streamed in constant memory, not by
+    /// recomputing `sigma`. The synthesized advice is moved into the witness
+    /// (never cloned) right after synthesis, so it is zeroized on every
+    /// return path.
     ///
     /// # Errors
     ///
@@ -547,10 +584,19 @@ impl<F: PastaField> Witness<F> {
         let descriptor = pk.binding().descriptor();
         check_instances(descriptor, instances)?;
         let k = u32::from(descriptor.k);
-        let synthesized = synthesize(circuit, k, Some(instances))?;
+        let mut synthesized = synthesize(circuit, k, Some(instances))?;
+        let advice = synthesized
+            .tables
+            .take_advice()
+            .ok_or(frontend::Error::WitnessRequired)?;
+        // Owned by a zeroizing witness from here on.
+        let witness = Self {
+            advice,
+            instances: instances.to_vec(),
+        };
         let tables = &synthesized.tables;
-        let first_column =
-            usize::try_from(descriptor.selectors.first_column).map_err(|_| ProtocolError::Overflow)?;
+        let first_column = usize::try_from(descriptor.selectors.first_column)
+            .map_err(|_| ProtocolError::Overflow)?;
         let finalized = synthesized
             .cs
             .clone()
@@ -566,16 +612,15 @@ impl<F: PastaField> Witness<F> {
             },
         )?;
         let fixed = pk.fixed_values();
-        let sigma = permutation_values(tables.permutation(), pk.domain().omega())?;
         if rebuilt != *descriptor
             || fixed.get(..first_column) != Some(tables.fixed())
             || fixed.get(first_column..) != Some(finalized.selector_columns())
-            || sigma != pk.permutation_values()
+            || tables.permutation().mapping_digest() != *pk.copy_digest()
         {
             return Err(ProverError::CircuitMismatch);
         }
-        let advice = tables.advice().ok_or(frontend::Error::WitnessRequired)?;
-        Self::from_columns(pk, advice.to_vec(), instances.to_vec())
+        witness.check_shape(pk)?;
+        Ok(witness)
     }
 
     /// A witness from explicit advice columns (`n` rows each; rows from `u`
@@ -595,25 +640,33 @@ impl<F: PastaField> Witness<F> {
     where
         C: PastaCurve<ScalarExt = F>,
     {
-        let descriptor = pk.binding().descriptor();
         let witness = Self { advice, instances };
+        witness.check_shape(pk)?;
+        Ok(witness)
+    }
+
+    /// Checks the advice and instance shapes against `pk`'s descriptor.
+    fn check_shape<C>(&self, pk: &ProvingKey<C>) -> Result<(), ProverError>
+    where
+        C: PastaCurve<ScalarExt = F>,
+    {
+        let descriptor = pk.binding().descriptor();
         let columns =
             usize::try_from(descriptor.num_advice_columns).map_err(|_| ProtocolError::Overflow)?;
-        if witness.advice.len() != columns {
+        if self.advice.len() != columns {
             return Err(ProverError::WitnessShape {
                 expected: columns,
-                found: witness.advice.len(),
+                found: self.advice.len(),
             });
         }
         let n = pk.binding().n();
-        if let Some(column) = witness.advice.iter().find(|column| column.len() != n) {
+        if let Some(column) = self.advice.iter().find(|column| column.len() != n) {
             return Err(ProverError::WitnessShape {
                 expected: n,
                 found: column.len(),
             });
         }
-        check_instances(descriptor, &witness.instances)?;
-        Ok(witness)
+        check_instances(descriptor, &self.instances)
     }
 
     /// The instance columns.
@@ -627,33 +680,25 @@ impl<F: PastaField> Witness<F> {
         &self.advice
     }
 
-    /// The witness digest over the usable rows of every advice column.
+    /// The witness digest over the usable rows of every advice column,
+    /// streamed value by value (no copy of the advice is built; each
+    /// encoded value is wiped after it is absorbed).
     fn digest(&self, usable_rows: usize) -> [u8; 32] {
-        let columns = u32::try_from(self.advice.len())
-            .unwrap_or(u32::MAX)
-            .to_le_bytes();
-        let rows = u32::try_from(usable_rows)
-            .unwrap_or(u32::MAX)
-            .to_le_bytes();
-        let mut bytes = Vec::with_capacity(
-            8 + self
-                .advice
-                .len()
-                .saturating_mul(usable_rows)
-                .saturating_mul(32),
+        let mut hasher = Blake2bPersonal::<32>::new(WITNESS_PERSONA);
+        hasher.update(
+            &u32::try_from(self.advice.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
         );
-        bytes.extend_from_slice(&columns);
-        bytes.extend_from_slice(&rows);
+        hasher.update(&u32::try_from(usable_rows).unwrap_or(u32::MAX).to_le_bytes());
         for column in &self.advice {
             for value in column.iter().take(usable_rows) {
-                bytes.extend_from_slice(&value.to_repr());
+                let mut repr = value.to_repr();
+                hasher.update(repr.as_ref());
+                repr.as_mut().fill(0);
             }
         }
-        let digest = blake2b_personal::<32>(WITNESS_PERSONA, &[&bytes]);
-        for byte in &mut bytes {
-            *byte = 0;
-        }
-        digest
+        hasher.finalize()
     }
 }
 
@@ -664,21 +709,18 @@ pub fn statement_digest<F: PastaField>(
     transcript_repr: &F,
     instances: &[Vec<F>],
 ) -> [u8; 32] {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(descriptor_digest);
-    bytes.extend_from_slice(&transcript_repr.to_repr());
-    bytes.extend_from_slice(
-        &u32::try_from(instances.len())
-            .unwrap_or(u32::MAX)
-            .to_le_bytes(),
-    );
+    let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX).to_le_bytes();
+    let mut hasher = Blake2bPersonal::<32>::new(STATEMENT_PERSONA);
+    hasher.update(descriptor_digest);
+    hasher.update(transcript_repr.to_repr().as_ref());
+    hasher.update(&count(instances.len()));
     for column in instances {
-        bytes.extend_from_slice(&u32::try_from(column.len()).unwrap_or(u32::MAX).to_le_bytes());
+        hasher.update(&count(column.len()));
         for value in column {
-            bytes.extend_from_slice(&value.to_repr());
+            hasher.update(value.to_repr().as_ref());
         }
     }
-    blake2b_personal::<32>(STATEMENT_PERSONA, &[&bytes])
+    hasher.finalize()
 }
 
 /// Resources of one proof.
@@ -717,7 +759,7 @@ pub fn create_proof<C: PastaCurve>(
     pk: &ProvingKey<C>,
     witness: &Witness<C::ScalarExt>,
     randomness: ProverRandomness<'_>,
-    config: &ProverConfig,
+    config: ProverConfig,
 ) -> Result<Vec<u8>, ProverError>
 where
     C::ScalarExt: PoseidonField,
@@ -726,7 +768,16 @@ where
         oracle: false,
         transcript_repr: *pk.vk().transcript_repr(),
     };
-    prove(params, pk, witness, randomness, config, mode)
+    prove(
+        params,
+        pk,
+        witness,
+        randomness,
+        config,
+        mode,
+        &mut lookup::VendoredPermutation,
+        &AllTerms,
+    )
 }
 
 /// Synthesizes `circuit` with `instances` ([`Witness::from_circuit`]) and
@@ -741,7 +792,7 @@ pub fn prove_circuit<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     circuit: &Ci,
     instances: &[Vec<C::ScalarExt>],
     randomness: ProverRandomness<'_>,
-    config: &ProverConfig,
+    config: ProverConfig,
 ) -> Result<Vec<u8>, ProverError>
 where
     C::ScalarExt: PoseidonField,
@@ -765,7 +816,7 @@ pub fn create_proof_oracle<C: PastaCurve>(
     pk: &ProvingKey<C>,
     witness: &Witness<C::ScalarExt>,
     randomness: ProverRandomness<'_>,
-    config: &ProverConfig,
+    config: ProverConfig,
     vendored_transcript_repr: C::ScalarExt,
 ) -> Result<Vec<u8>, ProverError>
 where
@@ -775,7 +826,16 @@ where
         oracle: true,
         transcript_repr: vendored_transcript_repr,
     };
-    prove(params, pk, witness, randomness, config, mode)
+    prove(
+        params,
+        pk,
+        witness,
+        randomness,
+        config,
+        mode,
+        &mut lookup::VendoredPermutation,
+        &AllTerms,
+    )
 }
 
 /// The challenges squeezed before the quotient.
@@ -787,17 +847,25 @@ struct Challenges<F> {
     y: F,
 }
 
-/// The prover body shared by production and oracle mode.
-fn prove<C: PastaCurve>(
+/// The prover body shared by production and oracle mode. Every real proof
+/// passes [`lookup::VendoredPermutation`] and [`AllTerms`]; the
+/// malicious-prover tests pass forged lookup permutations and omit the
+/// constraint terms their forgery violates from the quotient.
+#[allow(clippy::too_many_arguments)]
+fn prove<C, P>(
     params: &PinnedParams<C>,
     pk: &ProvingKey<C>,
     witness: &Witness<C::ScalarExt>,
     randomness: ProverRandomness<'_>,
-    config: &ProverConfig,
+    config: ProverConfig,
     mode: Mode<C::ScalarExt>,
+    permutation: &mut P,
+    filter: &(impl ConstraintFilter + Sync),
 ) -> Result<Vec<u8>, ProverError>
 where
+    C: PastaCurve,
     C::ScalarExt: PoseidonField,
+    P: lookup::LookupPermutation<C::ScalarExt>,
 {
     let descriptor = pk.binding().descriptor();
     if params.k() != u32::from(descriptor.k) || params.curve() != descriptor.curve {
@@ -847,10 +915,18 @@ where
         );
     }
 
-    // Rows 1 and the instances.
+    // The instances, then row 1.
     let instance = advice::InstanceColumns::new(pk, witness.instances())?;
     instance.absorb(params, &shape, &mut transcript, budget)?;
-    let advice = advice::commit(params, pk, &shape, witness, &mut rng, &mut transcript, budget)?;
+    let advice = advice::commit(
+        params,
+        pk,
+        &shape,
+        witness,
+        &mut rng,
+        &mut transcript,
+        budget,
+    )?;
     let theta = transcript.squeeze_challenge();
 
     // Row 2.
@@ -863,6 +939,7 @@ where
         &advice.values,
         &instance.values,
         theta,
+        permutation,
         &mut rng,
         &mut transcript,
         budget,
@@ -924,8 +1001,10 @@ where
             gamma,
             y,
         },
+        filter,
     )?;
-    let quotient = vanishing::commit_quotient(params, pk, &shape, h, &mut rng, &mut transcript, budget)?;
+    let quotient =
+        vanishing::commit_quotient(params, pk, &shape, &h, &mut rng, &mut transcript, budget)?;
     let x = transcript.squeeze_challenge();
     let xn = x.pow_vartime([u64::try_from(shape.n).map_err(|_| ProtocolError::Overflow)?]);
     if bool::from(x.is_zero()) || xn == C::ScalarExt::ONE {

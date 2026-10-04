@@ -1,0 +1,30 @@
+seiyaku LocalMapValues {
+    state StateMap<Name, quantity> Balances;
+    state quantity Total;
+    hajimari() {
+        let quantity zero = 0;
+        Total = zero;
+    }
+    fn move_amount(Name source, Name destination, quantity amount) {
+        let quantity zero = 0;
+        let available = Balances.get(source).unwrap_or(zero);
+        let received = Balances.get(destination).unwrap_or(zero);
+        let remainder = available - amount;
+        Balances[source] = remainder;
+        Balances[destination] = received + amount;
+    }
+    kotoage fn main() -> (quantity, quantity, quantity) authorize("WriteState") {
+        let left = Name::parse("left");
+        let right = Name::parse("right");
+        let quantity zero = 0;
+        let quantity supply = 100;
+        let quantity first = 27;
+        let quantity second = 13;
+        Balances[left] = supply;
+        Balances[right] = zero;
+        Total = supply;
+        move_amount(source: left, destination: right, amount: first);
+        move_amount(source: left, destination: right, amount: second);
+        return (Balances.get(left).unwrap_or(zero), Balances.get(right).unwrap_or(zero), Total);
+    }
+}

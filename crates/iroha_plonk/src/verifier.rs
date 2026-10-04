@@ -19,7 +19,7 @@
 //!    canonically (no reduction, on-curve, never the identity);
 //! 4. `x = 0` and `x^n = 1` are rejected as [`VerifyError::DegenerateChallenge`];
 //! 5. Direct-mode instance evaluations are computed from the values, the masks
-//!    `l_0`, `l_last`, `l_blind` from `x`;
+//!    `l_first`, `l_last`, `l_blind` from `x`;
 //! 6. the constraints are folded with `y` in the spec section 2 order into
 //!    the expected `h(x)`;
 //! 7. the multiopen groups queries statically by slot (S1), rejects a
@@ -28,20 +28,24 @@
 //! 8. the IPA rejects a zero round challenge;
 //! 9. [`verify_full`] accepts iff the opening equation holds with
 //!    `G'_0 = <s(u), g>` (a `FoldedGenerator` suffix must equal it);
-//!    [`verify_succinct`] checks it with the suffix in place of `G'_0` and
+//!    [`accumulate_succinct`] checks it with the suffix in place of `G'_0` and
 //!    returns a `#[must_use]` [`PendingAccumulator`], which only `decide` or
-//!    `batch_decide` accept.
+//!    `batch_decide` accept. Its `Ok` is satisfiable for false statements
+//!    until the accumulator is decided, so it is never a verdict.
 //!
 //! Every failure is a typed [`VerifyError`]; the verifier never panics. A
 //! memory budget only slows public MSMs down; it never rejects (S10).
 
 use core::fmt;
 
-use ff::{Field, PrimeField};
-use iroha_pasta::{PastaCurve, msm::MemoryBudget, poseidon::PoseidonField};
+use ff::Field;
+use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget, poseidon::PoseidonField};
 
 use crate::{
-    cs::{CircuitDescriptorV1, DescriptorError, DescriptorRule, ProofSuffixV1},
+    cs::{
+        CircuitDescriptorV1, DescriptorError, DescriptorRule, ProofSuffixV1,
+        descriptor::ColumnKindV1,
+    },
     keys::{DescriptorBinding, VerifyingKey, VkError},
     pcs::{
         ipa::{
@@ -57,7 +61,8 @@ use crate::{
         multiopen::{MultiopenError, SlotKind, verifier::verify as verify_opening},
     },
     protocol::{
-        Protocol, ProtocolError, evaluate_expression, instance_commitment, instance_evaluation,
+        AllTerms, ConstraintFilter, ConstraintTerm, LookupConstraint, PermutationColumn, Protocol,
+        ProtocolError, evaluate_expression, instance_commitment, instance_evaluation,
         lagrange_evaluations,
     },
     transcript::{
@@ -288,6 +293,17 @@ fn at<T>(items: &[T], index: impl TryInto<usize>) -> Result<&T, VerifyError> {
         )))
 }
 
+/// Rejects the degenerate challenges `x = 0` and `x^n = 1` (spec section 8,
+/// step 4): the Lagrange masks and the vanishing division are undefined on
+/// the subgroup, and the vendored verifier panics there.
+fn check_challenge<F: Field>(x: F, xn: F) -> Result<(), VerifyError> {
+    if bool::from(x.is_zero()) || xn == F::ONE {
+        Err(VerifyError::DegenerateChallenge)
+    } else {
+        Ok(())
+    }
+}
+
 /// The evaluations of one permutation set.
 #[derive(Clone, Copy, Debug)]
 struct SetEvals<F> {
@@ -306,8 +322,137 @@ struct LookupEvals<F> {
     table: F,
 }
 
+/// The Lagrange masks at `x`: `l_first`, `l_last` and `1 - l_last - l_blind`.
+#[derive(Clone, Copy, Debug)]
+struct Masks<F> {
+    first: F,
+    last: F,
+    active: F,
+}
+
+/// Everything a constraint term reads at `x`.
+struct ConstraintEvaluations<'a, F> {
+    descriptor: &'a CircuitDescriptorV1,
+    protocol: &'a Protocol,
+    /// The gate polynomials, flattened in descriptor order.
+    gates: Vec<&'a crate::cs::descriptor::ExprV1>,
+    fixed: &'a [F],
+    advice: &'a [F],
+    instance: &'a [F],
+    sigma: &'a [F],
+    sets: &'a [SetEvals<F>],
+    lookups: &'a [LookupEvals<F>],
+    masks: Masks<F>,
+    theta: F,
+    beta: F,
+    gamma: F,
+    x: F,
+}
+
+impl<F: PastaField> ConstraintEvaluations<'_, F> {
+    /// A descriptor expression at `x`.
+    fn expression(&self, expression: &crate::cs::descriptor::ExprV1) -> Result<F, VerifyError> {
+        evaluate_expression(expression, self.fixed, self.advice, self.instance)
+            .ok_or_else(|| VerifyError::Descriptor(DescriptorRule::Expression.into()))
+    }
+
+    /// The `theta`-compression of lookup expressions.
+    fn compress(&self, expressions: &[crate::cs::descriptor::ExprV1]) -> Result<F, VerifyError> {
+        expressions.iter().try_fold(F::ZERO, |acc, expression| {
+            self.expression(expression)
+                .map(|value| acc * self.theta + value)
+        })
+    }
+
+    /// The rotation-0 evaluation of a permutation column.
+    fn column(&self, column: &PermutationColumn) -> Result<F, VerifyError> {
+        let table = match column.kind {
+            ColumnKindV1::Advice => self.advice,
+            ColumnKindV1::Fixed => self.fixed,
+            ColumnKindV1::Instance => self.instance,
+        };
+        at(table, column.query).copied()
+    }
+
+    /// The value of one constraint term at `x` (spec section 2).
+    fn term(&self, term: ConstraintTerm) -> Result<F, VerifyError> {
+        let one = F::ONE;
+        let masks = self.masks;
+        Ok(match term {
+            ConstraintTerm::Gate { polynomial } => self.expression(at(&self.gates, polynomial)?)?,
+            ConstraintTerm::PermutationFirst => {
+                masks.first * (one - self.sets.first().ok_or(ProtocolError::Overflow)?.product)
+            }
+            ConstraintTerm::PermutationLast => {
+                let last = self.sets.last().ok_or(ProtocolError::Overflow)?.product;
+                masks.last * (last.square() - last)
+            }
+            ConstraintTerm::PermutationLink { set } => {
+                let previous = set
+                    .checked_sub(1)
+                    .and_then(|previous| self.sets.get(previous))
+                    .and_then(|previous| previous.last)
+                    .ok_or(ProtocolError::Overflow)?;
+                (at(self.sets, set)?.product - previous) * masks.first
+            }
+            ConstraintTerm::PermutationProduct { set } => {
+                let chunk = self.protocol.shape().chunk_len;
+                let first = set.checked_mul(chunk).ok_or(ProtocolError::Overflow)?;
+                let columns = self
+                    .protocol
+                    .permutation_columns()
+                    .chunks(chunk)
+                    .nth(set)
+                    .ok_or(ProtocolError::Overflow)?;
+                let sigmas = self
+                    .sigma
+                    .chunks(chunk)
+                    .nth(set)
+                    .ok_or(ProtocolError::Overflow)?;
+                let evals = at(self.sets, set)?;
+                let first = u64::try_from(first).map_err(|_| ProtocolError::Overflow)?;
+                let mut delta = self.beta * self.x * F::DELTA.pow_vartime([first]);
+                let mut left = evals.next;
+                for (column, sigma) in columns.iter().zip(sigmas) {
+                    left *= self.column(column)? + self.beta * sigma + self.gamma;
+                }
+                let mut right = evals.product;
+                for column in columns {
+                    right *= self.column(column)? + delta + self.gamma;
+                    delta *= F::DELTA;
+                }
+                (left - right) * masks.active
+            }
+            ConstraintTerm::Lookup { lookup, part } => {
+                let evals = at(self.lookups, lookup)?;
+                let argument = at(&self.descriptor.lookups, lookup)?;
+                let a_minus_s = evals.input - evals.table;
+                match part {
+                    LookupConstraint::First => masks.first * (one - evals.product),
+                    LookupConstraint::Last => masks.last * (evals.product.square() - evals.product),
+                    LookupConstraint::Product => {
+                        let input = self.compress(&argument.inputs)?;
+                        let table = self.compress(&argument.tables)?;
+                        (evals.product_next
+                            * (evals.input + self.beta)
+                            * (evals.table + self.gamma)
+                            - evals.product * (input + self.beta) * (table + self.gamma))
+                            * masks.active
+                    }
+                    LookupConstraint::Start => masks.first * a_minus_s,
+                    LookupConstraint::Step => {
+                        a_minus_s * (evals.input - evals.input_prev) * masks.active
+                    }
+                }
+            }
+        })
+    }
+}
+
 /// Steps 1-8 of the checklist; returns the pending opening and the suffix.
-#[allow(clippy::too_many_lines)]
+/// `filter` is [`AllTerms`] for every real verification; the
+/// malicious-prover tests omit terms to show which one rejects.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn read_proof<C: PastaCurve>(
     params: &PinnedParams<C>,
     binding: &DescriptorBinding,
@@ -316,6 +461,7 @@ fn read_proof<C: PastaCurve>(
     proof: &[u8],
     mode: Mode<C::ScalarExt>,
     budget: MemoryBudget,
+    filter: &impl ConstraintFilter,
 ) -> Result<ReadProof<C>, VerifyError>
 where
     C::ScalarExt: PoseidonField,
@@ -356,10 +502,14 @@ where
     if shape.committed_instances {
         for (column, values) in instances.iter().enumerate() {
             let commitment = instance_commitment(params, values, budget);
-            transcript.common_point(&commitment).map_err(|error| match error {
-                TranscriptError::IdentityPoint => VerifyError::IdentityInstanceCommitment { column },
-                other => VerifyError::Transcript(other),
-            })?;
+            transcript
+                .common_point(&commitment)
+                .map_err(|error| match error {
+                    TranscriptError::IdentityPoint => {
+                        VerifyError::IdentityInstanceCommitment { column }
+                    }
+                    other => VerifyError::Transcript(other),
+                })?;
             instance_commitments.push(commitment);
         }
     } else {
@@ -387,9 +537,7 @@ where
     let x = transcript.squeeze_challenge();
     let n = u64::try_from(shape.n).map_err(|_| ProtocolError::Overflow)?;
     let xn = x.pow_vartime([n]);
-    if bool::from(x.is_zero()) || xn == C::ScalarExt::ONE {
-        return Err(VerifyError::DegenerateChallenge);
-    }
+    check_challenge(x, xn)?;
 
     // Rows 7-11.
     let instance_evals = if shape.committed_instances {
@@ -434,81 +582,51 @@ where
         });
     }
 
-    // Masks: l_last = l_u, l_blind = sum of l_{u+1..n}, l_0.
+    // Masks: l_last = l_u, l_blind = sum of l_{u+1..n}, l_first.
     let mut indices: Vec<usize> = (shape.usable_rows..shape.n).collect();
     indices.push(0);
-    let masks = lagrange_evaluations(x, xn, shape.k, &indices)
-        .ok_or(VerifyError::DegenerateChallenge)?;
+    let masks =
+        lagrange_evaluations(x, xn, shape.k, &indices).ok_or(VerifyError::DegenerateChallenge)?;
     let (l_last, rest) = masks.split_first().ok_or(ProtocolError::Overflow)?;
-    let (l_0, blinding) = rest.split_last().ok_or(ProtocolError::Overflow)?;
-    let (l_last, l_0) = (*l_last, *l_0);
-    let l_blind = blinding
+    let (l_first, blind_masks) = rest.split_last().ok_or(ProtocolError::Overflow)?;
+    let (l_last, l_first) = (*l_last, *l_first);
+    let l_blind = blind_masks
         .iter()
         .fold(C::ScalarExt::ZERO, |acc, value| acc + value);
-    let active = C::ScalarExt::ONE - (l_last + l_blind);
 
-    // The constraints, folded with y in spec section 2 order.
-    let one = C::ScalarExt::ONE;
+    // The constraints, folded with y by interpreting the protocol's
+    // constraint-term table (spec section 2, S11).
+    let evaluations = ConstraintEvaluations {
+        descriptor,
+        protocol: &protocol,
+        gates: descriptor.gates.iter().flatten().collect(),
+        fixed: &fixed_evals,
+        advice: &advice_evals,
+        instance: &instance_evals,
+        sigma: &sigma_evals,
+        sets: &set_evals,
+        lookups: &lookup_evals,
+        masks: Masks {
+            first: l_first,
+            last: l_last,
+            active: C::ScalarExt::ONE - (l_last + l_blind),
+        },
+        theta,
+        beta,
+        gamma,
+        x,
+    };
     let mut expected = C::ScalarExt::ZERO;
-    let expression_error = || VerifyError::Descriptor(DescriptorRule::Expression.into());
-    for poly in descriptor.gates.iter().flatten() {
-        let value = evaluate_expression(poly, &fixed_evals, &advice_evals, &instance_evals)
-            .ok_or_else(expression_error)?;
+    for term in protocol.constraint_terms() {
+        let value = if filter.keeps(*term) {
+            evaluations.term(*term)?
+        } else {
+            C::ScalarExt::ZERO
+        };
         expected = expected * y + value;
     }
-    if let (Some(first), Some(last)) = (set_evals.first(), set_evals.last()) {
-        expected = expected * y + l_0 * (one - first.product);
-        expected = expected * y + l_last * (last.product.square() - last.product);
-        for pair in set_evals.windows(2) {
-            let previous_last = pair[0].last.ok_or(ProtocolError::Overflow)?;
-            expected = expected * y + (pair[1].product - previous_last) * l_0;
-        }
-        let mut current_delta = beta * x;
-        for ((set, columns), sigmas) in set_evals
-            .iter()
-            .zip(protocol.permutation_columns().chunks(shape.chunk_len))
-            .zip(sigma_evals.chunks(shape.chunk_len))
-        {
-            let column_eval = |column: &crate::protocol::PermutationColumn| {
-                let table = match column.kind {
-                    crate::cs::descriptor::ColumnKindV1::Advice => &advice_evals,
-                    crate::cs::descriptor::ColumnKindV1::Fixed => &fixed_evals,
-                    crate::cs::descriptor::ColumnKindV1::Instance => &instance_evals,
-                };
-                at(table, column.query).copied()
-            };
-            let mut left = set.next;
-            for (column, sigma) in columns.iter().zip(sigmas) {
-                left *= column_eval(column)? + beta * sigma + gamma;
-            }
-            let mut right = set.product;
-            for column in columns {
-                right *= column_eval(column)? + current_delta + gamma;
-                current_delta *= <C::ScalarExt as PrimeField>::DELTA;
-            }
-            expected = expected * y + (left - right) * active;
-        }
-    }
-    for (evals, lookup) in lookup_evals.iter().zip(&descriptor.lookups) {
-        let compress = |expressions: &[crate::cs::descriptor::ExprV1]| {
-            expressions.iter().try_fold(C::ScalarExt::ZERO, |acc, expression| {
-                evaluate_expression(expression, &fixed_evals, &advice_evals, &instance_evals)
-                    .map(|value| acc * theta + value)
-            })
-        };
-        let input = compress(&lookup.inputs).ok_or_else(expression_error)?;
-        let table = compress(&lookup.tables).ok_or_else(expression_error)?;
-        let a_minus_s = evals.input - evals.table;
-        expected = expected * y + l_0 * (one - evals.product);
-        expected = expected * y + l_last * (evals.product.square() - evals.product);
-        expected = expected * y
-            + (evals.product_next * (evals.input + beta) * (evals.table + gamma)
-                - evals.product * (input + beta) * (table + gamma))
-                * active;
-        expected = expected * y + l_0 * a_minus_s;
-        expected = expected * y + a_minus_s * (evals.input - evals.input_prev) * active;
-    }
     // x^n != 1 was checked, so the inverse exists.
+    let one = C::ScalarExt::ONE;
     let expected_h = expected
         * Option::<C::ScalarExt>::from((xn - one).invert())
             .ok_or(VerifyError::DegenerateChallenge)?;
@@ -639,22 +757,34 @@ where
         proof,
         production(vk),
         budget,
+        &AllTerms,
     )?;
     Ok(read
         .pending
         .verify_full(params, read.suffix.as_ref(), budget)?)
 }
 
-/// Succinct verification (spec section 11): steps 1-8, then the opening
-/// equation with the `FoldedGenerator` suffix in place of `G'_0`. The MSM
-/// size does not depend on `n`. The result is a pending accumulator, not an
-/// acceptance: only `decide` or `batch_decide` accept it.
+/// Succinct accumulation (spec section 11): steps 1-8, then the opening
+/// equation with the `FoldedGenerator` suffix `G` in place of `G'_0`. The MSM
+/// size does not depend on `n`.
+///
+/// **`Ok` is not an acceptance and says nothing about the statement.** The
+/// suffix is read after every challenge (the round challenges, `c` and `f`)
+/// and is not absorbed, so for any statement a prover can write well-formed
+/// messages and then solve the equation for `G`; this function returns
+/// `Ok(accumulator)` for such a false statement. The returned
+/// [`PendingAccumulator`] carries the claim `G = <s(u), g>`, and only
+/// [`PendingAccumulator::decide`] or [`batch_decide`](crate::batch_decide)
+/// accept; [`verify_full`] and [`batch_verify`] decide it themselves. Use this
+/// only to defer that decision (for example into a recursive accumulator),
+/// never as a verdict.
 ///
 /// # Errors
 ///
 /// [`VerifyError::SuffixRequired`] without a `FoldedGenerator` suffix, and
-/// the typed [`VerifyError`] of the first failed check.
-pub fn verify_succinct<C: PastaCurve>(
+/// the typed [`VerifyError`] of the first failed decoding, shape or opening
+/// check.
+pub fn accumulate_succinct<C: PastaCurve>(
     params: &PinnedParams<C>,
     binding: &DescriptorBinding,
     vk: &VerifyingKey<C>,
@@ -676,11 +806,12 @@ where
         proof,
         production(vk),
         budget,
+        &AllTerms,
     )?;
     let folded = read.suffix.ok_or(VerifyError::SuffixRequired)?;
     Ok(read
         .pending
-        .verify_succinct(params, &folded, vk.transcript_repr(), budget)?)
+        .accumulate(params, &folded, vk.transcript_repr(), budget)?)
 }
 
 /// [`verify_full`] from the canonical descriptor frame `D` and the `0x02`
@@ -732,7 +863,40 @@ where
         oracle: true,
         transcript_repr: vendored_transcript_repr,
     };
-    let read = read_proof(params, binding, vk, instances, proof, mode, budget)?;
+    let read = read_proof(
+        params, binding, vk, instances, proof, mode, budget, &AllTerms,
+    )?;
+    Ok(read
+        .pending
+        .verify_full(params, read.suffix.as_ref(), budget)?)
+}
+
+/// [`verify_full`] with a constraint filter (malicious-prover tests only):
+/// a verifier that omits the filtered terms, used to show that a forgery is
+/// rejected exactly because of the terms it violates.
+#[cfg(test)]
+pub(crate) fn verify_full_filtered<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    binding: &DescriptorBinding,
+    vk: &VerifyingKey<C>,
+    instances: &[Vec<C::ScalarExt>],
+    proof: &[u8],
+    filter: &impl ConstraintFilter,
+) -> Result<(), VerifyError>
+where
+    C::ScalarExt: PoseidonField,
+{
+    let budget = MemoryBudget::DEFAULT;
+    let read = read_proof(
+        params,
+        binding,
+        vk,
+        instances,
+        proof,
+        production(vk),
+        budget,
+        filter,
+    )?;
     Ok(read
         .pending
         .verify_full(params, read.suffix.as_ref(), budget)?)
@@ -798,6 +962,7 @@ where
             item.proof,
             production(item.vk),
             budget,
+            &AllTerms,
         )
         .map_err(|error| item_error(index, error))?;
         let body = proof_item_body(
@@ -833,7 +998,10 @@ where
         }
         return Ok(());
     }
-    let Some(largest) = items.iter().map(|item| item.params).max_by_key(|params| params.k())
+    let Some(largest) = items
+        .iter()
+        .map(|item| item.params)
+        .max_by_key(|params| params.k())
     else {
         return Ok(());
     };

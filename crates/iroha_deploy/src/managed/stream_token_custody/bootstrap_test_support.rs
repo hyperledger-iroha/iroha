@@ -32,6 +32,8 @@ impl ManagedStreamTokenCustody {
         utc: u64,
         options: &BoundedTransactionOptions,
     ) -> BodyHistory {
+        // TODO: Remove static phase diagnostics after the ordinary-stack failure is localized.
+        eprintln!("custody-body phase: helper-enter");
         let terms = Terms::new(utc, options).unwrap();
         let turn = SigningTurn::Explicit(&terms);
         let checkpoint = self
@@ -39,7 +41,9 @@ impl ManagedStreamTokenCustody {
             .decode_checkpoint(&unsigned.checkpoint)
             .unwrap();
         let policy = body_history::selected_policy(&unsigned.selection).unwrap();
+        eprintln!("custody-body phase: selection-decoded native-current-start");
         let current = native.bootstrap_custody(&self.authority, &policy, &checkpoint);
+        eprintln!("custody-body phase: native-current-complete initialize-start");
         let history = BodyHistory::initialize(
             self,
             purpose,
@@ -49,10 +53,12 @@ impl ManagedStreamTokenCustody {
             options.deadline,
         )
         .unwrap();
+        eprintln!("custody-body phase: initialize-complete prefix-assertions-start");
         assert!(history.has_pending());
         assert!(history.original().unwrap().is_none());
         assert!(history.dispatch().is_err());
-        history
+        eprintln!("custody-body phase: prefix-assertions-complete finish-start");
+        let history = history
             .finish_pending_with_reads(
                 self,
                 &current,
@@ -60,7 +66,9 @@ impl ManagedStreamTokenCustody {
                 options.deadline,
                 &NativeEnrollmentReads(native),
             )
-            .unwrap()
+            .unwrap();
+        eprintln!("custody-body phase: finish-complete");
+        history
     }
 
     pub(in crate::managed) fn bootstrap_native_configure(
@@ -97,6 +105,19 @@ impl ManagedStreamTokenCustody {
         interval: ManagedCustodyEnrollmentInterval,
         options: &BoundedTransactionOptions,
     ) -> ManagedCustodyProgress {
+        self.bootstrap_native_enroll_with_interval(native, policy, |_| interval, options)
+            .1
+    }
+
+    // Select a test's original short interval only after authenticating all prerequisites.
+    // The interval is then immutable and every ordinary signing/expiry check still applies.
+    pub(super) fn bootstrap_native_enroll_with_interval(
+        &mut self,
+        native: &mut NativeFixture,
+        policy: &SignerCustodyPolicyV1,
+        select_interval: impl FnOnce(u64) -> ManagedCustodyEnrollmentInterval,
+        options: &BoundedTransactionOptions,
+    ) -> (ManagedCustodyEnrollmentInterval, ManagedCustodyProgress) {
         self.authority.validate_profile().unwrap();
         self.validate_policy(policy).unwrap();
         let configured = self.authority.directory.open_child("configure").unwrap();
@@ -119,6 +140,7 @@ impl ManagedStreamTokenCustody {
         assert!(!state.control().signer_revoked && !state.control().attester_revoked);
         assert!(state.control().active_head.is_none());
         let now = now_ms().unwrap();
+        let interval = select_interval(now);
         validate_interval(interval, now).unwrap();
         let unsigned = self
             .unsigned_enrollment(policy, &current, &verifier, interval, now)
@@ -137,13 +159,15 @@ impl ManagedStreamTokenCustody {
             interval.deadline_unix_ms,
             options,
         );
-        self.recover_enroll_selected_if_present(
-            policy,
-            &Fees::from_options(options).unwrap(),
-            options.deadline,
-        )
-        .unwrap()
-        .unwrap()
+        let progress = self
+            .recover_enroll_selected_if_present(
+                policy,
+                &Fees::from_options(options).unwrap(),
+                options.deadline,
+            )
+            .unwrap()
+            .unwrap();
+        (interval, progress)
     }
 
     pub(super) fn bootstrap_native_original(

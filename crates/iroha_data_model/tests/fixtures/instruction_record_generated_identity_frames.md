@@ -127,8 +127,9 @@ qualification remain separate gates. Earlier dated evidence applies only to its
 original source snapshots.
 
 On 2026-09-28 the `CancelConsensusEvidencePenalty` row was removed together with
-the instruction: consensus evidence is a local log and telemetry record, so no
-on-chain penalty exists to cancel. The merged first-release inventory retains 330 rows and 366 populated cases;
+the instruction. Native evidence admitted by a certified carrier is canonical
+state and authorizes mandatory finality slashing; there is no instruction or
+consensus effect that cancels that penalty. The merged first-release inventory retains 330 rows and 366 populated cases;
 the current registry has 388 instructions (21 governance and 367 non-governance).
 These totals combine existing captures and are not a new native qualification run.
 

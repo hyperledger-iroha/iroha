@@ -1293,6 +1293,12 @@ need to enforce StrongBox-only keys or user-authentication requirements while
 retaining an explicit deterministic software provider for other signing paths.
 If your desktop JVM lacks built-in Ed25519 support, configure the software
 provider with BouncyCastle required.
+The Android Keystore backend is offered only on keystore2 (API 31+). It decides
+whether an alias exists through `KeyStore.getKey(alias, null)` alone, because
+`containsAlias`/`getEntry` report Keystore errors as absent aliases and generating
+under an occupied alias replaces its key. `load` throws instead of returning empty
+when the Keystore cannot answer, so `generateOrLoad` never overwrites a key it could
+not see.
 Hardware-backed keys remain non-extractable; for user-managed accounts that must
 roam across devices, prefer `SOFTWARE_ONLY` (or `withSoftwareProvider`) and use
 `exportDeterministicKey(...)` / `importDeterministicKey(...)` to move key

@@ -1,5 +1,8 @@
 //! Original-mask replay from closed immutable MAIN witness owners.
 
+use super::super::super::der_stark::{
+    fill_zk_x509_der_stark_native_aux_columns_v1, fill_zk_x509_der_stark_native_base_columns_v1,
+};
 use super::super::super::private_table::{
     PrivateTableV1, zeroize_field_rows_v1, zeroize_fields_v1,
 };
@@ -1235,7 +1238,7 @@ pub(super) enum MainTraceReplaySourcesV1<'phase, 'assembly> {
 }
 
 impl MainTraceReplaySourcesV1<'_, '_> {
-    /// Extract each SHA run and arithmetic/value base or bound auxiliary run once, preserving
+    /// Extract each DER, SHA and arithmetic/value base or bound auxiliary run once, preserving
     /// public group/registration order and the closed base/bound phase.
     pub(super) fn native_columns_v1(
         &self,
@@ -1335,6 +1338,87 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                     PhaseV1::SourceP256ScalarBitBusAux
                 }
             });
+            if registration.segment.adapter == SegmentAdapterIdV1::StrictDer {
+                let end = columns.end.min(match kind {
+                    MainTraceColumnKindV1::Base => registration.base_end()?,
+                    MainTraceColumnKindV1::Aux => registration.aux_end()?,
+                });
+                if end <= first {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let count = end - first;
+                let rows = registration.segment.trace_size();
+                if output.capacity() != width {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                let mut batch = Vec::new();
+                batch
+                    .try_reserve_exact(count)
+                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+                if batch.capacity() != count {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                for _ in 0..count {
+                    let column = zeroed_main_trace_column_v1(rows)?;
+                    if column.0.capacity() != rows {
+                        return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                    }
+                    batch.push(column);
+                }
+                {
+                    let mut targets: [&mut [F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
+                        core::array::from_fn(|_| -> &mut [F] { &mut [] });
+                    for (target, column) in targets.iter_mut().zip(batch.iter_mut()) {
+                        *target = &mut **column;
+                    }
+                    match self {
+                        Self::Base {
+                            assembly,
+                            sha,
+                            p256,
+                            ..
+                        } => {
+                            let source = MainLog19BaseTraceGroupSourceV1::for_main_v1(
+                                layout, assembly, sha, p256,
+                            )?;
+                            if source.registration_index_v1(registration)? != 0 {
+                                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                            }
+                            fill_zk_x509_der_stark_native_base_columns_v1(
+                                source.der,
+                                local,
+                                &mut targets[..count],
+                            )?;
+                        }
+                        Self::Bound { log19, .. } => {
+                            if log19.registration_index_v1(registration)? != 0 {
+                                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                            }
+                            match kind {
+                                MainTraceColumnKindV1::Base => {
+                                    fill_zk_x509_der_stark_native_base_columns_v1(
+                                        &log19.der.base,
+                                        local,
+                                        &mut targets[..count],
+                                    )?;
+                                }
+                                MainTraceColumnKindV1::Aux => {
+                                    fill_zk_x509_der_stark_native_aux_columns_v1(
+                                        &log19.der,
+                                        local,
+                                        &mut targets[..count],
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+                output.extend(batch);
+                first = end;
+                #[cfg(test)]
+                source_timer.complete_v1();
+                continue;
+            }
             if registration.segment.adapter == SegmentAdapterIdV1::Rfc5280
                 && matches!(kind, MainTraceColumnKindV1::Base)
             {

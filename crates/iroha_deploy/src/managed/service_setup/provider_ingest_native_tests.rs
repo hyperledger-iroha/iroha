@@ -9,15 +9,13 @@ use crate::managed::native_operation::{
     },
     verify_carrier,
 };
-use iroha_core::state::WorldReadOnly;
+use iroha_core::state::{StorageReadOnly as _, WorldReadOnly};
 use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     isi::{InstructionBox, Log, sorafs::SetProviderIngestCompletionAuthority},
 };
 use iroha_primitives::numeric::Quantity;
 use std::time::Duration;
-
-use mv::storage::StorageReadOnly as _;
 
 fn native_fixture(prepared: &PreparedLocalnet, owner: &Setup) -> NativeFixture {
     let mut native = NativeFixture::from_generated(prepared, &owner.authority);

@@ -232,6 +232,9 @@ fn actual_epoch_history_has_a_finite_limit_and_never_rewrites_older_epochs() {
     let root = first.lease.directory.open_child("epochs").unwrap();
     let first_bytes = root.read("0001.nrt", attempts::MAX_RECORD_BYTES).unwrap();
     for ordinal in 2..=MAX_EPOCHS {
+        // Each epoch models a distinct worker startup, with its own finite I/O budget.
+        // Retained epoch terms remain immutable; no deadline is renewed within a startup.
+        let deadline = Instant::now() + Duration::from_secs(600);
         assert_eq!(
             usize::from(
                 owner
@@ -245,6 +248,8 @@ fn actual_epoch_history_has_a_finite_limit_and_never_rewrites_older_epochs() {
             ordinal
         );
     }
+    // The next independently budgeted startup must fail on the durable history cap.
+    let deadline = Instant::now() + Duration::from_secs(600);
     assert!(matches!(
         owner.authorize_generated_startup(deadline, cancelled),
         Err(crate::managed::Error::Bootstrap(

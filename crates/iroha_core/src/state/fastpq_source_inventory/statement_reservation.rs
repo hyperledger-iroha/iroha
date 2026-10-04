@@ -1,19 +1,12 @@
-//! State-owned, whole-inventory construction reservations after execution has finished.
+//! Test-only whole-transfer diagnostic preparation and exact logical quota accounting.
 //!
-//! A prospective reservation always remeasures the complete sealed archive. No occurrence
-//! prefix is added to an earlier statement size. Preparing or dropping an attempt leaves
-//! committed accounting untouched; successful materialization replaces it atomically.
-//! This local seam does not admit execution, reserve WSV effects, or authenticate policy.
-//! TODO: integrate authenticated intrinsic/block policy, transaction savepoints and mandatory
-//! work accounting before using source usage for proposal packing or runtime admission.
+//! Every attempt remeasures the original complete public transcript archive. Success
+//! replaces local usage atomically. This module creates no D7/wire/finality owner.
 
 use std::{collections::BTreeMap, sync::Arc};
 
 use iroha_crypto::Hash;
-use iroha_data_model::fastpq::{
-    FastpqOrdinarySourceStatementLeafV1, FastpqOrdinarySourceStatementManifestV1,
-    TransferTranscript,
-};
+use iroha_data_model::fastpq::TransferTranscript;
 use mv::storage::StorageReadOnly;
 
 use super::{FastpqSourceInventoryV1, StateBlock};
@@ -21,6 +14,8 @@ use crate::fastpq::{
     FastpqSourceStatementBuildLimits, FastpqSourceTranscriptUsage,
     measure_fastpq_source_statement_usage,
 };
+#[cfg(test)]
+use crate::fastpq::{TransferArchiveDiagnostic, TransferEntryDiagnostic};
 
 /// Exact local construction usage for one complete execution-owned inventory.
 ///
@@ -165,7 +160,7 @@ impl FastpqSourceStatementAttemptV1<'_, '_> {
         self.usage
     }
 
-    /// Materialize using the current State context and atomically publish local usage on success.
+    /// Prepare an unanchored diagnostic and atomically record local usage on success.
     ///
     /// State ownership is rechecked after preparation. Slot and permission root come from
     /// the current block header and role table, never a supplied root. The unchanged strict
@@ -177,21 +172,16 @@ impl FastpqSourceStatementAttemptV1<'_, '_> {
     /// # Errors
     /// Rejects stale/foreign/replay State ownership or any strict producer failure, leaving
     /// committed usage unchanged. No partially materialized output is returned on error.
-    pub fn materialize(
+    #[cfg(test)]
+    pub(crate) fn materialize_diagnostic(
         self,
         block: &StateBlock<'_>,
-    ) -> Result<
-        (
-            FastpqOrdinarySourceStatementManifestV1,
-            Vec<FastpqOrdinarySourceStatementLeafV1>,
-        ),
-        String,
-    > {
+    ) -> Result<(TransferArchiveDiagnostic, Vec<TransferEntryDiagnostic>), String> {
         let output = (|| {
             self.budget.verify_current(block)?;
             let slot = block._curr_block.creation_time_ms.saturating_mul(1_000_000);
             let perm_root = crate::fastpq::permission_table_root(block.world.roles.iter());
-            self.budget.inventory.derive_manifest(
+            self.budget.inventory.prepare_transfer_diagnostic(
                 slot,
                 perm_root,
                 self.transcripts,
@@ -201,6 +191,7 @@ impl FastpqSourceStatementAttemptV1<'_, '_> {
         self.publish_if_success(output)
     }
 
+    #[cfg(test)]
     fn publish_if_success<T>(self, output: Result<T, String>) -> Result<T, String> {
         let output = output?;
         self.budget.committed = Some(self.usage);

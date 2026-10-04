@@ -6,27 +6,19 @@ use crate::{
 use iroha_data_model::{IntoKeyValue, smart_contract::ContractAddress};
 use iroha_model_base::{name::Name, topology::DataSpaceId};
 
-const WRAPPER_BLOCK_GAS_LIMIT: u64 = 8_000_000;
+const WRAPPER_BLOCK_GAS_LIMIT: u64 = 4_000_000;
 
 // Keep genesis construction outside the frame that invokes the signed callback.
 // Every phase still runs on the ordinary test thread with its default stack.
 #[inline(never)]
 fn wrapper_chain() -> (crate::sumeragi::test_chain::CertifiedTestChain, AccountId) {
-    use iroha_data_model::parameter::{CustomParameter, CustomParameterId, Parameter};
     let deployer = account(55);
-    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(
+    // Use the actual default block policy from the signed original genesis.
+    // The production wrapper, nested DLMM and byte charge must fit it unchanged.
+    let config = crate::sumeragi::test_chain::TestChainConfig::new(
         validation_fee_payout_world(&deployer),
         1_000,
     );
-    // The unchanged production wrapper and nested DLMM need more than the default
-    // four-million-gas block. Authenticate a finite component-fixture policy in
-    // the original genesis; this does not qualify a production payout gas policy.
-    config
-        .genesis_parameters
-        .push(Parameter::Custom(CustomParameter::new(
-            CustomParameterId::new("ivm_gas_limit_per_block".parse().unwrap()),
-            Json::new(WRAPPER_BLOCK_GAS_LIMIT),
-        )));
     let (chain, deployer, _, _) =
         signed_original_fixtures::signed_fee_registry_root_fixture_with_config(config);
     (chain, deployer)
@@ -55,6 +47,8 @@ struct WrapperFixture {
     expected_output: Quantity,
     minimum_output: &'static str,
     pool_hash: Hash,
+    pool_artifact_bytes: usize,
+    pool_full_wire_hash: Hash,
     wrapper_code: Vec<u8>,
     wrapper_hash: Hash,
     treasury_sbd: AssetId,
@@ -270,19 +264,29 @@ seiyaku FullFillPool {
         expected_output,
         minimum_output,
         pool_hash,
+        pool_artifact_bytes: pool_code.len(),
+        pool_full_wire_hash: Hash::new(&pool_code),
         wrapper_code,
         wrapper_hash,
         treasury_sbd,
     }
 }
 
-// The preview host and VM must finish before the signed root invokes the real VM.
+// One actual host/authorization/plan-validation path for the maintained gate
+// and the explicit diagnostic. Its caller owns the transaction and alone may
+// publish it; this preview never executes queued transfers or applies overlays.
+struct WrapperEffectsPreview {
+    ordered: Vec<(AccountId, InstructionBox)>,
+    treasury_xor: AssetId,
+    gas_used: u64,
+}
+
 #[inline(never)]
-fn prepare_wrapper_callback(
-    block: &mut crate::state::StateBlock<'_>,
-    deployer: &AccountId,
+fn preview_wrapper_effects(
+    stx: &mut StateTransaction<'_, '_>,
     fixture: &WrapperFixture,
-) -> WrapperPreview {
+    preview_vm_gas_limit: u64,
+) -> WrapperEffectsPreview {
     let pool = fixture.pool.clone();
     let wrapper = fixture.wrapper.clone();
     let reward_pool = fixture.reward_pool.clone();
@@ -291,8 +295,6 @@ fn prepare_wrapper_callback(
     let pool_hash = fixture.pool_hash;
     let wrapper_code = fixture.wrapper_code.clone();
     let wrapper_hash = fixture.wrapper_hash;
-    let mut setup = block.transaction_for_callback_testing();
-    let stx = &mut setup;
     let treasury_xor = AssetId::new(xor.clone(), wrapper.subject_id());
     assert!(
         stx.world.assets.get(&treasury_xor).is_none(),
@@ -333,18 +335,13 @@ fn prepare_wrapper_callback(
             code_hash: wrapper_hash,
         },
     )));
-    let mut vm = ivm::IVM::new(50_000_000);
+    let mut vm = ivm::IVM::new(preview_vm_gas_limit);
     vm.load_program(&wrapper_code).unwrap();
     vm.set_program_counter(prepared.entrypoint_pc(&context.entrypoint).unwrap())
         .unwrap();
     vm.run_with_host(&mut host)
         .expect("real wrapper and nested pool execute");
-    let preview_gas_used = 50_000_000 - vm.remaining_gas();
-    eprintln!("payout gas execution: contract={wrapper}, total_gas={preview_gas_used}");
-    assert!(
-        preview_gas_used > 0 && preview_gas_used < WRAPPER_BLOCK_GAS_LIMIT,
-        "the real nested frame execution must fit its finite authenticated policy"
-    );
+    let preview_gas_used = preview_vm_gas_limit - vm.remaining_gas();
     let artifacts = host.into_execution_artifacts(Some(context)).unwrap();
     let ordered = artifacts.queued_instructions_with_authority();
     assert_eq!(
@@ -373,11 +370,39 @@ fn prepare_wrapper_callback(
         )
         .unwrap()
     );
-    // The artifact check is a read-only preview. A contract subject cannot
-    // sign a root transaction: invoke its registered callback through an
-    // explicitly authorized signed ExecuteTrigger instead. This component
-    // case does not claim scheduled or active retail-policy qualification.
+    // The artifact check is a read-only preview. The maintained gate then
+    // invokes its callback through an authorized signed ExecuteTrigger;
+    // the explicit gas diagnostic drops every effect and its transaction.
+    // Neither preview claims scheduled or active retail-policy qualification.
     drop(artifacts);
+    WrapperEffectsPreview {
+        ordered,
+        treasury_xor,
+        gas_used: preview_gas_used,
+    }
+}
+
+// The preview host and VM must finish before the signed root invokes the real VM.
+#[inline(never)]
+fn prepare_wrapper_callback(
+    block: &mut crate::state::StateBlock<'_>,
+    deployer: &AccountId,
+    fixture: &WrapperFixture,
+) -> WrapperPreview {
+    let wrapper = fixture.wrapper.clone();
+    let wrapper_hash = fixture.wrapper_hash;
+    let mut setup = block.transaction_for_callback_testing();
+    let WrapperEffectsPreview {
+        ordered,
+        treasury_xor,
+        gas_used: preview_gas_used,
+    } = preview_wrapper_effects(&mut setup, fixture, WRAPPER_BLOCK_GAS_LIMIT);
+    eprintln!("payout gas execution: contract={wrapper}, total_gas={preview_gas_used}");
+    assert!(
+        preview_gas_used > 0 && preview_gas_used < WRAPPER_BLOCK_GAS_LIMIT,
+        "the real nested frame execution must fit the original default block policy"
+    );
+    let stx = &mut setup;
     let trigger_id: iroha_data_model::trigger::TriggerId = "wrapper_effect_budget".parse().unwrap();
     let action = Action::new(
         Executable::ContractCall(ContractInvocation {
@@ -480,4 +505,95 @@ fn compiled_fee_wrapper_preserves_nested_pool_authorities_and_actual_output() {
             );
         });
     }
+}
+
+// Compare complete ledger balances and every durable contract-state byte after
+// dropping the diagnostic's unapplied transaction, rather than assuming rollback.
+fn wrapper_ledger_snapshot(
+    block: &crate::state::StateBlock<'_>,
+) -> (Vec<(AssetId, Quantity)>, Vec<(StatePath, Vec<u8>)>) {
+    (
+        block
+            .world
+            .assets
+            .iter()
+            .map(|(id, value)| (id.clone(), value.as_ref().clone()))
+            .collect(),
+        block
+            .world
+            .smart_contract_state
+            .iter()
+            .map(|(path, bytes)| (path.clone(), bytes.clone()))
+            .collect(),
+    )
+}
+
+#[test]
+#[ignore = "Explicit native gas diagnostic with finite8M preview; never a default4M callback qualification"]
+fn measure_complete_native_production_wrapper_gas_without_publishing_preview() {
+    const DIAGNOSTIC_PREVIEW_VM_GAS_LIMIT: u64 = 8_000_000;
+    with_wrapper_block(|block, deployer| {
+        let fixture = install_wrapper_fixture(block, deployer, true);
+        assert_eq!(block.gas_limit_per_block, WRAPPER_BLOCK_GAS_LIMIT);
+        let default_block_gas_limit = block.gas_limit_per_block;
+        let fragments_before = block.committed_fragment_count();
+        let block_gas_before = block.gas_used_in_block;
+        let ledger_before = wrapper_ledger_snapshot(block);
+        let mut preview = block.transaction_for_callback_testing();
+        let WrapperEffectsPreview {
+            ordered,
+            treasury_xor,
+            gas_used,
+        } = preview_wrapper_effects(&mut preview, &fixture, DIAGNOSTIC_PREVIEW_VM_GAS_LIMIT);
+        assert!(gas_used > 0 && gas_used < DIAGNOSTIC_PREVIEW_VM_GAS_LIMIT);
+        let input = direct_conversion_transfer(&ordered[0].1).unwrap();
+        let output = direct_conversion_transfer(&ordered[1].1).unwrap();
+        let reserve = direct_conversion_transfer(&ordered[2].1).unwrap();
+        assert_eq!(input.object, Quantity::from(10u64));
+        assert_eq!(output.object, fixture.expected_output);
+        assert_eq!(reserve.object, fixture.expected_output);
+        assert_eq!(output.source.definition, fixture.xor);
+        assert_eq!(reserve.source, treasury_xor);
+        let artifact_byte_gas = ivm::gas::CONSERVATIVE_SYSCALL_INPUT_MULTIPLIER
+            .checked_mul(u64::try_from(fixture.pool_artifact_bytes).unwrap())
+            .unwrap();
+        let non_artifact_gas = gas_used.checked_sub(artifact_byte_gas).unwrap();
+        let ordered_transfer_legs = ordered.len();
+        let native_sbd_input = input.object.clone();
+        let native_xor_output = output.object.clone();
+        let native_xor_reward_reserve = reserve.object.clone();
+        // Neither queued effects nor the preview overlay are committed or used
+        // to register a callback. The actual signed/default4M gate stays separate.
+        drop(ordered);
+        drop(preview);
+        assert_eq!(wrapper_ledger_snapshot(block), ledger_before);
+        assert_eq!(block.committed_fragment_count(), fragments_before);
+        assert_eq!(block.gas_used_in_block, block_gas_before);
+        assert_eq!(block.gas_limit_per_block, WRAPPER_BLOCK_GAS_LIMIT);
+        eprintln!(
+            "payout native diagnostic: default_block_gas={}, diagnostic_preview_vm_gas={}, \
+             pool_code_hash={}, pool_full_wire_hash={}, pool_artifact_bytes={}, \
+             wrapper_code_hash={}, wrapper_full_wire_hash={}, wrapper_artifact_bytes={}, \
+             nested_artifact_byte_gas={}, complete_native_preview_gas={}, \
+             native_preview_non_artifact_gas={}, native_preview_excess_over_default={}, \
+             ordered_transfer_legs={}, native_sbd_input={}, native_xor_output={}, \
+             native_xor_reward_reserve={}, scope=unapplied-preview-only",
+            default_block_gas_limit,
+            DIAGNOSTIC_PREVIEW_VM_GAS_LIMIT,
+            fixture.pool_hash,
+            fixture.pool_full_wire_hash,
+            fixture.pool_artifact_bytes,
+            fixture.wrapper_hash,
+            Hash::new(&fixture.wrapper_code),
+            fixture.wrapper_code.len(),
+            artifact_byte_gas,
+            gas_used,
+            non_artifact_gas,
+            gas_used.saturating_sub(WRAPPER_BLOCK_GAS_LIMIT),
+            ordered_transfer_legs,
+            native_sbd_input,
+            native_xor_output,
+            native_xor_reward_reserve,
+        );
+    });
 }

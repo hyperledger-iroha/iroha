@@ -1,4 +1,4 @@
-//! Instances and advice (spec 6.3 and section 7, row 1; BlindingScheduleV1
+//! Instances and advice (spec 6.3 and section 7, row 1; `BlindingScheduleV1`
 //! item 1).
 //!
 //! - Instance columns are zero-padded to `n` rows. In Committed mode each is
@@ -126,7 +126,7 @@ impl<F: iroha_pasta::PastaField> Drop for Advice<F> {
     }
 }
 
-/// Blinds, commits and writes the advice columns (BlindingScheduleV1 item
+/// Blinds, commits and writes the advice columns (`BlindingScheduleV1` item
 /// 1).
 ///
 /// # Errors

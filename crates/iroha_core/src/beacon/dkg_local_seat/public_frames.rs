@@ -198,14 +198,13 @@ pub(super) struct PublicFrame {
     input_bounds: [usize; 3],
 }
 impl PublicFrame {
-    pub(super) fn prepare(
+    pub(super) fn measure(
         session: &GlobalThresholdBeaconDkgSessionV1,
         recipient: &GlobalThresholdBeaconDkgRecipientKeyV1,
         dealer: &GlobalThresholdBeaconDkgDealerCommitmentV1,
         edge: &GlobalThresholdBeaconDkgEncryptedShareV1,
         acceptance: &GlobalThresholdBeaconDkgShareAcceptanceV1,
-        budget: &AllocationBudget,
-    ) -> Result<Self, SessionGraphError> {
+    ) -> Result<(usize, [usize; 3]), SessionGraphError> {
         let parameters =
             adaptive_beacon_parameters(session).map_err(|_| SessionGraphError::PlanChanged)?;
         let n = usize::from(session.committee_size);
@@ -291,6 +290,17 @@ impl PublicFrame {
             norito::canonical_frame_len(&deliveries)?,
             norito::canonical_frame_len(&final_session)?,
         ];
+        Ok((size, input_bounds))
+    }
+    pub(super) fn prepare(
+        session: &GlobalThresholdBeaconDkgSessionV1,
+        recipient: &GlobalThresholdBeaconDkgRecipientKeyV1,
+        dealer: &GlobalThresholdBeaconDkgDealerCommitmentV1,
+        edge: &GlobalThresholdBeaconDkgEncryptedShareV1,
+        acceptance: &GlobalThresholdBeaconDkgShareAcceptanceV1,
+        budget: &AllocationBudget,
+    ) -> Result<Self, SessionGraphError> {
+        let (size, input_bounds) = Self::measure(session, recipient, dealer, edge, acceptance)?;
         let mut reservation = budget.try_reserve_bytes(size)?;
         Ok(Self {
             bytes: ChargedBuffer::from_reservation(size, &mut reservation)?,
