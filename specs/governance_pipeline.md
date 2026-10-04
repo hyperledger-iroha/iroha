@@ -41,16 +41,42 @@ describes current source, not satisfaction of that replacement target.
    permissionless progress trigger, but its relayer cannot choose entropy or
    split the pending set: Core verifies the exact finalized pulse and requires
    the complete strictly ordered request family before deriving assignments.
-   `RegisterSortitionRequest` remains manager-gated request intent. If an
-   ordinary initial generation includes a hidden-ballot body, or an ordinary
-   hidden-body retry is requested, and the live body-specific electorate has
-   zero or one member, Core records typed pre-request capacity evidence instead
-   of admitting an invalid `SortitionRequestV1`. The exact 0/1-member snapshot,
-   request slot, target, and sequence are frozen; no beacon pulse is reserved or
-   consumed. A later block may request only the exact next bounded generation,
-   and the final failed generation rejects the governance attempt as
-   `SortitionRetriesExhausted`. The special atomic Confirmation-capacity result
-   described below remains separate.
+   `RegisterSortitionRequest` is manager-gated request intent outside SCCP
+   route governance and permissionless for an SCCP attempt. Either way Core
+   fixes every field, so a submitter chooses only whether to submit. After the
+   first consumed pulse, a retry generation contains exactly every body whose
+   active generation ended `NoRoster`, each at its next sequence, in one batch
+   for one fresh pulse slot. One redraw unit therefore retries every failed
+   body, and a retry can never strand another failed body that a later block
+   could no longer afford to redraw. Without a failed body, the batch holds
+   only the one newly required body. No batch may join a slot that an earlier
+   batch registered, so every request awaiting one slot shares one frozen
+   snapshot and the pulse batch can always consume it; persistence rejects a
+   slot whose awaiting requests froze different snapshots. The Parliament
+   driver plan lists this exact generation as an exact-height transition at
+   its execution height, so an attempt without a manager does not stall after
+   a no-roster failure. The plan omits a generation that a hidden body's
+   sub-floor electorate would only record as capacity evidence again: that
+   spends a sortition sequence and a redraw unit without drawing, and a driver
+   repeating it every block would exhaust the proposal while citizens are
+   still registering. Any submitter may still record that evidence, for
+   example to terminate an attempt whose electorate does not grow. The
+   plan keeps any transition only when the reducer accepts it and the
+   persistence audit (`validate`) accepts the successor state. A due batch
+   executes as one transaction, so it never carries a step that would abort
+   the others. If a generation includes a hidden-ballot body and the live
+   electorate has fewer than three members, Core records typed pre-request
+   capacity evidence for every body of the generation instead of admitting an
+   invalid `SortitionRequestV1`. The exact snapshot, request slot, target, and
+   sequence are frozen; no beacon pulse is reserved or consumed. A later block
+   may request only the exact next bounded generation, and the final failed
+   generation rejects the governance attempt as `SortitionRetriesExhausted`.
+   Bodies are drawn together, so a body serving a later stage can exhaust its
+   retries, or meet the exhausted proposal-wide redraw budget, while an
+   earlier stage is still in progress. That failure rejects the attempt at
+   once; the persisted audit then requires body results for exactly the
+   stages before the current one. The special atomic Confirmation-capacity
+   result described below remains separate.
    Threshold key rotation is independent of that logical request identifier.
    Its exact-roster certificate compare-and-sets the expected active predecessor,
    and a global key change in block `H` takes effect at `H + 1`. The certificate
@@ -209,7 +235,8 @@ describes current source, not satisfaction of that replacement target.
    with the closed ten-variant
    `ParliamentNoResultKindV1`; callers cannot supply that
    classification. `SortitionRetriesExhausted` is emitted when the final
-   permitted body-election sequence fails before a body instance exists.
+   permitted body-election sequence fails before a body instance exists, or
+   when a no-roster failure meets the exhausted proposal-wide redraw budget.
 9. Core automatically constructs one `GovernanceCertificateV1` when the final
    required result is accepted, from the exact
    persisted body, sortition, roster, authority-endorsed public-finding,

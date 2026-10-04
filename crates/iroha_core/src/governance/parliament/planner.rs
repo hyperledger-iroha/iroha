@@ -2,12 +2,17 @@
 //!
 //! A Parliament driver has no discretion. [`ParliamentAttemptStateV1::plan_driver_v1`] lists
 //! every permissionless progress transition the reducer accepts at one execution height, with
-//! payloads derived from committed state, the exact-height checkpoints, and the ballots that
-//! need off-chain work (a masked-ballot corpus relay or the TLE final release). Each candidate
-//! is trial-applied to a copy of the attempt in order, so the plan agrees with the reducer and
-//! later steps build on earlier ones (consecutive deliberation phases, for example). World
-//! checks outside the reducer (timed-OVN evidence, pulse verification) still run when the
-//! transition executes; a plan is advice, never authority.
+//! payloads derived from committed state, the exact-height checkpoints (including the exact
+//! next sortition generation after a no-roster failure, once the live electorate can fill a
+//! hidden body; re-recording capacity evidence is left to explicit submitters), and the
+//! ballots that need off-chain
+//! work (a masked-ballot corpus relay or the TLE final release). Each candidate is
+//! trial-applied to a copy of the attempt in order and kept only when the reducer accepts it
+//! and the successor passes the persistence audit ([`ParliamentAttemptStateV1::validate`]),
+//! so the plan agrees with what execution persists and later steps build on earlier ones
+//! (consecutive deliberation phases, for example). World checks outside the reducer
+//! (timed-OVN evidence, pulse verification) still run when the transition executes; a plan
+//! is advice, never authority.
 
 use iroha_data_model::isi::governance::{
     ParliamentAdvanceBodyPhaseV1, ParliamentBeginBallotOpeningBatchV1,
@@ -15,7 +20,8 @@ use iroha_data_model::isi::governance::{
     ParliamentConsumeSortitionPulseBatchV1, ParliamentFailBallotNoResultV1,
     ParliamentFailBodyElectionNoRosterV1, ParliamentFailPublicFindingNoResultV1,
     ParliamentFreezeBallotSurvivorsV1, ParliamentLifecycleTransitionV1,
-    ParliamentRegisterBallotAttemptV1, ParliamentSealBodyRosterV1,
+    ParliamentRegisterBallotAttemptV1, ParliamentRegisterSortitionRequestV1,
+    ParliamentSealBodyRosterV1,
 };
 use mv::storage::StorageReadOnly as _;
 
@@ -32,6 +38,11 @@ pub trait ParliamentPlanWorldV1 {
 
     /// The TLE key session a fresh ballot registered at `height` must use.
     fn fresh_ballot_tle_key_session(&self, height: u64) -> Option<TleKeySessionId>;
+
+    /// The canonical eligible-citizen snapshot Core freezes for a sortition request: every
+    /// citizen bonded at `governance.citizenship_bond_amount`, ascending, or `None` when the
+    /// registry or snapshot exceeds the V1 protocol bounds.
+    fn eligible_parliament_candidates(&self, governance: &Governance) -> Option<Vec<AccountId>>;
 }
 
 /// A transition valid at exactly one height.
@@ -56,8 +67,12 @@ pub struct ParliamentDriverPlanV1 {
     pub finalize_ballots: Vec<BallotAttemptId>,
 }
 
-/// Apply `apply` to a copy of `state` and, when the reducer accepts it, keep the copy and
-/// record `transition`.
+/// Apply `apply` to a copy of `state` and, when the reducer accepts it and persistence would
+/// accept the successor, keep the copy and record `transition`.
+///
+/// Execution persists every transition through `put_parliament_attempt`, which runs
+/// [`ParliamentAttemptStateV1::validate`]. The due batch executes as one transaction, so a step
+/// the reducer accepts but persistence rejects would abort every other step of the batch.
 fn try_due<T>(
     state: &mut ParliamentAttemptStateV1,
     due: &mut Vec<ParliamentLifecycleTransitionV1>,
@@ -65,7 +80,7 @@ fn try_due<T>(
     apply: impl FnOnce(&mut ParliamentAttemptStateV1) -> Result<T, ParliamentReducerErrorV1>,
 ) -> bool {
     let mut next = state.clone();
-    if apply(&mut next).is_err() {
+    if apply(&mut next).is_err() || next.validate().is_err() {
         return false;
     }
     *state = next;
@@ -401,6 +416,7 @@ impl ParliamentAttemptStateV1 {
                         release_height,
                     )
                     .is_ok()
+                    && trial.validate().is_ok()
                 {
                     plan.exact.push(ParliamentExactTransitionV1 {
                         height,
@@ -417,6 +433,45 @@ impl ParliamentAttemptStateV1 {
                         ),
                     });
                 }
+            }
+        }
+
+        // Every body whose generation ended without a roster is redrawn by the exact next
+        // generation. Its request height is the execution height, so the registration is
+        // exact; nobody else submits it for an attempt without a manager.
+        if !state.no_roster_sortition_generations_v1().is_empty()
+            && let Some(eligible) = world.eligible_parliament_candidates(governance)
+            && let Some((requests, candidate_snapshot)) =
+                state.next_sortition_retry_v1(height, logical_beacon, governance, eligible)
+        {
+            // The executor's `apply_parliament_sortition_request_batch_v1` turns a generation
+            // with a hidden body and a sub-floor electorate into capacity evidence. That cannot
+            // draw: it only spends a sortition sequence and a redraw unit, so a driver
+            // submitting it every block would exhaust the proposal while the electorate grows.
+            // The plan waits for the floor; any submitter may still record the evidence, for
+            // example to terminalize an attempt whose electorate does not grow.
+            let hidden_body_requested = requests.iter().any(|entry| {
+                state
+                    .requirement_for_body(entry.request.body)
+                    .is_ok_and(|required| {
+                        required.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
+                    })
+            });
+            let records_capacity_evidence = hidden_body_requested
+                && !hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len());
+            let mut trial = state.clone();
+            if !records_capacity_evidence
+                && trial
+                    .register_sortition_request_batch(id, requests.clone(), candidate_snapshot)
+                    .is_ok()
+                && trial.validate().is_ok()
+            {
+                plan.exact.push(ParliamentExactTransitionV1 {
+                    height,
+                    transition: ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                        ParliamentRegisterSortitionRequestV1 { requests },
+                    ),
+                });
             }
         }
         plan.exact.sort_by_key(|exact| exact.height);
@@ -465,6 +520,24 @@ impl<W: crate::state::WorldReadOnly> ParliamentPlanWorldV1 for WorldPlanInputsV1
     fn fresh_ballot_tle_key_session(&self, height: u64) -> Option<TleKeySessionId> {
         self.world
             .selectable_tle_key_session_for_fresh_ballot_at(height)
+    }
+
+    fn eligible_parliament_candidates(&self, governance: &Governance) -> Option<Vec<AccountId>> {
+        // Mirrors the executor's `canonical_parliament_eligible_candidates_v1`.
+        let citizens = self.world.citizens();
+        if citizens.len()
+            > usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+                .expect("the V1 Parliament citizen cap fits usize")
+        {
+            return None;
+        }
+        let mut candidates: Vec<_> = citizens
+            .iter()
+            .filter(|(_, record)| record.amount >= governance.citizenship_bond_amount)
+            .map(|(account_id, _)| account_id.clone())
+            .collect();
+        candidates.sort_unstable();
+        candidate_snapshot_fits_resource_bounds_v1(&candidates).then_some(candidates)
     }
 }
 

@@ -9504,7 +9504,9 @@ pub mod isi {
     /// - `RegisterSortitionRequest`: `request_height` is the containing block, `pulse_height`
     ///   is `request_height + sortition_pulse_delay_blocks`, `beacon_session_id` is the
     ///   network's logical beacon, `target_seats` is the configured body size, the candidate
-    ///   root and count are the canonical citizen snapshot, and every id is derived.
+    ///   root and count are the canonical citizen snapshot, and every id is derived. A retry
+    ///   batch holds exactly every body whose generation ended `NoRoster`, each at its next
+    ///   sequence, so the driver plan lists the one admissible retry for each height.
     /// - `AdvanceBodyPhase`: the body is the attempt's active body and `target` is the only
     ///   next phase the reducer accepts.
     /// - `RegisterBallotAttempt`: `ballot_attempt_id` and `tle_session_id` are derived,
@@ -23569,6 +23571,7 @@ pub mod isi {
         include!("world_validation_fee_tests.rs");
         include!("world_parliament_due_effect_tests.rs");
         include!("world_parliament_initial_sortition_tests.rs");
+        include!("world_parliament_sortition_retry_tests.rs");
         include!("world_sccp_governance_tests.rs");
         include!("world_permission_association_tests.rs");
         world_test!(set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate {
