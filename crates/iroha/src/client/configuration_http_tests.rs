@@ -325,13 +325,23 @@ async fn configuration_bounds_success_and_error_bodies_before_decoding() {
         let operator = client
             .operator_client(super::checked_random_keypair())
             .unwrap();
-        assert_eq!(
-            operator.configuration().get().await.unwrap_err(),
-            Error::ResponseTooLarge {
-                maximum: configuration::MAX_RESPONSE_BYTES,
-                actual: Some(configuration::MAX_RESPONSE_BYTES + 1),
-            }
-        );
+        {
+            let actual_error = operator.configuration().get().await.unwrap_err();
+            let Error::ResponseTooLarge {
+                maximum: actual_maximum,
+                actual: actual_actual,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (actual_maximum, actual_actual,),
+                (
+                    &(configuration::MAX_RESPONSE_BYTES),
+                    &(Some(configuration::MAX_RESPONSE_BYTES + 1)),
+                )
+            );
+        };
         assert_eq!(requests.lock().unwrap().len(), 1);
     }
     let (client, _, _) = attach(
@@ -372,15 +382,27 @@ async fn configuration_errors_retain_http_and_transport_identity_without_replay(
         let operator = client
             .operator_client(super::checked_random_keypair())
             .unwrap();
-        assert_eq!(
-            operator.configuration().get().await.unwrap_err(),
-            Error::Http {
-                operation: GET,
-                status,
-                retry_after: None,
-                body: b"operator-denied".to_vec(),
-            }
-        );
+        {
+            let actual_error = operator.configuration().get().await.unwrap_err();
+            let Error::Http {
+                operation: actual_operation,
+                status: actual_status,
+                retry_after: actual_retry_after,
+                body: actual_body,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (
+                    actual_operation,
+                    actual_status,
+                    actual_retry_after,
+                    actual_body,
+                ),
+                (&(GET), &(status), &(None), &(b"operator-denied".to_vec()),)
+            );
+        };
         assert_eq!(requests.lock().unwrap().len(), 1);
     }
     let (client, requests, _) = attach(
@@ -414,10 +436,16 @@ async fn configuration_deadline_cancels_pending_dispatch() {
     let operator = client
         .operator_client(super::checked_random_keypair())
         .unwrap();
-    assert_eq!(
-        operator.configuration().get().await.unwrap_err(),
-        Error::Timeout { operation: GET }
-    );
+    {
+        let actual_error = operator.configuration().get().await.unwrap_err();
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&(GET),));
+    };
     assert_eq!(requests.lock().unwrap().len(), 1);
     assert_eq!(completed.load(Ordering::SeqCst), 0);
 }

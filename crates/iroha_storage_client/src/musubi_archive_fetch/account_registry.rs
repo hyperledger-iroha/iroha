@@ -21,7 +21,8 @@ pub enum MusubiArchiveDiscoveryErrorV1 {
     /// The caller's finite overall deadline expired.
     Deadline,
 }
-/// Caller-owned fresh finality and native provider discovery, evaluated only on a cache miss.
+/// Caller-owned fresh finality and native provider discovery, evaluated for each origin resolution,
+/// plan selection, and token mint. A cached transport never replaces current native authority.
 pub type MusubiArchiveProviderDiscoveryV1 = dyn Fn(ProviderId) -> Result<VerifiedAccountReadProviderV1, MusubiArchiveDiscoveryErrorV1>
     + Send
     + Sync;
@@ -30,6 +31,7 @@ pub type MusubiArchiveProviderDiscoveryV1 = dyn Fn(ProviderId) -> Result<Verifie
 pub(super) struct AccountRegistryV1 {
     pub(super) config: iroha::config::Config,
     pub(super) discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
+    pub(super) local_transports: Option<[GeneratedLocalProviderTransportV1; 3]>,
 }
 #[derive(Clone)]
 pub(super) enum ProviderCredentialV1 {
@@ -55,6 +57,41 @@ impl PreparedMusubiArchiveFetchConfigV1 {
         discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
         request_timeout: Duration,
     ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
+        Self::prepare_account_registry(config, discovery, None, request_timeout)
+    }
+
+    /// Prepare account reads for exactly three original generated-local provider transports.
+    ///
+    /// The original selection is caller-owned intent, never native authority. Every provider
+    /// access and token mint joins it to fresh native discovery before loopback I/O is possible.
+    /// This retains no management-listener token or default authentication headers.
+    /// # Errors
+    /// Refuses duplicate providers, a different network/chain, invalid signer or unbounded timeout without I/O.
+    pub fn from_generated_local_account_registry(
+        config: iroha::config::Config,
+        discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
+        originals: [GeneratedLocalProviderTransportV1; 3],
+        request_timeout: Duration,
+    ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
+        if originals.iter().any(|original| {
+            original.network_id() != config.network_id
+                || original.chain_id() != config.chain.as_str()
+        }) || originals.iter().enumerate().any(|(index, original)| {
+            originals[..index]
+                .iter()
+                .any(|other| other.provider_id() == original.provider_id())
+        }) {
+            return Err(permanent("MUSUBI_ARCHIVE_LOCAL_TRANSPORT_MISMATCH"));
+        }
+        Self::prepare_account_registry(config, discovery, Some(originals), request_timeout)
+    }
+
+    fn prepare_account_registry(
+        config: iroha::config::Config,
+        discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
+        local_transports: Option<[GeneratedLocalProviderTransportV1; 3]>,
+        request_timeout: Duration,
+    ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
         if request_timeout.is_zero()
             || request_timeout > Duration::from_millis(MAX_REQUEST_TIMEOUT_MS)
             || config.account != AccountId::new(config.key_pair.public_key().clone())
@@ -66,7 +103,68 @@ impl PreparedMusubiArchiveFetchConfigV1 {
             network_id: config.network_id,
             client_id: "musubi-v1".into(),
             request_timeout,
-            account_registry: Some(Arc::new(AccountRegistryV1 { config, discovery })),
+            account_registry: Some(Arc::new(AccountRegistryV1 {
+                config,
+                discovery,
+                local_transports,
+            })),
+        })
+    }
+}
+
+pub(super) struct ResolvedAccountProviderV1 {
+    authority: VerifiedAccountReadProviderV1,
+    pub(super) base_url: Url,
+    original: Option<GeneratedLocalProviderTransportV1>,
+    local_transport: Option<AuthenticatedGeneratedLocalProviderTransportV1>,
+}
+
+impl AccountRegistryV1 {
+    // Shared cold/current origin selection. This performs no DNS, HTTP-client construction,
+    // token issuance or provider-data request; only the independently owned discovery callback.
+    pub(super) fn resolve_provider(
+        &self,
+        network: NetworkId,
+        provider: ProviderId,
+    ) -> Result<ResolvedAccountProviderV1, MusubiArchiveRuntimeErrorV1> {
+        // No callback or network work may precede exact original-provider selection.
+        let original = match &self.local_transports {
+            Some(originals) => Some(
+                originals
+                    .iter()
+                    .find(|original| original.provider_id() == provider)
+                    .ok_or_else(|| control_integrity("MUSUBI_ARCHIVE_LOCAL_TRANSPORT_MISMATCH"))?,
+            ),
+            None => None,
+        };
+        let authority = discover_authority(self.discovery.as_ref(), provider)?;
+        if authority.discovery().network_id() != network
+            || authority.discovery().advert().body.provider_id != *provider.as_bytes()
+            || authority.chain_id() != self.config.chain.as_str()
+        {
+            return Err(control_integrity(
+                "MUSUBI_ARCHIVE_PROVIDER_DISCOVERY_SCOPE_MISMATCH",
+            ));
+        }
+        let local_transport = original
+            .map(|original| original.authenticate_current(&authority))
+            .transpose()
+            .map_err(|_| control_integrity("MUSUBI_ARCHIVE_LOCAL_TRANSPORT_MISMATCH"))?;
+        let base_url = match &local_transport {
+            Some(selected) => selected.base_url().clone(),
+            None => {
+                let origin = authority
+                    .policy()
+                    .https_origin()
+                    .map_err(|_| control_integrity("MUSUBI_ARCHIVE_PROVIDER_ORIGIN_INVALID"))?;
+                parse_gateway_base_url(&format!("{origin}/"))?
+            }
+        };
+        Ok(ResolvedAccountProviderV1 {
+            authority,
+            base_url,
+            original: original.cloned(),
+            local_transport,
         })
     }
 }
@@ -79,21 +177,11 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         let Some(registry) = &self.account_registry else {
             return Ok(());
         };
-        let authority = discover_authority(registry.discovery.as_ref(), provider)?;
-        if authority.discovery().network_id() != self.network_id
-            || authority.discovery().advert().body.provider_id != *provider.as_bytes()
-            || authority.chain_id() != registry.config.chain.to_string()
-        {
-            return Err(control_integrity(
-                "MUSUBI_ARCHIVE_PROVIDER_DISCOVERY_SCOPE_MISMATCH",
-            ));
-        }
-        let origin = authority
-            .policy()
-            .https_origin()
-            .map_err(|_| control_integrity("MUSUBI_ARCHIVE_PROVIDER_ORIGIN_INVALID"))?;
-        let base_url = parse_gateway_base_url(&format!("{origin}/"))?;
-        let http = pinned_http_client(&base_url, self.request_timeout)?;
+        let selected = registry.resolve_provider(self.network_id, provider)?;
+        let http = match &selected.local_transport {
+            Some(local) => pinned_generated_local_http_client(local, self.request_timeout)?,
+            None => pinned_http_client(&selected.base_url, self.request_timeout)?,
+        };
         if self.providers.len() >= MAX_CONFIGURED_PROVIDERS
             && !self.providers.contains_key(&provider)
         {
@@ -103,12 +191,13 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
             provider,
             ProviderRuntimeV1 {
                 provider,
-                base_url,
+                base_url: selected.base_url,
                 http,
+                local_transport: selected.original,
                 credential: ProviderCredentialV1::Account {
                     account: registry.config.account.clone(),
                     key_pair: registry.config.key_pair.clone(),
-                    chain_id: authority.chain_id().to_owned(),
+                    chain_id: selected.authority.chain_id().to_owned(),
                     discovery: registry.discovery.clone(),
                 },
             },
@@ -153,7 +242,14 @@ pub(super) fn refresh_account_authority(
         .policy()
         .https_origin()
         .map_err(|_| control_integrity("MUSUBI_ARCHIVE_PROVIDER_ORIGIN_INVALID"))?;
-    let current_url = parse_gateway_base_url(&format!("{origin}/"))?;
+    let current_url = match &runtime.local_transport {
+        Some(original) => original
+            .authenticate_current(&authority)
+            .map_err(|_| control_integrity("MUSUBI_ARCHIVE_LOCAL_TRANSPORT_MISMATCH"))?
+            .base_url()
+            .clone(),
+        None => parse_gateway_base_url(&format!("{origin}/"))?,
+    };
     if authority.discovery().network_id() != network
         || authority.discovery().advert().body.provider_id != *runtime.provider.as_bytes()
         || authority.chain_id() != chain_id
@@ -247,6 +343,261 @@ pub(super) fn account_request_headers(
 mod tests {
     use super::*;
 
+    fn local_intent(config: &iroha::config::Config, slot: u8) -> GeneratedLocalProviderTransportV1 {
+        use sorafs_manifest::{
+            provider_admission::{ProviderAdmissionEnvelopeV1, ProviderAdmissionGenesisMaterialV1},
+            provider_advert::{
+                CapabilityType, EndpointKind, account_read::RegisteredAccountReadV1,
+            },
+        };
+        // Native producer bytes provide structurally valid keys. This deliberately constructs
+        // only caller-selected intent, never an opaque proof or authenticated genesis profile.
+        let bytes = include_bytes!(
+            "../../../../fixtures/sorafs_manifest/provider_admission/envelope_v1.to"
+        );
+        assert!(bytes.len() < 128 * 1024);
+        let mut envelope: ProviderAdmissionEnvelopeV1 = norito::decode_canonical_with_limits(
+            bytes,
+            norito::DecodeLimits::new(128 * 1024, 128 * 1024, 256 * 1024, 2 * 1024 * 1024, 48),
+        )
+        .unwrap();
+        envelope.proposal.provider_id[0] ^= slot;
+        envelope.advert_body.provider_id = envelope.proposal.provider_id;
+        let provider = ProviderId::new(envelope.proposal.provider_id);
+        let hex = hex::encode(provider.as_bytes());
+        let host = format!("{}.{}.localhost", &hex[..32], &hex[32..]);
+        envelope
+            .proposal
+            .capabilities
+            .retain(|cap| cap.cap_type != CapabilityType::RegisteredAccountRead);
+        envelope.proposal.capabilities.push(
+            RegisteredAccountReadV1 {
+                https_host: host.clone(),
+                https_port: 8443,
+                ttl_secs: 60,
+                max_streams: 1,
+                rate_limit_bytes: 1024,
+                requests_per_minute: 60,
+            }
+            .to_capability()
+            .unwrap(),
+        );
+        envelope.proposal.endpoints.truncate(1);
+        let endpoint = &mut envelope.proposal.endpoints[0];
+        endpoint.endpoint.kind = EndpointKind::Torii;
+        endpoint.endpoint.host_pattern = host;
+        endpoint.attestation.kind =
+            sorafs_manifest::provider_admission::EndpointAttestationKind::Tls;
+        endpoint.attestation.attested_at = envelope.issued_at;
+        endpoint.attestation.expires_at = envelope.retention_epoch;
+        endpoint.attestation.alpn_ids = vec!["http/1.1".into()];
+        endpoint.attestation.report.clear();
+        endpoint.attestation.leaf_certificate = vec![1];
+        endpoint.attestation.intermediate_certificates = vec![vec![2]];
+        envelope.advert_body.capabilities = envelope.proposal.capabilities.clone();
+        envelope.advert_body.endpoints = vec![endpoint.endpoint.clone()];
+        let material = ProviderAdmissionGenesisMaterialV1 {
+            proposal: envelope.proposal,
+            advert_body: envelope.advert_body,
+            issued_at: envelope.issued_at,
+            retention_epoch: envelope.retention_epoch,
+        };
+        GeneratedLocalProviderTransportV1::select(
+            config.network_id,
+            config.chain.as_str(),
+            provider,
+            &config.account,
+            &material,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn generated_local_preparation_is_lazy_and_scope_mismatch_never_discovers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let config = config();
+        let original = local_intent(&config, 0);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let discovery: Arc<MusubiArchiveProviderDiscoveryV1> = Arc::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err(MusubiArchiveDiscoveryErrorV1::Rejected)
+        });
+        let mut wrong = config.clone();
+        wrong.chain = "different-chain".parse().unwrap();
+        assert!(
+            PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_registry(
+                wrong,
+                discovery.clone(),
+                std::array::from_fn(|slot| local_intent(&config, slot as u8)),
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
+        let mut wrong = config.clone();
+        wrong.network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"other original"),
+            ));
+        assert_ne!(wrong.network_id, config.network_id);
+        assert!(
+            PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_registry(
+                wrong,
+                discovery.clone(),
+                std::array::from_fn(|slot| local_intent(&config, slot as u8)),
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
+        let prepared = PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_registry(
+            config.clone(),
+            discovery,
+            std::array::from_fn(|slot| local_intent(&config, slot as u8)),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let mut client = prepared.build_client().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            client
+                .resolve_provider_gateway_origin(ProviderId::new([0; 32]))
+                .unwrap_err()
+                .code(),
+            "MUSUBI_ARCHIVE_LOCAL_TRANSPORT_MISMATCH"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(
+            client
+                .discover_account_provider(ProviderId::new([0; 32]))
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            client
+                .discover_account_provider(original.provider_id())
+                .unwrap_err()
+                .code(),
+            "MUSUBI_ARCHIVE_PROVIDER_DISCOVERY_INVALID"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        for slot in 1..3 {
+            assert_eq!(
+                client
+                    .discover_account_provider(local_intent(&config, slot).provider_id())
+                    .unwrap_err()
+                    .code(),
+                "MUSUBI_ARCHIVE_PROVIDER_DISCOVERY_INVALID"
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            client
+                .resolve_provider_gateway_origin(original.provider_id())
+                .unwrap_err()
+                .code(),
+            "MUSUBI_ARCHIVE_PROVIDER_DISCOVERY_INVALID"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        assert!(client.providers.is_empty());
+    }
+
+    #[test]
+    fn generated_local_duplicate_or_mixed_scope_set_is_refused_without_discovery() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let config = config();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let discovery: Arc<MusubiArchiveProviderDiscoveryV1> = Arc::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err(MusubiArchiveDiscoveryErrorV1::Rejected)
+        });
+        for duplicate in 0..3 {
+            let mut originals = std::array::from_fn(|slot| local_intent(&config, slot as u8));
+            originals[(duplicate + 1) % 3] = originals[duplicate].clone();
+            assert!(
+                PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_registry(
+                    config.clone(),
+                    discovery.clone(),
+                    originals,
+                    Duration::from_secs(1)
+                )
+                .is_err()
+            );
+        }
+        for slot in 0..3 {
+            for change_network in [false, true] {
+                let mut selected = config.clone();
+                if change_network {
+                    selected.network_id =
+                        NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                            iroha_crypto::Hash::new(b"different original transport network"),
+                        ));
+                    assert_ne!(selected.network_id, config.network_id);
+                } else {
+                    selected.chain = "different-original-transport-chain".parse().unwrap();
+                }
+                let mut originals = std::array::from_fn(|index| local_intent(&config, index as u8));
+                originals[slot] = local_intent(&selected, slot as u8);
+                assert!(
+                    PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_registry(
+                        config.clone(),
+                        discovery.clone(),
+                        originals,
+                        Duration::from_secs(1),
+                    )
+                    .is_err()
+                );
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn generated_local_initial_and_replacement_mints_require_fresh_native_authority() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let config = config();
+        let original = local_intent(&config, 0);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let hex = hex::encode(original.provider_id().as_bytes());
+        let runtime = ProviderRuntimeV1 {
+            provider: original.provider_id(),
+            base_url: Url::parse(&format!(
+                "https://{}.{}.localhost:8443/",
+                &hex[..32],
+                &hex[32..]
+            ))
+            .unwrap(),
+            http: HttpClient::builder()
+                .timeout(Duration::from_millis(1))
+                .build()
+                .unwrap(),
+            local_transport: Some(original),
+            credential: ProviderCredentialV1::Account {
+                account: config.account,
+                key_pair: config.key_pair,
+                chain_id: config.chain.to_string(),
+                discovery: Arc::new(move |_| {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    Err(MusubiArchiveDiscoveryErrorV1::Rejected)
+                }),
+            },
+        };
+        for _ in 0..2 {
+            let error = mint_stream_token(
+                &runtime,
+                &config.network_id,
+                &ManifestDigest::new([1; 32]),
+                "component",
+                1,
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.code(), "MUSUBI_ARCHIVE_PROVIDER_DISCOVERY_INVALID");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
     #[test]
     fn revoked_current_custody_prevents_initial_and_replacement_mint_before_http() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -256,6 +607,7 @@ mod tests {
         // Planning retains only the authenticated origin/scope. No old signer key or token
         // policy is kept in these credentials as an alternative to a current callback.
         let runtime = ProviderRuntimeV1 {
+            local_transport: None,
             provider: ProviderId::new([1; 32]),
             base_url: Url::parse("https://storage.example.com/").unwrap(),
             http: HttpClient::builder()

@@ -61,7 +61,7 @@ pub enum FinalPromotionCheckObservationErrorV1 {
     Submission,
     /// The private pending-Reserve journal is unavailable, changed or noncanonical.
     Journal,
-    /// Local inventory resources are busy; reconcile the original signed operation.
+    /// Local resources were unavailable within the original operation or Check lifetime.
     LocalCapacity,
 }
 impl std::fmt::Display for FinalPromotionCheckObservationErrorV1 {
@@ -76,7 +76,7 @@ impl std::fmt::Display for FinalPromotionCheckObservationErrorV1 {
             Self::Provider => "final-promotion Check observer unavailable",
             Self::Submission => "final-promotion Check submission unavailable",
             Self::Journal => "final-promotion pending Reserve journal unavailable",
-            Self::LocalCapacity => "final-promotion pending Reserve journal capacity unavailable",
+            Self::LocalCapacity => "final-promotion local resources unavailable",
         })
     }
 }
@@ -281,6 +281,7 @@ impl FinalPromotionCurrentCheckRuntimeV1 {
             .map_err(|error| match error {
                 FinalPromotionObserverTransactionErrorV1::Provider => Error::Provider,
                 FinalPromotionObserverTransactionErrorV1::Payload => Error::Payload,
+                FinalPromotionObserverTransactionErrorV1::Unavailable => Error::LocalCapacity,
                 _ => Error::Check,
             })?;
         pending.ensure_live().map_err(|_| Error::Check)?;
@@ -347,16 +348,17 @@ impl FinalPromotionObserverTransactionsV1 {
         floor: &mut impl FinalPromotionRetainedFloorV1,
     ) -> Result<FinalPromotionCurrentObservationV1, Error> {
         let retained = floor.read().map_err(|_| Error::Floor)?;
-        let verified = pending
-            .verify_finalized(FinalPromotionCheckSourceV1::Current, || {
+        let mut verify = |pending: PendingFinalPromotionCheckV1| {
+            pending.verify_finalized(FinalPromotionCheckSourceV1::Current, || {
                 clock
                     .sample()
                     .map_err(|_| FinalPromotionObservationErrorV1::Clock)
             })
-            .map_err(|error| match error {
-                FinalPromotionObservationErrorV1::Clock => Error::Clock,
-                _ => Error::Check,
-            })?;
+        };
+        let verified = crate::native_check_binding::complete_check(verify(pending), |failure| {
+            verify(failure.into_pending())
+        })
+        .map_err(verification_error)?;
         let FinalPromotionAuthorityActionV1::Check(check) = &verified.instruction().action else {
             return Err(Error::Binding);
         };
@@ -435,4 +437,53 @@ pub(super) fn signing_context(
     )
     .map_err(|_| Error::Custody)?;
     Ok(custody)
+}
+
+/// Project only a completed Check rejection or the original local lifetime's expiry.
+pub(super) fn verification_error(
+    outcome: crate::native_check_binding::CheckTermination<
+        iroha_core::query::final_promotion_authority::observation::FinalPromotionCheckAttemptFailureV1,
+    >,
+) -> Error {
+    match outcome {
+        crate::native_check_binding::CheckTermination::Terminal(failure) => {
+            verification_rejection(failure.rejection())
+        }
+        crate::native_check_binding::CheckTermination::Expired => Error::LocalCapacity,
+    }
+}
+
+// Expired here is exclusively NativeCheckRoundV1's original monotonic lifetime. Signed
+// protocol expiry and current-authority failures remain their semantic Check rejection.
+fn verification_rejection(rejection: Option<FinalPromotionObservationErrorV1>) -> Error {
+    match rejection {
+        Some(FinalPromotionObservationErrorV1::Clock) => Error::Clock,
+        Some(FinalPromotionObservationErrorV1::Expired) => Error::LocalCapacity,
+        _ => Error::Check,
+    }
+}
+
+#[cfg(test)]
+mod rejection_tests {
+    use super::*;
+
+    #[test]
+    fn monotonic_expiry_is_local_but_clock_and_protocol_rejections_keep_their_meaning() {
+        assert_eq!(
+            verification_rejection(Some(FinalPromotionObservationErrorV1::Expired)),
+            Error::LocalCapacity,
+        );
+        assert_eq!(
+            verification_rejection(Some(FinalPromotionObservationErrorV1::Clock)),
+            Error::Clock,
+        );
+        for semantic in [
+            FinalPromotionObservationErrorV1::Authority,
+            FinalPromotionObservationErrorV1::Transaction,
+            FinalPromotionObservationErrorV1::NotApplied,
+        ] {
+            assert_eq!(verification_rejection(Some(semantic)), Error::Check);
+        }
+        assert_eq!(verification_rejection(None), Error::Check);
+    }
 }

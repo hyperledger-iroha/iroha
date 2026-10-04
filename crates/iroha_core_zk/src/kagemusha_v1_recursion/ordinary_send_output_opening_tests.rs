@@ -127,14 +127,18 @@ fn circuit<F: KagemushaPoseidonFieldV1>(mutation: Mutation) -> OutputCircuit<F> 
     let network = bytes(network);
     let lane = bytes(lane);
     let pool = bytes(pool);
+    let request_digest = bytes(request);
+    let credential_digest = bytes([8; 32]);
+    let encryption_key = bytes(recipient_key);
+    let recipient_lane = bytes([16; 32]);
+    // Preserve the fixture's final byte assignment after retiring unused returned request-ID storage.
+    let _request_id = bytes([17; 32]);
     let receiver = OrdinaryReceiverRequestOpeningV1 {
-        request_digest: bytes(request),
-        credential_digest: bytes([8; 32]),
-        encryption_key: bytes(recipient_key),
-        recipient_lane: bytes([16; 32]),
+        request_digest,
+        credential_digest,
+        encryption_key,
+        recipient_lane,
     };
-    // Preserve the original witness assignment order after dropping its unused projection.
-    let _ = bytes([17; 32]);
     let credit = bytes(credit_id);
     let expected_output = bytes(output_digest);
     let expected_encrypted = bytes(encrypted_digest);

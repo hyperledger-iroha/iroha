@@ -123,6 +123,14 @@ fn check_direct_refusal(replacement: bool) {
     let successor_bytes = original_cell_successor_bytes(&state);
     let [scalar_current, scalar_undo] =
         mv::cell::Cell::<u64, iroha_allocation::AllocationCharge>::allocation_layouts();
+    let [amx_current, amx_undo] = mv::cell::Cell::<
+        crate::sumeragi::amx::RetainedNativeAmx,
+        iroha_allocation::AllocationCharge,
+    >::allocation_layouts();
+    let amx_stage = amx_current.size()
+        + amx_undo.size()
+        + mv::cell::CellPublicationSuccessor::allocation_layout().size();
+
     if replacement {
         // Establish a genuine published predecessor. The replacement takes the
         // original journals' rollback path, rather than reverting an empty State.
@@ -134,7 +142,7 @@ fn check_direct_refusal(replacement: bool) {
         // Settle the retired tip undo before taking the retry baseline.
         collect_original_ebr_until(
             &budget,
-            initial_reserved + successor_bytes - scalar_current.size(),
+            initial_reserved + successor_bytes - amx_stage - scalar_current.size(),
         );
     }
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
@@ -263,15 +271,21 @@ fn check_direct_refusal(replacement: bool) {
     // Populated publication owns both scalar generations in this exact pool.
     // Every untracked Cell adds its funded identity once; native-tip identities
     // and generations replace the already funded initial owners at equal sizes.
-    let published_bytes = initial_reserved + successor_bytes;
+    // The native AMX Cell starts in this same pool: its successor replaces the
+    // funded identity, and its generations replace the funded initial pair.
+    let published_bytes = initial_reserved + successor_bytes - amx_stage;
     let [tip_current, tip_undo] = crate::state::native_execution_tip::TipCell::allocation_layouts();
     let retired_bytes = if replacement {
         // Replace publishes both tip generations. The first empty publication
         // also left its scalar undo in this pool, while its current stayed foreign.
-        tip_current.size() + tip_undo.size() + scalar_undo.size()
+        tip_current.size()
+            + tip_undo.size()
+            + scalar_undo.size()
+            + amx_current.size()
+            + amx_undo.size()
     } else {
         // Ordinary unchanged native tip keeps its original current generation.
-        tip_undo.size()
+        tip_undo.size() + amx_undo.size()
     };
     retirement_pin.flush();
     assert_eq!(

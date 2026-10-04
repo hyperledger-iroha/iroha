@@ -1454,7 +1454,7 @@ pub fn render_abi_hashes_markdown_table() -> String {
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
 const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 8;
 const ABI_V1_NORITO_ENCODE_FLAGS: u8 = norito::core::header_flags::COMPACT_LEN;
-const PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8;version_minor:u8;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=Iroha-Hash-v1(canonical-ABI-descriptor-for-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1);abi-hash-validated-before-prefix-or-instruction-decode";
+const PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8=1;version_minor:u8=1;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=Iroha-Hash-v1(canonical-ABI-descriptor-for-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1);abi-hash-validated-before-prefix-or-instruction-decode";
 const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
 const NUMERIC_WIRE_FORMAT_VERSION_V1: u8 = 1;
@@ -3274,6 +3274,11 @@ mod tests {
         });
         assert_surface_mutation_changes_hash(|changed| changed.policy_tag += 1);
         assert_eq!(surface.program_header_layout, PROGRAM_HEADER_LAYOUT_V1);
+        assert!(
+            surface
+                .program_header_layout
+                .contains("version_major:u8=1;version_minor:u8=1;")
+        );
         assert_surface_mutation_changes_hash(|changed| {
             changed.program_header_layout = "host-dependent-header";
         });

@@ -380,3 +380,144 @@ fn routed_read_source_keeps_multiroute_fanout_enabled() {
         );
     }
 }
+
+#[test]
+fn routed_read_json_graph_preserves_leaf_split_nested_and_exact_decode_refusals() {
+    let phase = 256 * 1024;
+    for entries in [0, 1, 5, 6, 11, 12, 31] {
+        let fields = (0..entries)
+            .map(|index| format!("\"k{index}\":0"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let body = format!("{{\"full\":{{{fields}}},\"empty\":{{}},\"items\":[\"a\\nb\",0]}}");
+        let mut budget =
+            ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
+                .unwrap();
+        let plan = budget.decode_plan(body.len()).unwrap();
+        let profile = budget.json_profile(body.as_bytes(), plan).unwrap();
+        let graph = torii_routed_read_json_value_graph_bytes(profile).unwrap();
+        assert_eq!(
+            graph,
+            profile.string_capacity_bytes()
+                + profile.array_entries() * core::mem::size_of::<Value>()
+                + profile.object_btree_allocation_bytes()
+        );
+        let (value, usage) = norito::core::with_decode_limits_measured(plan.limits, || {
+            norito::json::from_slice::<Value>(body.as_bytes())
+        });
+        let value = value.unwrap();
+        budget.verify_json_value_usage(profile, usage).unwrap();
+        let exact = usage.total_allocated_bytes();
+        let exact_limits = norito::DecodeLimits::new(
+            phase,
+            phase,
+            phase,
+            exact,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
+        );
+        let (decoded, exact_usage) =
+            norito::core::with_decode_limits_measured(exact_limits, || {
+                norito::json::from_slice::<Value>(body.as_bytes())
+            });
+        assert_eq!(decoded.unwrap(), value);
+        assert_eq!(exact_usage.total_allocated_bytes(), exact);
+        let short_limits = norito::DecodeLimits::new(
+            phase,
+            phase,
+            phase,
+            exact - 1,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
+        );
+        let (decoded, _) = norito::core::with_decode_limits_measured(short_limits, || {
+            norito::json::from_slice::<Value>(body.as_bytes())
+        });
+        assert!(
+            decoded.unwrap_err().is_decode_resource_limit(),
+            "original one-byte decode ceiling"
+        );
+        budget.envelope.accumulator_retained_bytes = exact - 1;
+        assert!(budget.retain_decode_usage(usage).is_err());
+        assert_eq!(
+            budget.retained_decoded_bytes, 0,
+            "refusal does not debit the original retained pool"
+        );
+        budget.envelope.accumulator_retained_bytes = exact;
+        budget.retain_decode_usage(usage).unwrap();
+        assert_eq!(budget.retained_decoded_bytes, exact);
+    }
+}
+#[test]
+fn routed_read_json_graph_refuses_missing_original_object_charge() {
+    let phase = 256 * 1024;
+    let budget =
+        ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase).unwrap();
+    let body = br#"{"a":0,"b":1,"c":2,"d":3,"e":4,"f":5}"#;
+    let plan = budget.decode_plan(body.len()).unwrap();
+    let profile = budget.json_profile(body, plan).unwrap();
+    let graph = torii_routed_read_json_value_graph_bytes(profile).unwrap();
+    let (charged, usage) = norito::core::with_decode_limits_measured(plan.limits, || {
+        norito::core::reserve_decode_allocation(graph - 1)
+    });
+    charged.unwrap();
+    let refusal = budget.verify_json_value_usage(profile, usage).unwrap_err();
+    assert_eq!(refusal.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(budget.retained_decoded_bytes, 0);
+}
+#[tokio::test]
+async fn routed_read_single_route_pipeline_status_keeps_original_json_graph_and_response() {
+    let phase = 256 * 1024;
+    for kind in [
+        "Queued",
+        "Approved",
+        "Committed",
+        "Applied",
+        "Rejected",
+        "Expired",
+    ] {
+        let mut budget =
+            ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
+                .unwrap();
+        let response = crate::utils::respond_with_format(
+            PipelineTransactionStatusResponse::new(
+                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+                    [0x51; Hash::LENGTH],
+                ))
+                .to_string(),
+                PipelineTransactionStatus {
+                    kind: kind.to_owned(),
+                    block_height: Some(7),
+                },
+                "global".to_owned(),
+                "state".to_owned(),
+            ),
+            ResponseFormat::Json,
+        );
+        let response = bound_torii_single_route_response(
+            response,
+            ToriiProxyResponseFormatV1::Json,
+            &mut budget,
+        )
+        .await
+        .expect("real pipeline status survives the original proxied JSON accounting");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            budget.retained_decoded_bytes > 0,
+            "complete decoded owner remains debited"
+        );
+        let body = axum::body::to_bytes(response.into_body(), budget.final_body_limit())
+            .await
+            .unwrap();
+        let decoded: PipelineTransactionStatusResponse = norito::json::from_slice(&body).unwrap();
+        assert_eq!(decoded.status.kind, kind);
+        assert_eq!(decoded.status.block_height, Some(7));
+        assert_eq!(decoded.scope, "global");
+        assert_eq!(decoded.resolved_from, "state");
+        assert_eq!(
+            decoded.hash,
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+                [0x51; Hash::LENGTH]
+            ))
+            .to_string()
+        );
+    }
+}

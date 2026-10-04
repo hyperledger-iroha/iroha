@@ -119,7 +119,6 @@ fn decode_transaction_details_failure(response: &http::Response<Vec<u8>>) -> Que
     }
 }
 
-#[derive(Debug)]
 struct ClientQueryRequestHead {
     torii_url: Url,
     headers: HashMap<String, String>,
@@ -129,6 +128,26 @@ struct ClientQueryRequestHead {
     request_timeout: Duration,
     accept_header: &'static str,
     transport: DefaultHttpTransport,
+}
+impl Debug for ClientQueryRequestHead {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Header values carry listener credentials such as Basic auth and API tokens.
+        let mut header_names: Vec<_> = self.headers.keys().map(String::as_str).collect();
+        header_names.sort_unstable();
+        formatter
+            .debug_struct("ClientQueryRequestHead")
+            .field(
+                "torii_origin",
+                &self.torii_url.origin().ascii_serialization(),
+            )
+            .field("network_id", &self.network_id)
+            .field("account_id", &self.account_id)
+            .field("public_key", self.key_pair.public_key())
+            .field("header_names", &header_names)
+            .field("request_timeout", &self.request_timeout)
+            .field("accept_header", &self.accept_header)
+            .finish_non_exhaustive()
+    }
 }
 impl ClientQueryRequestHead {
     #[cfg(test)]
@@ -389,19 +408,72 @@ fn exact_transaction_details_query(
         params: QueryParams::default(),
     }
 }
-/// An iterable query cursor for use in the client
+/// Continuation of an iterable query after its delivered batch.
+///
+/// It owns the request head needed to sign the next continuation, so iteration
+/// does not borrow the client. When the node reports more rows but returns no
+/// server cursor (Torii's ephemeral cursor mode), the continuation is
+/// truncated and continuing it fails with [`QueryError::Truncated`].
 #[derive(Debug)]
 pub struct QueryCursor {
-    // instead of storing iroha client itself, we store the base URL and headers required to make a request
-    //   along with the account id and key pair to sign the request.
-    // this removes the need to either keep a reference or use an Arc, but breaks abstraction a little
     request_head: ClientQueryRequestHead,
-    cursor: ForwardCursor,
+    state: CursorState,
+    remaining_items: Option<u64>,
+}
+#[derive(Debug)]
+enum CursorState {
+    /// The node stored the result; continue from this cursor.
+    Continue(ForwardCursor),
+    /// The node reported more rows without a way to fetch them.
+    Truncated,
 }
 impl QueryCursor {
-    /// Return the underlying Iroha forward cursor.
-    pub fn forward_cursor(&self) -> &ForwardCursor {
-        &self.cursor
+    /// Build the continuation of one response: a server cursor, an explicit
+    /// truncation when more rows exist without one, or `None` after the last batch.
+    fn after(
+        request_head: ClientQueryRequestHead,
+        remaining_items: Option<u64>,
+        has_more: bool,
+        cursor: Option<ForwardCursor>,
+    ) -> Option<Self> {
+        let state = match cursor {
+            Some(cursor) => CursorState::Continue(cursor),
+            None if has_more => CursorState::Truncated,
+            None => return None,
+        };
+        Some(Self {
+            request_head,
+            state,
+            remaining_items,
+        })
+    }
+
+    /// Return the server cursor, or `None` when the node truncated the result.
+    pub fn forward_cursor(&self) -> Option<&ForwardCursor> {
+        match &self.state {
+            CursorState::Continue(cursor) => Some(cursor),
+            CursorState::Truncated => None,
+        }
+    }
+
+    /// Whether the node reported more rows without returning a server cursor.
+    pub const fn is_truncated(&self) -> bool {
+        matches!(self.state, CursorState::Truncated)
+    }
+
+    /// Exact number of rows after the delivered batch, when the node reported it.
+    pub const fn remaining_items(&self) -> Option<u64> {
+        self.remaining_items
+    }
+
+    /// Split into the request head and the server cursor to continue from.
+    fn into_continuation(self) -> Result<(ClientQueryRequestHead, ForwardCursor), QueryError> {
+        match self.state {
+            CursorState::Continue(cursor) => Ok((self.request_head, cursor)),
+            CursorState::Truncated => Err(QueryError::Truncated {
+                remaining_items: self.remaining_items,
+            }),
+        }
     }
 }
 /// Different errors as a result of query response handling
@@ -423,6 +495,25 @@ pub enum QueryError {
     /// Iterable query response has an invalid batch shape: {0}
     #[error("iterable query response has an invalid batch shape: {0}")]
     ResponseShape(#[from] iroha_data_model::query::builder::TypedBatchDowncastError),
+    /// A structured SDK operation failure, including original canonical decoder custody.
+    #[error("{0}")]
+    Sdk(#[from] crate::Error),
+    /// A singular query response carried an output of a different type.
+    #[error("singular query response has an unexpected output type: {0}")]
+    UnexpectedOutput(String),
+    /// The node reported more rows than it returned and offered no continuation cursor.
+    ///
+    /// Torii returns only the first batch of an iterable query in its ephemeral
+    /// cursor mode. Every delivered row was yielded before this error; narrow
+    /// the query, or read the collection through [`crate::collections`].
+    #[error(
+        "the node returned only part of the iterable query result and no continuation cursor{}",
+        remaining_items.map_or_else(String::new, |remaining| format!(" ({remaining} more rows)"))
+    )]
+    Truncated {
+        /// Exact number of undelivered rows, when the node reported it.
+        remaining_items: Option<u64>,
+    },
     /// Lower-level transport or decoding error, preserving its original diagnostic.
     ///
     /// This is an explicit source because transparent forwarding would skip an
@@ -475,29 +566,20 @@ impl QueryExecutor for Client {
         let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
         let response = send_once_and_decode(make_request, decode_iterable_query_response)?;
-        let (batch, remaining_items, _has_more, cursor) = response.into_parts_with_count_mode();
-        let cursor = cursor.map(|cursor| QueryCursor {
-            request_head,
-            cursor,
-        });
+        let (batch, remaining_items, has_more, cursor) = response.into_parts_with_count_mode();
+        let cursor = QueryCursor::after(request_head, remaining_items, has_more, cursor);
         Ok((batch, remaining_items, cursor))
     }
     fn continue_query(
         cursor: Self::Cursor,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
-        let QueryCursor {
-            request_head,
-            cursor,
-        } = cursor;
+        let (request_head, cursor) = cursor.into_continuation()?;
         let request = QueryRequest::Continue(cursor);
         let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
         let response = send_once_and_decode(make_request, decode_iterable_query_response)?;
-        let (batch, remaining_items, _has_more, cursor) = response.into_parts_with_count_mode();
-        let cursor = cursor.map(|cursor| QueryCursor {
-            request_head,
-            cursor,
-        });
+        let (batch, remaining_items, has_more, cursor) = response.into_parts_with_count_mode();
+        let cursor = QueryCursor::after(request_head, remaining_items, has_more, cursor);
         Ok((batch, remaining_items, cursor))
     }
 }
@@ -640,7 +722,7 @@ impl Client {
         let details: PipelineTransactionDetailsResponse = Client::decode_canonical_norito_response(
             &response,
             TRANSACTION_DETAILS_RESPONSE_MAX_BYTES,
-            "Failed to get exact transaction details",
+            "query.transaction_details",
         )
         .map_err(QueryError::from)?;
         validate_transaction_details_bindings(&details, entrypoint_hash)
@@ -745,10 +827,9 @@ impl Client {
         <Q::Output as TryFrom<SingularQueryOutputBox>>::Error: Debug,
     {
         let query = SingularQueryBox::from(query);
-        let result = self.execute_singular_query(query)?;
-        Ok(result
+        self.execute_singular_query(query)?
             .try_into()
-            .expect("BUG: iroha returned unexpected type in singular query"))
+            .map_err(|error| QueryError::UnexpectedOutput(format!("{error:?}")))
     }
     /// Build an iterable query and return a builder object
     pub fn query<Q>(&self, query: Q) -> QueryBuilder<'_, Self, Q, Q::Item>
@@ -1883,7 +1964,14 @@ mod query_errors_handling {
             (StatusCode::OK, APPLICATION_NORITO, b"NRT0".to_vec()),
         ] {
             let error = transaction_details_http_failure(status, vec![content_type], body);
-            assert!(matches!(error, QueryError::Other(_)));
+            if status == StatusCode::OK {
+                assert!(
+                    matches!(&error, QueryError::Sdk(crate::Error::CanonicalDecode { source, .. })
+                    if source.kind() == norito::core::DecodeAttemptErrorKind::Invalid)
+                );
+            } else {
+                assert!(matches!(error, QueryError::Other(_)));
+            }
             let report = eyre::Report::new(error);
             assert!(
                 !report
@@ -1983,7 +2071,11 @@ mod query_errors_handling {
             },
         )
         .expect_err("trailing bytes must be rejected");
-        assert!(error.to_string().contains("canonical Norito"));
+        assert!(matches!(
+            &error,
+            QueryError::Sdk(crate::Error::CanonicalDecode { operation: "query.transaction_details", source })
+                if source.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+        ));
 
         let client = compatible_client_with_conflicting_wire_headers();
         let encoded = norito::to_bytes(&details).expect("encode transaction-details response");
@@ -2173,6 +2265,144 @@ mod query_errors_handling {
             "request must declare expected Accept header; got {:?}",
             snapshot.headers
         );
+    }
+    fn norito_query_response(response: &QueryResponse) -> Response<Vec<u8>> {
+        Response::builder()
+            .status(HttpStatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(response).expect("query response"))
+            .expect("response")
+    }
+    fn mocked_compatible_client(mock_transport: DefaultHttpTransport) -> Client {
+        let client = compatible_client_with_conflicting_wire_headers()
+            .with_test_http_transport(mock_transport);
+        *client
+            .data_model_compatibility
+            .lock()
+            .expect("fixture compatibility cache") = DataModelCompatibility::SubmitCompatible;
+        client
+    }
+    #[test]
+    fn sync_iteration_yields_delivered_rows_then_reports_truncation() {
+        use iroha_data_model::{
+            Registrable as _, domain::Domain, query::builder::QueryBuilderExt as _,
+            query::domain::FindDomains,
+        };
+        let domains: Vec<Domain> = ["alpha", "beta"]
+            .into_iter()
+            .map(|name| {
+                Domain::new(
+                    iroha_model_base::domain::DomainId::try_new(name, "universal")
+                        .expect("domain id"),
+                )
+                .build(&iroha_test_samples::ALICE_ID)
+            })
+            .collect();
+        // Ephemeral cursor mode: more rows exist, but no continuation is offered.
+        let truncated = QueryResponse::Iterable(QueryOutput {
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(
+                domains.clone(),
+            )),
+            remaining_items: Some(4),
+            has_more: true,
+            continue_cursor: None,
+        });
+        let sends = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&sends);
+        let (rows, all) = with_mock_http(
+            move |_| {
+                observed.fetch_add(1, Ordering::Relaxed);
+                Ok(norito_query_response(&truncated))
+            },
+            |mock_transport| {
+                let client = mocked_compatible_client(mock_transport);
+                let mut iter = client.query(FindDomains).execute().expect("first batch");
+                let cursor = iter.continue_cursor().expect("truncated continuation");
+                assert!(cursor.is_truncated());
+                assert!(cursor.forward_cursor().is_none());
+                assert_eq!(cursor.remaining_items(), Some(4));
+                let rows: Vec<_> = iter.by_ref().collect();
+                assert!(iter.next().is_none(), "truncation ends the iteration");
+                (rows, client.query(FindDomains).execute_all())
+            },
+        );
+        assert_eq!(
+            rows.len(),
+            3,
+            "both delivered rows, then the truncation error"
+        );
+        assert_eq!(rows[0].as_ref().expect("first row"), &domains[0]);
+        assert_eq!(rows[1].as_ref().expect("second row"), &domains[1]);
+        assert!(matches!(
+            rows[2],
+            Err(QueryError::Truncated {
+                remaining_items: Some(4)
+            })
+        ));
+        assert!(matches!(
+            all,
+            Err(QueryError::Truncated {
+                remaining_items: Some(4)
+            })
+        ));
+        assert_eq!(
+            QueryError::Truncated {
+                remaining_items: Some(4)
+            }
+            .to_string(),
+            "the node returned only part of the iterable query result and no continuation cursor (4 more rows)"
+        );
+        assert_eq!(
+            sends.load(Ordering::Relaxed),
+            2,
+            "truncation never sends a continuation"
+        );
+    }
+    #[test]
+    fn sync_query_single_reports_unexpected_output_instead_of_panicking() {
+        use iroha_data_model::query::{SingularQueryOutputBox, account::prelude::FindAccountById};
+        let mismatched = QueryResponse::Singular(SingularQueryOutputBox::DomainIds(Vec::new()));
+        let result = with_mock_http(
+            move |_| Ok(norito_query_response(&mismatched)),
+            |mock_transport| {
+                let client = mocked_compatible_client(mock_transport);
+                let id = client.account.clone();
+                client.query_single(FindAccountById { id })
+            },
+        );
+        assert!(
+            matches!(&result, Err(QueryError::UnexpectedOutput(details)) if details.contains("Account")),
+            "{result:?}"
+        );
+    }
+    #[test]
+    fn query_cursor_debug_redacts_header_values() {
+        let mut client = compatible_client_with_conflicting_wire_headers();
+        client.headers.insert(
+            "Authorization".to_owned(),
+            "Basic bWFkX2hhdHRlcjppbG92ZXRlYQ==".to_owned(),
+        );
+        client
+            .headers
+            .insert("X-API-Token".to_owned(), "owner-only-token".to_owned());
+        let cursor = QueryCursor::after(
+            client.get_query_request_head(),
+            None,
+            true,
+            Some(ForwardCursor {
+                query: "ab".repeat(32),
+                cursor: NonZeroU64::new(1).expect("cursor"),
+                gas_budget: None,
+            }),
+        )
+        .expect("continuation");
+        let debug = format!("{cursor:?}");
+        for secret in ["bWFkX2hhdHRlcjppbG92ZXRlYQ==", "owner-only-token"] {
+            assert!(!debug.contains(secret), "Debug leaked {secret}: {debug}");
+        }
+        assert!(debug.contains("Authorization") && debug.contains("X-API-Token"));
+        assert!(!cursor.is_truncated());
+        assert!(cursor.forward_cursor().is_some());
     }
     fn sample_alias_policy() -> AliasCachePolicy {
         AliasCachePolicy::new(

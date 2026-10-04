@@ -3575,9 +3575,9 @@ async fn mcp_jsonrpc_tools_call_account_transactions_uses_path_and_query_argumen
                     "path": {
                         "account_id": TEST_ACCOUNT_I105
                     },
-                    "query": {
-                        "limit": 0
-                    }
+                    "filter": "block_height >= 1 and result_ok = true",
+                    "select": "entrypoint_hash,block_height",
+                    "limit": 2
                 }
             }
         }),
@@ -3585,21 +3585,49 @@ async fn mcp_jsonrpc_tools_call_account_transactions_uses_path_and_query_argumen
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        tool_is_error(&call),
-        "invalid query should be marked as MCP tool error"
+        !tool_is_error(&call),
+        "collection query arguments should dispatch the history read: {call:?}"
     );
-    let structured = call
-        .get("result")
-        .and_then(|value| value.get("structuredContent"))
-        .and_then(Value::as_object)
-        .expect("structured content");
-    assert!(
-        structured
+    assert_eq!(
+        structured_content(&call)
             .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid `limit=0` query argument to be rejected"
+            .and_then(Value::as_u64),
+        Some(200)
     );
+    for (id, arguments, context) in [
+        (
+            1041,
+            norito::json!({
+                "path": { "account_id": TEST_ACCOUNT_I105 },
+                "query": { "limit": 2 }
+            }),
+            "the retired `query` object must fail advertised-schema validation",
+        ),
+        (
+            1042,
+            norito::json!({
+                "path": { "account_id": TEST_ACCOUNT_I105 },
+                "sort": "-block_height"
+            }),
+            "history reads are newest first and must not advertise `sort`",
+        ),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": "iroha.accounts.transactions",
+                    "arguments": arguments
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_tool_schema_error(&call, context);
+    }
     app.shutdown().await;
 }
 #[tokio::test]
@@ -4230,8 +4258,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_query_accepts_flat_envelope
             "params": {
                 "name": "iroha.accounts.query",
                 "arguments": {
-                    "limit": 2,
-                    "offset": 0
+                    "sort": "-id",
+                    "select": ["id", "uaid"],
+                    "limit": 2
                 }
             }
         }),
@@ -4240,10 +4269,31 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_query_accepts_flat_envelope
     assert_eq!(status, StatusCode::OK);
     assert!(
         !tool_is_error(&call),
-        "accounts query alias with flat envelope fields should dispatch successfully"
+        "accounts query alias with flat collection query fields should dispatch successfully"
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10625,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.accounts.query",
+                "arguments": {
+                    "limit": 2,
+                    "offset": 0
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_tool_schema_error(
+        &call,
+        "offset paging is retired; collections page with `limit` and `cursor`",
+    );
     app.shutdown().await;
 }
 #[tokio::test]
@@ -4325,7 +4375,7 @@ async fn mcp_jsonrpc_tools_call_account_assets_accepts_canonical_path() {
                 "name": "iroha.accounts.assets",
                 "arguments": {
                     "path": { "account_id": TEST_ACCOUNT_I105 },
-                    "limit": 0
+                    "filter": "unknown_field = 1"
                 }
             }
         }),
@@ -4334,7 +4384,7 @@ async fn mcp_jsonrpc_tools_call_account_assets_accepts_canonical_path() {
     assert_eq!(status, StatusCode::OK);
     assert!(
         tool_is_error(&call),
-        "invalid flat asset query should be marked as MCP tool error"
+        "a filter on a field the collection does not expose should be marked as MCP tool error: {call:?}"
     );
     let structured = structured_content(&call);
     assert!(
@@ -4342,7 +4392,36 @@ async fn mcp_jsonrpc_tools_call_account_assets_accepts_canonical_path() {
             .get("status")
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
-        "expected invalid flat asset limit to be rejected"
+        "expected Torii to reject the unknown account-asset field: {call:?}"
+    );
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 106211,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.accounts.assets",
+                "arguments": {
+                    "path": { "account_id": TEST_ACCOUNT_I105 },
+                    "filter": "quantity > 0",
+                    "sort": "-quantity",
+                    "limit": 2
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "a valid account-asset collection query should dispatch successfully: {call:?}"
+    );
+    assert_eq!(
+        structured_content(&call)
+            .get("status")
+            .and_then(Value::as_u64),
+        Some(200)
     );
     app.shutdown().await;
 }
@@ -4454,7 +4533,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
             "params": {
                 "name": "iroha.domains.list",
                 "arguments": {
-                    "limit": 0
+                    "filter": "unknown_field = 1"
                 }
             }
         }),
@@ -4463,7 +4542,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
     assert_eq!(status, StatusCode::OK);
     assert!(
         tool_is_error(&call),
-        "invalid flat domain-list limit should be marked as MCP tool error"
+        "a filter on a field domains do not expose should be marked as MCP tool error: {call:?}"
     );
     let structured = structured_content(&call);
     assert!(
@@ -4471,8 +4550,25 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
             .get("status")
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
-        "expected invalid flat domain-list limit to be rejected"
+        "expected Torii to reject the unknown domain field: {call:?}"
     );
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1062222,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.domains.list",
+                "arguments": {
+                    "limit": 0
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_tool_schema_error(&call, "`limit` must be at least 1 before dispatch");
     app.shutdown().await;
 }
 mcp_alias_dispatch_test! {

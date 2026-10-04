@@ -107,7 +107,7 @@ impl KagemushaNativeCurrentWalletReadV1 {
         let statements = statements
             .try_into()
             .map_err(|_| eyre!("Native current wallet node count rejected"))?;
-        self.authenticate_typed(KagemushaOrdinaryNativeCurrentWalletOriginalV1 {
+        self.authenticate_typed(&KagemushaOrdinaryNativeCurrentWalletOriginalV1 {
             proof,
             world_snapshot: first.world_snapshot,
             signatory_value: first.signatory_value,

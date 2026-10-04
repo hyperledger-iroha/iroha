@@ -188,7 +188,7 @@ class HttpClientTransportGovernanceTest {
                 .build(),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth(
+        fun auth() = ToriiCanonicalRequestAuth(
             "alice@universal",
             RequestSigner.ed25519(keyPair.private),
             1_700_000_000_100L,
@@ -198,7 +198,7 @@ class HttpClientTransportGovernanceTest {
         val response = transport.getParliamentTimedOvnCastingProofPageV1(
             ballotId,
             BigInteger.valueOf(17),
-            auth,
+            auth(),
         ).join()
 
         assertContentEquals(responseFrame, response.canonicalNorito())
@@ -242,7 +242,7 @@ class HttpClientTransportGovernanceTest {
             encodedTransport.requestParliamentTimedOvnCastingProofV1(
                 ballotId,
                 17,
-                auth,
+                auth(),
             ).join()
         }
         assertEquals(1, encodedExecutor.requestCount)

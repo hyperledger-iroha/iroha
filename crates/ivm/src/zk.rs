@@ -21,6 +21,12 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 mod cycle_roots;
+mod delta_rows;
+mod runtime_trace;
+mod trace_storage;
+pub use delta_rows::{DeltaEntry, DeltaTraceLog};
+pub use runtime_trace::RuntimeTraceCapture;
+pub(crate) use trace_storage::PcTraceLog;
 mod diagnostic_snapshot;
 mod register_authentication;
 pub(crate) use crate::cache_memory::SharedRegLog;
@@ -147,14 +153,18 @@ mod tests {
         registers.record_reserved(changed);
         assert_ne!(copied_registers.as_slice(), registers.as_slice());
 
-        let mut trace = DeltaTraceLog::default();
+        let mut trace = DeltaTraceLog::new(None);
         let mut gpr = [0; 256];
         gpr[7] = 21;
-        trace.record(4, gpr, [false; 256]);
+        trace.prepare_batch(1, 256, 0, None).unwrap();
+        trace.record_reserved(4, gpr, [false; 256]);
         gpr[7] = 22;
-        trace.record(8, gpr, [false; 256]);
-        let copied_trace = trace.try_clone_allocation().expect("bounded delta trace");
-        assert_eq!(copied_trace.entries, trace.entries);
+        trace.prepare_batch(1, 1, 0, None).unwrap();
+        trace.record_reserved(8, gpr, [false; 256]);
+        let copied_trace = trace
+            .try_clone_allocation(None)
+            .expect("bounded delta trace");
+        assert!(copied_trace.entries().eq(trace.entries()));
         let budget = iroha_allocation::AllocationBudget::new(64 * 1024);
         let capture = |rows| {
             DiagnosticTraceSource {
@@ -167,10 +177,7 @@ mod tests {
             .try_snapshot(&budget)
             .expect("fund copied trace fixture")
         };
-        assert_eq!(
-            capture(&copied_trace.entries).states(),
-            capture(&trace.entries).states()
-        );
+        assert_eq!(capture(&copied_trace).states(), capture(&trace).states());
         assert!(copied_trace.allocated_bytes().expect("checked capacity") > 0);
 
         let mut steps = StepLog::new(None);
@@ -561,95 +568,6 @@ pub struct RegisterState {
     pub pc: u64,
     pub gpr: [u64; 256],
     pub tags: [bool; 256],
-}
-/// Collector for the register trace. When zero-knowledge padding is enabled the prover needs the
-/// complete sequence of register states to construct the witness.
-#[derive(Default, Clone)]
-pub struct TraceLog {
-    pub states: Vec<RegisterState>,
-}
-impl TraceLog {
-    pub fn record(&mut self, pc: u64, gpr: [u64; 256], tags: [bool; 256]) {
-        self.states.push(RegisterState { pc, gpr, tags });
-    }
-}
-/// Compact trace log storing only changed registers.
-#[derive(Default, Clone)]
-pub struct DeltaTraceLog {
-    pub entries: Vec<DeltaEntry>,
-    last: Option<RegisterState>,
-}
-/// One compact trace entry.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DeltaEntry {
-    pub pc: u64,
-    pub changes: Vec<(usize, u64, bool)>,
-}
-impl DeltaTraceLog {
-    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
-        self.entries.iter().try_fold(
-            trace_vector_bytes::<DeltaEntry>(self.entries.capacity())?,
-            |bytes, entry| {
-                trace_add_bytes(
-                    bytes,
-                    trace_vector_bytes::<(usize, u64, bool)>(entry.changes.capacity())?,
-                )
-            },
-        )
-    }
-    #[cfg(test)]
-    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
-        let _ = trace_vector_bytes::<DeltaEntry>(self.entries.len())?;
-        let mut entries = Vec::new();
-        entries
-            .try_reserve_exact(self.entries.len())
-            .map_err(|_| trace_allocation_error())?;
-        for entry in &self.entries {
-            entries.push(DeltaEntry {
-                pc: entry.pc,
-                changes: try_copy_trace_slice(&entry.changes)?,
-            });
-        }
-        Ok(Self {
-            entries,
-            last: self.last.clone(),
-        })
-    }
-    pub fn record(&mut self, pc: u64, gpr: [u64; 256], tags: [bool; 256]) {
-        if let Some(prev) = &self.last {
-            let mut changes = Vec::new();
-            for (i, (&a, &b)) in prev.gpr.iter().zip(&gpr).enumerate() {
-                if a != b || prev.tags[i] != tags[i] {
-                    changes.push((i, b, tags[i]));
-                }
-            }
-            self.entries.push(DeltaEntry { pc, changes });
-        } else {
-            let changes = gpr
-                .iter()
-                .zip(tags.iter())
-                .enumerate()
-                .map(|(i, (&v, &t))| (i, v, t))
-                .collect();
-            self.entries.push(DeltaEntry { pc, changes });
-        }
-        self.last = Some(RegisterState { pc, gpr, tags });
-    }
-    /// Zero retained register values before discarding the compact trace.
-    pub(crate) fn scrub(&mut self) {
-        for entry in &mut self.entries {
-            for (_, value, tag) in &mut entry.changes {
-                *value = 0;
-                *tag = false;
-            }
-        }
-        if let Some(last) = &mut self.last {
-            last.gpr.fill(0);
-            last.tags.fill(false);
-        }
-        self.entries.clear();
-        self.last = None;
-    }
 }
 /// Merkle roots of registers and memory for a single cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]

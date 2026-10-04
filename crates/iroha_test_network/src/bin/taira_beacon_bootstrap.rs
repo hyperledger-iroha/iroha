@@ -15,15 +15,25 @@ use iroha::client::{
 };
 use iroha_config::base::read::ConfigReader;
 use iroha_core::{
-    beacon::credential::global_beacon_partial_signer_public_inventory_digest_v1,
+    beacon::{
+        AdaptiveGlobalThresholdBeaconDkgCryptoV1, GlobalThresholdBeaconDkgSnapshotV1,
+        GlobalThresholdBeaconDkgStateV1,
+        ceremony::{global_beacon_genesis_attempt_id_v1, global_beacon_genesis_session_id_v1},
+        credential::global_beacon_partial_signer_public_inventory_digest_v1,
+        global_threshold_beacon_roster_hash_v1,
+    },
     kura::{BlockIndex, BlockStore, Kura},
-    sumeragi::{native_journal::NativeJournalCursor, startup::genesis_committee_peers},
+    sumeragi::{
+        native_journal::{NativeJournalCursor, authenticate_signed_genesis},
+        startup::genesis_committee_peers,
+    },
 };
-use iroha_crypto::{HashOf, sha256};
+use iroha_crypto::{HashOf, sha256, sha256_reader_bounded};
 use iroha_data_model::{
     Level, NetworkId,
     account::address::ChainDiscriminantGuard,
-    consensus::GlobalThresholdBeaconKeySessionV1,
+    block::consensus::SumeragiRootScope,
+    consensus::{GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1},
     isi::{
         InstructionBox, Log,
         consensus_keys::{
@@ -52,6 +62,7 @@ use std::{
 use zeroize::{Zeroize as _, Zeroizing};
 
 const FILE_BOUND: u64 = 64 * 1024 * 1024;
+const DAEMON_BOUND: u64 = 2 * 1024 * 1024 * 1024;
 const ACTION_TIMEOUT: Duration = Duration::from_secs(180);
 const CREDENTIAL: &str = "iroha-global-beacon-partial-signer-v1.norito";
 const PROVIDER_FIELDS: [&str; 3] = [
@@ -111,10 +122,10 @@ struct RetainedSeat {
 
 #[derive(JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-struct Ceremony {
+struct Ceremony<Session> {
     schema: String,
     binding: Binding,
-    public_session: GlobalThresholdBeaconKeySessionV1,
+    public_session: Session,
     bundle_sha256: String,
     instruction_sha256: String,
     seats: Vec<RetainedSeat>,
@@ -130,6 +141,21 @@ struct Receipt {
     install_height: u64,
     session: GlobalThresholdBeaconKeySessionV1,
     seats: Vec<RetainedSeat>,
+}
+
+/// One signed ledger audit of a completed, genuine public DKG phase.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PhaseAudit {
+    schema: String,
+    chain_id: ChainId,
+    network_id: NetworkId,
+    manifest_sha256: String,
+    signed_genesis_sha256: String,
+    height: u64,
+    purpose: String,
+    session: GlobalThresholdBeaconDkgSessionV1,
+    public_snapshot_sha256: String,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -353,20 +379,12 @@ fn file_digest(path: &Path, private: bool) -> Result<String> {
 }
 
 fn daemon_digest(path: &Path) -> Result<String> {
-    let mut file = open_input(path, false, 512 * 1024 * 1024)?;
+    let mut file = open_input(path, false, DAEMON_BOUND)?;
     let before = file.metadata()?;
     ensure!(before.mode() & 0o111 != 0, "daemon is not executable");
-    let mut bytes = Zeroizing::new(Vec::new());
-    bytes.try_reserve_exact(usize::try_from(before.len())?)?;
-    std::io::Read::by_ref(&mut file)
-        .take(512 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)?;
+    let (digest, size) = sha256_reader_bounded(&mut file, DAEMON_BOUND)?;
     unchanged(path, &file, &before)?;
-    ensure!(
-        bytes.len() as u64 == before.len(),
-        "daemon changed during authentication"
-    );
-    let digest = sha256(&*bytes);
+    ensure!(size == before.len(), "daemon changed during authentication");
     Ok(hex(&digest))
 }
 
@@ -429,7 +447,7 @@ fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinali
                 let count = store.read_index_count()?;
                 let height = height.unwrap_or(count);
                 ensure!(
-                    (2..=limits().block_count as u64).contains(&height) && count >= height,
+                    (1..=limits().block_count as u64).contains(&height) && count >= height,
                     "durable native prefix is not available within bounds"
                 );
                 let mut blocks = Vec::new();
@@ -457,10 +475,31 @@ fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinali
                     blocks.push(NativeFinalityArtifact { block_wire: bytes });
                 }
                 let journal = NativeFinalityJournal { blocks };
+                if height == 1 {
+                    // H1 supplies signed genesis authority, never an invented QC.
+                    let (block, _) = authenticate_signed_genesis(
+                        &journal.blocks[0].block_wire,
+                        binding.network_id,
+                        limits(),
+                    )
+                    .map_err(|error| eyre!(error))?;
+                    ensure!(
+                        block.header().height().get() == 1,
+                        "native genesis height differs"
+                    );
+                    return Ok(journal);
+                }
                 let mut cursor = NativeJournalCursor::new(
                     binding.chain_id.clone(),
                     binding.network_id,
+                    SumeragiRootScope::Global,
                     limits(),
+                    &iroha_allocation::AllocationBudget::new(
+                        native
+                            .runtime_provider_broker
+                            .credential_max_memory_bytes
+                            .get(),
+                    ),
                 )
                 .map_err(|error| eyre!(error))?;
                 ensure!(
@@ -476,6 +515,178 @@ fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinali
             .join()
             .map_err(|_| eyre!("native journal worker panicked"))?
     })
+}
+
+fn genesis_roster(binding: &Binding) -> Result<Vec<PeerId>> {
+    let native = native_config(&binding.validator_configs[0], binding)?;
+    let manifest: iroha_genesis::RawGenesisTransaction =
+        json::from_slice(&read_input(&binding.genesis_manifest, false)?)?;
+    ensure!(
+        manifest.chain_id() == &binding.chain_id
+            && manifest.chain_discriminant() == binding.chain_discriminant,
+        "manifest differs from independent chain"
+    );
+    let validated = iroha_genesis::validate_prepared_genesis_bundle(
+        &read_input(&binding.genesis_signed, false)?,
+        &manifest,
+        &native.genesis.public_key,
+        binding.network_id.into_genesis_hash(),
+    )?;
+    let roster = genesis_committee_peers(validated.block())?;
+    ensure!(
+        roster.len() == 4,
+        "native bootstrap requires four validators"
+    );
+    Ok(roster)
+}
+
+fn phase_audit(
+    binding: &Binding,
+    roster: &[PeerId],
+    height: u64,
+    snapshot: &GlobalThresholdBeaconDkgSnapshotV1,
+) -> Result<(PhaseAudit, Vec<u8>)> {
+    let (purpose, edges, acceptances) = match height {
+        2 => ("signed-dealer-commitments-complete", 0, 0),
+        3 => ("signed-encrypted-deliveries-complete", 16, 0),
+        4 => ("signed-recipient-acceptances-complete", 16, 16),
+        _ => return Err(eyre!("unexpected native DKG audit phase")),
+    };
+    let session = snapshot.session;
+    ensure!(
+        roster.len() == 4
+            && session.version == 1
+            && session.network_id == binding.network_id
+            && session.session_id == global_beacon_genesis_session_id_v1(binding.network_id)
+            && session.attempt_id == global_beacon_genesis_attempt_id_v1(binding.network_id)
+            && session.authority_generation == 0
+            && session.roster_hash == global_threshold_beacon_roster_hash_v1(roster)
+            && session.committee_size == 4
+            && session.threshold == 2
+            && session.start_height == 1
+            && session.commitments_end_height == 2
+            && session.deliveries_end_height == 3
+            && session.acceptances_end_height == 4
+            && snapshot.last_updated_height == height - 1
+            && snapshot.recipient_keys.len() == 4
+            && snapshot
+                .recipient_keys
+                .iter()
+                .map(|key| &key.validator)
+                .eq(roster.iter())
+            && snapshot.dealer_commitments.len() == 4
+            && snapshot.encrypted_shares.len() == edges
+            && snapshot.share_acceptances.len() == acceptances,
+        "public DKG snapshot differs from exact genesis phase, attempt or roster"
+    );
+    // Restoration re-derives the public generators and verifies every signed
+    // record. Only this public DTO is encoded or hashed; no private share enters it.
+    GlobalThresholdBeaconDkgStateV1::from_snapshot(
+        snapshot.clone(),
+        &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+    )?;
+    let bytes = norito::encode_canonical(snapshot)?;
+    ensure!(
+        bytes.len() as u64 <= FILE_BOUND,
+        "public DKG snapshot exceeds retention bound"
+    );
+    let audit = PhaseAudit {
+        schema: "iroha.operator.genesis-beacon.phase-audit.v1".to_owned(),
+        chain_id: binding.chain_id.clone(),
+        network_id: binding.network_id,
+        manifest_sha256: binding.manifest_sha256.clone(),
+        signed_genesis_sha256: binding.signed_genesis_sha256.clone(),
+        height,
+        purpose: purpose.to_owned(),
+        session,
+        public_snapshot_sha256: hex(&sha256(&bytes)),
+    };
+    Ok((audit, bytes))
+}
+
+fn phase_instructions(audit: &PhaseAudit) -> Result<Vec<InstructionBox>> {
+    // The ledger records the exact independently bound, publicly replayable
+    // ceremony evidence. This is an audit action, not an empty-height request.
+    Ok(vec![Log::new(Level::INFO, json::to_json(audit)?).into()])
+}
+
+fn retained_phase_audit(args: &Args, roster: &[PeerId], height: u64) -> Result<PhaseAudit> {
+    let bytes = read_input(
+        &args.output.join(format!("phase-h{height}-public.norito")),
+        false,
+    )?;
+    let retained = read_input(
+        &args.output.join(format!("phase-h{height}-audit.json")),
+        false,
+    )?;
+    validate_retained_phase_audit(&args.binding, roster, height, &bytes, &retained)
+}
+
+fn validate_retained_phase_audit(
+    binding: &Binding,
+    roster: &[PeerId],
+    height: u64,
+    bytes: &[u8],
+    audit_bytes: &[u8],
+) -> Result<PhaseAudit> {
+    let snapshot: GlobalThresholdBeaconDkgSnapshotV1 =
+        norito::decode_canonical_with_limits(bytes, norito::canonical_decode_limits(bytes.len()))?;
+    let (expected, canonical) = phase_audit(binding, roster, height, &snapshot)?;
+    ensure!(
+        canonical.as_slice() == bytes,
+        "retained public DKG snapshot is not canonical"
+    );
+    let retained: PhaseAudit = json::from_slice(audit_bytes)?;
+    ensure!(retained == expected, "retained public DKG audit changed");
+    Ok(expected)
+}
+
+fn verify_transaction_carrier(
+    journal: &NativeFinalityJournal,
+    transaction: &SignedTransaction,
+    height: u64,
+    discriminant: u16,
+) -> Result<()> {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| -> Result<()> {
+                let _guard = ChainDiscriminantGuard::enter(discriminant);
+                let index = usize::try_from(
+                    height
+                        .checked_sub(1)
+                        .ok_or_else(|| eyre!("zero transaction height"))?,
+                )?;
+                let block = journal
+                    .blocks
+                    .get(index)
+                    .ok_or_else(|| eyre!("transaction carrier is absent"))?
+                    .decode_block(limits())
+                    .map_err(|error| eyre!(error))?;
+                ensure!(
+                    block
+                        .external_transactions()
+                        .any(|actual| actual == transaction),
+                    "authenticated carrier does not contain the identical retained transaction"
+                );
+                Ok(())
+            })
+            .join()
+            .map_err(|_| eyre!("transaction carrier worker panicked"))?
+    })
+}
+
+fn retain_phase_journal(output: &Path, height: u64, journal: &NativeFinalityJournal) -> Result<()> {
+    let bytes = norito::encode_canonical(journal)?;
+    let path = output.join(format!("phase-h{height}.norito"));
+    if path.try_exists()? {
+        ensure!(
+            read_input(&path, false)?.as_slice() == bytes,
+            "retained native phase journal changed"
+        );
+    } else {
+        write_new(&path, &bytes)?;
+    }
+    Ok(())
 }
 
 fn client(binding: &Binding) -> Result<Client> {
@@ -632,7 +843,10 @@ fn derived_config(path: &Path, provider: &Provider) -> Result<Zeroizing<Vec<u8>>
     result
 }
 
-fn installation(output: &Path, ceremony: &Ceremony) -> Result<Vec<InstructionBox>> {
+fn installation(
+    output: &Path,
+    ceremony: &Ceremony<GlobalThresholdBeaconKeySessionV1>,
+) -> Result<Vec<InstructionBox>> {
     let path = output.join("install-instruction.json");
     ensure!(
         file_digest(&path, false)? == ceremony.instruction_sha256,
@@ -747,22 +961,37 @@ async fn run(args: Args) -> Result<()> {
         );
     }
     if args.recover && !ceremony_path.try_exists()? {
-        if args.output.join("phase-h4-submitted.nrt").try_exists()? {
-            let instructions =
-                vec![Log::new(Level::INFO, "native genesis beacon phase h4".to_owned()).into()];
-            let transaction = retained_transaction(&args, "phase-h4", &instructions)?;
+        let roster = genesis_roster(&args.binding)?;
+        for height in (2..=4).rev() {
+            let label = format!("phase-h{height}");
+            if !args
+                .output
+                .join(format!("{label}-submitted.nrt"))
+                .try_exists()?
+            {
+                continue;
+            }
+            let audit = retained_phase_audit(&args, &roster, height)?;
+            let transaction = retained_transaction(&args, &label, &phase_instructions(&audit)?)?;
             recover_applied(
                 &client,
                 &transaction,
                 &args.output,
-                "phase-h4",
-                4,
+                &label,
+                height,
                 args.binding.chain_discriminant,
             )
             .await?;
-            native_journal(&args.binding, Some(4))?;
+            let journal = native_journal(&args.binding, Some(height))?;
+            verify_transaction_carrier(
+                &journal,
+                &transaction,
+                height,
+                args.binding.chain_discriminant,
+            )?;
+            retain_phase_journal(&args.output, height, &journal)?;
             return Err(eyre!(
-                "retained phase H4 is Applied; DKG completion is absent and this consumed attempt cannot be restarted"
+                "retained phase H{height} audit is Applied; DKG completion is absent and this consumed attempt cannot be restarted"
             ));
         }
         return Err(eyre!(
@@ -791,24 +1020,24 @@ async fn run(args: Args) -> Result<()> {
             "native bootstrap requires four validators"
         );
         let mut seats = Vec::new();
-        for validator in roster {
+        for validator in &roster {
             let mut matching = Vec::new();
             for path in &args.binding.validator_configs {
                 let config = native_config(path, &args.binding)?;
-                if config.common.peer.id() == &validator {
+                if config.common.peer.id() == validator {
                     matching.push(path.clone());
                 }
             }
             ensure!(matching.len() == 1, "validator config mapping is not exact");
             seats.push(DisposableGenesisConfigSeat {
-                validator,
+                validator: validator.clone(),
                 config_path: matching.remove(0),
             });
         }
         let tip = native_journal(&args.binding, None)?.blocks.len();
         ensure!(
-            (3..=4).contains(&tip),
-            "genesis bootstrap requires the real current H3 or H4 boundary"
+            tip == 1,
+            "fresh genesis bootstrap requires the exact signed H1 boundary"
         );
         let bundle = NativeGenesisProvisioningBundle {
             manifest_sha256: sha256(&manifest_json),
@@ -826,26 +1055,37 @@ async fn run(args: Args) -> Result<()> {
             &args.binding.daemon,
             limits(),
             5,
-            |height| {
+            |height, snapshot| {
                 let binding = args.binding.clone();
                 let output = args.output.clone();
                 let client = client.clone();
+                let roster = roster.clone();
                 async move {
                     ensure!((2..=4).contains(&height), "unexpected native DKG phase");
-                    if height == 4 && native_journal(&binding, None)?.blocks.len() == 3 {
-                        submit_once(
-                            &client,
-                            vec![
-                                Log::new(Level::INFO, "native genesis beacon phase h4".to_owned())
-                                    .into(),
-                            ],
-                            &output,
-                            "phase-h4",
-                            4,
-                            binding.chain_discriminant,
-                        )
-                        .await?;
-                    }
+                    ensure!(
+                        native_journal(&binding, None)?.blocks.len() as u64 == height - 1,
+                        "completed public DKG phase has lost its exact predecessor boundary"
+                    );
+                    let (audit, public_bytes) = phase_audit(&binding, &roster, height, &snapshot)?;
+                    write_new(
+                        &output.join(format!("phase-h{height}-public.norito")),
+                        &public_bytes,
+                    )?;
+                    write_new(
+                        &output.join(format!("phase-h{height}-audit.json")),
+                        &json::to_vec(&audit)?,
+                    )?;
+                    let label = format!("phase-h{height}");
+                    let instructions = phase_instructions(&audit)?;
+                    submit_once(
+                        &client,
+                        instructions.clone(),
+                        &output,
+                        &label,
+                        height,
+                        binding.chain_discriminant,
+                    )
+                    .await?;
                     let deadline = Instant::now() + ACTION_TIMEOUT;
                     loop {
                         let native = native_config(&binding.validator_configs[0], &binding)?;
@@ -862,10 +1102,20 @@ async fn run(args: Args) -> Result<()> {
                         tokio::time::sleep(Duration::from_millis(250)).await;
                     }
                     let journal = native_journal(&binding, Some(height))?;
-                    write_new(
-                        &output.join(format!("phase-h{height}.norito")),
-                        &norito::encode_canonical(&journal)?,
+                    let phase_args = Args {
+                        binding: binding.clone(),
+                        output: output.clone(),
+                        recover: true,
+                        submit_retained_install: false,
+                    };
+                    let transaction = retained_transaction(&phase_args, &label, &instructions)?;
+                    verify_transaction_carrier(
+                        &journal,
+                        &transaction,
+                        height,
+                        binding.chain_discriminant,
                     )?;
+                    retain_phase_journal(&output, height, &journal)?;
                     Ok(journal)
                 }
             },
@@ -891,7 +1141,7 @@ async fn run(args: Args) -> Result<()> {
                     && provider.policy_digest
                         == global_beacon_partial_signer_public_inventory_digest_v1(
                             args.binding.network_id,
-                            &[(dkg.public_session.clone(), seat.signer_index)]
+                            &[(dkg.public_session.record(), seat.signer_index)]
                         )?,
                 "native provider differs from exact completed seat"
             );
@@ -922,7 +1172,7 @@ async fn run(args: Args) -> Result<()> {
         let ceremony = Ceremony {
             schema: "iroha.operator.genesis-beacon.ceremony.v1".to_owned(),
             binding: args.binding.clone(),
-            public_session: dkg.public_session.clone(),
+            public_session: dkg.public_session.record(),
             bundle_sha256: hex(&sha256(&*bundle)),
             instruction_sha256: hex(&sha256(&*instruction)),
             seats: retained,
@@ -931,7 +1181,8 @@ async fn run(args: Args) -> Result<()> {
     }
     // Recovery is deliberately limited to retained transactions. A consumed or
     // incomplete DKG attempt cannot be restarted through this command.
-    let ceremony: Ceremony = json::from_slice(&read_input(&ceremony_path, false)?)?;
+    let ceremony: Ceremony<GlobalThresholdBeaconKeySessionV1> =
+        json::from_slice(&read_input(&ceremony_path, false)?)?;
     ensure!(
         ceremony.schema == "iroha.operator.genesis-beacon.ceremony.v1"
             && ceremony.binding == args.binding
@@ -1019,14 +1270,7 @@ async fn run(args: Args) -> Result<()> {
     }
     let transaction = retained_transaction(&args, "install", &instructions)?;
     let journal = native_journal(&args.binding, Some(5))?;
-    std::thread::scope(|scope| {
-        scope.spawn(|| -> Result<()> {
-        let _guard = ChainDiscriminantGuard::enter(args.binding.chain_discriminant);
-        let block = journal.blocks[4].decode_block(limits()).map_err(|error| eyre!(error))?;
-        ensure!(block.external_transactions().any(|actual| actual == &transaction), "authenticated H5 carrier does not contain the identical installation transaction");
-        Ok(())
-    }).join().map_err(|_| eyre!("installation carrier worker panicked"))?
-    })?;
+    verify_transaction_carrier(&journal, &transaction, 5, args.binding.chain_discriminant)?;
     let receipt = Receipt {
         schema: "iroha.operator.genesis-beacon.install-applied.v1".to_owned(),
         chain_id: args.binding.chain_id,
@@ -1061,6 +1305,216 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_core::beacon::{
+        LocalGlobalThresholdBeaconDkgSeatV1, ceremony::global_beacon_genesis_dkg_session_v1,
+    };
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+    use iroha_data_model::block::BlockHeader;
+
+    type AuditFixture = (
+        Binding,
+        Vec<PeerId>,
+        [GlobalThresholdBeaconDkgSnapshotV1; 3],
+    );
+
+    fn audit_fixture() -> &'static AuditFixture {
+        static FIXTURE: std::sync::LazyLock<AuditFixture> = std::sync::LazyLock::new(|| {
+            let mut signers = (1..=4)
+                .map(|index| KeyPair::try_from_seed(vec![index; 32], Algorithm::BlsNormal).unwrap())
+                .collect::<Vec<_>>();
+            signers.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let roster = signers
+                .iter()
+                .map(|key| PeerId::new(key.public_key().clone()))
+                .collect::<Vec<_>>();
+            let network_id = NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"phase-audit-test")),
+            );
+            let binding = Binding {
+                input_dir: "/native/input".into(),
+                daemon: "/native/iroha3d".into(),
+                daemon_sha256: "0".repeat(64),
+                chain_id: ChainId::from("phase-audit-test"),
+                network_id,
+                chain_discriminant: 369,
+                genesis_manifest: "/native/input/genesis.json".into(),
+                manifest_sha256: "1".repeat(64),
+                genesis_signed: "/native/input/genesis.signed.nrt".into(),
+                signed_genesis_sha256: "2".repeat(64),
+                client_config: "/native/input/client.toml".into(),
+                validator_configs: Vec::new(),
+            };
+            let session = global_beacon_genesis_dkg_session_v1(network_id, &roster).unwrap();
+            let mut local = signers
+                .iter()
+                .enumerate()
+                .map(|(index, signer)| {
+                    LocalGlobalThresholdBeaconDkgSeatV1::new(
+                        session,
+                        &roster,
+                        u16::try_from(index + 1).unwrap(),
+                        signer,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let publications = local
+                .iter()
+                .map(LocalGlobalThresholdBeaconDkgSeatV1::publication)
+                .collect::<Vec<_>>();
+            let keys = publications
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>();
+            let commitments = publications
+                .iter()
+                .map(|(_, commitment)| commitment.clone())
+                .collect::<Vec<_>>();
+            let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
+            let mut public = GlobalThresholdBeaconDkgStateV1::new(session, &crypto).unwrap();
+            for key in &keys {
+                public.record_recipient_key(1, key.clone()).unwrap();
+            }
+            for commitment in &commitments {
+                public
+                    .record_dealer_commitment(1, commitment.clone(), &crypto)
+                    .unwrap();
+            }
+            let committed = public.public_snapshot().unwrap();
+            for (seat, signer) in local.iter_mut().zip(&signers) {
+                for edge in seat.deliver(&keys, &commitments, 2, signer).unwrap() {
+                    public.record_encrypted_share(2, edge).unwrap();
+                }
+            }
+            let delivered = public.public_snapshot().unwrap();
+            for (seat, signer) in local.iter_mut().zip(&signers) {
+                for acceptance in seat.accept(&delivered, 3, signer).unwrap() {
+                    public.record_share_acceptance(3, acceptance).unwrap();
+                }
+            }
+            let accepted = public.public_snapshot().unwrap();
+            public.finalize(4, &crypto).unwrap();
+            assert!(
+                public.public_snapshot().is_err(),
+                "acceptance snapshot must precede consuming finalization"
+            );
+            (binding, roster, [committed, delivered, accepted])
+        });
+        &FIXTURE
+    }
+
+    #[test]
+    fn phase_audits_bind_real_signed_stage_purpose_and_genesis_context() {
+        let (binding, roster, snapshots) = audit_fixture();
+        let mut digests = Vec::new();
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            let height = u64::try_from(index + 2).unwrap();
+            let (audit, bytes) = phase_audit(binding, roster, height, snapshot).unwrap();
+            let instructions = phase_instructions(&audit).unwrap();
+            let log = instructions[0].as_any().downcast_ref::<Log>().unwrap();
+            assert_eq!(log.level, Level::INFO);
+            let recorded: PhaseAudit = json::from_str(&log.msg).unwrap();
+            assert_eq!(recorded, audit);
+            assert_eq!(audit.network_id, binding.network_id);
+            assert_eq!(audit.manifest_sha256, binding.manifest_sha256);
+            assert_eq!(audit.signed_genesis_sha256, binding.signed_genesis_sha256);
+            assert_eq!(audit.public_snapshot_sha256, hex(&sha256(&bytes)));
+            assert_ne!(audit.purpose, format!("phase-h{height}"));
+            digests.push(audit.public_snapshot_sha256);
+            assert!(phase_audit(binding, roster, height + 1, snapshot).is_err());
+        }
+        assert!(digests.windows(2).all(|pair| pair[0] != pair[1]));
+        let mut forged = snapshots[0].clone();
+        forged.dealer_commitments[0].signature = Signature::from_bytes(&[]);
+        assert!(phase_audit(binding, roster, 2, &forged).is_err());
+        let mut foreign = snapshots[0].clone();
+        foreign.session.attempt_id[0] ^= 1;
+        assert!(phase_audit(binding, roster, 2, &foreign).is_err());
+        let mut reordered = roster.clone();
+        reordered.swap(0, 1);
+        assert!(phase_audit(binding, &reordered, 2, &snapshots[0]).is_err());
+    }
+
+    #[test]
+    fn retained_phase_audit_regenerates_identical_action_and_rejects_substitution() {
+        let (binding, roster, snapshots) = audit_fixture();
+        let (audit, bytes) = phase_audit(binding, roster, 3, &snapshots[1]).unwrap();
+        let audit_bytes = json::to_vec(&audit).unwrap();
+        let recovered =
+            validate_retained_phase_audit(binding, roster, 3, &bytes, &audit_bytes).unwrap();
+        assert_eq!(
+            phase_instructions(&recovered).unwrap(),
+            phase_instructions(&audit).unwrap()
+        );
+        assert!(validate_retained_phase_audit(binding, roster, 4, &bytes, &audit_bytes).is_err());
+        let mut substituted = audit.clone();
+        substituted.public_snapshot_sha256 = "3".repeat(64);
+        assert!(
+            validate_retained_phase_audit(
+                binding,
+                roster,
+                3,
+                &bytes,
+                &json::to_vec(&substituted).unwrap()
+            )
+            .is_err()
+        );
+        let mut foreign_binding = binding.clone();
+        foreign_binding.signed_genesis_sha256 = "4".repeat(64);
+        assert!(
+            validate_retained_phase_audit(&foreign_binding, roster, 3, &bytes, &audit_bytes)
+                .is_err()
+        );
+        let mut corrupted = bytes.clone();
+        corrupted.pop();
+        assert!(
+            validate_retained_phase_audit(binding, roster, 3, &corrupted, &audit_bytes).is_err()
+        );
+    }
+
+    #[test]
+    fn ceremony_json_borrows_the_public_field_without_changing_recovery_bytes() {
+        // The generic ceremony container has one JSON layout. Session proof
+        // validation stays at its existing native boundary, independently of
+        // whether this encoding borrows a retained graph or owns decoded data.
+        let binding = Binding {
+            input_dir: PathBuf::from("input"),
+            daemon: PathBuf::from("iroha3d"),
+            daemon_sha256: "a".repeat(64),
+            chain_id: ChainId::from("ceremony-container"),
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"ceremony-container"),
+            )),
+            chain_discriminant: 42,
+            genesis_manifest: PathBuf::from("genesis.json"),
+            manifest_sha256: "b".repeat(64),
+            genesis_signed: PathBuf::from("genesis.norito"),
+            signed_genesis_sha256: "c".repeat(64),
+            client_config: PathBuf::from("client.toml"),
+            validator_configs: Vec::new(),
+        };
+        #[derive(Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+        struct PublicField {
+            values: Vec<u16>,
+        }
+        let public_field = PublicField {
+            values: vec![3_u16, 7, 31],
+        };
+        let borrowed = Ceremony {
+            schema: "iroha.operator.genesis-beacon.ceremony.v1".to_owned(),
+            binding: binding.clone(),
+            public_session: &public_field,
+            bundle_sha256: "d".repeat(64),
+            instruction_sha256: "e".repeat(64),
+            seats: Vec::new(),
+        };
+        let bytes = json::to_vec(&borrowed).unwrap();
+        let recovered: Ceremony<PublicField> = json::from_slice(&bytes).unwrap();
+        assert_eq!(recovered.public_session, public_field);
+        assert!(recovered.binding == binding);
+        assert_eq!(json::to_vec(&recovered).unwrap(), bytes);
+        assert!(std::ptr::eq(borrowed.public_session, &public_field));
+    }
 
     #[test]
     fn operator_rejects_secret_arguments_and_noncanonical_digests() {
@@ -1075,6 +1529,89 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn operator_daemon_digest_streams_executable_above_old_bound() {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+        let root = tempfile::tempdir().expect("private daemon test directory");
+        let root_path = root
+            .path()
+            .canonicalize()
+            .expect("canonical daemon test directory");
+        fs::set_permissions(&root_path, fs::Permissions::from_mode(0o700))
+            .expect("owner-only daemon test directory");
+        directory(&root_path, true).expect("safe daemon test directory ancestry");
+        let path = root_path.join("daemon");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .custom_flags(nix::libc::O_NOFOLLOW)
+            .open(&path)
+            .expect("new owned executable daemon fixture");
+        file.set_len(512 * 1024 * 1024 + 1)
+            .expect("sparse daemon above historical limit");
+        drop(file);
+        let before = fs::symlink_metadata(&path).expect("fixture metadata");
+        // Independently precomputed SHA-256 of exactly 536870913 zero bytes.
+        // Sparse set_len and the shared fixed-buffer reader avoid a full-file allocation.
+        assert_eq!(
+            daemon_digest(&path).expect("large executable daemon authenticates"),
+            "7c40fe5ce847740d0f0d0cdde3949d6585804cdec3ae61a15b923165699c8137"
+        );
+        assert_eq!(
+            identity(&before),
+            identity(&fs::symlink_metadata(&path).expect("unchanged fixture metadata"))
+        );
+    }
+
+    #[test]
+    fn operator_daemon_digest_refuses_oversized_and_nonexecutable_files() {
+        use std::{
+            io::Write as _,
+            os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+        };
+
+        let root = tempfile::tempdir().expect("private daemon test directory");
+        let root_path = root
+            .path()
+            .canonicalize()
+            .expect("canonical daemon test directory");
+        fs::set_permissions(&root_path, fs::Permissions::from_mode(0o700))
+            .expect("owner-only daemon test directory");
+        directory(&root_path, true).expect("safe daemon test directory ancestry");
+        let oversized = root_path.join("oversized-daemon");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .custom_flags(nix::libc::O_NOFOLLOW)
+            .open(&oversized)
+            .expect("new owned oversized executable fixture");
+        file.set_len(DAEMON_BOUND + 1)
+            .expect("sparse daemon above current limit");
+        drop(file);
+        let error = daemon_digest(&oversized).expect_err("size rejects before hashing");
+        assert!(
+            error
+                .to_string()
+                .contains("input file exceeds custody or size bounds")
+        );
+
+        let nonexecutable = root_path.join("nonexecutable-daemon");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(nix::libc::O_NOFOLLOW)
+            .open(&nonexecutable)
+            .expect("new owned nonexecutable fixture");
+        file.write_all(b"daemon").expect("small fixture body");
+        drop(file);
+        let error = daemon_digest(&nonexecutable).expect_err("executable permission required");
+        assert!(error.to_string().contains("daemon is not executable"));
     }
 
     #[test]

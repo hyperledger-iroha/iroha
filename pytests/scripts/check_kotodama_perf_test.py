@@ -1209,7 +1209,8 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )
         build_step = workflow.split(build_marker, 1)[1].split(marker, 1)[0]
         self.assertIn(
-            "cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission --bin ivm_artifact_admit",
+            "cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission "
+            "--features ivm_artifact_admission/dev-tools --bin ivm_artifact_admit",
             build_step,
         )
         self.assertIn("python3 scripts/check_kotodama_docs.py", build_step)

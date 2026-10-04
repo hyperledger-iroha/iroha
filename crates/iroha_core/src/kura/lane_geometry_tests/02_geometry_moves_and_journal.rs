@@ -4,9 +4,6 @@ impl Drop for GeometryReferenceResumeGuard<'_> {
         self.0.store(false, Ordering::Release);
     }
 }
-fn initial_primary_dataspace_for_pair_fixture() -> DataSpaceId {
-    ModelLaneConfig::default().dataspace_id
-}
 
 fn authenticate_transition_fixture_primary(
     kura: &Kura,

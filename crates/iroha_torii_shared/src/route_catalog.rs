@@ -3684,6 +3684,14 @@ pub mod sorafs {
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
             .with_effect(RouteEffect::ExpensiveCompute)
             .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Read one original signed provider attestation through current native archive-manager authorization.
+    pub const PROVIDER_ATTESTATION: RouteDescriptor = documented_post(
+        "sorafs.provider.attestation",
+        "/v1/sorafs/provider/attestation",
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_effect(RouteEffect::ExpensiveCompute)
+    .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Stage publisher-authenticated chunks for an exact finalized provider assignment.
     pub const PUBLISH_SOURCE: RouteDescriptor =
         documented_post("sorafs.publish_source.stage", "/v1/sorafs/publish/source")
@@ -3890,6 +3898,7 @@ pub mod sorafs {
         STORAGE_PLAN,
         REPAIR_SOURCE,
         PROVIDER_SOURCE,
+        PROVIDER_ATTESTATION,
         PUBLISH_SOURCE,
         PUBLISH_PREPARE,
         PUBLISH_PROOF,
@@ -4510,6 +4519,7 @@ pub mod contracts_and_verification_keys {
         SORAFS_ORDERBOOK_EVENTS_WS_GET => app_unprojected_websocket_get("contracts.sorafs_orderbook_events_ws_get", "/v1/sorafs/orderbook/events/ws");
         SORAFS_RESERVE_POLICY_GET => app_account_read_sdk_get("contracts.sorafs_reserve_policy_get", "/v1/sorafs/reserve/policy");
         SORAFS_RESERVE_POLICY_PROOF_GET => app_account_read_sdk_get("contracts.sorafs_reserve_policy_proof_get", "/v1/sorafs/reserve/policy/{height}");
+        SORAFS_RESERVE_ACCOUNT_PROOF_GET => app_account_read_sdk_get("contracts.sorafs_reserve_account_proof_get", "/v1/sorafs/reserve/providers/{provider_id}/proof/{height}");
         SORAFS_RESERVE_PROVIDERS_GET => app_account_read_sdk_get("contracts.sorafs_reserve_providers_get", "/v1/sorafs/reserve/providers");
         SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_account_read_sdk_get("contracts.sorafs_reserve_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/providers/{provider_id_hex}");
         SORAFS_RESERVE_TOP_UP_POST => app_signed_body_mutation_sdk_post("contracts.sorafs_reserve_top_up_post", "/v1/sorafs/reserve/top-up");

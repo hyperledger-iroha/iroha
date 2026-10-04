@@ -21,7 +21,7 @@ class TransactionPayload(
     val networkId: NetworkId,
     val authority: String,
     val creationTimeMs: Long = System.currentTimeMillis(),
-    val executable: Executable = Executable.ivm(byteArrayOf()),
+    val executable: Executable,
     val timeToLiveMs: Long? = DEFAULT_TRANSACTION_TTL_MS,
     val nonce: Long? = null,
     val feePayment: FeePaymentIntent,

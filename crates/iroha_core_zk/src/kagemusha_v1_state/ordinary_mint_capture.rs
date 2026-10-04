@@ -92,9 +92,6 @@ pub(super) enum MintRecord {
         operation: DigestV1,
         original: Vec<u8>,
     },
-    Cancel {
-        operation: DigestV1,
-    },
     Funding(Box<super::mint_funding::MintFundingRecord>),
 }
 pub(super) struct PendingMint {
@@ -716,18 +713,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             _ => Err(KagemushaStateErrorV1::SnapshotIntegrity),
         }
     }
-    pub(crate) fn cancel_uninvoked_mint(
-        &mut self,
-        operation: DigestV1,
-    ) -> Result<(), KagemushaStateErrorV1> {
-        self.require_live_mint(operation)?;
-        if self.pending_mint.as_ref().is_none_or(|p| p.fenced) {
-            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
-        }
-        self.persist(&Record::Mint(MintRecord::Cancel { operation }))?;
-        self.pending_mint = None;
-        self.require_current_financial_control()
-    }
     pub(crate) fn captured_mint_selection(
         &self,
     ) -> Result<KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1<'_>, KagemushaStateErrorV1>
@@ -1045,16 +1030,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     .proven_request = Some(original);
             }
             MintRecord::Funding(record) => self.replay_mint_funding(*record)?,
-            MintRecord::Cancel { operation } => {
-                let p = self
-                    .pending_mint
-                    .as_ref()
-                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-                if p.originals.challenge.operation_id != operation || p.fenced {
-                    return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-                }
-                self.pending_mint = None;
-            }
         }
         Ok(())
     }

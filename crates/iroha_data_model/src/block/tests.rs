@@ -1206,8 +1206,8 @@ fn signed_block_decoders_reject_nested_instruction_type_name_alias() {
     let framed_error = decode_framed_signed_block(&framed)
         .expect_err("framed V1 blocks must reject nested instruction aliases");
     assert!(matches!(
-        framed_error,
-        iroha_version::error::Error::NoritoCodec(reason)
+        framed_error.into_error(),
+        NoritoFrameError::Message(reason)
             if reason == "unknown instruction wire identifier"
     ));
 }
@@ -1359,11 +1359,11 @@ fn decode_versioned_signed_block_accepts_framed_payload() {
     let versioned = block.encode_versioned();
     let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame versioned payload");
     let decoded_from_framed =
-        decode_versioned_signed_block(&framed).expect("decode framed payload via versioned API");
+        decode_framed_signed_block(&framed).expect("decode framed payload via versioned API");
     assert_eq!(decoded_from_framed, block);
-    let err = decode_versioned_signed_block(&versioned)
-        .expect_err("headerless payloads must be rejected");
-    assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    let err =
+        decode_framed_signed_block(&versioned).expect_err("headerless payloads must be rejected");
+    assert_eq!(err.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
 }
 fn plain_block_at(height: u64) -> SignedBlock {
     let header = BlockHeader::new(
@@ -1502,7 +1502,7 @@ fn commit_certificate_wire_json_and_versioned_round_trip() {
     ] {
         let wire = block.encode_wire().expect("wire");
         assert_eq!(
-            decode_versioned_signed_block(&wire).expect("decode wire"),
+            decode_framed_signed_block(&wire).expect("decode wire"),
             block
         );
         assert_eq!(
@@ -2255,7 +2255,7 @@ fn canonical_wire_and_deframe_preserve_layout_flags() {
     super::decode_framed_signed_block(wire.as_framed()).expect("decode canonical wire");
     let err = super::decode_framed_signed_block(&versioned)
         .expect_err("headerless payloads must be rejected");
-    assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    assert_eq!(err.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
 }
 #[test]
 fn framing_derives_flags_instead_of_reusing_tls_state() {
@@ -2420,4 +2420,109 @@ fn full_output_replacement_rebuilds_exact_cache() {
     assert_eq!(block.output_merkle_commitment(), expected.commitment());
     assert_eq!(block.header(), header);
     block.validate_output_merkle_cache().unwrap();
+}
+
+#[test]
+fn canonical_block_and_journal_share_strict_header_and_version_rejections() {
+    use crate::sumeragi::finality::{
+        NativeFinalityArtifact, NativeFinalityDecodeError, NativeFinalityLimits,
+    };
+    let mut block = plain_block_at(1);
+    let key = checked_random_keypair();
+    block
+        .signatures
+        .insert(checked_block_signature(0, &key, &block.header()));
+    let wire = block.encode_wire().unwrap();
+    let limits = NativeFinalityLimits {
+        block_bytes: 1024 * 1024,
+        journal_bytes: 1024 * 1024,
+        block_count: 1,
+        allocated_bytes: 64 * 1024 * 1024,
+    };
+    assert_eq!(decode_framed_signed_block(&wire).unwrap(), block);
+    assert_eq!(
+        NativeFinalityArtifact {
+            block_wire: wire.clone()
+        }
+        .decode_block(limits)
+        .unwrap(),
+        block
+    );
+    let mut malformed = Vec::new();
+    for offset in [0, 1, 5, 6, 7, 23, 24, 32, norito::core::Header::SIZE] {
+        let mut changed = wire.clone();
+        changed[offset] ^= 0x80;
+        malformed.push(changed);
+    }
+    let mut oversized = wire.clone();
+    oversized[24..32].copy_from_slice(
+        &norito::core::max_archive_len()
+            .saturating_add(1)
+            .to_le_bytes(),
+    );
+    malformed.push(oversized);
+    let mut trailing = wire.clone();
+    trailing.push(0);
+    malformed.push(trailing);
+    malformed.extend([block.encode_versioned(), Vec::new(), vec![1]]);
+    for bytes in malformed {
+        let direct = norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || decode_framed_signed_block(&bytes),
+        )
+        .unwrap_err();
+        assert_eq!(
+            direct.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid,
+            "{direct:?}"
+        );
+        let journal = NativeFinalityArtifact {
+            block_wire: bytes.clone(),
+        }
+        .decode_block(limits)
+        .unwrap_err();
+        match journal {
+            NativeFinalityDecodeError::Malformed(original) => {
+                assert_eq!(original.kind(), direct.kind());
+                assert_eq!(original.to_string(), direct.to_string());
+            }
+            NativeFinalityDecodeError::Invalid(_) if bytes.is_empty() => {}
+            other => panic!("journal changed canonical invalidity: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn canonical_block_refusal_survives_outer_unwind_and_retries_identical_frame() {
+    let mut block = plain_block_at(1);
+    let key = checked_random_keypair();
+    block
+        .signatures
+        .insert(checked_block_signature(0, &key, &block.header()));
+    let wire = block.encode_wire().unwrap();
+    let saved = std::cell::RefCell::new(None);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || {
+                    *saved.borrow_mut() = Some(decode_framed_signed_block(&wire).unwrap_err());
+                    panic!("retire original decoder scope");
+                },
+            )
+        }))
+        .is_err()
+    );
+    let original = saved.into_inner().unwrap();
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    assert!(matches!(
+        original.into_error().decode_resource_error(),
+        Some(norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+    ));
+    let retried = decode_framed_signed_block(&wire).unwrap();
+    assert_eq!(retried, block);
+    assert_eq!(retried.encode_wire().unwrap(), wire);
 }

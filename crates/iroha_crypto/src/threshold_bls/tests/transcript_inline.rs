@@ -1,5 +1,6 @@
 //! Inline transcript custody with real minimum and maximum degree DKG proofs.
 
+use super::dealer_secret_inline::inline_coefficients;
 use super::*;
 use crate::test_allocations::without_allocations;
 
@@ -51,9 +52,13 @@ fn fixture(committee: u16, qualified: u16) -> Fixture {
                 .map(|components| components.map(|value| value.to_bytes_be()))
                 .collect(),
         );
-        let (secret, dealer) =
-            DasRenDealerSecret::from_coefficients_with_rng(&parameters, index, bytes, &mut rng)
-                .expect("actual exact-degree dealer and constant proof");
+        let (secret, dealer) = DasRenDealerSecret::from_coefficients_with_rng(
+            &parameters,
+            index,
+            inline_coefficients(bytes),
+            &mut rng,
+        )
+        .expect("actual exact-degree dealer and constant proof");
         drop(secret);
         dealers.push(dealer);
         coefficients.push(values);

@@ -872,6 +872,20 @@ mod tests {
                         norito::decode_canonical(&encoded).expect("decode witness");
                     assert_eq!(&decoded, witness.wire());
                     assert_eq!(witness.writes.len(), if include_receipts { 8 } else { 6 });
+                    // All four fixed native contexts and the ordinary source manifest
+                    // remain authenticated alongside this genuine transfer's writes.
+                    for key in [
+                        iroha_data_model::execution_witness::VALIDATION_FEE_POLICY_WITNESS_KEY_V1,
+                        iroha_data_model::execution_witness::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1,
+                        iroha_data_model::sumeragi_finality::SUMERAGI_LANE_STATE_WITNESS_KEY,
+                        iroha_data_model::execution_witness::FEE_EVIDENCE_WITNESS_KEY_V1,
+                    ] {
+                        assert_eq!(
+                            witness.writes.iter().filter(|write| write.key == key).count(),
+                            1,
+                            "the complete native context appears exactly once",
+                        );
+                    }
                     assert_eq!(witness.writes.iter().filter(|write| write.key.as_slice() ==
                 iroha_data_model::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1).count(), 1);
                     let native_lanes =
@@ -887,8 +901,22 @@ mod tests {
                             .expect("actual casting proof");
                     let (proofs, receipt_root) = kagemusha_reserve_receipt_witnesses_v1(&decoded)
                         .expect("casting writes must not be decoded as receipts");
+                    let (fee_evidence, fee_evidence_root) = fee_evidence_block_proof_v1(&decoded)
+                        .expect("complete captured fee evidence");
                     assert_eq!(fee_root, casting_root);
                     assert_eq!(fee_root, receipt_root);
+                    assert_eq!(fee_root, fee_evidence_root);
+                    assert!(fee_evidence.verify(fee_root));
+                    assert!(fee_evidence.records.is_empty());
+                    let fee_snapshot = fee_evidence.snapshot_witness.commitment().unwrap();
+                    assert_eq!(fee_snapshot.evaluated_height, header.height().get());
+                    assert_eq!(fee_snapshot.count, 0);
+                    let mut omitted_fee = decoded.clone();
+                    omitted_fee.writes.retain(|write| {
+                        write.key
+                            != iroha_data_model::execution_witness::FEE_EVIDENCE_WITNESS_KEY_V1
+                    });
+                    assert!(fee_evidence_block_proof_v1(&omitted_fee).is_err());
                     assert!(native_lanes.verify(
                         *state.network_id_ref(),
                         header.height().get(),

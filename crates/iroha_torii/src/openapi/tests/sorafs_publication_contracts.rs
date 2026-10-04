@@ -150,7 +150,9 @@ fn provider_source_contract_binds_assignment_authority_and_metadata_chunk_bounds
     }
     let description = operation["description"].as_str().unwrap();
     for condition in [
-        "target provider owner",
+        "governed completion signer",
+        "independent registered provider owner",
+        "provider-scoped",
         "same-State durable finality",
         "both provider admissions",
         "assignment revision",
@@ -165,5 +167,51 @@ fn provider_source_contract_binds_assignment_authority_and_metadata_chunk_bounds
             description.contains(condition),
             "missing authority boundary: {condition}"
         );
+    }
+}
+
+#[test]
+fn provider_attestation_contract_preserves_original_body_and_no_native_absence_claim() {
+    let document = compiled_spec();
+    let operation = &document["paths"]["/v1/sorafs/provider/attestation"]["post"];
+    assert_eq!(
+        operation["x-iroha-route-auth"]["authentication"].as_str(),
+        Some("canonical_account_signature")
+    );
+    assert_eq!(operation["x-iroha-tool-effect"].as_str(), Some("expensive"));
+    let request = &operation["requestBody"]["content"]["application/x-norito"]["schema"];
+    assert_eq!(request["maxLength"].as_u64(), Some(4096));
+    assert_eq!(
+        request["x-iroha-norito-schema"].as_str(),
+        Some("iroha_data_model::musubi::MusubiProviderBundleAttestationKeyV1")
+    );
+    let response = &operation["responses"]["200"]["content"]["application/x-norito"]["schema"];
+    assert_eq!(
+        response["maxLength"].as_u64(),
+        Some(
+            iroha_data_model::musubi::MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1
+                as u64
+        )
+    );
+    assert_eq!(
+        response["x-iroha-norito-schema"].as_str(),
+        Some("iroha_data_model::musubi::MusubiProviderBundleVerificationAttestationV1")
+    );
+    for status in ["200", "204", "400", "401", "403", "413", "429", "503"] {
+        assert_eq!(
+            operation["responses"][status]["headers"]["Cache-Control"]["schema"]["const"].as_str(),
+            Some("private, no-store")
+        );
+    }
+    let description = operation["description"].as_str().unwrap();
+    for boundary in [
+        "already-owned",
+        "archive manager",
+        "before and after",
+        "current full completion authority",
+        "not prove registry membership",
+        "not authenticated native absence",
+    ] {
+        assert!(description.contains(boundary), "{boundary}");
     }
 }

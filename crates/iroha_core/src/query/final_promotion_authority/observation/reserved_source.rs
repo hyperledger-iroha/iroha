@@ -11,6 +11,7 @@ use iroha_data_model::{
 
 use super::{Error, FinalPromotionCheckFloorV1};
 use crate::{
+    query::signer_check::SignerCertifiedWalkV1,
     query::{
         final_promotion_authority::{
             final_promotion_authority_request_digest_v1,
@@ -19,7 +20,6 @@ use crate::{
         signer_check::{NativeCheckFloorV1, NativeCheckRoundV1, native_signed_entry_frame_v1},
     },
     state::{StateReadOnly, StateView, TransactionsReadOnly},
-    sumeragi::certified_chain::CertifiedChain,
 };
 
 /// Maximum finalized lineage from the independently pinned floor through an admitted Reserve.
@@ -34,7 +34,7 @@ pub(super) fn authenticate_reserved_source(
     expected: &FinalPromotionOperationRecordV1,
     source: &SignedTransaction,
     round: &NativeCheckRoundV1,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let reserved = read_original_reserved_operation(
         &view.world,
         &expected.deployment_id,
@@ -56,7 +56,7 @@ pub(super) fn authenticate_reserved_source(
             .and_then(|distance| distance.checked_add(1))
             .is_none_or(|span| span > MAX_RESERVE_HISTORY_BLOCKS_V1)
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let entry_hash = source.hash_as_entrypoint();
     if row.reserved_origin.entry_hash != *entry_hash.as_ref()
@@ -65,10 +65,10 @@ pub(super) fn authenticate_reserved_source(
         || view.transactions.get(&entry_hash).map(|index| index.get())
             != usize::try_from(height).ok()
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let Executable::Instructions(instructions) = source.instructions() else {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     };
     let instruction = instructions
         .first()
@@ -79,7 +79,7 @@ pub(super) fn authenticate_reserved_source(
         })
         .ok_or(Error::Execution)?;
     let FinalPromotionAuthorityActionV1::Reserve(request) = &instruction.action else {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     };
     if instruction.deployment_id != row.deployment_id
         || instruction.expected_control_digest != row.custody.control_state_digest
@@ -89,46 +89,83 @@ pub(super) fn authenticate_reserved_source(
             .map_err(|_| Error::Execution)?
             != row.request_digest
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
+    // TODO: admit historical source clones and nested codec scratch from the original State pool.
     let source_frame =
         native_signed_entry_frame_v1(&TransactionEntrypoint::External(source.clone()))
-            .map_err(|_| Error::Execution)?;
+            .map_err(|error| error.map_rejection(|_| Error::Execution))?;
 
     // The challenged Check already authenticated floor-to-applied continuity using this view.
     // Replaying floor-to-Reserve retains the target's certified block for its entry proof.
-    let chain = CertifiedChain::new(view).map_err(|_| Error::Finality)?;
+    let chain =
+        SignerCertifiedWalkV1::new(view).map_err(|error| error.map_rejection(Error::from))?;
     let mut cumulative_bytes = 0_usize;
     let mut target = None;
-    for block in chain.walk(floor.height, height) {
-        round.ensure_live()?;
-        let block = block.map_err(|_| Error::Finality)?;
+    // Keep the one original iterator in place. Moving only this reference into
+    // the loop avoids duplicate parent/successor storage while decoding another
+    // certificate; the original source allowance and view remain unchanged.
+    let mut walk = chain.walk(floor.height, height);
+    for block in &mut walk {
+        round.ensure_live().map_err(Error::from)?;
+        // Convert only an actual error, without another full receipt-bearing
+        // Result temporary live alongside the next original decoder frame.
+        let receipt = match block {
+            Ok(receipt) => receipt,
+            Err(error) => return Err(error.map_rejection(Error::from)),
+        };
+        let block = receipt.in_view(view).map_err(Error::from)?;
         cumulative_bytes = cumulative_bytes
             .checked_add(block.certificate_len())
-            .ok_or(Error::Finality)?;
+            .ok_or_else(|| {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                )
+            })?;
         if cumulative_bytes > MAX_RESERVE_HISTORY_FINALITY_BYTES_V1 {
-            return Err(Error::Finality);
+            return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ));
         }
         if block.height() == floor.height
             && (*block.block_hash().as_ref() != floor.block_hash || block.id() != floor.context_id)
         {
-            return Err(Error::Finality);
+            return Err(Error::Finality.into());
         }
-        target = Some(block);
+        target = Some(receipt);
     }
-    round.ensure_live()?;
+    drop(walk);
+    round.ensure_live().map_err(Error::from)?;
+    // Borrow the retained final receipt. Consuming Option::filter copies its
+    // full decoded commitment into another debug-frame temporary.
     let target = target
+        .as_ref()
         .filter(|block| block.height() == height)
         .ok_or(Error::Finality)?;
+    let target = target.in_view(view).map_err(Error::from)?;
+    authenticate_reserved_entry(target, row, &entry_hash, &source_frame, round)
+}
+
+// Entry proof work starts only after the complete original walk. Keep its fixed
+// temporaries outside the frame that performs certificate decoding; this borrows
+// the same final receipt and never re-reads, clones or re-verifies its source.
+#[inline(never)]
+fn authenticate_reserved_entry(
+    target: &crate::sumeragi::certified_chain::CertifiedBlock,
+    row: &FinalPromotionOperationRecordV1,
+    entry_hash: &iroha_crypto::HashOf<TransactionEntrypoint>,
+    source_frame: &[u8],
+    round: &NativeCheckRoundV1,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let anchor = target
-        .entry_anchor(&entry_hash)
+        .entry_anchor(entry_hash)
         .map_err(|_| Error::Execution)?;
     let block = target.block();
     let proof = block
-        .network_execution_proof(&entry_hash)
+        .network_execution_proof(entry_hash)
         .ok_or(Error::Execution)?;
     if !proof.verify(&anchor) || anchor.entry_index() != row.reserved_origin.entry_index {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let actual = block
         .network_entrypoint_at(
@@ -140,10 +177,13 @@ pub(super) fn authenticate_reserved_source(
         .ok_or(Error::Execution)?;
     if !output.result.is_ok()
         || target.block_time_ms() != row.reserved.recorded_at_unix_ms
-        || native_signed_entry_frame_v1(actual).map_err(|_| Error::Execution)? != source_frame
+        || native_signed_entry_frame_v1(actual)
+            .map_err(|error| error.map_rejection(|_| Error::Execution))?
+            .as_slice()
+            != source_frame
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
-    round.ensure_live()?;
+    round.ensure_live().map_err(Error::from)?;
     Ok(())
 }

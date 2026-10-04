@@ -345,7 +345,7 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         (
             "ExecStart=/usr/local/libexec/iroha-runtime-provider-broker-v1 "
             "--catalog /etc/iroha/runtime-provider-broker/catalog.norito "
-            "--broker-endpoint /run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock"
+            "--broker-policy /etc/iroha/runtime-provider-broker/policy.toml"
         ),
     ),
     (
@@ -366,8 +366,8 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "org.hyperledger.iroha.runtime-provider-broker-v1",
         "/usr/local/libexec/iroha-runtime-provider-broker-v1",
         "/private/etc/iroha/runtime-provider-broker/catalog.norito",
-        "<string>--broker-endpoint</string>",
-        "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+        "<string>--broker-policy</string>",
+        "/private/etc/iroha/runtime-provider-broker/policy.toml",
         "<key>UserName</key>",
         "<key>GroupName</key>",
         "<key>SoftResourceLimits</key>\n  <dict>\n    <key>Core</key>",
@@ -378,6 +378,9 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "consumer_assets: tuple[tuple[PurePosixPath, PurePosixPath], ...]",
         "checked-in runtime-provider supervisor template",
         "BROKER_EXECUTABLE_MAX_BYTES_V1",
+        "BROKER_POLICY_MAX_BYTES_V1",
+        "def _check_broker_policy(",
+        "observer_operation_timeout_ms",
         "_sha256_regular_bounded",
         "externally verified release digest",
         "stat.S_IMODE(info.st_mode) & 0o7222",
@@ -458,6 +461,9 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "crates/irohad/src/runtime_provider_broker/launcher.rs": (
         "trusted_runtime_provider_catalog_owner_uid_v1",
+        "load_runtime_provider_broker_policy_file_v1",
+        "read_runtime_provider_broker_public_file_on_unix_v1",
+        "RUNTIME_PROVIDER_BROKER_POLICY_MAX_BYTES_V1",
         "changed_seconds: metadata.ctime()",
         "changed_nanoseconds: metadata.ctime_nsec()",
         "before.owner != trusted_owner_uid",

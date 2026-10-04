@@ -12039,11 +12039,21 @@ pub mod isi {
                             });
                         committee_attempt_instruction_error(state_transaction, error)
                     })?;
-                    record.validate().map_err(|_| {
-                        threshold_key_lifecycle_error_v1(
-                            "global-beacon public key session is invalid",
+                    let record =
+                        crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(
+                            &record,
+                            &state_transaction.execution_budget(),
                         )
-                    })?;
+                        .map_err(|error| {
+                            committee_attempt_instruction_error(
+                                state_transaction,
+                                error.into_execution_attempt().map_rejection(|_| {
+                                    threshold_key_lifecycle_error_v1(
+                                        "global-beacon public key session is invalid",
+                                    )
+                                }),
+                            )
+                        })?;
                     if record.activated_at_height.is_some()
                         || record.retired_at_height.is_some()
                         || record.session.session_id != certificate.session_id
@@ -17511,6 +17521,10 @@ pub mod isi {
             // it removes domain-owned definitions and clears this domain's labels.
             // Preserve the existing retail guard for each relabeled account.
             for account_id in &relabeled_accounts {
+                if crate::sumeragi::amx::retained_account(&state_transaction.world, account_id) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "domain teardown would remove an original native AMX party or custody account".into()));
+                }
                 crate::smartcontracts::isi::asset::isi::ensure_account_not_retained_by_retail_daily_limit(
                     state_transaction,
                     account_id,
@@ -17525,6 +17539,10 @@ pub mod isi {
                 .get(&domain_id)
                 .cloned()
                 .unwrap_or_default();
+            crate::sumeragi::amx::ensure_retained_definitions(
+                &state_transaction.world,
+                &remove_asset_definitions,
+            )?;
             crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_retail_daily_limit(
                 state_transaction,
                 &remove_asset_definitions,
@@ -18290,20 +18308,21 @@ pub mod isi {
                         .into(),
                 ));
             }
-            if role.permissions().any(|permission| {
-                crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
+            for permission in role.permissions() {
+                if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                     state_transaction,
                     permission,
-                ) || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
+                )? || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
                     state_transaction,
                     permission,
-                )
+                )?
                 .is_some()
-            }) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "an enacted validation-fee payout lifecycle forbids role delegation of its trigger or exact runtime permissions"
-                        .into(),
-                ));
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "an enacted validation-fee payout lifecycle forbids role delegation of its trigger or exact runtime permissions"
+                            .into(),
+                    ));
+                }
             }
             if state_transaction.world.roles.get(role.id()).is_some() {
                 return Err(RepetitionError {
@@ -18380,10 +18399,10 @@ pub mod isi {
             if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                 state_transaction,
                 &permission,
-            ) || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
+            )? || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
                 state_transaction,
                 &permission,
-            )
+            )?
             .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -19050,7 +19069,6 @@ pub mod isi {
         use std::{
             collections::{BTreeMap, BTreeSet},
             str::FromStr,
-            sync::Arc,
         };
         const TEST_HALO2_CIRCUIT_ID: &str =
             crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
@@ -19759,6 +19777,7 @@ pub mod isi {
             let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
                 state_transaction.network_id,
                 release_height,
+                &state_transaction.execution_budget(),
             );
             state_transaction
                 .world
@@ -19812,6 +19831,7 @@ pub mod isi {
             let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
                 state_transaction.network_id,
                 release_height,
+                &state_transaction.execution_budget(),
             );
             state_transaction
                 .world
@@ -20765,6 +20785,7 @@ pub mod isi {
                 let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
                     state_transaction.network_id,
                     PULSE_HEIGHT,
+                    &state_transaction.execution_budget(),
                 );
                 state_transaction
                     .world
@@ -22838,7 +22859,6 @@ pub mod isi {
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
         fn verifier_registry_bootstrap_requires_original_input_and_remains_genesis_only() {
-            use crate::state::StateReadOnly as _;
             use crate::sumeragi::{
                 startup,
                 test_chain::{CertifiedTestChain, TestChainConfig},
@@ -23313,7 +23333,7 @@ pub mod isi {
                 0,
             );
             let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            let state_transaction = block.transaction();
             let (authority, authorization) =
                 crate::state::validator_committee::current_authority(&state_transaction)
                     .expect("the incumbent owns authenticated native finality");
@@ -23371,9 +23391,10 @@ pub mod isi {
                         acceptances_end_height: 4,
                     },
                     &successor_validator_keys,
+                    &state_transaction.execution_budget(),
                 );
             let key_b = crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
-                successor_session.record().clone()
+                successor_session.record().clone(), &state_transaction.execution_budget()
             ).expect("the successor retains a genuinely finalized DKG transcript");
             let install_b = certified_threshold_key_lifecycle_instruction_v1(
                 &state_transaction,
@@ -27971,63 +27992,6 @@ seiyaku GovernanceLifecycle {
             let mut set = SpaceDirectoryManifestSet::default();
             set.upsert(record);
             stx.world.space_directory_manifests.insert(uaid, set);
-        }
-        fn seed_live_peer(stx: &mut StateTransaction<'_, '_>, keypair: &KeyPair) -> PeerId {
-            seed_live_peer_with_role(stx, keypair, ConsensusKeyRole::Validator)
-        }
-        fn seed_live_peer_with_role(
-            stx: &mut StateTransaction<'_, '_>,
-            keypair: &KeyPair,
-            role: ConsensusKeyRole,
-        ) -> PeerId {
-            let peer = PeerId::new(keypair.public_key().clone());
-            if stx.world.peers.iter().all(|existing| existing != &peer) {
-                let _ = stx.world.peers.push(peer.clone());
-            }
-            let id = match role {
-                ConsensusKeyRole::Validator => {
-                    crate::state::derive_validator_key_id(keypair.public_key())
-                }
-                ConsensusKeyRole::Committee => {
-                    crate::state::derive_committee_key_id(keypair.public_key())
-                }
-                ConsensusKeyRole::Endorsement => {
-                    panic!("lane relay peers cannot use endorsement keys")
-                }
-            };
-            let record = ConsensusKeyRecord {
-                id,
-                public_key: keypair.public_key().clone(),
-                pop: Some(
-                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
-                        .expect("generate pop for test peer"),
-                ),
-                activation_height: 0,
-                expiry_height: None,
-                replaces: None,
-                status: ConsensusKeyStatus::Active,
-            };
-            let record_id = record.id.clone();
-            upsert_consensus_key(&mut stx.world, &record_id, record);
-            peer
-        }
-        fn register_multisig_authority(
-            stx: &mut StateTransaction<'_, '_>,
-            threshold: u16,
-            member_count: usize,
-        ) -> AccountId {
-            let mut members = Vec::with_capacity(member_count);
-            for _ in 0..member_count {
-                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
-                let member = MultisigMember::new(kp.public_key().clone(), 1).expect("member");
-                members.push(member);
-            }
-            let policy = MultisigPolicy::new(threshold, members).expect("multisig policy");
-            let multisig_id = AccountId::new_multisig(policy);
-            Register::account(Account::new(multisig_id.clone()))
-                .execute(&ALICE_ID, stx)
-                .expect("register multisig authority");
-            multisig_id
         }
         world_test!(unregister_domain_rejects_native_kaigi_state_atomically {
             use iroha_data_model::kaigi::{

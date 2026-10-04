@@ -17,6 +17,7 @@ manifest = [
     "dep:ed25519-dalek",
     "dep:httpdate",
     "dep:url",
+    "dep:rustls",
     "dep:zstd",
     "dep:toml",
 ]
@@ -40,6 +41,7 @@ cli = [
 ]
 fetch_cli = ["cli"]
 [dependencies]
+rustls = { workspace = true, optional = true, features = ["ring"] }
 iroha_fs = { workspace = true }
 iroha_model_base = { workspace = true, optional = true }
 iroha_service_model = { workspace = true }
@@ -72,9 +74,11 @@ toml = { workspace = true, optional = true }
 rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
+rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "ring"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
 iroha_model_base = { workspace = true }
 assert_cmd = "2.1.1"
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "test-util"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "test-util", "net", "io-util"] }
 sorafs_orchestrator = { workspace = true }
 
 [[bin]]

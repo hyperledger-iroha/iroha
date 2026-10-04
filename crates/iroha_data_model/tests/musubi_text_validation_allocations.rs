@@ -529,6 +529,7 @@ mod signature_custody {
             completed_by: owner.clone(),
             completion_authority: ProviderIngestCompletionAuthorityV1::new(
                 owner.clone(),
+                owner.clone(),
                 ProviderIngestCompletionSignerPolicyV1 {
                     policy_id: [0x21; 32],
                     revision: 1,
@@ -759,7 +760,7 @@ mod signature_custody {
         assert_measured(
             &f,
             [
-                Err("Musubi provider bundle approvals do not meet provider-owner threshold"),
+                Err("Musubi provider bundle approvals do not meet completion-signer threshold"),
                 Err("Musubi seed-ingress receipt does not meet broker threshold"),
                 Err("Musubi namespace delegation does not meet owner threshold"),
             ],

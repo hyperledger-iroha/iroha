@@ -159,38 +159,41 @@ fn original_durable_certificate_refusal_preserves_local_reason_and_retries() {
 }
 
 #[test]
-fn original_versioned_frame_distinguishes_surviving_and_dropped_decoder_limits() {
+fn original_canonical_frame_preserves_refusal_after_decoder_scope_retirement() {
     let chain = original_chain();
     let bytes = chain.committed(1).block().encode_wire().unwrap();
     no_decode_allocation(|| {
         let error = iroha_data_model::block::decode_framed_signed_block(&bytes).unwrap_err();
-        let mapped = crate::execution_attempt::versioned_decode_attempt_error(error, |error| error);
+        let mapped = crate::execution_attempt::canonical_decode_attempt_error(error, |error| error);
         assert!(matches!(mapped, ExecutionAttemptError::Deferred(_)));
     });
-    norito::with_decode_limits_scope(
-        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 64),
-        || {
-            let error = no_decode_allocation(|| {
-                iroha_data_model::block::decode_framed_signed_block(&bytes).unwrap_err()
-            });
-            let mapped =
-                crate::execution_attempt::versioned_decode_attempt_error(error, |error| error);
-            assert!(
-                matches!(
-                    mapped,
-                    ExecutionAttemptError::Rejected(
-                        iroha_version::error::Error::NoritoResourceLimit(
-                            norito::core::DecodeResourceError::TotalAllocationExceeded {
-                                limit: 0,
-                                ..
-                            }
-                        )
-                    )
-                ),
-                "a wider remaining scope must not adopt the inner decoder's format ceiling"
-            );
-        },
+    let original =
+        no_decode_allocation(|| iroha_data_model::block::decode_framed_signed_block(&bytes))
+            .unwrap_err();
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
     );
+    assert!(matches!(
+        crate::execution_attempt::canonical_decode_attempt_error(original, |e| e),
+        ExecutionAttemptError::Deferred(_)
+    ));
+    // A limit introduced inside the owner is intrinsic even if its numeric fields match.
+    let intrinsic = norito::core::classify_decode_attempt(|| {
+        no_decode_allocation(|| {
+            iroha_data_model::block::decode_framed_signed_block(&bytes)
+                .map_err(norito::core::DecodeAttemptError::into_error)
+        })
+    })
+    .unwrap_err();
+    assert_eq!(
+        intrinsic.kind(),
+        norito::core::DecodeAttemptErrorKind::Invalid
+    );
+    assert!(matches!(
+        crate::execution_attempt::canonical_decode_attempt_error(intrinsic, |e| e),
+        ExecutionAttemptError::Rejected(_)
+    ));
     assert!(iroha_data_model::block::decode_framed_signed_block(&bytes).is_ok());
 }
 

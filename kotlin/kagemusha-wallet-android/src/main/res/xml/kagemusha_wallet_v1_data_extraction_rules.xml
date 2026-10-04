@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  KAGEMUSHA wallet custody (API 31+): the backup and device-transfer sets are empty.
+
+  Apps targeting API 31+ are eligible for device-to-device transfer even with
+  android:allowBackup="false", and a full-data restore stream that delivers any
+  file to an app without its own backup agent first clears all of its data,
+  including no_backup custody files, and its Keystore namespace. Every domain is
+  therefore excluded for both cloud backup and device transfer. The host app
+  must not replace these rules (spec §4.2; G2 design rev 2).
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>

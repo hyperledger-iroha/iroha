@@ -1139,10 +1139,15 @@ pub(crate) fn is_native_escrow_custody_asset(
     };
     Ok(state_transaction
         .world
-        .game_custody_by_account
-        .get(resolved_id.account())
-        .and_then(|id| state_transaction.world.game_sessions.get(id))
-        .is_some_and(|session| session.asset_definition == *resolved_id.definition())
+        .sumeragi_amx_participant()
+        .canonical()
+        .is_some_and(|participant| participant.custody == *resolved_id.account())
+        || state_transaction
+            .world
+            .game_custody_by_account
+            .get(resolved_id.account())
+            .and_then(|id| state_transaction.world.game_sessions.get(id))
+            .is_some_and(|session| session.asset_definition == *resolved_id.definition())
         || state_transaction
             .world
             .asset_escrows
@@ -1168,11 +1173,12 @@ pub(crate) fn is_protocol_escrow_custody_account(
     state_transaction: &StateTransaction<'_, '_>,
     account_id: &AccountId,
 ) -> bool {
-    state_transaction
-        .world
-        .game_custody_by_account
-        .get(account_id)
-        .is_some()
+    crate::sumeragi::amx::retained_account(&state_transaction.world, account_id)
+        || state_transaction
+            .world
+            .game_custody_by_account
+            .get(account_id)
+            .is_some()
         || state_transaction
             .world
             .asset_escrows

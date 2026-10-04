@@ -1,12 +1,13 @@
+//! Signed collection queries: optional canonical account signatures over the exact one-shot target.
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ed25519 } from "@noble/curves/ed25519";
 
-import { AccountAddress } from "../src/address.js";
 import {
   NetworkId,
   canonicalRequestSignatureMessage,
+  field,
   verifyEd25519,
 } from "../src/index.js";
 import {
@@ -19,7 +20,7 @@ const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
 const FOREIGN_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa7));
 const PRIVATE_KEY = Buffer.alloc(32, 0x5a);
 const PUBLIC_KEY = Buffer.from(ed25519.getPublicKey(PRIVATE_KEY));
-const ACCOUNT_ID = AccountAddress.fromAccount({ publicKey: PUBLIC_KEY }).toI105();
+const ACCOUNT_ID = "alice@wonderland";
 const AUTH = Object.freeze({ accountId: ACCOUNT_ID, privateKey: PRIVATE_KEY });
 
 function jsonResponse(payload, status = 200) {
@@ -46,44 +47,42 @@ function client(fetchImpl, options = {}) {
   });
 }
 
-test("all expensive application query callers sign the exact one-shot target", async () => {
+test("every collection query signs the exact one-shot target when credentials are given", async () => {
   const requests = [];
   const torii = client(async (url, init) => {
     requests.push({ url: new URL(url), init });
-    return jsonResponse({ items: [], total: 0 });
+    return jsonResponse({ items: [], next_cursor: null });
   });
-  const options = { canonicalAuth: AUTH, limit: 1 };
+  const query = { filter: field("owned_by").eq(ACCOUNT_ID), limit: 1 };
+  const options = { canonicalAuth: AUTH };
 
-  await torii.queryAccountTransactions(ACCOUNT_ID, options);
-  await torii.queryAccountAssets(ACCOUNT_ID, options);
-  await torii.queryDomains(options);
-  await torii.queryAccounts(options);
-  await torii.queryTransactions(options);
-  await torii.queryRepoAgreements(options);
-  await torii.queryAssetHolders("rose#wonderland", options);
-  await torii.queryAssetDefinitions(options);
-  await torii.queryNfts(options);
-  await torii.queryRwas(options);
+  await torii.accountTransactions(ACCOUNT_ID).list(query, options);
+  await torii.accountAssets(ACCOUNT_ID).list(query, options);
+  await torii.domains.list(query, options);
+  await torii.accounts.list(query, options);
+  await torii.repoAgreements.list(query, options);
+  await torii.assetHolders("rose#wonderland").list(query, options);
+  await torii.assetDefinitions.list(query, options);
+  await torii.nfts.list(query, options);
+  await torii.rwas.list(query, options);
+  await torii.transactions.list(query, options);
 
   assert.deepEqual(requests.map(({ url }) => url.pathname), [
     `/v1/accounts/${encodeURIComponent(ACCOUNT_ID)}/transactions/query`,
     `/v1/accounts/${encodeURIComponent(ACCOUNT_ID)}/assets/query`,
     "/v1/domains/query",
     "/v1/accounts/query",
-    "/v1/transactions/query",
     "/v1/repo/agreements/query",
     "/v1/assets/rose%23wonderland/holders/query",
     "/v1/assets/definitions/query",
     "/v1/nfts/query",
     "/v1/rwas/query",
+    "/v1/transactions/query",
   ]);
   for (const { url, init } of requests) {
     assert.equal(init.method, "POST");
     assert.equal(init.redirect, "error");
-    assert.equal(
-      header(init.headers, "X-Iroha-Account"),
-      AccountAddress.parseEncoded(ACCOUNT_ID).address.canonicalHex(),
-    );
+    assert.equal(header(init.headers, "X-Iroha-Account"), ACCOUNT_ID);
     const message = canonicalRequestSignatureMessage({
       networkId: NETWORK_ID,
       method: init.method,
@@ -98,16 +97,13 @@ test("all expensive application query callers sign the exact one-shot target", a
   }
 });
 
-test("query signatures reject foreign genesis, path, and body substitution", async () => {
+test("collection query signatures reject foreign genesis, path, and body substitution", async () => {
   let captured;
   const torii = client(async (url, init) => {
     captured = { url: new URL(url), init };
-    return jsonResponse({ items: [], total: 0 });
+    return jsonResponse({ items: [], next_cursor: null });
   });
-  await torii.queryAccountTransactions(ACCOUNT_ID, {
-    canonicalAuth: AUTH,
-    limit: 2,
-  });
+  await torii.accountTransactions(ACCOUNT_ID).list({ limit: 2 }, { canonicalAuth: AUTH });
 
   const signatureInput = {
     method: captured.init.method,
@@ -126,46 +122,43 @@ test("query signatures reject foreign genesis, path, and body substitution", asy
 
   assert.equal(verify(NETWORK_ID), true);
   assert.equal(verify(FOREIGN_NETWORK_ID), false);
-  assert.equal(verify(NETWORK_ID, { path: "/v1/transactions/query" }), false);
-  assert.equal(verify(NETWORK_ID, { body: Buffer.from('{"pagination":{"limit":3},"sort":[]}') }), false);
+  assert.equal(verify(NETWORK_ID, { path: "/v1/accounts/query" }), false);
+  assert.equal(verify(NETWORK_ID, { body: Buffer.from('{"limit":3}') }), false);
 });
 
-test("expensive query authentication rejects legacy shapes before one-shot dispatch", async () => {
+test("signed collection queries are one-shot and reject precomputed or inline credentials", async () => {
   let calls = 0;
   const torii = client(async () => {
     calls += 1;
-    return jsonResponse({ error: "unavailable" }, 503);
+    return jsonResponse({ code: "unavailable", message: "try later" }, 503);
   });
   await assert.rejects(
-    torii.queryAccounts({ canonicalAuth: AUTH, limit: 1 }),
-    (error) => error instanceof ToriiHttpError && error.status === 503,
+    torii.accounts.list({ limit: 1 }, { canonicalAuth: AUTH }),
+    (error) => error instanceof ToriiHttpError && error.status === 503 && error.code === "unavailable",
   );
-  assert.equal(calls, 1);
+  assert.equal(calls, 1, "signed requests are never retried");
 
   const noFetch = client(async () => {
     throw new Error("invalid authentication must fail before fetch");
   });
-  await assert.rejects(noFetch.queryAccounts({ limit: 1 }), /canonicalAuth is required/);
   await assert.rejects(
-    noFetch.queryAccounts({ canonicalAuth: { ...AUTH, accountId: "alice@wonderland" } }),
-    /canonical I105/,
+    noFetch.accounts.list({ limit: 1 }, { canonicalAuth: { ...AUTH, accountId: " alice@wonderland" } }),
+    /exact canonical I105 account or ASCII account alias/u,
   );
   await assert.rejects(
-    noFetch.queryAccounts({ canonicalAuth: AUTH, privateKey: "inline-secret" }),
-    /unsupported fields: privateKey/,
-  );
-  await assert.rejects(
-    noFetch.queryAccounts({
-      canonicalAuth: AUTH,
-      headers: { "X-Iroha-Signature": "precomputed" },
-    }),
-    /unsupported fields: headers|cannot be precomputed/,
+    noFetch.accounts.list({ limit: 1 }, { canonicalAuth: AUTH, privateKey: "inline-secret" }),
+    /unsupported fields: privateKey/u,
   );
   const precomputed = client(async () => {
     throw new Error("precomputed headers must fail before fetch");
   }, { defaultHeaders: { "X-Iroha-Signature": "precomputed" } });
   await assert.rejects(
-    precomputed.queryAccounts({ canonicalAuth: AUTH }),
-    /cannot be precomputed/,
+    precomputed.accounts.list({}, { canonicalAuth: AUTH }),
+    /cannot be precomputed/u,
   );
+  const unsigned = client(async (_url, init) => {
+    assert.equal(header(init.headers, "X-Iroha-Signature"), null);
+    return jsonResponse({ items: [], next_cursor: null });
+  });
+  await unsigned.accounts.list({ limit: 1 });
 });

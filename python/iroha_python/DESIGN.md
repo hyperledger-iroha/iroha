@@ -38,8 +38,6 @@ python/iroha_python/
 │   ├── norito_rpc.py         # Bounded Norito-RPC transport facade
 │   ├── privacy.py            # Bounded privacy event/query client
 │   ├── connect.py            # Exact Connect V1 URI and session primitives
-│   ├── query.py              # Structured account/query envelope builders
-│   ├── query_filter.py       # Deterministic filter DSL for metadata/fields
 ├── bin/submit_envelope_json.py  # CLI helper for JSON envelope replay
 ├── iroha_python_rs/          # PyO3 cdylib built by maturin
 └── tests/                    # pytest parity tests
@@ -67,6 +65,22 @@ and `overrides` mappings. It never reads `os.environ`. Callers that deliberately
 want environment configuration pass `env=os.environ`; explicit factory
 keywords then take precedence. The resolved model is immutable and redacts
 tokens from its representation.
+
+Collection reads (domains, accounts, asset definitions, NFTs, RWA lots,
+account assets, asset holders, transactions, account transactions and repo
+agreements) have exactly one surface: the `Collection` objects
+(`client.domains`, `client.accounts.assets(id)`, ...) defined in
+`iroha_torii_client.collection` on top of the shared query core
+`iroha_torii_client.list_query` (filter AST and builder, canonical text/JSON
+forms, sort keys, `ListQuery`, `Page` and cursor iterators). The two
+transaction collections are `HistoryCollection` objects: newest first by block
+coordinates, without `sort`, `include_total` or `aggregate`, and paged until
+`next_cursor` is null because pages may be short or empty. The SDK re-exports
+that core and specializes only row decoding (`RepoAgreementRecord`); it carries
+no second query grammar. HTTP failures raise the shared
+`iroha_torii_client.errors.ToriiError` hierarchy. `stream_events` decodes the
+specified `/v1/events/sse` payloads into the typed records of
+`iroha_python.stream_events`; unknown event kinds become `GenericEvent`.
 
 Public query methods return typed result models directly. Raw dictionaries are
 retained only where the current protocol family does not yet have a complete

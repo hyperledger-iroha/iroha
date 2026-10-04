@@ -52,12 +52,9 @@ running this recipe. The portable tarball alone does not supply native codecs.
 
 ## nft_account_iteration.mjs
 
-- Demonstrates the iterator helpers for NFTs and per-account asset balances
-  with `requirePermissions` enabled so secured Torii nodes fail fast without
-  credentials.
-- Applies Norito-style filters/sorts that match the server adapters
-  (`quantity` comparisons for assets; id sorting for NFTs) and shows how to
-  request compressed literals plus `select` projections.
+- Reads the NFTs an account owns (`torii.nfts.list` with an `owned_by` filter)
+  and iterates its asset balances (`torii.accountAssets(id).iterate`) with a
+  text filter (`quantity >= 1`) and a `select` projection.
 
 Run with:
 
@@ -165,10 +162,11 @@ field.
 
 ## streaming.mjs
 
-- Streams `/v1/events/sse` with a deterministic filter (pipeline transactions by default).
+- Streams `/v1/events/sse` with a collection-query filter over event fields
+  (`tx_status = "Approved"` by default) and prints the typed payloads
+  (`category`, `event`, `status`, rejection code and reason).
 - Treats the endpoint as live-only: reconnects start a new subscription and may have a gap.
-- Surfaces pipeline status transitions using `extractPipelineStatusKind` so runbooks can capture
-  applied/committed transitions side-by-side with the live JSON payload.
+- Stops at the terminal `stream_error` frame, which reports that the live stream lost events.
 
 Run with:
 
@@ -176,28 +174,29 @@ Run with:
 npm install
 node ./recipes/streaming.mjs \
   TORII_URL=https://torii.nexus.example \
-  PIPELINE_STATUS=Committed \
+  PIPELINE_STATUS=Approved \
   STREAM_MAX_EVENTS=25
 ```
 
 Environment variables:
 
-- `STREAM_FILTER_JSON` — override the default pipeline transaction filter with raw JSON.
-- `PIPELINE_STATUS` — change the diagnostic SSE event filter
-  (`Queued`/`Approved`/`Committed`/`Applied`, etc.). This does not configure
+- `STREAM_FILTER` — override the filter with text such as
+  `tx_status in ["Approved", "Rejected"] and tx_dataspace_id = 0`; it is
+  parsed locally first, so syntax errors report their column before connecting.
+  Torii accepts `=`/`in` on event fields, `and`/`or`, `not tx_status = ...` and
+  `tx_block_height is null`.
+- `PIPELINE_STATUS` — change the transaction status the default filter matches
+  (`Queued`, `Expired`, `Approved` or `Rejected`). This does not configure
   transaction finality; waits still require exact global, state-resolved `Applied`.
 - `STREAM_MAX_EVENTS` — stop after N events (`0` keeps the iterator running until interrupted).
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — optional headers for locked-down Torii deployments.
 
 ## assets_iterators.mjs
 
-- Iterates NFTs and per-account asset holdings using the pagination helpers
-  (`iterateNftsQuery`, `iterateAccountAssets`), applying Norito-style sort and
-  filter envelopes (id equality for NFTs, optional quantity filters for assets)
-  so the output mirrors Torii JSON responses.
-- Enables `requirePermissions` automatically when credentials are configured;
-  `TORII_REQUIRE_PERMISSIONS=1|0` can override that fail-fast gate explicitly.
-  Page sizes and caps can be tuned via environment variables.
+- Iterates NFTs (`torii.nfts.iterate`, optionally filtered to one id) and an
+  account's asset holdings (`torii.accountAssets(id).iterate`, sorted by
+  asset). The iterators follow `next_cursor`; `PAGE_SIZE` sets the page size
+  and `MAX_ITEMS` stops early.
 
 Run with:
 
@@ -220,8 +219,6 @@ Environment variables:
 - `PAGE_SIZE` / `MAX_ITEMS` — pagination controls.
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — credentials for permissioned nodes.
 - `TORII_ALLOW_INSECURE=1` — allow HTTP while sending credentials (dev/test only).
-- `TORII_REQUIRE_PERMISSIONS=1|0` — override the default permission gate; by
-  default it is enabled when an API/auth token is configured.
 
 ## governance.mjs
 

@@ -763,7 +763,7 @@ fn rejected_next_bridge_finality_response(
     height: NonZeroU64,
     verifier: &mut iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier,
     response: HttpResponse<Vec<u8>>,
-) -> String {
+) -> eyre::Report {
     capture_request(response, |mock_transport| {
         let client = client
             .clone()
@@ -774,7 +774,6 @@ fn rejected_next_bridge_finality_response(
     })
     .0
     .expect_err("bridge finality response must fail")
-    .to_string()
 }
 
 #[test]
@@ -957,7 +956,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
             Some(APPLICATION_NORITO),
         ),
     );
-    assert!(error.contains("Failed to get current finality proof"));
+    assert!(error.to_string().contains("sumeragi.finality_proof.read"));
 
     let error = rejected_next_bridge_finality_response(
         &client,
@@ -965,7 +964,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
         &mut verifier,
         mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_JSON)),
     );
-    assert!(error.contains("invalid content-type"));
+    assert!(error.to_string().contains("invalid content-type"));
 
     let mut duplicate_content_type =
         mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_NORITO));
@@ -979,7 +978,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
         &mut verifier,
         duplicate_content_type,
     );
-    assert!(error.contains("multiple Content-Type"));
+    assert!(error.to_string().contains("multiple Content-Type"));
 
     let error = rejected_next_bridge_finality_response(
         &client,
@@ -991,7 +990,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
             Some(APPLICATION_NORITO),
         ),
     );
-    assert!(error.contains("response exceeds"));
+    assert!(error.to_string().contains("response exceeds"));
 
     let mut trailing = body.clone();
     trailing.push(0);
@@ -1001,7 +1000,11 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
         &mut verifier,
         mk_response(StatusCode::OK, trailing, Some(APPLICATION_NORITO)),
     );
-    assert!(error.contains("canonical Norito"));
+    assert!(matches!(
+        error.downcast_ref::<crate::Error>(),
+        Some(crate::Error::CanonicalDecode { operation: "sumeragi.finality_proof.read", source })
+            if source.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+    ));
 
     let actual = capture_request(
         mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO)),
@@ -1033,7 +1036,7 @@ fn bridge_finality_next_reader_verification_failure_does_not_advance() {
         &mut verifier,
         mk_response(StatusCode::OK, invalid_body, Some(APPLICATION_NORITO)),
     );
-    assert!(!error.is_empty());
+    assert!(!error.to_string().is_empty());
 
     let body = norito::to_bytes(&successor).expect("encode canonical successor proof");
     let actual = capture_request(

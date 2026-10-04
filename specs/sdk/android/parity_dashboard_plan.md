@@ -42,13 +42,14 @@ release candidates cannot merge when fixture drift or regen SLA breaches occur.
    injects the pipeline metadata described above, exports a Prometheus
    textfile (`metrics.prom`) for textfile collectors, and copies everything to
    `artifacts/android/parity/latest/` for stable dashboard links.
-4. **SoraFS capacity marketplace builders:** the dedicated regression suite
-   (`SorafsCapacityMarketplaceInstructionTests`) now covers Norito round-trips
-   for `RegisterCapacityDeclaration`, `RegisterCapacityDispute`,
-   `SetPricingSchedule`, and `UpsertProviderCredit`. These tests exercise the
-   same typed builders (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/*.java`)
-   that parity dashboards rely on, so fixture diffs immediately surface schema
-   drift for the capacity marketplace flows in AND7’s scope.
+4. **SoraFS capacity marketplace builders:** the remaining duplicate Java suite
+   (`SorafsCapacityMarketplaceInstructionTests`) covers dispute/pricing arguments.
+   Capacity declarations and guarded provider-credit arguments have one Kotlin owner,
+   exercised by `SorafsCapacityDeclarationJavaConsumerTest` and
+   `SorafsProviderCreditJavaConsumerTest`. Provider-credit tests require explicit
+   absence or an exact current-record hash and retain the migrated Java assertions.
+   These argument-template checks do not establish native Norito frame parity;
+   current typed Rust captures own the instruction wire fixtures.
 
 ## Automation Steps
 

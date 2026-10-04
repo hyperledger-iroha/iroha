@@ -5727,11 +5727,12 @@ mod global_beacon_persistence_tests {
 
     #[test]
     fn restore_rejects_pulse_after_sortition_slot_was_terminally_unavailable() {
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; 32])),
         );
         let (key_record, pulse) =
-            crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+            crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41, &budget);
         let roster = (1_u8..=4)
             .map(|marker| {
                 KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
@@ -7676,8 +7677,143 @@ fn take_native_lane_custody(
 }
 
 #[cfg(test)]
+#[path = "deserialize_world_beacon_custody_tests.rs"]
+mod native_beacon_custody_tests;
+#[cfg(test)]
 #[path = "deserialize_world_lane_custody_tests.rs"]
 mod native_lane_custody_tests;
+
+/// Canonical DTO input only: runtime rows cannot be decoded without original admission.
+#[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct NativeBeaconSessionSnapshot {
+    revert: std::collections::BTreeMap<
+        [u8; 32],
+        Option<crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+    >,
+    blocks: std::collections::BTreeMap<
+        [u8; 32],
+        crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    >,
+}
+fn take_native_beacon_sessions(
+    map: &mut SnapshotJsonMap<'_>,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<
+    Storage<[u8; 32], crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1>,
+    StateRestoreError,
+> {
+    use crate::beacon::{
+        GlobalThresholdBeaconSessionError, RetainedFinalizedGlobalThresholdBeaconSessionV1,
+    };
+    let field = map
+        .fields
+        .get("global_beacon_key_sessions")
+        .ok_or_else(|| json::Error::missing_field("global_beacon_key_sessions"))?;
+    let snapshot: NativeBeaconSessionSnapshot = match field {
+        SnapshotJsonField::Borrowed { raw } => {
+            let value: NativeBeaconSessionSnapshot = json::from_str(raw)?;
+            if json::to_json(&value)?.as_bytes() != raw.as_bytes() {
+                return Err(invalid_global_beacon_persistence(
+                    "beacon session snapshot field is not canonical",
+                )
+                .into());
+            }
+            value
+        }
+        #[cfg(test)]
+        SnapshotJsonField::Owned(value) => json::value::from_value(value.clone())?,
+    };
+    let admit = |key: &[u8; 32],
+                 value: &crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1|
+     -> Result<
+        crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
+        StateRestoreError,
+    > {
+        if key != &value.session.session_id {
+            return Err(invalid_global_beacon_persistence(
+                "beacon snapshot storage key differs from its canonical session identity",
+            )
+            .into());
+        }
+        RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(value, budget).map_err(|error| {
+            match error {
+                GlobalThresholdBeaconSessionError::Invalid(error) => {
+                    invalid_global_beacon_persistence(error.to_string()).into()
+                }
+                local => StateRestoreError::BeaconSession(local),
+            }
+        })
+    };
+    let mut current = std::collections::BTreeMap::new();
+    for (key, value) in &snapshot.blocks {
+        current.insert(*key, admit(key, value)?);
+    }
+    let mut undo = std::collections::BTreeMap::new();
+    for (key, value) in &snapshot.revert {
+        undo.insert(
+            *key,
+            value.as_ref().map(|value| admit(key, value)).transpose()?,
+        );
+    }
+    map.remove("global_beacon_key_sessions");
+    // Both authenticated graph generations are complete before installing either map.
+    // Input JSON graphs, outer maps/EBR and decoder scratch remain separate explicit
+    // ownership obligations; none is claimed by these retained graph ledgers.
+    Ok(Storage::from_snapshot_parts(current, undo))
+}
+
+/// Decode explicit current/undo claims, then admit both original graph and Cell generations.
+fn take_native_amx_participant(
+    map: &mut SnapshotJsonMap<'_>,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<
+    Cell<crate::sumeragi::amx::RetainedNativeAmx, iroha_allocation::AllocationCharge>,
+    StateRestoreError,
+> {
+    #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct Snapshot {
+        // Preserve the original Cell encoder's declaration order during the
+        // canonical comparison; both current and explicit undo remain required.
+        #[norito(required)]
+        revert: Option<Undo>,
+        blocks: Undo,
+    }
+    #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct Undo {
+        #[norito(required)]
+        value: Option<iroha_data_model::sumeragi_amx::NativeAmxParticipantStateV1>,
+    }
+    let snapshot: Snapshot = take_required(map, "sumeragi_amx_participant")?;
+    let admit = |source: Option<&iroha_data_model::sumeragi_amx::NativeAmxParticipantStateV1>| {
+        source
+            .map(|source| crate::sumeragi::amx::RetainedNativeAmx::admit(source, budget))
+            .transpose()
+            .map(|value| value.unwrap_or_default())
+            .map_err(|error| match error {
+                local @ (crate::sumeragi::amx::NativeAmxAdmissionError::Admission(_)
+                | crate::sumeragi::amx::NativeAmxAdmissionError::Allocator { .. }
+                | crate::sumeragi::amx::NativeAmxAdmissionError::Codec(_)) => {
+                    StateRestoreError::NativeAmx(local)
+                }
+                invalid => StateRestoreError::Serialization(json::Error::InvalidField {
+                    field: "world.sumeragi_amx_participant".into(),
+                    message: invalid.to_string(),
+                }),
+            })
+    };
+    let current = admit(snapshot.blocks.value.as_ref())?;
+    let previous = snapshot
+        .revert
+        .as_ref()
+        .map(|undo| admit(undo.value.as_ref()))
+        .transpose()?;
+    let initial = mv::cell::CellInitialization::try_reserve(budget)
+        .map_err(crate::state::scalar_cell_custody::admission_error)?;
+    Ok(initial.initialize(current, previous))
+}
 
 fn take_native_consensus_schedule(
     map: &mut SnapshotJsonMap<'_>,
@@ -8094,6 +8230,7 @@ fn decode_world_fields(
             field: "world.sumeragi_amx".to_owned(),
             message: error.to_string(),
         })?;
+    let sumeragi_amx_participant = take_native_amx_participant(&mut map, execution_budget)?;
     let private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry> =
         take_required(&mut map, "private_dataspaces")?;
     private_dataspaces
@@ -8387,7 +8524,7 @@ fn decode_world_fields(
     let validator_committee_transitions =
         take_required(&mut map, "validator_committee_transitions")?;
     let global_beacon_dkg = take_required(&mut map, "global_beacon_dkg")?;
-    let global_beacon_key_sessions = take_required(&mut map, "global_beacon_key_sessions")?;
+    let global_beacon_key_sessions = take_native_beacon_sessions(&mut map, execution_budget)?;
     let global_beacon_active_session = take_required(&mut map, "global_beacon_active_session")?;
     let global_beacon_latest_pulse = take_required(&mut map, "global_beacon_latest_pulse")?;
     let global_beacon_pulses = take_required(&mut map, "global_beacon_pulses")?;
@@ -8605,6 +8742,7 @@ fn decode_world_fields(
         consensus_keys_by_pk,
         sumeragi_lanes,
         sumeragi_amx,
+        sumeragi_amx_participant,
         private_dataspaces,
         pedersen_params,
         poseidon_params,

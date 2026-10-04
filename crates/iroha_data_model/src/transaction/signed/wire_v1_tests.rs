@@ -1,12 +1,27 @@
 //! Byte equivalence, fixed layout, writer bounds and unchanged original codec errors.
 
 use super::*;
-use iroha_data_model::transaction::{SignedTransaction, TransactionEntrypoint};
+use iroha_data_model::transaction::{
+    SignedTransaction, TransactionEntrypoint,
+    signed::{
+        SealedTransactionCommitmentPayload, SealedTransactionReveal,
+        SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
+    },
+};
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use std::{cell::Cell, io};
 
 #[path = "wire_v1_test_support.rs"]
 mod support;
+
+// Independent test-only oracle for the previously established wire contract: version one,
+// then the canonical default-layout bare payload. This is not a production fallback encoder.
+fn established_wire(value: &impl norito::NoritoSerialize) -> Vec<u8> {
+    let _flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let mut bytes = vec![1];
+    norito::core::serialize_to_buffer(value, &mut bytes).unwrap();
+    bytes
+}
 
 #[test]
 fn original_signed_and_entrypoint_vectors_traits_and_roundtrips_match() {
@@ -20,7 +35,8 @@ fn original_signed_and_entrypoint_vectors_traits_and_roundtrips_match() {
         "multisig-b",
     ] {
         let signed = support::signed(profile);
-        let original = signed.encode_wire_v1().unwrap();
+        let original = established_wire(&signed);
+        assert_eq!(signed.encode_wire_v1().unwrap(), original);
         let plan = WireV1Plan::new(&signed).unwrap();
         assert_eq!(plan.wire_length(), original.len());
         assert_eq!(plan.into_vec().unwrap(), original);
@@ -30,7 +46,8 @@ fn original_signed_and_entrypoint_vectors_traits_and_roundtrips_match() {
             signed
         );
         let entry = TransactionEntrypoint::External(signed);
-        let original_entry = entry.encode_wire_v1().unwrap();
+        let original_entry = established_wire(&entry);
+        assert_eq!(entry.encode_wire_v1().unwrap(), original_entry);
         assert_eq!(
             WireV1Plan::new(&entry).unwrap().into_vec().unwrap(),
             original_entry
@@ -54,6 +71,43 @@ fn same_payload_with_different_authorization_has_different_exact_wire() {
         WireV1Plan::new(&first).unwrap().into_vec().unwrap(),
         WireV1Plan::new(&second).unwrap().into_vec().unwrap()
     );
+}
+
+#[test]
+fn sealed_entrypoint_variants_preserve_canonical_wire_and_roundtrip() {
+    let signed = support::signed("advance");
+    let signer = iroha_crypto::KeyPair::from_seed(vec![0x91; 32], iroha_crypto::Algorithm::Ed25519);
+    let network = *signed.network_id().unwrap();
+    let salt = [0xA5; 32];
+    let commitment = compute_sealed_transaction_commitment(&network, &signed, salt, 42);
+    let payload = SealedTransactionCommitmentPayload::new(
+        network,
+        signed.authority().clone(),
+        commitment,
+        10,
+        42,
+        std::num::NonZeroU64::new(7),
+    );
+    let sealed =
+        SignedSealedTransactionCommitment::try_sign(payload, signer.private_key()).unwrap();
+    sealed.verify_signature().unwrap();
+    for entry in [
+        TransactionEntrypoint::SealedCommitment(sealed),
+        TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(commitment, signed, salt)),
+    ] {
+        let original = established_wire(&entry);
+        assert_eq!(entry.encode_wire_v1().unwrap(), original);
+        let _outer = DecodeFlagsGuard::enter(0);
+        let plan = WireV1Plan::new(&entry).unwrap();
+        assert_eq!(plan.wire_length(), original.len());
+        assert_eq!(plan.into_vec().unwrap(), original);
+        assert_eq!(norito::core::effective_decode_flags(), Some(0));
+        assert_eq!(entry.encode_versioned(), original);
+        assert_eq!(
+            TransactionEntrypoint::decode_all_versioned(&original).unwrap(),
+            entry
+        );
+    }
 }
 
 #[test]
@@ -120,6 +174,7 @@ fn count_traverses_real_serializer_and_both_changed_extents_refuse() {
 
 #[test]
 fn serializer_errors_survive_both_counting_and_writing() {
+    let _outer = DecodeFlagsGuard::enter(0);
     let value = Changing {
         length: Cell::new(3),
         fail: Cell::new(true),
@@ -128,6 +183,7 @@ fn serializer_errors_survive_both_counting_and_writing() {
         WireV1Plan::new(&value),
         Err(Error::AllocationFailed { bytes: 73 })
     ));
+    assert_eq!(norito::core::effective_decode_flags(), Some(0));
     value.fail.set(false);
     let plan = WireV1Plan::new(&value).unwrap();
     value.fail.set(true);
@@ -135,6 +191,7 @@ fn serializer_errors_survive_both_counting_and_writing() {
         plan.write_to(&mut Vec::new()),
         Err(Error::AllocationFailed { bytes: 73 })
     ));
+    assert_eq!(norito::core::effective_decode_flags(), Some(0));
 }
 
 struct OneByteWriter {
@@ -169,8 +226,36 @@ fn partial_destination_writes_work_and_original_io_refusal_survives() {
     assert_eq!(output.bytes, signed.encode_wire_v1().unwrap());
     output.bytes.clear();
     output.fail_after = Some(7);
+    let _outer = DecodeFlagsGuard::enter(0);
     assert!(
         matches!(plan.write_to(&mut output), Err(Error::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied)
     );
     assert_eq!(output.bytes.len(), 7);
+    assert_eq!(norito::core::effective_decode_flags(), Some(0));
+}
+
+#[test]
+fn ordinary_output_obeys_zero_and_cumulative_inherited_allowance() {
+    let value = Changing {
+        length: Cell::new(3),
+        fail: Cell::new(false),
+    };
+    let limits = |bytes| norito::DecodeLimits::new(4096, 4096, 4096, bytes, 32);
+    norito::with_decode_limits(limits(0), || {
+        let error = WireV1Plan::new(&value)?.into_vec().unwrap_err();
+        assert!(norito::core::decode_error_matches_active_limits(&error));
+        Ok(())
+    })
+    .unwrap();
+    norito::with_decode_limits(limits(4), || {
+        assert_eq!(WireV1Plan::new(&value)?.into_vec()?, [1, 7, 7, 7]);
+        let error = WireV1Plan::new(&value)?.into_vec().unwrap_err();
+        assert!(norito::core::decode_error_matches_active_limits(&error));
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        WireV1Plan::new(&value).unwrap().into_vec_bounded(3),
+        Err(Error::LengthMismatch)
+    ));
 }

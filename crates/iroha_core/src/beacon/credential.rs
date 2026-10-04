@@ -15,15 +15,17 @@
 //! Neither producer nor importer performs file I/O; credential bytes are handed
 //! directly to a supervisor credential facility.
 
-use std::io::Read as _;
-
-use iroha_crypto::sha256_reader_bounded;
+use iroha_allocation::AllocationBudget;
 use iroha_data_model::{NetworkId, consensus::GlobalThresholdBeaconKeySessionV1};
-use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
+use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, core::PayloadRef};
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
-use super::{GlobalThresholdBeaconSessionBindingV1, RuntimeGlobalThresholdBeaconShareCustodyV1};
+use super::{
+    GlobalThresholdBeaconSessionBindingV1, GlobalThresholdBeaconSessionError,
+    RuntimeGlobalThresholdBeaconShareCustodyV1, ValidatedGlobalThresholdBeaconSessionV1,
+    validate_global_threshold_beacon_session_v1,
+};
 
 /// Stable runtime-provider slot wire identifier of the global-beacon partial signer.
 pub const GLOBAL_BEACON_PARTIAL_SIGNER_SLOT_WIRE_ID_V1: u16 = 59;
@@ -59,25 +61,52 @@ pub const fn consensus_threshold_credential_decode_limits_v1(len: usize) -> Deco
 ///
 /// # Errors
 ///
-/// Returns [`ConsensusThresholdCredentialErrorV1::Rejected`] for empty bytes,
-/// bytes above [`MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1`], or bytes that
-/// are not one canonical frame within
-/// [`consensus_threshold_credential_decode_limits_v1`].
+/// Returns [`ConsensusThresholdCredentialDecodeErrorV1::Rejected`] for empty,
+/// oversized, malformed or intrinsically over-limit frames. A refusal from the
+/// original enclosing decode scope or physical allocator retains its exact cause
+/// in [`ConsensusThresholdCredentialDecodeErrorV1::Resource`], even after that
+/// scope ends. This classification does not fund the raw decoded graph.
 pub fn decode_consensus_threshold_credential_v1<T>(
     bytes: &[u8],
-) -> Result<T, ConsensusThresholdCredentialErrorV1>
+) -> Result<T, ConsensusThresholdCredentialDecodeErrorV1>
 where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     if bytes.is_empty() || bytes.len() > MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1 {
-        return Err(ConsensusThresholdCredentialErrorV1::Rejected);
+        return Err(ConsensusThresholdCredentialDecodeErrorV1::Rejected);
     }
-    norito::decode_canonical_with_limits(
+    norito::decode_canonical_for_admission(
         bytes,
         consensus_threshold_credential_decode_limits_v1(bytes.len()),
     )
-    .map_err(|_| ConsensusThresholdCredentialErrorV1::Rejected)
+    .map_err(|error| match error.kind() {
+        norito::core::DecodeAttemptErrorKind::Invalid => {
+            ConsensusThresholdCredentialDecodeErrorV1::Rejected
+        }
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        | norito::core::DecodeAttemptErrorKind::Allocator => {
+            if cfg!(all(test, sumeragi_core_mutation = "HC89")) {
+                ConsensusThresholdCredentialDecodeErrorV1::Rejected
+            } else {
+                ConsensusThresholdCredentialDecodeErrorV1::Resource(error)
+            }
+        }
+    })
+}
+
+/// One canonical frame decode failure, retaining host-local refusal provenance.
+///
+/// Display is payload-free; the original non-wire cause is available through
+/// [`std::error::Error::source`]. No allocation-pool release token is manufactured.
+#[derive(Debug, Error)]
+pub enum ConsensusThresholdCredentialDecodeErrorV1 {
+    /// The complete frame or its intrinsic codec limits were invalid.
+    #[error("consensus threshold-signer credential was rejected")]
+    Rejected,
+    /// The enclosing decode scope or physical allocator refused this exact attempt.
+    #[error("consensus threshold-signer credential decoder is unavailable")]
+    Resource(#[source] norito::core::DecodeAttemptError),
 }
 
 const CONSENSUS_THRESHOLD_CREDENTIAL_MAGIC_V1: [u8; 8] = *b"IRTHR001";
@@ -94,6 +123,44 @@ pub enum ConsensusThresholdCredentialErrorV1 {
     /// Canonical encoding failed or exceeded its fixed byte ceiling.
     #[error("consensus threshold-signer credential encoding failed")]
     Encoding,
+}
+
+/// Import failure preserving the original finite resource refusal separately from bad credentials.
+#[derive(Debug, Error)]
+pub enum GlobalBeaconCredentialImportErrorV1 {
+    /// The canonical credential, qualification, inventory or private share was rejected.
+    #[error(transparent)]
+    Credential(#[from] ConsensusThresholdCredentialErrorV1),
+    /// Original local raw-decoder refusal; no protocol-invalid judgment was made.
+    #[error("consensus threshold-signer credential decoder is unavailable")]
+    DecodeResource(#[source] norito::core::DecodeAttemptError),
+    /// Admission or physical construction of the retained public graph failed locally.
+    #[error(transparent)]
+    Session(GlobalThresholdBeaconSessionError),
+}
+
+impl From<ConsensusThresholdCredentialDecodeErrorV1> for GlobalBeaconCredentialImportErrorV1 {
+    fn from(error: ConsensusThresholdCredentialDecodeErrorV1) -> Self {
+        match error {
+            ConsensusThresholdCredentialDecodeErrorV1::Rejected => {
+                Self::Credential(ConsensusThresholdCredentialErrorV1::Rejected)
+            }
+            ConsensusThresholdCredentialDecodeErrorV1::Resource(error) => {
+                Self::DecodeResource(error)
+            }
+        }
+    }
+}
+
+impl From<GlobalThresholdBeaconSessionError> for GlobalBeaconCredentialImportErrorV1 {
+    fn from(error: GlobalThresholdBeaconSessionError) -> Self {
+        match error {
+            GlobalThresholdBeaconSessionError::Invalid(_) => {
+                Self::Credential(ConsensusThresholdCredentialErrorV1::Rejected)
+            }
+            local => Self::Session(local),
+        }
+    }
 }
 
 /// Public header framing every consensus-threshold signer credential.
@@ -204,30 +271,46 @@ impl Drop for ConsensusThresholdSecretScalarTripleV1 {
 pub fn consensus_threshold_public_inventory_digest_v1<T: NoritoSerialize>(
     inventory: &T,
 ) -> Result<[u8; 32], ConsensusThresholdCredentialErrorV1> {
-    let encoded = norito::encode_canonical(inventory)
+    use sha2::Digest as _;
+    struct CanonicalDigestWriter {
+        digest: sha2::Sha256,
+        remaining: usize,
+    }
+    impl std::io::Write for CanonicalDigestWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.remaining {
+                return Err(std::io::ErrorKind::WriteZero.into());
+            }
+            self.digest.update(bytes);
+            self.remaining -= bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let encoded_len = norito::canonical_frame_len(inventory)
         .map_err(|_| ConsensusThresholdCredentialErrorV1::Encoding)?;
-    if encoded.is_empty() || encoded.len() > MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1 {
+    if encoded_len == 0 || encoded_len > MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1 {
         return Err(ConsensusThresholdCredentialErrorV1::Encoding);
     }
-    let encoded_len =
-        u64::try_from(encoded.len()).map_err(|_| ConsensusThresholdCredentialErrorV1::Encoding)?;
-    let encoded_len_bytes = encoded_len.to_be_bytes();
-    let digest_input_len = CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1
-        .len()
-        .checked_add(encoded_len_bytes.len())
-        .and_then(|len| len.checked_add(encoded.len()))
-        .and_then(|len| u64::try_from(len).ok())
-        .ok_or(ConsensusThresholdCredentialErrorV1::Encoding)?;
-    let (digest, observed_len) = sha256_reader_bounded(
-        CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1
-            .chain(encoded_len_bytes.as_slice())
-            .chain(encoded.as_slice()),
-        digest_input_len,
-    )
-    .map_err(|_| ConsensusThresholdCredentialErrorV1::Encoding)?;
-    if observed_len != digest_input_len {
+    let mut digest = sha2::Sha256::new();
+    digest.update(CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1);
+    digest.update(
+        u64::try_from(encoded_len)
+            .map_err(|_| ConsensusThresholdCredentialErrorV1::Encoding)?
+            .to_be_bytes(),
+    );
+    let mut writer = CanonicalDigestWriter {
+        digest,
+        remaining: encoded_len,
+    };
+    norito::core::write_canonical_to_writer(inventory, &mut writer)
+        .map_err(|_| ConsensusThresholdCredentialErrorV1::Encoding)?;
+    if writer.remaining != 0 {
         return Err(ConsensusThresholdCredentialErrorV1::Encoding);
     }
+    let digest: [u8; 32] = writer.digest.finalize().into();
     if digest == [0; 32] {
         return Err(ConsensusThresholdCredentialErrorV1::Rejected);
     }
@@ -301,30 +384,41 @@ pub fn validate_consensus_threshold_provisioning_v1(
 /// [`encode_global_beacon_partial_signer_credential_v1`] to produce the
 /// zeroizing bytes handed directly to a supervisor credential facility.
 pub struct RuntimeGlobalBeaconShareProvisioningV1 {
-    public_session: GlobalThresholdBeaconKeySessionV1,
+    public_session: ValidatedGlobalThresholdBeaconSessionV1,
     signer_index: u16,
-    components: Zeroizing<[[u8; 32]; 3]>,
+    components: ConsensusThresholdSecretScalarTripleV1,
 }
 
 impl RuntimeGlobalBeaconShareProvisioningV1 {
-    /// Consume one public transcript and its zeroizing aggregate share.
+    /// Retain one sealed public transcript and consume its zeroizing aggregate share.
     #[must_use]
     pub fn new(
-        public_session: GlobalThresholdBeaconKeySessionV1,
+        public_session: ValidatedGlobalThresholdBeaconSessionV1,
         signer_index: u16,
         components: Zeroizing<[[u8; 32]; 3]>,
     ) -> Self {
         Self {
             public_session,
             signer_index,
-            components,
+            components: ConsensusThresholdSecretScalarTripleV1::from_zeroizing(components),
         }
     }
 
-    /// Complete public DKG transcript this share belongs to.
+    /// Complete public DKG transcript this share belongs to, borrowed from its original owner.
     #[must_use]
     pub fn public_session(&self) -> &GlobalThresholdBeaconKeySessionV1 {
+        self.public_session.record()
+    }
+
+    /// Borrow the authenticated original owner for preparing output before exposing any share.
+    pub fn authenticated_session(&self) -> &ValidatedGlobalThresholdBeaconSessionV1 {
         &self.public_session
+    }
+
+    /// Whether the retained public transcript belongs to the caller's original pool.
+    #[must_use]
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.public_session.belongs_to(budget)
     }
 
     /// One-based signer seat of this share.
@@ -351,9 +445,16 @@ struct RuntimeGlobalBeaconSignerCredentialWireV1 {
     sessions: Vec<RuntimeGlobalBeaconShareCredentialWireV1>,
 }
 
+struct CredentialSequence<T>(arrayvec::ArrayVec<T, MAX_CONSENSUS_THRESHOLD_CREDENTIAL_SESSIONS_V1>);
+impl<T: norito::core::SerializePayload> norito::core::SerializePayload for CredentialSequence<T> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        norito::core::write_element_sequence::<T, _>(writer, self.0.iter())
+    }
+}
+
 #[derive(NoritoSerialize)]
-struct RuntimeGlobalBeaconPublicInventoryEntryWireV1 {
-    public_session: GlobalThresholdBeaconKeySessionV1,
+struct RuntimeGlobalBeaconPublicInventoryEntryWireV1<'a> {
+    public_session: PayloadRef<'a, GlobalThresholdBeaconKeySessionV1>,
     signer_index: u16,
 }
 
@@ -362,36 +463,37 @@ struct RuntimeGlobalBeaconPublicInventoryEntryWireV1 {
     name = "iroha_core::beacon::credential::RuntimeGlobalBeaconPublicInventoryWireV1",
     frame = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_public_inventory"
 )]
-struct RuntimeGlobalBeaconPublicInventoryWireV1 {
+struct RuntimeGlobalBeaconPublicInventoryWireV1<'a> {
     version: u16,
     slot: u16,
     network_id: NetworkId,
-    sessions: Vec<RuntimeGlobalBeaconPublicInventoryEntryWireV1>,
+    sessions: CredentialSequence<RuntimeGlobalBeaconPublicInventoryEntryWireV1<'a>>,
 }
 
-fn global_beacon_public_inventory_wire_v1(
+fn global_beacon_public_inventory_wire_v1<'a>(
     network_id: NetworkId,
-    sessions: impl IntoIterator<Item = (GlobalThresholdBeaconKeySessionV1, u16)>,
-) -> Result<RuntimeGlobalBeaconPublicInventoryWireV1, ConsensusThresholdCredentialErrorV1> {
-    let mut sessions = sessions
-        .into_iter()
-        .map(|(public_session, signer_index)| {
-            if public_session.network_id != network_id {
-                return Err(ConsensusThresholdCredentialErrorV1::Rejected);
-            }
-            Ok(RuntimeGlobalBeaconPublicInventoryEntryWireV1 {
-                public_session,
+    sessions: impl IntoIterator<Item = (&'a GlobalThresholdBeaconKeySessionV1, u16)>,
+) -> Result<RuntimeGlobalBeaconPublicInventoryWireV1<'a>, ConsensusThresholdCredentialErrorV1> {
+    let mut entries = arrayvec::ArrayVec::new();
+    for (public_session, signer_index) in sessions {
+        if public_session.network_id != network_id {
+            return Err(ConsensusThresholdCredentialErrorV1::Rejected);
+        }
+        entries
+            .try_push(RuntimeGlobalBeaconPublicInventoryEntryWireV1 {
+                public_session: PayloadRef(public_session),
                 signer_index,
             })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    validate_consensus_threshold_session_count_v1(sessions.len())?;
-    sessions.sort_by(|left, right| {
+            .map_err(|_| ConsensusThresholdCredentialErrorV1::Rejected)?;
+    }
+    validate_consensus_threshold_session_count_v1(entries.len())?;
+    entries.sort_unstable_by(|left, right| {
         left.public_session
             .session_id
             .cmp(&right.public_session.session_id)
             .then_with(|| left.signer_index.cmp(&right.signer_index))
     });
+    let sessions = CredentialSequence(entries);
     Ok(RuntimeGlobalBeaconPublicInventoryWireV1 {
         version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
         slot: GLOBAL_BEACON_PARTIAL_SIGNER_SLOT_WIRE_ID_V1,
@@ -413,15 +515,15 @@ fn global_beacon_public_inventory_wire_v1(
 /// # Errors
 ///
 /// Rejects empty, excessive, or cross-network inventories and encoding failure.
-pub fn global_beacon_partial_signer_inventory_digest_v1(
+pub fn global_beacon_partial_signer_inventory_digest_v1<'a>(
     network_id: NetworkId,
-    sessions: &[RuntimeGlobalBeaconShareProvisioningV1],
+    sessions: impl IntoIterator<Item = &'a RuntimeGlobalBeaconShareProvisioningV1>,
 ) -> Result<[u8; 32], ConsensusThresholdCredentialErrorV1> {
     let inventory = global_beacon_public_inventory_wire_v1(
         network_id,
         sessions
-            .iter()
-            .map(|session| (session.public_session.clone(), session.signer_index)),
+            .into_iter()
+            .map(|session| (session.public_session.record(), session.signer_index)),
     )?;
     consensus_threshold_public_inventory_digest_v1(&inventory)
 }
@@ -433,88 +535,22 @@ pub fn global_beacon_partial_signer_inventory_digest_v1(
 /// Rejects empty, excessive, or cross-network inventories and encoding failure.
 pub fn global_beacon_partial_signer_public_inventory_digest_v1(
     network_id: NetworkId,
-    sessions: &[(GlobalThresholdBeaconKeySessionV1, u16)],
+    sessions: &[(&GlobalThresholdBeaconKeySessionV1, u16)],
 ) -> Result<[u8; 32], ConsensusThresholdCredentialErrorV1> {
-    let inventory = global_beacon_public_inventory_wire_v1(network_id, sessions.iter().cloned())?;
+    let inventory = global_beacon_public_inventory_wire_v1(
+        network_id,
+        sessions
+            .iter()
+            .map(|(session, signer_index)| (*session, *signer_index)),
+    )?;
     consensus_threshold_public_inventory_digest_v1(&inventory)
 }
 
-/// Canonically encode a cryptographically validated global-beacon share inventory.
-///
-/// The returned allocation scrubs itself on drop and is intended to be passed
-/// directly to the supervisor credential facility. This function performs no
-/// file I/O and never writes private material to configuration or ledger state.
-///
-/// # Errors
-///
-/// Rejects invalid production qualification, empty or excessive inventories,
-/// cross-network transcripts, duplicate sessions, and shares that do not match
-/// the complete public DKG transcript and signer seat.
-pub fn encode_global_beacon_partial_signer_credential_v1(
-    network_id: NetworkId,
-    handle: impl Into<String>,
-    revision: u64,
-    policy_digest: [u8; 32],
-    sessions: Vec<RuntimeGlobalBeaconShareProvisioningV1>,
-) -> Result<Zeroizing<Vec<u8>>, ConsensusThresholdCredentialErrorV1> {
-    let handle = handle.into();
-    if global_beacon_partial_signer_inventory_digest_v1(network_id, &sessions)? != policy_digest {
-        return Err(ConsensusThresholdCredentialErrorV1::Rejected);
-    }
-    validate_consensus_threshold_provisioning_v1(&network_id, &handle, revision, policy_digest)?;
-    let header = ConsensusThresholdCredentialHeaderV1::new(
-        GLOBAL_BEACON_PARTIAL_SIGNER_SLOT_WIRE_ID_V1,
-        network_id,
-        handle,
-        revision,
-        policy_digest,
-    );
-    let sessions = encode_global_beacon_sessions_v1(&network_id, sessions)?;
-    encode_consensus_threshold_secret_credential_v1(&RuntimeGlobalBeaconSignerCredentialWireV1 {
-        header,
-        sessions,
-    })
-}
-
-fn encode_global_beacon_sessions_v1(
-    network_id: &NetworkId,
-    mut sessions: Vec<RuntimeGlobalBeaconShareProvisioningV1>,
-) -> Result<Vec<RuntimeGlobalBeaconShareCredentialWireV1>, ConsensusThresholdCredentialErrorV1> {
-    validate_consensus_threshold_session_count_v1(sessions.len())?;
-    sessions.sort_by(|left, right| {
-        left.public_session
-            .session_id
-            .cmp(&right.public_session.session_id)
-            .then_with(|| left.signer_index.cmp(&right.signer_index))
-    });
-    let validation_custody = RuntimeGlobalThresholdBeaconShareCustodyV1::new();
-    let mut encoded = Vec::with_capacity(sessions.len());
-    for session in sessions {
-        let RuntimeGlobalBeaconShareProvisioningV1 {
-            public_session,
-            signer_index,
-            components,
-        } = session;
-        if public_session.network_id != *network_id {
-            return Err(ConsensusThresholdCredentialErrorV1::Rejected);
-        }
-        let binding = global_beacon_session_binding_v1(&public_session);
-        validation_custody
-            .import_components(
-                public_session.clone(),
-                &binding,
-                signer_index,
-                Zeroizing::new(*components),
-            )
-            .map_err(|_| ConsensusThresholdCredentialErrorV1::Rejected)?;
-        encoded.push(RuntimeGlobalBeaconShareCredentialWireV1 {
-            public_session,
-            signer_index,
-            components: ConsensusThresholdSecretScalarTripleV1::from_zeroizing(components),
-        });
-    }
-    Ok(encoded)
-}
+mod prepared_output;
+pub use prepared_output::{
+    GlobalBeaconCredentialEncodeErrorV1, PreparedGlobalBeaconCredentialV1,
+    SecretConsensusThresholdCredentialV1, encode_global_beacon_partial_signer_credential_v1,
+};
 
 /// Decode and import one global-beacon seat credential for an exact qualification.
 ///
@@ -535,7 +571,65 @@ pub fn decode_global_beacon_partial_signer_credential_v1(
     handle: &str,
     revision: u64,
     policy_digest: [u8; 32],
-) -> Result<RuntimeGlobalThresholdBeaconShareCustodyV1, ConsensusThresholdCredentialErrorV1> {
+    budget: &AllocationBudget,
+) -> Result<RuntimeGlobalThresholdBeaconShareCustodyV1, GlobalBeaconCredentialImportErrorV1> {
+    let (custody, shares) = decode_global_beacon_inventory_v1(
+        bytes,
+        network_id,
+        handle,
+        revision,
+        policy_digest,
+        budget,
+    )?;
+    drop(shares);
+    Ok(custody)
+}
+
+/// Decode one exactly bound credential and return its sealed, validated shares.
+///
+/// The complete credential is decoded once. Every public session is admitted
+/// from `budget`, and the returned provisioning shares retain that same graph.
+/// Extending an inventory reuses these owners through canonical encoding.
+///
+/// # Errors
+/// Returns a rejected credential or the original local session resource failure.
+pub fn decode_global_beacon_partial_signer_credential_shares_v1(
+    bytes: &[u8],
+    network_id: &NetworkId,
+    handle: &str,
+    revision: u64,
+    policy_digest: [u8; 32],
+    budget: &AllocationBudget,
+) -> Result<Vec<RuntimeGlobalBeaconShareProvisioningV1>, GlobalBeaconCredentialImportErrorV1> {
+    let (custody, shares) = decode_global_beacon_inventory_v1(
+        bytes,
+        network_id,
+        handle,
+        revision,
+        policy_digest,
+        budget,
+    )?;
+    drop(custody);
+    Ok(shares)
+}
+
+fn decode_global_beacon_inventory_v1(
+    bytes: &[u8],
+    network_id: &NetworkId,
+    handle: &str,
+    revision: u64,
+    policy_digest: [u8; 32],
+    budget: &AllocationBudget,
+) -> Result<
+    (
+        RuntimeGlobalThresholdBeaconShareCustodyV1,
+        Vec<RuntimeGlobalBeaconShareProvisioningV1>,
+    ),
+    GlobalBeaconCredentialImportErrorV1,
+> {
+    // TODO: replace the raw credential DTO decode and its outer inventory buffers
+    // with physical prepaid decoding; the retained session graph is separately
+    // admitted from the caller's original pool, never from a per-import pool.
     let wire: RuntimeGlobalBeaconSignerCredentialWireV1 =
         decode_consensus_threshold_credential_v1(bytes)?;
     wire.header.validate(
@@ -554,76 +648,40 @@ pub fn decode_global_beacon_partial_signer_credential_v1(
             .then_with(|| pair[0].signer_index.cmp(&pair[1].signer_index))
             .is_ge()
     }) {
-        return Err(ConsensusThresholdCredentialErrorV1::Rejected);
+        return Err(ConsensusThresholdCredentialErrorV1::Rejected.into());
     }
     let public_inventory = global_beacon_public_inventory_wire_v1(
         *network_id,
         wire.sessions
             .iter()
-            .map(|session| (session.public_session.clone(), session.signer_index)),
+            .map(|session| (&session.public_session, session.signer_index)),
     )?;
     if consensus_threshold_public_inventory_digest_v1(&public_inventory)?
         != wire.header.policy_digest
     {
-        return Err(ConsensusThresholdCredentialErrorV1::Rejected);
+        return Err(ConsensusThresholdCredentialErrorV1::Rejected.into());
     }
+    drop(public_inventory);
     let custody = RuntimeGlobalThresholdBeaconShareCustodyV1::new();
+    let mut shares = Vec::with_capacity(wire.sessions.len());
     for session in wire.sessions {
-        if session.public_session.network_id != *network_id {
-            return Err(ConsensusThresholdCredentialErrorV1::Rejected);
-        }
         let binding = global_beacon_session_binding_v1(&session.public_session);
+        let public_session =
+            validate_global_threshold_beacon_session_v1(&session.public_session, &binding, budget)?;
         custody
             .import_components(
-                session.public_session,
-                &binding,
+                public_session.clone(),
                 session.signer_index,
-                session.components.into_zeroizing(),
+                Zeroizing::new(session.components.0),
             )
             .map_err(|_| ConsensusThresholdCredentialErrorV1::Rejected)?;
+        shares.push(RuntimeGlobalBeaconShareProvisioningV1 {
+            public_session,
+            signer_index: session.signer_index,
+            components: session.components,
+        });
     }
-    Ok(custody)
-}
-
-/// Decode one global-beacon seat credential for an exact qualification and return its shares.
-///
-/// The credential passes every check of [`decode_global_beacon_partial_signer_credential_v1`]
-/// before any share is returned, so each share matches its public transcript and seat. The shares
-/// keep the credential's canonical order. A caller that extends a retained inventory, such as a
-/// prepared committee rotation appending its pending share, re-encodes the complete inventory
-/// through [`encode_global_beacon_partial_signer_credential_v1`].
-///
-/// # Errors
-///
-/// The errors of [`decode_global_beacon_partial_signer_credential_v1`].
-pub fn decode_global_beacon_partial_signer_credential_shares_v1(
-    bytes: &[u8],
-    network_id: &NetworkId,
-    handle: &str,
-    revision: u64,
-    policy_digest: [u8; 32],
-) -> Result<Vec<RuntimeGlobalBeaconShareProvisioningV1>, ConsensusThresholdCredentialErrorV1> {
-    let custody = decode_global_beacon_partial_signer_credential_v1(
-        bytes,
-        network_id,
-        handle,
-        revision,
-        policy_digest,
-    )?;
-    drop(custody);
-    let RuntimeGlobalBeaconSignerCredentialWireV1 { header, sessions } =
-        decode_consensus_threshold_credential_v1(bytes)?;
-    drop(header);
-    Ok(sessions
-        .into_iter()
-        .map(|session| {
-            RuntimeGlobalBeaconShareProvisioningV1::new(
-                session.public_session,
-                session.signer_index,
-                session.components.into_zeroizing(),
-            )
-        })
-        .collect())
+    Ok((custody, shares))
 }
 
 /// Read the public header of one canonical global-beacon seat credential.
@@ -638,11 +696,11 @@ pub fn decode_global_beacon_partial_signer_credential_shares_v1(
 ///
 /// # Errors
 ///
-/// Returns [`ConsensusThresholdCredentialErrorV1::Rejected`] for bytes that
-/// are not one canonical global-beacon credential.
+/// Returns a completed rejection for malformed or intrinsically over-limit bytes,
+/// or the exact local decoder refusal without judging the credential invalid.
 pub fn global_beacon_partial_signer_credential_header_v1(
     bytes: &[u8],
-) -> Result<ConsensusThresholdCredentialHeaderV1, ConsensusThresholdCredentialErrorV1> {
+) -> Result<ConsensusThresholdCredentialHeaderV1, ConsensusThresholdCredentialDecodeErrorV1> {
     let RuntimeGlobalBeaconSignerCredentialWireV1 { header, sessions } =
         decode_consensus_threshold_credential_v1(bytes)?;
     drop(sessions);

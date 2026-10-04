@@ -61,6 +61,8 @@ mod mutation_group_3;
 #[cfg(test)]
 mod mutation_group_4;
 #[cfg(test)]
+mod sweep;
+#[cfg(test)]
 mod tests;
 
 pub use scenario::Scenario;

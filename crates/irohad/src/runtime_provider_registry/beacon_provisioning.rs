@@ -17,8 +17,12 @@ impl IrohaRuntimeProviderBindingsV1 {
         handle: &str,
         revision: u64,
         policy_digest: [u8; 32],
+        credential_max_memory_bytes: usize,
     ) -> Result<Self, IrohaRuntimeProviderCatalogErrorV1> {
         let rejected = IrohaRuntimeProviderCatalogErrorV1::InvalidBinding;
+        if credential_max_memory_bytes == 0 {
+            return Err(rejected);
+        }
         let binding = IrohaRuntimeProviderBindingV1::try_new(
             IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
             handle,
@@ -29,9 +33,13 @@ impl IrohaRuntimeProviderBindingsV1 {
         let mut catalog = retained.cloned().unwrap_or_else(|| Self {
             chain_id: chain_id.to_owned(),
             network_id,
+            credential_max_memory_bytes,
             bindings: Vec::new(),
         });
-        if catalog.chain_id != chain_id || catalog.network_id != network_id {
+        if catalog.chain_id != chain_id
+            || catalog.network_id != network_id
+            || catalog.credential_max_memory_bytes != credential_max_memory_bytes
+        {
             return Err(rejected);
         }
         if let Some(existing) = catalog
@@ -67,6 +75,7 @@ mod tests {
             "software://beacon/main",
             1,
             [1; 32],
+            64 * 1024 * 1024,
         )
         .unwrap();
         let next = IrohaRuntimeProviderBindingsV1::with_prepared_beacon_inventory_v1(
@@ -76,6 +85,7 @@ mod tests {
             "software://beacon/main",
             2,
             [2; 32],
+            64 * 1024 * 1024,
         )
         .unwrap();
         assert_eq!(next.iter().next().unwrap().revision(), Some(2));
@@ -93,9 +103,35 @@ mod tests {
                     handle,
                     revision,
                     [2; 32],
+                    64 * 1024 * 1024,
                 )
                 .is_err()
             );
         }
+    }
+    #[test]
+    fn prepared_catalog_rejects_zero_or_changed_credential_memory_bound() {
+        let network = runtime_provider_test_network_id();
+        let create = |retained, revision, bytes| {
+            IrohaRuntimeProviderBindingsV1::with_prepared_beacon_inventory_v1(
+                retained,
+                "beacon-chain",
+                network,
+                "software://beacon/main",
+                revision,
+                [1; 32],
+                bytes,
+            )
+        };
+        assert!(create(None, 1, 0).is_err());
+        let first = create(None, 1, 123_456).unwrap();
+        assert!(create(Some(&first), 2, 123_457).is_err());
+        assert_eq!(
+            create(Some(&first), 2, 123_456)
+                .unwrap()
+                .credential_max_memory_bytes(),
+            123_456
+        );
+        assert_eq!(first.credential_max_memory_bytes(), 123_456);
     }
 }

@@ -68,7 +68,7 @@ fn built_account_in_domain(account_id: &AccountId) -> Account {
 fn make_header() -> Vec<u8> {
     ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 4,
         max_cycles: 1_000_000,

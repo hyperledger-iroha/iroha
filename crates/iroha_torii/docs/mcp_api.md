@@ -599,12 +599,52 @@ Body/headers behavior:
 - When `body_base64` is used and `content_type` is omitted, Torii defaults to Norito MIME.
 - `arguments.headers` entries for `content-length`, `host`, and `connection` are ignored.
 
-Many purpose-built `iroha.*` read tools also accept flat path and query
-shortcut keys (for example `account_id`, `hash`, `definition_id`, `limit`,
-`offset`). Request payloads are different: every tool that forwards a request
-body requires it in the `body` object, and top-level arguments are never
-assembled into a body.
+Purpose-built `iroha.*` tools take route path values in the `path` object (for
+example `path.account_id`). Request payloads are different: every tool that
+forwards a request body requires it in the `body` object, and top-level
+arguments are never assembled into a body. The only exception are the
+collection tools below, whose flat query controls are parsed into the
+collection query before dispatch.
 Rely on each tool’s `inputSchema` for authoritative accepted fields.
+
+### Collection Tools
+
+The collection tools read Torii collections with the one query language of
+[`specs/torii/collection_queries.md`](../../../specs/torii/collection_queries.md):
+
+| Tools | Routes |
+| --- | --- |
+| `iroha.accounts.list`, `iroha.accounts.query` | `GET /v1/accounts`, `POST /v1/accounts/query` |
+| `iroha.domains.list`, `iroha.domains.query` | `GET /v1/domains`, `POST /v1/domains/query` |
+| `iroha.assets.definitions`, `iroha.assets.definitions.query` | `GET /v1/assets/definitions`, `POST /v1/assets/definitions/query` |
+| `iroha.nfts.chain.list`, `iroha.nfts.query` | `GET /v1/nfts`, `POST /v1/nfts/query` |
+| `iroha.rwas.chain.list`, `iroha.rwas.query` | `GET /v1/rwas`, `POST /v1/rwas/query` |
+| `iroha.accounts.assets`, `iroha.accounts.assets.query` | `GET`/`POST` `/v1/accounts/{account_id}/assets[/query]` |
+| `iroha.assets.holders`, `iroha.assets.holders.query` | `GET`/`POST` `/v1/assets/{definition_id}/holders[/query]` |
+| `iroha.accounts.transactions`, `iroha.accounts.transactions.query` | `GET`/`POST` `/v1/accounts/{account_id}/transactions[/query]` |
+| `iroha.transactions.query` | `POST /v1/transactions/query` |
+
+They take the query controls as flat arguments:
+
+- `filter`: text such as `owned_by = "sorau…" and quantity >= 10`, or the JSON
+  form `{"op": "eq", "args": ["owned_by", "sorau…"]}`;
+- `sort`: `"-quantity,id"` or `["-quantity", "id"]` (`-` is descending);
+- `select`: `"id,quantity"` or `["id", "quantity"]`;
+- `limit` (at least 1) and `cursor` (the previous page's `next_cursor`);
+- `include_total`: adds `total`, at the cost of a full scan;
+- `aggregate` (`POST` tools only): grouped metrics.
+
+`POST` tools alternatively take one complete query object in `body`, which
+cannot be combined with flat controls. Torii parses the arguments with the
+reference `ListQuery` implementation before dispatch, so malformed controls
+fail with the server's own error text; `GET` tools send the parsed query as URL
+parameters and `POST` tools its canonical JSON body. Every page is
+`{"items": [...], "next_cursor": ...}`: repeat the call with `cursor` set to
+`next_cursor` until it is `null`. The retired offset envelope (`pagination`,
+`offset`, `fetch_size`, `count_mode`, `query`) is rejected. Transaction tools
+read history newest first: they take no `sort`, `include_total` or
+`aggregate`, and a page may hold fewer than `limit` rows while `next_cursor`
+is set.
 
 Do not place a raw private key in `arguments`, `body`, or forwarded headers.
 Use unsigned instruction builders plus local signing, or submit an already
@@ -854,7 +894,7 @@ described under Protocol Behavior.
 }
 ```
 
-### Call Purpose-Built Tool With Flat Arguments
+### Call A Collection Tool
 ```json
 {
   "jsonrpc": "2.0",
@@ -863,9 +903,11 @@ described under Protocol Behavior.
   "params": {
     "name": "iroha.accounts.transactions",
     "arguments": {
-      "account_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-      "limit": 20,
-      "offset": 0
+      "path": {
+        "account_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+      },
+      "filter": "block_height >= 1200 and result_ok = true",
+      "limit": 20
     },
     "_meta": {
       "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -874,6 +916,9 @@ described under Protocol Behavior.
   }
 }
 ```
+
+Read the next page by repeating the call with `"cursor"` set to the returned
+`next_cursor`; stop when it is `null`.
 
 ### Batch Calls
 ```json

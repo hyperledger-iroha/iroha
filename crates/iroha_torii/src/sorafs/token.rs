@@ -37,6 +37,7 @@ pub(crate) const MAX_NONCE_BYTES: usize = 128;
 #[cfg(feature = "test-fixtures")]
 #[path = "token/native_issuer_test_fixture.rs"]
 pub mod native_issuer_test_fixture;
+mod signer_binding;
 mod signer_completed_finality;
 mod signer_finality;
 mod signer_lifecycle;

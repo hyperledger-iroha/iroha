@@ -44,7 +44,7 @@ impl Client {
     ) -> Result<iroha_data_model::sorafs::provider_admission::discovery::account_read::VerifiedAccountReadProviderV1>{
         let proof = self.read_provider_discovery_frame(provider, block)?;
         let verified = proof.verify_account_read(
-            &self.chain.to_string(),
+            self.chain.as_ref(),
             self.network_id,
             provider,
             native_schema,
@@ -55,7 +55,7 @@ impl Client {
         Ok(verified)
     }
 
-    /// Read current native StreamToken control for an independently selected signer binding.
+    /// Read current native `StreamToken` control for an independently selected signer binding.
     ///
     /// The caller supplies the complete expected binding, qualified World schema and fresh
     /// certified decision. This reuses the bounded provider-discovery transport and returns only
@@ -126,7 +126,7 @@ impl Client {
         };
         use sorafs_manifest::signer::protocol::{SignerPurposeBindingV1, SignerRoleV1};
         expected_binding.validate()?;
-        block.verify_global_scope(self.network_id, &self.chain.to_string())?;
+        block.verify_global_scope(self.network_id, self.chain.as_ref())?;
         if provider.as_bytes() == &[0; 32]
             || block.height() < 2
             || block.commitment().schedule.current.network_id != self.network_id
@@ -261,7 +261,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                "Failed to get current genesis readiness",
+                "sumeragi.genesis_readiness.read",
             )?;
         attestation.verify()?;
         let body = &attestation.body;
@@ -332,7 +332,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                "Failed to get current finality attestation",
+                "sumeragi.finality_attestation.read",
             )?;
         attestation.verify()?;
         if attestation.body.challenge != challenge
@@ -371,7 +371,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                "Failed to get current finality proof",
+                "sumeragi.finality_proof.read",
             )?;
         if proof.height() != height.get() {
             return Err(eyre!(
@@ -615,7 +615,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 MAX,
-                "FI current World original unavailable",
+                "kagemusha.authority_state.read",
             )?;
         original.attestation.verify()?;
         let body = &original.attestation.body;
@@ -726,7 +726,7 @@ impl Client {
             verifier,
             proof,
             compiled_schema,
-            snapshot.ok_or_else(|| eyre!("FI complete World absent"))?,
+            &snapshot.ok_or_else(|| eyre!("FI complete World absent"))?,
             signatory.into_key_value(),
             wallet.into_key_value(),
             nodes,

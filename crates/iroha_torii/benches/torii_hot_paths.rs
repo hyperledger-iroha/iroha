@@ -40,13 +40,8 @@ use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
     BenchRateLimiter, ContractActivityGetParamsForBench, MaybeTelemetry, NoritoJson, NoritoQuery,
     QueryOptions, ResponseFormat, SignedQueryAdmission, accept_transaction_for_ingress_for_bench,
-    filter::{
-        AggregateFn, AggregateMetric, AggregateSpec, FieldPath, FilterExpr, Order, Pagination,
-        QueryEnvelope, Selector, SortKey,
-    },
-    handle_queries_with_opts, handle_transaction_with_metrics_for_bench,
-    handle_v1_account_assets_query_for_bench, handle_v1_accounts_query_for_bench,
-    handle_v1_asset_holders_query_for_bench, handle_v1_contracts_activity_get_for_bench,
+    collection_query_for_bench, handle_queries_with_opts,
+    handle_transaction_with_metrics_for_bench, handle_v1_contracts_activity_get_for_bench,
     profile_stats::print_profile,
     query_load_profiles::{QueryLoadProfile, QueryLoadWorkload, standard_query_load_profiles},
     verify_signed_query_request_for_bench,
@@ -377,12 +372,12 @@ impl HttpRequestTemplate {
             body: Arc::new(Vec::new()),
         }
     }
-    fn json(uri: impl Into<String>, envelope: &QueryEnvelope) -> Self {
+    fn json(uri: impl Into<String>, query: &norito::json::Value) -> Self {
         Self {
             method: Method::POST,
             uri: uri.into(),
             content_type: Some("application/json"),
-            body: Arc::new(norito::json::to_vec(envelope).expect("encode query envelope")),
+            body: Arc::new(norito::json::to_vec(query).expect("encode collection query")),
         }
     }
     fn norito(uri: impl Into<String>, body: Vec<u8>) -> Self {
@@ -549,13 +544,17 @@ fn accounts_query_router(fixture: &QueryLoadFixture) -> Router {
     let telemetry = direct_metrics_telemetry();
     Router::new().route(
         "/v1/accounts/query",
-        post(move |NoritoJson(envelope): NoritoJson<QueryEnvelope>| {
+        post(move |body: Bytes| {
             let state = Arc::clone(&state);
             let telemetry = telemetry.clone();
             async move {
-                match handle_v1_accounts_query_for_bench(state, NoritoJson(envelope), telemetry)
-                    .await
-                {
+                let query: norito::json::Value = match norito::json::from_slice(&body) {
+                    Ok(query) => query,
+                    Err(error) => {
+                        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+                    }
+                };
+                match collection_query_for_bench(state, "accounts", None, query, telemetry).await {
                     Ok(response) => response.into_response(),
                     Err(error) => {
                         (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
@@ -570,28 +569,32 @@ fn account_assets_query_router(fixture: &QueryLoadFixture) -> Router {
     let telemetry = direct_metrics_telemetry();
     Router::new().route(
         "/v1/accounts/{account_id}/assets/query",
-        post(
-            move |Path(account_id): Path<String>,
-                  NoritoJson(envelope): NoritoJson<QueryEnvelope>| {
-                let state = Arc::clone(&state);
-                let telemetry = telemetry.clone();
-                async move {
-                    match handle_v1_account_assets_query_for_bench(
-                        state,
-                        Path(account_id),
-                        NoritoJson(envelope),
-                        telemetry,
-                    )
-                    .await
-                    {
-                        Ok(response) => response.into_response(),
-                        Err(error) => {
-                            (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
-                        }
+        post(move |Path(path_arg): Path<String>, body: Bytes| {
+            let state = Arc::clone(&state);
+            let telemetry = telemetry.clone();
+            async move {
+                let query: norito::json::Value = match norito::json::from_slice(&body) {
+                    Ok(query) => query,
+                    Err(error) => {
+                        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+                    }
+                };
+                match collection_query_for_bench(
+                    state,
+                    "account_assets",
+                    Some(path_arg),
+                    query,
+                    telemetry,
+                )
+                .await
+                {
+                    Ok(response) => response.into_response(),
+                    Err(error) => {
+                        (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
                     }
                 }
-            },
-        ),
+            }
+        }),
     )
 }
 fn asset_holders_query_router(fixture: &QueryLoadFixture) -> Router {
@@ -599,28 +602,32 @@ fn asset_holders_query_router(fixture: &QueryLoadFixture) -> Router {
     let telemetry = direct_metrics_telemetry();
     Router::new().route(
         "/v1/assets/{definition_id}/holders/query",
-        post(
-            move |Path(definition_id): Path<String>,
-                  NoritoJson(envelope): NoritoJson<QueryEnvelope>| {
-                let state = Arc::clone(&state);
-                let telemetry = telemetry.clone();
-                async move {
-                    match handle_v1_asset_holders_query_for_bench(
-                        state,
-                        Path(definition_id),
-                        NoritoJson(envelope),
-                        telemetry,
-                    )
-                    .await
-                    {
-                        Ok(response) => response.into_response(),
-                        Err(error) => {
-                            (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
-                        }
+        post(move |Path(path_arg): Path<String>, body: Bytes| {
+            let state = Arc::clone(&state);
+            let telemetry = telemetry.clone();
+            async move {
+                let query: norito::json::Value = match norito::json::from_slice(&body) {
+                    Ok(query) => query,
+                    Err(error) => {
+                        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+                    }
+                };
+                match collection_query_for_bench(
+                    state,
+                    "asset_holders",
+                    Some(path_arg),
+                    query,
+                    telemetry,
+                )
+                .await
+                {
+                    Ok(response) => response.into_response(),
+                    Err(error) => {
+                        (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
                     }
                 }
-            },
-        ),
+            }
+        }),
     )
 }
 fn contracts_activity_router(fixture: &QueryLoadFixture) -> Router {
@@ -650,95 +657,27 @@ fn contracts_activity_router(fixture: &QueryLoadFixture) -> Router {
         ),
     )
 }
-fn account_alias_projection_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
-    QueryEnvelope {
-        query: Some("accounts_alias_projection".to_owned()),
-        filter: Some(FilterExpr::Eq(
-            FieldPath("has_primary_alias".to_owned()),
-            norito::json::Value::from(true),
-        )),
-        select: Some(Selector(vec![
-            FieldPath("id".to_owned()),
-            FieldPath("primary_alias".to_owned()),
-            FieldPath("primary_alias_domain".to_owned()),
-            FieldPath("has_primary_alias".to_owned()),
-        ])),
-        aggregate: None,
-        sort: vec![
-            SortKey {
-                key: FieldPath("primary_alias_domain".to_owned()),
-                order: Order::Asc,
-            },
-            SortKey {
-                key: FieldPath("id".to_owned()),
-                order: Order::Asc,
-            },
-        ],
-        pagination: Pagination {
-            limit: Some(profile.page_limit as u64),
-            offset: 0,
-        },
-        fetch_size: Some(profile.fetch_size as u64),
-        count_mode: Some("bounded".to_owned()),
-    }
+fn account_alias_projection_envelope(profile: QueryLoadProfile) -> norito::json::Value {
+    norito::json!({
+        "filter": "label is not null",
+        "select": ["id", "label"],
+        "sort": ["label", "id"],
+        "limit": (profile.page_limit as u64)
+    })
 }
-fn asset_holders_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
-    QueryEnvelope {
-        query: Some("asset_holders".to_owned()),
-        filter: Some(FilterExpr::Gt(
-            FieldPath("quantity".to_owned()),
-            norito::json::Value::from(0_u64),
-        )),
-        select: None,
-        aggregate: None,
-        sort: vec![SortKey {
-            key: FieldPath("quantity".to_owned()),
-            order: Order::Desc,
-        }],
-        pagination: Pagination {
-            limit: Some(profile.page_limit as u64),
-            offset: 0,
-        },
-        fetch_size: Some(profile.fetch_size as u64),
-        count_mode: Some("bounded".to_owned()),
-    }
+fn asset_holders_envelope(profile: QueryLoadProfile) -> norito::json::Value {
+    norito::json!({
+        "filter": "quantity > 0",
+        "sort": ["-quantity"],
+        "limit": (profile.page_limit as u64)
+    })
 }
-fn account_assets_predicate_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
-    QueryEnvelope {
-        query: Some("account_assets_predicate".to_owned()),
-        filter: Some(FilterExpr::And(vec![
-            FilterExpr::Gt(
-                FieldPath("quantity".to_owned()),
-                norito::json::Value::from(0_u64),
-            ),
-            FilterExpr::Eq(
-                FieldPath("scope".to_owned()),
-                norito::json::Value::from("global"),
-            ),
-            FilterExpr::Eq(
-                FieldPath("has_primary_alias".to_owned()),
-                norito::json::Value::from(true),
-            ),
-        ])),
-        select: None,
-        aggregate: None,
-        sort: vec![
-            SortKey {
-                key: FieldPath("quantity".to_owned()),
-                order: Order::Desc,
-            },
-            SortKey {
-                key: FieldPath("asset".to_owned()),
-                order: Order::Asc,
-            },
-        ],
-        pagination: Pagination {
-            limit: Some(profile.page_limit as u64),
-            offset: 0,
-        },
-        fetch_size: Some(profile.fetch_size as u64),
-        count_mode: Some("bounded".to_owned()),
-    }
+fn account_assets_predicate_envelope(profile: QueryLoadProfile) -> norito::json::Value {
+    norito::json!({
+        "filter": "quantity > 0 and scope = \"global\"",
+        "sort": ["-quantity", "asset"],
+        "limit": (profile.page_limit as u64)
+    })
 }
 fn contracts_activity_uri(fixture: &QueryLoadFixture, profile: QueryLoadProfile) -> String {
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
@@ -758,41 +697,18 @@ fn contracts_activity_uri(fixture: &QueryLoadFixture, profile: QueryLoadProfile)
     );
     format!("/v1/contracts/activity?{}", serializer.finish())
 }
-fn generic_aggregate_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
-    QueryEnvelope {
-        query: Some("accounts_generic_aggregate".to_owned()),
-        filter: Some(FilterExpr::Eq(
-            FieldPath("has_primary_alias".to_owned()),
-            norito::json::Value::from(true),
-        )),
-        select: None,
-        aggregate: Some(AggregateSpec {
-            group_by: vec![FieldPath("primary_alias_domain".to_owned())],
-            metrics: vec![
-                AggregateMetric {
-                    alias: "accounts".to_owned(),
-                    r#fn: AggregateFn::Count,
-                    field: None,
-                },
-                AggregateMetric {
-                    alias: "distinct_aliases".to_owned(),
-                    r#fn: AggregateFn::DistinctCount,
-                    field: Some(FieldPath("primary_alias".to_owned())),
-                },
-            ],
-            having: None,
-        }),
-        sort: vec![SortKey {
-            key: FieldPath("primary_alias_domain".to_owned()),
-            order: Order::Asc,
-        }],
-        pagination: Pagination {
-            limit: Some(profile.page_limit as u64),
-            offset: 0,
+fn generic_aggregate_envelope(profile: QueryLoadProfile) -> norito::json::Value {
+    norito::json!({
+        "filter": "label is not null",
+        "aggregate": {
+            "group_by": [],
+            "metrics": [
+                {"alias": "accounts", "fn": "count"},
+                {"alias": "distinct_labels", "fn": "distinct_count", "field": "label"}
+            ]
         },
-        fetch_size: Some(profile.fetch_size as u64),
-        count_mode: Some("bounded".to_owned()),
-    }
+        "limit": (profile.page_limit as u64)
+    })
 }
 async fn run_app_http_profile(
     profile: QueryLoadProfile,

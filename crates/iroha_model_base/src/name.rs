@@ -117,6 +117,19 @@ mod model {
     pub struct Name(pub(super) ConstString);
 }
 impl Name {
+    /// Copy an already validated name through exact, fallible retained storage.
+    ///
+    /// The original constructor established canonical spelling. This operation
+    /// preserves it and charges only newly owned string storage to the active
+    /// Norito allocation scope, without repeating normalization scratch.
+    ///
+    /// # Errors
+    /// Returns a decode allocation or allocator refusal before retaining bytes.
+    #[doc(hidden)]
+    pub fn try_clone_for_admission(&self) -> Result<Self, norito::Error> {
+        ConstString::try_from_str_for_decode(self.as_ref()).map(Self)
+    }
+
     /// Check if `candidate` string would be valid [`Name`].
     ///
     /// # Errors
@@ -449,6 +462,33 @@ impl norito::json::JsonKeyCodec for Name {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn admitted_name_clone_retains_exact_long_bytes_and_inline_values() {
+        let long: super::Name = "long_validated_name_for_retention".parse().unwrap();
+        let limits = |allocated| norito::DecodeLimits::new(0, 0, 0, allocated, 0);
+        let (copy, usage) =
+            norito::core::with_decode_limits_measured(limits(long.as_ref().len()), || {
+                long.try_clone_for_admission()
+            });
+        assert_eq!(copy.unwrap(), long);
+        assert_eq!(usage.total_allocated_bytes(), long.as_ref().len());
+        assert!(
+            norito::core::with_decode_limits_measured(limits(long.as_ref().len() - 1), || long
+                .try_clone_for_admission())
+            .0
+            .unwrap_err()
+            .is_decode_resource_limit()
+        );
+        let short: super::Name = "inline".parse().unwrap();
+        assert_eq!(
+            norito::core::with_decode_limits_measured(limits(0), || short
+                .try_clone_for_admission())
+            .0
+            .unwrap(),
+            short
+        );
+    }
+
     use super::*;
     use norito::codec::{Decode, Encode};
     use std::borrow::ToOwned as _;

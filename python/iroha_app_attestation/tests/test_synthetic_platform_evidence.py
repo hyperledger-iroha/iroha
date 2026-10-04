@@ -11,6 +11,7 @@ from pathlib import Path
 from iroha_app_attestation.attestation import (
     ANDROID_KEY_DESCRIPTION_OID,
     APPLE_NONCE_OID,
+    AndroidPatchLevels,
     AttestationRejected,
     Selection,
     certificate_key_extensions,
@@ -19,6 +20,7 @@ from iroha_app_attestation.attestation import (
     encode_android_chain,
     der_one,
     primitive,
+    require_android_patch_floor,
     verify_android_raw,
     verify_android_persistent_app_key_raw,
     verify_apple_raw,
@@ -131,13 +133,19 @@ def keymint_description(selected: Selection, package_name: str,
                         key_size: int = 256, digest: int = 4,
                         curve: int = 1, origin: int = 0,
                         device_locked: bool = True, verified_boot_state: int = 0,
-                        software_key_size: bool = False) -> bytes:
+                        software_key_size: bool = False,
+                        os_version: int | None = None, os_patch_level: int | None = None,
+                        vendor_patch_level: int | None = 20260805,
+                        boot_patch_level: int | None = None,
+                        software_os_patch_level: int | None = None) -> bytes:
     """Signed synthetic ordinary StrongBox evidence; no production trust."""
     app_id = sequence(set_of(sequence(octets(package_name.encode()), integer(package_version))),
                       set_of(octets(signer)))
     software_fields = ([] if not software_key_size else [explicit(3, integer(key_size))])
     if software_usage_count is not None:
         software_fields.append(explicit(405, integer(software_usage_count)))
+    if software_os_patch_level is not None:
+        software_fields.append(explicit(706, integer(software_os_patch_level)))
     software = sequence(*software_fields, explicit(709, octets(app_id)))
     boot = sequence(octets(b"\x51" * 32),
                     der(b"\x01", b"\xff" if device_locked else b"\x00"),
@@ -155,8 +163,14 @@ def keymint_description(selected: Selection, package_name: str,
     if legacy_rollback_resistant:
         hardware_fields.append(explicit(703, der(b"\x05", b"")))
     hardware_fields.append(explicit(704, boot))
-    if attestation_version >= 3:
-        hardware_fields.append(explicit(718, integer(20260805)))
+    if os_version is not None:
+        hardware_fields.append(explicit(705, integer(os_version)))
+    if os_patch_level is not None:
+        hardware_fields.append(explicit(706, integer(os_patch_level)))
+    if attestation_version >= 3 and vendor_patch_level is not None:
+        hardware_fields.append(explicit(718, integer(vendor_patch_level)))
+    if attestation_version >= 3 and boot_patch_level is not None:
+        hardware_fields.append(explicit(719, integer(boot_patch_level)))
     hardware = sequence(*hardware_fields)
     return sequence(
         integer(attestation_version), integer(security_level, b"\x0a"),
@@ -414,6 +428,8 @@ class SyntheticPlatformTests(unittest.TestCase):
                             allowed_security_levels=frozenset({1, 2}),
                         )
                         self.assertEqual(proof.android_security_level, level)
+                        self.assertEqual(proof.android_patch_levels, AndroidPatchLevels(
+                            version, None, None, 20260805 if version >= 3 else None, None))
                         self.assertEqual(proof.attested_public_key_sec1, fixture.point)
                         self.assertEqual(proof.evidence_sha256,
                                          hashlib.sha256(encode_android_chain([leaf, root])).digest())
@@ -424,6 +440,43 @@ class SyntheticPlatformTests(unittest.TestCase):
                                     root, hashlib.sha256(root).digest(), now, self.openssl,
                                     allowed_security_levels=frozenset({1, 2}),
                                 )
+
+    def test_signed_hardware_patch_levels_feed_the_enrollment_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SignedEnvelope(Path(temporary), self.openssl)
+            original = selection(fixture.point)
+            selected = Selection(original.client_nonce, original.server_nonce,
+                                 original.release_id, original.hardware_profile_id,
+                                 b"\0" * 32, original.lane_id)
+            package_name, package_version, signer = "org.example.wallet", 7, b"\x71" * 32
+            now = int(time.time() * 1000) + 60_000
+
+            def verified(**levels) -> AndroidPatchLevels:
+                description = keymint_description(selected, package_name, package_version,
+                                                  signer, **levels)
+                leaf, root = fixture.sign(ANDROID_KEY_DESCRIPTION_OID, description)
+                proof = verify_android_persistent_app_key_raw(
+                    [leaf, root], selected, package_name, package_version, signer,
+                    root, hashlib.sha256(root).digest(), now, self.openssl,
+                    allowed_security_levels=frozenset({2}))
+                return proof.android_patch_levels
+
+            levels = verified(os_version=150000, os_patch_level=202609,
+                              vendor_patch_level=20260905, boot_patch_level=20260901)
+            self.assertEqual(levels, AndroidPatchLevels(300, 150000, 202609, 20260905, 20260901))
+            require_android_patch_floor(levels, 202609)
+            with self.assertRaisesRegex(AttestationRejected, "below the enrollment floor"):
+                require_android_patch_floor(levels, 202610)
+            stale_boot = verified(os_patch_level=202609, vendor_patch_level=20260905,
+                                  boot_patch_level=20250101)
+            with self.assertRaisesRegex(AttestationRejected, "boot patch level is below"):
+                require_android_patch_floor(stale_boot, 202609)
+            # A software-enforced OS patch level never stands in for the
+            # hardware-enforced value.
+            software_only = verified(software_os_patch_level=202609)
+            self.assertEqual(software_only, AndroidPatchLevels(300, None, None, 20260805, None))
+            with self.assertRaisesRegex(AttestationRejected, "OS patch level absent"):
+                require_android_patch_floor(software_only, 202601)
 
     def test_ordinary_persistent_legacy_preserves_signed_identity_and_hardware_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

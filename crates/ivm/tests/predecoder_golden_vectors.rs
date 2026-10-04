@@ -126,7 +126,7 @@ fn decode_artifact_invariant_across_metadata_fields() {
     );
 }
 #[test]
-fn decode_artifact_rejects_legacy_or_unknown_minor_version() {
+fn decode_artifact_rejects_retired_or_unknown_minor_version() {
     let _lease = crate::predecode_test_support::exclusive();
     let code = build_wide_code();
     let base = ProgramMetadata {
@@ -137,14 +137,14 @@ fn decode_artifact_rejects_legacy_or_unknown_minor_version() {
         max_cycles: 0,
         abi_version: 1,
     };
-    let mut legacy = base.clone();
-    legacy.version_minor = 0;
-    let mut legacy_artifact = legacy.encode();
-    legacy_artifact.extend_from_slice(&code);
+    let mut retired = base.clone();
+    retired.version_minor = 0;
+    let mut retired_artifact = retired.encode();
+    retired_artifact.extend_from_slice(&code);
     assert_eq!(
-        IvmCache::decode_artifact(&legacy_artifact)
-            .expect_err("the 1.1 predecoder surface rejects generic 1.0 artifacts"),
-        VMError::InvalidMetadata
+        IvmCache::decode_artifact(&retired_artifact)
+            .expect_err("the sole header policy rejects retired 1.0 artifacts"),
+        VMError::UnsupportedProgramVersion { major: 1, minor: 0 }
     );
     for vmin in [2u8, 7, 42] {
         let mut m = base.clone();

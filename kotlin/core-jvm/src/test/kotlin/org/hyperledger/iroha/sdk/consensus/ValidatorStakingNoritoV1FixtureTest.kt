@@ -14,6 +14,8 @@ import kotlin.test.assertFails
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertIs
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
@@ -22,7 +24,8 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 class ValidatorStakingNoritoV1FixtureTest {
     private val expectedKinds = setOf(
         "authority_generation", "epoch_authorization", "dkg_session", "dkg_transcript",
-        "committee_transition", "monetary_plan", "reward_claim_plan", "fee_reward_claim_plan", "rebind_peer",
+        "committee_transition", "monetary_plan", "monetary_bond_plan", "monetary_unbond_plan",
+        "monetary_slash_plan", "reward_claim_plan", "fee_reward_claim_plan", "rebind_peer",
     )
 
     @Test
@@ -117,6 +120,122 @@ class ValidatorStakingNoritoV1FixtureTest {
     }
 
     @Test
+    fun monetaryOperationFixturesBindExactTypedFieldsAndNetworkXor() {
+        val rows = fixtureRows()
+        val registration = ValidatorStakingNoritoV1.MonetaryPlan.decode(rows.getValue("monetary_plan"))
+        val transition = ValidatorStakingNoritoV1.CommitteeTransition.decode(rows.getValue("committee_transition"))
+        val bond = ValidatorStakingNoritoV1.MonetaryPlan.decode(rows.getValue("monetary_bond_plan"))
+        val unbond = ValidatorStakingNoritoV1.MonetaryPlan.decode(rows.getValue("monetary_unbond_plan"))
+        val slash = ValidatorStakingNoritoV1.MonetaryPlan.decode(rows.getValue("monetary_slash_plan"))
+        val bondBinding = assertIs<ValidatorStakingNoritoV1.MonetaryPrecondition.Bond>(bond.precondition).bond
+        val unbondBinding = assertIs<ValidatorStakingNoritoV1.MonetaryPrecondition.Unbond>(unbond.precondition).unbond
+        val slashBinding = assertIs<ValidatorStakingNoritoV1.MonetaryPrecondition.Slash>(slash.precondition).slash
+        assertEquals(SigningAlgorithm.BLS_NORMAL, bondBinding.peerId.algorithm)
+        assertContentEquals(transition.preparation.committee[0].validator.bytes(), bondBinding.peerId.encode())
+        assertEquals(transition.preparation.committee[0].blsPublicKey, bondBinding.peerId.publicKey)
+        assertContentEquals(ByteArray(32) { 0x75 }, unbondBinding.requestHash.bytes())
+        assertEquals(BigInteger.valueOf(1500), slashBinding.slashableExposure.mantissa)
+        assertEquals(0L, slashBinding.slashableExposure.scale)
+        for ((name, plan) in listOf("monetary_bond_plan" to bond, "monetary_unbond_plan" to unbond, "monetary_slash_plan" to slash)) {
+            assertEquals(transition.preparation.networkId, plan.networkScope)
+            assertEquals(210L, plan.validUntilHeight)
+            assertEquals(registration.amount.mantissa, plan.amount.mantissa)
+            assertEquals(0L, plan.amount.scale)
+            assertEquals(201L, plan.precondition.activationHeight)
+            for (asset in listOf(plan.sourceAsset, plan.destinationAsset)) {
+                assertEquals(transition.preparation.eligibility.xorAssetDefinitionId, asset.definition)
+                assertNull(asset.scopeDataspace)
+            }
+            val deposits = plan.precondition.kind == ValidatorStakingNoritoV1.MonetaryPrecondition.Kind.BOND
+            assertContentEquals((if (deposits) registration.sourceAsset else registration.destinationAsset).encode(), plan.sourceAsset.encode())
+            assertContentEquals((if (deposits) registration.destinationAsset else registration.sourceAsset).encode(), plan.destinationAsset.encode())
+            assertContentEquals(rows.getValue(name), plan.encode())
+        }
+    }
+
+    @Test
+    fun monetaryBindingsRejectMalformedPeerHashAndExposure() {
+        val rows = fixtureRows()
+        fun assertRejected(kind: String, tag: Long, body: List<ByteArray>) {
+            val original = fields(rows.getValue(kind))
+            val variant = uint(tag, 32) + record(listOf(record(body)))
+            assertFails { ValidatorStakingNoritoV1.MonetaryPrecondition.decode(variant) }
+            assertFails { ValidatorStakingNoritoV1.MonetaryPlan.decode(replacing(original, 5, variant)) }
+        }
+        val variant = fields(rows.getValue("monetary_bond_plan"))[5]
+        val peer = fields(fields(variant.copyOfRange(4, variant.size))[0])[1]
+        val key = vectorFields(fields(peer)[0])
+        val badPeers = listOf(
+            byteArrayOf(), record(emptyList()), record(listOf(byteArrayOf())), record(listOf(vector(emptyList()))),
+            record(listOf(vector(listOf(byteArrayOf(0xff.toByte())) + key.drop(1)))),
+            record(listOf(vector(key.dropLast(1)))), record(listOf(vector(key + listOf(byteArrayOf(1))))),
+            record(listOf(vector(listOf(byteArrayOf(2)) + List(48) { byteArrayOf(0) }))),
+            record(listOf(vector(listOf(byteArrayOf(2, 0)) + key.drop(1)))),
+            record(listOf(vector(key), byteArrayOf(0))),
+        )
+        for (malformed in badPeers) assertRejected("monetary_bond_plan", 1, listOf(uint(201, 64), malformed))
+        for (width in listOf(0, 1, 31, 33)) {
+            assertRejected("monetary_unbond_plan", 2, listOf(uint(201, 64), ByteArray(width) { 0x75 }))
+        }
+        val unmarked = ByteArray(32) { 0x75 }.apply { this[31] = 0x74 }
+        assertRejected("monetary_unbond_plan", 2, listOf(uint(201, 64), unmarked))
+        for (malformed in listOf(quantity(byteArrayOf(0xff.toByte()), 0), quantity(byteArrayOf(10), 1), quantity(byteArrayOf(1), 29), byteArrayOf())) {
+            assertRejected("monetary_slash_plan", 3, listOf(uint(201, 64), malformed))
+        }
+        for ((kind, tag, binding) in listOf(
+            Triple("monetary_bond_plan", 1L, peer),
+            Triple("monetary_unbond_plan", 2L, ByteArray(32) { 0x75 }),
+            Triple("monetary_slash_plan", 3L, quantity(byteArrayOf(0xdc.toByte(), 5), 0)),
+        )) {
+            assertRejected(kind, tag, listOf(uint(201, 64)))
+            assertRejected(kind, tag, listOf(uint(201, 64), binding, byteArrayOf(0)))
+            for (width in listOf(0, 7, 9)) assertRejected(kind, tag, listOf(ByteArray(width), binding))
+            assertRejected(kind, 4, listOf(uint(201, 64), binding))
+            assertRejected(kind, 0xffff_ffffL, listOf(uint(201, 64), binding))
+        }
+        val body = record(listOf(uint(201, 64), ByteArray(32) { 0x75 }))
+        val nonminimal = uint(2, 32) + byteArrayOf((body.size or 0x80).toByte(), 0) + body
+        assertFails { ValidatorStakingNoritoV1.MonetaryPrecondition.decode(nonminimal) }
+    }
+
+    @Test
+    fun monetaryBindingsPreserveUnsignedHeightAndOwnedValues() {
+        val rows = fixtureRows()
+        for ((kind, tag) in listOf("monetary_bond_plan" to 1L, "monetary_unbond_plan" to 2L, "monetary_slash_plan" to 3L)) {
+            val plan = fields(rows.getValue(kind)).toMutableList()
+            val variant = plan[5]
+            val binding = fields(fields(variant.copyOfRange(4, variant.size))[0]).toMutableList()
+            for (height in listOf(0L, -1L)) {
+                binding[0] = uint(height, 64)
+                plan[5] = uint(tag, 32) + record(listOf(record(binding)))
+                val bytes = record(plan)
+                val original = bytes.copyOf()
+                val decoded = ValidatorStakingNoritoV1.MonetaryPlan.decode(bytes)
+                bytes.fill(0)
+                assertEquals(height, decoded.precondition.activationHeight)
+                assertContentEquals(original, decoded.encode())
+                when (val value = decoded.precondition) {
+                    is ValidatorStakingNoritoV1.MonetaryPrecondition.Bond -> {
+                        value.bond.peerId.publicKey.bytes().fill(0)
+                        assertTrue(value.bond.peerId.publicKey.bytes().any { it.toInt() != 0 })
+                    }
+                    is ValidatorStakingNoritoV1.MonetaryPrecondition.Unbond -> {
+                        value.unbond.requestHash.bytes().fill(0)
+                        assertContentEquals(ByteArray(32) { 0x75 }, value.unbond.requestHash.bytes())
+                    }
+                    is ValidatorStakingNoritoV1.MonetaryPrecondition.Slash -> assertEquals(BigInteger.valueOf(1500), value.slash.slashableExposure.mantissa)
+                    is ValidatorStakingNoritoV1.MonetaryPrecondition.Registration -> error("wrong monetary variant")
+                }
+            }
+        }
+        // PeerId is a generic Rust key identity, not a BLS-only wire alias.
+        val replacementPeer = fields(rows.getValue("rebind_peer"))[2]
+        val peer = ValidatorStakingNoritoV1.PeerId.decode(replacementPeer)
+        assertEquals(SigningAlgorithm.ED25519, peer.algorithm)
+        assertContentEquals(replacementPeer, peer.encode())
+    }
+
+    @Test
     fun `truncated canonical records fail closed`() {
         val rows = fixtureRows()
         val decoders: Map<String, (ByteArray) -> Any> = mapOf(
@@ -126,6 +245,9 @@ class ValidatorStakingNoritoV1FixtureTest {
             "dkg_transcript" to ValidatorStakingNoritoV1.DkgTranscript::decode,
             "committee_transition" to ValidatorStakingNoritoV1.CommitteeTransition::decode,
             "monetary_plan" to ValidatorStakingNoritoV1.MonetaryPlan::decode,
+            "monetary_bond_plan" to ValidatorStakingNoritoV1.MonetaryPlan::decode,
+            "monetary_unbond_plan" to ValidatorStakingNoritoV1.MonetaryPlan::decode,
+            "monetary_slash_plan" to ValidatorStakingNoritoV1.MonetaryPlan::decode,
             "reward_claim_plan" to ValidatorStakingNoritoV1.RewardClaimPlan::decode,
             "fee_reward_claim_plan" to ValidatorStakingNoritoV1.RewardClaimPlan::decode,
             "rebind_peer" to ValidatorStakingNoritoV1.RebindPeer::decode,

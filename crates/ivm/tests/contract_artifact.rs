@@ -722,7 +722,7 @@ fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
     );
     assert_eq!(
         hex::encode(admitted.code_hash.as_ref()),
-        "ce3b2db09db97871a76cf1e2318ccfb51931ec71a9917af74270128ca510c913"
+        "984f729f8c465b6d7fb6b62bf9ff13c882f7fbb18b76cad922c3c35a63ded6df"
     );
 }
 #[test]

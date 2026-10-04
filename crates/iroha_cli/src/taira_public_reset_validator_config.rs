@@ -9,6 +9,9 @@
 //! binding is admitted against `runtime/operator-signer.key` before the explicit deployment key
 //! replaces it; the ledger/faucet and onboarding identities remain unchanged. The required Torii
 //! listener selects its final bind interface at the generated port; P2P bindings stay unchanged.
+//! The three optional `--staging-*` arguments instead bind every generated listener
+//! and state destination to one separate owner-only private successor root. They
+//! never project a staging validator into the serving state tree.
 
 use super::*;
 use iroha::data_model::NetworkId;
@@ -19,6 +22,9 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 /// Materialize one generated validator without exporting its private configuration.
 #[derive(clap::Args, Debug)]
 pub(super) struct MaterializeValidatorConfig {
+    /// Optional independently approved private successor layout.
+    #[command(flatten)]
+    staging: runtime_clients::StagedRuntimeArgs,
     /// Inherited owner-private generated validator configuration descriptor.
     #[arg(long, value_name = "FD", value_parser = clap::value_parser!(u32).range(3..=65535))]
     config_fd: u32,
@@ -96,6 +102,25 @@ fn checked_trusted_proxy_ip(value: &str) -> Result<std::net::IpAddr, String> {
 }
 /// Consume private bytes only through native descriptor custody and create a new private file.
 pub(super) fn materialize(args: &MaterializeValidatorConfig) -> Result<()> {
+    let staging = args.staging.layout()?;
+    let staging_root = staging
+        .as_ref()
+        .map(runtime_clients::StagedRuntimeLayout::hold_root)
+        .transpose()?;
+    if let Some(layout) = &staging {
+        for (path, label) in [
+            (&args.localnet_dir, "generated network directory"),
+            (&args.genesis_file, "installed signed genesis"),
+            (&args.output, "staging validator config output"),
+        ] {
+            layout.validate_path(path, label)?;
+        }
+        if args.output.starts_with(&args.localnet_dir) || args.output == args.genesis_file {
+            return Err(eyre!(
+                "staging validator output must be separate from generated inputs"
+            ));
+        }
+    }
     validate_absolute_normal_path(&args.localnet_dir, "generated network directory")?;
     validate_owner_private_dir(&args.localnet_dir, "generated network directory")?;
     validate_absolute_normal_path(&args.genesis_file, "installed signed genesis")?;
@@ -131,8 +156,16 @@ pub(super) fn materialize(args: &MaterializeValidatorConfig) -> Result<()> {
         &args.operator_public_key,
         args.torii_bind_address,
         &args.trusted_proxy_ip,
+        staging.as_ref(),
     )?;
-    inputs::write_new_private(&args.output, &output)
+    if let Some(root) = &staging_root {
+        root.check()?;
+    }
+    inputs::write_new_private(&args.output, &output)?;
+    if let Some(root) = &staging_root {
+        root.check()?;
+    }
+    Ok(())
 }
 
 fn validate_generated_identity(bytes: &[u8], network: &NetworkId) -> Result<()> {
@@ -232,6 +265,42 @@ fn state_paths(peer: usize) -> Vec<(Vec<&'static str>, PathBuf, &'static str)> {
     ]
 }
 
+fn validate_staged_dependencies(table: &toml::Table, source_root: &Path) -> Result<()> {
+    for (fields, relative) in [
+        (
+            &["torii", "faucet", "private_key_file"][..],
+            "runtime/ledger-signer.key",
+        ),
+        (
+            &["torii", "account_onboarding", "private_key_file"][..],
+            "runtime/onboarding-signer.key",
+        ),
+        (
+            &["streaming", "codec", "rans_tables_path"][..],
+            "codec/rans/tables/rans_seed0.toml",
+        ),
+    ] {
+        let (last, parents) = fields
+            .split_last()
+            .ok_or_else(|| eyre!("dependency path is empty"))?;
+        let mut cursor = table;
+        for field in parents {
+            cursor = cursor
+                .get(*field)
+                .and_then(toml::Value::as_table)
+                .ok_or_else(|| {
+                    eyre!("generated staging config omits a required dependency table")
+                })?;
+        }
+        if cursor.get(*last).and_then(toml::Value::as_str) != source_root.join(relative).to_str() {
+            return Err(eyre!(
+                "generated staging dependency differs from its exact selected source"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Replace localnet-only admission with the finite public Torii policy.
 ///
 /// Public edges set the socket-observed client in `X-Forwarded-For`. Torii
@@ -308,6 +377,7 @@ fn project_config(
     operator_key: &PublicKey,
     torii_bind_address: std::net::SocketAddr,
     trusted_proxy_ips: &[std::net::IpAddr],
+    staging: Option<&runtime_clients::StagedRuntimeLayout>,
 ) -> Result<Zeroizing<Vec<u8>>> {
     validate_absolute_normal_path(source_root, "generated network directory")?;
     validate_absolute_normal_path(genesis_file, "installed signed genesis")?;
@@ -315,6 +385,17 @@ fn project_config(
         .iter()
         .position(|role| *role == validator)
         .ok_or_else(|| eyre!("unknown canonical public validator role"))?;
+    if let Some(layout) = staging {
+        layout.validate_path(source_root, "generated network directory")?;
+        layout.validate_path(genesis_file, "installed signed genesis")?;
+        if torii_bind_address
+            != std::net::SocketAddr::from(([127, 0, 0, 1], layout.api_port(peer)?))
+        {
+            return Err(eyre!(
+                "staging Torii listener must retain the selected private loopback port"
+            ));
+        }
+    }
     validator_operator_public_key(&source_operator_key.to_string())?;
     validator_operator_public_key(&operator_key.to_string())?;
     if bytes.is_empty() || bytes.len() as u64 > MAX_CONFIG_BYTES {
@@ -338,6 +419,10 @@ fn project_config(
             return Err(eyre!(
                 "source is not the exact generated Taira configuration shape"
             ));
+        }
+        if let Some(layout) = staging {
+            runtime_clients::validate_staged_config_ports(&table, peer, layout)?;
+            validate_staged_dependencies(&table, source_root)?;
         }
         let registry = table
             .get("nexus")
@@ -386,7 +471,11 @@ fn project_config(
                     .to_owned(),
             ),
         );
-        let state_root = Path::new("/var/lib/taira").join(validator);
+        let state_root = if let Some(layout) = staging {
+            layout.validator_state_root(validator)?
+        } else {
+            Path::new("/var/lib/taira").join(validator)
+        };
         for (field, relative, destination) in state_paths(peer) {
             let value = field_mut(&mut table, &field)?;
             if value.as_str() != source_root.join(relative).to_str() {
@@ -637,6 +726,7 @@ mod tests {
             &operator(),
             torii_bind_address,
             &[],
+            None,
         )?;
         Ok(toml::from_str(std::str::from_utf8(&output)?)?)
     }
@@ -679,6 +769,208 @@ mod tests {
                     .join(role)
                     .join("snapshots")
                     .to_str()
+            );
+        }
+    }
+
+    fn staged_layout() -> runtime_clients::StagedRuntimeLayout {
+        #[derive(clap::Parser)]
+        struct Command {
+            #[command(flatten)]
+            staging: runtime_clients::StagedRuntimeArgs,
+        }
+        <Command as clap::Parser>::try_parse_from([
+            "materialize-validator-config",
+            "--staging-root",
+            "/private/runtime/taira-public-reset/private-candidate",
+            "--staging-api-base-port",
+            "28080",
+            "--staging-p2p-base-port",
+            "21337",
+        ])
+        .unwrap()
+        .staging
+        .layout()
+        .unwrap()
+        .unwrap()
+    }
+
+    fn staged_source(peer: usize, layout: &runtime_clients::StagedRuntimeLayout) -> toml::Table {
+        let root = layout.root().join("network");
+        let mut generated = source(peer);
+        for (fields, relative, _) in state_paths(peer) {
+            *field_mut(&mut generated, &fields).unwrap() =
+                root.join(relative).to_str().unwrap().into();
+        }
+        for (fields, relative) in [
+            (&["genesis", "file"][..], "genesis.signed.nrt"),
+            (
+                &["nexus", "registry", "manifest_directory"][..],
+                "lane-manifests",
+            ),
+            (
+                &["torii", "faucet", "private_key_file"][..],
+                "runtime/ledger-signer.key",
+            ),
+            (
+                &["torii", "account_onboarding", "private_key_file"][..],
+                "runtime/onboarding-signer.key",
+            ),
+        ] {
+            *field_mut(&mut generated, fields).unwrap() =
+                root.join(relative).to_str().unwrap().into();
+        }
+        insert(
+            &mut generated,
+            &["streaming", "codec", "rans_tables_path"],
+            root.join("codec/rans/tables/rans_seed0.toml")
+                .to_str()
+                .unwrap()
+                .into(),
+        );
+        *field_mut(&mut generated, &["torii", "address"]).unwrap() =
+            iroha_primitives::addr::SocketAddr::from((
+                [127, 0, 0, 1],
+                layout.api_port(peer).unwrap(),
+            ))
+            .to_literal()
+            .into();
+        for field in ["address", "public_address"] {
+            *field_mut(&mut generated, &["network", field]).unwrap() =
+                iroha_primitives::addr::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    layout.p2p_port(peer).unwrap(),
+                ))
+                .to_literal()
+                .into();
+        }
+        generated
+    }
+
+    fn project_staged(
+        generated: &toml::Table,
+        role: &str,
+        layout: &runtime_clients::StagedRuntimeLayout,
+    ) -> Result<toml::Table> {
+        let peer = VALIDATOR_SLUGS
+            .iter()
+            .position(|candidate| *candidate == role)
+            .unwrap();
+        let bytes = project_config(
+            toml::to_string(generated)?.as_bytes(),
+            &layout.root().join("network"),
+            role,
+            &identity(),
+            &layout.root().join("installed/genesis.signed.nrt"),
+            &source_operator(),
+            &operator(),
+            ([127, 0, 0, 1], layout.api_port(peer)?).into(),
+            &[],
+            Some(layout),
+        )?;
+        Ok(toml::from_str(std::str::from_utf8(&bytes)?)?)
+    }
+
+    #[test]
+    fn private_staging_projects_four_distinct_state_roots_without_serving_paths_or_signer_changes()
+    {
+        let layout = staged_layout();
+        let mut roots = BTreeSet::new();
+        for (peer, role) in VALIDATOR_SLUGS.iter().enumerate() {
+            let generated = staged_source(peer, &layout);
+            let original = toml::to_string(&generated).unwrap();
+            let mut staged = project_staged(&generated, role, &layout).unwrap();
+            let expected_root = layout.root().join("validators").join(role);
+            assert!(roots.insert(expected_root.clone()));
+            for (fields, _, destination) in state_paths(peer) {
+                assert_eq!(
+                    field_mut(&mut staged, &fields).unwrap().as_str(),
+                    expected_root.join(destination).to_str()
+                );
+            }
+            assert_eq!(
+                staged["snapshot"]["store_dir"].as_str(),
+                expected_root.join("snapshots").to_str()
+            );
+            assert_eq!(
+                staged["network"]["address"],
+                generated["network"]["address"]
+            );
+            assert_eq!(
+                staged["network"]["public_address"],
+                generated["network"]["public_address"]
+            );
+            assert_eq!(staged["torii"]["address"], generated["torii"]["address"]);
+            assert_eq!(staged["torii"]["faucet"], generated["torii"]["faucet"]);
+            assert_eq!(
+                staged["torii"]["account_onboarding"],
+                generated["torii"]["account_onboarding"]
+            );
+            assert_eq!(staged["private_key"], generated["private_key"]);
+            assert!(!toml::to_string(&staged).unwrap().contains("/var/lib/taira"));
+            assert_eq!(toml::to_string(&generated).unwrap(), original);
+        }
+        assert_eq!(roots.len(), 4);
+    }
+
+    #[test]
+    fn private_staging_rejects_serving_ports_cross_slot_listeners_and_foreign_source_roots() {
+        let layout = staged_layout();
+        let generated = staged_source(0, &layout);
+        for (fields, port) in [
+            (&["torii", "address"][..], 8080),
+            (&["torii", "address"][..], 28081),
+            (&["network", "address"][..], 1337),
+            (&["network", "public_address"][..], 21338),
+        ] {
+            let mut changed = generated.clone();
+            *field_mut(&mut changed, fields).unwrap() =
+                iroha_primitives::addr::SocketAddr::from(([127, 0, 0, 1], port))
+                    .to_literal()
+                    .into();
+            assert!(project_staged(&changed, VALIDATOR_SLUGS[0], &layout).is_err());
+        }
+        for fields in [
+            &["torii", "faucet", "private_key_file"][..],
+            &["torii", "account_onboarding", "private_key_file"][..],
+            &["streaming", "codec", "rans_tables_path"][..],
+        ] {
+            let mut changed = generated.clone();
+            *field_mut(&mut changed, fields).unwrap() =
+                "/private/runtime/taira-public-reset/serving-network/foreign.key".into();
+            assert!(project_staged(&changed, VALIDATOR_SLUGS[0], &layout).is_err());
+        }
+        for (source_root, genesis, bind) in [
+            (
+                layout.root().join("network"),
+                layout.root().join("installed/genesis.signed.nrt"),
+                ([0, 0, 0, 0], 28080).into(),
+            ),
+            (
+                PathBuf::from("/private/runtime/taira-public-reset/other-candidate/network"),
+                layout.root().join("installed/genesis.signed.nrt"),
+                ([127, 0, 0, 1], 28080).into(),
+            ),
+            (
+                layout.root().join("network"),
+                PathBuf::from("/var/lib/taira/taira-validator-1/genesis.signed.nrt"),
+                ([127, 0, 0, 1], 28080).into(),
+            ),
+        ] {
+            assert!(
+                project_config(
+                    toml::to_string(&generated).unwrap().as_bytes(),
+                    &source_root,
+                    VALIDATOR_SLUGS[0],
+                    &identity(),
+                    &genesis,
+                    &source_operator(),
+                    &operator(),
+                    bind,
+                    &[],
+                    Some(&layout),
+                )
+                .is_err()
             );
         }
     }

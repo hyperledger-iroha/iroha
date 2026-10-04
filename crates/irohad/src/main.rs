@@ -42,7 +42,7 @@ mod sorafs_gateway_compliance_transport;
 /// Supervised committed `SoraFS` hedging/billing projector and delivery worker.
 pub mod sorafs_hedging_billing_runtime;
 /// Explicit owner-only software credentials for the four native transaction roles.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod sorafs_native_software_signers;
 /// Fail-closed config-bound `SoraFS` `PoP` runtime construction.
 pub mod sorafs_pop_runtime;
@@ -138,11 +138,6 @@ use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
-#[cfg(all(
-    feature = "test-network-disposable-broker",
-    any(target_os = "linux", target_os = "macos")
-))]
-pub use runtime_provider_broker::load_owner_private_runtime_provider_broker_catalog_file_v1;
 pub use runtime_provider_broker::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
@@ -154,9 +149,17 @@ pub use runtime_provider_broker::{
     RuntimeProviderBrokerExecutableV1, RuntimeProviderBrokerLauncherErrorV1,
     RuntimeProviderBrokerLifecycleV1, RuntimeProviderBrokerReadinessErrorV1,
     RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
-    load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
-    serve_runtime_provider_broker_with_fallible_readiness_v1,
+    load_runtime_provider_broker_catalog_file_v1, load_runtime_provider_broker_policy_file_v1,
+    serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_fallible_readiness_v1,
     serve_runtime_provider_broker_with_lifecycle_v1,
+};
+#[cfg(all(
+    feature = "test-network-disposable-broker",
+    any(target_os = "linux", target_os = "macos")
+))]
+pub use runtime_provider_broker::{
+    load_owner_private_runtime_provider_broker_catalog_file_v1,
+    load_owner_private_runtime_provider_broker_policy_file_v1,
 };
 pub use runtime_provider_registry::{
     IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
@@ -858,6 +861,7 @@ pub struct Args {
     #[arg(long)]
     pub language: Option<String>,
     /// Enable Sora Nexus feature profile (`SoraFS`, `SoraNet` handshake, multi-lane consensus)
+    /// while preserving explicitly configured Nexus topology, including default-valued catalogs.
     #[arg(long, env = "IROHA_SORA_PROFILE")]
     pub sora: bool,
     #[cfg(feature = "test-network-parliament-signers")]
@@ -1964,17 +1968,17 @@ fn validate_provider_ingest_archive_presence(
         }
     }
 }
-fn validate_provider_attestation_journal_activation(configured: bool) -> Result<(), &'static str> {
-    // Keep this pre-supervisor gate until the supervised child's archive scanner, local store,
-    // durable time, approval-signer, and authenticated-inventory boundaries qualify.
-    if configured {
-        Err(
-            "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it",
-        )
+fn validate_provider_attestation_journal_activation(
+    configured: bool,
+    native: bool,
+) -> Result<(), &'static str> {
+    if configured && !native {
+        Err("provider-attestation activation requires the concrete native custody owner")
     } else {
         Ok(())
     }
 }
+
 fn validate_sorafs_native_signer_role_presence(
     role: &'static str,
     required: bool,
@@ -2022,9 +2026,12 @@ fn validate_selected_sorafs_native_signer_presence(
             "SoraFS {role} native software custody conflicts with an external adapter"
         ));
     }
-    if native && !cfg!(unix) {
+    // Runtime credentials use iroha_fs retained native custody on both supported hosts.
+    // This is a platform-presence check only; actual DACL/mode, key and State checks stay in
+    // the credential loader and qualified role adapter.
+    if native && !cfg!(any(unix, windows)) {
         return Err(format!(
-            "SoraFS {role} native software custody requires owner-only Unix runtime credentials"
+            "SoraFS {role} native software custody requires native Unix or Windows runtime credentials"
         ));
     }
     validate_sorafs_native_signer_role_presence(
@@ -2285,6 +2292,12 @@ impl Iroha {
                     .provider_ingest_runtime
                     .as_ref()
                     .is_some_and(|runtime| runtime.provider_attestation_journal.is_some()),
+                config
+                    .torii
+                    .sorafs_storage
+                    .provider_ingest_runtime
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.native_completion_credential.is_some()),
             )
             .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
         }
@@ -2333,7 +2346,7 @@ impl Iroha {
             )
             .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let native_provider_ingest = if !emergency_fast {
             config
                 .torii
@@ -2375,9 +2388,24 @@ impl Iroha {
                             "native provider ingest rejects substituted external adapters"
                         ));
                     }
+                    if runtime_deps
+                        .sorafs_musubi_provider_attestation_clock_seal
+                        .is_some()
+                        || runtime_deps
+                            .sorafs_musubi_provider_attestation_approval_signer
+                            .is_some()
+                        || runtime_deps
+                            .sorafs_musubi_provider_attestation_inventory
+                            .is_some()
+                    {
+                        return Err(eyre::eyre!(
+                            "native provider attestation rejects external adapter substitution"
+                        ));
+                    }
                     sorafs_provider_ingest_runtime::native_software::NativeProducerV1::prepare(
                         ingest,
                         provider,
+                        NetworkId::from_genesis_hash(config.genesis.expected_hash),
                         &config.torii.sorafs_storage.data_dir,
                     )
                 })
@@ -2389,7 +2417,7 @@ impl Iroha {
         } else {
             None
         };
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         if config
             .torii
             .sorafs_storage
@@ -2397,8 +2425,9 @@ impl Iroha {
             .as_ref()
             .is_some_and(|ingest| ingest.native_completion_credential.is_some())
         {
-            return Err(Report::new(StartError::StartTorii)
-                .attach("native provider ingest requires owner-only Unix credential custody"));
+            return Err(Report::new(StartError::StartTorii).attach(
+                "native provider ingest requires native Unix or Windows credential custody",
+            ));
         }
         let sorafs_provider_ingest_preflight = if emergency_fast {
             None
@@ -2415,7 +2444,7 @@ impl Iroha {
                         )
                     })?;
             let native_preflight = {
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 {
                     if let Some(native) = native_provider_ingest.as_ref() {
                         Some(
@@ -2432,7 +2461,7 @@ impl Iroha {
                         None
                     }
                 }
-                #[cfg(not(unix))]
+                #[cfg(not(any(unix, windows)))]
                 {
                     None::<sorafs_provider_ingest_runtime::QualifiedProviderIngestRuntimeAdaptersV1>
                 }
@@ -3367,7 +3396,7 @@ impl Iroha {
             }
         }
         let state: Arc<State> = Arc::from(state);
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(native) = native_provider_ingest.as_ref() {
             native.bind_state(Arc::clone(&state)).map_err(|error| {
                 Report::new(StartError::StartTorii).attach(format!(
@@ -3872,7 +3901,7 @@ impl Iroha {
         let sorafs_appeal_finance_checkpoint_runtime = runtime_deps
             .sorafs_appeal_finance_checkpoint_runtime
             .clone();
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if !emergency_fast {
             sorafs_native_software_signers::install_native_software_signers(
                 &config.torii.sorafs_storage.native_transaction_signers,
@@ -4108,7 +4137,7 @@ impl Iroha {
                 })?,
             )
         };
-        let sorafs_provider_ingest_completed_musubi_capture = match (
+        let mut sorafs_provider_ingest_completed_musubi_capture = match (
             prepared_sorafs_provider_ingest_archive.as_mut(),
             sorafs_provider_ingest_config.as_ref(),
         ) {
@@ -4134,6 +4163,55 @@ impl Iroha {
                 ));
             }
         };
+        #[cfg(any(unix, windows))]
+        let native_provider_attestation_inventory = if let Some((native, ingest, journal)) =
+            native_provider_ingest.as_ref().and_then(|native| {
+                let ingest = sorafs_provider_ingest_config.as_ref()?;
+                Some((
+                    native,
+                    ingest,
+                    ingest.provider_attestation_journal.as_ref()?,
+                ))
+            }) {
+            let attestation = native.attestation().ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("native provider attestation custody is absent")
+            })?;
+            let coordinator = sorafs_provider_ingest_completed_musubi_capture
+                .take()
+                .ok_or_else(|| {
+                    Report::new(StartError::StartTorii)
+                        .attach("native provider attestation capture was already taken")
+                })?;
+            let (driver, inventory) = attestation
+                .compose(
+                    sorafs_node
+                        .as_ref()
+                        .expect("native ingest requires storage"),
+                    coordinator,
+                    Arc::clone(&state),
+                    journal,
+                )
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii)
+                        .attach(format!("native attestation composition rejected: {error}"))
+                })?;
+            let child = sorafs_provider_ingest_runtime::start_native_attestation(
+                driver,
+                ingest.scan_interval_ms,
+                supervisor.shutdown_signal(),
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii)
+                    .attach(format!("native attestation supervision rejected: {error}"))
+            })?;
+            supervisor.monitor(child);
+            Some(inventory)
+        } else {
+            None
+        };
+        #[cfg(not(any(unix, windows)))]
+        let native_provider_attestation_inventory = None;
         if let Some((view, providers)) = sorafs_governance_dag_service_launch {
             let runner = sorafs_node::prepare_governance_dag_service_from_view(view, providers)
                 .await
@@ -4706,6 +4784,9 @@ impl Iroha {
                 Arc::clone(&queue),
                 sorafs_node::NodeHandle::clone(sorafs_node),
             )
+            .with_native_provider_attestation_inventory(
+                native_provider_attestation_inventory.clone(),
+            )
         });
         let private_settlement_availability_signer = state
             .nexus_snapshot()
@@ -4742,6 +4823,11 @@ impl Iroha {
         };
         let runtime_deps = if let Some(signer) = private_settlement_phase_signer {
             runtime_deps.with_private_settlement_phase_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(inventory) = native_provider_attestation_inventory.as_ref() {
+            runtime_deps.with_sorafs_provider_attestation_inventory(Arc::clone(inventory))
         } else {
             runtime_deps
         };
@@ -6017,10 +6103,7 @@ fn read_config_and_genesis_with_filesystem_space(
     } else {
         (ConfigReader::new(), None)
     };
-    let sorafs_storage_enabled_is_explicit =
-        config.contains_toml_parameter(["sorafs", "storage", "enabled"]);
-    let sorafs_discovery_enabled_is_explicit =
-        config.contains_toml_parameter(["sorafs", "discovery", "discovery_enabled"]);
+    let sora_profile = iroha_config::sora_profile::SoraProfileSelection::from_reader(&config);
     let mut config = config
         .read_and_complete::<UserConfig>()
         .change_context(ConfigError::ReadConfig)?
@@ -6030,15 +6113,7 @@ fn read_config_and_genesis_with_filesystem_space(
         config.genesis.manifest_json = Some(WithOrigin::inline(path.clone()));
     }
     if args.sora {
-        let configured_sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
-        let configured_sorafs_discovery_enabled = config.torii.sorafs_discovery.discovery_enabled;
-        config.apply_sora_profile();
-        if sorafs_storage_enabled_is_explicit {
-            config.torii.sorafs_storage.enabled = configured_sorafs_storage_enabled;
-        }
-        if sorafs_discovery_enabled_is_explicit {
-            config.torii.sorafs_discovery.discovery_enabled = configured_sorafs_discovery_enabled;
-        }
+        sora_profile.apply(&mut config);
     }
     let sora_features = sora_features_requiring_flag(&config);
     // A compiled profile owns its Nexus and SoraFS settings; `--sora` is rejected with it.
@@ -8607,6 +8682,9 @@ fn run_main_with_config_guard(
                     test_network_id,
                     ordered_roster.clone(),
                     &config.common.peer.id,
+                    &iroha_allocation::AllocationBudget::new(
+                        config.runtime_provider_broker.credential_max_memory_bytes.get(),
+                    ),
                 )
                 .map_err(|_| Report::new(MainError::Config))
                 .attach(
@@ -8779,8 +8857,14 @@ fn resolve_node_secrets_runtime_deps(
     let secrets_error = |error: node_secrets::NodeSecretsErrorV1| {
         Report::new(MainError::Config).attach(error.to_string())
     };
-    let secrets = node_secrets::NodeSecretsV1::open(config)
-        .map_err(secrets_error)?
+    let credential_budget = iroha_allocation::AllocationBudget::new(
+        config
+            .runtime_provider_broker
+            .credential_max_memory_bytes
+            .get(),
+    );
+    let secrets = node_secrets::NodeSecretsV1::open(config, &credential_budget)
+        .map_err(|error| Report::new(error).change_context(MainError::Config))?
         .ok_or_else(|| Report::new(MainError::Config).attach("node secrets require data_dir"))?;
     let runtime_deps = secrets
         .resolve_runtime_deps(config)
@@ -10113,13 +10197,12 @@ mod tests {
         );
     }
     #[test]
-    fn provider_attestation_journal_remains_fail_closed_until_activation_is_qualified() {
-        assert!(validate_provider_attestation_journal_activation(false).is_ok());
+    fn provider_attestation_journal_requires_concrete_native_selection() {
+        assert!(validate_provider_attestation_journal_activation(false, false).is_ok());
+        assert!(validate_provider_attestation_journal_activation(true, true).is_ok());
         assert_eq!(
-            validate_provider_attestation_journal_activation(true),
-            Err(
-                "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it"
-            )
+            validate_provider_attestation_journal_activation(true, false),
+            Err("provider-attestation activation requires the concrete native custody owner")
         );
         let startup = include_str!("main.rs")
             .split_once("pub(crate) async fn start_with_runtime_deps")
@@ -12758,3 +12841,6 @@ mod authenticated_roster_capacity_tests {
         assert!(authenticated_maximum_validator_roster_len(ConsensusMode::Npos, 4, None).is_err());
     }
 }
+
+#[cfg(test)]
+mod sora_profile_geometry_tests;

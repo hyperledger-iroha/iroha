@@ -297,6 +297,7 @@ export async function buildCanonicalJsonRequest({
   baseUrl,
   query,
   body,
+  bodyText,
   headers,
   privateKey,
   sign,
@@ -321,7 +322,10 @@ export async function buildCanonicalJsonRequest({
   const methodUpper = String(method).toUpperCase();
   const canonicalTarget = canonicalTargetFromPath({ path, query, baseUrl });
   canonicalTarget.query = preparedTransportQuery(canonicalTarget.query);
-  const bodyJson = body === undefined ? "" : JSON.stringify(body);
+  if (bodyText !== undefined && (typeof bodyText !== "string" || body !== undefined)) {
+    throw new TypeError("bodyText must be a pre-serialized JSON string and cannot be combined with body");
+  }
+  const bodyJson = bodyText ?? (body === undefined ? "" : JSON.stringify(body));
   const message = canonicalRequestSignatureMessage({
     networkId,
     method: methodUpper,

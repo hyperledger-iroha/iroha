@@ -384,8 +384,9 @@ Implemented:
   mis-authorized/expired/unregistered locks, missing transfer-call context,
   custody drift/overdraw, destination overflow, and unchanged balances/audit
   state on rejection.
-- `crates/iroha_core` executor tests require `CanSetSorafsPricing` or
-  `CanCompleteSorafsReplicationOrder` for every authoritative orderbook read query.
+- `crates/iroha_core` executor tests require `CanSetSorafsPricing` for authoritative
+  orderbook reads. Provider-scoped `CanCompleteSorafsReplicationOrder` authorizes
+  only that provider's governed completion/source path and grants no global orderbook read.
 - `crates/sorafs_manifest/src/orderbook.rs` unit tests cover valid orders,
   cancellation payloads, Ed25519 signature-length checks, invalid remaining
   quantities/bytes, self-trade rejection, and balanced/imbalanced settlement

@@ -85,3 +85,29 @@ fn independent_custody_export_contains_presence_and_absence_schema_closure() {
     assert!(expected.contains_key::<StreamTokenCustodyRecordProofV1>());
     assert!(find_missing_schema_references(&expected).is_empty());
 }
+
+#[test]
+fn reserve_account_export_contains_exact_independent_projection_schema_closure() {
+    use iroha_data_model::sorafs::reserve::{
+        ReserveProviderAccountV1, account_proof::ReserveAccountProofV1, history::ReserveStateV1,
+    };
+    let mut expected = ReserveAccountProofV1::schema();
+    // The originals are canonical byte frames on the response; their semantic owners
+    // remain explicit roots and must be covered by the same exported schema inventory.
+    ReserveProviderAccountV1::update_schema_map(&mut expected);
+    ReserveStateV1::update_schema_map(&mut expected);
+    iroha_data_model::sorafs::pricing::ProviderCreditRecord::update_schema_map(&mut expected);
+    iroha_data_model::sorafs::capacity::CapacityDeclarationRecord::update_schema_map(&mut expected);
+    iroha_data_model::sorafs::pricing::PricingScheduleRecord::update_schema_map(&mut expected);
+    let exported = crate::build_schemas();
+    let exported: std::collections::BTreeMap<_, _> = exported.iter().collect();
+    for (id, descriptor) in expected.iter() {
+        assert_eq!(
+            exported.get(id).copied(),
+            Some(descriptor),
+            "missing or substituted reserve account descriptor: {}",
+            descriptor.type_name
+        );
+    }
+    assert!(find_missing_schema_references(&expected).is_empty());
+}

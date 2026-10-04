@@ -203,19 +203,27 @@ pub(crate) fn norito_decode_attempt_error<E>(
     ExecutionAttemptError::Rejected(rejected(error))
 }
 
-/// Preserve original versioned decoder fields before classifying the surviving caller scope.
-pub(crate) fn versioned_decode_attempt_error<E>(
-    error: iroha_version::error::Error,
-    rejected: impl FnOnce(iroha_version::error::Error) -> E,
+/// Consume the canonical decoder's captured origin after its caller scopes retire.
+/// Invalid source bytes remain completed rejection; numeric error fields are not reclassified.
+pub(crate) fn canonical_decode_attempt_error<E>(
+    error: norito::core::DecodeAttemptError,
+    rejected: impl FnOnce(norito::core::DecodeAttemptError) -> E,
 ) -> ExecutionAttemptError<E> {
-    match error {
-        iroha_version::error::Error::NoritoResourceLimit(resource) => {
-            norito_decode_attempt_error(resource.into(), |_| {
-                rejected(iroha_version::error::Error::NoritoResourceLimit(resource))
-            })
+    let reason = match error.kind() {
+        norito::core::DecodeAttemptErrorKind::Allocator => {
+            Some(ExecutionDeferral::AllocationUnavailable)
         }
-        completed => ExecutionAttemptError::Rejected(rejected(completed)),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit => {
+            Some(ExecutionDeferral::ActiveMemoryCapacity)
+        }
+        norito::core::DecodeAttemptErrorKind::Invalid => None,
+    };
+    if !cfg!(all(test, sumeragi_core_mutation = "HC32"))
+        && let Some(reason) = reason
+    {
+        return ExecutionAttemptError::Deferred(reason.into());
     }
+    ExecutionAttemptError::Rejected(rejected(error))
 }
 
 /// Classify original JSON decoding before a diagnostic can discard local retry identity.
@@ -726,6 +734,66 @@ mod tests {
             transaction.execution_deferral(),
             Some(ExecutionDeferral::ActiveMemoryCapacity.into())
         );
+    }
+
+    #[test]
+    fn trace_owner_deferral_abandons_writes_without_metering_or_rejection() {
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
+        use iroha_data_model::{
+            Registrable,
+            prelude::{Account, Domain},
+        };
+        use mv::storage::StorageReadOnly as _;
+
+        let reason = ExecutionDeferral::TraceOwnerUnavailable;
+        let original = ivm::VMError::ExecutionDeferred(reason);
+        let wrapped = ivm::VMError::Metered {
+            gas: 91,
+            source: Box::new(original.clone()),
+        };
+        let attempt = super::vm_attempt_error(wrapped.clone(), |_| {
+            panic!("trace custody refusal must not enter the rejection mapper")
+        });
+        let ExecutionAttemptError::Deferred(retained) = attempt else {
+            panic!("trace custody refusal cannot complete an execution attempt");
+        };
+        assert_eq!(retained.reason(), reason);
+        assert!(retained.allocation_refusal().is_none());
+        assert_eq!(retained.clone().into_vm_error(), original);
+        assert_eq!(wrapped.metered_gas(), None);
+
+        let owner = iroha_test_samples::ALICE_ID.clone();
+        let state = State::new_for_testing(
+            World::with([], [Account::new(owner.clone()).build(&owner)], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let domain =
+            iroha_model_base::domain::DomainId::try_new("trace_retry", "universal").unwrap();
+        let mut transaction = block.transaction();
+        transaction
+            .world
+            .domains
+            .insert(domain.clone(), Domain::new(domain.clone()).build(&owner));
+        transaction.vm_error_to_validation_fail(wrapped, |_| {
+            panic!("trace custody refusal must not become a wire rejection")
+        });
+        transaction.defer_execution(ExecutionDeferral::AllocationUnavailable);
+        assert_eq!(transaction.execution_deferral(), Some(retained));
+        assert_eq!(transaction.last_tx_gas_used, 0);
+        transaction.apply();
+        assert!(block.world.domains.get(&domain).is_none());
     }
 
     #[test]

@@ -77,8 +77,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--asset-id",
-        default="norito:<asset-id-hex>",
-        help="Asset id to mint into (encoded-only, norito:<hex>)",
+        required=True,
+        help=(
+            "Balance bucket to mint into: <base58-asset-definition-id>#<i105-account-id>"
+            "[#dataspace:<id>]"
+        ),
     )
     parser.add_argument("--quantity", default="10", help="Quantity for the mint instruction")
     parser.add_argument("--burn-quantity", help="Optional quantity to burn after minting")

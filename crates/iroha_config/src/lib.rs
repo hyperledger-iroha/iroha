@@ -8,6 +8,7 @@ pub mod node_config;
 pub mod parameters;
 pub mod profile;
 pub mod snapshot;
+pub mod sora_profile;
 mod torii;
 /// Enables verbose tracing of configuration loading.
 ///

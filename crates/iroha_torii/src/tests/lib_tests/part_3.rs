@@ -1936,7 +1936,7 @@ fn seed_proof_record_after_native_genesis_for_test(
         app.state
             .block_by_height(NonZeroUsize::new(1).unwrap())
             .expect("reread original signed genesis through canonical State custody")
-            .unwrap()
+            .expect("original signed genesis remains retained")
             .hash(),
         genesis_hash
     );

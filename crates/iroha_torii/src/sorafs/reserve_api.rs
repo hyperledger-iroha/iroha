@@ -1647,7 +1647,7 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
 mod tests {
     use super::*;
     use futures::{Sink, channel::mpsc, task::AtomicWaker};
-    use iroha_core::{smartcontracts::Execute, state::World};
+    use iroha_core::state::World;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId, Registrable,

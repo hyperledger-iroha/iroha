@@ -111,3 +111,75 @@ fn sora_profile_does_not_override_signed_genesis_mode() {
         "local Sora profile selection must not override the signed genesis mode",
     );
 }
+
+#[test]
+fn genesis_projection_preserves_explicit_default_sora_topology_and_execution_policy() {
+    let (_credentials, storage_layer) = sora_storage_profile_fixture();
+    let topology_layer = toml::toml! {
+        [nexus]
+        lane_count = 1
+        lane_catalog = []
+        dataspace_catalog = []
+        [nexus.routing_policy]
+    };
+    let config_layers = vec![storage_layer, topology_layer];
+    assert!(config_requires_sora_profile(&config_layers));
+    let mut merged = sora_profile_detection_defaults();
+    for layer in &config_layers {
+        merge_tables(&mut merged, layer);
+    }
+    apply_identity_defaults_for_detection(&mut merged);
+    ensure_sora_profile_trusted_peer_pop(&mut merged);
+    let before = ConfigReader::new()
+        .with_env(MockEnv::default())
+        .with_toml_source(TomlSource::inline(merged.clone()))
+        .read_and_complete::<iroha_config::parameters::user::Root>()
+        .expect("read explicit default geometry")
+        .parse()
+        .expect("parse explicit default geometry");
+    assert!(!before.nexus.has_lane_overrides());
+    let projected = parse_actual_config_for_genesis_result(merged, &config_layers)
+        .expect("source-selected genesis projection");
+    assert_eq!(projected.nexus.lane_catalog, before.nexus.lane_catalog);
+    assert_eq!(
+        projected.nexus.configured_lane_catalog,
+        before.nexus.configured_lane_catalog
+    );
+    assert_eq!(projected.nexus.lane_config, before.nexus.lane_config);
+    assert_eq!(
+        projected.nexus.dataspace_catalog,
+        before.nexus.dataspace_catalog
+    );
+    assert_eq!(
+        projected.nexus.configured_dataspace_catalog,
+        before.nexus.configured_dataspace_catalog
+    );
+    assert_eq!(projected.nexus.routing_policy, before.nexus.routing_policy);
+    let execution_policy = |config: &iroha_config::parameters::actual::Root| {
+        let manifests = iroha_core::governance::manifest::LaneManifestRegistry::from_config(
+            &config.nexus.lane_catalog,
+            &config.nexus.governance,
+            &config.nexus.registry,
+        );
+        let nexus =
+            iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
+                &config.nexus,
+                None,
+                Some(manifests.baseline_consensus_policy_digest()),
+            )
+            .expect("fixture Nexus policy");
+        iroha_config::parameters::actual::execution_policy_digest_v1(
+            &config.pipeline,
+            &config.oracle,
+            &config.crypto,
+            &config.fraud_monitoring,
+            &config.gov,
+            &config.content,
+            &config.settlement,
+            nexus,
+            iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
+        )
+    };
+    assert_eq!(execution_policy(&projected), execution_policy(&before));
+    assert!(projected.torii.sorafs_storage.enabled);
+}

@@ -13,15 +13,6 @@ internal static class ToriiNodeCapabilitiesJson
     private const string QueryProjectionCompression = "zstd";
     private const int QueryProjectionDefaultPartitionCount = 4096;
 
-    private static readonly string[] QueryRowEnrichmentFields =
-    [
-        "primary_alias",
-        "primary_alias_name",
-        "primary_alias_dataspace",
-        "primary_alias_domain",
-        "has_primary_alias",
-    ];
-
     private static readonly string[] QueryProjectionMetadataKeys =
     [
         "query_projection.locator",
@@ -145,12 +136,6 @@ internal static class ToriiNodeCapabilitiesJson
         }
 
         ValidateNodeAggregateQueryCapabilities(response.Aggregate, $"{context}.aggregate");
-        if (!response.IndexedSnapshotMarker)
-        {
-            throw new JsonException($"{context}.indexed_snapshot_marker must be true.");
-        }
-
-        ValidateExactTokenSequence(response.RowEnrichmentFields, QueryRowEnrichmentFields, $"{context}.row_enrichment_fields");
         ValidateNodeProjectionCapabilities(response.Projection, $"{context}.projection");
     }
 
@@ -236,7 +221,6 @@ internal static class ToriiNodeCapabilitiesJson
         {
             _ when TryMapCollectionField(paramName, nameof(ToriiNodeSmCapabilities.AllowedSigning), "allowed_signing", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiNodeCurveCapabilities.AllowedCurveIds), "allowed_curve_ids", out var mapped) => mapped,
-            _ when TryMapCollectionField(paramName, nameof(ToriiNodeQueryCapabilities.RowEnrichmentFields), "row_enrichment_fields", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiNodeAggregateQueryCapabilities.SupportedResources), "supported_resources", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiNodeProjectionCapabilities.MetadataKeys), "metadata_keys", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiNodeProjectionCapabilities.ExportSupportedResources), "export_supported_resources", out var mapped) => mapped,
@@ -674,8 +658,6 @@ internal static class ToriiNodeCapabilitiesJson
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         ToriiNodeAggregateQueryCapabilities? aggregate = null;
-        bool? indexedSnapshotMarker = null;
-        List<string>? rowEnrichmentFields = null;
         ToriiNodeProjectionCapabilities? projection = null;
 
         while (reader.Read())
@@ -687,8 +669,6 @@ internal static class ToriiNodeCapabilitiesJson
                     var response = new ToriiNodeQueryCapabilities
                     {
                         Aggregate = aggregate!,
-                        IndexedSnapshotMarker = RequireBool(indexedSnapshotMarker, context, "indexed_snapshot_marker"),
-                        RowEnrichmentFields = RequireList(rowEnrichmentFields, context, "row_enrichment_fields"),
                         Projection = projection!,
                     };
                     ValidateNodeQueryCapabilities(response, context);
@@ -712,12 +692,6 @@ internal static class ToriiNodeCapabilitiesJson
             {
                 case "aggregate":
                     aggregate = ReadNullableItem(ref reader, $"{context}.aggregate", ReadNodeAggregateQueryCapabilities);
-                    break;
-                case "indexed_snapshot_marker":
-                    indexedSnapshotMarker = ReadBool(ref reader, $"{context}.indexed_snapshot_marker");
-                    break;
-                case "row_enrichment_fields":
-                    rowEnrichmentFields = ReadStringList(ref reader, $"{context}.row_enrichment_fields");
                     break;
                 case "projection":
                     projection = ReadNullableItem(ref reader, $"{context}.projection", ReadNodeProjectionCapabilities);
@@ -957,8 +931,6 @@ internal static class ToriiNodeCapabilitiesJson
         writer.WriteStartObject();
         writer.WritePropertyName("aggregate");
         WriteNodeAggregateQueryCapabilities(writer, response.Aggregate, $"{context}.aggregate");
-        writer.WriteBoolean("indexed_snapshot_marker", response.IndexedSnapshotMarker);
-        WriteStringList(writer, "row_enrichment_fields", response.RowEnrichmentFields);
         writer.WritePropertyName("projection");
         WriteNodeProjectionCapabilities(writer, response.Projection, $"{context}.projection");
         writer.WriteEndObject();

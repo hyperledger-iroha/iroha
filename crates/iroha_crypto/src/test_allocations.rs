@@ -9,6 +9,7 @@ struct ObservedAllocator;
 
 thread_local! {
     pub(crate) static OBSERVE: Cell<bool> = const { Cell::new(false) };
+    static REFUSE_SIZE: Cell<Option<usize>> = const { Cell::new(None) };
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
     static DEALLOCATION_SIZE: Cell<Option<usize>> = const { Cell::new(None) };
     static DEALLOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -26,11 +27,17 @@ fn record_allocation() {
 unsafe impl GlobalAlloc for ObservedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record_allocation();
+        if REFUSE_SIZE.try_with(Cell::get).unwrap_or(None) == Some(layout.size()) {
+            return core::ptr::null_mut();
+        }
         // SAFETY: forwarded unchanged from GlobalAlloc's caller.
         unsafe { System.alloc(layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         record_allocation();
+        if REFUSE_SIZE.try_with(Cell::get).unwrap_or(None) == Some(layout.size()) {
+            return core::ptr::null_mut();
+        }
         // SAFETY: forwarded unchanged from GlobalAlloc's caller.
         unsafe { System.alloc_zeroed(layout) }
     }
@@ -51,7 +58,9 @@ unsafe impl GlobalAlloc for ObservedAllocator {
 #[global_allocator]
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 
-pub fn without_allocations<T>(operation: impl FnOnce() -> T) -> T {
+/// Return the actual allocation count for one operation on this test thread.
+/// The observer is always retired during unwinding and observations cannot nest.
+pub fn allocations_during<T>(operation: impl FnOnce() -> T) -> (T, usize) {
     struct EndObservation;
     impl Drop for EndObservation {
         fn drop(&mut self) {
@@ -67,12 +76,23 @@ pub fn without_allocations<T>(operation: impl FnOnce() -> T) -> T {
     let guard = EndObservation;
     let result = operation();
     drop(guard);
-    assert_eq!(ALLOCATIONS.with(Cell::get), 0, "uncached core allocated");
+    (result, ALLOCATIONS.with(Cell::get))
+}
+
+pub fn without_allocations<T>(operation: impl FnOnce() -> T) -> T {
+    let (result, allocations) = allocations_during(operation);
+    assert_eq!(allocations, 0, "uncached core allocated");
     result
 }
 
 #[test]
 fn allocation_observer_detects_backing_and_retires_during_unwind() {
+    let (backing, count) = allocations_during(|| std::hint::black_box(vec![0x5a_u8; 73]));
+    assert_eq!(
+        count, 1,
+        "the shared counter observes a real original allocation"
+    );
+    drop(backing);
     let observed = std::panic::catch_unwind(|| {
         without_allocations(|| {
             std::hint::black_box(vec![0x5a_u8; 73]);
@@ -128,4 +148,21 @@ fn deallocation_observer_counts_completed_exact_size_release() {
     });
     assert!(unwind.is_err());
     assert!(DEALLOCATION_SIZE.with(Cell::get).is_none());
+}
+
+/// Refuse exact-size physical requests on this thread without changing admission.
+/// The caller must construct all unrelated test owners before entering this scope.
+pub fn with_allocation_failure<T>(bytes: usize, body: impl FnOnce() -> T) -> T {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            REFUSE_SIZE.with(|size| size.set(None));
+        }
+    }
+    assert!(REFUSE_SIZE.with(Cell::get).is_none());
+    REFUSE_SIZE.with(|size| size.set(Some(bytes)));
+    let guard = Restore;
+    let value = body();
+    drop(guard);
+    value
 }

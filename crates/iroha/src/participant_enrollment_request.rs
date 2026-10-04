@@ -613,7 +613,7 @@ pub(crate) fn authenticate_fi_current_request_cut(
     verifier: &SumeragiFinalityVerifier,
     proof: &SumeragiFinalityProof,
     compiled_schema: Hash,
-    snapshot: iroha_data_model::sumeragi_finality::WorldStateSnapshotV1,
+    snapshot: &iroha_data_model::sumeragi_finality::WorldStateSnapshotV1,
     signatory_row: (AccountId, iroha_data_model::account::AccountValue),
     wallet_row: (AccountId, iroha_data_model::account::AccountValue),
     nodes: &[SelectedEnrollmentReadNodeV1; 4],
@@ -639,16 +639,16 @@ pub(crate) fn authenticate_fi_current_request_cut(
         wallet_row.0,
         &wallet_row.1,
     )?;
-    let verified = wallet.verify_request(request, signature)?;
-    verified.verify_fi_owned_selection(
+    let authenticated = wallet.verify_request(request, signature)?;
+    authenticated.verify_fi_owned_selection(
         request.network_id,
         nodes,
         compiled_schema,
         verifier,
         block.height(),
     )?;
-    verified.recheck()?;
-    Ok(verified)
+    authenticated.recheck()?;
+    Ok(authenticated)
 }
 
 /// Purpose-specific exact HTTP metadata codec; decoding establishes no FI or Native owner.

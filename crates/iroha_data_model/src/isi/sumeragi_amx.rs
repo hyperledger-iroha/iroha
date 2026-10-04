@@ -64,6 +64,67 @@ isi! {
     }
 }
 
+isi! {
+    /// Install a native participant only within its independently authenticated signed genesis.
+    /// The root's signed parent network and this signed global chain label derive the sole
+    /// trusted global instance; later callers cannot replace its epoch anchor.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+    #[norito_schema(name = "iroha_data_model::isi::sumeragi_amx::RegisterAmxParticipantV1")]
+    pub struct RegisterAmxParticipantV1 {
+        /// Full identifier of the executing private dataspace root.
+        pub dataspace: DataSpaceId,
+        /// Global chain label authenticated by this private root's signed genesis.
+        pub global_chain_id: iroha_model_base::chain::ChainId,
+        /// Complete canonical `SignedBlockWire` of global genesis, with its result-only certificate.
+        #[norito(with = "crate::json_helpers::base64_vec",
+                 bounded_with = "crate::json_helpers::base64_vec::serialize_bounded")]
+        pub global_genesis: Vec<u8>,
+        /// Canonical H2 successor whose exact quorum binds the original genesis result.
+        #[norito(with = "crate::json_helpers::base64_vec",
+                 bounded_with = "crate::json_helpers::base64_vec::serialize_bounded")]
+        pub global_successor: Vec<u8>,
+    }
+}
+isi! {
+    /// Prepare the executing dataspace's exact native transfer leg against a global Begin proof.
+    /// The outer transaction authority must own that leg's source account.
+    /// The current native host supports ordinary non-retail numeric transfers. Enrolled-wallet
+    /// and registered retail monetary legs record No without monetary/maintenance effects;
+    /// a relayer cannot manufacture the customer's original signed fee assessment.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+    #[norito_schema(name = "iroha_data_model::isi::sumeragi_amx::PrepareAmxV1")]
+    pub struct PrepareAmxV1 {
+        /// Exact executing participant, used also for native admission routing.
+        pub dataspace: DataSpaceId,
+        /// Complete transaction whose local payload is an `AmxTransferLegV1` frame.
+        pub transaction: AmxTransactionV1,
+        /// Global chain's certified Begin record for this same transaction.
+        pub begin: AmxRecordProofV1,
+    }
+}
+isi! {
+    /// Apply or release retained native AMX escrow only with the global decision proof.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+    #[norito_schema(name = "iroha_data_model::isi::sumeragi_amx::SettleAmxV1")]
+    pub struct SettleAmxV1 {
+        /// Exact executing participant, used also for native admission routing.
+        pub dataspace: DataSpaceId,
+        /// Authenticated global Commit or Abort decision.
+        pub decision: AmxRecordProofV1,
+    }
+}
+isi! {
+    /// Advance a native participant's global tracker by one authenticated epoch handoff.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+    #[norito_schema(name = "iroha_data_model::isi::sumeragi_amx::RelayGlobalAmxHandoffV1")]
+    pub struct RelayGlobalAmxHandoffV1 {
+        /// Exact executing participant, used also for native admission routing.
+        pub dataspace: DataSpaceId,
+        /// Global chain's certified epoch boundary.
+        pub proof: AmxHandoffProofV1,
+    }
+}
+
 impl RegisterAmxDataspaceV1 {
     /// Stable wire identifier.
     pub const WIRE_ID: &'static str = "iroha.sumeragi.amx.register_dataspace.v1";
@@ -85,6 +146,30 @@ impl crate::seal::Instruction for RegisterAmxDataspaceV1 {}
 impl crate::seal::Instruction for BeginAmxV1 {}
 impl crate::seal::Instruction for RelayAmxPreparedV1 {}
 impl crate::seal::Instruction for RelayAmxHandoffV1 {}
+
+impl RegisterAmxParticipantV1 {
+    /// Stable wire identifier.
+    pub const WIRE_ID: &'static str = "iroha.sumeragi.amx.register_participant.v1";
+}
+impl crate::seal::Instruction for RegisterAmxParticipantV1 {}
+
+impl PrepareAmxV1 {
+    /// Stable wire identifier.
+    pub const WIRE_ID: &'static str = "iroha.sumeragi.amx.prepare.v1";
+}
+impl crate::seal::Instruction for PrepareAmxV1 {}
+
+impl SettleAmxV1 {
+    /// Stable wire identifier.
+    pub const WIRE_ID: &'static str = "iroha.sumeragi.amx.settle.v1";
+}
+impl crate::seal::Instruction for SettleAmxV1 {}
+
+impl RelayGlobalAmxHandoffV1 {
+    /// Stable wire identifier.
+    pub const WIRE_ID: &'static str = "iroha.sumeragi.amx.relay_global_handoff.v1";
+}
+impl crate::seal::Instruction for RelayGlobalAmxHandoffV1 {}
 
 #[cfg(test)]
 mod tests {
@@ -129,6 +214,73 @@ mod tests {
         }
         assert!(registry.contains(RelayAmxPreparedV1::WIRE_ID));
         assert!(registry.contains(RelayAmxHandoffV1::WIRE_ID));
+        let block = crate::sumeragi_amx::AmxCertifiedBlockV1 {
+            consensus_header: vec![1],
+            commit_qc: vec![2],
+            result_preimage: vec![3],
+        };
+        let proof = AmxRecordProofV1 {
+            block: block.clone(),
+            record: crate::sumeragi_amx::AmxRecordV1::Decision(
+                crate::sumeragi_amx::AmxDecisionV1 {
+                    tx: [4; 32],
+                    outcome: crate::sumeragi_amx::AmxOutcomeV1::Abort,
+                },
+            ),
+            write: crate::sumeragi_amx::AmxWriteProofV1 {
+                present: [0; 32],
+                siblings: Vec::new(),
+            },
+        };
+        for (wire_id, instruction) in [
+            (
+                RegisterAmxParticipantV1::WIRE_ID,
+                InstructionBox::from(RegisterAmxParticipantV1 {
+                    dataspace: DataSpaceId::new(u64::MAX),
+                    global_chain_id: "signed-parent".into(),
+                    global_genesis: vec![5],
+                    global_successor: vec![6],
+                }),
+            ),
+            (
+                PrepareAmxV1::WIRE_ID,
+                InstructionBox::from(PrepareAmxV1 {
+                    dataspace: DataSpaceId::new(u64::MAX),
+                    transaction: begin.transaction.clone(),
+                    begin: proof.clone(),
+                }),
+            ),
+            (
+                SettleAmxV1::WIRE_ID,
+                InstructionBox::from(SettleAmxV1 {
+                    dataspace: DataSpaceId::new(u64::MAX),
+                    decision: proof,
+                }),
+            ),
+            (
+                RelayGlobalAmxHandoffV1::WIRE_ID,
+                InstructionBox::from(RelayGlobalAmxHandoffV1 {
+                    dataspace: DataSpaceId::new(u64::MAX),
+                    proof: AmxHandoffProofV1 { block },
+                }),
+            ),
+        ] {
+            assert!(registry.contains(wire_id), "{wire_id}");
+            assert_eq!(
+                norito::decode_canonical::<InstructionBox>(
+                    &norito::encode_canonical(&instruction).unwrap()
+                )
+                .unwrap(),
+                instruction
+            );
+            assert_eq!(
+                norito::json::from_str::<InstructionBox>(
+                    &norito::json::to_json(&instruction).unwrap()
+                )
+                .unwrap(),
+                instruction
+            );
+        }
         let json = norito::json::to_json(&begin).expect("json");
         assert_eq!(
             norito::json::from_str::<BeginAmxV1>(&json).expect("json decode"),

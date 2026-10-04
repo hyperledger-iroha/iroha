@@ -20,6 +20,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 iroha_model_base = { workspace = true }
 axum = { workspace = true, features = ["http1", "tokio", "json"] }
 iroha_config = { path = "../iroha_config" }
+iroha_fs = { workspace = true }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["application-model"] }
 iroha_logger = { workspace = true }
 iroha_telemetry = { path = "../iroha_telemetry" }

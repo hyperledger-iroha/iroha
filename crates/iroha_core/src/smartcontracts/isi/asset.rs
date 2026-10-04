@@ -2108,6 +2108,8 @@ pub mod isi {
         },
         /// Fund a native escrow retained record.
         NativeEscrow(Vec<u8>),
+        /// Fund one original signed-root AMX transfer escrow.
+        NativeAmx(Vec<u8>),
         /// Fund an exact native racing seat.
         GameSession(Vec<u8>),
         /// Fund a VPN lease retained record.
@@ -2154,6 +2156,8 @@ pub mod isi {
         CitizenshipRelease(Vec<u8>),
         /// Move value according to an exact native escrow record.
         NativeEscrow(Vec<u8>),
+        /// Apply or release only an authenticated global AMX decision.
+        NativeAmx(Vec<u8>),
         /// Settle or refund an exact native racing liability.
         GameSession(Vec<u8>),
         /// Move value according to an exact VPN lease record.
@@ -2311,6 +2315,11 @@ pub mod isi {
                     "native-escrow-funding",
                     binding,
                 ),
+                EmbeddedNumericAssetMovementPurpose::NativeAmx(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "native-amx-prepare",
+                    binding,
+                ),
                 EmbeddedNumericAssetMovementPurpose::GameSession(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
                     "game-seat-funding",
@@ -2455,6 +2464,12 @@ pub mod isi {
                 ),
                 RetainedNumericAssetMovementPurpose::NativeEscrow(binding) => (
                     "native-escrow-retained",
+                    binding,
+                    NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::NativeAmx(binding) => (
+                    "native-amx-certified-settlement",
                     binding,
                     NumericAssetTransferSourcePolicy::NativeEscrowCustody,
                     NumericAssetTransferControlPolicy::Enforce,
@@ -4792,6 +4807,135 @@ pub mod isi {
                 RetainedNumericAssetMovementPurpose::SccpEscrowRelease(binding),
             ),
         )
+    }
+    /// Consume one native AMX movement after independently rejoining exact canonical custody.
+    /// The producer is the signed-root participant owner; generic escrow has no constructor.
+    pub(crate) fn execute_verified_amx_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::sumeragi::amx::VerifiedAmxMovement,
+    ) -> Result<(), Error> {
+        use iroha_data_model::sumeragi_amx::{AmxOutcomeV1, AmxVoteV1};
+        let (owner, slot, outcome) = authorization.into_parts();
+        if !owner.belongs_to(
+            state_transaction
+                .pipeline_ivm_prepared_cache
+                .execution_budget(),
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native AMX movement belongs to a foreign allocation pool".into(),
+            ));
+        }
+        let record = owner
+            .canonical()
+            .and_then(|value| value.escrows.get(slot))
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "native AMX capability lost its exact original funded escrow slot".into(),
+                )
+            })?;
+        let tx = record.tx;
+        let effects_hash = iroha_data_model::sumeragi_amx::native_transfer_effects_hash(
+            &record.leg,
+        )
+        .map_err(|error| {
+            if let iroha_data_model::sumeragi_amx::AmxError::Resource(resource) = &error {
+                state_transaction.arm_local_storage_refusal(
+                    crate::state::StateStorageAdmissionError::AmxDecode(*resource),
+                );
+            }
+            InstructionExecutionError::InvariantViolation(error.to_string().into())
+        })?;
+        let participant = state_transaction
+            .world
+            .sumeragi_amx_participant()
+            .canonical()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "native AMX movement has no genesis-installed participant".into(),
+                )
+            })?;
+        if record.tx != tx
+            || record.custody != participant.custody
+            || record.leg.source.scope()
+                != &AssetBalanceScope::Dataspace(participant.participant.dataspace)
+            || record.effects_hash != effects_hash
+            || record.settled.is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native AMX movement differs from its exact protected leg".into(),
+            ));
+        }
+        let custody_id = AssetId::with_scope(
+            record.leg.source.definition().clone(),
+            record.custody.clone(),
+            *record.leg.source.scope(),
+        );
+        let binding = canonical_numeric_movement_binding(&(tx, record.effects_hash, outcome))?;
+        let (source_id, destination_id, authorization) = match outcome {
+            None => {
+                if participant.participant.entry(&tx).is_some()
+                    || participant
+                        .escrows
+                        .binary_search_by_key(&tx, |record| record.tx)
+                        .is_ok()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native AMX funding repeats an original transaction".into(),
+                    ));
+                }
+                (
+                    record.leg.source.clone(),
+                    custody_id,
+                    NumericAssetMovementAuthorization::embedded_user(
+                        record.leg.source.account(),
+                        EmbeddedNumericAssetMovementPurpose::NativeAmx(binding),
+                    ),
+                )
+            }
+            Some(outcome) => {
+                let original = participant
+                    .escrows
+                    .binary_search_by_key(&tx, |record| record.tx)
+                    .ok()
+                    .map(|slot| &participant.escrows[slot]);
+                if original != Some(record)
+                    || !participant.participant.entry(&tx).is_some_and(|entry| {
+                        entry.settled.is_none() && entry.vote == AmxVoteV1::Yes(record.effects_hash)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native AMX settlement has no identical original unsettled Yes escrow"
+                            .into(),
+                    ));
+                }
+                let receiver = match outcome {
+                    AmxOutcomeV1::Commit => &record.leg.destination,
+                    AmxOutcomeV1::Abort => record.leg.source.account(),
+                };
+                let destination = AssetId::with_scope(
+                    record.leg.source.definition().clone(),
+                    receiver.clone(),
+                    *record.leg.source.scope(),
+                );
+                (
+                    custody_id,
+                    destination,
+                    NumericAssetMovementAuthorization::retained(
+                        record.leg.source.account(),
+                        RetainedNumericAssetMovementPurpose::NativeAmx(binding),
+                    ),
+                )
+            }
+        };
+        PreparedNumericAssetMovement::prepare_with_scope(
+            state_transaction,
+            source_id,
+            destination_id,
+            record.leg.amount.clone(),
+            authorization,
+            NumericAssetTransferScopePolicy::ExplicitBilateral,
+        )?
+        .apply(state_transaction)
     }
     /// Consume one exact native-escrow movement capability.
     pub(in crate::smartcontracts::isi) fn execute_verified_native_escrow_movement(
@@ -7270,15 +7414,16 @@ pub mod isi {
     impl<'a> QuantityRetirementOwner<'a> {
         /// Observe the already authorized native instruction. Failure affects only
         /// capture; it never changes the original business operation or error order.
-        pub(in crate::smartcontracts::isi) fn retain<'ids, I>(
+        #[expect(
+            single_use_lifetimes,
+            reason = "Rust 1.93 requires a named lifetime for reference items in impl ExactSizeIterator bounds"
+        )]
+        pub(in crate::smartcontracts::isi) fn retain<'ids>(
             state: &StateTransaction<'_, '_>,
             authority: &'a AccountId,
             scope: QuantityRetirementScope<'a>,
-            definitions: I,
-        ) -> Self
-        where
-            I: ExactSizeIterator<Item = &'ids AssetDefinitionId>,
-        {
+            definitions: impl ExactSizeIterator<Item = &'ids AssetDefinitionId>,
+        ) -> Self {
             let invocation = state.retain_quantity_retirement_invocation();
             let lifecycles = (|| {
                 use crate::state::QuantityCaptureIssue;

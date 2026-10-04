@@ -31,6 +31,7 @@ pub(in super::super) struct OrdinaryFundedStateForTestingV1 {
     pub(in super::super) state: KagemushaStateV1,
     pub(in super::super) generated: KagemushaGeneratedRecursiveStateProofV1,
     pub(in super::super) public_original: Vec<u8>,
+    // Hold the exact consumed-credit replay index for the funded fixture lifetime.
     pub(in super::super) consumed_credits: OrdinaryConsumedCreditsForQualificationV1,
     pub(in super::super) mint_source: ProvenMintForTesting,
 }

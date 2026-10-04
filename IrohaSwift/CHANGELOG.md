@@ -4,6 +4,59 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- Collection queries follow `specs/torii/collection_queries.md`: `ToriiFilter`
+  (builder operators, result builder, canonical text `description` and JSON
+  `jsonData()`, client-side limits), `ToriiSortKey`, `ToriiAggregate`,
+  `ToriiListQuery` (canonical `POST /query` body and `GET` parameters),
+  `ToriiPage` and the on-demand `ToriiPageSequence`/`ToriiItemSequence`, checked
+  against `fixtures/torii/list_query/vectors.json`. `ToriiClient` exposes
+  `domains`, `accounts` (with `get(_:)`), `assetDefinitions`, `nfts`, `rwas`,
+  `repoAgreements`, `accountAssets(of:)`, `assetHolders(of:)`, the history
+  collections `transactions` and `accountTransactions(of:)` (rows
+  `ToriiTransaction`, newest first; `sort`, `includeTotal` and `aggregate`
+  rejected locally; pagers follow `nextCursor` across short and empty pages)
+  with typed rows whose non-identity fields are optional. Filters with object or
+  array literals are sent only in the JSON form (`queryItems()` and event
+  streams reject them). Removed `listDomains`,
+  `iterateDomains`, `listRwas`, `queryRwas`, `iterateRwas`, `getAssets`,
+  `getTransactions`, their completion/Combine/`IrohaSDK` twins and
+  `ToriiListOptions`/`ToriiListFilter`/`ToriiListSort`/`ToriiQueryEnvelope`
+  and the offset/`total`-based page types.
+- Torii error responses surface as `ToriiClientError.api(ToriiAPIError)` with
+  `status`, envelope `code`, `message`, `details` and the `X-Iroha-Reject-Code`
+  header; `ToriiClientError.invalidQuery` reports locally rejected controls with
+  the same codes. `ToriiClientError.httpStatus` was removed.
+- Event streams decode the specified `/v1/events/sse` payloads into `ToriiEvent`
+  (pipeline transaction, block, warning and witness events; proof verified,
+  rejected and pruned events; `.data`/`.other` notices for every other kind, so
+  unknown events never fail a stream), wrapped in `ToriiEventMessage`.
+  Transaction statuses, block statuses and `ToriiTransactionRejectionCode` are
+  typed from their names. New `streamEvents(filter:)`/`streamEvents(filterText:)`
+  take the collection text grammar, and built filters are checked against the
+  event-stream subset before connecting. The transaction-status stream sends
+  `tx_hash = "…"` and checks every event's hash (including the trailing one);
+  proof streams send `proof_backend`/`proof_call_hash`/`proof_envelope_hash`
+  filters and match pruning events too; `streamVerifyingKeyEvents()` and
+  `streamTriggerEvents()` recognise their events by kind. The retired
+  `{"VerifyingKey": …}`, `{"Trigger": …}` and `{"Proof": …}` shapes, their
+  typed payloads and filters (`ToriiVerifyingKeyEventFilter`,
+  `ToriiTriggerEventFilter`, `ToriiVerifyingKeyEvent`, `ToriiTriggerEvent`) were
+  removed. Event streams follow the same transport policy as other requests
+  (HTTPS for credentials, no redirects) and surface rejections with the parsed
+  error envelope.
+- `+` in query values is percent-encoded; `getStatusSnapshot()` no longer races
+  on its sample state; `AccountId.make(publicKey:)` throws instead of trapping;
+  building a transfer with a non-empty `TransferRequest.description` throws
+  `TransactionInputError.transferDescriptionUnsupported` instead of silently
+  dropping the memo; the always-failing `deployContractInstance` and
+  `activateContractInstance` were removed.
+- `ToriiCanonicalRequestAuth` is now only the account credential
+  (`accountId`, `privateKey`); its `timestampMs`/`nonce` were removed because a
+  reused credential replayed one nonce. `ToriiClient`, `MusubiToriiClientV1` and
+  `AtomicPrivateSettlementToriiClientV1` draw a fresh timestamp and nonce for
+  every signed request from `ToriiCanonicalRequestFreshness` (injectable for
+  tests), so pinned-freshness errors and their both-or-neither checks are gone.
+
 - Added the Petal Stream optical transport (`Sources/IrohaSwift/Petal/`), a
   function-by-function port of `crates/iroha_petal`: CRC-32C bound streams,
   whitened GF(256) Reed–Solomon lanes with errors-and-erasures decoding,

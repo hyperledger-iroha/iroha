@@ -907,8 +907,9 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
         })
     }
 }
+// Receipt roles expose only the operations their actual custody consumers need.
 macro_rules! receipt {
-    ($t:ident, $variant:ident, $selector:ty, $getter:ident; $($extra:ident),*) => {
+    ($t:ident, $variant:ident, $selector:ty, $getter:ident; $($capability:ident),+ $(,)?) => {
         impl $t<'_> {
             pub(crate) fn $getter(&self) -> Result<&$selector> {
                 self.owner.recheck_journal()?;
@@ -933,7 +934,7 @@ macro_rules! receipt {
                 Ok(())
             }
         }
-        $(receipt!(@$extra, $t);)*
+        $(receipt!(@$capability, $t);)+
     };
     (@original, $t:ident) => {
         impl $t<'_> {
@@ -949,7 +950,7 @@ macro_rules! receipt {
             }
         }
     };
-    (@recheck_for_effect, $t:ident) => {
+    (@effect, $t:ident) => {
         impl $t<'_> {
             pub(crate) fn recheck_for_effect(
                 &self,
@@ -972,7 +973,7 @@ macro_rules! receipt {
             }
         }
     };
-    (@request_original_sha256, $t:ident) => {
+    (@request_digest, $t:ident) => {
         impl $t<'_> {
             pub(crate) fn request_original_sha256(&self) -> [u8; 32] {
                 self.request_sha256
@@ -984,32 +985,32 @@ receipt!(
     KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
     Anchor,
     KagemushaOrdinaryLineageAnchorV1,
-    anchor; recheck_for_effect
+    anchor; effect
 );
 receipt!(
     KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1,
     Reserve,
     KagemushaOrdinaryLineageReservationV1,
-    reservation; original, request_original_sha256
+    reservation; original, request_digest
 );
 receipt!(
     KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
     Commit,
     KagemushaOrdinaryLineageCommitV1,
-    commit; recheck_for_effect
+    commit; effect
 );
 
 receipt!(
     KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1,
     ReserveIncoming,
     KagemushaOrdinaryIncomingReservationV1,
-    reservation; original, request_original_sha256
+    reservation; original, request_digest
 );
 receipt!(
     KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,
     CommitIncoming,
     KagemushaOrdinaryIncomingCommitV1,
-    commit; original, recheck_for_effect
+    commit; original, effect
 );
 
 fn encode(r: &Record) -> Result<Vec<u8>> {

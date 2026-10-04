@@ -3,7 +3,9 @@
 //! These records preserve local execution provenance only. They are not finality
 //! proofs, qualified compact statements or spend-authority tokens.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::{
@@ -172,6 +174,7 @@ pub(crate) struct FastpqSourceCaptureAccumulator {
 }
 
 impl FastpqSourceCaptureAccumulator {
+    #[cfg(test)]
     /// Require an exact healthy, still-owned selection without transferring captures.
     /// Validation changes neither entries nor the seal/error state.
     pub(crate) fn validate_unsealed_selection(

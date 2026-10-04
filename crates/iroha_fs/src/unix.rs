@@ -466,6 +466,63 @@ impl Directory {
         result
     }
 
+    pub(super) fn reconcile_atomic_staging(
+        &self,
+        required: &[&str],
+        maximum_staged: usize,
+        maximum_bytes: usize,
+    ) -> io::Result<usize> {
+        let maximum_entries = required.len() + maximum_staged;
+        let names = self.entries(maximum_entries)?;
+        validate_atomic_staging_inventory(&names, required, maximum_staged)?;
+        let mut retained = Vec::with_capacity(names.len());
+        for name in &names {
+            let file = self.open_read(name)?;
+            let before = journal_snapshot(&file)?;
+            let staged = is_atomic_staging_name(name);
+            if staged && before.length > maximum_bytes as u64 {
+                return Err(invalid("atomic staging extent exceeds the bound"));
+            }
+            retained.push((name, file, before, staged));
+        }
+        // Validate every original before deleting any one of them. The caller's retained
+        // exclusive operation lock serializes cooperative writers throughout this operation.
+        if self.entries(maximum_entries)? != names {
+            return Err(changed());
+        }
+        for (name, file, before, _) in &retained {
+            if journal_snapshot(file)? != *before
+                || journal_snapshot(&self.open_read(name)?)? != *before
+            {
+                return Err(changed());
+            }
+        }
+        let mut removed = 0;
+        for (name, file, before, staged) in &retained {
+            if *staged {
+                self.revalidate()?;
+                if journal_snapshot(file)? != *before
+                    || journal_snapshot(&self.open_read(name)?)? != *before
+                {
+                    return Err(changed());
+                }
+                rustix::fs::unlinkat(&self.current().file, name.as_os_str(), AtFlags::empty())?;
+                removed += 1;
+            }
+        }
+        self.sync()?;
+        validate_atomic_staging_inventory(&self.entries(required.len())?, required, 0)?;
+        for (name, file, before, staged) in &retained {
+            if !*staged
+                && (journal_snapshot(file)? != *before
+                    || journal_snapshot(&self.open_read(name)?)? != *before)
+            {
+                return Err(changed());
+            }
+        }
+        Ok(removed)
+    }
+
     pub(super) fn open_mutable(&self, name: &OsStr, append: bool) -> io::Result<File> {
         self.revalidate()?;
         let flags =

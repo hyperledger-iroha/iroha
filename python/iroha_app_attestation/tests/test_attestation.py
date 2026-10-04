@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from iroha_app_attestation.attestation import (
+    AndroidPatchLevels,
     AttestationRejected,
     GOOGLE_FACTORY_2016_ROOT_SHA256,
     GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS,
@@ -23,6 +24,8 @@ from iroha_app_attestation.attestation import (
     encode_android_chain,
     explicit_tags,
     oid,
+    patch_level_yyyymm,
+    require_android_patch_floor,
     verify_apple_raw,
     verify_android_raw,
     verify_issuer_preparation,
@@ -196,6 +199,39 @@ class AttestationTests(unittest.TestCase):
         self.assertTrue(_certificate_valid_at(root, GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS))
         self.assertFalse(_certificate_valid_at(root, GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS
                                                 + 30 * 86_400_000))
+
+    def test_patch_levels_normalize_only_documented_keymint_forms(self) -> None:
+        for value, expected in ((202609, 202609), (20260905, 202609), (20260900, 202609),
+                                (190001, 190001), (999912, 999912)):
+            with self.subTest(value=value):
+                self.assertEqual(patch_level_yyyymm(value), expected)
+        for value in (0, 202600, 202613, 189912, 2026, 20261301, 100000000, True, "202609", None, 202609.0):
+            with self.subTest(value=value):
+                self.assertIsNone(patch_level_yyyymm(value))
+
+    def test_enrollment_patch_floor_uses_every_reported_hardware_level(self) -> None:
+        current = AndroidPatchLevels(300, 150000, 202609, 20260905, 20260901)
+        require_android_patch_floor(current, 202609)
+        require_android_patch_floor(current, 202601)
+        # Vendor and boot levels that are absent or zero are "not reported".
+        require_android_patch_floor(AndroidPatchLevels(3, None, 202609, None, 0), 202609)
+        for levels, message in (
+            (AndroidPatchLevels(300, 150000, None, 20260905, 20260901), "OS patch level absent"),
+            (AndroidPatchLevels(300, 150000, 0, 20260905, 20260901), "OS patch level absent"),
+            (AndroidPatchLevels(300, 150000, 202608, 20260905, 20260901), "OS patch level is below"),
+            (AndroidPatchLevels(300, 150000, 202609, 20260805, 20260901), "vendor patch level is below"),
+            (AndroidPatchLevels(300, 150000, 202609, 20260905, 20260801), "boot patch level is below"),
+            (AndroidPatchLevels(300, 150000, 202613, 20260905, 20260901), "unparsable Android OS"),
+            (AndroidPatchLevels(300, 150000, 202609, 2026, 20260901), "unparsable Android vendor"),
+            (AndroidPatchLevels(300, 150000, 202609, 20260905, 20261301), "unparsable Android boot"),
+        ):
+            with self.subTest(levels=levels), self.assertRaisesRegex(AttestationRejected, message):
+                require_android_patch_floor(levels, 202609)
+        for floor in (0, 20260901, 202613, 2026, True, "202609"):
+            with self.subTest(floor=floor), self.assertRaisesRegex(AttestationRejected, "patch floor"):
+                require_android_patch_floor(current, floor)
+        with self.assertRaisesRegex(AttestationRejected, "patch levels absent"):
+            require_android_patch_floor((300, 150000, 202609, 20260905, 20260901), 202609)
 
     def test_issuer_preparation_signature_binds_nonce_account_profile_lane_key_and_release(self) -> None:
         executable = shutil.which("openssl")

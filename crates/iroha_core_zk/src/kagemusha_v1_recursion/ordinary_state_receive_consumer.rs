@@ -431,19 +431,21 @@ pub(super) fn constrain_ordinary_receive_opening_v1<F: KagemushaPoseidonFieldV1>
             .try_into()
             .map_err(|_| "ordinary received request digest width".into())
     };
+    let encryption_key = selected(
+        ctx,
+        &range,
+        enabled,
+        field_bytes("recipient_encryption_key")?,
+    );
+    let recipient_lane = selected(ctx, &range, enabled, field_bytes("recipient_lane_id")?);
+    // Retain the request ID's gated constraints and fallible width check in the same synthesis order.
+    let _request_id = selected(ctx, &range, enabled, field_bytes("request_id")?);
     let receiver = OrdinaryReceiverRequestOpeningV1 {
         request_digest,
         credential_digest: recipient,
-        encryption_key: selected(
-            ctx,
-            &range,
-            enabled,
-            field_bytes("recipient_encryption_key")?,
-        ),
-        recipient_lane: selected(ctx, &range, enabled, field_bytes("recipient_lane_id")?),
+        encryption_key,
+        recipient_lane,
     };
-    // Keep request-id selection constraints in their original construction order.
-    let _ = selected(ctx, &range, enabled, field_bytes("request_id")?);
     let mut raw = encrypted.to_vec();
     raw.resize(KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0);
     if encrypted.len() > KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1 {

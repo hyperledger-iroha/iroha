@@ -42,6 +42,7 @@ pub(super) enum TransportOriginals {
     },
 }
 
+/// Opaque original data retained by the parent cash journal; admission remains in this owner.
 #[derive(Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::OrdinaryCashTerminalSelectionOriginalsV1"

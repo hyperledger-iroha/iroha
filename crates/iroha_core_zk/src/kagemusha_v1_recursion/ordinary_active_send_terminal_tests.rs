@@ -32,6 +32,7 @@ pub(super) struct OrdinarySendTerminalForTestingV1 {
     pub(super) record: KagemushaOrdinaryCashTerminalRecordV1,
     pub(super) approval: KagemushaAppOperationApprovalV1,
     pub(super) admission_clock_original: Vec<u8>,
+    // Retain the genuine purpose-1 Guard pair with the complete outgoing proof owner.
     pub(super) terminal_guard: super::ordinary_guard_generation::GeneratedOrdinaryGuardPairV1,
     pub(super) inner: OrdinaryCashProofForTestingV1,
     pub(super) wrapper: OrdinaryCashProofForTestingV1,
@@ -421,7 +422,7 @@ pub(super) fn prove_ordinary_send_terminal_for_testing_v1(
     let eq_hash_native = hash.eq_history.to_native().unwrap();
     let ep_hash_native = hash.ep_history.to_native().unwrap();
     let witness = OrdinaryCashTerminalCircuitWitnessV1 {
-        public,
+        public: public.clone(),
         semantic: &semantic,
         eq: OrdinaryCashTerminalHalfWitnessV1 {
             candidate: OrdinaryCashCandidateCompleteProofV1 {
@@ -527,9 +528,16 @@ pub(super) fn prove_ordinary_send_terminal_for_testing_v1(
         norito::encode_canonical(&inner_wire).unwrap(),
         inner.generated.original
     );
-    let wrapper_public = inner.generated.public.clone();
+    let wrapper_public = OrdinaryCashTerminalPublicV1 {
+        release_id: inner_wire.release_id,
+        eq_protocol_digest: inner_wire.eq_protocol_digest,
+        ep_protocol_digest: inner_wire.ep_protocol_digest,
+        eq_deferred_audit: inner_wire.eq_deferred_audit,
+        ep_deferred_audit: inner_wire.ep_deferred_audit,
+        ..public
+    };
     let witness = OrdinaryCashCommitWrapperWitnessV1 {
-        public: wrapper_public,
+        public: wrapper_public.clone(),
         eq: OrdinaryCashCommitWrapperHalfWitnessV1 {
             protocol: &inner.generated.eq_protocol,
             instances: &eq_inner_instances,
@@ -549,6 +557,16 @@ pub(super) fn prove_ordinary_send_terminal_for_testing_v1(
     };
     let wrapper = generate_ordinary_wrapper_for_testing_v1(witness, manifest, &seed);
     assert!(wrapper.generated.wrapper_history_fold_originals.is_some());
+    let wrapper_wire: super::super::ordinary_cash_terminal_verifier::OrdinaryCashProofPairWireV1 =
+        norito::decode_canonical(&wrapper.generated.original).unwrap();
+    let wrapper_public = OrdinaryCashTerminalPublicV1 {
+        release_id: wrapper_wire.release_id,
+        eq_protocol_digest: wrapper_wire.eq_protocol_digest,
+        ep_protocol_digest: wrapper_wire.ep_protocol_digest,
+        eq_deferred_audit: wrapper_wire.eq_deferred_audit,
+        ep_deferred_audit: wrapper_wire.ep_deferred_audit,
+        ..wrapper_public
+    };
     // Mutate actual public origins, exact inner audit tuples and complete history limbs. These
     // checks verify the already-created proof and terminally decide the resulting IPA claim.
     for slot in [0, 20, 24, 26, 41, 43, 49] {
@@ -608,7 +626,7 @@ pub(super) fn prove_ordinary_send_terminal_for_testing_v1(
     )
     .unwrap();
     let bad = OrdinaryCashCommitWrapperWitnessV1 {
-        public: wrapper.generated.public.clone(),
+        public: wrapper_public,
         eq: OrdinaryCashCommitWrapperHalfWitnessV1 {
             protocol: &inner.generated.eq_protocol,
             instances: &eq_inner_instances,

@@ -26,7 +26,7 @@ final class BridgeAvailabilityTests: XCTestCase {
     func testTransactionEncoderUnavailableWhenBridgeDisabled() throws {
         let privateKey = Data(repeating: 1, count: 32)
         let keypair = try Keypair(privateKeyBytes: privateKey)
-        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let authority = try AccountId.make(publicKey: keypair.publicKey)
         let signingKey = try SigningKey.ed25519(privateKey: privateKey)
         NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
         let request = TransferRequest(networkId: TestNetworkIds.canonical,

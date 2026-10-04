@@ -211,7 +211,7 @@ impl ProviderIngestAuthenticatedSourceFetchV1 for NativeAssignedSourceV1 {
                                     let state = read_resolver.state().map_err(|_| rejected())?;
                                     authorize_provider_source_v1(
                                         &state.view(),
-                                        &read_resolver.owner,
+                                        &read_resolver.completion_signer,
                                         &read_request,
                                         now()? / 1000,
                                     )
@@ -237,8 +237,13 @@ fn fetch_response(
     deadline: Instant,
 ) -> std::result::Result<ProviderSourceResponseV1, ProviderIngestSourceFetchErrorV1> {
     let state = resolver.state().map_err(|_| rejected())?;
-    authorize_provider_source_v1(&state.view(), &resolver.owner, request, now()? / 1000)
-        .map_err(|_| rejected())?;
+    authorize_provider_source_v1(
+        &state.view(),
+        &resolver.completion_signer,
+        request,
+        now()? / 1000,
+    )
+    .map_err(|_| rejected())?;
     let url = endpoint
         .join("v1/sorafs/provider/source")
         .map_err(|_| rejected())?;
@@ -268,7 +273,10 @@ fn fetch_response(
         .header("Accept-Encoding", "identity")
         .header(
             "X-Iroha-Account",
-            resolver.owner.to_canonical_hex().map_err(|_| rejected())?,
+            resolver
+                .completion_signer
+                .to_canonical_hex()
+                .map_err(|_| rejected())?,
         )
         .header("X-Iroha-Signature", STANDARD.encode(signature.payload()))
         .header("X-Iroha-Timestamp-Ms", timestamp.to_string())
@@ -305,8 +313,13 @@ fn fetch_response(
     if !response_matches_request(&result, request) {
         return Err(rejected());
     }
-    authorize_provider_source_v1(&state.view(), &resolver.owner, request, now()? / 1000)
-        .map_err(|_| rejected())?;
+    authorize_provider_source_v1(
+        &state.view(),
+        &resolver.completion_signer,
+        request,
+        now()? / 1000,
+    )
+    .map_err(|_| rejected())?;
     Ok(result)
 }
 

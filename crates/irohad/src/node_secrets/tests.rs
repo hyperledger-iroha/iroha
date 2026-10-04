@@ -340,7 +340,7 @@ struct DealtSeat {
     handle: String,
     revision: u64,
     policy_digest: [u8; 32],
-    credential: Zeroizing<Vec<u8>>,
+    credential: iroha_core::beacon::credential::SecretConsensusThresholdCredentialV1,
 }
 
 fn dealt_seat(network_id: NetworkId) -> DealtSeat {
@@ -362,8 +362,12 @@ fn dealt_seat(network_id: NetworkId) -> DealtSeat {
         .map(|index| format!("software://iroha/global-beacon/validator-{index}"))
         .collect();
     let plan = GlobalBeaconCeremonyPlanV1::new(session, roster, handles, 2).expect("valid plan");
-    let mut dealt = deal_global_beacon_at_logical_clock_v1(&plan, &keys.iter().collect::<Vec<_>>())
-        .expect("logical-clock deal");
+    let mut dealt = deal_global_beacon_at_logical_clock_v1(
+        &plan,
+        &keys.iter().collect::<Vec<_>>(),
+        &credential_test_budget(),
+    )
+    .expect("logical-clock deal");
     let seat = dealt.seats.swap_remove(0);
     DealtSeat {
         network_id,
@@ -387,15 +391,25 @@ fn beacon_credential_binding_is_derived_from_its_header() {
     let seat = dealt_seat(network(b"node-secrets beacon network"));
     let mut sumeragi = validator_sumeragi();
     assert!(
-        load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi)
-            .expect("no credential")
-            .is_none(),
+        secret_result(load_beacon_signer(
+            &fixture.data_dir,
+            &seat.network_id,
+            &sumeragi,
+            &credential_test_budget()
+        ))
+        .expect("no credential")
+        .is_none(),
         "an absent beacon.cred leaves the node without a beacon signer"
     );
     fixture.write(NodeSecretFile::BeaconCredential, &seat.credential);
-    let loaded = load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi)
-        .expect("load unconfigured credential")
-        .expect("credential present");
+    let loaded = secret_result(load_beacon_signer(
+        &fixture.data_dir,
+        &seat.network_id,
+        &sumeragi,
+        &credential_test_budget(),
+    ))
+    .expect("load unconfigured credential")
+    .expect("credential present");
     assert_eq!(loaded.handle, seat.handle);
     assert_eq!(loaded.revision, seat.revision);
     assert_eq!(loaded.policy_digest, seat.policy_digest);
@@ -403,11 +417,21 @@ fn beacon_credential_binding_is_derived_from_its_header() {
     sumeragi.global_beacon_partial_signer_provider_handle = Some(seat.handle.clone());
     sumeragi.global_beacon_partial_signer_provider_revision = Some(seat.revision);
     sumeragi.global_beacon_partial_signer_provider_policy_digest = Some(seat.policy_digest);
-    load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi)
-        .expect("a configured binding equal to the header is accepted");
+    secret_result(load_beacon_signer(
+        &fixture.data_dir,
+        &seat.network_id,
+        &sumeragi,
+        &credential_test_budget(),
+    ))
+    .expect("a configured binding equal to the header is accepted");
     sumeragi.global_beacon_partial_signer_provider_revision = Some(seat.revision + 1);
     assert!(matches!(
-        load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi),
+        secret_result(load_beacon_signer(
+            &fixture.data_dir,
+            &seat.network_id,
+            &sumeragi,
+            &credential_test_budget()
+        )),
         Err(NodeSecretsErrorV1::BindingMismatch {
             file: NodeSecretFile::BeaconCredential,
             ..
@@ -415,16 +439,22 @@ fn beacon_credential_binding_is_derived_from_its_header() {
     ));
     sumeragi.global_beacon_partial_signer_provider_revision = Some(seat.revision);
     assert!(matches!(
-        load_beacon_signer(
+        secret_result(load_beacon_signer(
             &fixture.data_dir,
             &network(b"another beacon network"),
-            &sumeragi
-        ),
+            &sumeragi,
+            &credential_test_budget(),
+        )),
         Err(NodeSecretsErrorV1::BindingMismatch { .. })
     ));
     sumeragi.role = NodeRole::Observer;
     assert!(matches!(
-        load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi),
+        secret_result(load_beacon_signer(
+            &fixture.data_dir,
+            &seat.network_id,
+            &sumeragi,
+            &credential_test_budget()
+        )),
         Err(NodeSecretsErrorV1::Unsupported(_))
     ));
     sumeragi.role = NodeRole::Validator;
@@ -432,7 +462,13 @@ fn beacon_credential_binding_is_derived_from_its_header() {
     trailing.push(0);
     fixture.write(NodeSecretFile::BeaconCredential, &trailing);
     assert_eq!(
-        load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi).err(),
+        secret_result(load_beacon_signer(
+            &fixture.data_dir,
+            &seat.network_id,
+            &sumeragi,
+            &credential_test_budget()
+        ))
+        .err(),
         Some(NodeSecretsErrorV1::Malformed(
             NodeSecretFile::BeaconCredential
         ))
@@ -444,7 +480,13 @@ fn beacon_credential_binding_is_derived_from_its_header() {
     )
     .expect("group-readable credential");
     assert_eq!(
-        load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi).err(),
+        secret_result(load_beacon_signer(
+            &fixture.data_dir,
+            &seat.network_id,
+            &sumeragi,
+            &credential_test_budget()
+        ))
+        .err(),
         Some(NodeSecretsErrorV1::Custody {
             file: NodeSecretFile::BeaconCredential,
             error: RuntimeCredentialErrorV1::InvalidSource,
@@ -492,7 +534,11 @@ fn open_without_data_dir_touches_no_secret() {
     let config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
         .expect("minimal config parses");
     assert!(config.data_dir.is_none());
-    assert!(NodeSecretsV1::open(&config).expect("no data_dir").is_none());
+    assert!(
+        secret_result(NodeSecretsV1::open(&config, &credential_test_budget()))
+            .expect("no data_dir")
+            .is_none()
+    );
 }
 
 #[test]
@@ -505,7 +551,7 @@ fn opened_secrets_resolve_the_configured_catalog() {
     let seat = dealt_seat(NetworkId::from_genesis_hash(config.genesis.expected_hash));
     fixture.write(NodeSecretFile::BeaconCredential, &seat.credential);
 
-    let secrets = NodeSecretsV1::open(&config)
+    let secrets = secret_result(NodeSecretsV1::open(&config, &credential_test_budget()))
         .expect("open node secrets")
         .expect("data_dir node");
     let dependencies = secrets
@@ -531,7 +577,7 @@ fn opened_secrets_resolve_the_configured_catalog() {
     config
         .sumeragi
         .global_beacon_partial_signer_provider_policy_digest = Some(seat.policy_digest);
-    let dependencies = NodeSecretsV1::open(&config)
+    let dependencies = secret_result(NodeSecretsV1::open(&config, &credential_test_budget()))
         .expect("open with a configured beacon binding")
         .expect("data_dir node")
         .resolve_runtime_deps(&config)
@@ -541,7 +587,7 @@ fn opened_secrets_resolve_the_configured_catalog() {
     // A binding for another key never resolves.
     config.soracloud_runtime.submission.signer = Some(signer_binding(&signer_key(0x49)));
     assert!(matches!(
-        NodeSecretsV1::open(&config),
+        secret_result(NodeSecretsV1::open(&config, &credential_test_budget())),
         Err(NodeSecretsErrorV1::BindingMismatch {
             file: NodeSecretFile::RuntimeSigner,
             ..
@@ -557,12 +603,12 @@ fn production_mode_requires_the_runtime_signer_file() {
     config.soracloud_runtime.production_mode = true;
     config.soracloud_runtime.submission.signer = Some(signer_binding(&key_pair));
     assert_eq!(
-        NodeSecretsV1::open(&config).err(),
+        secret_result(NodeSecretsV1::open(&config, &credential_test_budget())).err(),
         Some(NodeSecretsErrorV1::Missing(NodeSecretFile::RuntimeSigner))
     );
     config.soracloud_runtime.submission.signer = None;
     assert!(matches!(
-        NodeSecretsV1::open(&config),
+        secret_result(NodeSecretsV1::open(&config, &credential_test_budget())),
         Err(NodeSecretsErrorV1::Unsupported(_))
     ));
 }
@@ -574,7 +620,7 @@ fn registry_rejects_substituted_catalog_bindings() {
     fixture.write(NodeSecretFile::RuntimeSigner, &signer_record(&key_pair));
     let mut config = data_dir_config(&fixture);
     config.soracloud_runtime.submission.signer = Some(signer_binding(&key_pair));
-    let secrets = NodeSecretsV1::open(&config)
+    let secrets = secret_result(NodeSecretsV1::open(&config, &credential_test_budget()))
         .expect("open node secrets")
         .expect("data_dir node");
     // The catalog asks for a beacon signer but `beacon.cred` is absent.
@@ -715,4 +761,114 @@ fn config_key_files_pass_custody_before_the_parser_reads_them() {
         fs::rename(&aside, &path).expect("restore key");
     }
     verify_config_key_custody(&fixture.data_dir).expect("restored key files");
+}
+
+fn credential_test_budget() -> AllocationBudget {
+    AllocationBudget::new(64 * 1024 * 1024)
+}
+
+// Existing exact custody/binding assertions still inspect their complete original error.
+// A local admission failure cannot satisfy any of these negative protocol fixtures.
+fn secret_result<T>(result: Result<T, NodeSecretsLoadErrorV1>) -> Result<T, NodeSecretsErrorV1> {
+    result.map_err(|error| match error {
+        NodeSecretsLoadErrorV1::Secret(error) => error,
+        NodeSecretsLoadErrorV1::BeaconSession(error) => {
+            panic!("unexpected local admission: {error}")
+        }
+        NodeSecretsLoadErrorV1::BeaconDecode(error) => {
+            panic!("unexpected local decoder refusal: {error}")
+        }
+    })
+}
+
+#[test]
+fn beacon_file_admission_keeps_original_pool_source_and_retries_without_consuming_input() {
+    let fixture = SecretsFixture::new();
+    let seat = dealt_seat(network(b"original credential pool"));
+    let sumeragi = validator_sumeragi();
+    let path = fixture.write(NodeSecretFile::BeaconCredential, &seat.credential);
+    let budget = credential_test_budget();
+    let occupied = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+    let error = match load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi, &budget) {
+        Err(NodeSecretsLoadErrorV1::BeaconSession(
+            iroha_core::beacon::GlobalThresholdBeaconSessionError::Admission(error),
+        )) => error,
+        _ => panic!("occupied original pool must produce its typed admission refusal"),
+    };
+    let iroha_allocation::AllocationRefusal::Capacity {
+        requested_bytes, ..
+    } = &error
+    else {
+        panic!("valid graph is temporarily blocked by original outstanding owner");
+    };
+    assert_eq!(
+        error,
+        budget.try_reserve_bytes(*requested_bytes).unwrap_err()
+    );
+    assert_eq!(
+        fs::read(&path).unwrap().as_slice(),
+        seat.credential.as_slice()
+    );
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    drop(occupied);
+    let loaded = load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi, &budget)
+        .unwrap()
+        .unwrap();
+    let retained = budget.reserved_bytes();
+    assert!(retained > 0);
+    let final_reader = loaded.signer.clone();
+    drop(loaded);
+    assert_eq!(budget.reserved_bytes(), retained);
+    drop(final_reader);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        fs::read(path).unwrap().as_slice(),
+        seat.credential.as_slice()
+    );
+}
+
+#[test]
+fn beacon_header_decode_refusal_preserves_original_file_and_scope_until_retry() {
+    let fixture = SecretsFixture::new();
+    let seat = dealt_seat(network(b"original header decoder scope"));
+    let sumeragi = validator_sumeragi();
+    let path = fixture.write(NodeSecretFile::BeaconCredential, &seat.credential);
+    let budget = credential_test_budget();
+    let failed = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi, &budget),
+    )
+    .err()
+    .expect("actual original header decode refusal");
+    assert_eq!(
+        failed.to_string(),
+        "node beacon credential decoder is unavailable"
+    );
+    assert!(std::error::Error::source(&failed).is_some());
+    let NodeSecretsLoadErrorV1::BeaconDecode(error) = failed else {
+        panic!("local header pressure is not malformed custody");
+    };
+    assert_eq!(
+        error.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    assert!(matches!(
+        error.into_error(),
+        norito::Error::ScopedDecodeResource(_)
+    ));
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        fs::read(&path).unwrap().as_slice(),
+        seat.credential.as_slice()
+    );
+    let signer = load_beacon_signer(&fixture.data_dir, &seat.network_id, &sumeragi, &budget)
+        .unwrap()
+        .unwrap();
+    assert!(budget.reserved_bytes() > 0);
+    drop(signer);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        fs::read(path).unwrap().as_slice(),
+        seat.credential.as_slice()
+    );
 }

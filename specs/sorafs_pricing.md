@@ -190,7 +190,9 @@ following instructions:
 - `RecordCapacityTelemetry` consumes provider telemetry, calculates storage fees using the current
   schedule, applies uptime/PoR multipliers, updates the fee ledger, and debits provider credit
   accounts when present.
-- `UpsertProviderCredit` seeds or updates the governed credit projection. A governed owner and
+- `UpsertProviderCredit` atomically compares the entire current credit record before replacement.
+  Its required `expected_current` is explicit `null` for absence or the canonical typed hash of
+  the exact stored `ProviderCreditRecord`; omission and stale observations are refused. A governed owner and
   native reserve account must already exist, and `bonded + slashed` must exactly match the
   verified owner-funded reserve balance. Existing slash totals and penalty epochs are monotonic
   across upserts. Ordinary transfers and burns cannot debit the active custody asset;

@@ -31,6 +31,7 @@ fn fixture(
         status: Mutex::new(None),
         backlog: Mutex::new(Backlog::default()),
         wake: ThreadWake::admit(budget).unwrap(),
+        transactions_pending: AtomicBool::new(false),
         alive: AtomicBool::new(true),
         stopped: Mutex::new(None),
         metrics: None,

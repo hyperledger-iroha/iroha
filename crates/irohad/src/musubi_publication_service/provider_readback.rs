@@ -26,7 +26,10 @@ use iroha_storage_client::musubi_archive_fetch::{
     MusubiArchiveRuntimeFailureClassV1,
 };
 use sorafs_car::{CarBuildPlan, musubi::MusubiBundleVerifierV1};
-use sorafs_manifest::provider_advert::{AdvertEndpoint, CapabilityType, EndpointKind};
+use sorafs_manifest::provider_advert::{
+    AdvertEndpoint, CapabilityTlv, CapabilityType, EndpointKind,
+    account_read::RegisteredAccountReadV1,
+};
 use std::{
     io::Read as _,
     sync::Arc,
@@ -178,6 +181,12 @@ impl MusubiPublicationAuthenticatedProviderReadbackV1 {
                     MusubiPublicationServiceBackendErrorV1::Permanent
                 }
             })?;
+        // Discovery can perform registry I/O. Never hold the advert cache guard across it.
+        let origin = self
+            .core
+            .source
+            .resolve_provider_gateway_origin(request.provider)
+            .map_err(backend_error)?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| MusubiPublicationServiceBackendErrorV1::Retryable)?
@@ -189,12 +198,7 @@ impl MusubiPublicationAuthenticatedProviderReadbackV1 {
         let record = adverts
             .admitted_record_by_provider(request.provider.as_bytes(), now)
             .ok_or(MusubiPublicationServiceBackendErrorV1::Retryable)?;
-        let origin = self
-            .core
-            .source
-            .provider_gateway_origin(request.provider)
-            .ok_or(MusubiPublicationServiceBackendErrorV1::Permanent)?;
-        if !admitted_torii_gateway_matches(record, origin) {
+        if !admitted_torii_gateway_matches(record, &origin) {
             return Err(MusubiPublicationServiceBackendErrorV1::Permanent);
         }
         Ok(())
@@ -226,27 +230,52 @@ fn admitted_torii_gateway_matches(
     origin: &str,
 ) -> bool {
     torii_gateway_origin_matches(
-        record.known_capabilities(),
+        &record.advert().body.capabilities,
         &record.advert().body.endpoints,
         origin,
     )
 }
 fn torii_gateway_origin_matches(
-    capabilities: &[CapabilityType],
+    capabilities: &[CapabilityTlv],
     endpoints: &[AdvertEndpoint],
     origin: &str,
 ) -> bool {
+    if origin.is_empty() || origin.len() > 2_048 {
+        return false;
+    }
     let Ok(url) = reqwest::Url::parse(origin) else {
         return false;
     };
     let Some(host) = url.host_str() else {
         return false;
     };
-    capabilities.contains(&CapabilityType::ToriiGateway)
-        && capabilities.contains(&CapabilityType::ChunkRangeFetch)
-        && url.scheme() == "https"
-        && url.port_or_known_default() == Some(443)
-        && url.path() == "/"
+    if url.as_str() != origin
+        || url.scheme() != "https"
+        || url.port_or_known_default().is_none_or(|port| port == 0)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+    {
+        return false;
+    }
+    let Ok(account_policy) = RegisteredAccountReadV1::from_capabilities(capabilities) else {
+        return false;
+    };
+    // Absent account capability leaves the existing operator-configured transport contract
+    // intact; it does not itself authorize an origin or any network access.
+    if account_policy.is_some_and(|policy| {
+        policy.https_host != host || Some(policy.https_port) != url.port_or_known_default()
+    }) {
+        return false;
+    }
+    capabilities
+        .iter()
+        .any(|cap| cap.cap_type == CapabilityType::ToriiGateway)
+        && capabilities
+            .iter()
+            .any(|cap| cap.cap_type == CapabilityType::ChunkRangeFetch)
         && endpoints.iter().any(|endpoint| {
             endpoint.kind == EndpointKind::Torii && endpoint.host_pattern.eq_ignore_ascii_case(host)
         })
@@ -339,7 +368,6 @@ fn backend_error(error: MusubiArchiveRuntimeErrorV1) -> MusubiPublicationService
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::musubi_publication_service::seed_staging::tests::fixture;
     use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
     use iroha_data_model::{
         musubi::{
@@ -351,6 +379,7 @@ mod tests {
         sorafs::pin_registry::ReplicationOrderId,
     };
     use iroha_musubi_service::MusubiFinalizedArchiveRegistrationEvidenceV1;
+    use iroha_musubi_service::seed_test_support::fixture;
     use std::io::Cursor;
 
     struct FixtureSourceV1 {
@@ -564,7 +593,11 @@ mod tests {
         let capabilities = [
             CapabilityType::ToriiGateway,
             CapabilityType::ChunkRangeFetch,
-        ];
+        ]
+        .map(|cap_type| CapabilityTlv {
+            cap_type,
+            payload: Vec::new(),
+        });
         let endpoint = AdvertEndpoint {
             kind: EndpointKind::Torii,
             host_pattern: "provider.example".to_owned(),
@@ -585,7 +618,9 @@ mod tests {
             std::slice::from_ref(&endpoint),
             "https://provider.example/",
         ));
-        assert!(!torii_gateway_origin_matches(
+        // Without account capability, the previously configured operator transport owns its
+        // exact port. Matching an advert alone never constructs or authorizes that transport.
+        assert!(torii_gateway_origin_matches(
             &capabilities,
             std::slice::from_ref(&endpoint),
             "https://provider.example:444/",
@@ -599,5 +634,75 @@ mod tests {
             &[changed_kind],
             "https://provider.example/",
         ));
+    }
+
+    #[test]
+    fn readback_account_origin_requires_exact_admitted_port_and_canonical_root() {
+        let endpoint = AdvertEndpoint {
+            kind: EndpointKind::Torii,
+            host_pattern: "provider.example".into(),
+            metadata: Vec::new(),
+        };
+        let mut policy = RegisteredAccountReadV1 {
+            https_host: "provider.example".into(),
+            https_port: 8443,
+            ttl_secs: 60,
+            max_streams: 1,
+            rate_limit_bytes: 1024,
+            requests_per_minute: 60,
+        };
+        let mut capabilities = vec![
+            CapabilityTlv {
+                cap_type: CapabilityType::ToriiGateway,
+                payload: Vec::new(),
+            },
+            CapabilityTlv {
+                cap_type: CapabilityType::ChunkRangeFetch,
+                payload: Vec::new(),
+            },
+            policy.to_capability().unwrap(),
+        ];
+        let matches = |caps: &[CapabilityTlv], origin: &str| {
+            torii_gateway_origin_matches(caps, std::slice::from_ref(&endpoint), origin)
+        };
+        assert!(matches(&capabilities, "https://provider.example:8443/"));
+        for origin in [
+            "https://provider.example/",
+            "https://provider.example:8444/",
+            "https://other.example:8443/",
+            "http://provider.example:8443/",
+            "https://provider.example:8443",
+            "https://PROVIDER.example:8443/",
+            "https://provider.example:08443/",
+            "https://provider.example:0/",
+            "https://user@provider.example:8443/",
+            "https://user:secret@provider.example:8443/",
+            "https://provider.example:8443/?query",
+            "https://provider.example:8443/?",
+            "https://provider.example:8443/#fragment",
+            "https://provider.example:8443/#",
+            "https://provider.example:8443/path",
+            "https://provider.example:8443/a/../",
+            " https://provider.example:8443/",
+            "https://provider.example:8443/\n",
+        ] {
+            assert!(!matches(&capabilities, origin), "{origin:?}");
+        }
+        let valid = capabilities[2].clone();
+        capabilities.push(valid.clone());
+        assert!(!matches(&capabilities, "https://provider.example:8443/"));
+        capabilities.pop();
+        for payload in [
+            vec![],
+            vec![0],
+            valid.payload.iter().copied().chain([0]).collect(),
+        ] {
+            capabilities[2].payload = payload;
+            assert!(!matches(&capabilities, "https://provider.example:8443/"));
+        }
+        policy.https_port = 443;
+        capabilities[2] = policy.to_capability().unwrap();
+        assert!(matches(&capabilities, "https://provider.example/"));
+        assert!(!matches(&capabilities, "https://provider.example:443/"));
     }
 }

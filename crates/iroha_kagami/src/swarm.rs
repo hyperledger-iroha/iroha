@@ -165,7 +165,7 @@ struct PreparedRuntimePeer {
 const GENESIS_EXPECTED_HASH_RUNTIME_TARGET: &str = "/run/secrets/iroha_genesis_expected_hash";
 const MAX_PEER_OVERRIDE_BYTES_V1: u64 = 64 * 1024;
 #[cfg(unix)]
-const CONTAINER_PROJECTION_FILE_MODE: u16 = 0o444;
+const CONTAINER_PROJECTION_FILE_MODE: rustix::fs::RawMode = 0o444;
 fn read_exact_record(path: &Path, label: &str) -> color_eyre::Result<String> {
     const MAX_EXACT_RECORD_BYTES: u64 = 64 * 1024;
     let record = read_runtime_file_bounded(path, label, MAX_EXACT_RECORD_BYTES)?;
@@ -405,16 +405,6 @@ fn remove_toml_key(
     current.remove(key);
     Ok(())
 }
-fn toml_contains(root: &toml::Table, table_path: &[&str], key: &str) -> bool {
-    let mut current = root;
-    for segment in table_path {
-        let Some(table) = current.get(*segment).and_then(toml::Value::as_table) else {
-            return false;
-        };
-        current = table;
-    }
-    current.contains_key(key)
-}
 fn config_requires_sora_profile(config: &actual::Root) -> bool {
     config.torii.sorafs_storage.enabled
         || config.torii.sorafs_discovery.discovery_enabled
@@ -426,19 +416,7 @@ fn config_requires_sora_profile(config: &actual::Root) -> bool {
 fn effective_runtime_config(mut config: actual::Root, table: &toml::Table) -> (actual::Root, bool) {
     let requires_sora_profile = config_requires_sora_profile(&config);
     if requires_sora_profile {
-        // Match irohad's explicit-value preservation around `--sora`.
-        let storage_explicit = toml_contains(table, &["sorafs", "storage"], "enabled");
-        let discovery_explicit =
-            toml_contains(table, &["sorafs", "discovery"], "discovery_enabled");
-        let storage_enabled = config.torii.sorafs_storage.enabled;
-        let discovery_enabled = config.torii.sorafs_discovery.discovery_enabled;
-        config.apply_sora_profile();
-        if storage_explicit {
-            config.torii.sorafs_storage.enabled = storage_enabled;
-        }
-        if discovery_explicit {
-            config.torii.sorafs_discovery.discovery_enabled = discovery_enabled;
-        }
+        iroha_config::sora_profile::SoraProfileSelection::from_table(table).apply(&mut config);
     }
     (config, requires_sora_profile)
 }
@@ -4088,3 +4066,7 @@ api_port = 9000
         fs::write(path, json).expect("write npos genesis");
     }
 }
+
+#[cfg(test)]
+#[path = "swarm/sora_profile_geometry_tests.rs"]
+mod sora_profile_geometry_tests;

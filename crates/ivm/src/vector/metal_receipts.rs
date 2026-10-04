@@ -2,6 +2,8 @@
 
 #[cfg(any(test, all(target_os = "macos", feature = "metal")))]
 mod calibration;
+#[cfg(all(test, feature = "metal-hardware-tests"))]
+pub(in crate::vector) mod timing;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(super) use calibration::with_synthetic;
 

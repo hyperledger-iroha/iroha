@@ -3643,11 +3643,36 @@ fn retail_monetary_dataspace_target_with_world<W: WorldReadOnly>(
     Ok(dataspace)
 }
 
+/// Participant instructions name their exact root; global proofs do not add a second route.
+fn native_amx_participant_dataspace_target(instruction: &dyn Instruction) -> Option<DataSpaceId> {
+    use iroha_data_model::isi::sumeragi_amx::{
+        PrepareAmxV1, RegisterAmxParticipantV1, RelayGlobalAmxHandoffV1, SettleAmxV1,
+    };
+    let any = instruction.as_any();
+    any.downcast_ref::<RegisterAmxParticipantV1>()
+        .map(|value| value.dataspace)
+        .or_else(|| {
+            any.downcast_ref::<PrepareAmxV1>()
+                .map(|value| value.dataspace)
+        })
+        .or_else(|| {
+            any.downcast_ref::<SettleAmxV1>()
+                .map(|value| value.dataspace)
+        })
+        .or_else(|| {
+            any.downcast_ref::<RelayGlobalAmxHandoffV1>()
+                .map(|value| value.dataspace)
+        })
+}
+
 fn instruction_transaction_dataspace_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(dataspace) = native_amx_participant_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
     if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
         return Ok(Some(dataspace));
     }
@@ -4066,6 +4091,9 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     ledger_time_ms: Option<u64>,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(dataspace) = native_amx_participant_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
     if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
         return Ok(Some(dataspace));
     }
@@ -10015,7 +10043,7 @@ mod tests {
     ) -> iroha_data_model::transaction::Executable {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 1,

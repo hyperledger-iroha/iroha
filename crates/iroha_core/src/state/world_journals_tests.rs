@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::state::scalar_cell_custody::ScalarCellFixtureBlock;
+use crate::sumeragi::amx::NativeAmxCellFixtureBlock as _;
 use crate::{
     smartcontracts::isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
     state::{DataSpaceId, LaneConfig},
@@ -209,14 +210,14 @@ fn ordinary_world_capture_retains_deltas_events_catalog_and_releases_every_write
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(detached.mode(), BlockMode::Ordinary);
-    assert_eq!(detached.field_count(), 313);
+    assert_eq!(detached.field_count(), 314);
     assert_eq!(
         detached
             .fields()
             .map(|field| field.name)
             .collect::<BTreeSet<_>>()
             .len(),
-        313
+        314
     );
     assert_eq!(
         detached

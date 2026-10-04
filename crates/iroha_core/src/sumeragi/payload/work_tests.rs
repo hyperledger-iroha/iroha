@@ -147,8 +147,8 @@ fn merge_floor_avoids_duplicate_original_parent_build_with_exact_wire_parity() {
         .state()
         .view()
         .latest_block()
-        .expect("original parent acquisition succeeds")
-        .expect("committed parent exists");
+        .expect("original committed parent read completes")
+        .expect("fixture retains its actual committed parent");
     let assembly = Assembly {
         parent: &parent,
         view: 7,
@@ -225,8 +225,8 @@ fn empty_work_and_cadence_overflow_refuse_before_any_parent_build() {
         .state()
         .view()
         .latest_block()
-        .expect("original parent acquisition succeeds")
-        .expect("committed parent exists");
+        .expect("original committed parent read completes")
+        .expect("fixture retains its actual committed parent");
     let assembly = Assembly {
         parent: &parent,
         view: 0,

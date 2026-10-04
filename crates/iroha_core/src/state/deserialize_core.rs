@@ -31,9 +31,18 @@ pub(crate) enum StateRestoreError {
     /// Original finite resources refused canonical native schedule ownership.
     #[error("snapshot native schedule admission deferred: {0}")]
     NativeSchedule(#[source] crate::sumeragi::schedule::ScheduleError),
+    /// Original resources refused a fully authenticated retained beacon session.
+    #[error("snapshot beacon session admission failed: {0}")]
+    BeaconSession(#[source] crate::beacon::GlobalThresholdBeaconSessionError),
+    /// Original finite resources refused the complete native participant graph.
+    #[error("snapshot native AMX admission deferred: {0}")]
+    NativeAmx(#[source] crate::sumeragi::amx::NativeAmxAdmissionError),
     /// The local VM image could not be constructed before restoring State.
     #[error("snapshot State VM initialization deferred: {0}")]
     VmInitialization(#[source] ivm::VMError),
+    /// An original storage reader or publication is locally unavailable during restore.
+    #[error("snapshot State reader unavailable: {0}")]
+    StateRead(#[source] StateViewError),
     /// Original execution resources refused this local restore attempt.
     #[error("snapshot State execution deferred: {0}")]
     ExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
@@ -601,18 +610,6 @@ impl KuraSeed {
         )
     }
     #[cfg(test)]
-    pub(crate) fn into_state_from_json_with_configured_nexus(
-        self,
-        value: json::Value,
-        configured_nexus: iroha_config::parameters::actual::Nexus,
-    ) -> Result<Box<State>, StateRestoreError> {
-        self.into_state_from_json_with_recovery_mode_and_configured_nexus(
-            value,
-            true,
-            Some(configured_nexus),
-        )
-    }
-    #[cfg(test)]
     fn into_state_from_json_with_recovery_mode_and_configured_nexus(
         self,
         value: json::Value,
@@ -1088,18 +1085,12 @@ impl KuraSeed {
             })?;
         }
         reject_unknown(&map, "state")?;
-        crate::smartcontracts::code::rebuild_contract_subject_addresses(&mut world).map_err(
-            |message| json::Error::InvalidField {
+        super::contract_subject_restore::rebuild(&mut world).map_err(|message| {
+            json::Error::InvalidField {
                 field: "contract_subject_bindings".into(),
                 message,
-            },
-        )?;
-        crate::smartcontracts::code::validate_contract_subject_bindings(&world).map_err(
-            |message| json::Error::InvalidField {
-                field: "contract_subject_bindings".into(),
-                message,
-            },
-        )?;
+            }
+        })?;
         world
             .validate_quantity_ledger_invariants()
             .map_err(|error| {

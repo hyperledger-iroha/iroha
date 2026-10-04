@@ -283,12 +283,14 @@ pub fn validate_prepared_genesis_bundle(
     expected_hash: HashOf<BlockHeader>,
 ) -> Result<ValidatedGenesisBundle> {
     let block = decode_signed_genesis(signed_wire)?;
-    let canonical_wire = block
-        .encode_wire()
-        .map_err(|error| eyre!("re-encode signed genesis body: {error}"))?;
-    if canonical_wire != signed_wire {
-        return Err(eyre!("signed genesis body is not canonical framed Norito"));
-    }
+    // The sole framed decoder already compared the canonical writer against these exact
+    // source bytes. The validated bundle owns a source copy, not another encoding.
+    // TODO: this source backing needs an explicit retained caller-pool ledger.
+    let mut canonical_wire = Vec::new();
+    canonical_wire
+        .try_reserve_exact(signed_wire.len())
+        .wrap_err("retain authenticated signed genesis source")?;
+    canonical_wire.extend_from_slice(signed_wire);
     if block.hash() != expected_hash {
         return Err(eyre!(
             "signed genesis body hashes to {}, expected {}",

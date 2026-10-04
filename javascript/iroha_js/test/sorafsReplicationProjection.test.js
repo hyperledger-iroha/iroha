@@ -15,7 +15,7 @@ function rejects(mutate) { const value = fixture(); mutate(value, value.replicat
 test("replication projection retains complete native order, completion authority and finalized anchor", () => {
   const value = fixture(); accountCalls = 0;
   assert.deepEqual(normalize(value), value);
-  assert.equal(accountCalls, 3);
+  assert.equal(accountCalls, 4);
   assert.deepEqual(normalize(parseStrictLosslessIntegerJson(JSON.stringify(value), "replication")), value);
   assert.equal(Object.hasOwn(normalize(value).replication_orders[0], "receipts"), false);
 });
@@ -139,8 +139,11 @@ test("completion authority equality is independent of canonical account parsing"
   const value = fixture(), completion = value.replication_orders[0].provider_completions[0];
   completion.completed_by = secondOwner;
   assert.throws(() => normalizeTwoOwners(value), /completion authority/);
-  completion.completion_authority.provider_owner = secondOwner;
+  completion.completion_authority.completion_signer = secondOwner;
   assert.deepEqual(normalizeTwoOwners(value), value);
+  assert.equal(completion.completion_authority.provider_owner, owner);
+  completion.completed_by = owner;
+  assert.throws(() => normalizeTwoOwners(value), /completion authority/);
 });
 
 test("retained completion anchor may precede and differ from the current inventory tip", () => {

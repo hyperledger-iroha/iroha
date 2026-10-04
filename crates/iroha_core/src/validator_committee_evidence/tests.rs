@@ -295,6 +295,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
     let mut history = vec![crate::block::reserve_block_for_tests().initialize(genesis)];
     let mut boundary_pulse = None;
     let mut selected_fixture = None;
+    let beacon_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     for height in 2..=14 {
         let parent = history.last().unwrap();
         let signer = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
@@ -341,7 +342,11 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
                 .adaptive_dkg
                 .session;
             let (session, signers) =
-                crate::beacon::prepared_session_and_signers_fixture_for_keys_v1(old, &keys);
+                crate::beacon::prepared_session_and_signers_fixture_for_keys_v1(
+                    old,
+                    &keys,
+                    &beacon_budget,
+                );
             let mut reducer = GlobalThresholdBeaconPulseAggregatorV1::new(
                 session.clone(),
                 height,
@@ -541,7 +546,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
                 selecting_finality: blocks[9].clone(),
             }),
             candidate_keys: candidates,
-            pending_beacon_session: Some(record.session.clone()),
+            pending_beacon_session: Some(record.session.record().clone()),
         },
         finality_journal: NativeFinalityJournal { blocks },
         beacon_finalization: certificate,
@@ -653,6 +658,7 @@ fn offline_committee_proposal_retains_signed_root_and_refuses_foreign_network_in
 
 #[test]
 fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credentials() {
+    let session_budget = AllocationBudget::new(limits().allocated_bytes);
     let evidence = selection_evidence_fixture();
     let network = evidence.status.network_id;
     let chain_id = chain_id();
@@ -674,6 +680,7 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             attempt,
             limits(),
             &verifier,
+            &session_budget,
         )
     };
     let selected = verify(&evidence).expect("contiguous incumbent-certified E+1 selection");
@@ -697,6 +704,7 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             attempt,
             limits(),
             &verifier,
+            &session_budget,
         )
         .is_err(),
         "selection-only proof cannot authorize private-share import"
@@ -750,7 +758,8 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             2,
             attempt,
             limits(),
-            &verifier
+            &verifier,
+            &session_budget,
         )
         .is_err()
     );
@@ -762,7 +771,8 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             3,
             attempt,
             limits(),
-            &verifier
+            &verifier,
+            &session_budget,
         )
         .is_err()
     );
@@ -774,7 +784,8 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
             2,
             [0xEE; 32],
             limits(),
-            &verifier
+            &verifier,
+            &session_budget,
         )
         .is_err()
     );
@@ -782,6 +793,7 @@ fn selection_evidence_authenticates_only_frozen_roster_before_any_dkg_credential
 
 #[test]
 fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_substitution() {
+    let session_budget = AllocationBudget::new(limits().allocated_bytes);
     let evidence = evidence_fixture();
     let network = evidence.status.network_id;
     let chain_id = chain_id();
@@ -804,12 +816,13 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
             attempt,
             limits(),
             &verifier,
+            &session_budget,
         )
     };
     let accepted = verify(&evidence).unwrap();
     assert_eq!(accepted.observed_height(), 14);
     assert_eq!(
-        accepted.session(),
+        accepted.session().record(),
         evidence.status.pending_beacon_session.as_ref().unwrap()
     );
     assert_eq!(accepted.transition().preparation.target_epoch, 2);
@@ -873,7 +886,8 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
             2,
             attempt,
             limits(),
-            &verifier
+            &verifier,
+            &session_budget,
         )
         .is_err()
     );
@@ -885,7 +899,8 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
             3,
             attempt,
             limits(),
-            &verifier
+            &verifier,
+            &session_budget,
         )
         .is_err()
     );
@@ -897,10 +912,133 @@ fn committee_custody_evidence_authenticates_exact_pending_attempt_and_rejects_su
             2,
             [0xEE; 32],
             limits(),
-            &verifier
+            &verifier,
+            &session_budget,
         )
         .is_err()
     );
+}
+
+#[test]
+fn committee_custody_evidence_retains_original_session_refusal_and_retries_unchanged_proof() {
+    use crate::beacon::{
+        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_session_allocation_bytes_v1,
+    };
+    use iroha_allocation::{AllocationRefusal, release::ReleaseRegistration};
+    use std::task::{Context, Waker};
+
+    let evidence = evidence_fixture();
+    let network = evidence.status.network_id;
+    let chain_id = chain_id();
+    let verifier = verifier(&evidence.finality_journal, network);
+    let attempt = evidence
+        .status
+        .selected
+        .as_ref()
+        .unwrap()
+        .transition
+        .preparation
+        .transition_id()
+        .unwrap();
+    let source = evidence.status.pending_beacon_session.as_ref().unwrap();
+    let binding = GlobalThresholdBeaconSessionBindingV1 {
+        network_id: source.network_id,
+        session_id: source.session_id,
+        roster_hash: source.roster_hash,
+        transcript_hash: source.transcript_hash,
+    };
+    let demand = global_threshold_beacon_session_allocation_bytes_v1(source, &binding).unwrap();
+    let observer_bytes = ReleaseRegistration::allocation_layout().size();
+    let journal_controls = evidence.finality_journal.blocks.len()
+        * iroha_data_model::block::SharedSignedBlock::allocation_layout().size();
+    let pool = AllocationBudget::new(demand + journal_controls + observer_bytes);
+    let mut observer = crate::unit_test_support::release_registration(&pool);
+    let blocker = pool.try_reserve_bytes(1).unwrap();
+    let expected = pool
+        .try_reserve_bytes(demand + journal_controls)
+        .unwrap_err();
+    let verify = || {
+        verify_validator_committee_provisioning_evidence_v1(
+            &evidence,
+            &chain_id,
+            network,
+            2,
+            attempt,
+            limits(),
+            &verifier,
+            &pool,
+        )
+    };
+    let Err(ValidatorCommitteeProvisioningEvidenceError::Session(
+        GlobalThresholdBeaconSessionError::Admission(actual),
+    )) = verify()
+    else {
+        panic!("the verifier must preserve its original session admission refusal");
+    };
+    let AllocationRefusal::Capacity {
+        release: expected_release,
+        ..
+    } = expected
+    else {
+        panic!("actual held capacity");
+    };
+    let AllocationRefusal::Capacity {
+        requested_bytes,
+        reserved_bytes,
+        limit_bytes,
+        release,
+    } = actual
+    else {
+        panic!("a held original pool must carry its exact release source");
+    };
+    assert_eq!(requested_bytes, demand);
+    assert_eq!(reserved_bytes, observer_bytes + journal_controls + 1);
+    assert_eq!(limit_bytes, pool.limit_bytes());
+    assert_eq!(release, expected_release);
+    assert_eq!(pool.reserved_bytes(), observer_bytes + 1);
+    let mut context = Context::from_waker(Waker::noop());
+    // Returning the failed attempt really retires its temporary journal controls. That is an
+    // original-pool refund, not authority to assume enough capacity for the whole next proof.
+    assert!(observer.poll_wait(&release, &mut context).is_ready());
+    assert!(matches!(
+        verify(),
+        Err(ValidatorCommitteeProvisioningEvidenceError::Session(
+            GlobalThresholdBeaconSessionError::Admission(AllocationRefusal::Capacity { .. })
+        ))
+    ));
+    drop(blocker);
+    assert!(observer.poll_wait(&release, &mut context).is_ready());
+    observer.cancel();
+    let verified = verify().expect("the identical authorized proof retries after actual refund");
+    assert!(verified.session().belongs_to(&pool));
+    assert_eq!(verified.session().record(), source);
+    let shared = verified.session().clone();
+    assert!(std::ptr::eq(shared.record(), verified.session().record()));
+    let retained = pool.reserved_bytes();
+    assert!(retained > observer_bytes);
+    drop(verified);
+    assert_eq!(pool.reserved_bytes(), retained);
+    drop(shared);
+    assert_eq!(pool.reserved_bytes(), observer_bytes);
+    drop(observer);
+    assert_eq!(pool.reserved_bytes(), 0);
+
+    let mut invalid = evidence.clone();
+    invalid.beacon_finalization.expected_active_session_id = None;
+    assert!(matches!(
+        verify_validator_committee_provisioning_evidence_v1(
+            &invalid,
+            &chain_id,
+            network,
+            2,
+            attempt,
+            limits(),
+            &verifier,
+            &pool,
+        ),
+        Err(ValidatorCommitteeProvisioningEvidenceError::Invalid(_))
+    ));
+    assert_eq!(pool.reserved_bytes(), 0);
 }
 
 #[test]
@@ -913,10 +1051,11 @@ fn status_selection_binding_uses_the_same_actual_native_boundary_as_custody() {
         &evidence.status.network_id,
         limits(),
         &verifier,
+        &AllocationBudget::new(limits().allocated_bytes),
         |reader| {
-            let latest = reader.certified(14).map_err(|error| error.to_string())?;
-            let selecting = reader.certified(10).map_err(|error| error.to_string())?;
-            let before = reader.certified(9).map_err(|error| error.to_string())?;
+            let latest = reader.certified(14).map_err(NativeJournalError::History)?;
+            let selecting = reader.certified(10).map_err(NativeJournalError::History)?;
+            let before = reader.certified(9).map_err(NativeJournalError::History)?;
             let selection = &evidence.status.selected.as_ref().unwrap().transition;
             validate_validator_committee_selection_binding_v1(selection, &selecting, &latest, 2)?;
             assert!(

@@ -1346,3 +1346,148 @@ fn rematerialized_numeric_operands_keep_rounding_branch_and_quantity_faults() {
         );
     }
 }
+
+#[test]
+fn borrowed_numeric_operands_keep_values_faults_and_real_typed_call_tables() {
+    let program = compile(
+        r#"seiyaku BorrowedNumeric {
+        fn arithmetic(int left, int right) -> int {
+            if (left < right) { return (left + right) * (right - left); }
+            return (left - right) + (left * right);
+        }
+        view fn run(int left, int right) -> int { return arithmetic(left, right); }
+    }"#,
+    );
+    let parsed = ProgramMetadata::parse(&program).unwrap();
+    assert_eq!(
+        parsed.contract_interface.as_ref().unwrap().callables.len(),
+        2,
+        "both original call boundaries retain typed descriptors"
+    );
+    let publish = encoding::wide::encode_sys(
+        ivm::instruction::wide::system::SCALL,
+        syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+    );
+    assert!(
+        !program[parsed.code_offset..]
+            .chunks_exact(4)
+            .any(|word| u32::from_le_bytes(word.try_into().unwrap()) == publish)
+    );
+    for (left, right, expected) in [
+        ("3", "7", "40"),
+        ("7", "3", "25"),
+        ("5", "5", "25"),
+        ("-3", "4", "7"),
+    ] {
+        let mut vm = IVM::new(1_000_000);
+        vm.load_program(&program).unwrap();
+        vm.set_program_counter(entrypoint_pc(&program)).unwrap();
+        let payload =
+            Json::from_str_norito(&format!(r#"{{"left":"{left}","right":"{right}"}}"#)).unwrap();
+        let mut host = argument_host(&program, &payload).unwrap();
+        let observer_budget = iroha_allocation::AllocationBudget::new(32 * 1024 * 1024);
+        let mut steps =
+            ivm::execution_step_recorder::DiagnosticStepRecorder::try_new(4096, &observer_budget)
+                .unwrap();
+        vm.run_with_host_diagnostic_steps(&mut host, &mut steps)
+            .unwrap();
+        assert_eq!(
+            common::decode_int_word(&vm, vm.public_call_result_word(0).unwrap()),
+            bigint(expected)
+        );
+        let arithmetic = steps
+            .records()
+            .iter()
+            .filter(|step| {
+                step.instruction.is_some_and(|word| {
+                    ivm::instruction::wide::opcode(word) == ivm::instruction::wide::system::SYSTEM
+                        && [
+                            syscalls::SYSCALL_INT_ADD,
+                            syscalls::SYSCALL_INT_SUB,
+                            syscalls::SYSCALL_INT_MUL,
+                            syscalls::SYSCALL_INT_LT,
+                        ]
+                        .contains(&encoding::wide::decode_syscallx(word))
+                })
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            arithmetic.len() >= 4,
+            "actual branch and arithmetic syscalls execute"
+        );
+        for step in arithmetic {
+            assert!(
+                step.before.gas_remaining > step.after.gas_remaining,
+                "the original typed numeric work remains metered"
+            );
+        }
+        assert!(
+            steps
+                .records()
+                .iter()
+                .all(|step| step.instruction != Some(publish))
+        );
+        eprintln!(
+            "borrowed numeric runtime left={left} right={right} artifact_bytes={} gas_used={} steps={}",
+            program.len(),
+            1_000_000 - vm.remaining_gas(),
+            steps.records().len()
+        );
+    }
+    let overflow = run_binary(&program, MAX_INT, "1").unwrap_err();
+    assert_eq!(
+        numeric_fault_from_vm_error(&overflow),
+        Some(NumericFaultV1::MantissaOverflow)
+    );
+    let division = compile(
+        "seiyaku Division { view fn run(int left, int right) -> int { return left / right; } }",
+    );
+    let failure = run_binary(&division, "7", "0").unwrap_err();
+    assert_eq!(
+        numeric_fault_from_vm_error(&failure),
+        Some(NumericFaultV1::DivisionByZero)
+    );
+}
+
+#[test]
+fn borrowed_numeric_literal_and_host_results_keep_decimal_and_quantity_faults() {
+    // Existing complete entry/call/result validation is used with literal and
+    // freshly allocated numeric results, including both comparison outcomes.
+    let decimal = compile(
+        r#"seiyaku BorrowedDecimal {
+        view fn run(decimal value) -> decimal {
+            let decimal sum = value + 1.25;
+            if (sum < 0) { return sum - 2.5; }
+            return sum * 2;
+        }
+    }"#,
+    );
+    for (value, expected) in [("2", "6.5"), ("-2", "-3.25")] {
+        let payload = Json::from_str_norito(&format!(r#"{{"value":"{value}"}}"#)).unwrap();
+        assert_eq!(
+            execute_numeric_program(&decimal, Some(&payload), NumericReturnKind::Decimal),
+            NumericOutcome::Value(NumericValue::Decimal(expected.parse().unwrap()))
+        );
+    }
+    let quantity = compile(
+        r#"seiyaku BorrowedQuantity {
+        view fn run(quantity value) -> quantity { let quantity one = 1; return value - one; }
+    }"#,
+    );
+    for (value, expected) in [
+        (
+            "3.5",
+            NumericOutcome::Value(NumericValue::Quantity("2.5".parse().unwrap())),
+        ),
+        (
+            "0",
+            NumericOutcome::Fault(NumericFaultV1::QuantityUnderflow),
+        ),
+    ] {
+        let payload = Json::from_str_norito(&format!(r#"{{"value":"{value}"}}"#)).unwrap();
+        assert_eq!(
+            execute_numeric_program(&quantity, Some(&payload), NumericReturnKind::Quantity),
+            expected
+        );
+    }
+}

@@ -15,7 +15,7 @@ use halo2_base::gates::{
     GateInstructions as _, RangeInstructions as _, circuit::builder::BaseCircuitBuilder,
 };
 
-use super::ordinary_zero_bootstrap_fixture as originals;
+use super::ordinary_originals::core as originals;
 
 pub(super) fn mathematical_protocol<C>(parameters: &ParamsIPA<C>, width: usize) -> PlonkProtocol<C>
 where
@@ -125,6 +125,7 @@ pub(super) struct OrdinaryBootstrapStateForTestingV1 {
     pub(super) state: KagemushaStateV1,
     pub(super) credential: KagemushaOrdinaryAppCredentialV1,
     pub(super) issuer_table: OrdinaryIssuerTableV1,
+    // Retain the authenticated predecessor counter in the returned fixture.
     pub(super) previous_counter: Option<u32>,
     pub(super) guard_eq_protocol: PlonkProtocol<EqAffine>,
     pub(super) guard_ep_protocol: PlonkProtocol<EpAffine>,

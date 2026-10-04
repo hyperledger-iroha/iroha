@@ -17,12 +17,14 @@ import pwd
 import re
 import stat
 import sys
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 
 CATALOG_MAX_BYTES_V1 = 256 * 1024
+BROKER_POLICY_MAX_BYTES_V1 = 16 * 1024
 BROKER_EXECUTABLE_MAX_BYTES_V1 = 512 * 1024 * 1024
 SUPERVISOR_ASSET_MAX_BYTES_V1 = 128 * 1024
 SERVICE_USER = "iroha"
@@ -42,6 +44,7 @@ class InstallLayout:
     platform: str
     executable: PurePosixPath
     catalog: PurePosixPath
+    policy: PurePosixPath
     runtime_directory: PurePosixPath
     socket: PurePosixPath
     supervisor_asset: PurePosixPath
@@ -58,6 +61,7 @@ LAYOUTS = {
         catalog=PurePosixPath(
             "/etc/iroha/runtime-provider-broker/catalog.norito"
         ),
+        policy=PurePosixPath("/etc/iroha/runtime-provider-broker/policy.toml"),
         runtime_directory=PurePosixPath(
             "/run/iroha-runtime-provider-broker-v1"
         ),
@@ -96,6 +100,7 @@ LAYOUTS = {
         catalog=PurePosixPath(
             "/private/etc/iroha/runtime-provider-broker/catalog.norito"
         ),
+        policy=PurePosixPath("/private/etc/iroha/runtime-provider-broker/policy.toml"),
         runtime_directory=PurePosixPath("/private/var/iroha/run"),
         socket=PurePosixPath(
             "/private/var/iroha/run/runtime-provider-broker-v1.sock"
@@ -443,6 +448,41 @@ def _check_supervisor_asset(
         )
 
 
+def _check_broker_policy(
+    path: Path,
+    *,
+    layout: InstallLayout,
+    install_root: Path,
+    trusted_artifact_owner_uid: int,
+    service_uid: int,
+    service_gid: int,
+) -> None:
+    """Require the secure public TOML used by the fixed supervisor command."""
+    _require_secure_directories(path, install_root=install_root,
+        trusted_owner_uids=frozenset({trusted_artifact_owner_uid}))
+    payload, info = _read_regular_bounded(path, label="installed runtime-provider policy",
+        maximum_bytes=BROKER_POLICY_MAX_BYTES_V1, require_single_link=True)
+    if info.st_uid != trusted_artifact_owner_uid or stat.S_IMODE(info.st_mode) & 0o7222:
+        raise InstallCheckError("installed runtime-provider policy has unsafe owner or mode")
+    if not _service_can_access(info, service_uid=service_uid, service_gid=service_gid,
+        owner_mask=stat.S_IRUSR, group_mask=stat.S_IRGRP, other_mask=stat.S_IROTH):
+        raise InstallCheckError("installed runtime-provider policy is not readable by the service UID")
+    try:
+        policy = tomllib.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise InstallCheckError("installed runtime-provider policy is invalid TOML") from error
+    if set(policy) - {"endpoint_path", "observer_operation_timeout_ms", "credential_max_memory_bytes"}:
+        raise InstallCheckError("installed runtime-provider policy contains unknown fields")
+    if policy.get("endpoint_path") != str(layout.socket):
+        raise InstallCheckError("installed runtime-provider policy endpoint differs from the service socket")
+    timeout = policy.get("observer_operation_timeout_ms", 15_000)
+    if type(timeout) is not int or not 1 <= timeout <= 15_000:
+        raise InstallCheckError("installed runtime-provider policy operation timeout is outside 1..15000 ms")
+    budget = policy.get("credential_max_memory_bytes", 67_108_864)
+    if type(budget) is not int or budget <= 0:
+        raise InstallCheckError("installed runtime-provider policy memory budget must be positive")
+
+
 def validate_install(
     *,
     layout: InstallLayout,
@@ -522,6 +562,9 @@ def validate_install(
         raise InstallCheckError(
             "installed runtime-provider catalog differs from the expected canonical bytes"
         )
+    _check_broker_policy(_under_root(install_root, layout.policy), layout=layout,
+        install_root=install_root, trusted_artifact_owner_uid=trusted_artifact_owner_uid,
+        service_uid=service_uid, service_gid=service_gid)
     if check_runtime_directory or layout.platform == "macos":
         _check_runtime_directory(
             _under_root(install_root, layout.runtime_directory),

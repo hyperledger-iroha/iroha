@@ -240,3 +240,101 @@ fn observer_expiry_during_key_io_does_not_renew_original_challenge() {
     assert!(matches!(result, Err(ObserverError::Check)));
     assert_eq!(f.native.finalized_floor(), floor);
 }
+
+#[test]
+fn observer_binding_refusal_retries_original_pool_signed_payload_and_deadline_once() {
+    use iroha_core::query::final_promotion_authority::observation::NativeCheckBindingErrorV1;
+
+    let f = Fixture::new();
+    let observer = f.observer_transactions();
+    let prepared = f.prepare_receipt_check(None, Duration::from_secs(60));
+    let deadline = prepared.deadline();
+    let instruction = prepared.instruction().clone();
+    let payload = f.observer_payload(instruction.clone().into());
+    let expected = payload.clone();
+    let pool = f.native.state().ivm_execution_budget();
+    let limit = pool.limit_bytes();
+    let baseline = pool.reserved_bytes();
+    let mut signer_calls = 0;
+    let mut original_signature = None;
+    let mut waits = 0;
+    let pending = observer
+        .sign_receipt_waiting(
+            prepared,
+            payload,
+            |request| {
+                signer_calls += 1;
+                assert_eq!(request.payload(), &expected);
+                let signature = Signature::try_new(key(3).private_key(), request.signing_message())
+                    .map_err(|_| ObserverError::Provider)?;
+                original_signature = Some(signature.clone());
+                pool.set_limit_bytes(0);
+                Ok(signature)
+            },
+            |failure, delay| {
+                waits += 1;
+                assert_eq!(failure.deadline(), deadline);
+                assert!(failure.error().is_retryable());
+                let NativeCheckBindingErrorV1::Deferred(original) = failure.error() else {
+                    panic!("original State frame admission")
+                };
+                assert!(matches!(
+                    original.allocation_refusal(),
+                    Some(iroha_allocation::AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. })
+                ));
+                assert_eq!(pool.reserved_bytes(), baseline);
+                assert_eq!(delay, Duration::from_millis(1));
+                pool.set_limit_bytes(limit);
+            },
+        )
+        .unwrap();
+    assert_eq!(signer_calls, 1);
+    assert_eq!(waits, 1);
+    assert_eq!(pending.deadline(), deadline);
+    assert_eq!(pending.signed_transaction().payload(), &expected);
+    pending.signed_transaction().verify_signature().unwrap();
+    let exact = TransactionBuilder::from_payload(expected)
+        .unwrap()
+        .build_with_signature(original_signature.unwrap());
+    assert_eq!(pending.signed_transaction(), &exact);
+    assert!(pool.reserved_bytes() > baseline);
+    drop(pending);
+    assert_eq!(pool.reserved_bytes(), baseline);
+}
+
+#[test]
+fn observer_binding_capacity_expiry_is_local_unavailability_without_resigning() {
+    let f = Fixture::new();
+    let observer = f.observer_transactions();
+    let prepared = f.prepare_receipt_check(None, Duration::from_secs(1));
+    let deadline = prepared.deadline();
+    let payload = f.observer_payload(prepared.instruction().clone().into());
+    let pool = f.native.state().ivm_execution_budget();
+    let limit = pool.limit_bytes();
+    let baseline = pool.reserved_bytes();
+    let mut signer_calls = 0;
+    let mut waits = 0;
+    let result = observer.sign_receipt_waiting(
+        prepared,
+        payload,
+        |request| {
+            signer_calls += 1;
+            let signature = Signature::try_new(key(3).private_key(), request.signing_message())
+                .map_err(|_| ObserverError::Provider)?;
+            pool.set_limit_bytes(0);
+            Ok(signature)
+        },
+        |failure, _| {
+            waits += 1;
+            assert_eq!(failure.deadline(), deadline);
+            assert!(failure.error().is_retryable());
+            // Service delay crosses exactly the existing deadline; no replacement lifetime.
+            std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+        },
+    );
+    pool.set_limit_bytes(limit);
+    assert!(matches!(result, Err(ObserverError::Unavailable)));
+    assert_eq!(signer_calls, 1);
+    assert_eq!(waits, 1);
+    assert_eq!(pool.reserved_bytes(), baseline);
+}

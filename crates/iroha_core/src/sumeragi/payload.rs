@@ -317,17 +317,16 @@ pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
 /// or the decoded block has no consensus work. Local decoder resource refusal remains
 /// [`PayloadError::DecodeResource`], rather than a deterministic property of the bytes.
 pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
-    let block =
-        iroha_data_model::block::decode_versioned_signed_block(payload).map_err(|error| {
-            match crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
-                PayloadError::NotCanonical(error.to_string())
-            }) {
-                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                    PayloadError::DecodeResource(reason)
-                }
-                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+    let block = iroha_data_model::block::decode_framed_signed_block(payload).map_err(|error| {
+        match crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
+            PayloadError::NotCanonical(error.to_string())
+        }) {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                PayloadError::DecodeResource(reason)
             }
-        })?;
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+        }
+    })?;
     if !has_work(&block) {
         return Err(PayloadError::EmptyBlock);
     }

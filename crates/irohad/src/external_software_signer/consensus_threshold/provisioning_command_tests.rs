@@ -110,7 +110,140 @@ fn prepared_custody_cli_requires_external_pins_and_exposes_no_secret_argument() 
     assert!(!help.contains("--anchor-height"));
     assert!(help.contains("--transition-id"));
     assert!(help.contains("--current-catalog"));
+    assert!(help.contains("--credential-max-memory-bytes"));
+    let command = Args::command();
+    let bound = command
+        .get_arguments()
+        .find(|argument| argument.get_id() == "credential_max_memory_bytes")
+        .unwrap()
+        .clone();
+    assert!(bound.is_required_set());
+    let budget_command = clap::Command::new("budget").arg(bound);
+    assert!(
+        budget_command
+            .clone()
+            .try_get_matches_from(["budget"])
+            .is_err()
+    );
+    assert!(
+        budget_command
+            .clone()
+            .try_get_matches_from(["budget", "--credential-max-memory-bytes", "0"])
+            .is_err()
+    );
+    assert!(
+        budget_command
+            .try_get_matches_from(["budget", "--credential-max-memory-bytes", "1"])
+            .is_ok()
+    );
+    let budget = AllocationBudget::new(0);
+    let original = budget.try_reserve_bytes(1).unwrap_err();
+    let mapped = PreparationError::from(GlobalThresholdBeaconSessionError::Admission(
+        original.clone(),
+    ));
+    assert!(
+        matches!(mapped, PreparationError::Credential(RuntimeConsensusThresholdSignerCredentialErrorV1::Session(GlobalThresholdBeaconSessionError::Admission(actual))) if actual == original)
+    );
+    let proof_error = PreparationError::from(ValidatorCommitteeProvisioningEvidenceError::Session(
+        GlobalThresholdBeaconSessionError::Admission(original.clone()),
+    ));
+    assert!(matches!(
+        proof_error,
+        PreparationError::Evidence(ValidatorCommitteeProvisioningEvidenceError::Session(
+            GlobalThresholdBeaconSessionError::Admission(actual)
+        )) if actual == original
+    ));
+    assert!(matches!(
+        PreparationError::from(ValidatorCommitteeProvisioningEvidenceError::Invalid(
+            "invalid signed evidence".to_owned()
+        )),
+        PreparationError::Evidence(ValidatorCommitteeProvisioningEvidenceError::Invalid(_))
+    ));
     assert!(!help.contains("--private-key"));
     assert!(!help.contains("--seed"));
     assert!(Args::try_parse_from(["beacon-prepare-custody", "--output", "/tmp/new"]).is_err());
+}
+
+#[test]
+fn provisioning_decoder_retains_original_scope_and_retries_unchanged_public_bytes() {
+    use iroha_data_model::{
+        isi::consensus_keys::{ThresholdKeyLifecycleActionV1, ThresholdKeyLifecycleCertificateV1},
+        nexus::ValidatorCommitteeStatusV1,
+        sumeragi::finality::{
+            NativeFinalityArtifact, NativeFinalityDecodeError, NativeFinalityJournal,
+            NativeFinalityLimits,
+        },
+    };
+    // Codec-only envelope: these bytes establish no signature, finality or custody authority.
+    let network = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+        Hash::new(b"provisioning decoder source"),
+    ));
+    let artifact = NativeFinalityArtifact {
+        block_wire: vec![1; 32],
+    };
+    let evidence = ValidatorCommitteeProvisioningEvidenceV1 {
+        status: ValidatorCommitteeStatusV1 {
+            network_id: network,
+            target_epoch: 2,
+            latest_finality: artifact.clone(),
+            selected: None,
+            candidate_keys: Vec::new(),
+            pending_beacon_session: None,
+        },
+        finality_journal: NativeFinalityJournal {
+            blocks: vec![artifact],
+        },
+        beacon_finalization: ThresholdKeyLifecycleCertificateV1 {
+            version: 1,
+            action: ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
+            expected_active_session_id: None,
+            effective_height: 2,
+            network_id: network,
+            roster_hash: [2; 32],
+            committee_size: 4,
+            quorum: 3,
+            session_id: [3; 32],
+            transcript_hash: [4; 32],
+            public_state: vec![5; 32],
+            signatures: Vec::new(),
+        },
+    };
+    let bytes = norito::encode_canonical(&evidence).unwrap();
+    let limits = NativeFinalityLimits {
+        block_bytes: 1024 * 1024,
+        journal_bytes: 4 * 1024 * 1024,
+        block_count: 16,
+        allocated_bytes: 64 * 1024 * 1024,
+    };
+    let error = norito::core::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || decode_provisioning_evidence(&bytes, limits),
+    )
+    .unwrap_err();
+    let PreparationError::Journal(NativeJournalError::Decode(NativeFinalityDecodeError::Resource(
+        original,
+    ))) = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    assert!(matches!(
+        original.into_error().decode_resource_error(),
+        Some(norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+    ));
+    assert_eq!(
+        decode_provisioning_evidence(&bytes, limits).unwrap(),
+        evidence
+    );
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(matches!(
+        decode_provisioning_evidence(&trailing, limits),
+        Err(PreparationError::Journal(NativeJournalError::Decode(
+            NativeFinalityDecodeError::Malformed(_)
+        )))
+    ));
 }

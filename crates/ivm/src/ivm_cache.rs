@@ -233,7 +233,6 @@ impl IvmCache {
         artifact: &[u8],
     ) -> Result<(ProgramMetadata, DecodedStream), crate::VMError> {
         let parsed = ProgramMetadata::parse(artifact)?;
-        validate_supported_artifact_metadata(&parsed.metadata)?;
         let code = &artifact[parsed.code_offset..];
         let decoded = Self::decode_stream(code)?;
         Ok((parsed.metadata, decoded))
@@ -244,7 +243,6 @@ impl IvmCache {
         artifact: &[u8],
     ) -> Result<(ProgramMetadata, DecodedStream), crate::VMError> {
         let parsed = ProgramMetadata::parse(artifact)?;
-        validate_supported_artifact_metadata(&parsed.metadata)?;
         let code = &artifact[parsed.code_offset..];
         let key = Self::key_for(code);
         let decoded = self.get_or_predecode_with_key(key, code)?;
@@ -313,12 +311,6 @@ impl IvmCache {
 /// Returns exactly the stream geometry or instruction error from ordinary decoding.
 pub fn validate_instruction_stream(code: &[u8]) -> Result<usize, crate::VMError> {
     ValidatedInstructions::new(code).map(ValidatedInstructions::len)
-}
-fn validate_supported_artifact_metadata(meta: &ProgramMetadata) -> Result<(), crate::VMError> {
-    if meta.version_major == 1 && meta.version_minor == 1 {
-        return Ok(());
-    }
-    Err(crate::VMError::InvalidMetadata)
 }
 // Global thread-safe cache and counters (Phase 2)
 pub struct ShardedCache {

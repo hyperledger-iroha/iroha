@@ -7,19 +7,34 @@
 //! capability after their policy, finalized-state, and durable-journal inputs are complete.
 use super::{
     MusubiPublicationFinalizedArchiveRegistrationQueryV1,
-    MusubiPublicationFinalizedArchiveRegistrationReaderV1, MusubiSeedStagingBackendV1,
-    MusubiSeedStagingErrorV1,
+    MusubiPublicationFinalizedArchiveRegistrationReadErrorV1,
+    MusubiPublicationFinalizedArchiveRegistrationReaderV1,
 };
 use iroha_data_model::{
     musubi::{MusubiArchiveCommitmentV1, MusubiSeedIngressReceiptBindingV1},
     sorafs::capacity::ProviderId,
 };
-use iroha_musubi_service::{MusubiPublicationServiceBackendErrorV1, MusubiSeedIngressBackendV1};
+use iroha_musubi_service::{
+    MusubiPublicationServiceBackendErrorV1, MusubiSeedIngressBackendV1, MusubiSeedStagingBackendV1,
+    MusubiSeedStagingErrorV1,
+};
 use sorafs_car::CarBuildPlan;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
+
+/// Exact native-read or local custody failure while acquiring a finalized seed lease.
+///
+/// Native allocation refusals keep their original retry owner; local bytes never turn an
+/// unavailable native observation into successful registration evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MusubiPublicationFinalizedSeedReadErrorV1 {
+    /// The original native registration read failed, including its retained allocation deferral.
+    Finality(MusubiPublicationFinalizedArchiveRegistrationReadErrorV1),
+    /// The local seed owner or its exclusive bounded read lease refused.
+    Custody(MusubiSeedStagingErrorV1),
+}
 
 /// Read-only handoff of finalized, exact staged bytes to a deployment coordinator.
 ///
@@ -45,30 +60,21 @@ impl MusubiPublicationFinalizedSeedReadCapabilityV1 {
     pub fn read_finalized_seed(
         &self,
         query: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
-    ) -> Result<MusubiPublicationFinalizedSeedReadLeaseV1, MusubiSeedStagingErrorV1> {
+    ) -> Result<MusubiPublicationFinalizedSeedReadLeaseV1, MusubiPublicationFinalizedSeedReadErrorV1>
+    {
+        use MusubiPublicationFinalizedSeedReadErrorV1::{Custody, Finality};
         self.active_read
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| MusubiSeedStagingErrorV1::Capacity)?;
+            .map_err(|_| Custody(MusubiSeedStagingErrorV1::Capacity))?;
         let reservation = SeedReadReservationV1(Arc::clone(&self.active_read));
-        let archive = self
-            .reader
-            .read_current_archive(query)
-            .map_err(|error| match error {
-                super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(
-                    error,
-                ) => MusubiSeedStagingErrorV1::Deferred(error),
-                super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
-                    MusubiSeedStagingErrorV1::LocallyAhead
-                }
-                super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => {
-                    MusubiSeedStagingErrorV1::Invalid
-                }
-            })?;
+        let archive = self.reader.read_current_archive(query).map_err(Finality)?;
         let seed = self
             .seed
             .lock()
-            .map_err(|_| MusubiSeedStagingErrorV1::Unavailable)?;
-        let (plan, car) = seed.read_verified_archive_seed(&archive)?;
+            .map_err(|_| Custody(MusubiSeedStagingErrorV1::Unavailable))?;
+        let (plan, car) = seed
+            .read_staged_car(&archive.staging_receipt, &archive.commitment)
+            .map_err(Custody)?;
         Ok(MusubiPublicationFinalizedSeedReadLeaseV1 {
             plan,
             car,

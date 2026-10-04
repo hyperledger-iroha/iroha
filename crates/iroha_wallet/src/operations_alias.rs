@@ -16,6 +16,39 @@ pub(super) enum AliasFeeBounds {
 }
 
 impl AccountService {
+    /// Inspect the exact bounded alias preparation without planning, signing or network I/O.
+    /// # Errors
+    /// Rejects changed alias request, fee authorization or unsafe journal custody.
+    pub fn inspect_alias_bounded_preparation(
+        &self,
+        journal: &Path,
+        request: &AliasSetupPlanRequestV1,
+        options: &BoundedTransactionOptions,
+    ) -> Result<VerifiedNativePreparation> {
+        self.inspect_preparation(
+            journal,
+            NativeOperationKind::AliasSetup,
+            Some(OperationExpectation::PrivateRoot(
+                BoundedOperationExpectation::Alias(request, options),
+            )),
+        )
+    }
+    /// Retire only this exact retained request before any payload or dispatch evidence exists.
+    /// # Errors
+    /// Refuses missing, changed, malformed, payload-retained or signed histories and unsafe custody.
+    pub fn retire_alias_bounded_unprepared(
+        &self,
+        journal: &Path,
+        request: &AliasSetupPlanRequestV1,
+        options: &BoundedTransactionOptions,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation(
+            journal,
+            NativeOperationKind::AliasSetup,
+            OperationExpectation::PrivateRoot(BoundedOperationExpectation::Alias(request, options)),
+        )
+    }
+
     /// Prepare one paid alias request within explicit aggregate fee limits and one deadline.
     ///
     /// The verified alias request and plan separately bind lease rent and ownership terms.
@@ -31,6 +64,19 @@ impl AccountService {
         options: &BoundedTransactionOptions,
         journal: &Path,
     ) -> Result<OperationReport> {
+        if let Some(report) = self
+            .with_deadline(options.deadline)?
+            .finish_existing_preparation(
+                journal,
+                NativeOperationKind::AliasSetup,
+                Some(OperationExpectation::PrivateRoot(
+                    BoundedOperationExpectation::Alias(request, options),
+                )),
+            )?
+        {
+            return Ok(report);
+        }
+
         let terms = BoundedTerms::new(options)?;
         self.with_deadline(options.deadline)?
             .prepare_alias_with_bounds(
@@ -54,11 +100,9 @@ impl AccountService {
         request: &AliasSetupPlanRequestV1,
         options: &BoundedTransactionOptions,
     ) -> Result<()> {
-        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        let journal = Journal::open(journal)?;
-        let record: TransactionJournal = journal.read_operation()?;
-        record.verify(&self.config)?;
-        BoundedOperationExpectation::Alias(request, options).verify(&record)
+        self.inspect_alias_bounded_preparation(journal, request, options)?
+            .into_signed_transaction()?;
+        Ok(())
     }
 
     /// Submit the original bounded alias transaction once after comparing its request under lock.

@@ -623,16 +623,6 @@ impl PublicLaneStakeIndex {
             .map(|index| &groups[index])
     }
 
-    /// Original physical allocations, for tests of move-only index custody.
-    #[cfg(test)]
-    pub(crate) fn allocation_identity_for_test(&self) -> (usize, usize, usize) {
-        (
-            self.share_keys.as_slice().as_ptr() as usize,
-            self.groups.as_slice().as_ptr() as usize,
-            self._nested_account_charges.as_slice().as_ptr() as usize,
-        )
-    }
-
     #[cfg(test)]
     pub(crate) fn row_visits(&self) -> usize {
         self.row_visits
@@ -721,7 +711,7 @@ fn materialize_index_quantity(
     let charge = reservation
         .try_split(layout)
         .map_err(|_| EvidencePreparationError::Invariant)?;
-    #[cfg(all(test, feature = "mutation-testing", sumeragi_core_mutation = "HC55"))]
+    #[cfg(all(test, feature = "mutation-testing", sumeragi_core_mutation = "HC87"))]
     let charge = {
         // Mutation: release the admitted original while the physical quantity lives.
         drop(charge);

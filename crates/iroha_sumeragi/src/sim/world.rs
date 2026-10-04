@@ -10,6 +10,9 @@
 
 mod progress;
 mod storage;
+mod transport;
+
+pub use transport::SharedWire;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -173,7 +176,7 @@ pub struct Replica {
     /// Executor.
     pub exec: Executor,
     /// Egress NIC: packets carry `(target replica, message)`.
-    pub nic: Nic<(usize, Rc<WireMessage>)>,
+    pub nic: Nic<(usize, Rc<SharedWire>)>,
     /// Transaction queue of the payload builder.
     pub txs: BTreeMap<u64, Vec<u8>>,
     /// Quarantined transactions.
@@ -200,7 +203,7 @@ enum Ev {
     Arrive {
         r: usize,
         from: PublicKey,
-        msg: Rc<WireMessage>,
+        msg: Rc<SharedWire>,
     },
     Local {
         r: usize,
@@ -1088,7 +1091,7 @@ impl World {
                 if matches!(msg, WireMessage::Proposal(_)) && !self.machines[m].byz {
                     self.stats.proposals += 1;
                 }
-                self.net_send(r, &to, Rc::new(msg), at);
+                self.net_send(r, &to, SharedWire::share(msg), at);
             }
             Action::Broadcast { to, msg } => {
                 self.expose(r, &msg);
@@ -1099,7 +1102,7 @@ impl World {
                     let bh = p.proposal.block_hash(&self.hasher);
                     self.oracle.proposed.entry(bh).or_insert(at);
                 }
-                let msg = Rc::new(msg);
+                let msg = SharedWire::share(msg);
                 for key in &to {
                     self.net_send(r, key, Rc::clone(&msg), at);
                 }
@@ -1144,7 +1147,7 @@ impl World {
                         Err((_, error)) => self.fail(format!("sim restoration failed: {error:?}")),
                     }
                 } else {
-                    let msg = Rc::new(WireMessage::PayloadRequest(PayloadRequest {
+                    let msg = SharedWire::share(WireMessage::PayloadRequest(PayloadRequest {
                         instance,
                         height: source.height(),
                         block_hash: source.block_hash(),
@@ -1267,7 +1270,7 @@ impl World {
                 let blocks = self.serve_blocks(r, from_height, max_count, max_bytes);
                 let msg = WireMessage::SyncResponse(SyncResponse { instance, blocks });
                 self.expose(r, &msg);
-                self.net_send(r, &to, Rc::new(msg), at);
+                self.net_send(r, &to, SharedWire::share(msg), at);
             }
             Action::ReportEvidence(evidence) => {
                 self.expose_evidence(r, &evidence);
@@ -1296,7 +1299,7 @@ impl World {
             &self.replicas[r].budget,
         )
         .unwrap();
-        let manifest = Rc::new(WireMessage::PayloadManifest(PayloadManifest {
+        let manifest = SharedWire::share(WireMessage::PayloadManifest(PayloadManifest {
             header: body.header().clone(),
             availability: body.availability().clone(),
         }));
@@ -1309,7 +1312,7 @@ impl World {
                 crate::availability::RowBytes::from_untrusted(encoded.codeword()[range].to_vec())
                     .unwrap();
             bytes.admit(&self.replicas[r].budget).unwrap();
-            let chunk = Rc::new(WireMessage::PayloadChunk(PayloadChunk {
+            let chunk = SharedWire::share(WireMessage::PayloadChunk(PayloadChunk {
                 instance: body.header().instance,
                 height: body.header().height,
                 block_hash: body.hash(&self.hasher),
@@ -1390,7 +1393,7 @@ impl World {
     }
 
     /// Queue a message from replica `r` to the owner of `to` on `r`'s NIC.
-    pub fn net_send(&mut self, r: usize, to: &PublicKey, msg: Rc<WireMessage>, at: Millis) {
+    pub fn net_send(&mut self, r: usize, to: &PublicKey, msg: Rc<SharedWire>, at: Millis) {
         let Some(&tm) = self.key_owner.get(to) else {
             return;
         };
@@ -1406,7 +1409,7 @@ impl World {
     }
 
     /// Queue a message from replica `r` to replica `target` (bypassing key routing).
-    pub fn send_to_replica(&mut self, r: usize, target: usize, msg: Rc<WireMessage>, at: Millis) {
+    pub fn send_to_replica(&mut self, r: usize, target: usize, msg: Rc<SharedWire>, at: Millis) {
         if target == r {
             return; // O7
         }
@@ -1441,7 +1444,7 @@ impl World {
         }
     }
 
-    fn transmit(&mut self, r: usize, target: usize, msg: Rc<WireMessage>, depart: Millis) {
+    fn transmit(&mut self, r: usize, target: usize, msg: Rc<SharedWire>, depart: Millis) {
         let size = approx_size(&msg);
         let lane = lane(class_of(&msg));
         self.stats.packets[lane] += 1;
@@ -1485,12 +1488,12 @@ impl World {
             Ev::Arrive {
                 r,
                 from,
-                msg: Rc::new(msg),
+                msg: SharedWire::share(msg),
             },
         );
     }
 
-    fn arrive(&mut self, r: usize, from: PublicKey, msg: &Rc<WireMessage>) {
+    fn arrive(&mut self, r: usize, from: PublicKey, msg: &Rc<SharedWire>) {
         let m = self.replicas[r].machine;
         if !self.machines[m].up || !self.replicas[r].host.running() {
             return;
@@ -1499,11 +1502,11 @@ impl World {
             self.byz_observe(r, &from, msg);
         }
         let class = class_of(msg);
-        let Ok(bytes) = msg.encode() else {
+        let Ok(bytes) = msg.canonical_bytes() else {
             return;
         };
         let Ok(mut decoded) = WireMessage::decode(
-            &bytes,
+            bytes,
             usize::try_from(self.net.frame_limit).unwrap_or(usize::MAX),
         ) else {
             return;
@@ -2853,11 +2856,16 @@ pub fn describe_msg(msg: &WireMessage) -> String {
 /// Seeds to run: `SUMERAGI_SIM_SEED` (one seed) or `SUMERAGI_SIM_SEEDS` (count, from
 /// `SUMERAGI_SIM_SEED_BASE`), else `default` seeds from 0.
 pub fn seeds(default: u64) -> Vec<u64> {
+    seed_iter(default).collect()
+}
+
+/// Iterate the same configured seed range without retaining a campaign-sized seed list.
+pub(super) fn seed_iter(default: u64) -> impl Iterator<Item = u64> {
     let var = |name: &str| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok());
     if let Some(seed) = var("SUMERAGI_SIM_SEED") {
-        return vec![seed];
+        return (seed..seed).chain(Some(seed));
     }
     let base = var("SUMERAGI_SIM_SEED_BASE").unwrap_or(0);
     let count = var("SUMERAGI_SIM_SEEDS").unwrap_or(default);
-    (base..base + count).collect()
+    (base..base + count).chain(None)
 }

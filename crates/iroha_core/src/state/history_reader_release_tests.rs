@@ -105,7 +105,7 @@ fn executing_state_retains_captured_reader_notices_until_joint_writer_retirement
             for (future, registration) in pending.as_ref().unwrap().iter().zip(&mut registrations) {
                 assert!(registration.poll_wait(future, &mut context).is_pending());
             }
-            let _hash = block.read_releases.lane_execution_state_hash().unwrap();
+            let _hash = block._read_releases.lane_execution_state_hash().unwrap();
             assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
             assert!(!state.transactions.reader_test_writer_available());
             if unwind {

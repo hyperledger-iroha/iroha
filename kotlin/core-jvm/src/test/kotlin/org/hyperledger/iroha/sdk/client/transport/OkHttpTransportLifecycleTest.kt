@@ -271,6 +271,37 @@ class OkHttpTransportLifecycleTest {
         } finally { closeClient(client) }
     }
 
+    @Test
+    fun streamsOutliveTheRequestTimeoutWhileBytesKeepArriving() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("0123456789").throttleBody(1, 150, TimeUnit.MILLISECONDS))
+            OkHttpTransportExecutor.create().use { transport ->
+                val request = TransportRequest.builder().setUri(server.url("/v1/events/sse").toUri())
+                    .setTimeout(Duration.ofMillis(600)).build()
+                val response = transport.openStream(request).get(5, TimeUnit.SECONDS)
+                val started = System.nanoTime()
+                val body = response.body.use { it.readBytes() }
+                assertEquals("0123456789", String(body, Charsets.UTF_8))
+                assertTrue(System.nanoTime() - started > TimeUnit.MILLISECONDS.toNanos(600), "the stream lasted longer than the timeout")
+                response.close()
+            }
+        }
+    }
+
+    @Test
+    fun streamsFailWhenIdleLongerThanTheTimeout() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("late").setBodyDelay(3, TimeUnit.SECONDS))
+            OkHttpTransportExecutor.create().use { transport ->
+                val request = TransportRequest.builder().setUri(server.url("/v1/events/sse").toUri())
+                    .setTimeout(Duration.ofMillis(300)).build()
+                val response = transport.openStream(request).get(5, TimeUnit.SECONDS)
+                assertFailsWith<IOException> { response.body.use { it.readBytes() } }
+                response.close()
+            }
+        }
+    }
+
     private fun request(server: MockWebServer, method: String = "GET", signed: Boolean = false): TransportRequest =
         TransportRequest.builder().setMethod(method).setUri(server.url("/capability").toUri())
             .apply {

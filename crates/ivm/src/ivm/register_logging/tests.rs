@@ -56,7 +56,10 @@ fn original_logger_admission_refusal_leaves_the_whole_run_unchanged() {
     vm.input_bump_next = 8;
     vm.cycles = 19;
     vm.halted = true;
-    vm.pc_trace.push(7);
+    budget
+        .with_deferred_refund_notifications(|scope| vm.pc_trace.prepare(1, Some(scope)))
+        .unwrap();
+    vm.pc_trace.record_reserved(7);
     let before = vm.execution_summary();
     let previous_events = previous.lock().as_slice().to_vec();
     let baseline = budget.reserved_bytes();

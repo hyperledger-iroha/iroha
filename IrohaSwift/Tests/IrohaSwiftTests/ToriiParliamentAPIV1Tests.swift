@@ -477,9 +477,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         let auth = ToriiCanonicalRequestAuth(
             accountId: try Keypair(privateKeyBytes: seed)
                 .accountId(networkPrefix: AccountId.defaultNetworkPrefix),
-            privateKey: seed,
-            timestampMs: 1_700_000_000_100,
-            nonce: "parliament-casting-proof"
+            privateKey: seed
         )
         let client = ToriiClient(
             baseURL: URL(string: "https://example.test")!,

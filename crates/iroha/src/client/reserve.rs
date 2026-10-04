@@ -15,7 +15,6 @@ use iroha_data_model::{
     sorafs::{
         capacity::ProviderId,
         reserve::{
-            RESERVE_MAX_OPEN_APPEALS_V1, RESERVE_MAX_PENDING_MOVEMENTS_V1,
             RESERVE_MAX_REASON_BYTES_V1, RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1,
             RESERVE_QUERY_MAX_ITEMS_V1, ReserveAppealPageV1, ReserveAppealRecordV1,
             ReserveAppealStatusV1, ReserveAuthorityPolicyRecordV1, ReserveFinalizedCursorV1,
@@ -231,23 +230,18 @@ fn validate_policy_record(record: &ReserveAuthorityPolicyRecordV1, kind: &str) -
     Ok(())
 }
 fn validate_provider_record(record: &ReserveProviderAccountV1, kind: &str) -> Result<()> {
-    if record.terms.provider_id.0 == [0; 32]
-        || record.terms.capacity_gib == 0
-        || record.policy_digest == [0; 32]
-        || record.revision == 0
-        || record.debt_principal > record.credit_cap
-        || record.pending_movements > RESERVE_MAX_PENDING_MOVEMENTS_V1
-        || record.open_appeals > RESERVE_MAX_OPEN_APPEALS_V1
-        || record.rent_charged_through_unix == 0
-        || record.interest_accrued_at_unix == 0
-        || record.updated_at_unix == 0
-        || record.rent_charged_through_unix > record.updated_at_unix
-        || record.interest_accrued_at_unix > record.updated_at_unix
-    {
+    // Keep the SDK's nonzero registry-id prerequisite; the shared validator matches
+    // native stored-partition predicates exactly and does not invent that consensus rule.
+    if record.terms.provider_id.0 == [0; 32] {
         return Err(response_error(kind, "provider record is inconsistent"));
     }
-    Ok(())
+    iroha_data_model::sorafs::reserve::history::validate_provider_record(
+        record,
+        record.terms.provider_id,
+    )
+    .map_err(|_| response_error(kind, "provider record is inconsistent"))
 }
+
 fn validate_movement_record(record: &ReserveMovementRecordV1, kind: &str) -> Result<()> {
     let terminal_fields = record.decided_by.is_some()
         && record.decided_at_unix.is_some()
@@ -774,7 +768,8 @@ mod tests {
             capacity::ProviderId,
             pin_registry::StorageClass,
             reserve::{
-                RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAppealPageV1, ReserveAppealRecordV1,
+                RESERVE_AUTHORITY_POLICY_VERSION_V1, RESERVE_MAX_OPEN_APPEALS_V1,
+                RESERVE_MAX_PENDING_MOVEMENTS_V1, ReserveAppealPageV1, ReserveAppealRecordV1,
                 ReserveAppealStatusV1, ReserveAuthorityPolicyRecordV1, ReserveAuthorityPolicyV1,
                 ReserveDuration, ReserveFinalizedCursorV1, ReserveFinalizedEventPageV1,
                 ReserveFinalizedEventV1, ReserveLifecycleStage, ReserveMovementKindV1,

@@ -2,6 +2,7 @@
 
 import {
   ToriiClient,
+  field,
   normalizeAccountId,
 } from "../src/index.js";
 
@@ -21,24 +22,26 @@ async function main() {
   });
   const accountId = normalizeAccountId(ACCOUNT_LITERAL);
 
-  console.log(`Listing NFTs for account: ${accountId}`);
-  const nftPage = await client.listNfts({
-    requirePermissions: true,
+  console.log(`Listing NFTs owned by account: ${accountId}`);
+  const nftPage = await client.nfts.list({
+    filter: field("owned_by").eq(accountId),
+    sort: "id",
     limit: 5,
-    sort: [{ key: "id", order: "asc" }],
   });
   for (const nft of nftPage.items) {
     console.log(" •", nft.id);
   }
+  if (nftPage.nextCursor) {
+    console.log("   (more NFTs: pass nextCursor as `cursor` to continue)");
+  }
 
   console.log(`\nIterating account assets for ${accountId} (quantity >= 1)`);
-  for await (const holding of client.iterateAccountAssetsQuery(accountId, {
-    requirePermissions: true,
-    pageSize: 3,
-    filter: { Gte: ["quantity", 1] },
-    select: [{ Fields: ["asset_id", "quantity"] }],
+  for await (const holding of client.accountAssets(accountId).iterate({
+    filter: "quantity >= 1",
+    select: ["asset", "quantity"],
+    limit: 3,
   })) {
-    console.log(`${holding.asset_id} => ${holding.quantity}`);
+    console.log(`${holding.asset} => ${holding.quantity}`);
   }
 
   console.log("\nDone");

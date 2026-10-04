@@ -57,12 +57,8 @@ impl super::Nexus<'_> {
         let status: ValidatorCommitteeStatusV1 = Client::decode_canonical_norito_response(
             &response,
             COMMITTEE_STATUS_RESPONSE_MAX_BYTES,
-            "Failed to get validator committee status",
-        )
-        .map_err(|error| crate::Error::Decode {
             operation,
-            details: error.to_string(),
-        })?;
+        )?;
         let source = status
             .latest_finality
             .decode_block(NativeFinalityLimits {
@@ -71,10 +67,7 @@ impl super::Nexus<'_> {
                 block_count: 256,
                 allocated_bytes: 64 * 1024 * 1024,
             })
-            .map_err(|error| crate::Error::Decode {
-                operation,
-                details: format!("noncanonical native committee source: {error}"),
-            })?;
+            .map_err(|source| crate::Error::NativeFinalityDecode { operation, source })?;
         if status.network_id != self.client.network_id
             || target_epoch.is_some_and(|epoch| status.target_epoch != epoch)
             || status.target_epoch == 0

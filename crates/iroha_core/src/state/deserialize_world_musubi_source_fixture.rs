@@ -26,6 +26,7 @@ pub(super) fn seed_provider_attested_location(
     let location_id = MusubiArchiveLocationIdV1::new([0x33; 32]);
     let completion_authority = ProviderIngestCompletionAuthorityV1::new(
         provider_owner.clone(),
+        provider_owner.clone(),
         ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0x34; 32],
             revision: 1,

@@ -211,7 +211,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
     verifying_keys: Storage< iroha_data_model::proof::VerifyingKeyId, iroha_data_model::proof::VerifyingKeyRecord, > => ("world.verifying_keys",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::proof::VerifyingKeyId>(), value: schema::<iroha_data_model::proof::VerifyingKeyRecord>() }));
     verifying_keys_by_circuit: Storage<(String, u32), iroha_data_model::proof::VerifyingKeyId> => ("world.verifying_keys_by_circuit",
-        Role::Derived { sources: &["world.verifying_keys"], check: DerivationCheck::Rebuild("state::deserialize::verifying_key_index::validate_verifying_key_index checks exact circuit/version inverse on current and predecessor cuts, independent of status and activation") });
+        Role::Derived { sources: &["world.verifying_keys"], check: DerivationCheck::Rebuild("state::verifying_key_index_validation::validate; CheckedVerifyingKeys::capture and fail-closed restore check both original images, independent of status and activation") });
     consensus_keys: Storage< iroha_data_model::consensus::ConsensusKeyId, iroha_data_model::consensus::ConsensusKeyRecord, > => ("world.consensus_keys",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::consensus::ConsensusKeyId>(), value: schema::<iroha_data_model::consensus::ConsensusKeyRecord>() }));
     // Registration order is retained and consumed by public-key lookup; records do not carry it.
@@ -271,7 +271,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
     proofs: Storage<iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord> => ("world.proofs",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::proof::ProofId>(), value: schema::<iroha_data_model::proof::ProofRecord>() }));
     proofs_by_status: Storage<iroha_data_model::proof::ProofStatus, BTreeSet<iroha_data_model::proof::ProofId>> => ("world.proofs_by_status",
-        Role::Derived { sources: &["world.proofs"], check: DerivationCheck::Rebuild("World::rebuild_proof_status_index") });
+        Role::Derived { sources: &["world.proofs"], check: DerivationCheck::Rebuild("World::rebuild_proof_status_index; state::authority_registry::grouped_ownership::CheckedProofRecords::capture") });
     proof_tags: Storage<iroha_data_model::proof::ProofId, Vec<[u8; 4]>> => ("world.proof_tags",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::proof::ProofId>(), value: schema::<Vec<[u8; 4]>>() }));
     proofs_by_tag: Storage<[u8; 4], Vec<iroha_data_model::proof::ProofId>> => ("world.proofs_by_tag",
@@ -295,7 +295,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
     contract_subject_bindings: Storage< iroha_data_model::smart_contract::ContractAddress, crate::smartcontracts::code::ContractSubjectBinding, > => ("world.contract_subject_bindings",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::smart_contract::ContractAddress>(), value: schema::<crate::smartcontracts::code::ContractSubjectBinding>() }));
     contract_subject_addresses: Storage<AccountId, iroha_data_model::smart_contract::ContractAddress> => ("world.contract_subject_addresses",
-        Role::Derived { sources: &["world.contract_subject_bindings"], check: DerivationCheck::Rebuild("smartcontracts::code::rebuild_contract_subject_addresses") });
+        Role::Derived { sources: &["world.contract_subject_bindings", "world.accounts", "world.contract_instances"], check: DerivationCheck::Rebuild("state::contract_subject_restore::rebuild; state::authority_registry::grouped_ownership::CheckedContractSubjects::capture checks both original images") });
     smart_contract_state: Storage<StatePath, Vec<u8>> => ("world.smart_contract_state",
         Role::Canonical(Canonical::Table { key: schema::<StatePath>(), value: schema::<Vec<u8>>() }));
     musubi_namespace_bindings: Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1> => ("world.musubi_namespace_bindings",
@@ -499,9 +499,9 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
     zk_assets: Storage<AssetDefinitionId, ZkAssetState> => ("world.zk_assets",
         Role::Canonical(Canonical::Table { key: schema::<AssetDefinitionId>(), value: schema::<ZkAssetState>() }));
     confidential_policy_transition_index: Storage<(u64, AssetDefinitionId), ()> => ("world.confidential_policy_transition_index",
-        Role::Derived { sources: &["world.zk_assets"], check: DerivationCheck::Rebuild("World::rebuild_confidential_policy_transition_index") });
+        Role::Derived { sources: &["world.asset_definitions"], check: DerivationCheck::Rebuild("World::rebuild_confidential_policy_transition_index; CheckedAssetDefinitions::capture checks both native images") });
     confidential_policy_transition_counts: Storage<u64, u32> => ("world.confidential_policy_transition_counts",
-        Role::Derived { sources: &["world.zk_assets"], check: DerivationCheck::Rebuild("World::rebuild_confidential_policy_transition_index") });
+        Role::Derived { sources: &["world.asset_definitions"], check: DerivationCheck::Rebuild("World::rebuild_confidential_policy_transition_index; CheckedAssetDefinitions::capture checks both native images") });
     elections: Storage<String, ElectionState> => ("world.elections",
         Role::Canonical(Canonical::Table { key: schema::<String>(), value: schema::<ElectionState>() }));
     citizens: Storage<AccountId, CitizenshipRecord> => ("world.citizens",
@@ -517,7 +517,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
     governance_lock_expiry_index: Storage<u64, BTreeSet<(String, iroha_data_model::account::AccountId)>> => ("world.governance_lock_expiry_index",
         Role::Derived { sources: &["world.governance_locks", "world.governance_referenda"], check: DerivationCheck::Rebuild("World::rebuild_governance_read_indexes") });
     validation_fee_proposal_index: Storage<(u64, [u8; 32]), ()> => ("world.validation_fee_proposal_index",
-        Role::Derived { sources: &["world.governance_proposals"], check: DerivationCheck::Rebuild("World::rebuild_governance_read_indexes") });
+        Role::Derived { sources: &["world.governance_proposals"], check: DerivationCheck::Rebuild("World::rebuild_governance_read_indexes; CheckedValidationFeeProposals::capture checks both native images") });
     governance_slashes: Storage<String, GovernanceSlashLedger> => ("world.governance_slashes",
         Role::Canonical(Canonical::Table { key: schema::<String>(), value: schema::<GovernanceSlashLedger>() }));
     governance_last_unlock_sweep_height: Cell<u64> => ("world.governance_last_unlock_sweep_height",
@@ -560,8 +560,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Table { key: schema::<u64>(), value: schema::<iroha_data_model::nexus::ValidatorCommitteeTransitionV1>() }));
     global_beacon_dkg: Storage<[u8; 32], GlobalThresholdBeaconDkgSnapshotV1> => ("world.global_beacon_dkg",
         Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<GlobalThresholdBeaconDkgSnapshotV1>() }));
-    global_beacon_key_sessions: Storage<[u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1> => ("world.global_beacon_key_sessions",
-        Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<FinalizedGlobalThresholdBeaconKeySessionRecordV1>() }));
+    global_beacon_key_sessions: Storage<[u8; 32], RetainedFinalizedGlobalThresholdBeaconSessionV1> => ("world.global_beacon_key_sessions",
+        Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<RetainedFinalizedGlobalThresholdBeaconSessionV1>() }));
     global_beacon_active_session: Storage<u64, [u8; 32]> => ("world.global_beacon_active_session",
         Role::Canonical(Canonical::Table { key: schema::<u64>(), value: schema::<[u8; 32]>() }));
     global_beacon_latest_pulse: Storage<u64, GlobalThresholdBeaconPulseLinkV1> => ("world.global_beacon_latest_pulse",
@@ -576,6 +576,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_lanes::SumeragiLaneState>())));
     sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState> => ("world.sumeragi_amx",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_amx::SumeragiAmxState>())));
+    sumeragi_amx_participant: Cell<crate::sumeragi::amx::RetainedNativeAmx, iroha_allocation::AllocationCharge> => ("world.sumeragi_amx_participant",
+        Role::Canonical(Canonical::Cell(schema::<crate::sumeragi::amx::RetainedNativeAmx>())));
     private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry> => ("world.private_dataspaces",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>())));
     sccp_parameters: Cell<Option<iroha_data_model::sccp::params::SccpParametersV1>> => ("world.sccp_parameters",

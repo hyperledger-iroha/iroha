@@ -30,7 +30,7 @@ fn compound_snapshot_roundtrips_current_undo_and_staged_replacement() {
     let mut actual = String::new();
     serialize(&restored, &mut actual);
     assert_eq!(actual, expected);
-    let mut replacement = restored.block_and_revert();
+    let mut replacement = block_field::BlockField::new(restored.block_and_revert());
     assert_eq!(
         replacement
             .iter()
@@ -41,7 +41,20 @@ fn compound_snapshot_roundtrips_current_undo_and_staged_replacement() {
     replacement.insert((2, 0), 22);
     let mut staged = String::new();
     serialize_block(&replacement, &mut staged);
-    replacement.commit();
+    replacement.begin_freeze();
+    replacement.try_finish_freeze(|_| Ok::<_, ()>(())).unwrap();
+    let mut frozen = String::new();
+    serialize_block(&replacement, &mut frozen);
+    assert_eq!(
+        frozen, staged,
+        "freeing writers preserves every original undo record"
+    );
+    let (original, cleanup) = replacement.into_frozen();
+    drop(cleanup);
+    let prepared = original
+        .try_prepare_publication(&restored, |_, _| Ok::<_, ()>(()))
+        .unwrap_or_else(|(_, error, _)| panic!("original replacement publication: {error:?}"));
+    drop(prepared.publish());
     actual.clear();
     serialize(&restored, &mut actual);
     assert_eq!(

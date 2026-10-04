@@ -736,26 +736,14 @@
    "function": "iroha_accounts_list_tool",
    "name": "iroha.accounts.list",
    "effect": "read",
-   "description": "List accounts with optional query filters/pagination (supports flat top-level query args).",
+   "description": "List accounts (`GET /v1/accounts`). Fields: `id`, `label`, `uaid` (sortable) and `metadata.<key>`; default order `id`. Example: {\"filter\": \"metadata.tier >= 2\", \"sort\": \"-id\", \"limit\": 20}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "GET",
    "path_template": "/v1/accounts",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "get",
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "asset_id": {
-      "type": "string"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -848,47 +836,14 @@
    "function": "iroha_accounts_query_tool",
    "name": "iroha.accounts.query",
    "effect": "read",
-   "description": "Query accounts with filter/select/sort/pagination envelope (flat shortcuts supported).",
+   "description": "Query accounts (`POST /v1/accounts/query`) with the same controls as `iroha.accounts.list`, `aggregate` for grouped metrics, or one complete query in `body`. Fields: `id`, `label`, `uaid` (sortable) and `metadata.<key>`. Example: {\"filter\": \"uaid is not null\", \"select\": [\"id\", \"uaid\"], \"limit\": 50}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "POST",
    "path_template": "/v1/accounts/query",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "post",
     "properties": {
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
-     },
-     "query": {
-      "type": "string"
-     },
-     "filter": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "select": {},
-     "aggregate": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "sort": {
-      "type": "array",
-      "items": {}
-     },
-     "pagination": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "fetch_size": {
-      "type": "integer"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -2606,12 +2561,13 @@
    "function": "iroha_account_transactions_tool",
    "name": "iroha.accounts.transactions",
    "effect": "read",
-   "description": "List transactions authored by canonical `path.account_id`.",
+   "description": "List committed transactions that canonical `path.account_id` signed or that reference it (`GET /v1/accounts/{account_id}/transactions`), newest first. Fields: `entrypoint_hash`, `block_hash`, `authority`, `entrypoint_kind`, `block_height`, `block_index`, `timestamp_ms`, `result_ok`, `asset_ids`, `asset_definition_ids` and `metadata.<key>`; `block_height` bounds in the filter's top-level `and` also bound the scan. Example: {\"path\": {\"account_id\": \"sorau…\"}, \"filter\": \"block_height >= 1200 and result_ok = true\", \"limit\": 20}. The order is fixed (no `sort`, `include_total` or `aggregate`), and a page may hold fewer than `limit` rows, even none, while `next_cursor` is set: keep passing `next_cursor` as `cursor` until it is null.",
    "method": "GET",
    "path_template": "/v1/accounts/{account_id}/transactions",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_get",
     "required": [
      "path"
     ],
@@ -2627,10 +2583,6 @@
         "type": "string"
        }
       }
-     },
-     "query": {
-      "type": "object",
-      "additionalProperties": true
      },
      "headers": {
       "type": "object",
@@ -2699,12 +2651,13 @@
    "function": "iroha_account_transactions_query_tool",
    "name": "iroha.accounts.transactions.query",
    "effect": "read",
-   "description": "Query transactions authored by canonical `path.account_id` with the QueryEnvelope input.",
+   "description": "Query committed transactions that canonical `path.account_id` signed or that reference it (`POST /v1/accounts/{account_id}/transactions/query`), newest first, with the same controls as `iroha.accounts.transactions` or one complete query in `body`. Fields: `entrypoint_hash`, `block_hash`, `authority`, `entrypoint_kind`, `block_height`, `block_index`, `timestamp_ms`, `result_ok`, `asset_ids`, `asset_definition_ids` and `metadata.<key>`; `block_height` bounds in the filter's top-level `and` also bound the scan. Example: {\"path\": {\"account_id\": \"sorau…\"}, \"filter\": \"asset_definition_ids = '<asset definition id>'\", \"select\": [\"entrypoint_hash\", \"block_height\", \"result_ok\"]}. The order is fixed (no `sort`, `include_total` or `aggregate`), and a page may hold fewer than `limit` rows, even none, while `next_cursor` is set: keep passing `next_cursor` as `cursor` until it is null.",
    "method": "POST",
    "path_template": "/v1/accounts/{account_id}/transactions/query",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
     "required": [
      "path"
     ],
@@ -2720,40 +2673,6 @@
         "type": "string"
        }
       }
-     },
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
-     },
-     "query": {
-      "type": "string"
-     },
-     "filter": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "select": {},
-     "aggregate": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "sort": {
-      "type": "array",
-      "items": {}
-     },
-     "pagination": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "fetch_size": {
-      "type": "integer"
      },
      "headers": {
       "type": "object",
@@ -2771,12 +2690,13 @@
    "function": "iroha_account_assets_tool",
    "name": "iroha.accounts.assets",
    "effect": "read",
-   "description": "List assets held by canonical `path.account_id`.",
+   "description": "List the asset balances of canonical `path.account_id` (`GET /v1/accounts/{account_id}/assets`). Fields: `asset`, `asset_name`, `asset_alias`, `scope`, `account_id`, `quantity` (all sortable); default order `asset`, `scope`. Example: {\"path\": {\"account_id\": \"sorau…\"}, \"filter\": \"quantity > 0\", \"sort\": \"-quantity\"}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "GET",
    "path_template": "/v1/accounts/{account_id}/assets",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "get",
     "required": [
      "path"
     ],
@@ -2792,19 +2712,6 @@
         "type": "string"
        }
       }
-     },
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "asset_id": {
-      "type": "string"
      },
      "headers": {
       "type": "object",
@@ -2822,12 +2729,13 @@
    "function": "iroha_account_assets_query_tool",
    "name": "iroha.accounts.assets.query",
    "effect": "read",
-   "description": "Query assets held by canonical `path.account_id` with the QueryEnvelope input.",
+   "description": "Query the asset balances of canonical `path.account_id` (`POST /v1/accounts/{account_id}/assets/query`) with the same controls as `iroha.accounts.assets`, `aggregate` for grouped metrics, or one complete query in `body`. Fields: `asset`, `asset_name`, `asset_alias`, `scope`, `account_id`, `quantity` (all sortable). Example: {\"path\": {\"account_id\": \"sorau…\"}, \"filter\": \"quantity >= 10.5\", \"select\": [\"asset\", \"quantity\"]}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "POST",
    "path_template": "/v1/accounts/{account_id}/assets/query",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "post",
     "required": [
      "path"
     ],
@@ -2843,40 +2751,6 @@
         "type": "string"
        }
       }
-     },
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
-     },
-     "query": {
-      "type": "string"
-     },
-     "filter": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "select": {},
-     "aggregate": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "sort": {
-      "type": "array",
-      "items": {}
-     },
-     "pagination": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "fetch_size": {
-      "type": "integer"
      },
      "headers": {
       "type": "object",
@@ -2978,23 +2852,14 @@
    "function": "iroha_domains_list_tool",
    "name": "iroha.domains.list",
    "effect": "read",
-   "description": "List domains with optional flat pagination/query fields.",
+   "description": "List domains (`GET /v1/domains`). Fields: `id`, `owned_by` (sortable), `logo` and `metadata.<key>`; default order `id`. Example: {\"filter\": \"owned_by = 'sorau…'\", \"select\": \"id,logo\"}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "GET",
    "path_template": "/v1/domains",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "get",
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -3049,47 +2914,14 @@
    "function": "iroha_domains_query_tool",
    "name": "iroha.domains.query",
    "effect": "read",
-   "description": "Query domains with filter/select/sort/pagination envelope (flat shortcuts supported).",
+   "description": "Query domains (`POST /v1/domains/query`) with the same controls as `iroha.domains.list`, `aggregate` for grouped metrics, or one complete query in `body`. Fields: `id`, `owned_by` (sortable), `logo` and `metadata.<key>`. Example: {\"aggregate\": {\"group_by\": [\"owned_by\"], \"metrics\": [{\"alias\": \"domains\", \"fn\": \"count\"}]}, \"sort\": [\"-domains\"], \"limit\": 10}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "POST",
    "path_template": "/v1/domains/query",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "post",
     "properties": {
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
-     },
-     "query": {
-      "type": "string"
-     },
-     "filter": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "select": {},
-     "aggregate": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "sort": {
-      "type": "array",
-      "items": {}
-     },
-     "pagination": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "fetch_size": {
-      "type": "integer"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -3315,29 +3147,14 @@
    "function": "iroha_asset_definitions_tool",
    "name": "iroha.assets.definitions",
    "effect": "read",
-   "description": "List asset definitions with optional flat pagination/sort/filter query fields.",
+   "description": "List asset definitions (`GET /v1/assets/definitions`). Fields: `id`, `name`, `alias`, `owned_by`, `owning_domain` (sortable), `mintable`, `alias_binding.alias`, `alias_binding.status`, `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms`, `alias_binding.bound_at_ms` (the last three sortable) and `metadata.<key>`; default order `id`. Example: {\"filter\": \"owning_domain = 'wonderland'\", \"sort\": \"name\"}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "GET",
    "path_template": "/v1/assets/definitions",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "get",
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "sort": {
-      "type": "string"
-     },
-     "filter": {
-      "type": "string"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -3392,47 +3209,14 @@
    "function": "iroha_asset_definitions_query_tool",
    "name": "iroha.assets.definitions.query",
    "effect": "read",
-   "description": "Query asset definitions with QueryEnvelope shortcuts when `body` is omitted.",
+   "description": "Query asset definitions (`POST /v1/assets/definitions/query`) with the same controls as `iroha.assets.definitions`, `aggregate` for grouped metrics, or one complete query in `body`. Fields: `id`, `name`, `alias`, `owned_by`, `owning_domain` (sortable), `mintable`, `alias_binding.alias`, `alias_binding.status`, `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms`, `alias_binding.bound_at_ms` (the last three sortable) and `metadata.<key>`. Example: {\"filter\": \"owned_by = 'sorau…'\", \"select\": [\"id\", \"name\", \"alias\"], \"limit\": 50}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "POST",
    "path_template": "/v1/assets/definitions/query",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "post",
     "properties": {
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
-     },
-     "query": {
-      "type": "string"
-     },
-     "filter": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "select": {},
-     "aggregate": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "sort": {
-      "type": "array",
-      "items": {}
-     },
-     "pagination": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "fetch_size": {
-      "type": "integer"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -3449,12 +3233,13 @@
    "function": "iroha_asset_holders_tool",
    "name": "iroha.assets.holders",
    "effect": "read",
-   "description": "List asset holders for canonical `path.definition_id`.",
+   "description": "List the holders of canonical `path.definition_id` (`GET /v1/assets/{definition_id}/holders`). Fields: `account_id`, `asset`, `asset_alias`, `scope`, `quantity` (all sortable); default order `account_id`, `scope`. Example: {\"path\": {\"definition_id\": \"<asset definition id>\"}, \"sort\": \"-quantity\", \"limit\": 10}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "GET",
    "path_template": "/v1/assets/{definition_id}/holders",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "get",
     "required": [
      "path"
     ],
@@ -3470,19 +3255,6 @@
         "type": "string"
        }
       }
-     },
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "asset_id": {
-      "type": "string"
      },
      "headers": {
       "type": "object",
@@ -3500,12 +3272,13 @@
    "function": "iroha_asset_holders_query_tool",
    "name": "iroha.assets.holders.query",
    "effect": "read",
-   "description": "Query asset holders for canonical `path.definition_id` with the QueryEnvelope input. Supports exact aggregate DSL queries, for example PAYNET PKR alias users grouped by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. Production aggregate reads serve local DA projection shards as `query_source=projection_da_cache` and hydrate missing shards from approved SoraFS providers as `query_source=projection_da_hydrated`; incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.",
+   "description": "Query the holders of canonical `path.definition_id` (`POST /v1/assets/{definition_id}/holders/query`) with the same controls as `iroha.assets.holders`, `aggregate` for grouped metrics, or one complete query in `body`. Fields: `account_id`, `asset`, `asset_alias`, `scope`, `quantity` (all sortable). Example: {\"path\": {\"definition_id\": \"<asset definition id>\"}, \"filter\": \"quantity > 0\", \"aggregate\": {\"group_by\": [\"scope\"], \"metrics\": [{\"alias\": \"holders\", \"fn\": \"count\"}, {\"alias\": \"supply\", \"fn\": \"sum\", \"field\": \"quantity\"}]}}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "POST",
    "path_template": "/v1/assets/{definition_id}/holders/query",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "post",
     "required": [
      "path"
     ],
@@ -3521,40 +3294,6 @@
         "type": "string"
        }
       }
-     },
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
-     },
-     "query": {
-      "type": "string"
-     },
-     "filter": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "select": {},
-     "aggregate": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "sort": {
-      "type": "array",
-      "items": {}
-     },
-     "pagination": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "fetch_size": {
-      "type": "integer"
      },
      "headers": {
       "type": "object",
@@ -3739,47 +3478,14 @@
    "function": "iroha_nfts_query_tool",
    "name": "iroha.nfts.query",
    "effect": "read",
-   "description": "Query NFTs with filter/select/sort/pagination envelope (flat shortcuts supported).",
+   "description": "Query NFTs (`POST /v1/nfts/query`) with the same controls as `iroha.nfts.chain.list`, `aggregate` for grouped metrics, or one complete query in `body`. Fields: `id`, `owned_by` (sortable) and `metadata.<key>` (the NFT content). Example: {\"aggregate\": {\"group_by\": [\"owned_by\"], \"metrics\": [{\"alias\": \"nfts\", \"fn\": \"count\"}]}, \"sort\": [\"-nfts\"], \"limit\": 10}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "POST",
    "path_template": "/v1/nfts/query",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "post",
     "properties": {
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
-     },
-     "query": {
-      "type": "string"
-     },
-     "filter": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "select": {},
-     "aggregate": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "sort": {
-      "type": "array",
-      "items": {}
-     },
-     "pagination": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "fetch_size": {
-      "type": "integer"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -3878,47 +3584,14 @@
    "function": "iroha_rwas_query_tool",
    "name": "iroha.rwas.query",
    "effect": "read",
-   "description": "Query RWA lots with filter/select/sort/pagination envelope (flat shortcuts supported).",
+   "description": "Query RWA lots (`POST /v1/rwas/query`) with the same controls as `iroha.rwas.chain.list`, `aggregate` for grouped metrics, or one complete query in `body`. Fields: `id`, `owned_by`, `primary_reference`, `status`, `quantity` (sortable), `is_frozen` and `metadata.<key>`. Example: {\"aggregate\": {\"group_by\": [\"status\"], \"metrics\": [{\"alias\": \"lots\", \"fn\": \"count\"}, {\"alias\": \"total\", \"fn\": \"sum\", \"field\": \"quantity\"}]}}. Each page is {items, next_cursor}: pass `next_cursor` as `cursor` until it is null.",
    "method": "POST",
    "path_template": "/v1/rwas/query",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "post",
     "properties": {
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
-     },
-     "query": {
-      "type": "string"
-     },
-     "filter": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "select": {},
-     "aggregate": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "sort": {
-      "type": "array",
-      "items": {}
-     },
-     "pagination": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
-     "fetch_size": {
-      "type": "integer"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {

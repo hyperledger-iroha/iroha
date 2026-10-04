@@ -373,8 +373,10 @@ fn six_gateway_check_purposes_authenticate_original_execution_and_exact_pending_
         matches!(admission.readback(), StreamTokenGatewayCheckReadbackV1::Admission(result) if result.record == record)
     );
     assert!(matches!(
-        admission.consume_for_serving(&request, || Ok(fixture.clock()), |record| record),
-        Err(Error::Authority)
+        admission
+            .consume_for_serving(&request, || Ok(fixture.clock()), |record| record)
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Authority))
     ));
     let pending = fixture.verify(Selector::Pending { max_items: 4 });
     assert!(
@@ -439,8 +441,11 @@ fn gateway_check_consumes_original_deadline_and_exact_signed_challenge() {
     .with_instructions([wrong])
     .sign(key(3).private_key());
     assert!(matches!(
-        prepared.bind_signed_transaction(signed),
-        Err(Error::Transaction)
+        prepared
+            .bind_signed_transaction(signed)
+            .err()
+            .and_then(|failure| failure.rejection()),
+        Some(Error::Transaction)
     ));
     let mut prepared = fixture.prepare(Selector::Qualification);
     prepared.round.expire_for_test();
@@ -448,8 +453,10 @@ fn gateway_check_consumes_original_deadline_and_exact_signed_challenge() {
     let mut pending = fixture.bind(fixture.prepare(Selector::Qualification));
     pending.prepared.round.expire_for_test();
     assert!(matches!(
-        pending.verify_finalized(|| panic!("clock must not be sampled before proof")),
-        Err(Error::Expired)
+        pending
+            .verify_finalized(|| panic!("clock must not be sampled before proof"))
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Expired))
     ));
 }
 
@@ -466,8 +473,10 @@ fn gateway_check_rejects_revoked_current_observer_after_successful_check() {
     );
     assert!(fixture.commit(1, vec![revoke.into()]));
     assert!(matches!(
-        pending.verify_finalized(|| Ok(fixture.clock())),
-        Err(Error::Authority)
+        pending
+            .verify_finalized(|| Ok(fixture.clock()))
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Authority))
     ));
 }
 
@@ -481,8 +490,10 @@ fn gateway_check_rechecks_original_configure_quorum_without_reusing_capture_evid
         .chain
         .corrupt_local_quorum_for_test(configure_height, Signers::BelowQuorum);
     assert!(matches!(
-        pending.verify_finalized(|| panic!("proof must reject before clock")),
-        Err(Error::Finality)
+        pending
+            .verify_finalized(|| panic!("proof must reject before clock"))
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Finality))
     ));
 }
 
@@ -496,31 +507,37 @@ fn gateway_serving_consumption_rejects_new_attempt_and_original_expiry() {
     let mut another = request.clone();
     another.serving_attempt_id[0] ^= 1;
     assert!(matches!(
-        verified.consume_for_serving(&another, || Ok(fixture.clock()), |record| record),
-        Err(Error::Authority)
+        verified
+            .consume_for_serving(&another, || Ok(fixture.clock()), |record| record)
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Authority))
     ));
     let verified = fixture.verify(Selector::Serving(request.clone()));
     let expiry = record.lease_expires_at_unix_ms.unwrap();
     assert!(matches!(
-        verified.consume_for_serving(
-            &request,
-            || Ok(Time {
-                earliest_unix_ms: expiry - 1,
-                latest_unix_ms: expiry
-            }),
-            |record| record
-        ),
-        Err(Error::Authority)
+        verified
+            .consume_for_serving(
+                &request,
+                || Ok(Time {
+                    earliest_unix_ms: expiry - 1,
+                    latest_unix_ms: expiry
+                }),
+                |record| record
+            )
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Authority))
     ));
     let mut verified = fixture.verify(Selector::Serving(request.clone()));
     verified.prepared.round.expire_for_test();
     assert!(matches!(
-        verified.consume_for_serving(
-            &request,
-            || panic!("expired proof cannot sample clock"),
-            |record| record
-        ),
-        Err(Error::Expired)
+        verified
+            .consume_for_serving(
+                &request,
+                || panic!("expired proof cannot sample clock"),
+                |record| record
+            )
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Expired))
     ));
 }
 
@@ -558,8 +575,10 @@ fn gateway_pending_proof_checks_two_admissions_at_the_same_height_separately() {
         );
     });
     assert!(matches!(
-        pending.verify_finalized(|| panic!("second target must reject before clock")),
-        Err(Error::Execution)
+        pending
+            .verify_finalized(|| panic!("second target must reject before clock"))
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Execution))
     ));
 }
 
@@ -583,8 +602,10 @@ fn gateway_post_proof_clock_rejects_both_malformed_endpoints() {
         let pending = fixture.bind(fixture.prepare(Selector::Qualification));
         fixture.publish(&pending);
         assert!(matches!(
-            pending.verify_finalized(|| Ok(invalid)),
-            Err(Error::Clock)
+            pending
+                .verify_finalized(|| Ok(invalid))
+                .map_err(|failure| failure.rejection()),
+            Err(Some(Error::Clock))
         ));
     }
 }
@@ -641,15 +662,19 @@ fn gateway_check_cannot_cross_signer_purpose_or_treat_submission_as_execution() 
         PreparedCheckExecutionV1::new(
             &view,
             NativeCustodyCheckPurposeV1::StreamToken,
-            bound,
+            &mut Some(bound),
             &prepared.round
         ),
-        Err(NativeCheckErrorV1::Invalid)
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            NativeCheckErrorV1::Invalid
+        ))
     ));
     let pending = fixture.bind(fixture.prepare(Selector::Qualification));
     assert!(matches!(
-        pending.verify_finalized(|| panic!("submission cannot reach eligibility sampling")),
-        Err(Error::NotApplied)
+        pending
+            .verify_finalized(|| panic!("submission cannot reach eligibility sampling"))
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::NotApplied))
     ));
 }
 
@@ -671,8 +696,10 @@ fn rejected_exact_signed_gateway_check_cannot_create_verified_readback() {
         [false]
     );
     assert!(matches!(
-        pending.verify_finalized(|| panic!("rejected execution cannot reach the clock")),
-        Err(Error::Execution)
+        pending
+            .verify_finalized(|| panic!("rejected execution cannot reach the clock"))
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Execution))
     ));
 }
 
@@ -686,11 +713,13 @@ fn gateway_live_lease_is_checked_at_both_post_proof_clock_endpoints() {
     fixture.publish(&pending);
     let expiry = record.lease_expires_at_unix_ms.unwrap();
     assert!(matches!(
-        pending.verify_finalized(|| Ok(Time {
-            earliest_unix_ms: expiry - 1,
-            latest_unix_ms: expiry
-        })),
-        Err(Error::Authority)
+        pending
+            .verify_finalized(|| Ok(Time {
+                earliest_unix_ms: expiry - 1,
+                latest_unix_ms: expiry
+            }))
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Authority))
     ));
 }
 
@@ -743,12 +772,14 @@ fn serving_consumption_rejects_every_intervening_state_publication() {
             _ => unreachable!(),
         }
         assert!(matches!(
-            verified.consume_for_serving(
-                &request,
-                || panic!("changed publication fails before clock"),
-                |_| panic!("changed publication cannot capture response")
-            ),
-            Err(Error::Authority)
+            verified
+                .consume_for_serving(
+                    &request,
+                    || panic!("changed publication fails before clock"),
+                    |_| panic!("changed publication cannot capture response")
+                )
+                .map_err(|failure| failure.rejection()),
+            Err(Some(Error::Authority))
         ));
     }
 }
@@ -771,12 +802,14 @@ fn serving_consumption_rechecks_durable_qc_even_without_state_publication() {
         "local certificate bytes are outside World publication"
     );
     assert!(matches!(
-        verified.consume_for_serving(
-            &request,
-            || panic!("removed durable certificate fails before clock"),
-            |_| panic!("missing durable proof cannot capture response")
-        ),
-        Err(Error::Finality)
+        verified
+            .consume_for_serving(
+                &request,
+                || panic!("removed durable certificate fails before clock"),
+                |_| panic!("missing durable proof cannot capture response")
+            )
+            .map_err(|failure| failure.rejection()),
+        Err(Some(Error::Finality))
     ));
 }
 
@@ -822,4 +855,130 @@ fn verified_ack_and_release_expose_only_their_authenticated_original_execution()
     assert_eq!(execution.transaction_hash, *original_release.as_ref());
     assert!(!expired);
     assert!(released.acknowledgement_execution().is_none());
+}
+
+#[test]
+fn binding_local_refusal_retries_only_original_signed_custody() {
+    let fixture = Fixture::ready();
+    let prepared = fixture.prepare(Selector::Qualification);
+    let mut builder = TransactionBuilder::new(
+        fixture.policy.network_id,
+        account(3),
+        FeePaymentIntent::authority(Vec::new(), None),
+    );
+    builder.set_creation_time(Duration::from_millis(fixture.now() - 1));
+    let signed = builder
+        .with_instructions([prepared.instruction().clone()])
+        .sign(key(3).private_key());
+    let expected_wire = signed.encode_wire_v1().unwrap();
+    let deadline = prepared.deadline();
+    let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    let failure =
+        match norito::with_decode_limits_scope(zero, || prepared.bind_signed_transaction(signed)) {
+            Err(failure) => failure,
+            Ok(_) => panic!("original caller allocation ceiling must survive"),
+        };
+    assert!(failure.error().is_retryable());
+    assert!(failure.rejection().is_none());
+    assert_eq!(failure.deadline(), deadline);
+    let pending = failure.retry().unwrap();
+    assert_eq!(pending.deadline(), deadline);
+    assert_eq!(
+        pending.signed_transaction().encode_wire_v1().unwrap(),
+        expected_wire
+    );
+    assert!(Arc::ptr_eq(&pending.prepared.state, fixture.chain.state()));
+}
+
+#[test]
+fn local_recheck_refusal_preserves_original_signed_owner_and_accepted_time_floor() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use iroha_allocation::AllocationRefusal;
+    // Stabilize unrelated retired State generations while checking this original pool's
+    // exact scratch/refund accounting. This guard neither reserves nor adds capacity.
+    let _retirement_pin = crossbeam_epoch::pin();
+    let mut fixture = Fixture::ready();
+    let request = fixture.request("same-owner-clock-floor");
+    let record = fixture.admit(&request);
+    fixture.acknowledge(record);
+    let pending = fixture.bind(fixture.prepare(Selector::Serving(request.clone())));
+    fixture.publish(&pending);
+    let deadline = pending.deadline();
+    let signed = pending.signed_transaction().encode_wire_v1().unwrap();
+    let signed_backing = match pending.signed_transaction().instructions() {
+        iroha_data_model::transaction::Executable::Instructions(instructions) => {
+            instructions.as_ptr()
+        }
+        _ => panic!("native instructions"),
+    };
+    let accepted = fixture.clock();
+    let verified = pending.verify_finalized(|| Ok(accepted)).unwrap();
+    let budget = fixture.chain.state().ivm_execution_budget();
+    let baseline = budget.reserved_bytes();
+    let held = budget
+        .try_reserve_bytes(budget.limit_bytes() - baseline)
+        .unwrap();
+    let failure = verified
+        .consume_for_serving(
+            &request,
+            || panic!("source refusal precedes clock sampling"),
+            |_| panic!("incomplete source proof cannot capture a response"),
+        )
+        .err()
+        .unwrap();
+    assert!(
+        matches!(failure.error(), ExecutionAttemptError::Deferred(original)
+        if matches!(original.allocation_refusal(), Some(AllocationRefusal::Capacity { .. }))),
+        "original source capacity must survive the preliminary ledger-time read: {:?}",
+        failure.error(),
+    );
+    assert_eq!(failure.deadline(), deadline);
+    drop(held);
+    assert_eq!(
+        budget.reserved_bytes(),
+        baseline,
+        "failed proof scratch refunded"
+    );
+    let pending = failure.into_pending();
+    assert!(Arc::ptr_eq(&pending.prepared.state, fixture.chain.state()));
+    assert_eq!(
+        pending.prepared.accepted_earliest_unix_ms,
+        Some(accepted.earliest_unix_ms)
+    );
+    let failure = pending
+        .verify_finalized(|| {
+            Ok(Time {
+                earliest_unix_ms: accepted.earliest_unix_ms - 1,
+                latest_unix_ms: accepted.latest_unix_ms,
+            })
+        })
+        .err()
+        .unwrap();
+    assert_eq!(failure.rejection(), Some(Error::Clock));
+    assert_eq!(failure.deadline(), deadline);
+    assert_eq!(
+        failure.signed_transaction().encode_wire_v1().unwrap(),
+        signed
+    );
+    match failure.signed_transaction().instructions() {
+        iroha_data_model::transaction::Executable::Instructions(instructions) => {
+            assert_eq!(instructions.as_ptr(), signed_backing)
+        }
+        _ => panic!("same native instructions"),
+    }
+    assert_eq!(budget.reserved_bytes(), baseline);
+    let verified = failure
+        .into_pending()
+        .verify_finalized(|| Ok(accepted))
+        .unwrap();
+    assert_eq!(
+        verified
+            .consume_for_serving(&request, || Ok(accepted), |record| record)
+            .unwrap(),
+        record
+    );
+    assert!(
+        budget.reserved_bytes() < baseline,
+        "final owner releases original frame"
+    );
 }

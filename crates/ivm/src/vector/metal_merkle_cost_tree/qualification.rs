@@ -55,7 +55,14 @@ fn required_metal_tree_exact_geometry_retains_outputs_and_separates_synthetic_re
                 let geometry = Geometry::new(bytes, chunk).unwrap();
                 let production = counts(&health, false);
                 let synthetic = counts(&health, true);
-                let profile = calibrate(geometry, baseline, context, Instant::now()).expect("bounded actual whole-tree calibration on required runner");
+                let profile = super::super::metal_receipts::timing::report(
+                    "BuildTree",
+                    health.identity(),
+                    geometry,
+                    baseline,
+                    || calibrate(geometry, baseline, context, Instant::now()),
+                )
+                .expect("bounded actual whole-tree calibration on required runner");
                 assert_eq!(profile.geometry, geometry);
                 assert_eq!(profile.baseline, baseline);
                 assert_eq!(counts(&health, false), production);

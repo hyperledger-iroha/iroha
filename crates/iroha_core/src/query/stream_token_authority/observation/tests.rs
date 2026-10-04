@@ -307,7 +307,13 @@ fn now() -> Result<StreamTokenEligibilityTimeIntervalV1, Error> {
 fn current_check_requires_actual_application_and_accepts_exact_native_finality() {
     let fixture = Fixture::new();
     let pending = fixture.pending(fixture.expected());
-    assert_eq!(pending.verify_finalized(now).err(), Some(Error::NotApplied));
+    assert_eq!(
+        pending
+            .verify_finalized(now)
+            .err()
+            .and_then(|failure| failure.rejection()),
+        Some(Error::NotApplied)
+    );
     let mut fixture = Fixture::new();
     let pending = fixture.pending(fixture.expected());
     fixture.apply(&pending, true);
@@ -375,7 +381,13 @@ fn missing_check_finality_cannot_be_replaced_by_successful_application() {
     let expected = fixture.complete();
     let pending = fixture.pending(expected);
     fixture.apply(&pending, false);
-    assert_eq!(pending.verify_finalized(now).err(), Some(Error::Finality));
+    assert_eq!(
+        pending
+            .verify_finalized(now)
+            .err()
+            .and_then(|failure| failure.rejection()),
+        Some(Error::Finality)
+    );
 }
 
 #[test]
@@ -395,7 +407,13 @@ fn current_operator_permission_is_rechecked_after_successful_completed_check() {
         2,
         NOW + 1,
     );
-    assert_eq!(pending.verify_finalized(now).err(), Some(Error::Authority));
+    assert_eq!(
+        pending
+            .verify_finalized(now)
+            .err()
+            .and_then(|failure| failure.rejection()),
+        Some(Error::Authority)
+    );
 }
 
 #[test]
@@ -409,14 +427,21 @@ fn both_utc_endpoints_and_original_monotonic_deadline_bound_the_capability() {
                 earliest_unix_ms: NOW,
                 latest_unix_ms: 90_000,
             }))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Authority)
     );
     let mut fixture = Fixture::new();
     let mut pending = fixture.pending(fixture.expected());
     fixture.apply(&pending, true);
     pending.prepared.round.expire_for_test();
-    assert_eq!(pending.verify_finalized(now).err(), Some(Error::Expired));
+    assert_eq!(
+        pending
+            .verify_finalized(now)
+            .err()
+            .and_then(|failure| failure.rejection()),
+        Some(Error::Expired)
+    );
 }
 
 #[test]
@@ -439,10 +464,48 @@ fn preparation_rejects_wrong_scope_and_binding_consumes_substituted_transaction(
     wrong.request.expected_control_digest = [99; 32];
     let signed = fixture::sign(&fixture.state, wrong.into(), 3, NOW);
     assert_eq!(
-        prepared.bind_signed_transaction(signed).err(),
+        prepared
+            .bind_signed_transaction(signed)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Transaction)
     );
 }
 
 #[path = "tests/single_walk.rs"]
 mod single_walk;
+
+#[test]
+fn binding_local_refusal_retries_only_original_signed_custody() {
+    let fixture = Fixture::new();
+    let prepared = begin_stream_token_check_v1(
+        fixture.state.clone(),
+        fixture.expected(),
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    let signed = fixture::sign(
+        &fixture.state,
+        prepared.instruction().clone().into(),
+        3,
+        NOW,
+    );
+    let expected_wire = signed.encode_wire_v1().unwrap();
+    let deadline = prepared.deadline();
+    let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    let failure =
+        match norito::with_decode_limits_scope(zero, || prepared.bind_signed_transaction(signed)) {
+            Err(failure) => failure,
+            Ok(_) => panic!("original caller allocation ceiling must survive"),
+        };
+    assert!(failure.error().is_retryable());
+    assert!(failure.rejection().is_none());
+    assert_eq!(failure.deadline(), deadline);
+    let pending = failure.retry().unwrap();
+    assert_eq!(pending.deadline(), deadline);
+    assert_eq!(
+        pending.signed_transaction().encode_wire_v1().unwrap(),
+        expected_wire
+    );
+    assert!(Arc::ptr_eq(&pending.prepared.state, &fixture.state));
+}

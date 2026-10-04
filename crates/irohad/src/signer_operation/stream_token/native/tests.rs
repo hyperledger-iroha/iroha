@@ -117,7 +117,52 @@ fn queue() -> Arc<Queue> {
     ))
 }
 mod checked_reservation;
+mod completed_observation;
 mod phase_preparation;
+
+#[test]
+fn native_check_signing_and_submission_use_original_absolute_deadline() {
+    let fixture = Fixture::new_at(now_ms());
+    let queue = queue();
+    let source = source(&fixture, queue.clone());
+    let reviewed = reviewed(&source);
+    let prepared = source
+        .prepare_check(reviewed, Phase::Current(reviewed.intent.previous_audit))
+        .unwrap();
+    let deadline = prepared.deadline();
+    let before_sign = std::time::Instant::now();
+    let signed = source
+        .transactions
+        .sign(prepared.instruction(), true, deadline)
+        .unwrap();
+    let ttl = signed.time_to_live().unwrap();
+    assert!(!ttl.is_zero());
+    assert!(ttl <= deadline.duration_since(before_sign));
+    assert!(ttl < source.timeout);
+    let pending = prepared.bind_signed_transaction(signed).unwrap();
+    assert_eq!(pending.deadline(), deadline);
+    let expired = std::time::Instant::now();
+    assert!(matches!(
+        source
+            .transactions
+            .submit_and_wait(pending.signed_transaction(), expired),
+        Err(SignerOperationErrorV1::StateUnavailable)
+    ));
+    let iroha_data_model::transaction::Executable::Instructions(instructions) =
+        pending.signed_transaction().instructions()
+    else {
+        panic!("native Check instruction")
+    };
+    let instruction = instructions[0]
+        .as_any()
+        .downcast_ref::<MutateSorafsStreamTokenAuthority>()
+        .unwrap();
+    assert!(matches!(
+        source.transactions.sign(instruction, true, expired),
+        Err(SignerOperationErrorV1::StateUnavailable)
+    ));
+    assert_eq!(queue.queued_len(), 0);
+}
 
 fn source(fixture: &Fixture, queue: Arc<Queue>) -> NativeStreamTokenSourceV1 {
     source_with_timeout(fixture, queue, Duration::from_secs(1))
@@ -193,7 +238,7 @@ fn native_constructor_qualifies_current_software_custody_without_submitting_chec
     )
     .unwrap()
     .unwrap();
-    let expected = SignerStreamTokenObservationExpectedV1::current(
+    let mut expected = SignerStreamTokenObservationExpectedV1::current(
         pins.binding(),
         SignerStreamTokenObservationPhaseV1::Startup,
         [19; 32],
@@ -209,7 +254,7 @@ fn native_constructor_qualifies_current_software_custody_without_submitting_chec
         pins.binding(),
         pins.custody_trust(),
         pins.observer_trust(),
-        expected,
+        &mut expected,
         now_ms(),
     )
     .unwrap();
@@ -436,11 +481,9 @@ fn native_source_requires_current_operator_and_observer_permissions() {
             .unwrap();
         let signed = source
             .transactions
-            .sign(prepared.instruction(), true)
+            .sign(prepared.instruction(), true, prepared.deadline())
             .unwrap();
-        let pending = prepared
-            .bind_signed_transaction(signed.transaction)
-            .unwrap();
+        let pending = prepared.bind_signed_transaction(signed).unwrap();
         assert!(fixture.revoke_runtime_permission(seed == 3, now_ms()));
         assert!(!fixture.commit_signed(pending.signed_transaction().clone(), now_ms()));
         assert!(pending.verify_finalized(|| source.time().map_err(|_| iroha_core::query::stream_token_authority::observation::StreamTokenObservationErrorV1::Clock)).is_err());

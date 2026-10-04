@@ -225,17 +225,18 @@ impl QuantityTape {
     }
 
     /// Retain one complete replacement before executing its new original effects.
-    pub(super) fn prepare_inputs<'a, I>(
+    pub(super) fn prepare_inputs<'a, Inputs>(
         context: FastpqExecutionEffectContextV1,
         prefix: &[FastpqExecutionEffectV1],
-        added: I,
+        added: Inputs,
         authority_digest: Hash,
         authorization_context: Hash,
         max_effects: usize,
         budget: &AllocationBudget,
     ) -> Result<Self, QuantityCaptureIssue>
     where
-        I: Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+        Inputs:
+            Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
     {
         let count = prefix
             .len()
@@ -535,7 +536,7 @@ impl<V> QuantityArchiveMap<V> {
     }
     fn rows(&self) -> &[(Hash, V)] {
         self.frozen.as_ref().map_or_else(
-            || self.rows.as_ref().map_or(&[], ChargedBuffer::as_slice),
+            || self.rows.as_ref().map_or(&[][..], ChargedBuffer::as_slice),
             |frozen| frozen.rows(),
         )
     }

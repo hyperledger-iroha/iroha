@@ -113,6 +113,7 @@ fn service() -> (AccountService, Arc<Transport>) {
             config,
             client,
             deadline: None,
+            cancellation: None,
         },
         transport,
     )
@@ -395,7 +396,7 @@ fn expired_original_can_be_verified_and_read_without_renewal_or_dispatch() {
     };
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("historical");
-    drop(Journal::create_prepared(&path, &record).unwrap());
+    drop(preparation::retain_signed_fixture(&path, &record).unwrap());
     let before = std::fs::read(path.join("operation.json")).unwrap();
     request.options.deadline = Instant::now() + Duration::from_secs(120);
     assert_eq!(
@@ -522,5 +523,76 @@ fn retained_journal_rejects_substituted_signed_body_and_wire() {
         plan: Vec::new(),
         terms: BoundedTerms::new(&request.options).unwrap(),
     };
-    assert!(ReservePolicyExpectation(&request).verify(&changed).is_err());
+    assert!(
+        ReservePolicyExpectation(&request)
+            .verify(&preparation::Selection {
+                operation: &changed.operation,
+                requested_fee: &changed.requested_fee,
+                deadline_ms: changed.deadline_ms
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn retain_initial_reserve_policy_request_is_a_real_unsigned_zero_http_boundary() {
+    let (service, transport) = service();
+    let request = request(&service.config, current_unix_ms().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("request-only-boundary");
+    let before = transport.requests.load(std::sync::atomic::Ordering::SeqCst);
+    let first = service
+        .retain_initial_reserve_policy_request(&request, &path)
+        .unwrap();
+    assert_eq!(first.phase(), NativePreparationPhase::RequestOnly);
+    let commitment = first.request_sha256().unwrap().to_owned();
+    let original = std::fs::read(path.join("preparation.json")).unwrap();
+    assert!(!path.join("payload.json").exists());
+    assert!(!path.join("operation.json").exists());
+    assert!(!path.join("submission.json").exists());
+    let repeated = service
+        .retain_initial_reserve_policy_request(&request, &path)
+        .unwrap();
+    assert_eq!(repeated.request_sha256(), Some(commitment.as_str()));
+    let mut changed = request.clone();
+    changed.deadline_unix_ms += 1;
+    assert!(
+        service
+            .retain_initial_reserve_policy_request(&changed, &path)
+            .is_err()
+    );
+    assert_eq!(
+        transport.requests.load(std::sync::atomic::Ordering::SeqCst),
+        before
+    );
+    assert_eq!(
+        std::fs::read(path.join("preparation.json")).unwrap(),
+        original
+    );
+
+    service
+        .prepare_initial_reserve_policy(&request, &path)
+        .unwrap();
+    let before = transport.requests.load(std::sync::atomic::Ordering::SeqCst);
+    let signed = service
+        .retain_initial_reserve_policy_request(&request, &path)
+        .unwrap();
+    assert_eq!(signed.phase(), NativePreparationPhase::Signed);
+    assert_eq!(signed.request_sha256(), Some(commitment.as_str()));
+    assert_eq!(
+        std::fs::read(path.join("preparation.json")).unwrap(),
+        original
+    );
+    // Genuine durable prefix before signature publication; retain cannot finish the payload.
+    std::fs::remove_file(path.join("operation.json")).unwrap();
+    let partial = service
+        .retain_initial_reserve_policy_request(&request, &path)
+        .unwrap();
+    assert_eq!(partial.phase(), NativePreparationPhase::PayloadRetained);
+    assert_eq!(partial.request_sha256(), Some(commitment.as_str()));
+    assert!(!path.join("operation.json").exists());
+    assert_eq!(
+        transport.requests.load(std::sync::atomic::Ordering::SeqCst),
+        before
+    );
 }

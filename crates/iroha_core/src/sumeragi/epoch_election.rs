@@ -42,9 +42,8 @@ use mv::storage::StorageReadOnly;
 use crate::{
     beacon::{
         GlobalThresholdBeaconSessionBindingV1,
-        authenticated_global_threshold_beacon_roster_hash_v1,
+        authenticated_global_threshold_beacon_roster_hash_iter_v1,
         global_threshold_beacon_npos_successor_seed_v1,
-        validate_global_threshold_beacon_session_v1,
         validate_persisted_global_threshold_beacon_pulse_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
@@ -173,6 +172,7 @@ impl<'a> CheckedElectionView<'a> {
         })
     }
 
+    #[cfg(test)]
     /// Exact source for one peer, if it retains enough real XOR throughout the target tenure.
     /// Missing custody fails the target attempt; it never permits a smaller activation roster.
     pub(super) fn eligible(
@@ -191,6 +191,7 @@ impl<'a> CheckedElectionView<'a> {
             .then_some(seat.record)
     }
 
+    #[cfg(test)]
     /// Readiness of an already frozen seat ignores a later voluntary election exit request.
     /// Its actual tenure, custody and frozen minimum remain binding through the target epoch.
     /// Mutable fresh BLS registration is deliberately not consulted here.
@@ -504,13 +505,10 @@ pub(super) fn authenticated_boundary_entropy(
     {
         return Err("incumbent beacon is not active through its boundary".into());
     }
-    let peers = current
-        .committee
-        .iter()
-        .map(|member| member.validator.clone())
-        .collect::<Vec<_>>();
-    let roster_hash = authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &peers)
-        .map_err(|error| error.to_string())?;
+    let peers = current.committee.iter().map(|member| &member.validator);
+    let roster_hash =
+        authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, peers)
+            .map_err(|error| error.to_string())?;
     let beacon = InstalledBeaconEpochBindingV1 {
         session_id: pulse.session_id,
         transcript_hash: pulse.transcript_hash,
@@ -526,7 +524,9 @@ pub(super) fn authenticated_boundary_entropy(
         roster_hash,
         transcript_hash: pulse.transcript_hash,
     };
-    let session = validate_global_threshold_beacon_session_v1(record.session.clone(), &binding)
+    let session = &record.session;
+    session
+        .check_binding(&binding)
         .map_err(|error| error.to_string())?;
     // The stored pulse was inserted only by pristine native admission and its complete epoch
     // binding is checked above. Its native parent identities remain signed in that exact row.

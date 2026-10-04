@@ -167,6 +167,56 @@ define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protoco
     pub(super) transcript_hash: [u8; 32],
     pub(super) signer_index: u16,
 });
+// Borrowed serialization view of the sole canonical request frame.
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconPartialSignRequestWireV1",
+    frame = "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconPartialSignRequestWireV1"
+)]
+pub(super) struct GlobalBeaconPartialSignRequestRefV1<'a> {
+    pub(super) session: norito::core::PayloadRef<
+        'a,
+        iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
+    >,
+    pub(super) height: u64,
+    pub(super) finalized_chain_anchor:
+        iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1,
+    pub(super) context: iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
+}
+
+// Borrowed serialization view of the sole canonical request frame.
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconSeatReadinessRequestWireV1",
+    frame = "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconSeatReadinessRequestWireV1"
+)]
+pub(super) struct GlobalBeaconSeatReadinessRequestRefV1<'a> {
+    pub(super) session: norito::core::PayloadRef<
+        'a,
+        iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
+    >,
+    pub(super) authority: norito::core::PayloadRef<
+        'a,
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+    >,
+    pub(super) context:
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySeatReadinessContextV1,
+}
+
+// Borrowed serialization view of the sole canonical request frame.
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconCapabilityAttestRequestWireV1",
+    frame = "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconCapabilityAttestRequestWireV1"
+)]
+pub(super) struct GlobalBeaconCapabilityAttestRequestRefV1<'a> {
+    pub(super) session: norito::core::PayloadRef<
+        'a,
+        iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
+    >,
+    pub(super) signer_index: u16,
+}
+
 pub(super) fn governance_signing_purpose_from_wire(
     value: u8,
 ) -> Result<sorafs_node::GovernanceDagSigningPurposeV1, BrokerError> {

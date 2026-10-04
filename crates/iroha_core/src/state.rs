@@ -2,6 +2,8 @@
 #![allow(clippy::items_after_statements, clippy::used_underscore_binding)]
 /// Original finite allocation pool passed from startup into State and restore.
 pub use iroha_allocation::AllocationBudget;
+/// Read-only access to the original storage views exposed by [`WorldReadOnly`].
+pub use mv::storage::StorageReadOnly;
 
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
@@ -36,6 +38,8 @@ use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
 use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
 use iroha_data_model::game::GameSessionRecordV1;
+#[cfg(test)]
+use iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT;
 use iroha_data_model::nft_market::{NftCustodyRecordV1, NftSaleRecordV1};
 use iroha_data_model::smart_contract::ContractArtifactId;
 use iroha_data_model::{
@@ -110,15 +114,14 @@ use iroha_data_model::{
         musubi_provider_bundle_attestation_set_digest_v1,
     },
     nexus::{
-        AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, AxtAnchoredSpendReplayKeyV1, AxtAssetIncarnationV1,
-        AxtEnvelopeRecord, AxtHandleBudgetKey, AxtHandleBudgetRecord, AxtHandleCounterError,
-        AxtHandleCounterRecord, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry,
-        AxtPolicySnapshot, AxtPolicySnapshotValidationError, AxtReplayRecord,
-        AxtSourceTransferReplayKeyV1, AxtSourceTransferReplayRecordV1, DataSpaceCatalog,
-        DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementRecord,
-        FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey, FeeSponsorEnrollment,
-        FeeSponsorEnrollmentKey, FeeSponsorProgram, FeeSponsorProgramId,
+        AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_MANAGED,
+        AxtAnchoredSpendReplayKeyV1, AxtAssetIncarnationV1, AxtEnvelopeRecord, AxtHandleBudgetKey,
+        AxtHandleBudgetRecord, AxtHandleCounterError, AxtHandleCounterRecord, AxtHandleReplayKey,
+        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
+        AxtReplayRecord, AxtSourceTransferReplayKeyV1, AxtSourceTransferReplayRecordV1,
+        DataSpaceCatalog, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
+        DomainEndorsementRecord, FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey,
+        FeeSponsorEnrollment, FeeSponsorEnrollmentKey, FeeSponsorProgram, FeeSponsorProgramId,
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
         FeeSponsorVault, FeeSponsorVaultKey, LaneCatalog, LaneLifecycleParameterV1,
         LaneLifecyclePlan, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardClaimStateV1,
@@ -198,8 +201,7 @@ use mv::{
     Key as MvKey, Value as MvValue,
     cell::{Block as CellBlock, Cell, Transaction as CellTransaction, View as CellView},
     storage::{
-        Block as StorageBlock, Storage, StorageReadOnly, Transaction as StorageTransaction,
-        View as StorageView,
+        Block as StorageBlock, Storage, Transaction as StorageTransaction, View as StorageView,
     },
 };
 use nonzero_ext::nonzero;
@@ -431,6 +433,11 @@ mod checked_keypair_tests {
     }
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
+use crate::beacon::{
+    GlobalThresholdBeaconError, ValidatedGlobalThresholdBeaconSessionV1,
+    verify_finalized_global_threshold_beacon_pulse_v1,
+};
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use crate::query::{
     projection_checkpoint::{
         QueryProjectionCheckpointPlanError, QueryProjectionCheckpointPublishPlan,
@@ -447,11 +454,9 @@ use crate::telemetry::record_da_shard_cursor_lag;
 use crate::{
     Peers,
     beacon::{
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgSnapshotV1,
-        GlobalThresholdBeaconError, GlobalThresholdBeaconPulseLinkV1,
-        ValidatedGlobalThresholdBeaconSessionV1,
+        GlobalThresholdBeaconDkgSnapshotV1, GlobalThresholdBeaconPulseLinkV1,
+        RetainedFinalizedGlobalThresholdBeaconSessionV1,
         validate_persisted_global_threshold_beacon_pulse_v1,
-        verify_finalized_global_threshold_beacon_pulse_v1,
     },
     block::CommittedBlock,
     compliance::LaneComplianceEngine,
@@ -1123,6 +1128,7 @@ macro_rules! with_world_overlay_fields {
             consensus_keys_by_pk,
             sumeragi_lanes,
             sumeragi_amx,
+            sumeragi_amx_participant,
             private_dataspaces,
             domain_committees,
             domain_endorsement_policies,
@@ -4038,6 +4044,9 @@ pub struct WorldData {
     pub(crate) sumeragi_lanes: Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// The global chain's AMX two-phase-commit state (`specs/sumeragi.md` §11).
     pub(crate) sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState>,
+    /// Original native participant graph and dedicated retained monetary custody.
+    pub(crate) sumeragi_amx_participant:
+        Cell<crate::sumeragi::amx::RetainedNativeAmx, iroha_allocation::AllocationCharge>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
     pub(crate) private_dataspaces:
         Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
@@ -4509,7 +4518,7 @@ pub struct WorldData {
     pub(crate) global_beacon_dkg: Storage<[u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public keys with activation and retirement metadata.
     pub(crate) global_beacon_key_sessions:
-        Storage<[u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+        Storage<[u8; 32], RetainedFinalizedGlobalThresholdBeaconSessionV1>,
     /// Singleton pointer to the active finalized beacon key session.
     pub(crate) global_beacon_active_session: Storage<u64, [u8; 32]>,
     /// Singleton monotonic ingestion cursor for finalized beacon pulses.
@@ -4714,6 +4723,12 @@ pub struct WorldBlockFields<'world> {
         CellField<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellField<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
+    /// Original native participant Cell and its exact current/undo controls.
+    pub(crate) sumeragi_amx_participant: CellField<
+        'world,
+        crate::sumeragi::amx::RetainedNativeAmx,
+        iroha_allocation::AllocationCharge,
+    >,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
     pub(crate) private_dataspaces:
         CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
@@ -5532,7 +5547,7 @@ pub struct WorldBlockFields<'world> {
         StorageField<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public-key lifecycle records.
     pub(crate) global_beacon_key_sessions:
-        StorageField<'world, [u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+        StorageField<'world, [u8; 32], RetainedFinalizedGlobalThresholdBeaconSessionV1>,
     /// Singleton active beacon session pointer.
     pub(crate) global_beacon_active_session: StorageField<'world, u64, [u8; 32]>,
     /// Singleton latest beacon pulse/origin link.
@@ -6035,6 +6050,7 @@ impl WorldBlock<'_> {
             merge_global_state_root,
             sumeragi_lanes,
             sumeragi_amx,
+            sumeragi_amx_participant,
             private_dataspaces,
         );
         append_merge_executor_delta(&mut out, "executor", &self.executor);
@@ -6422,6 +6438,13 @@ pub struct WorldTransaction<'block, 'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx:
         CellTransaction<'block, 'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
+    /// Native participant overlay sharing the original immutable charged graph.
+    pub(crate) sumeragi_amx_participant: CellTransaction<
+        'block,
+        'world,
+        crate::sumeragi::amx::RetainedNativeAmx,
+        iroha_allocation::AllocationCharge,
+    >,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
     pub(crate) private_dataspaces: CellTransaction<
         'block,
@@ -7208,7 +7231,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) global_beacon_dkg:
         StorageTransaction<'block, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     pub(crate) global_beacon_key_sessions:
-        StorageTransaction<'block, [u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+        StorageTransaction<'block, [u8; 32], RetainedFinalizedGlobalThresholdBeaconSessionV1>,
     pub(crate) global_beacon_active_session: StorageTransaction<'block, u64, [u8; 32]>,
     pub(crate) global_beacon_latest_pulse:
         StorageTransaction<'block, u64, GlobalThresholdBeaconPulseLinkV1>,
@@ -8929,6 +8952,8 @@ pub struct WorldView<'world> {
         CellView<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellView<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
+    /// Read-only original charged native participant graph.
+    pub(crate) sumeragi_amx_participant: CellView<'world, crate::sumeragi::amx::RetainedNativeAmx>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
     pub(crate) private_dataspaces:
         CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
@@ -9505,7 +9530,7 @@ pub struct WorldView<'world> {
     pub(crate) global_beacon_dkg: StorageView<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public-key lifecycle records.
     pub(crate) global_beacon_key_sessions:
-        StorageView<'world, [u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+        StorageView<'world, [u8; 32], RetainedFinalizedGlobalThresholdBeaconSessionV1>,
     /// Singleton active beacon session pointer.
     pub(crate) global_beacon_active_session: StorageView<'world, u64, [u8; 32]>,
     /// Singleton latest beacon pulse/origin link.
@@ -11359,14 +11384,6 @@ impl PipelineParallelism {
     pub(crate) fn pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
         self.pool.clone()
     }
-    #[cfg(test)]
-    fn shares_pool_with(&self, other: &Self) -> bool {
-        match (&self.pool, &other.pool) {
-            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
-            (None, None) => true,
-            _ => false,
-        }
-    }
 }
 #[cfg(test)]
 mod pipeline_parallelism_tests;
@@ -12532,7 +12549,7 @@ pub struct StateBlockFields<'state> {
     >,
     state_ref: &'state State,
     /// Original replacement-rewind notices, dropped only after joint writer retirement.
-    da_rewind_releases: Option<da_hydration::DaRewindReleases<'state>>,
+    _da_rewind_releases: Option<da_hydration::DaRewindReleases<'state>>,
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldBlock<'state>,
     /// Hashes of transactions mapped onto block height where they stored
@@ -12738,9 +12755,9 @@ pub struct StateBlockFields<'state> {
     /// Original history custody drops only after all physical State writers.
     pub block_hashes: block_hash_field::BlockHashField<'state>,
     /// Last: deliver view-read notices only after every original field retires.
-    read_releases: StateViewReleases<'state>,
+    _read_releases: StateViewReleases<'state>,
     /// Original execution-pool scratch wakes outlive every physical State writer.
-    ivm_refunds: iroha_allocation::AllocationRefundBatch,
+    _ivm_refunds: iroha_allocation::AllocationRefundBatch,
 }
 
 impl<'state> std::ops::Deref for StateBlock<'state> {
@@ -12768,14 +12785,6 @@ impl<'state> StateBlock<'state> {
             world_cut_capture: None,
             publication: None,
         }
-    }
-
-    fn into_fields(mut self) -> StateBlockFields<'state> {
-        assert!(
-            self.publication.is_none(),
-            "publication owns its original fields"
-        );
-        self.fields.take().expect("original executing State")
     }
 }
 
@@ -13211,10 +13220,12 @@ impl<'state> StateBlock<'state> {
         &self.lane_incarnation_lineage
     }
     /// Serialize transaction membership exactly as this block commit would publish it.
+    #[cfg(test)]
     pub(crate) fn json_serialize_transactions_after_commit(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.transactions, out);
     }
     /// Serialize the committed event-buffer cell, which block commit deliberately leaves intact.
+    #[cfg(test)]
     pub(crate) fn json_serialize_committed_external_event_buffer(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.state_ref.world.external_event_buf, out);
     }
@@ -13222,6 +13233,7 @@ impl<'state> StateBlock<'state> {
     ///
     /// Ordinary expiry is projected without pruning the live block overlay or
     /// changing witness timing. `None` means the staged serializer is already exact.
+    #[cfg(test)]
     pub(crate) fn json_serialize_committed_axt_replay_ledger(&self) -> Option<String> {
         let current_slot =
             current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
@@ -13249,7 +13261,13 @@ impl<'state> StateBlock<'state> {
     /// Only the already prepared writes are projected. Their values and first
     /// pre-block undo entries match commit; no quota is recomputed or applied.
     /// `None` means there are no pending writes to override.
+    #[cfg(test)]
     pub(crate) fn json_serialize_committed_smart_contract_state(&self) -> Option<String> {
+        // The frozen original already contains every once-prepared quota write.
+        // Borrow its immutable JSON directly; it no longer has execution authority.
+        if self.has_finalized_world_tail_for_snapshot() {
+            return None;
+        }
         let pending = self.pending_da_pin_intents.as_ref()?;
         if pending.quota_writes.is_empty() {
             return None;
@@ -14307,8 +14325,6 @@ pub struct StateView<'state> {
     pub nexus: iroha_config::parameters::actual::Nexus,
     /// Active lane incarnation commitments for this state view.
     pub lane_incarnations: BTreeMap<LaneId, Hash>,
-    /// Latest active or retired incarnation lineage for snapshot persistence.
-    pub(crate) lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
     /// Global activation height for recreated lane incarnations.
     pub lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
     /// Lane governance manifest registry snapshot for this view.
@@ -20002,17 +20018,7 @@ impl World {
         self.repo_agreements_by_custodian = by_custodian;
     }
     fn rebuild_proof_status_index(&mut self) {
-        let mut by_status = BTreeMap::<
-            iroha_data_model::proof::ProofStatus,
-            BTreeSet<iroha_data_model::proof::ProofId>,
-        >::new();
-        for (proof_id, record) in self.proofs.view().iter() {
-            by_status
-                .entry(record.status)
-                .or_default()
-                .insert(proof_id.clone());
-        }
-        self.proofs_by_status = by_status.into_iter().collect();
+        proof_status_restore::rebuild(self);
     }
     fn validate_identifier_claims(&self) -> Result<(), String> {
         let identifier_claims = self.identifier_claims.view();
@@ -20826,6 +20832,8 @@ macro_rules! world_ro_accessors {
             ref sumeragi_lanes: iroha_data_model::sumeragi_lanes::SumeragiLaneState;
             /// The global chain's AMX two-phase-commit state (read-only).
             ref sumeragi_amx: iroha_data_model::sumeragi_amx::SumeragiAmxState;
+            /// Immutable native participant authority and permanent custody records.
+            ref sumeragi_amx_participant: crate::sumeragi::amx::RetainedNativeAmx;
             /// Parent-authorized private roots and their latest contiguous certified cursors.
             ref private_dataspaces: iroha_data_model::private_dataspace::PrivateDataspaceRegistry;
             /// Pedersen parameter registry (read-only).
@@ -21195,7 +21203,7 @@ macro_rules! world_ro_accessors {
                 [u8; 32] => GlobalThresholdBeaconDkgSnapshotV1;
             /// Finalized beacon key sessions with activation/retirement metadata.
             storage global_beacon_key_sessions:
-                [u8; 32] => FinalizedGlobalThresholdBeaconKeySessionRecordV1;
+                [u8; 32] => RetainedFinalizedGlobalThresholdBeaconSessionV1;
             /// Singleton active beacon key-session pointer.
             storage global_beacon_active_session: u64 => [u8; 32];
             /// Singleton latest finalized beacon pulse or genesis-origin link.
@@ -22346,7 +22354,7 @@ impl<'world> WorldBlock<'world> {
     /// Install one fully verified global-beacon fixture for dependent-crate tests.
     pub fn install_global_beacon_fixture_for_testing(
         &mut self,
-        key_record: crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        key_record: crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
         pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
         expected_context: &iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
     ) -> Result<(), crate::beacon::GlobalThresholdBeaconError> {
@@ -22377,12 +22385,10 @@ impl<'world> WorldBlock<'world> {
             roster_hash: pulse.roster_hash,
             transcript_hash: pulse.transcript_hash,
         };
-        let session = crate::beacon::validate_global_threshold_beacon_session_v1(
-            key_record.session.clone(),
-            &binding,
-        )?;
+        let session = &key_record.session;
+        session.check_binding(&binding)?;
         let link = crate::beacon::verify_finalized_global_threshold_beacon_pulse_v1(
-            &session,
+            session,
             &pulse,
             pulse.finalized_chain_anchor,
             expected_context,
@@ -22679,7 +22685,25 @@ fn parliament_timed_ovn_reservation_reducer_error_v1(
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl<'block> WorldTransaction<'block, '_> {
+    /// Provides mutable provider-owner bindings for finalized-publication tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn provider_owners_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, ProviderId, AccountId> {
+        &mut self.provider_owners
+    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to provider-ingest completion authorities for tests.
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, ProviderId, ProviderIngestCompletionAuthorityV1> {
+        &mut self.provider_ingest_completion_authorities
+    }
+}
+
+impl WorldTransaction<'_, '_> {
     /// Update the executor data model, purge permissions it no longer declares, and synchronize
     /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
@@ -23465,20 +23489,6 @@ impl<'block> WorldTransaction<'block, '_> {
     pub fn remove_provider_owner_for_testing(&mut self, provider: ProviderId) -> Option<AccountId> {
         self.provider_owners.remove(provider)
     }
-    /// Provides mutable provider-owner bindings for finalized-publication tests.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn provider_owners_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, ProviderId, AccountId> {
-        &mut self.provider_owners
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to provider-ingest completion authorities for tests.
-    pub fn provider_ingest_completion_authorities_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, ProviderId, ProviderIngestCompletionAuthorityV1> {
-        &mut self.provider_ingest_completion_authorities
-    }
     /// Replace one referendum's lock set while keeping the expiry index exact.
     pub(crate) fn put_governance_locks(
         &mut self,
@@ -24207,7 +24217,7 @@ impl<'block> WorldTransaction<'block, '_> {
     /// Persist one finalized public beacon key and remove its matching active DKG snapshot.
     pub(crate) fn put_finalized_global_beacon_key_session(
         &mut self,
-        record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        record: RetainedFinalizedGlobalThresholdBeaconSessionV1,
     ) -> Result<(), GlobalThresholdBeaconError> {
         record.validate()?;
         if record.activated_at_height.is_some() || record.retired_at_height.is_some() {
@@ -24318,7 +24328,7 @@ impl<'block> WorldTransaction<'block, '_> {
             .global_beacon_key_sessions
             .get(&session_id)
             .ok_or(GlobalThresholdBeaconError::ActiveKeyMismatch)?;
-        if &persisted_session.session != session.record()
+        if persisted_session.session.record() != session.record()
             || !persisted_session.is_active_at(pulse.height)
         {
             return Err(GlobalThresholdBeaconError::ActiveKeyMismatch);
@@ -24629,6 +24639,7 @@ impl<'block> WorldTransaction<'block, '_> {
             consensus_keys_by_pk: _,
             sumeragi_lanes: _,
             sumeragi_amx: _,
+            sumeragi_amx_participant: _,
             private_dataspaces: _,
             pedersen_params: _,
             poseidon_params: _,
@@ -24858,6 +24869,7 @@ impl<'block> WorldTransaction<'block, '_> {
         self.consensus_keys_by_pk.apply();
         self.sumeragi_lanes.apply();
         self.sumeragi_amx.apply();
+        self.sumeragi_amx_participant.apply();
         self.private_dataspaces.apply();
         self.pedersen_params.apply();
         self.poseidon_params.apply();
@@ -27335,6 +27347,8 @@ impl State {
     ) -> core::result::Result<Self, MergeLedgerCommitError> {
         crate::sumeragi::lanes::custody::admit_world_state(&mut world, &execution_budget)
             .map_err(MergeLedgerCommitError::NativeLaneCustodyAdmission)?;
+        crate::sumeragi::amx::admit_world_state(&mut world, &execution_budget)
+            .map_err(MergeLedgerCommitError::StateStorageAdmission)?;
         let transactions = TransactionsStorage::try_new(kura.transaction_history_budget())
             .map_err(MergeLedgerCommitError::MembershipAdmission)?;
         world
@@ -27391,7 +27405,7 @@ impl State {
                     "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
                 )
             });
-        crate::smartcontracts::code::initialize_contract_subject_bindings(&mut world).expect(
+        contract_subject_restore::rebuild(&mut world).expect(
             "incompatible contract lifecycle state; regenerate first-release genesis and snapshots",
         );
         let default_sns_payment_asset_id =
@@ -30327,6 +30341,7 @@ impl State {
     /// Merge validation must bind its base to the complete committed world-state
     /// surface, not only to the canonical block-journal tip.
     #[track_caller]
+    #[cfg(test)]
     pub(crate) fn lane_execution_state_hash(
         &self,
     ) -> Result<HashOf<BlockHeader>, crate::snapshot::SnapshotCaptureError> {
@@ -30665,7 +30680,7 @@ impl State {
                 nexus,
                 incarnations: lane_incarnations,
                 activation_heights: lane_incarnation_activation_heights,
-                lineage: lane_incarnation_lineage,
+                lineage: _,
                 samples: _,
                 manifests: lane_manifests,
                 privacy: _,
@@ -30734,7 +30749,6 @@ impl State {
                 crypto,
                 nexus,
                 lane_incarnations,
-                lane_incarnation_lineage,
                 lane_incarnation_activation_heights,
                 lane_manifests,
                 fraud_monitoring: self.fraud_monitoring.clone(),
@@ -34270,6 +34284,7 @@ fn ensure_autoscale_transition_matches_plan(
 ) -> Result<(), LaneLifecycleError> {
     ensure_physical_catalog_additions_only(plan)
 }
+#[cfg(test)]
 fn ensure_autoscale_managed_created_heights_not_future(
     nexus: &iroha_config::parameters::actual::Nexus,
     block_height: u64,
@@ -34435,6 +34450,7 @@ fn ensure_autoscale_runtime_lane_bounds(
     }
     Ok(())
 }
+#[cfg(test)]
 fn ensure_autoscale_runtime_elastic_range(
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Result<(), LaneLifecycleError> {
@@ -36350,6 +36366,7 @@ fn append_autoscale_sample_record(
     history.push_back(record);
     trim_autoscale_sample_history(history, cap);
 }
+#[cfg(test)]
 fn autoscale_ratio_permille(value: f64) -> u64 {
     if !value.is_finite() || value.is_sign_negative() {
         return 0;
@@ -36362,12 +36379,14 @@ fn autoscale_ratio_permille(value: f64) -> u64 {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 struct AutoscaleThresholds {
     scale_out_latency_permille: u64,
     scale_in_latency_permille: u64,
     scale_out_utilization_permille: u64,
     scale_in_utilization_permille: u64,
 }
+#[cfg(test)]
 fn autoscale_threshold_permille(value: f64) -> Option<u64> {
     if !value.is_finite() || value <= 0.0 {
         return None;
@@ -36375,6 +36394,7 @@ fn autoscale_threshold_permille(value: f64) -> Option<u64> {
     let permille = autoscale_ratio_permille(value);
     (permille > 0).then_some(permille)
 }
+#[cfg(test)]
 fn autoscale_thresholds_permille(
     autoscale: &iroha_config::parameters::actual::Autoscale,
 ) -> Option<AutoscaleThresholds> {
@@ -36397,6 +36417,7 @@ fn autoscale_thresholds_permille(
         scale_in_utilization_permille,
     })
 }
+#[cfg(test)]
 fn autoscale_scale_in_triggered(
     can_scale_in: bool,
     sample_count: usize,
@@ -36412,6 +36433,7 @@ fn autoscale_scale_in_triggered(
         && latency_ratio_p95_permille.unwrap_or(u64::MAX) <= latency_threshold_permille
         && utilization_p95_permille.unwrap_or(u64::MAX) <= utilization_threshold_permille
 }
+#[cfg(test)]
 fn autoscale_scale_out_triggered(
     can_scale_out: bool,
     sample_count: usize,
@@ -36427,6 +36449,7 @@ fn autoscale_scale_out_triggered(
         && (latency_ratio_p95_permille.unwrap_or_default() >= latency_threshold_permille
             || utilization_p95_permille.unwrap_or_default() >= utilization_threshold_permille)
 }
+#[cfg(test)]
 fn autoscale_cooldown_active(
     last_transition_height: u64,
     cooldown_blocks: u16,
@@ -36435,6 +36458,7 @@ fn autoscale_cooldown_active(
     last_transition_height != 0
         && block_height <= last_transition_height.saturating_add(u64::from(cooldown_blocks))
 }
+#[cfg(test)]
 fn autoscale_managed_lane_for_retire(
     lanes: &[iroha_data_model::nexus::LaneConfig],
     min_lane_id: u32,
@@ -36452,6 +36476,7 @@ fn autoscale_managed_lane_for_retire(
         .map(|lane| lane.id)
         .max_by_key(|lane| lane.as_u32())
 }
+#[cfg(test)]
 fn autoscale_default_route_capacity_lanes(
     policy: &LaneRoutingPolicy,
     lanes: &[iroha_data_model::nexus::LaneConfig],
@@ -36480,6 +36505,7 @@ fn autoscale_default_route_capacity_lanes(
         .count();
     u64::try_from(base_lanes.saturating_add(elastic_lanes)).unwrap_or(u64::MAX)
 }
+#[cfg(test)]
 fn autoscale_next_lane_id(
     lanes: &[iroha_data_model::nexus::LaneConfig],
     min_lane_id: u32,
@@ -36493,6 +36519,7 @@ fn autoscale_next_lane_id(
         .find(|candidate| !existing.contains(candidate))
         .map(LaneId::new)
 }
+#[cfg(test)]
 fn autoscale_elastic_lane_config_from_base(
     lane_id: LaneId,
     base_lane: &iroha_data_model::nexus::LaneConfig,
@@ -36568,12 +36595,14 @@ fn autoscale_utilization_permille(
     let utilization_permille = tps_milli.saturating_div(utilization_denominator);
     u64::try_from(utilization_permille).unwrap_or(u64::MAX)
 }
+#[cfg(test)]
 fn autoscale_latency_ratio_permille(latency_ms: u64, target_block_ms: u64) -> u64 {
     let ratio = u128::from(latency_ms)
         .saturating_mul(1_000)
         .saturating_div(u128::from(target_block_ms.max(1)));
     u64::try_from(ratio).unwrap_or(u64::MAX)
 }
+#[cfg(test)]
 fn p95_u64(values: &[u64]) -> Option<u64> {
     if values.is_empty() {
         return None;
@@ -36585,6 +36614,7 @@ fn p95_u64(values: &[u64]) -> Option<u64> {
     let index = rank.saturating_sub(1).min(len.saturating_sub(1));
     sorted.get(index).copied()
 }
+#[cfg(test)]
 fn autoscale_window_stats(
     samples: &[AutoscaleSample],
     target_block_ms: u64,
@@ -39514,6 +39544,7 @@ mod tiered_snapshot_diff_tests {
         let provider_id = ProviderId::new([0xA1; 32]);
         let authority = ProviderIngestCompletionAuthorityV1::new(
             owner.clone(),
+            owner.clone(),
             iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: [0xA2; 32],
                 revision: 1,
@@ -42393,20 +42424,16 @@ impl StateTransaction<'_, '_> {
             let run_result = vm.run_with_host(&mut host);
             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             if let Err(error) = run_result {
-                if let Some(reason) =
-                    crate::execution_attempt::ExecutionDeferred::from_vm_error(&error)
-                {
-                    drop(host);
-                    drop(vm);
-                    return Err(self.defer_execution(reason));
-                }
-                let error = crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                    &vm, &error,
-                );
-                {
-                    let _consumed_host = host;
-                }
+                let attempt =
+                    crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error);
+                drop(host);
                 drop(vm);
+                let error = match attempt {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        return Err(self.defer_execution(reason));
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                };
                 self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
                 return Err(error);
             }
@@ -42911,20 +42938,17 @@ impl StateTransaction<'_, '_> {
                 }
                 let run_result = vm.run_with_host(&mut host);
                 let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                let local_deferral = run_result
-                    .as_ref()
-                    .err()
-                    .and_then(crate::execution_attempt::ExecutionDeferred::from_vm_error);
                 let run_error = run_result.err().map(|error| {
-                    crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, &error)
+                    crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error)
                 });
-                if let Some(error) = run_error {
-                    {
-                        let _consumed_host = host;
-                    }
-                    if let Some(reason) = local_deferral {
-                        return Err(self.defer_execution(reason).into());
-                    }
+                if let Some(attempt) = run_error {
+                    drop(host);
+                    let error = match attempt {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                            return Err(self.defer_execution(reason).into());
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    };
                     self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
                     return Err(error.into());
                 }
@@ -43205,21 +43229,23 @@ impl StateTransaction<'_, '_> {
                             }
                             let run_result = vm.run_with_host(&mut host);
                             let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                            let local_deferral = run_result.as_ref().err().and_then(
-                                crate::execution_attempt::ExecutionDeferred::from_vm_error,
-                            );
                             let run_error = run_result.err().map(|error| {
                                 crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                                    &vm, &error,
+                                    &vm, error,
                                 )
                             });
-                            if let Some(error) = run_error {
-                                {
-                                    let _consumed_host = host;
-                                }
-                                if let Some(reason) = local_deferral {
-                                    return Err(self.defer_execution(reason).into());
-                                }
+                            if let Some(attempt) = run_error {
+                                drop(host);
+                                let error = match attempt {
+                                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                                        reason,
+                                    ) => {
+                                        return Err(self.defer_execution(reason).into());
+                                    }
+                                    crate::execution_attempt::ExecutionAttemptError::Rejected(
+                                        error,
+                                    ) => error,
+                                };
                                 self.last_tx_gas_used =
                                     self.last_tx_gas_used.saturating_add(trigger_gas_used);
                                 return Err(error.into());
@@ -43399,10 +43425,14 @@ mod alias_index_restore;
 mod alias_lease;
 use alias_lease::validate_alias_lease_window;
 mod asset_index_restore;
+pub(crate) mod contract_subject_restore;
+mod contract_subject_validation;
 mod ownership_index_restore;
+mod proof_status_restore;
 pub(crate) mod sccp_snapshot_state;
 pub(crate) mod snapshot_service_state;
 pub(crate) mod snapshot_storage;
+mod verifying_key_index_validation;
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct SnapshotNoritoBlob {
     pub encoded_hex: String,

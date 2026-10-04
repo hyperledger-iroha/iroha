@@ -502,6 +502,7 @@ impl ConsensusKeyRecord {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconPublicShareV1 {
     /// Canonical one-based participant index.
     pub index: u16,
@@ -528,6 +529,7 @@ pub struct GlobalThresholdBeaconPublicShareV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconDkgSessionV1 {
     /// Fixed first-release beacon protocol version.
     pub version: u16,
@@ -576,6 +578,7 @@ pub struct GlobalThresholdBeaconDkgSessionV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconDkgConstantProofV1 {
     /// Canonical compressed G2 Schnorr nonce commitment.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -599,6 +602,7 @@ pub struct GlobalThresholdBeaconDkgConstantProofV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconDkgDealerCommitmentV1 {
     /// Dealer's canonical one-based participant index.
     pub dealer_index: u16,
@@ -628,6 +632,7 @@ pub struct GlobalThresholdBeaconDkgDealerCommitmentV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconDkgRecipientKeyV1 {
     /// One-based index in the exact frozen roster.
     pub recipient_index: u16,
@@ -658,6 +663,7 @@ pub struct GlobalThresholdBeaconDkgRecipientKeyV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconDkgEncryptedShareV1 {
     /// One-based dealer index in the frozen roster.
     pub dealer_index: u16,
@@ -696,6 +702,7 @@ pub struct GlobalThresholdBeaconDkgEncryptedShareV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconDkgShareAcceptanceV1 {
     /// One-based dealer index in the frozen roster.
     pub dealer_index: u16,
@@ -727,6 +734,7 @@ pub struct GlobalThresholdBeaconDkgShareAcceptanceV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconDkgTranscriptV1 {
     /// Immutable session and height-window bindings.
     pub session: GlobalThresholdBeaconDkgSessionV1,
@@ -848,7 +856,7 @@ impl norito::NoritoSchema for GlobalThresholdBeaconPartialSignatureV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconKeySessionV1 {
     /// Fixed protocol version; must equal [`GLOBAL_THRESHOLD_BEACON_VERSION_V1`].
     pub version: u16,

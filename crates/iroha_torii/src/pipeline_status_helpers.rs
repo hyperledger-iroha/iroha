@@ -23,6 +23,20 @@ impl PipelineStatusKind {
         matches!(self, Self::Applied | Self::Rejected | Self::Expired)
     }
 }
+/// Stable machine-readable class of a transaction rejection (event streams).
+fn transaction_rejection_code(
+    reason: &iroha_data_model::transaction::error::TransactionRejectionReason,
+) -> &'static str {
+    use iroha_data_model::transaction::error::TransactionRejectionReason;
+    match reason {
+        TransactionRejectionReason::AccountDoesNotExist(_) => "account_does_not_exist",
+        TransactionRejectionReason::LimitCheck(_) => "limit_check",
+        TransactionRejectionReason::Validation(_) => "validation",
+        TransactionRejectionReason::InstructionExecution(_) => "instruction_execution",
+        TransactionRejectionReason::IvmExecution(_) => "ivm_execution",
+        TransactionRejectionReason::TriggerExecution(_) => "trigger_execution",
+    }
+}
 fn pipeline_rejection_summary(
     reason: &iroha_data_model::transaction::error::TransactionRejectionReason,
 ) -> &'static str {

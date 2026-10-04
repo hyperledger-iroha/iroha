@@ -215,7 +215,7 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
             "default" => {
                 assert_eq!(
                     (parsed.metadata.version_major, parsed.metadata.version_minor),
-                    (1, 0),
+                    (1, 1),
                     "{} is a generic executor, not a deployable contract",
                     path.display()
                 );

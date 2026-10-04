@@ -4,7 +4,7 @@ use iroha_core::{
     smartcontracts::isi::multisig::{
         multisig_approval_outcome_state_key, multisig_proposal_terminal_execution_state_key,
     },
-    state::{AllocationBudget, StateReadOnly},
+    state::AllocationBudget,
     sumeragi::certified_chain::{CertifiedChain, QcVerification},
 };
 use iroha_crypto::{Hash, HashOf};

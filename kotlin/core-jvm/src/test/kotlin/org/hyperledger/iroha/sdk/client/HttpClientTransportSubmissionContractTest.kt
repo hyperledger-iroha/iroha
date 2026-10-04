@@ -127,7 +127,7 @@ class HttpClientTransportSubmissionContractTest {
             }
             val rejected = assertIs<TransactionSubmissionHttpException>(error.cause)
 
-            assertEquals(statusCode, rejected.statusCode)
+            assertEquals(statusCode, rejected.status)
             assertEquals("submit_$statusCode", rejected.rejectCode)
             assertEquals("rejected-$statusCode", rejected.responseBody)
             assertEquals(2, executor.callCount)
@@ -227,17 +227,17 @@ class HttpClientTransportSubmissionContractTest {
     @Test
     fun canonicalAuthRedirectStatusAndNetworkFailuresAreOneShot() {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth(
+        fun auth() = ToriiCanonicalRequestAuth(
             "alice@universal",
             RequestSigner.ed25519(keyPair.private),
             1_717_171_717_000L,
             "canonical-one-shot-nonce",
         )
         for (status in listOf(307, 308, 503)) {
-            assertCanonicalAliasFailsOnce(auth, OutcomeExecutor(status = status))
+            assertCanonicalAliasFailsOnce(auth(), OutcomeExecutor(status = status))
         }
         assertCanonicalAliasFailsOnce(
-            auth,
+            auth(),
             OutcomeExecutor(failure = RuntimeException("ambiguous network failure")),
         )
     }

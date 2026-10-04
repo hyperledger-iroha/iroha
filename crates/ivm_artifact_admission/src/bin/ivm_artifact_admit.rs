@@ -1,7 +1,9 @@
 //! Canonical, node-independent admission and create-only manifest publication.
 //!
-//! Build with `cargo build -p ivm_artifact_admission --bin ivm_artifact_admit`.
-//! This tool needs no node configuration, network, or signing material.
+//! Build with
+//! `cargo build -p ivm_artifact_admission --features dev-tools --bin ivm_artifact_admit`.
+//! This development tool is not part of the default workspace build; it needs
+//! no node configuration, network, or signing material.
 
 use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 

@@ -28,7 +28,7 @@ fn compile(source: &str, retain_homes: bool) -> CompileOutput {
     .expect("canonical compiler worker")
 }
 
-fn assert_same_semantic_metadata(baseline: &CompileOutput, optimized: &CompileOutput) {
+pub(super) fn assert_same_semantic_metadata(baseline: &CompileOutput, optimized: &CompileOutput) {
     let mut before = baseline.manifest.clone();
     let mut after = optimized.manifest.clone();
     before.code_hash = None;

@@ -282,6 +282,9 @@ impl PublicationDeferral {
             Self::StateStorage(crate::state::StateStorageAdmissionError::World(
                 mv::storage::AdmittedStorageError::Allocation(original),
             ))
+            | Self::StateStorage(crate::state::StateStorageAdmissionError::NativeAmx(
+                crate::sumeragi::amx::NativeAmxAdmissionError::Admission(original),
+            ))
             | Self::EvidencePreparation(crate::state::EvidencePreparationError::Admission(
                 original,
             ))

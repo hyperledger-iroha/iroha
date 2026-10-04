@@ -59,10 +59,11 @@ package, genuine signed context and selected hardware release.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
-monetary plans, bounded reward claims with an explicit optional fee-custody
+typed registration, bond, withdrawal and slash plans, bounded reward claims with an explicit optional fee-custody
 payment, and peer rebinding. Its Rust-authored fixture is
 `fixtures/validator_staking/norito_v1.tsv`; the consumer tests also reject
-truncated records, retired reward-plan layouts, invalid fee custody and
+truncated records, malformed peer bindings, invalid withdrawal hash widths or markers,
+retired reward-plan layouts, invalid fee custody and
 noncanonical quantity decimals. Decoding preserves exact
 Norito bytes but does not verify signatures, custody, or committee activation.
 Unsigned 64-bit fields retain their complete wire bits in `Long`, including
@@ -79,6 +80,115 @@ addresses, quantities, durations, and malformed frames. The focused
 execution still requires a same-source ABI-25 native bridge for account
 admission. This SDK slice does not establish Rust fixture parity or complete
 private standalone elections.
+
+## Quickstart: Torii collections and event filters
+
+Every Torii collection (`specs/torii/collection_queries.md`) is read with one
+query language and returns one page envelope. `HttpClientTransport` exposes the
+collections: `domains`, `accounts`, `assetDefinitions`, `nfts`, `rwas`,
+`repoAgreements`, `accountAssets(accountId)`, `assetHolders(definitionId)`,
+`transactions` and `accountTransactions(accountId)`. Each one has `page(query)` (one page),
+`iterate(query)` (a lazy iterator that follows `next_cursor`; `close()` cancels
+the request in flight), `pages(query)` and `fetchAll(query)` (every page,
+asynchronously; cancelling the future stops paging). Requests use
+`POST <collection>/query`.
+
+```kotlin
+import java.net.URI
+import java.util.concurrent.CompletionException
+import org.hyperledger.iroha.sdk.client.ClientConfig
+import org.hyperledger.iroha.sdk.client.HttpClientTransport
+import org.hyperledger.iroha.sdk.client.ToriiApiException
+import org.hyperledger.iroha.sdk.client.stream.EventFields
+import org.hyperledger.iroha.sdk.client.stream.ToriiEvent
+import org.hyperledger.iroha.sdk.client.stream.ToriiEventListener
+import org.hyperledger.iroha.sdk.client.stream.TransactionEventStatus
+import org.hyperledger.iroha.sdk.query.field
+import org.hyperledger.iroha.sdk.query.listQuery
+
+val client = HttpClientTransport.createDefault(
+    ClientConfig.builder().setBaseUri(URI("https://taira.sora.org")).build(),
+)
+
+// One page: filter, sort and page size.
+val query = listQuery {
+    filter((field("owned_by") eq alice) and (field("alias_binding.bound_at_ms") gt 0))
+    sort("-alias_binding.bound_at_ms,id")
+    limit(50)
+}
+val page = client.assetDefinitions.page(query).join()
+page.items.forEach { println("${it.id} ${it.alias}") }
+
+// Everything, following next_cursor; quantities are exact BigDecimal values.
+client.accountAssets(alice).iterate().use { balances ->
+    for (balance in balances) println("${balance.asset} ${balance.quantity}")
+}
+
+// Errors carry Torii's envelope: status, code, message and details.
+try {
+    client.nfts.page(listQuery { filter("owned_by == \"x\" && quantity > 1") }).join()
+} catch (failure: CompletionException) {
+    val error = failure.cause as ToriiApiException
+    println("${error.status} ${error.code} ${error.message} field=${error.field} hint=${error.hint}")
+}
+
+// Event streams use the same grammar over event fields; payloads decode to typed events.
+client.newEventStreamClient().subscribe(
+    (EventFields.TX_HASH eq txHash) and EventFields.TX_STATUS.isIn("Approved", "Rejected"),
+    object : ToriiEventListener {
+        override fun onEvent(event: ToriiEvent) {
+            if (event is ToriiEvent.Transaction && event.status == TransactionEventStatus.REJECTED) {
+                println("${event.hash} ${event.rejectionCode} ${event.rejectionReason}")
+            }
+        }
+    },
+)
+```
+
+Java uses the same API: `Filter.field("owned_by").eq(alice).and(...)`,
+`ListQuery.builder().filter(filter).sort("-quantity,id").limit(50).build()`,
+`client.domains().page(query)`, and try-with-resources around
+`client.domains().iterate(query)`.
+
+- `toString()` of a `Filter` is the canonical text (`owned_by = "alice" and
+  quantity >= "10.5"`) and `toJson()` the JSON form; `Filter.parse(text)`
+  validates text locally and reports the line and column like Torii. A string
+  passed to `filter(...)` is sent unchanged.
+- Literals are exact: integers that fit `u64`/`i64` are numbers, `BigDecimal`
+  and wider `BigInteger` values become decimal strings. There are no `double`
+  overloads.
+- Typed rows keep the complete JSON in `row.json`; only the identity fields
+  (`id`; `account_id`, `asset`, `scope` and `quantity` for balances) are
+  non-null. Use `collection.json()` for `select` projections and aggregates
+  (`AggregateSpec`), whose items are plain JSON objects. Aggregates are
+  computed where the rows live: a read whose visible rows span several
+  dataspace routes is rejected with `invalid_aggregate`; page through the rows
+  instead.
+- Object and array literals (only valid against `metadata.<key>`) exist only
+  in the JSON form. `POST` bodies always carry tree filters as JSON; GET
+  parameters (`toQueryPairs()`) and event-stream filters reject them.
+- Failures complete the futures (or throw from the iterator) with
+  `ToriiApiException`; query errors use `invalid_filter`, `invalid_sort`,
+  `invalid_select`, `invalid_aggregate`, `invalid_limit`, `invalid_cursor`,
+  `invalid_include_total` and `invalid_query`. Malformed responses raise
+  `ToriiProtocolException` (`invalid_response`). Client-side validation raises
+  `ListQueryException` with the same `code` before anything is sent.
+- Transaction history (`transactions`, `accountTransactions(id)`) is read
+  newest first by (`block_height`, `block_index`) and rejects `sort`,
+  `include_total` and `aggregate` (`invalid_sort`, `invalid_include_total`,
+  `invalid_aggregate`). Each page scans a bounded slice of history, so a page
+  can hold fewer than `limit` rows, or none, and still have a `next_cursor`;
+  `iterate` and `fetchAll` keep following it until it is `null`. Bounds on
+  `block_height` in the filter's top-level `and` also bound the scan
+  (`(field("block_height") gte 1200) and (field("result_ok") eq true)` reads
+  only that range). `asset_ids` and `asset_definition_ids` are lists matched
+  element-wise: `=`/`in` match when any element matches, `!=`/`not in` when
+  none does.
+- Collection reads are public. Set `ClientConfig.Builder.setCanonicalAuth(...)`
+  (with a `LocalSigningContext`) to sign them, which widens visibility into
+  restricted dataspaces, or sign one collection with `signedBy(auth)`.
+  Signed requests need HTTPS; for a local devnet,
+  `setAllowPlaintextLoopback(true)` admits plain `http` to loopback hosts only.
 
 ## Local confidential proofs
 
@@ -366,6 +476,10 @@ Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls requir
 Use `RequestSigner.ed25519(privateKey)` for a JCA Ed25519 signer. The SDK builds the exact
 canonical message, rejects empty, all-zero or oversized callback signatures, and propagates
 signing failures without retrying. Auth contexts do not expose private-key properties.
+The two-argument `ToriiCanonicalRequestAuth(accountId, signer)` generates a
+fresh timestamp and nonce for every request. An explicit `timestampMs`/`nonce`
+pair is single-use: a second signing attempt fails locally with
+`IllegalStateException` instead of sending a replay that Torii would reject.
 The transport signs the exact
 POST path and body once, rejects caller-supplied canonical headers, and requires a claim-receipt
 path account to be the same exact canonical I105 account as the signer.
@@ -833,15 +947,31 @@ ledger.
 
 ### Torii server-sent events
 
-`HttpClientTransport.newEventStreamClient()` does not synthesize an account
-identity; without auth-bearing default headers its requests remain fully
-anonymous and public-only. It still inherits the HTTP client's base URI,
+`HttpClientTransport.newEventStreamClient()` signs with the client-wide
+`ClientConfig.canonicalAuth()` when one is configured; otherwise its requests
+remain anonymous and public-only. It inherits the HTTP client's base URI,
 default headers, and observers. Use `newEventStreamClient(canonicalAuth)` with
-a configured `LocalSigningContext` to add a canonical account identity. The
-client generates all four canonical headers after path resolution, filter
-normalisation, and option-query assembly, so the signature is bound to the
-exact final URI;
-precomputed or partial canonical headers are rejected before dispatch. The
+a configured `LocalSigningContext` for a specific account identity.
+`subscribe(filter, ToriiEventListener)` reads `/v1/events/sse` with a filter in
+the collection-query text grammar over event fields (`EventFields.TX_HASH`,
+`TX_STATUS`, `BLOCK_HEIGHT`, `PROOF_BACKEND`, ...) and decodes each payload into
+a `ToriiEvent`: `Transaction` (`TransactionEventStatus` plus
+`TransactionRejectionCode` and the public `rejectionReason` when rejected),
+`Block` (`BlockEventStatus`, block `rejectionCode`), `Warning`, `Witness`,
+`ProofVerified`/`ProofRejected`/`ProofPruned`, `DataChange` (`DataEventKind`
+plus a diagnostic `summary`) and `Other`. Payloads with an unknown `event` or
+status arrive as `ToriiEvent.Unknown` and never fail the stream; a terminal
+`stream_error` frame reaches `onStreamError`. `openEventStream(filter,
+listener)` delivers the raw `ServerSentEvent`s instead
+(`ServerSentEvent.toriiEvent()` decodes one), and text filters can also be
+passed with `ToriiEventStreamOptions.Builder.setFilter(String)`. The client
+generates all four canonical headers after path resolution and option-query
+assembly, so the signature is bound to the exact final URI;
+precomputed or partial canonical headers are rejected before dispatch. Frames
+follow the SSE specification: an event cut off by the end of the stream is
+discarded and lines are bounded. `ToriiEventStreamOptions.timeout` bounds the
+idle time between bytes (default 45 seconds, above Torii's 15-second heartbeat);
+a stream has no total lifetime. The
 canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are live-only
 and have no replay log. `ToriiEventStreamClient` therefore rejects every case
 variant of `Last-Event-ID` before dispatch for exactly those two paths; custom

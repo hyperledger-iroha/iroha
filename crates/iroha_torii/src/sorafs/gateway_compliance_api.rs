@@ -8,10 +8,9 @@
 
 #![cfg(feature = "app_api")]
 use super::gateway::{
-    GatewayComplianceAcknowledgementV1, GatewayComplianceCatalogV1, GatewayComplianceCheckpointV1,
-    GatewayComplianceController, GatewayComplianceError, GatewayComplianceHistoryRecordV1,
-    GatewayComplianceMutationBindingV1, GatewayComplianceMutationResultV1,
-    GatewayComplianceRollbackV1, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+    GatewayComplianceCheckpointV1, GatewayComplianceController, GatewayComplianceError,
+    GatewayComplianceHistoryRecordV1, GatewayComplianceMutationBindingV1,
+    GatewayComplianceMutationResultV1,
 };
 use crate::{JsonBody, SharedAppState};
 use axum::{
@@ -23,15 +22,23 @@ use axum::{
 use iroha_core::state::WorldReadOnly;
 use iroha_data_model::role::RoleId;
 use iroha_logger::warn;
-use norito::derive::JsonSerialize;
-use sha2::{Digest as _, Sha256};
+use iroha_torii_shared::sorafs_gateway_compliance_api::{
+    GATEWAY_COMPLIANCE_ACTION_SCHEMA_V1, GATEWAY_COMPLIANCE_ERROR_SCHEMA_V1,
+    GATEWAY_COMPLIANCE_IDEMPOTENCY_KEY_HEADER as IDEMPOTENCY_KEY_HEADER,
+    GATEWAY_COMPLIANCE_STATUS_SCHEMA_V1, GatewayComplianceActionResponseV1,
+    GatewayComplianceCatalogStatusV1, GatewayComplianceErrorResponseV1,
+    GatewayComplianceLatestActionStatusV1, GatewayCompliancePromoteExpectationV1,
+    GatewayComplianceStatusResponseV1, decode_lower_hex_32, request_idempotency_binding,
+};
+use sorafs_manifest::gateway_compliance::{
+    GatewayComplianceAcknowledgementV1, GatewayComplianceCatalogV1, GatewayComplianceRollbackV1,
+    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+};
 use std::{
     sync::{Arc, LazyLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 const GATEWAY_COMPLIANCE_OPERATOR_ROLE: &str = "sorafs_gateway_compliance_operator";
-const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
-const IDEMPOTENCY_BINDING_DOMAIN_V1: &[u8] = b"iroha.sorafs.gateway.compliance.idempotency.v1";
 const MAX_GATEWAY_COMPLIANCE_BLOCKING_OPERATIONS: usize = 16;
 static GATEWAY_COMPLIANCE_OPERATOR_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
     GATEWAY_COMPLIANCE_OPERATOR_ROLE
@@ -44,59 +51,6 @@ static GATEWAY_COMPLIANCE_BLOCKING_PERMITS: LazyLock<Arc<tokio::sync::Semaphore>
             MAX_GATEWAY_COMPLIANCE_BLOCKING_OPERATIONS,
         ))
     });
-#[derive(Debug, JsonSerialize)]
-struct GatewayComplianceActionResponseV1 {
-    schema: String,
-    action: String,
-    catalog_digest_hex: String,
-    idempotency_key: String,
-    operation_timestamp_unix: u64,
-}
-#[derive(Debug, JsonSerialize)]
-struct GatewayComplianceCatalogStatusV1 {
-    digest_hex: String,
-    sequence: u64,
-    generated_at_unix: u64,
-    valid_until_unix: u64,
-}
-#[derive(Debug, JsonSerialize)]
-struct GatewayComplianceLatestActionStatusV1 {
-    operation_id_hex: String,
-    action: String,
-    previous_serving_digest_hex: Option<String>,
-    serving_digest_hex: String,
-    recorded_at_unix: u64,
-    reason_code: String,
-}
-#[derive(Debug, JsonSerialize)]
-struct GatewayComplianceStatusResponseV1 {
-    schema: String,
-    checkpoint_version: u8,
-    policy_digest_hex: String,
-    observed_at_unix: u64,
-    serving_ready: bool,
-    chain_head: Option<GatewayComplianceCatalogStatusV1>,
-    serving: Option<GatewayComplianceCatalogStatusV1>,
-    previous_serving: Option<GatewayComplianceCatalogStatusV1>,
-    candidate: Option<GatewayComplianceCatalogStatusV1>,
-    acknowledgement_count: u64,
-    accepted_acknowledgement_count: u64,
-    rejected_acknowledgement_count: u64,
-    history_count: u64,
-    idempotency_record_count: u64,
-    latest_action: Option<GatewayComplianceLatestActionStatusV1>,
-}
-#[derive(Debug, JsonSerialize)]
-struct GatewayComplianceErrorResponseV1 {
-    schema: String,
-    code: String,
-    message: String,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GatewayCompliancePromoteExpectationV1 {
-    catalog_digest: [u8; 32],
-    sequence: u64,
-}
 /// Fetch one configured feed through the runtime-injected authenticated
 /// address-pinned transport. The returned document is normalized and bounded;
 /// this route never promotes it or signs a catalog.
@@ -790,7 +744,7 @@ fn status_response(
     let (_, _, serving_ready) =
         gateway_compliance_checkpoint_snapshot(checkpoint, observed_at_unix);
     Ok(GatewayComplianceStatusResponseV1 {
-        schema: "sorafs.gateway.compliance.status.v1".to_owned(),
+        schema: GATEWAY_COMPLIANCE_STATUS_SCHEMA_V1.to_owned(),
         checkpoint_version: checkpoint.version,
         policy_digest_hex: hex::encode(checkpoint.policy_digest),
         observed_at_unix,
@@ -867,33 +821,8 @@ fn decode_canonical_promote_expectation(
             "gateway compliance promotion requires an exact catalog digest and sequence",
         )
     })?;
-    let mut fields = query.split('&');
-    let digest_field = fields.next().unwrap_or_default();
-    let sequence_field = fields.next().unwrap_or_default();
-    if fields.next().is_some() {
-        return Err(non_canonical_promote_expectation());
-    }
-    let Some(digest_hex) = digest_field.strip_prefix("expected_catalog_digest=") else {
-        return Err(non_canonical_promote_expectation());
-    };
-    let Some(sequence_text) = sequence_field.strip_prefix("expected_sequence=") else {
-        return Err(non_canonical_promote_expectation());
-    };
-    let catalog_digest =
-        decode_lower_hex_32(digest_hex).ok_or_else(non_canonical_promote_expectation)?;
-    let sequence = sequence_text
-        .parse::<u64>()
-        .ok()
-        .filter(|sequence| *sequence != 0 && sequence.to_string() == sequence_text)
-        .ok_or_else(non_canonical_promote_expectation)?;
-    let canonical = format!("expected_catalog_digest={digest_hex}&expected_sequence={sequence}");
-    if canonical != query {
-        return Err(non_canonical_promote_expectation());
-    }
-    Ok(GatewayCompliancePromoteExpectationV1 {
-        catalog_digest,
-        sequence,
-    })
+    GatewayCompliancePromoteExpectationV1::parse_query(query)
+        .map_err(|_| non_canonical_promote_expectation())
 }
 fn non_canonical_promote_expectation() -> Response {
     gateway_compliance_request_error(
@@ -908,7 +837,12 @@ fn require_request_idempotency_binding(
     uri: &Uri,
     body: &[u8],
 ) -> Result<GatewayComplianceMutationBindingV1, Response> {
-    let request_digest = request_idempotency_binding(action, uri, body);
+    let request_digest = request_idempotency_binding(
+        action,
+        uri.path_and_query()
+            .map_or_else(|| uri.path(), |value| value.as_str()),
+        body,
+    );
     let key_digest = require_exact_idempotency_key(headers, request_digest)?;
     Ok(GatewayComplianceMutationBindingV1 {
         key_digest,
@@ -932,7 +866,12 @@ fn require_operation_idempotency_binding(
     let key_digest = require_exact_idempotency_key(headers, operation_id)?;
     Ok(GatewayComplianceMutationBindingV1 {
         key_digest,
-        request_digest: request_idempotency_binding(action, uri, body),
+        request_digest: request_idempotency_binding(
+            action,
+            uri.path_and_query()
+                .map_or_else(|| uri.path(), |value| value.as_str()),
+            body,
+        ),
     })
 }
 fn require_exact_idempotency_key(
@@ -989,30 +928,6 @@ fn validated_idempotency_key(headers: &HeaderMap) -> Result<[u8; 32], Response> 
             "Idempotency-Key must be exactly 64 lowercase hexadecimal characters",
         )
     })
-}
-fn request_idempotency_binding(action: &str, uri: &Uri, body: &[u8]) -> [u8; 32] {
-    let request_target = uri
-        .path_and_query()
-        .map_or_else(|| uri.path(), |value| value.as_str());
-    let mut hasher = Sha256::new();
-    hasher.update(IDEMPOTENCY_BINDING_DOMAIN_V1);
-    hasher.update((action.len() as u64).to_be_bytes());
-    hasher.update(action.as_bytes());
-    hasher.update((request_target.len() as u64).to_be_bytes());
-    hasher.update(request_target.as_bytes());
-    hasher.update((body.len() as u64).to_be_bytes());
-    hasher.update(body);
-    hasher.finalize().into()
-}
-fn decode_lower_hex_32(value: &str) -> Option<[u8; 32]> {
-    if value.len() != 64
-        || value.bytes().any(|byte| !byte.is_ascii_hexdigit())
-        || value.bytes().any(|byte| byte.is_ascii_uppercase())
-    {
-        return None;
-    }
-    let decoded = hex::decode(value).ok()?;
-    decoded.try_into().ok()
 }
 fn decode_canonical_catalog(body: &[u8]) -> Result<GatewayComplianceCatalogV1, Response> {
     let value: GatewayComplianceCatalogV1 = norito::json::from_slice(body).map_err(|_| {
@@ -1099,7 +1014,7 @@ fn action_response(
         (
             status,
             JsonBody(GatewayComplianceActionResponseV1 {
-                schema: "sorafs.gateway.compliance.action.v1".to_owned(),
+                schema: GATEWAY_COMPLIANCE_ACTION_SCHEMA_V1.to_owned(),
                 action: action.to_owned(),
                 catalog_digest_hex: hex::encode(result.catalog_digest),
                 idempotency_key: hex::encode(idempotency_key),
@@ -1118,7 +1033,7 @@ fn gateway_compliance_request_error(
         (
             status,
             JsonBody(GatewayComplianceErrorResponseV1 {
-                schema: "sorafs.gateway.compliance.error.v1".to_owned(),
+                schema: GATEWAY_COMPLIANCE_ERROR_SCHEMA_V1.to_owned(),
                 code: code.to_owned(),
                 message: message.to_owned(),
             }),
@@ -1260,12 +1175,14 @@ fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response 
 mod tests {
     use super::*;
     use crate::sorafs::gateway::{
-        GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1, GATEWAY_COMPLIANCE_CATALOG_VERSION_V1,
-        GATEWAY_COMPLIANCE_CHECKPOINT_VERSION_V1, GatewayComplianceCatalogApprovalV1,
-        GatewayComplianceCatalogPayloadV1, GatewayComplianceIdempotencyRecordV1,
+        GATEWAY_COMPLIANCE_CHECKPOINT_VERSION_V1, GatewayComplianceIdempotencyRecordV1,
         GatewayComplianceMutationKindV1,
     };
     use ed25519_dalek::{Signer as _, SigningKey};
+    use sorafs_manifest::gateway_compliance::{
+        GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1, GATEWAY_COMPLIANCE_CATALOG_VERSION_V1,
+        GatewayComplianceCatalogApprovalV1, GatewayComplianceCatalogPayloadV1,
+    };
     #[test]
     fn gateway_compliance_auth_rejects_foreign_exact_network() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
@@ -1322,6 +1239,56 @@ mod tests {
         padded.push(b'\n');
         assert!(decode_canonical_catalog(&padded).is_err());
     }
+    #[test]
+    fn shared_protocol_failures_keep_runtime_http_classes() {
+        use sorafs_manifest::gateway_compliance::GatewayComplianceProtocolError;
+        for (protocol, status, variant) in [
+            (
+                GatewayComplianceProtocolError::CatalogNotFresh,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "CatalogNotFresh",
+            ),
+            (
+                GatewayComplianceProtocolError::InvalidSignature {
+                    signer_id: "catalog-a".into(),
+                    reason: "signature rejected".into(),
+                },
+                StatusCode::FORBIDDEN,
+                "InvalidSignature",
+            ),
+            (
+                GatewayComplianceProtocolError::QuorumNotMet {
+                    found: 1,
+                    required: 2,
+                },
+                StatusCode::FORBIDDEN,
+                "QuorumNotMet",
+            ),
+            (
+                GatewayComplianceProtocolError::InvalidPredecessor,
+                StatusCode::CONFLICT,
+                "InvalidPredecessor",
+            ),
+            (
+                GatewayComplianceProtocolError::ResourceLimit {
+                    resource: "canonical encoded bytes",
+                    found: 17,
+                    maximum: 16,
+                },
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "ResourceLimit",
+            ),
+        ] {
+            let message = protocol.to_string();
+            let exact = format!("{protocol:?}");
+            let runtime = GatewayComplianceError::from(protocol);
+            assert_eq!(runtime.to_string(), message);
+            assert_eq!(format!("{runtime:?}"), exact);
+            assert!(exact.starts_with(variant));
+            assert_eq!(gateway_compliance_error_response(runtime).status(), status);
+        }
+    }
+
     #[test]
     fn controller_errors_map_to_fail_closed_http_classes() {
         assert_eq!(
@@ -1447,7 +1414,13 @@ mod tests {
         };
         let status =
             status_response(&checkpoint, 1_700_000_020).expect("redacted status projection");
+        status
+            .validate()
+            .expect("canonical shared status projection");
         let json = norito::json::to_string(&status).expect("status JSON");
+        let decoded: GatewayComplianceStatusResponseV1 = norito::json::from_str(&json).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded, status);
         assert!(
             json.len() < 4_096,
             "status projection must remain tightly bounded"
@@ -1506,7 +1479,17 @@ mod tests {
             gateway_compliance_checkpoint_snapshot(&checkpoint, 1_700_003_600),
             (Some(1), Some(1_700_003_600), false)
         );
+        for observed in [1_699_999_999, 1_700_000_000, 1_700_003_599, 1_700_003_600] {
+            status_response(&checkpoint, observed)
+                .unwrap()
+                .validate()
+                .unwrap();
+        }
         checkpoint.serving = None;
+        status_response(&checkpoint, 1_700_000_020)
+            .unwrap()
+            .validate()
+            .unwrap();
         assert_eq!(
             gateway_compliance_checkpoint_snapshot(&checkpoint, 1_700_000_020),
             (None, None, false)
@@ -1518,7 +1501,12 @@ mod tests {
             .parse()
             .expect("stage URI");
         let body = b"{\"catalog\":\"fixture\"}";
-        let expected = hex::encode(request_idempotency_binding("stage", &uri, body));
+        let expected = hex::encode(request_idempotency_binding(
+            "stage",
+            uri.path_and_query()
+                .map_or_else(|| uri.path(), |value| value.as_str()),
+            body,
+        ));
         let mut headers = HeaderMap::new();
         assert!(validated_idempotency_key(&headers).is_err());
         headers.insert(
@@ -1554,7 +1542,12 @@ mod tests {
             .expect("stage URI");
         let original = b"{\"catalog\":1}";
         let changed = b"{\"catalog\":2}";
-        let key = hex::encode(request_idempotency_binding("stage", &uri, original));
+        let key = hex::encode(request_idempotency_binding(
+            "stage",
+            uri.path_and_query()
+                .map_or_else(|| uri.path(), |value| value.as_str()),
+            original,
+        ));
         let mut headers = HeaderMap::new();
         headers.insert(
             IDEMPOTENCY_KEY_HEADER,
@@ -1569,8 +1562,18 @@ mod tests {
             Some(&HeaderValue::from_static("private, no-store, max-age=0"))
         );
         assert_ne!(
-            request_idempotency_binding("stage", &uri, original),
-            request_idempotency_binding("acknowledge", &uri, original)
+            request_idempotency_binding(
+                "stage",
+                uri.path_and_query()
+                    .map_or_else(|| uri.path(), |value| value.as_str()),
+                original
+            ),
+            request_idempotency_binding(
+                "acknowledge",
+                uri.path_and_query()
+                    .map_or_else(|| uri.path(), |value| value.as_str()),
+                original
+            )
         );
     }
     #[test]

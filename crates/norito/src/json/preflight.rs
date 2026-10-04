@@ -260,6 +260,7 @@ pub struct JsonPreflightProfile {
     array_entries: usize,
     object_entries: usize,
     object_btree_node_upper_bound: usize,
+    object_btree_allocation_bytes: usize,
     root_container_entries: usize,
     max_container_entries: usize,
     encoded_string_bytes: usize,
@@ -307,6 +308,15 @@ impl JsonPreflightProfile {
     #[must_use]
     pub const fn object_btree_node_upper_bound(self) -> usize {
         self.object_btree_node_upper_bound
+    }
+    /// Sum of the native `Value` parser's conservative allocation charge for each object's nodes.
+    ///
+    /// Empty objects allocate no nodes. Objects through eleven lexical entries charge one leaf;
+    /// larger objects retain the collection owner's full split and internal-node bound. Duplicate
+    /// keys retain their original lexical-entry charge, just as the parser's admission does.
+    #[must_use]
+    pub const fn object_btree_allocation_bytes(self) -> usize {
+        self.object_btree_allocation_bytes
     }
     /// Number of entries in the root array or object, or zero for a scalar.
     #[must_use]
@@ -572,6 +582,11 @@ impl<'a> Scanner<'a> {
                 .map_err(|_| JsonPreflightError::arithmetic(self.offset))?;
             self.profile.object_btree_node_upper_bound =
                 self.checked_add(self.profile.object_btree_node_upper_bound, nodes)?;
+            let bytes =
+                crate::core::owned_btree_allocation_bytes::<String, super::Value>(frame.entries)
+                    .map_err(|_| JsonPreflightError::arithmetic(self.offset))?;
+            self.profile.object_btree_allocation_bytes =
+                self.checked_add(self.profile.object_btree_allocation_bytes, bytes)?;
         }
         if self.frame_len == 0 {
             self.profile.root_container_entries = frame.entries;
@@ -1032,6 +1047,47 @@ mod tests {
         assert_eq!(profile.objects(), 2);
         assert_eq!(profile.object_entries(), 5);
         assert_eq!(profile.object_btree_node_upper_bound(), 1);
+    }
+    #[test]
+    fn profiles_native_value_object_charge_at_leaf_split_and_nested_boundaries() {
+        for entries in [0, 1, 5, 6, 10, 11, 12, 13, 31, 64, 256] {
+            let fields = (0..entries)
+                .map(|index| format!("\"k{index}\":0"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let object = format!("{{{fields}}}");
+            let profile = preflight_slice(object.as_bytes(), generous()).unwrap();
+            let owner =
+                crate::core::owned_btree_allocation_bytes::<String, super::super::Value>(entries)
+                    .unwrap();
+            assert_eq!(
+                profile.object_btree_allocation_bytes(),
+                owner,
+                "entries={entries}"
+            );
+            let nested = format!("{{\"full\":{object},\"empty\":{{}}}}");
+            let profile = preflight_slice(nested.as_bytes(), generous()).unwrap();
+            assert_eq!(
+                profile.object_btree_allocation_bytes(),
+                owner
+                    + crate::core::owned_btree_allocation_bytes::<String, super::super::Value>(2)
+                        .unwrap(),
+                "each object retains its own original charge"
+            );
+        }
+    }
+    #[test]
+    fn duplicate_object_keys_retain_original_lexical_parser_charge() {
+        let object = format!("{{{}}}", ["\"same\":0"; 12].join(","));
+        let profile = preflight_slice(object.as_bytes(), generous()).unwrap();
+        assert_eq!(profile.object_entries(), 12);
+        assert_eq!(
+            profile.object_btree_allocation_bytes(),
+            crate::core::owned_btree_allocation_bytes::<String, super::super::Value>(12).unwrap()
+        );
+        let error = crate::json::from_slice::<super::super::Value>(object.as_bytes())
+            .expect_err("duplicate keys retain the original canonical parser refusal");
+        assert!(matches!(error, crate::json::Error::DuplicateField { field } if field == "same"));
     }
     #[test]
     fn enforces_exact_decode_limit_mapping() {

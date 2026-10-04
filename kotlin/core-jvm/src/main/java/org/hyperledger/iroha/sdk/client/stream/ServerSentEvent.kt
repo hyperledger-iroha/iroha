@@ -20,4 +20,7 @@ class ServerSentEvent internal constructor(
      */
     fun terminalStreamError(): ToriiStreamException? =
         if (event == "stream_error") ToriiStreamErrorParser.parse(data) else null
+
+    /** The decoded `/v1/events/sse` payload, or `null` for a terminal `stream_error` frame. */
+    fun toriiEvent(): ToriiEvent? = if (event == "stream_error") null else ToriiEvent.parse(data)
 }

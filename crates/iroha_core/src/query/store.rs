@@ -695,10 +695,6 @@ impl LiveQueryStoreHandle {
             ordinary_memory_admission: Some(admission),
         }
     }
-    #[cfg(test)]
-    pub(crate) fn shares_store_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.store, &other.store)
-    }
     /// Construct a batched response from a post-processed query output.
     ///
     /// # Parameters

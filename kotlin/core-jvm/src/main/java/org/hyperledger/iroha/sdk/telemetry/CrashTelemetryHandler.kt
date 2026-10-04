@@ -47,24 +47,31 @@ class CrashTelemetryHandler(
     fun reporter(): CrashTelemetryReporter = reporter
 
     companion object {
+        private val INSTALL_LOCK = Any()
+
         /**
-         * Installs the crash telemetry handler as the process-wide default handler. Returns the
-         * installed handler so callers can emit upload telemetry or uninstall the handler if needed.
+         * Installs the crash telemetry handler as the process-wide default handler and returns it.
+         *
+         * Installation is idempotent: at most one SDK handler is active. When the current default
+         * handler is already a [CrashTelemetryHandler] (for example after building another
+         * `ClientConfig`), it is replaced in place and keeps the original application delegate,
+         * so a crash is reported once.
          */
         @JvmStatic
         fun install(
             options: TelemetryOptions,
             sink: TelemetrySink,
             metadataProvider: MetadataProvider,
-        ): CrashTelemetryHandler {
-            val previous = Thread.getDefaultUncaughtExceptionHandler()
+        ): CrashTelemetryHandler = synchronized(INSTALL_LOCK) {
+            val current = Thread.getDefaultUncaughtExceptionHandler()
+            val delegate = if (current is CrashTelemetryHandler) current.delegate else current
             val handler = CrashTelemetryHandler(
                 CrashTelemetryReporter(options, sink),
                 metadataProvider,
-                previous,
+                delegate,
             )
             Thread.setDefaultUncaughtExceptionHandler(handler)
-            return handler
+            handler
         }
 
         /** Returns a metadata provider that derives crash identifiers from the thread and throwable. */

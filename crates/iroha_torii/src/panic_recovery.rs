@@ -80,6 +80,32 @@ mod tests {
         assert!(!stale);
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_panic_fails_closed_and_clears_physical_worker_suppression() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let suppressed = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&suppressed);
+        let ready = super::super::wait_for_consensus_readiness(
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            move |_| {
+                observed.store(iroha_panic_hook::is_suppressed(), Ordering::Release);
+                panic!("injected readiness observation panic");
+            },
+        )
+        .await;
+        assert!(!ready);
+        assert!(suppressed.load(Ordering::Acquire));
+        assert!(!iroha_panic_hook::is_suppressed());
+        let stale = tokio::task::spawn_blocking(iroha_panic_hook::is_suppressed)
+            .await
+            .expect("ordinary blocking worker probe must join");
+        assert!(!stale);
+    }
+
     #[tokio::test]
     async fn joined_async_panic_is_controlled() {
         let task = spawn_joined_recoverable(async {

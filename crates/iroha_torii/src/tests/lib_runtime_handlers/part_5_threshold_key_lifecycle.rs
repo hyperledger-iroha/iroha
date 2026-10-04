@@ -38,16 +38,6 @@ fn lifecycle_ordinary_fixture(
     (app, authority_key, validators, certificate)
 }
 
-// Local pending custody only: a submission receipt does not promise restart durability.
-fn lifecycle_pending_wire(app: &SharedAppState) -> Vec<Vec<u8>> {
-    use iroha_version::codec::EncodeVersioned as _;
-    let view = app.state.view();
-    app.queue
-        .all_transactions(&view)
-        .map(|transaction| transaction.entrypoint().encode_versioned())
-        .collect()
-}
-
 fn lifecycle_sign_certificate(
     certificate: &mut ThresholdKeyLifecycleCertificateV1,
     keys: &[KeyPair],
@@ -81,9 +71,16 @@ fn lifecycle_ordinary_transaction(
 }
 
 async fn lifecycle_submit(app: &SharedAppState, transaction: SignedTransaction) -> Response {
-    super::submit_signed_transaction_for_ingress(app.clone(), HeaderMap::new(), None, transaction)
-        .await
-        .unwrap_or_else(IntoResponse::into_response)
+    super::submit_signed_transaction_for_ingress(
+        app.clone(),
+        HeaderMap::new(),
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
+        transaction,
+    )
+    .await
+    .unwrap_or_else(IntoResponse::into_response)
 }
 
 #[tokio::test]

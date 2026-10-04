@@ -309,7 +309,12 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     ) -> Result<KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'_>, KagemushaStateErrorV1>
     {
         self.require_current_financial_control()?;
-        let loan = self.historical_received_source_custody(request_id)?;
+        let loan = KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1 {
+            owner: self,
+            request_id,
+            prefix: self.prefix,
+        };
+        loan.recheck_source_custody()?;
         self.require_current_financial_control()?;
         Ok(loan)
     }
@@ -364,7 +369,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 outgoing.admission_clock_signed_original(),
             )
             .map_err(material)?;
-        let request = self.receiver_request_custody(request_id)?;
+        let request = receiver_request::loan_main_request(self, request_id)?;
         let admitted = verify_ordinary_received_cash_output_v1(
             &self.verifier,
             &assertion,
@@ -511,23 +516,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         }
         Ok(total)
-    }
-}
-
-// Actual Main-only historical proof custody; no current FI, funds or platform grant.
-impl KagemushaNativeOrdinaryCashOwnerV1 {
-    pub(super) fn historical_received_source_custody(
-        &self,
-        request_id: DigestV1,
-    ) -> Result<KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'_>, KagemushaStateErrorV1>
-    {
-        let loan = KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1 {
-            owner: self,
-            request_id,
-            prefix: self.prefix,
-        };
-        loan.recheck_source_custody()?;
-        Ok(loan)
     }
 }
 

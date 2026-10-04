@@ -130,6 +130,7 @@ pub use recovery_metadata::{
 };
 mod sparse_merkle;
 mod state_proof_archive_export;
+pub mod wallet_advance_v1;
 pub use state_proof_archive_export::{
     KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1,
     KagemushaOutgoingStateProofArchivePairV1,

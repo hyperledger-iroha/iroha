@@ -1040,8 +1040,8 @@ fn multisig_approve_routes_by_persisted_proposal_when_scope_is_missing() {
     );
 }
 #[test]
-fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
-    multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
+fn multisig_approve_rejects_corrupt_proposal_state_with_account_scope() {
+    multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id _lane_id catalog lane_catalog policy router proposed);
     let instructions_hash = HashOf::new(&proposed);
     let tx = sample_transaction(
         &submitter_id,
@@ -1056,12 +1056,12 @@ fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
     let mut state =
         state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
     install_router_lane_catalog(&mut state, lane_catalog);
-    state.world.smart_contract_state_mut_for_testing().insert(
-        multisig_proposal_state_key(&multisig_id, &instructions_hash),
-        b"not a multisig proposal state".to_vec(),
-    );
-    let expected_route = RoutingDecision::new(lane_id, dataspace_id);
-    let expected_plan = RoutingPlan::single(expected_route);
+    let key = multisig_proposal_state_key(&multisig_id, &instructions_hash);
+    let corrupt = b"not a multisig proposal state".to_vec();
+    state
+        .world
+        .smart_contract_state_mut_for_testing()
+        .insert(key.clone(), corrupt.clone());
     assert_eq!(
         router
             .try_route_without_state(&tx)
@@ -1070,27 +1070,114 @@ fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
     );
     assert_eq!(
         router
-            .try_route_with_view(&tx, &state.view())
-            .expect("corrupt proposal state should fall back to multisig account scope"),
-        expected_route
+            .try_route_plan_without_state(&tx)
+            .expect("multisig approval plan should defer to state-aware routing"),
+        None
     );
+    let view = state.view();
+    // A retained malformed row is rejection, even when the account has a real scope.
+    // Only physical absence can use account-scope fallback.
+    for (entrypoint, result) in [
+        (
+            "route with view",
+            router.try_route_with_view(&tx, &view).map(|_| ()),
+        ),
+        (
+            "route with state",
+            router.try_route_with_state(&tx, &state).map(|_| ()),
+        ),
+        (
+            "plan with view",
+            router.try_route_plan_with_view(&tx, &view).map(|_| ()),
+        ),
+        (
+            "plan with state",
+            router.try_route_plan_with_state(&tx, &state).map(|_| ()),
+        ),
+        (
+            "validation route",
+            evaluate_policy_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &view.nexus().dataspace_catalog,
+                &tx,
+                view.world(),
+            )
+            .map(|_| ()),
+        ),
+        (
+            "validation route at ledger time",
+            evaluate_policy_with_catalog_and_world_at(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &view.nexus().dataspace_catalog,
+                &tx,
+                view.world(),
+                0,
+            )
+            .map(|_| ()),
+        ),
+        (
+            "validation plan",
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &view.nexus().dataspace_catalog,
+                &tx,
+                view.world(),
+            )
+            .map(|_| ()),
+        ),
+        (
+            "validation plan at ledger time",
+            evaluate_policy_plan_with_catalog_and_world_at(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &view.nexus().dataspace_catalog,
+                &tx,
+                view.world(),
+                0,
+            )
+            .map(|_| ()),
+        ),
+        (
+            "Nexus validation plan",
+            evaluate_policy_plan_with_nexus_and_world_at(view.nexus(), &tx, view.world(), 0)
+                .map(|_| ()),
+        ),
+        (
+            "Nexus validation plan at block height",
+            evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                view.nexus(),
+                &tx,
+                view.world(),
+                0,
+                1,
+            )
+            .map(|_| ()),
+        ),
+    ] {
+        match result {
+            Err(RoutingResolveError::InvalidMultisigProposal {
+                account,
+                instructions_hash: rejected_hash,
+                reason,
+            }) => {
+                assert_eq!(account, multisig_id, "{entrypoint}");
+                assert_eq!(rejected_hash, instructions_hash, "{entrypoint}");
+                assert!(
+                    !reason.is_empty(),
+                    "{entrypoint} must retain its rejection reason"
+                );
+            }
+            result => panic!(
+                "{entrypoint} must reject the exact corrupt account/proposal row: {result:?}"
+            ),
+        }
+    }
     assert_eq!(
-        router
-            .try_route_plan_with_view(&tx, &state.view())
-            .expect("corrupt proposal state plan should fall back to multisig account scope"),
-        expected_plan
-    );
-    assert_eq!(
-        evaluate_policy_plan_with_catalog_and_world(
-            &policy,
-            router.lane_catalog.as_ref(),
-            &state.view().nexus().dataspace_catalog,
-            &tx,
-            state.view().world(),
-        )
-        .expect("validation routing should ignore corrupt proposal state")
-        .coordinator_route(),
-        expected_route
+        view.world().smart_contract_state().get(&key),
+        Some(&corrupt)
     );
 }
 #[test]

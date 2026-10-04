@@ -4,7 +4,10 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
 };
+mod dead_operands;
 mod rematerialized;
+#[cfg(test)]
+pub(crate) use dead_operands::with_conservative_host_operands;
 #[cfg(test)]
 pub(crate) use rematerialized::with_literal_homes;
 
@@ -161,7 +164,7 @@ fn instruction_preserves_argument_registers(instruction: &Instr) -> bool {
 #[derive(Debug)]
 struct ArgumentRegisterClobber {
     position: usize,
-    internal_call: bool,
+    operands_staged_before_clobber: bool,
     uses: HashSet<Temp>,
     /// Temps whose current values are needed after this instruction on a
     /// control-flow path, including fields carried by virtual tuples.
@@ -252,9 +255,8 @@ fn collect_argument_register_clobbers(function: &Function) -> Vec<ArgumentRegist
                 extend_virtual_tuple_liveness(&mut live_across, &tuple_defs);
                 clobbers.push(ArgumentRegisterClobber {
                     position,
-                    internal_call: matches!(
+                    operands_staged_before_clobber: dead_operands::operands_staged_before_clobber(
                         instruction,
-                        Instr::Call { .. } | Instr::CallMulti { .. }
                     ),
                     uses: uses.clone(),
                     live_across,
@@ -275,7 +277,7 @@ fn interval_can_use_argument_registers(
 ) -> bool {
     clobbers.iter().all(|clobber| {
         !clobber.live_across.contains(&interval.temp)
-            && (clobber.internal_call || !clobber.uses.contains(&interval.temp))
+            && (clobber.operands_staged_before_clobber || !clobber.uses.contains(&interval.temp))
     })
 }
 fn reload_range_survives_clobber(
@@ -293,7 +295,7 @@ fn split_candidate_can_use_argument_registers(
 ) -> bool {
     !reload_range_survives_clobber(candidate.start, candidate.end, clobbers)
         && clobbers.iter().all(|clobber| {
-            clobber.internal_call
+            clobber.operands_staged_before_clobber
                 || !clobber.uses.contains(&candidate.temp)
                 || clobber.position < candidate.start
                 || candidate.end < clobber.position

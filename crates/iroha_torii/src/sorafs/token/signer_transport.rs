@@ -69,7 +69,10 @@ pub trait StreamTokenStateObserverClientV1: Send + Sync {
         &self,
         instruction: &iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority,
     ) -> Result<iroha_data_model::transaction::SignedTransaction, StreamTokenSignerCallErrorV1>;
-    /// Execute one read-only query, preserving every retained challenge, phase and subject field.
+    /// Execute this exact observation once, preserving challenge, phase and subject fields.
+    /// Native completed observations may sign and submit an internal Check before replying;
+    /// a transport or local refusal does not authorize replaying this method. The caller may
+    /// retry only local verification of an already returned exact reply.
     fn observe(
         &self,
         request: &SignerStreamTokenObservationRequestV1,

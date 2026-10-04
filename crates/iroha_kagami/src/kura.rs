@@ -288,8 +288,9 @@ fn print_blockchain(
             block_store
                 .read_block_data(idx.start, &mut block_buf)
                 .wrap_err(format!("failed to read block № {} data.", meta_index + 1))?;
-            let block = decode_framed_signed_block(&block_buf)
-                .map_err(|err| eyre!("Failed to decode block № {}: {err}", meta_index + 1))?;
+            let block = decode_framed_signed_block(&block_buf).wrap_err_with(|| {
+                format!("failed to decode canonical block № {}", meta_index + 1)
+            })?;
             writeln!(writer, "Block#{} :", meta_index + 1)?;
             writeln!(writer, "{block:#?}")?;
         }

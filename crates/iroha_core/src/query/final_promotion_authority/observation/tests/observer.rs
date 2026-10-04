@@ -60,7 +60,10 @@ fn receipt_check_rejects_self_observation_and_substituted_operator_or_observer()
         assert_ne!(&changed, prepared.instruction());
         let signed = f.sign(changed.into(), 3, NOW);
         assert_eq!(
-            prepared.bind_signed_transaction(signed).err(),
+            prepared
+                .bind_signed_transaction(signed)
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(Error::Transaction)
         );
     }
@@ -68,7 +71,10 @@ fn receipt_check_rejects_self_observation_and_substituted_operator_or_observer()
         let prepared = f.prepared();
         let signed = f.sign(prepared_instruction(&prepared), signer, NOW);
         assert_eq!(
-            prepared.bind_signed_transaction(signed).err(),
+            prepared
+                .bind_signed_transaction(signed)
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(Error::Transaction)
         );
     }
@@ -95,7 +101,8 @@ fn receipt_current_check_requires_the_pinned_operator_registered_and_authorized(
                 .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
                     "failed native operator check precedes clock"
                 ))
-                .err(),
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(Error::Execution)
         );
     }
@@ -155,7 +162,8 @@ fn receipt_observer_role_permission_and_account_removal_are_rechecked_at_applied
                         NOW + 2,
                         NOW + 2
                     )))
-                    .err(),
+                    .err()
+                    .and_then(|failure| failure.rejection()),
                 Some(Error::Authority),
                 "{change}, same_block={same_block}"
             );
@@ -190,7 +198,8 @@ fn receipt_observer_permission_revoked_before_execution_cannot_supply_a_success(
             .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
                 "rejected Check result precedes clock"
             ))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Execution)
     );
 }

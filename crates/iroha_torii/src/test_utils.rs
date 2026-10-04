@@ -561,6 +561,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
         },
         runtime_provider_broker: A::RuntimeProviderBroker {
+                observer_operation_timeout: defaults::runtime_provider_broker::OBSERVER_OPERATION_TIMEOUT,
+                credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES,
             endpoint_path: A::RuntimeProviderBrokerEndpointPath::try_new(
                 defaults::runtime_provider_broker::endpoint_path(),
             )
@@ -1422,22 +1424,19 @@ mod tests {
         TestDataDirGuard, apply_queued_in_one_block, contract_code_hash_hex, minimal_ivm_program,
     };
     use iroha_core::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        queue::{Queue, RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan},
-        state::{State, StateReadOnly, World},
+        queue::Queue,
+        state::{StateReadOnly, World},
         tx::AcceptedTransaction,
     };
-    use iroha_crypto::{Hash, HashOf};
+
     use iroha_data_model::{
         Level, Registrable,
         account::{Account, AccountId},
-        block::ExternalExecutionRouteRole,
         isi::Log,
-        transaction::{TransactionBuilder, TransactionEntrypoint},
+        transaction::TransactionBuilder,
     };
     use iroha_model_base::chain::ChainId;
-    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+
     use std::{borrow::Cow, sync::Arc};
     #[test]
     fn minimal_root_cfg_keeps_durable_torii_paths_in_the_test_data_dir() {
@@ -1657,4 +1656,111 @@ pub(crate) fn pin_autoscale_lane_committee_for_test(
         hex::encode(encoded),
     );
     validator_set
+}
+
+/// Explicit root authority for routing-only fixtures; this never supplies native finality.
+#[cfg(test)]
+pub(crate) fn bind_fixture_root(
+    world: &mut iroha_core::state::World,
+    scope: iroha_data_model::block::consensus::SumeragiRootScope,
+) {
+    use iroha_data_model::{
+        block::consensus::ValidatorPower,
+        parameter::{
+            Parameter,
+            custom::CustomParameter,
+            system::{
+                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+                consensus_metadata,
+            },
+        },
+    };
+    use std::num::NonZeroU64;
+    let validators = iroha_core::sumeragi::test_chain::fixture_validators()
+        .into_iter()
+        .map(|(validator, _)| ValidatorPower {
+            validator,
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    let mut context = iroha_core_zk::kagemusha_v1_test_fixtures::genesis_context_parameters();
+    context.root_scope = scope;
+    let metadata = ConsensusHandshakeMetadata {
+        mode: SumeragiConsensusMode::Permissioned,
+        block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
+        wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
+        consensus_fingerprint: ConsensusFingerprint::new([0xC7; 32]),
+        kagemusha_mint_finality:
+            iroha_core_zk::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&validators),
+        sumeragi_context: context,
+    };
+    metadata.validate().unwrap();
+    let mut block = world.block();
+    block
+        .parameters
+        .set_parameter(Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            iroha_primitives::json::Json::new(metadata),
+        )));
+    block.commit();
+}
+
+/// Configure the original future-created autoscale lane for shared authority refusals.
+#[cfg(all(test, any(feature = "app_api", feature = "connect")))]
+pub(crate) fn configure_future_created_autoscale_route_for_test(
+    app: &mut crate::SharedAppState,
+) -> (iroha_model_base::topology::LaneId, DataSpaceId) {
+    use iroha_model_base::topology::LaneId;
+    use std::num::NonZeroU32;
+    let future_lane = LaneId::new(1);
+    let future_dataspace = DataSpaceId::UNIVERSAL;
+    let mut lane = iroha_data_model::nexus::LaneConfig {
+        id: future_lane,
+        dataspace_id: future_dataspace,
+        alias: "elastic-lane-1".to_owned(),
+        visibility: iroha_data_model::nexus::LaneVisibility::Public,
+        ..iroha_data_model::nexus::LaneConfig::default()
+    };
+    lane.metadata.insert(
+        iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+        "true".to_owned(),
+    );
+    lane.metadata.insert(
+        iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+        "7".to_owned(),
+    );
+    assert!(
+        lane.is_autoscale_managed_elastic(),
+        "fixture must be a valid-looking autoscale elastic lane"
+    );
+    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+        NonZeroU32::new(2).expect("nonzero lane count"),
+        vec![iroha_data_model::nexus::LaneConfig::default(), lane],
+    )
+    .expect("future-created lane catalog");
+    let mut nexus = iroha_config::parameters::actual::Nexus {
+        lane_catalog,
+        ..iroha_config::parameters::actual::Nexus::default()
+    };
+    nexus.autoscale.enabled = true;
+    nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+    nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    let app_state = Arc::get_mut(app).expect("unique app state");
+    let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+    // This is an isolated malformed read model, never executed or restored authority.
+    state.install_synthetic_routing_snapshot_for_testing(nexus);
+    state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+        NonZeroU64::new(1).expect("nonzero authority height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    assert!(
+        !state.is_lane_active_for_authority(future_lane),
+        "future-created autoscale fixture must be inactive before creation height"
+    );
+    (future_lane, future_dataspace)
 }

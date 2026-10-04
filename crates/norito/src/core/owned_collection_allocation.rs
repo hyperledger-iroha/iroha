@@ -33,10 +33,8 @@ pub fn with_decode_limits_measured<T>(
     decode: impl FnOnce() -> T,
 ) -> (T, DecodeAllocationUsage) {
     let context = DecodeBudgetContext::new(limits);
-    let counters = Arc::clone(&context.layers[0].budget.counters);
-    let guard = DecodeLimitsGuard::enter_context(&context);
-    let result = decode();
-    drop(guard);
+    let counters = context.layer.budget.counters.clone();
+    let result = context.with(decode);
     let usage = DecodeAllocationUsage {
         total_elements: usize::try_from(counters.total_elements.load(Ordering::Relaxed))
             .unwrap_or(usize::MAX),
@@ -208,11 +206,17 @@ fn btree_maps_node_count_upper_bound(maps: usize, entries: usize) -> Result<usiz
 }
 /// Bytes reserved by all `BTreeMap<K, V>` nodes created for `entries`.
 ///
-/// An internal node is the largest standard-library B-tree node: it owns the leaf header, eleven
-/// key/value slots, and twelve child pointers. Charging that layout for the maximum live node count
-/// also covers leaf-only trees and insertion splits.
+/// Up to eleven entries occupy one leaf, which has no child-pointer array.
+/// Larger trees charge the largest internal-node layout for the conservative
+/// maximum live node count, covering leaf nodes and insertion splits.
 #[doc(hidden)]
 pub fn owned_btree_allocation_bytes<K, V>(entries: usize) -> Result<usize, Error> {
+    if entries == 0 {
+        return Ok(0);
+    }
+    if entries <= STD_BTREE_NODE_CAPACITY {
+        return btree_leaf_allocation_bytes::<K, V>();
+    }
     let node_bytes = btree_node_allocation_bytes::<K, V>()?;
     owned_btree_node_count_upper_bound(entries)?
         .checked_mul(node_bytes)
@@ -232,6 +236,27 @@ pub fn owned_btree_maps_allocation_bytes<K, V>(
     btree_maps_node_count_upper_bound(maps, entries)?
         .checked_mul(node_bytes)
         .ok_or(Error::LengthMismatch)
+}
+// Rust 1.93.1 alloc/src/collections/btree/node.rs: one leaf has five
+// Rust-layout fields (parent, parent index, length, keys and values). The
+// eleven-entry root is split only when another distinct key is inserted.
+// The allocator census covers the split boundary and over-aligned key/value
+// layouts without reconstructing a private std node or assuming field order.
+fn btree_leaf_allocation_bytes<K, V>() -> Result<usize, Error> {
+    let fields = core::mem::size_of::<usize>()
+        .checked_add(core::mem::size_of::<u16>())
+        .and_then(|bytes| bytes.checked_add(core::mem::size_of::<u16>()))
+        .and_then(|bytes| {
+            bytes.checked_add(core::mem::size_of::<K>().checked_mul(STD_BTREE_NODE_CAPACITY)?)
+        })
+        .and_then(|bytes| {
+            bytes.checked_add(core::mem::size_of::<V>().checked_mul(STD_BTREE_NODE_CAPACITY)?)
+        })
+        .ok_or(Error::LengthMismatch)?;
+    let alignment = core::mem::align_of::<K>()
+        .max(core::mem::align_of::<V>())
+        .max(core::mem::align_of::<usize>());
+    checked_rust_struct_layout_upper_bound(fields, 5, alignment)
 }
 fn btree_node_allocation_bytes<K, V>() -> Result<usize, Error> {
     let pointer_bytes = core::mem::size_of::<usize>();
@@ -478,9 +503,37 @@ mod owned_collection_allocation_tests {
             owned_btree_maps_allocation_bytes::<u8, u8>(1, 6).expect("single-map charge fits");
         let split =
             owned_btree_maps_allocation_bytes::<u8, u8>(6, 6).expect("multi-map charge fits");
-        let node = owned_btree_allocation_bytes::<u8, u8>(1).expect("one node charge fits");
+        // Aggregate distribution still charges the largest internal layout
+        // for every possible root/split; one known small tree uses its leaf.
+        let node = btree_node_allocation_bytes::<u8, u8>().expect("internal node charge fits");
         assert_eq!(single, node.checked_mul(2).expect("test charge fits"));
         assert_eq!(split, node.checked_mul(6).expect("test charge fits"));
+    }
+    #[test]
+    fn small_btree_charge_has_one_leaf_and_preserves_outer_refusal() {
+        let leaf = btree_leaf_allocation_bytes::<[u64; 2], usize>().unwrap();
+        for entries in 1..=STD_BTREE_NODE_CAPACITY {
+            assert_eq!(
+                owned_btree_allocation_bytes::<[u64; 2], usize>(entries).unwrap(),
+                leaf
+            );
+            let ((result, inner), outer) =
+                with_decode_limits_measured(allocation_limit_just_below(leaf), || {
+                    with_decode_limits_measured(
+                        DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, leaf, usize::MAX),
+                        || reserve_decode_btree_allocation::<[u64; 2], usize>(entries),
+                    )
+                });
+            assert!(
+                matches!(result, Err(Error::TotalAllocationExceeded { attempted, limit }) if attempted == leaf as u64 && limit == (leaf - 1) as u64)
+            );
+            assert_eq!(inner.total_allocated_bytes(), 0);
+            assert_eq!(outer.total_allocated_bytes(), 0);
+        }
+        assert!(
+            owned_btree_allocation_bytes::<[u64; 2], usize>(STD_BTREE_NODE_CAPACITY + 1).unwrap()
+                > leaf
+        );
     }
     #[test]
     fn single_btree_node_estimator_handles_empty_root_and_split_boundary() {

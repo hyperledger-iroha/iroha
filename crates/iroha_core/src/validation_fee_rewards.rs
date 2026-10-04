@@ -99,17 +99,6 @@ fn string_attempt_instruction_error(
     stx.world
         .attempt_error_to_instruction_error(error.map_rejection(fail))
 }
-fn string_attempt_transaction_error(
-    stx: &StateTransaction<'_, '_>,
-    error: ExecutionAttemptError<String>,
-) -> TransactionRejectionReason {
-    match error {
-        ExecutionAttemptError::Rejected(error) => rejection(fail(error)),
-        ExecutionAttemptError::Deferred(reason) => {
-            TransactionRejectionReason::Validation(stx.world.defer_execution(reason))
-        }
-    }
-}
 fn error_attempt_transaction_error(
     stx: &StateTransaction<'_, '_>,
     error: ExecutionAttemptError<TransactionRejectionReason>,
@@ -1273,7 +1262,12 @@ fn finish_reward_maintenance(
             "validation fee reward maintenance failed: {error}"
         ))
     })?;
-    stx.apply();
+    // Both maintenance callers write only protected smart-contract state. The
+    // original local touch journal excludes writes from earlier applied siblings;
+    // an empty maintenance attempt must not invent an execution fragment.
+    if stx.world.smart_contract_state.touched_entries().len() != 0 {
+        stx.apply();
+    }
     Ok(())
 }
 
@@ -1281,6 +1275,7 @@ fn finish_reward_maintenance(
 mod tests {
     use super::*;
     include!("validation_fee_rewards/signed_claim_tests.rs");
+    include!("validation_fee_rewards/credit_refusal_tests.rs");
     use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         asset::AssetDefinitionId,
@@ -1853,7 +1848,7 @@ mod tests {
             revised.pool_contract_address =
                 iroha_data_model::smart_contract::ContractAddress::derive(
                     &stx.network_id,
-                    &owner,
+                    &account(55),
                     991,
                     iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 )
@@ -1873,6 +1868,52 @@ mod tests {
                 active_bindings(stx).unwrap(),
                 vec![original.clone()],
                 "unfinalized enactment cannot change this block"
+            );
+            assert!(
+                crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
+                    stx,
+                    &revised.pool_vault_account_id,
+                )
+                .expect("resolve the original authenticated contract scope")
+                .is_none(),
+                "an address alone cannot supply an activated payout pool"
+            );
+            let artifact = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &original.pool_contract_address,
+                Hash::prehashed(original.pool_code_hash),
+            )
+            .unwrap();
+            let code = stx.world.contract_code.get(&artifact).unwrap();
+            assert_eq!(
+                <[u8; 32]>::from(ivm::contract_code_hash(code)),
+                revised.pool_code_hash
+            );
+            let replacement_deployer = account(55);
+            stx.world.bind_inactive_contract_subject_for_testing(
+                revised.pool_contract_address.clone(),
+                replacement_deployer.clone(),
+            );
+            // A pool replacement does not create a second autonomous payout
+            // trigger; the enacted lifecycle retains its original sole trigger.
+            crate::smartcontracts::code::activate_instance(
+                &replacement_deployer,
+                revised.pool_contract_address.clone(),
+                1,
+                Hash::prehashed(original.pool_code_hash),
+                stx,
+            )
+            .expect("activate the exact replacement pool artifact");
+            let pool = crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
+                stx,
+                &revised.pool_vault_account_id,
+            )
+            .expect("resolve the activated authenticated pool")
+            .expect("the deployed replacement is active");
+            assert_eq!(pool.contract_address, revised.pool_contract_address);
+            assert_eq!(pool.contract_subject, revised.pool_vault_account_id);
+            assert_eq!(
+                <[u8; 32]>::from(ivm::contract_code_hash(&pool.code_bytes)),
+                revised.pool_code_hash
             );
             assert_eq!(
                 active_bindings_at_height(stx, enactment + 1).unwrap(),
@@ -1906,7 +1947,8 @@ mod tests {
                 crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
                     stx,
                     &permission
-                ),
+                )
+                .unwrap(),
                 Some(revised.pool_vault_account_id.clone()),
                 "permission ownership switches atomically at enactment; historical order cannot restore an old pool",
             );
@@ -2063,6 +2105,77 @@ mod tests {
 #[cfg(test)]
 mod protected_original_retry_controls {
     use super::*;
+
+    #[test]
+    fn empty_conversion_maintenance_cannot_publish_an_inherited_dirty_sibling() {
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let fragments = block.committed_fragment_count();
+        publish_conversion_offers(&mut block).unwrap();
+        assert_eq!(block.committed_fragment_count(), fragments);
+        let key: StatePath = "protected_maintenance_original_TESTDATA".parse().unwrap();
+        {
+            let mut stx = block.transaction();
+            stx.world.smart_contract_state.insert(key.clone(), vec![23]);
+            finish_reward_maintenance(stx, Ok(())).unwrap();
+        }
+        assert_eq!(block.committed_fragment_count(), fragments + 1);
+        assert_eq!(block.world.smart_contract_state.touched_entries().len(), 1);
+        {
+            let stx = block.transaction();
+            assert_eq!(stx.world.smart_contract_state.touched_entries().len(), 0);
+            finish_reward_maintenance(stx, Ok(())).unwrap();
+        }
+        publish_conversion_offers(&mut block).unwrap();
+        assert_eq!(block.committed_fragment_count(), fragments + 1);
+        assert_eq!(block.world.smart_contract_state.get(&key), Some(&vec![23]));
+    }
+
+    #[test]
+    fn empty_conversion_journal_still_returns_original_decoder_refusal() {
+        use crate::state::ExecutionOutputAttemptError;
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let key: StatePath = "empty_maintenance_original_TESTDATA".parse().unwrap();
+        let original = norito::to_bytes(&vec![7_u64, 11, 13]).unwrap();
+        block
+            .world
+            .smart_contract_state
+            .insert(key.clone(), original.clone());
+        let fragments = block.committed_fragment_count();
+        let stx = block.transaction();
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, 0, usize::MAX, usize::MAX);
+        let result =
+            norito::with_decode_limits_scope(limits, || read::<Vec<u64>>(&stx, &key).map(|_| ()));
+        let original_refusal = stx.execution_deferral().expect("genuine decoder refusal");
+        assert_eq!(stx.world.smart_contract_state.touched_entries().len(), 0);
+        assert_eq!(
+            finish_reward_maintenance(stx, result),
+            Err(ExecutionOutputAttemptError::Deferred(original_refusal))
+        );
+        assert_eq!(block.committed_fragment_count(), fragments);
+        assert_eq!(block.world.smart_contract_state.get(&key), Some(&original));
+    }
 
     #[test]
     fn incomplete_conversion_preparation_returns_original_owner_and_keeps_prior_projection() {

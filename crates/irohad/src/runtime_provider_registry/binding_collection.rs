@@ -98,11 +98,18 @@ fn collect_musubi_provider_attestation_bindings(
     else {
         return Ok(());
     };
+    // Native selection has concrete custody owners and never resolves an external seal adapter.
+    if config
+        .torii
+        .sorafs_storage
+        .provider_ingest_runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.native_completion_credential.is_some())
+    {
+        return Ok(());
+    }
     let projected = [
-        (
-            Slot::MusubiProviderAttestationClockSeal,
-            &journal.clock_seal,
-        ),
+        (Slot::MusubiProviderAttestationClockSeal, &journal.clock),
         (
             Slot::MusubiProviderAttestationApprovalSigner,
             &journal.approval_signer,
@@ -698,7 +705,7 @@ fn collect_pop_potr_gateway_bindings(
     }
     if let Some(compliance) = config.torii.sorafs_gateway.compliance.as_ref()
         && compliance.feed_transport_provider.provider_handle
-            != iroha_torii::sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1
+            != iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1
     {
         let binding = &compliance.feed_transport_provider;
         append_binding(

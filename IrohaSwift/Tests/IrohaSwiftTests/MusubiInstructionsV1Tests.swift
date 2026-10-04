@@ -124,7 +124,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         let instructions = try cases.map { try instruction(for: $0) }
         let frames = try instructions.map { try $0.transactionInstructionFrame() }
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
-        let authority = AccountId.make(publicKey: try signingKey.publicKey())
+        let authority = try AccountId.make(publicKey: try signingKey.publicKey())
         let networkId = TestNetworkIds.canonical
         let sdk = IrohaSDK(
             baseURL: URL(string: "https://torii.example")!,
@@ -703,7 +703,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         XCTAssertThrowsError(try MusubiPinOutboxCheckFloorV1(
             height: 1, blockHash: Array(digest.dropLast()), contextID: digest
         ))
-        let authority = AccountId.make(publicKey: try Keypair(
+        let authority = try AccountId.make(publicKey: try Keypair(
             privateKeyBytes: Data(repeating: 0x42, count: 32)
         ).publicKey)
         func row(
@@ -732,7 +732,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
 
     func testPinOutboxCheckBindsCompleteRowAndPreservesFullUnsignedCoordinates() throws {
         let network = TestNetworkIds.canonical
-        let authority = AccountId.make(publicKey: try Keypair(
+        let authority = try AccountId.make(publicKey: try Keypair(
             privateKeyBytes: Data(repeating: 0x42, count: 32)
         ).publicKey)
         let digest = [UInt8](repeating: 3, count: 32)
@@ -784,7 +784,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         XCTAssertThrowsError(try check(
             networkID: NetworkId(bytes: Data(otherDigest)), expected: .present(row)
         ))
-        let stranger = AccountId.make(publicKey: try Keypair(
+        let stranger = try AccountId.make(publicKey: try Keypair(
             privateKeyBytes: Data(repeating: 0x43, count: 32)
         ).publicKey)
         XCTAssertThrowsError(try check(owner: stranger, expected: .present(row)))
@@ -1348,7 +1348,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
             ]
         )
         let authority = try fixtureObject(binding["completion_authority"])
-        try requireKeys(authority, ["provider_owner", "signer_policy"])
+        try requireKeys(authority, ["provider_owner", "completion_signer", "signer_policy"])
         let policy = try fixtureObject(authority["signer_policy"])
         try requireKeys(
             policy,
@@ -1362,6 +1362,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         }
         let completionAuthority = try MusubiProviderIngestCompletionAuthorityV1(
             providerOwner: XCTUnwrap(authority["provider_owner"] as? String),
+            completionSigner: XCTUnwrap(authority["completion_signer"] as? String),
             signerPolicy: MusubiProviderIngestCompletionSignerPolicyV1(
                 policyID: fixedBytes32(policy["policy_id"]),
                 revision: fixtureUInt64(policy, "revision"),

@@ -517,22 +517,6 @@ fn fixture_updated_storage_identity(
     }
 }
 
-fn fixture_pending_autoscale_storage_identity(
-    state: &State,
-    block: &StateBlock<'_>,
-    lane_id: LaneId,
-) -> crate::kura::LaneStorageIdentity {
-    fixture_updated_storage_identity(
-        state,
-        &block
-            .pending_autoscale_lifecycle
-            .as_ref()
-            .expect("actual staged autoscale lifecycle")
-            .catalog_update,
-        lane_id,
-    )
-}
-
 fn fixture_manual_lifecycle_storage_identity(
     state: &State,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -1784,7 +1768,7 @@ state_test! { sync world_transaction_apply_commits_sorafs_and_da_overlays
     let mut block = world.block();
     let provider_id = ProviderId::new([0x91; 32]);
     let provider_owner = AccountId::new(checked_keypair().public_key().clone());
-    let_row! { provider_authority = ProviderIngestCompletionAuthorityV1::new( provider_owner.clone(), iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 { policy_id: [0x92; 32], revision: 1, predecessor_digest: None, policy_digest: [0x93; 32], }, ) };
+    let_row! { provider_authority = ProviderIngestCompletionAuthorityV1::new(provider_owner.clone(),  provider_owner.clone(), iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 { policy_id: [0x92; 32], revision: 1, predecessor_digest: None, policy_digest: [0x93; 32], }, ) };
     let mut pricing = PricingScheduleRecord::launch_default();
     pricing.notes = Some("WorldTransaction apply regression".to_owned());
     let_row! { credit = ProviderCreditRecord::new( provider_id, Quantity::zero(), Quantity::zero(), Quantity::zero(), Quantity::zero(), 5, 7, Metadata::default(), ) };
@@ -7525,15 +7509,6 @@ fn seed_committed_autoscale_history_block_for_test(state: &State, block: &Signed
         )
         .expect("stage explicit committed autoscale history fixture");
 }
-fn insert_empty_transaction_block_for_state_commit(
-    state_block: &mut StateBlock<'_>,
-    block: &SignedBlock,
-) {
-    let_row! { block_height = block .header() .height() .try_into() .expect("test block height must fit transaction storage height") };
-    state_block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), block_height);
-}
 fn manual_lane_lifecycle_payload() -> iroha_data_model::nexus::LaneLifecycleParameterV1 {
     let expected_catalog = LaneCatalog::default();
     let incarnations = derive_static_lane_incarnations(&expected_catalog);
@@ -7785,38 +7760,6 @@ state_test! { sync signed_lane_lifecycle_rejects_physical_replacement_without_mu
 }
 include!("ordinary_common_tail_tests.rs");
 include!("pipeline_outcome_ownership_tests.rs");
-fn insert_empty_transaction_block_for_test(state_block: &mut StateBlock<'_>) {
-    let_row! { block_height = state_block ._curr_block .height() .try_into() .expect("test block height fits storage height") };
-    state_block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), block_height);
-    // These commit fixtures stage metadata without apply_without_execution.
-    // Complete the one original prepaid hash tip with this exact carrier header.
-    // has_pending excludes the hidden reservation, but detects a prior push.
-    assert!(
-        !state_block.block_hashes.has_pending(),
-        "the fixture must stage its original carrier hash exactly once"
-    );
-    let block_hash = state_block._curr_block.hash();
-    state_block.block_hashes.push(block_hash);
-    assert_eq!(state_block.block_hashes.len(), block_height.get());
-    let pending = state_block.block_hashes.pending();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending.get(0), Some(&block_hash));
-}
-fn commit_and_store_autoscale_previous_block_for_test(
-    state: &mut State,
-    kura: &Arc<Kura>,
-    block: &SignedBlock,
-) {
-    store_block_for_state_commit(kura, block);
-    let mut state_block = state.block(block.header());
-    let_row! { committed = ValidBlock::new_unverified_for_tests(block.clone()) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
-    let _events = state_block.apply_without_execution(&committed, Vec::new());
-    state_block
-        .commit()
-        .expect("commit previous autoscale block");
-}
 fn autoscale_transition_test_nexus(
     lanes: Vec<LaneConfig>,
     min_lane_id: u32,
@@ -7863,42 +7806,6 @@ fn autoscale_drain_keypairs_for_test(count: usize) -> Vec<KeyPair> {
         PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
     });
     keypairs
-}
-fn seed_autoscale_transport_peers_for_test(state: &State, peer_count: usize) -> Vec<KeyPair> {
-    let_row! { keypairs: Vec<_> = (0..peer_count) .map(|index| { let seed = u8::try_from(index) .expect("autoscale committee test index must fit u8") .saturating_add(0x41); KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal) .expect("deterministic autoscale committee BLS key") }) .collect() };
-    seed_consensus_keys_with_pops(state, &keypairs);
-    let mut topology = state.commit_topology.block();
-    topology.clear();
-    for keypair in &keypairs {
-        topology.push(PeerId::new(keypair.public_key().clone()));
-    }
-    topology.commit();
-    keypairs
-}
-fn seed_governed_autoscale_committee_for_test(state: &State, peer_count: usize) -> Vec<KeyPair> {
-    let keypairs = seed_autoscale_transport_peers_for_test(state, peer_count);
-    seed_committee_consensus_keys_with_pops(state, &keypairs);
-    let nexus = state.nexus_snapshot();
-    install_lane_manifest_registry(
-        state,
-        &[(
-            nexus.routing_policy.default_lane,
-            nexus.routing_policy.default_dataspace,
-            keypairs
-                .iter()
-                .map(|keypair| AccountId::new(keypair.public_key().clone()))
-                .collect(),
-        )],
-    );
-    keypairs
-}
-fn autoscale_committee_guard_test_state() -> State {
-    let mut state = blank_test_state();
-    install_default_autoscale_test_nexus(
-        &mut state,
-        "apply autoscale committee-guard test nexus config",
-    );
-    state
 }
 #[test]
 fn exact_autoscale_committee_needs_no_beacon_but_selection_and_duplicates_fail_closed() {
@@ -8160,23 +8067,6 @@ fn seed_autoscale_sample_history_for_snapshot_test(state: &State) {
     let mut runtime = state.canonical_runtime.block();
     *runtime.get_mut() = current;
     runtime.commit();
-}
-fn seed_predecessor_height_for_state_commit(state: &State, block: &SignedBlock) {
-    let predecessor_height = block.header().height().get().saturating_sub(1);
-    seed_committed_height_for_state_test(state, predecessor_height);
-    seed_empty_transaction_height_for_state_test(state, predecessor_height);
-}
-fn seed_empty_transaction_height_for_state_test(state: &State, height: u64) {
-    let target = usize::try_from(height).expect("test block height must fit usize");
-    let current = state.transactions.latest_height();
-    for next in current.saturating_add(1)..=target {
-        let_row! { Some(block_height) = NonZeroUsize::new(next) else { continue; } };
-        let mut transactions = state.transactions.block();
-        transactions.insert_block(std::collections::HashSet::new(), block_height);
-        transactions
-            .commit()
-            .expect("seed predecessor transaction block");
-    }
 }
 fn dataspace_catalog_with_extra(dataspace_id: DataSpaceId) -> DataSpaceCatalog {
     DataSpaceCatalog::new(vec![
@@ -9157,13 +9047,6 @@ fn record_public_lane_staking_status_for_test(lane_id: LaneId, bonded: &Quantity
     crate::status::record_public_lane_bonded_delta(lane_id, bonded, true);
     crate::status::record_public_lane_pending_unbond_delta(lane_id, &Quantity::from(1_u32), true);
     crate::status::record_public_lane_slash(lane_id);
-}
-fn assert_public_lane_staking_status_absent(lane_id: LaneId, context: &str) {
-    let status = crate::status::nexus_staking_snapshot();
-    assert!(
-        status.lanes.iter().all(|lane| lane.lane_id != lane_id),
-        "{context}"
-    );
 }
 fn assert_public_lane_staking_status_bonded(
     lane_id: LaneId,
@@ -13374,14 +13257,6 @@ fn stale_lane_manifest_registry_for_test(
         .collect();
     Arc::new(LaneManifestRegistry::from_statuses(statuses))
 }
-fn install_lane_privacy_commitment_fixture(state: &State, private_lane: LaneId) {
-    use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
-    let nexus = state.nexus_snapshot();
-    let_row! { statuses = nexus .lane_catalog .lanes() .iter() .map(|lane| { let is_private = lane.id == private_lane; let status = LaneManifestStatus { lane: lane.id, alias: lane.alias.clone(), dataspace: lane.dataspace_id, visibility: lane.visibility, storage: lane.storage, governance: lane.governance.clone(), manifest_path: is_private .then(|| std::path::PathBuf::from("/tmp/lane-privacy.manifest.json")), governance_rules: None, privacy_commitments: is_private .then(|| { vec![LanePrivacyCommitment::merkle( LaneCommitmentId::new(1), MerkleCommitment::from_root_bytes([0xA5; 32], 12), )] }) .unwrap_or_default(), }; (lane.id, status) }) .collect() };
-    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
-        statuses,
-    )));
-}
 fn install_lane_manifest_registry_for_keypairs(
     state: &State,
     lane_ids: &[LaneId],
@@ -13680,29 +13555,6 @@ fn sample_da_commitment_record(
         checked_da_ack_signature(tag),
     )
 }
-fn seed_da_runtime_record_for_lane(
-    state: &State,
-    lane_id: LaneId,
-    alias: &str,
-    tag: u8,
-) -> DaCommitmentRecord {
-    let record = sample_da_commitment_record(lane_id, 1, 0, tag);
-    let_row! { location = DaCommitmentLocation { block_height: 3, index_in_bundle: u32::from(tag), } };
-    state.da_commitments.write().insert(&record, location);
-    state.da_confidential_compute.write().insert(
-        &record,
-        location,
-        &ConfidentialComputePolicy::new(
-            ConfidentialComputeMechanism::Encryption,
-            NonZeroU32::new(u32::from(tag)).expect("non-zero key version tag"),
-            BTreeSet::new(),
-        ),
-    );
-    let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), lane_id, 1, 1, StorageTicketId::new([tag.wrapping_add(4); 32]), ManifestDigest::new([tag.wrapping_add(5); 32]), ) };
-    set_test_da_pin_intent_alias(&mut intent, &ALICE_KEYPAIR, Some(alias.to_owned()));
-    state.da_pin_intents.write().insert(intent, location);
-    record
-}
 fn insert_da_pin_intent_world_block_indexes(
     world: &mut WorldBlock<'_>,
     intent: DaPinIntent,
@@ -13738,71 +13590,6 @@ fn seed_da_pin_intent_world_indexes_for_test(
         },
     );
     block.commit();
-}
-fn seed_stale_da_cursors_for_lane_recreation(
-    state: &State,
-    lane_config: &RuntimeLaneConfig,
-    lane_id: LaneId,
-) {
-    state
-        .ensure_da_indexes_hydrated()
-        .expect("hydrate DA indexes before seeding stale cursors");
-    let stale = sample_da_commitment_record(lane_id, 2, 5, 0xA0);
-    state
-        .da_shard_cursors
-        .write()
-        .record_records(lane_config, std::slice::from_ref(&stale), 10)
-        .expect("seed stale DA shard cursor");
-    state
-        .da_receipt_cursors
-        .write()
-        .record_bundle(10, std::slice::from_ref(&stale))
-        .expect("seed stale DA receipt cursor");
-    assert!(
-        state
-            .da_shard_cursors
-            .read()
-            .get(lane_config.shard_id(lane_id), lane_id)
-            .is_some(),
-        "test setup must install stale shard cursor"
-    );
-    assert_eq!(
-        state
-            .da_receipt_cursors
-            .read()
-            .highest(LaneEpoch::new(lane_id, 2)),
-        Some(5),
-        "test setup must install stale receipt cursor"
-    );
-}
-fn assert_recreated_lane_da_cursors_accept_fresh_sequence(state: &State, lane_id: LaneId) {
-    let fresh = sample_da_commitment_record(lane_id, 2, 1, 0xB0);
-    state
-        .advance_da_shard_cursors_from_bundle(11, std::slice::from_ref(&fresh))
-        .expect("recreated lane shard cursor must accept a fresh lower sequence");
-    state
-        .advance_da_receipt_cursors_from_bundle(11, std::slice::from_ref(&fresh))
-        .expect("recreated lane receipt cursor must accept a fresh lower sequence");
-    let nexus = state.nexus_snapshot();
-    let shard_id = nexus.lane_config.shard_id(lane_id);
-    {
-        let cursors = state
-            .da_shard_cursor_index()
-            .expect("completed DA history read");
-        let cursor = cursors
-            .get(shard_id, lane_id)
-            .expect("fresh shard cursor present");
-        assert_eq!((cursor.epoch, cursor.sequence), (2, 1));
-        assert_eq!(cursor.last_block_height, 11);
-    }
-    assert_eq!(
-        state
-            .da_receipt_cursors()
-            .expect("completed DA history read")
-            .highest(LaneEpoch::new(lane_id, 2)),
-        Some(1),
-        "fresh receipt cursor should replace stale incarnation history"
-    );
 }
 fn peer_id_for_account(account: &AccountId) -> PeerId {
     PeerId::from(
@@ -14990,6 +14777,7 @@ fn seed_lane_committee_beacon_for_test(state: &State) -> u64 {
     let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         *state.network_id_ref(),
         pulse_height,
+        &state.ivm_execution_budget(),
     );
     let mut world = state.world.block();
     world
@@ -28935,10 +28723,12 @@ fn parliament_unavailable_beacon_slot_index_rebuilds_and_tracks_removal() {
 
 #[test]
 fn parliament_attempt_rejects_unavailable_slot_after_pulse_finalization_atomically() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; 32])),
     );
-    let (_, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+    let (_, pulse) =
+        crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41, &budget);
     let roster = (1_u8..=4)
         .map(|marker| {
             KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
@@ -28992,10 +28782,12 @@ fn parliament_attempt_rejects_unavailable_slot_after_pulse_finalization_atomical
 
 #[test]
 fn parliament_unavailable_slot_rebuild_rejects_finalized_pulse_fail_atomically() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD6; 32])),
     );
-    let (_, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+    let (_, pulse) =
+        crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41, &budget);
     let roster = (1_u8..=4)
         .map(|marker| {
             KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
@@ -30252,11 +30044,13 @@ fn world_block_snapshot_schema_matches_committed_world() {
 
 #[test]
 fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let (_key_session, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; 32])),
         ),
         41,
+        &budget,
     );
     let mut world = World::new();
     world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
@@ -30299,11 +30093,13 @@ fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique() {
 
 #[test]
 fn global_beacon_pulse_slot_rebuild_preserves_latest_block_undo_projection() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let (_key_session, added_pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB3; 32])),
         ),
         41,
+        &budget,
     );
     let added_slot = (
         iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
@@ -30335,11 +30131,13 @@ fn global_beacon_pulse_slot_rebuild_preserves_latest_block_undo_projection() {
 
 #[test]
 fn global_beacon_pulse_slot_rebuild_rejects_an_invalid_previous_view_atomically() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let (_key_session, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB4; 32])),
         ),
         41,
+        &budget,
     );
     let slot = (
         iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id),
@@ -30379,11 +30177,13 @@ fn global_beacon_pulse_slot_rebuild_rejects_an_invalid_previous_view_atomically(
 
 #[test]
 fn global_beacon_fixture_installs_the_logical_slot_index() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; 32])),
     );
     let (key_record, pulse) =
-        crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+        crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41, &budget);
+    assert!(key_record.session.belongs_to(&budget));
     let world = World::new();
     let mut block = world.block();
     block

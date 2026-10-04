@@ -293,6 +293,7 @@ pub(super) fn instructions(
     Ok(vec![plan.instruction(config)?])
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum CustodyExpectation<'a> {
     Configure(&'a StreamTokenCustodyConfigureRequest),
     Enroll(&'a StreamTokenCustodyEnrollRequest),
@@ -343,8 +344,8 @@ impl CustodyExpectation<'_> {
             deadline_unix_ms,
         })
     }
-    pub(super) fn verify(&self, record: &TransactionJournal) -> Result<()> {
-        let bytes = match (self, &record.operation) {
+    pub(super) fn verify(&self, record: &preparation::Selection<'_>) -> Result<()> {
+        let bytes = match (self, record.operation) {
             (Self::Configure(_), NativeOperation::StreamTokenCustodyConfigure { plan, .. })
             | (Self::Enroll(_), NativeOperation::StreamTokenCustodyEnroll { plan, .. }) => plan,
             _ => eyre::bail!("custody journal differs from the selected operation purpose"),
@@ -357,7 +358,7 @@ impl CustodyExpectation<'_> {
             .ok_or_else(|| eyre!("missing custody fee terms"))?;
         eyre::ensure!(
             encode_bounded(&expected, MAX_PLAN_BYTES)? == *bytes
-                && record.requested_fee == self.options().fee_payment
+                && *record.requested_fee == self.options().fee_payment
                 && terms.matches_options(self.options())?,
             "custody journal differs from original request or fee authorization"
         );
@@ -366,11 +367,121 @@ impl CustodyExpectation<'_> {
 }
 
 impl AccountService {
+    /// Inspect the immutable custody request and preparation stages without signing or network I/O.
+    /// # Errors
+    /// Rejects changed selected custody request, fee limits or unsafe native custody.
+    pub fn inspect_stream_token_custody_enroll_preparation(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyEnrollRequest,
+    ) -> Result<VerifiedNativePreparation> {
+        self.inspect_preparation(
+            journal,
+            NativeOperationKind::StreamTokenCustodyEnroll,
+            Some(OperationExpectation::Custody(CustodyExpectation::Enroll(
+                expected,
+            ))),
+        )
+    }
+    /// Retire only this exact retained request before any payload or dispatch evidence exists.
+    /// # Errors
+    /// Refuses missing, changed, malformed, payload-retained or signed histories and unsafe custody.
+    pub fn retire_stream_token_custody_enroll_unprepared(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyEnrollRequest,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation(
+            journal,
+            NativeOperationKind::StreamTokenCustodyEnroll,
+            OperationExpectation::Custody(CustodyExpectation::Enroll(expected)),
+        )
+    }
+
+    /// Inspect the immutable custody request and preparation stages without signing or network I/O.
+    /// # Errors
+    /// Rejects changed selected custody request, fee limits or unsafe native custody.
+    pub fn inspect_stream_token_custody_configure_preparation(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyConfigureRequest,
+    ) -> Result<VerifiedNativePreparation> {
+        self.inspect_preparation(
+            journal,
+            NativeOperationKind::StreamTokenCustodyConfigure,
+            Some(OperationExpectation::Custody(
+                CustodyExpectation::Configure(expected),
+            )),
+        )
+    }
+    /// Retire only this exact retained request before any payload or dispatch evidence exists.
+    /// # Errors
+    /// Refuses missing, changed, malformed, payload-retained or signed histories and unsafe custody.
+    pub fn retire_stream_token_custody_configure_unprepared(
+        &self,
+        journal: &Path,
+        expected: &StreamTokenCustodyConfigureRequest,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation(
+            journal,
+            NativeOperationKind::StreamTokenCustodyConfigure,
+            OperationExpectation::Custody(CustodyExpectation::Configure(expected)),
+        )
+    }
+
     fn prepare_custody(
         &self,
         expected: CustodyExpectation<'_>,
         journal: &Path,
     ) -> Result<OperationReport> {
+        let kind = match &expected {
+            CustodyExpectation::Configure(_) => NativeOperationKind::StreamTokenCustodyConfigure,
+            CustodyExpectation::Enroll(_) => NativeOperationKind::StreamTokenCustodyEnroll,
+        };
+        let bounded = self.with_deadline(expected.options().deadline)?;
+        let choice = match &expected {
+            CustodyExpectation::Configure(value) => CustodyExpectation::Configure(value),
+            CustodyExpectation::Enroll(value) => CustodyExpectation::Enroll(value),
+        };
+        if let Some(report) = bounded.finish_existing_preparation(
+            journal,
+            kind,
+            Some(OperationExpectation::Custody(choice)),
+        )? {
+            return Ok(report);
+        }
+
+        self.retain_custody_request(expected, journal)?;
+        bounded
+            .finish_existing_preparation(
+                journal,
+                kind,
+                Some(OperationExpectation::Custody(expected)),
+            )?
+            .ok_or_else(|| eyre!("retained custody request disappeared before preparation"))
+    }
+    fn retain_custody_request(
+        &self,
+        expected: CustodyExpectation<'_>,
+        journal: &Path,
+    ) -> Result<VerifiedNativePreparation> {
+        let kind = match &expected {
+            CustodyExpectation::Configure(_) => NativeOperationKind::StreamTokenCustodyConfigure,
+            CustodyExpectation::Enroll(_) => NativeOperationKind::StreamTokenCustodyEnroll,
+        };
+        let bounded = self.with_deadline(expected.options().deadline)?;
+        let choice = match &expected {
+            CustodyExpectation::Configure(value) => CustodyExpectation::Configure(value),
+            CustodyExpectation::Enroll(value) => CustodyExpectation::Enroll(value),
+        };
+        if let Some(report) = bounded.inspect_existing_preparation(
+            journal,
+            kind,
+            Some(OperationExpectation::Custody(choice)),
+        )? {
+            return Ok(report);
+        }
+
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let plan = expected.plan(current_unix_ms()?)?;
         plan.instruction(&self.config)?;
@@ -387,7 +498,7 @@ impl AccountService {
             }
         };
         operation.instructions(&self.config)?;
-        self.with_deadline(options.deadline)?.prepare_native(
+        self.with_deadline(options.deadline)?.retain_native_request(
             operation,
             options.fee_payment.clone(),
             journal,
@@ -398,12 +509,12 @@ impl AccountService {
         journal: &Path,
         expected: CustodyExpectation<'_>,
     ) -> Result<SignedTransaction> {
-        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        let journal = Journal::open(journal)?;
-        let record: TransactionJournal = journal.read_operation()?;
-        let transaction = record.verify(&self.config)?;
-        expected.verify(&record)?;
-        Ok(transaction)
+        let kind = match &expected {
+            CustodyExpectation::Configure(_) => NativeOperationKind::StreamTokenCustodyConfigure,
+            CustodyExpectation::Enroll(_) => NativeOperationKind::StreamTokenCustodyEnroll,
+        };
+        self.inspect_preparation(journal, kind, Some(OperationExpectation::Custody(expected)))?
+            .into_signed_transaction()
     }
     fn run_custody(
         &self,
@@ -424,6 +535,28 @@ impl AccountService {
             )
     }
 
+    /// Retain or inspect the exact Configure request without HTTP, quote, payload or signature.
+    /// Existing later phases remain unchanged; this cannot renew their authorization.
+    /// # Errors
+    /// Rejects changed policy/CAS, fees, deadline, malformed records or unsafe custody.
+    pub fn retain_stream_token_custody_configure_request(
+        &self,
+        request: &StreamTokenCustodyConfigureRequest,
+        journal: &Path,
+    ) -> Result<VerifiedNativePreparation> {
+        self.retain_custody_request(CustodyExpectation::Configure(request), journal)
+    }
+    /// Retain or inspect the exact already-attested Enroll request without HTTP, quote or signing.
+    /// The original attester body, interval and native predecessor are preserved in every phase.
+    /// # Errors
+    /// Rejects changed body, policy/CAS, original bounds, fees or unsafe custody.
+    pub fn retain_stream_token_custody_enroll_request(
+        &self,
+        request: &StreamTokenCustodyEnrollRequest,
+        journal: &Path,
+    ) -> Result<VerifiedNativePreparation> {
+        self.retain_custody_request(CustodyExpectation::Enroll(request), journal)
+    }
     /// Quote, sign and retain one exact Configure without submitting it.
     /// # Errors
     /// Rejects malformed policy/CAS, changed role, fees, deadline, unsafe custody or failed I/O.
@@ -511,3 +644,7 @@ impl AccountService {
 #[cfg(test)]
 #[path = "operations_stream_token_custody_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "operations_stream_token_custody_request_tests.rs"]
+mod request_tests;

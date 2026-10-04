@@ -82,14 +82,18 @@ pub(super) fn provider_ingest_resolve_signer(
     let expected = provider_ingest_expected_signer_binding(&request.binding)?;
     if !expected
         .qualification
-        .matches_authority(&context.provider_owner)
-        || expected.qualification.signer_policy != context.signer_policy
+        .matches_authority(&context.expected_authority.completion_signer)
+        || expected.qualification.signer_policy != context.expected_authority.signer_policy
     {
         return Err(BrokerError::BindingMismatch);
     }
     let signer = resolved_provider_signer(state, context.clone())?;
     if let Some(signer) = &signer {
-        validate_resolved_provider_signer(signer.as_ref(), &expected, &context.provider_owner)?;
+        validate_resolved_provider_signer(
+            signer.as_ref(),
+            &expected,
+            &context.expected_authority.completion_signer,
+        )?;
     }
     requalify()?;
     encode_canonical(
@@ -114,7 +118,11 @@ pub(super) fn provider_ingest_sign(
     .map_err(|_| BrokerError::Rejected)?;
     ensure_provider_ingest_completion_payload(&payload, &context, &state.network_id)?;
     let backend = resolved_provider_signer(state, context.clone())?.ok_or(BrokerError::Rejected)?;
-    validate_resolved_provider_signer(backend.as_ref(), &expected, &context.provider_owner)?;
+    validate_resolved_provider_signer(
+        backend.as_ref(),
+        &expected,
+        &context.expected_authority.completion_signer,
+    )?;
     let transaction =
         block_on_provider_future(backend.sign(payload.clone()))?.map_err(|error| match error {
             sorafs_node::ProviderIngestCompletionSignerErrorV1::Unavailable => {
@@ -122,7 +130,11 @@ pub(super) fn provider_ingest_sign(
             }
             sorafs_node::ProviderIngestCompletionSignerErrorV1::Rejected => BrokerError::Rejected,
         })?;
-    validate_resolved_provider_signer(backend.as_ref(), &expected, &context.provider_owner)?;
+    validate_resolved_provider_signer(
+        backend.as_ref(),
+        &expected,
+        &context.expected_authority.completion_signer,
+    )?;
     if transaction.payload() != &payload {
         return Err(BrokerError::Rejected);
     }

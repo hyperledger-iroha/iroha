@@ -16,7 +16,7 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
-iroha_core_privacy = { workspace = true, features = ["zk-stark"] }
+iroha_core_privacy = { workspace = true, default-features = false, features = ["zk-stark"] }
 iroha_model_base = { workspace = true }
 iroha_js_codec = { workspace = true }
 iroha_service_model = { workspace = true }

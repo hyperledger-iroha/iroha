@@ -14,6 +14,8 @@ pub enum TryReadError {
     Serialization(#[source] norito::json::Error),
     /// Local State history allocation refused restore; this is not evidence of snapshot corruption: {0}
     StateAdmission(#[source] crate::state::StateAdmissionError),
+    /// The original State reader or publication is locally unavailable during snapshot restore
+    StateRead(#[source] crate::state::StateViewError),
     /// The local State VM image could not be constructed during snapshot restore
     StateVmInitialization(#[source] ivm::VMError),
     /// Local State execution resources were unavailable during snapshot restore
@@ -22,6 +24,10 @@ pub enum TryReadError {
     StateNativeLaneCustody(#[source] iroha_data_model::sumeragi_lanes::LaneStateAdmissionError),
     /// Local original-pool admission of the restored native schedule failed: {0}
     StateNativeSchedule(#[source] crate::sumeragi::schedule::ScheduleError),
+    /// Local original-pool admission of restored beacon session custody failed: {0}
+    StateBeaconSession(#[source] crate::beacon::GlobalThresholdBeaconSessionError),
+    /// Local original-pool admission of the restored native participant failed: {0}
+    StateNativeAmx(#[source] crate::sumeragi::amx::NativeAmxAdmissionError),
     /// Signed snapshot payload is not the single canonical first-release JSON encoding
     NonCanonicalSnapshotPayload,
     /// Snapshot exceeds a configured typed decode or transient resource boundary: {0}
@@ -152,6 +158,9 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
             crate::state::deserialize::StateRestoreError::Admission(error) => {
                 Self::StateAdmission(error)
             }
+            crate::state::deserialize::StateRestoreError::StateRead(error) => {
+                Self::StateRead(error)
+            }
             crate::state::deserialize::StateRestoreError::VmInitialization(error) => {
                 Self::StateVmInitialization(error)
             }
@@ -163,6 +172,12 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
             }
             crate::state::deserialize::StateRestoreError::NativeSchedule(error) => {
                 Self::StateNativeSchedule(error)
+            }
+            crate::state::deserialize::StateRestoreError::BeaconSession(error) => {
+                Self::StateBeaconSession(error)
+            }
+            crate::state::deserialize::StateRestoreError::NativeAmx(error) => {
+                Self::StateNativeAmx(error)
             }
         }
     }
@@ -284,3 +299,6 @@ mod native_lane_custody_tests;
 
 #[cfg(test)]
 mod native_lane_sample_tests;
+
+#[cfg(test)]
+mod beacon_session_tests;

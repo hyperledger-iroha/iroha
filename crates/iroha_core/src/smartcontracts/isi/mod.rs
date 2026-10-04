@@ -123,9 +123,10 @@ pub(crate) enum InitialNativeInstructionAdmission {
     /// The operation is registered for decoding but is not available for execution.
     Closed,
 }
-/// Reviewed, static numeric-asset effects, independent of execution authority.
+/// Test-owned static numeric-asset audit, independent of execution authority.
 ///
-/// This metadata cannot admit an instruction or replace a payload-dependent fee-asset guard.
+/// Actual user payments retain the common numeric mutation and signed assessment checks.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NativeInstructionAssetEffect {
     /// The handler changes no numeric asset balance or supply.
@@ -144,44 +145,9 @@ macro_rules! define_instruction_handlers {
             #[cfg(test)]
             impl NativeInstructionRegistered for $instruction {}
         )*
-        /// Return the concrete type registered by the native dispatcher for `instruction`.
-        ///
-        /// Validation-fee admission uses this matcher as its deny-by-default boundary: adding a
-        /// native handler makes the new instruction visible to the admission classifier, where it
-        /// remains rejected until its DS effect disposition is audited explicitly.
-        pub(crate) fn registered_native_instruction_type_name(
-            instruction: &InstructionBox,
-        ) -> Option<&'static str> {
-            $(
-                if instruction.as_any().downcast_ref::<$instruction>().is_some() {
-                    return Some(core::any::type_name::<$instruction>());
-                }
-            )*
-            None
-        }
         #[cfg(test)]
         fn registered_native_instruction_type_names() -> Vec<&'static str> {
             vec![$(core::any::type_name::<$instruction>()),*]
-        }
-        /// Match only explicitly reviewed static asset effects at the native handler owner.
-        ///
-        /// Registration and Initial authority alone never assign an asset-effect disposition.
-        /// Unannotated handlers remain subject to the fee classifier's independent dynamic and
-        /// static guards, followed by its deny-by-default fallback.
-        pub(crate) fn registered_native_instruction_asset_effect(
-            instruction: &InstructionBox,
-        ) -> Option<(&'static str, NativeInstructionAssetEffect)> {
-            $(
-                $(
-                    if instruction.as_any().downcast_ref::<$instruction>().is_some() {
-                        return Some((
-                            core::any::type_name::<$instruction>(),
-                            NativeInstructionAssetEffect::$asset_effect,
-                        ));
-                    }
-                )?
-            )*
-            None
         }
         #[cfg(test)]
         fn registered_native_instruction_asset_effects()
@@ -287,13 +253,17 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::ActivateRetailDailyLimitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::BindRetailIdentityV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
-    // AMX two-phase commit (`crate::sumeragi::amx`): World records only, no asset effect.
+    // Native AMX two-phase commit retains exact signed-root transitions and monetary custody.
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RegisterAmxDataspaceV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::BeginAmxV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxPreparedV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxHandoffV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RegisterAmxParticipantV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::PrepareAmxV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::SettleAmxV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayGlobalAmxHandoffV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::repo::RepoInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::ReverseRepoIsi>,
@@ -416,16 +386,20 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::account_recovery::CancelAccountRecovery>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::FinalizeAccountRecovery>,
     dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
-    dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1>,
+    // The native namespace owner/generation and exact static/SNS dataspace mapping authorize
+    // registration and current-owner replay; no executor-level blanket grant is introduced.
+    dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiArchiveV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1>,
+    // The native archive manager, original completed provider evidence and current revision
+    // checks own these publication operations; Initial only routes to those exact owners.
     dispatch_instruction::<
         iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1,
-    >,
-    dispatch_instruction::<iroha_data_model::isi::musubi::AddMusubiArchiveLocationV1>,
+    > => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::musubi::AddMusubiArchiveLocationV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::musubi::RetireMusubiArchiveLocationV1>,
-    dispatch_instruction::<iroha_data_model::isi::musubi::PublishMusubiReleaseV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::PublishMusubiReleaseV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiReleaseYankV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiPackageMetadataV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::InviteMusubiPackageMaintainerV1>,
@@ -653,7 +627,7 @@ define_instruction_handlers! {
     // Asset-effect metadata is an independent audit: governance, roots, bootstraps and APS
     // carriers update typed privacy state, opaque commitments and rollback-safe budgets.
     // Their ordinary signed network fees remain payable. SubmitPrivacyProof can authorize
-    // transparent transfers, so active validation-fee policy must still reject it.
+    // transparent transfers, whose user payment legs retain the common signed assessment checks.
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -726,8 +700,8 @@ define_instruction_handlers! {
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    // Core enforces every SCCP v1 rule (`specs/sccp.md` §4.19); validation-fee DS effects are
-    // classified explicitly in `crate::validation_fee`.
+    // Core enforces every SCCP v1 rule (`specs/sccp.md` §4.19); exact user payments and
+    // protected custody retain the common numeric mutation and fee checks.
     dispatch_instruction::<iroha_data_model::isi::sccp::InitializeSccpV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sccp::SetSccpBridgeKeyV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sccp::SubmitSccpAttestationsV1> => CoreAuthorized,

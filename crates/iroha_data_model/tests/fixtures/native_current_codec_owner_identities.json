@@ -9157,6 +9157,12 @@
           "nominal": "iroha_data_model::sorafs::reserve::proof::ReservePolicyProofV1",
           "root": "iroha_data_model::sorafs::reserve::proof::ReservePolicyProofV1",
           "serialize_hash": "3ed19cc5db9dfa1f711c355cecbec7bf"
+        },
+        {
+          "deserialize_hash": "91c4618a3072c9b74a8bd028c7891864",
+          "nominal": "iroha_data_model::sorafs::reserve::account_proof::ReserveAccountProofV1",
+          "root": "iroha_data_model::sorafs::reserve::account_proof::ReserveAccountProofV1",
+          "serialize_hash": "91c4618a3072c9b74a8bd028c7891864"
         }
       ],
       "schema": 1

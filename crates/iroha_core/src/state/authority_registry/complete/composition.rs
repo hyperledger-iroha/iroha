@@ -254,7 +254,7 @@ fn reject_unbound_derived_sources(fields: &'static [Field]) -> Result<(), Compos
 /// Fold every declared canonical table/cell exactly once in declaration order.
 ///
 /// This checks only the inventory and supplied digest identities. The actual
-/// State inventory currently fails closed on unfinished schemas and history.
+/// State inventory still fails closed on unbound derived sources and history.
 /// Even a synthetic successful draft does not authenticate the supplied roots.
 fn compose_canonical_draft(
     fields: &'static [Field],
@@ -331,7 +331,7 @@ fn compose_canonical_draft(
 
 /// Non-authorizing actual-State probe, pinned to the exhaustive typed inventory.
 ///
-/// Current State still has required schemas and history without a Kura handle,
+/// Inventory metadata admission does not bind derived sources or Kura history,
 /// so this cannot return a digest. Synthetic inventories remain test-only.
 #[cfg(test)]
 fn compose_actual_state_draft(
@@ -644,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn history_and_unfinished_actual_state_cannot_form_a_draft() {
+    fn history_and_actual_state_remain_unbound_after_schema_admission() {
         const HISTORY: &[Field] = &[
             Field::new(
                 "test.cell",
@@ -666,12 +666,28 @@ mod tests {
             compose_canonical_draft(HISTORY, &leaf),
             Err(CompositionError::UnboundHistory("state.block_hashes"))
         );
-        assert!(matches!(
-            compose_actual_state_draft(&[]),
-            Err(CompositionError::Inventory(
-                CompleteInventoryError::RequiredSchema(_)
-            ))
-        ));
+        assert_eq!(super::super::require_complete_state_inventory(), Ok(()));
+        // Even a caller supplying every canonical identity and a digest for each
+        // cannot substitute for checked source ownership or authenticated history.
+        let mut supplied = Vec::new();
+        visit(super::super::super::STATE_FIELDS, &mut |field| {
+            if matches!(
+                field.role,
+                Role::Canonical(Canonical::Cell(_) | Canonical::Table { .. })
+            ) {
+                supplied.push(CanonicalLeafDigest {
+                    id: field.id,
+                    digest: Hash::new(field.id.as_bytes()),
+                });
+            }
+        });
+        assert_eq!(
+            compose_actual_state_draft(&supplied),
+            Err(CompositionError::UnboundDerivedSource {
+                field: "world.account_scope_directory",
+                table_source: "world.uaid_dataspaces",
+            })
+        );
     }
 
     #[test]

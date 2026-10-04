@@ -12,13 +12,16 @@ use super::super::{
         OrdinaryCashTerminalCircuitWitnessV1, build_ordinary_cash_terminal_ep_v1,
         build_ordinary_cash_terminal_eq_v1, collect_ordinary_cash_terminal_audits_v1,
     },
-    ordinary_cash_terminal_verifier::ORDINARY_TERMINAL_PUBLIC_INSTANCES_V1,
+    ordinary_cash_terminal_verifier::{
+        ORDINARY_TERMINAL_PUBLIC_INSTANCES_V1, OrdinaryCashTerminalPublicV1,
+    },
 };
 use super::ordinary_cash_terminal_generation::{GeneratedOrdinaryCashPairV1, finish_pair};
 use super::*;
 use crate::kagemusha_v1_state::DigestV1;
 
 /// Actual role material is retained only as canonical structured/processed originals.
+/// Qualification decodes the retained originals and verifies the framed proof with them.
 /// The full financial corridor may inspect it but has no artifact-installation authority.
 pub(super) struct OrdinaryCashRoleKeysForTestingV1 {
     pub(super) eq_parameters: Arc<[u8]>,
@@ -254,9 +257,10 @@ pub(super) fn generate_ordinary_terminal_for_testing_v1(
     let (ep_parameters, ep_proving_key, ep_verifying_key) =
         build_generated_helper_parity(KagemushaPastaParityV1::Ep, "ordinary Terminal", &ep, ep_pk)
             .unwrap();
+    let expected_public = witness.public;
     let generated = finish_pair(
         1,
-        witness.public,
+        expected_public.clone(),
         manifest,
         eq_protocol,
         ep_protocol,
@@ -289,6 +293,7 @@ pub(super) fn generate_ordinary_terminal_for_testing_v1(
         super::super::ordinary_cash_terminal_circuit::OrdinaryCashTerminalEpCircuitV1,
     >(
         &result,
+        &expected_public,
         [
             KagemushaArtifactRoleV1::TerminalAuthorizationPkEq,
             KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
@@ -458,9 +463,10 @@ pub(super) fn generate_ordinary_wrapper_for_testing_v1(
     let (ep_parameters, ep_proving_key, ep_verifying_key) =
         build_generated_helper_parity(KagemushaPastaParityV1::Ep, "ordinary Wrapper", &ep, pk)
             .unwrap();
+    let expected_public = witness.public;
     let generated = finish_pair(
         2,
-        witness.public,
+        expected_public.clone(),
         manifest,
         eq_protocol,
         ep_protocol,
@@ -493,6 +499,7 @@ pub(super) fn generate_ordinary_wrapper_for_testing_v1(
         super::super::ordinary_cash_commit_wrapper::OrdinaryCashCommitWrapperEpCircuitV1,
     >(
         &result,
+        &expected_public,
         [
             KagemushaArtifactRoleV1::CommitWrapperPkEq,
             KagemushaArtifactRoleV1::CommitWrapperVkEq,
@@ -528,9 +535,11 @@ pub(super) fn generate_ordinary_wrapper_for_testing_v1(
 }
 
 /// Decode both actual role artifacts and verify the exact framed proof with the decoded
-/// standalone keys. The existing full-cycle test drives Terminal and Wrapper through this.
+/// standalone keys against the actual witness statement. The existing full-cycle test drives
+/// Terminal and Wrapper through this; the canonical frame owns the generated statement.
 fn verify_retained_pair<EqCircuit, EpCircuit>(
     value: &OrdinaryCashProofForTestingV1,
+    expected_public: &OrdinaryCashTerminalPublicV1,
     roles: [KagemushaArtifactRoleV1; 4],
     manifest: DigestV1,
 ) where
@@ -548,7 +557,7 @@ fn verify_retained_pair<EqCircuit, EpCircuit>(
         super::super::ordinary_cash_terminal_verifier::decode_profile_exact(
             &value.generated.original,
             relation,
-            value.generated.public.release_id,
+            expected_public.release_id,
             // The factory supplies this separate original release-manifest context.
             manifest,
             [
@@ -581,19 +590,19 @@ fn verify_retained_pair<EqCircuit, EpCircuit>(
     assert_eq!(original.ep_history, *value.generated.ep_history.as_bytes());
     assert_eq!(
         original.eq_deferred_audit,
-        value.generated.public.eq_deferred_audit
+        expected_public.eq_deferred_audit
     );
     assert_eq!(
         original.ep_deferred_audit,
-        value.generated.public.ep_deferred_audit
+        expected_public.ep_deferred_audit
     );
     assert_eq!(
         original.eq_protocol_digest,
-        value.generated.public.eq_protocol_digest
+        expected_public.eq_protocol_digest
     );
     assert_eq!(
         original.ep_protocol_digest,
-        value.generated.public.ep_protocol_digest
+        expected_public.ep_protocol_digest
     );
     let (eq, protocol) = roundtrip::<EqAffine, EqCircuit>(
         Originals {
@@ -614,9 +623,7 @@ fn verify_retained_pair<EqCircuit, EpCircuit>(
         original.eq_protocol_digest
     );
     assert_eq!(
-        value
-            .generated
-            .public
+        expected_public
             .public_column::<Fp>(&original.eq_history)
             .unwrap(),
         value.generated.eq_instances
@@ -655,9 +662,7 @@ fn verify_retained_pair<EqCircuit, EpCircuit>(
         original.ep_protocol_digest
     );
     assert_eq!(
-        value
-            .generated
-            .public
+        expected_public
             .public_column::<Fq>(&original.ep_history)
             .unwrap(),
         value.generated.ep_instances

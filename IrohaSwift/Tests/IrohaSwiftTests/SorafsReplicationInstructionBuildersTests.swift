@@ -16,10 +16,12 @@ final class SorafsReplicationInstructionBuildersTests: XCTestCase {
     private func completionAuthority(
         revision: UInt64 = 2,
         predecessorDigest: String? = nil,
-        providerOwner: String? = nil
+        providerOwner: String? = nil,
+        completionSigner: String? = nil
     ) throws -> SorafsProviderIngestCompletionAuthorityV1 {
         try SorafsProviderIngestCompletionAuthorityV1(
             providerOwner: providerOwner ?? self.providerOwner,
+            completionSigner: completionSigner ?? self.providerOwner,
             signerPolicy: SorafsProviderIngestCompletionSignerPolicyV1(
                 policyId: policyId,
                 revision: revision,
@@ -202,6 +204,7 @@ final class SorafsReplicationInstructionBuildersTests: XCTestCase {
         )
         let authority = try XCTUnwrap(body["expected_authority"] as? [String: Any])
         XCTAssertEqual(authority["provider_owner"] as? String, providerOwner)
+        XCTAssertEqual(authority["completion_signer"] as? String, providerOwner)
         let policy = try XCTUnwrap(authority["signer_policy"] as? [String: Any])
         XCTAssertEqual(policy["policy_id"] as? String, policyId)
         XCTAssertEqual((policy["revision"] as? NSNumber)?.uint64Value, 2)

@@ -15,7 +15,7 @@ decoders, aliases, shims and parallel implementations are prohibited.
 
 | Milestone | Completion gate | Current state |
 | --- | --- | --- |
-| Custody and lifecycle | All focused staking, reserve, snapshot and restoration controls pass | Focused Core custody, rollback, fee and restoration controls pass on the integrated test artifact; CLI, daemon and unchanged-candidate network qualification remain open |
+| Custody and lifecycle | All focused staking, reserve, snapshot and restoration controls pass | Earlier focused Core custody, rollback, fee and restoration controls passed; the current shared beacon custody API and typed restoration errors await fresh compilation and runtime checks, followed by unchanged-candidate network qualification |
 | Canonical XOR | Genesis-pinned network XOR funds bonds, rewards and withdrawals; no synthetic staking definition or implicit production minting | Immutable network XOR pin, global scale-nine genesis/operator validation and early staking/reward custody checks implemented; production implicit minting removed; current-candidate component and integration validation pending |
 | Authority and election | Separate key generations and scheduling epochs; freeze E+2 membership at E and prepare through E+1 | Generation/authorization, authenticated native epoch graph and pristine E+2 boundary capture are integrated; current Core, runtime and network qualification remains open |
 | Atomic transition | All target seats ready; current exact quorum certifies activation or retention and cancellation; restart preserves both sessions | Native prepare/activate/retain source capture, signed control/Pasta, atomic application barrier and current/predecessor restore join are integrated; snapshot chain/network identity is checked before typed restore, but positive-height startup and real restart/transition qualification remain open |
@@ -30,12 +30,22 @@ retention keeps the current key generation without claiming forward security.
 Missing target readiness cannot change the frozen roster in place. Missing the
 current quorum does not authorize weakened voting rules.
 
-The current production DLMM pool artifact is 80,629 bytes. Its nested artifact
-charge alone is 5,160,256 gas at the existing 64-gas-per-byte price, exceeding the
-default four-million-gas block limit before execution. Private numeric-literal
-helper folding and a shared swap-direction body reduce the artifact without
-changing its public interface or gas prices. The component fixture authenticates a finite eight-million-gas limit in
-its original signed genesis. TODO: finish optimizing and qualify the enacted
+The current measured compiler artifact of the production DLMM pool is 71,201 bytes.
+Its nested artifact charge alone is 4,556,864 gas at the existing 64-gas-per-byte
+price, exceeding the default four-million-gas block limit before execution.
+The compiler and pool inputs were unchanged across that component measurement;
+the wider workspace changed during the build and is not a qualified candidate.
+Private numeric-literal helper folding, literal register reuse, a shared
+swap-direction body and direct operands at the existing metered numeric and state consumers
+reduce the artifact without changing its public interface or gas prices.
+Dead-operand register allocation is included in that measurement and passes the
+focused compiler checks; VM and actual Core payout checks remain, and the
+reduction does not yet close this gap.
+The latest retained actual Core payout diagnostic measured 4,720,196 gas with a
+71,397-byte pool artifact. That wider Core cohort failed nine tests and its sources
+changed during execution, so the measurement establishes no candidate qualification.
+The latest compiler output has not been remeasured through Core. The component fixture authenticates a finite
+eight-million-gas limit in its original signed genesis. TODO: finish optimizing and qualify the enacted
 payout under the default policy on the disposable network; the component limit
 does not establish that the default policy can execute the payout.
 
@@ -53,9 +63,11 @@ without rewriting the source. Positive, substitution, scope, precision and actua
 transaction-rollback controls are implemented; their current-candidate gates
 remain open.
 
-Focused Core compilation and custody/lifecycle checks pass. Complete resource
-funding and unchanged-candidate real-network transition/monetary qualification
-remain open.
+Earlier focused Core compilation and custody/lifecycle checks passed. Repairs to
+canonical DKG frame geometry, prepared credential funding, obsolete custody
+fixtures and operator proof transport await complete combined Core and daemon checks. Complete
+resource funding and unchanged-candidate real-network transition/monetary
+qualification remain open.
 
 ## Implemented candidate under validation
 
@@ -97,13 +109,48 @@ also retain their concrete errors through the serialized worker and node boundar
 Committed-history startup assembly preserves original cold-read refusal for both
 global and lane callers; absent or corrupt history remains a separate completed
 failure.
+Verifier-key inverse validation also preserves the actual current/predecessor
+storage reader refusal through snapshot decoding and daemon startup. Local
+publication contention or reader poisoning cannot authorize empty-State fallback;
+completed inverse inconsistencies still reject the snapshot. Startup relation-work
+admission and the new connected reader regressions remain under qualification.
 Connected regressions exercise
 retirement after success, actual archive failure and post-publication unwind.
 These implementations require current-candidate compilation, regression and
 mutation qualification; component passes do not qualify the whole driver or network.
 
+The immutable validated beacon session now owns its complete canonical graph,
+shared control and verifier workspaces through one original-pool admission.
+World current and undo rows, runtime signers and prepared credentials retain that
+same seal; restore validates both generations before installation. Credential
+registries use an explicit configured aggregate bound, exported in the sole
+canonical provider catalog. Native provisioning commands use one explicit
+operation budget. These connected changes are integrated but await Rust
+compilation and runtime qualification.
+
+Borrowed credential, lifecycle and broker encoders forward the canonical field
+payloads without duplicating retained graphs. Provisioning retains its verified
+session in the original caller pool. Snapshot beacon and lane custody failures
+retain their typed causes and cannot select an empty-State recovery fallback.
+Each broker operation retains its original authenticated beacon session across
+request validation, signer dispatch and response validation. Reuse checks the
+complete session record and the external binding; it cannot substitute a graph
+with matching identifiers. Resource-saturation controls and the maximum-committee
+socket deadline still require execution. Raw decoder and encoder backing remain
+separate funding obligations. These repairs require the same pending compilation
+and runtime gates.
+
+The Rust client's shared canonical response decoder retains the original typed
+decode attempt, including local resource refusal. Committee readers also preserve
+the native finality decoder cause through query and transport boundaries. Stable
+operation IDs identify these errors; the top-level SDK error moves its source
+instead of cloning or flattening it. All affected consumers and their canonical
+fixtures still require current-source compilation and runtime qualification.
+
 TODO: complete original-pool funding of nested execution, proof and startup graphs,
-including beacon transcripts and cryptographic scratch. Polling, rearming, cancellation
+including broker decoding, native-journal artifact and block graphs, and the
+outer World/registry containers. Prepared DKG input banks and retained transport
+frames are integrated but still require their runtime gates. Polling, rearming, cancellation
 and release must remain allocation-free after admission. Physical-history and State
 readers must retain actual release owners, with callbacks outside enclosing fences.
 
@@ -153,17 +200,23 @@ readers must retain actual release owners, with callbacks outside enclosing fenc
   an actual network fails the qualification. The scenarios explicitly exclude
   an enacted retail validation-fee policy. The complete rotation now includes
   funded treasury rewards, exact signed claims and full withdrawal after retained
-  liability expiry, with separately settled native fees; compilation and network
-  execution are still required. Slashing, Parliament pulses and the connected
-  enacted-policy scenario remain open.
-  Compiling and running the harness on one unchanged candidate is required.
+  liability expiry, with separately settled native fees. The connected Parliament
+  helper requests and consumes a genuine sortition pulse during E+1 while current
+  and pending credentials coexist; it separately verifies the fresh epoch-boundary
+  scheduling pulse and rejects early activation. These scenarios require compilation
+  and execution on one unchanged candidate. The connected enacted-policy scenario
+  remains open; slashing uses the deterministic native component below.
 - The finality-owned lane penalty component
   `native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_admission`
   now covers signed full-unbond scheduling, a delayed physical XOR transfer to a
   distinct slash sink, reduced pending liability, and repeated original-chain
   replay. Its exact remaining withdrawal is rejected while the unchanged global
-  and lane seats retain custody. This extension is under validation; successful
-  withdrawal after actual replacement remains transition/network qualification.
+  and lane seats retain custody. The connected `lane/tests/replacement.rs` extension
+  then certifies a replacement, releases both seat obligations, waits for height
+  and time maturity, withdraws the remaining XOR, and checks a freshly signed replay
+  with exact fees, balances and reserves. The extension is implemented but awaits
+  compilation and runtime qualification; it is a deterministic native component,
+  not a real-peer slashing result.
   Torii exposes evidence reads, not an external evidence-submission endpoint;
   the Initial executor admits manual slashing only in genesis. An offline proof
   cannot currently drive the disposable network's finality-owned penalty through
@@ -323,7 +376,36 @@ context and share equation, then signs one acceptance for the exact edge.
 Use `iroha_crypto::hybrid::{HybridKeyPair, encapsulate, decapsulate}` for the
 existing X25519/ML-KEM-768 key exchange and
 `iroha_crypto::encryption::SymmetricEncryptor<ChaCha20Poly1305>` for nonce-bearing
-AEAD over the associated data. The public reducer requires all `n` distinct
+AEAD over the associated data. Hybrid key and ciphertext owners now retain fixed
+ML-KEM storage; private-share encryption returns the exact 124-byte envelope.
+Contextual BLS signing uses one fixed-storage kernel for ordinary and prepaid
+callers. Prepaid signatures retain their original output buffer and allocation
+charge. Local preparation now constructs every phase output and its maximum
+canonical frame before randomness or the durable attempt claim. Reducer rows,
+snapshots and finalization retain their actual nested backing under the original
+allocation pool; CLI and disposable coordinators consume that final owner.
+The credential producer prepares exact secret output backing from that pool
+before share extraction and encodes borrowed shares without a second output
+allocation. Final export retains the private source, original descriptors and
+write offsets on failure; retry verifies the same files and byte prefixes.
+The canonical decoder now supports prepared destinations through the same generated
+field walk as ordinary decoding. Separate commitment, delivery and final-session
+banks retain their nested backing in the original pool, with exact source bindings
+and unchanged canonicality checks. Genesis moves its finalized graph into a
+prepared verifier instead of overlapping a cloned graph with the delivered snapshot.
+The daemon's single `SeatDkgAttempt` retains the claim, input descriptors, partial
+frames, decoded banks, signing phase and publication offsets across refusal.
+It advances beyond signing before attempting publication and preserves the original
+deadline. Native finality retains prepaid ranges into its original funded frame
+through refused advancement. Ordinary and prepared journal decoding share the
+same generated canonical field walk and source bounds; the native cursor uses
+the same complete finality verifier. Journal indexes retain actual backing from
+the original pool. TODO: fund the nested decoded SignedBlock and result graphs
+through their complete physical lifetime.
+These changes await compilation, Core and daemon runtime qualification.
+Process exit still cancels the in-memory export owner; this does not establish
+restart recovery for an unfinished DKG attempt.
+The public reducer requires all `n` distinct
 commitments and all `n²` distinct signed acceptances before the finalized
 acceptance cutoff. It derives the transcript from those exact commitments; a
 recipient aggregates only its locally decrypted contributions. A missing,

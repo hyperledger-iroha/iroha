@@ -201,14 +201,15 @@ fn funded_predecessors<'a>(
     })
 }
 
-fn contains_account<'a, I>(
-    accounts: I,
+#[expect(
+    single_use_lifetimes,
+    reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
+)]
+fn contains_account<'a>(
+    accounts: impl IntoIterator<Item = &'a AccountId>,
     account: &AccountId,
     work: &mut Work,
-) -> Result<bool, GroupedOwnershipError>
-where
-    I: IntoIterator<Item = &'a AccountId>,
-{
+) -> Result<bool, GroupedOwnershipError> {
     for candidate in accounts {
         work.charge()?;
         if candidate == account {

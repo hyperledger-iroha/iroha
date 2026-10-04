@@ -7,6 +7,58 @@ use crate::sumeragi_finality::commitment::{
 use iroha_schema::IntoSchema;
 
 #[test]
+fn checked_result_finish_receives_complete_value_only_after_validation_and_original_refusal() {
+    let value = boundary_result(4);
+    let bytes = value.preimage().unwrap();
+    let calls = std::cell::Cell::new(0);
+    let height = ExecutionResultCommitment::decode_with_validation_into(
+        &bytes,
+        &mut crate::sumeragi_finality::EpochValidationScope::new(),
+        |decoded| {
+            assert_eq!(decoded, value);
+            calls.set(calls.get() + 1);
+            decoded.height
+        },
+    )
+    .unwrap();
+    assert_eq!(height, value.height);
+    assert_eq!(calls.get(), 1);
+    assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
+
+    let limits = norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, usize::MAX);
+    let refused = norito::with_decode_limits_scope(limits, || {
+        ExecutionResultCommitment::decode_with_validation_into(
+            &bytes,
+            &mut crate::sumeragi_finality::EpochValidationScope::new(),
+            |_| calls.set(calls.get() + 1),
+        )
+    });
+    assert!(matches!(refused, Err(CommitmentError::Resource(_))));
+    assert_eq!(calls.get(), 1);
+
+    let mut invalid = value;
+    invalid.height += 1;
+    assert!(
+        ExecutionResultCommitment::decode_with_validation_into(
+            &invalid.preimage().unwrap(),
+            &mut crate::sumeragi_finality::EpochValidationScope::new(),
+            |_| calls.set(calls.get() + 1),
+        )
+        .is_err()
+    );
+    let oversized = vec![0; MAX_RESULT_PREIMAGE_BYTES + 1];
+    assert!(matches!(
+        ExecutionResultCommitment::decode_with_validation_into(
+            &oversized,
+            &mut crate::sumeragi_finality::EpochValidationScope::new(),
+            |_| calls.set(calls.get() + 1),
+        ),
+        Err(CommitmentError::PreimageLength(length)) if length == oversized.len()
+    ));
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
 fn compact_result_roundtrips_complete_boundary_without_repeated_epoch_wire() {
     // There is one first-release result layout; the former repeated graph is not accepted.
     #[derive(norito::NoritoSerialize, norito::NoritoSchema)]

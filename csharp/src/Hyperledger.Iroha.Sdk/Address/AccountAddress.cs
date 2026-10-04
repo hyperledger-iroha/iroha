@@ -222,6 +222,21 @@ public sealed class AccountAddress : IEquatable<AccountAddress>
         return address;
     }
 
+    /// <summary>The chain discriminant spelled by an I105 literal's sentinel, without full validation.</summary>
+    internal static bool TryGetI105Discriminant(string encoded, out ushort discriminant)
+    {
+        try
+        {
+            (discriminant, _) = SplitI105Sentinel(encoded);
+            return true;
+        }
+        catch (AccountAddressException)
+        {
+            discriminant = DefaultChainDiscriminant;
+            return false;
+        }
+    }
+
     public string ToI105(ushort chainDiscriminant = DefaultChainDiscriminant)
     {
         var digits = EncodeBaseN(canonicalBytes, I105Base);

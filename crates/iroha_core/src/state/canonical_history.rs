@@ -15,19 +15,10 @@ use crate::{
     kura::Kura,
 };
 
-fn source_query_error(error: QueryExecutionFail) -> ExecutionAttemptError<QueryExecutionFail> {
-    match error {
-        QueryExecutionFail::GasBudgetExceeded => ExecutionAttemptError::Deferred(
-            ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
-        ),
-        error => ExecutionAttemptError::Rejected(error),
-    }
-}
-
-fn versioned_source_error(
-    error: iroha_version::error::Error,
+fn canonical_source_error(
+    error: norito::core::DecodeAttemptError,
 ) -> ExecutionAttemptError<QueryExecutionFail> {
-    crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
+    crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
         QueryExecutionFail::Conversion(error.to_string())
     })
 }
@@ -192,7 +183,7 @@ impl<'a> CanonicalHistorySource<'a> {
     pub(crate) fn block_with_admission(
         &self,
         height: NonZeroUsize,
-        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
     ) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<QueryExecutionFail>>
     {
         let expected = self
@@ -214,7 +205,7 @@ impl<'a> CanonicalHistorySource<'a> {
             crate::kura::Error::NoritoFrame(error) => norito_decode_attempt_error(error, |error| {
                 QueryExecutionFail::Conversion(error.to_string())
             }),
-            crate::kura::Error::VersionedCodec(error) => versioned_source_error(error),
+            crate::kura::Error::BlockDecode(error) => canonical_source_error(error),
             error => {
                 ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(error.to_string()))
             }
@@ -225,7 +216,7 @@ impl<'a> CanonicalHistorySource<'a> {
             .map_err(storage_error)?
             .ok_or_else(missing)?;
         let wire_len = source.wire_len();
-        before_read(1, wire_len).map_err(source_query_error)?;
+        before_read(1, wire_len)?;
         let shell = SharedSignedBlock::reserve(&self.budget)
             .map_err(|error| ExecutionAttemptError::Deferred(error.into()))?;
         let bytes = source
@@ -233,7 +224,7 @@ impl<'a> CanonicalHistorySource<'a> {
             .map_err(storage_error)?
             .ok_or_else(missing)?;
         let block = iroha_data_model::block::decode_framed_signed_block(&bytes)
-            .map_err(versioned_source_error)?;
+            .map_err(canonical_source_error)?;
         authenticate_canonical_block(height, expected, Some(shell.initialize(block))).map_err(
             |error| ExecutionAttemptError::Rejected(QueryExecutionFail::CanonicalHistory(error)),
         )
@@ -241,12 +232,14 @@ impl<'a> CanonicalHistorySource<'a> {
 
     /// Read execution identity through the original State tip, without inspecting
     /// any local QC. Every source frame is admitted before its bytes are read.
+    /// Callbacks retain their original typed local refusal; semantic query errors
+    /// stay rejected even when their transport representation is a budget error.
     /// Parent core hash, parent R and Iroha parent hash jointly authenticate the
     /// reverse walk. The finite captured tip bounds its number of source frames.
     pub(crate) fn executed_receipt(
         &self,
         height: NonZeroUsize,
-        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
     ) -> Result<
         crate::sumeragi::certified_chain::CommittedBlock,
         ExecutionAttemptError<QueryExecutionFail>,
@@ -271,10 +264,10 @@ impl<'a> CanonicalHistorySource<'a> {
         &self,
         first: NonZeroUsize,
         last: NonZeroUsize,
-        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
         mut visit: impl FnMut(
             crate::sumeragi::certified_chain::CommittedBlock,
-        ) -> Result<(), QueryExecutionFail>,
+        ) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
     ) -> Result<(), ExecutionAttemptError<QueryExecutionFail>> {
         self.visit_executed_backwards_until(first, last, before_read, |value| {
             visit(value).map(|()| core::ops::ControlFlow::Continue(()))
@@ -291,10 +284,13 @@ impl<'a> CanonicalHistorySource<'a> {
         &self,
         first: NonZeroUsize,
         last: NonZeroUsize,
-        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
         mut visit: impl FnMut(
             crate::sumeragi::certified_chain::CommittedBlock,
-        ) -> Result<core::ops::ControlFlow<()>, QueryExecutionFail>,
+        ) -> Result<
+            core::ops::ControlFlow<()>,
+            ExecutionAttemptError<QueryExecutionFail>,
+        >,
     ) -> Result<bool, ExecutionAttemptError<QueryExecutionFail>> {
         if first > last {
             return Err(QueryExecutionFail::Conversion(
@@ -323,6 +319,11 @@ impl<'a> CanonicalHistorySource<'a> {
             u64::try_from(first.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
         let selected_last =
             u64::try_from(last.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        // This scope retains at most two fully validated exact context values.
+        // It owns no source, certificate, freshness or ancestry verdict and dies
+        // with this walk. Every durable frame and parent binding is still read
+        // and checked below, including on a warmed or subsequent State view.
+        let mut validation = iroha_data_model::sumeragi_finality::EpochValidationScope::new();
         for source_height in (target..=tip.height()).rev() {
             let index = usize::try_from(source_height)
                 .ok()
@@ -337,10 +338,14 @@ impl<'a> CanonicalHistorySource<'a> {
                 )));
             }
             let block = self.block_with_admission(index, &mut before_read)?;
-            let receipt = crate::sumeragi::certified_chain::read_frame(block, source_height)
-                .map_err(|error| {
-                    error.map_rejection(|error| QueryExecutionFail::Conversion(error.to_string()))
-                })?;
+            let receipt = crate::sumeragi::certified_chain::read_frame_with_validation(
+                block,
+                source_height,
+                &mut validation,
+            )
+            .map_err(|error| {
+                error.map_rejection(|error| QueryExecutionFail::Conversion(error.to_string()))
+            })?;
             if receipt.core_hash() != expected_core || receipt.result() != expected_result {
                 return Err(invalid(format!(
                     "native header or R differs from authenticated execution ancestry at {source_height}"
@@ -358,7 +363,7 @@ impl<'a> CanonicalHistorySource<'a> {
                     })?;
             }
             if source_height <= selected_last {
-                if visit(receipt).map_err(source_query_error)?.is_break() {
+                if visit(receipt)?.is_break() {
                     return Ok(false);
                 }
             }
@@ -376,7 +381,7 @@ impl<'a> CanonicalHistorySource<'a> {
     pub(crate) fn executed_block(
         &self,
         height: NonZeroUsize,
-        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
     ) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<QueryExecutionFail>>
     {
         self.executed_receipt(height, before_read)
@@ -476,3 +481,6 @@ impl DoubleEndedIterator for CanonicalHistoryCursor<'_> {
 }
 
 impl std::iter::FusedIterator for CanonicalHistoryCursor<'_> {}
+
+#[cfg(test)]
+mod admission_tests;

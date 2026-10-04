@@ -50,6 +50,65 @@ fn preparation_recovery_and_native_finality_have_distinct_safe_codes() {
 }
 
 #[test]
+fn retained_bootstrap_failures_preserve_unresolved_journals_without_signed_terminal_claims() {
+    for (reason, expected) in [
+        (
+            ManagedBootstrapFailure::Cancelled,
+            ManagedAttachmentFailure::WorkerUnavailable,
+        ),
+        (
+            ManagedBootstrapFailure::TransitionPending,
+            ManagedAttachmentFailure::RecoveryFailed,
+        ),
+        (
+            ManagedBootstrapFailure::SignedUnresolved,
+            ManagedAttachmentFailure::RecoveryFailed,
+        ),
+        (
+            ManagedBootstrapFailure::AuthorizationExpired,
+            ManagedAttachmentFailure::ContextRejected,
+        ),
+        (
+            ManagedBootstrapFailure::PayloadExpired,
+            ManagedAttachmentFailure::ContextRejected,
+        ),
+        (
+            ManagedBootstrapFailure::EnrollmentExpired,
+            ManagedAttachmentFailure::ContextRejected,
+        ),
+        (
+            ManagedBootstrapFailure::EnrollmentObservationExpired,
+            ManagedAttachmentFailure::ContextRejected,
+        ),
+        (
+            ManagedBootstrapFailure::EnrollmentPredecessorChanged,
+            ManagedAttachmentFailure::ContextRejected,
+        ),
+        (
+            ManagedBootstrapFailure::ProfileExpired,
+            ManagedAttachmentFailure::ContextRejected,
+        ),
+        (
+            ManagedBootstrapFailure::EpochLimit,
+            ManagedAttachmentFailure::ContextRejected,
+        ),
+        (
+            ManagedBootstrapFailure::ReplacementLimit,
+            ManagedAttachmentFailure::ContextRejected,
+        ),
+    ] {
+        let failure = ManagedAttachmentFailure::from(Error::Bootstrap(reason));
+        assert_eq!(failure, expected);
+        assert!(!failure.is_terminal_operation());
+        let original = norito::json::to_vec(&failure).unwrap();
+        assert_eq!(
+            norito::json::from_slice::<ManagedAttachmentFailure>(&original).unwrap(),
+            failure,
+        );
+    }
+}
+
+#[test]
 fn public_failure_codes_roundtrip_and_reject_arbitrary_text() {
     for failure in [
         ManagedAttachmentFailure::PreparationFailed,

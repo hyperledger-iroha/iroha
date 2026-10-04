@@ -590,13 +590,16 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         let account = try Keypair(privateKeyBytes: privateKey)
             .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
         let auth = ToriiCanonicalRequestAuth(
-            accountId: account, privateKey: privateKey,
-            timestampMs: 1_700_000_000_000, nonce: "privacy-cache-policy"
+            accountId: account, privateKey: privateKey
         )
         let client = ToriiClient(
             baseURL: URL(string: "https://example.invalid")!,
             defaultHeaders: ["cache-control": "max-age=3600", "Accept": "application/json"],
-            localSigningContext: ToriiLocalSigningContext(networkId: network)
+            localSigningContext: ToriiLocalSigningContext(networkId: network),
+            canonicalRequestFreshness: ToriiCanonicalRequestFreshness(
+                timestampMs: { 1_700_000_000_000 },
+                nonce: { "privacy-cache-policy" }
+            )
         )
         // This returns only a request, never a validated manifest or admission.
         let request = try client.makePrivacyExact12CapabilityRequestV1(canonicalAuth: auth)
@@ -644,8 +647,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         let client = ToriiClient(baseURL: URL(string: "https://example.invalid")!, session: session)
         // The guard must run before authentication, native validation, or transport.
         let auth = ToriiCanonicalRequestAuth(
-            accountId: "unused-before-network-guard", privateKey: Data(repeating: 1, count: 32),
-            timestampMs: 1, nonce: "unused-before-network-guard"
+            accountId: "unused-before-network-guard", privateKey: Data(repeating: 1, count: 32)
         )
         do {
             _ = try await client.getPrivacyExact12CapabilityManifestV1(canonicalAuth: auth)

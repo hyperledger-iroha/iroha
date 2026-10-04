@@ -281,3 +281,39 @@ fn canonical_json_parser_and_writer_preserve_original_refusal_and_protocol_kind(
     .unwrap_err();
     assert_eq!(body.kind(), DecodeAttemptErrorKind::Invalid);
 }
+
+#[test]
+fn public_closure_admission_uses_same_origin_kernel_after_caller_unwind() {
+    let value = vec!["original first".to_owned(), "original second".to_owned()];
+    let bytes = crate::encode_canonical(&value).unwrap();
+    let saved = std::cell::RefCell::new(None);
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_decode_limits_scope(allocation_limit(0), || {
+            *saved.borrow_mut() = Some(
+                classify_decode_attempt(|| {
+                    crate::decode_canonical_with_limits::<Vec<String>>(
+                        &bytes,
+                        crate::canonical_decode_limits(bytes.len()),
+                    )
+                })
+                .unwrap_err(),
+            );
+            panic!("retire enclosing caller scope");
+        })
+    }));
+    assert!(unwind.is_err());
+    let original = saved.into_inner().unwrap();
+    assert_eq!(original.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+    assert!(matches!(
+        original.into_error().decode_resource_error(),
+        Some(DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+    ));
+    assert_eq!(
+        classify_decode_attempt(|| crate::decode_canonical_with_limits::<Vec<String>>(
+            &bytes,
+            crate::canonical_decode_limits(bytes.len()),
+        ))
+        .unwrap(),
+        value
+    );
+}

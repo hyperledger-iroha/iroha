@@ -2435,7 +2435,7 @@ mod tests {
         .expect("valid compiler intrinsics must survive the production projection");
         let suite_metadata = crate::metadata::ProgramMetadata::parse(&outputs.suite.artifact)
             .expect("parse generic test harness");
-        assert_eq!(suite_metadata.metadata.version_minor, 0);
+        assert_eq!(suite_metadata.metadata.version_minor, 1);
         assert!(suite_metadata.contract_interface.is_none());
         assert!(matches!(
             outputs.suite.contract_interface().states.as_slice(),

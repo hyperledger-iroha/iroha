@@ -24,10 +24,10 @@ function createClient(fetchImpl) {
 }
 
 async function signedRead(client) {
-  return client.listAccountAssets(accountId, {
-    canonicalAuth: { accountId, privateKey },
-    limit: 1,
-  });
+  return client.accountAssets(accountId).list(
+    { limit: 1 },
+    { canonicalAuth: { accountId, privateKey } },
+  );
 }
 
 for (const status of [307, 308, 503]) {

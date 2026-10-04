@@ -91,9 +91,10 @@ pub(super) async fn verify_boundary_chain(
         roster.len() == 4,
         "genesis proof authority is not four peers"
     );
-    installed.validate()?;
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    installed.validate(&budget)?;
     let session = beacon::validate_global_threshold_beacon_session_v1(
-        installed.session.clone(),
+        &installed.session,
         &beacon::GlobalThresholdBeaconSessionBindingV1 {
             network_id: network,
             session_id: installed.session.session_id,
@@ -105,6 +106,7 @@ pub(super) async fn verify_boundary_chain(
             ),
             transcript_hash: installed.session.transcript_hash,
         },
+        &budget,
     )?;
     ensure!(
         installed.session.network_id == network
@@ -149,8 +151,10 @@ pub(super) async fn verify_boundary_chain(
             source.sort_by_key(|block| block.header().height());
             ensure!(source.len() == usize::try_from(height)?, "retention source lacks complete genesis prefix");
             let journal = NativeFinalityJournal { blocks: source.iter().map(|block| NativeFinalityArtifact::from_block(block, native_finality_limits()).map_err(|error| eyre!(error))).collect::<Result<Vec<_>>>()? };
-            let cursor = NativeJournalCursor::new(client.chain().clone(), network, iroha_data_model::block::consensus::SumeragiRootScope::Global, native_finality_limits()).map_err(|error| eyre!(error))?;
-            let proofs = with_verified_native_journal(&journal, client.chain(), &network, native_finality_limits(), cursor.attestations(), |reader| reader.walk(1, height).collect::<std::result::Result<Vec<_>, _>>().map_err(|error| error.to_string())).map_err(|error| eyre!(error))?;
+            let cursor = NativeJournalCursor::new(client.chain().clone(), network, iroha_data_model::block::consensus::SumeragiRootScope::Global, native_finality_limits(),
+&iroha_allocation::AllocationBudget::new(native_finality_limits().allocated_bytes),
+).map_err(|error| eyre!(error))?;
+            let proofs = with_verified_native_journal(&journal, client.chain(), &network, native_finality_limits(), cursor.attestations(), cursor.allocation_budget(), |reader| reader.walk(1, height).collect::<std::result::Result<Vec<_>, _>>().map_err(iroha_core::sumeragi::native_journal::NativeJournalError::History)).map_err(|error| eyre!(error))?;
             let first = proofs.first().ok_or_else(|| eyre!("missing actual signed genesis"))?;
             let context = &first.commitment().schedule.current;
             ensure!(first.block_hash() == genesis_hash && context.committee == roster && context.authority == authority && context.authorization == initial,

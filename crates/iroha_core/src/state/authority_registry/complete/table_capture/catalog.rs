@@ -8,10 +8,20 @@ const MEMBERSHIP_FRONTIER: &str = "state.transactions.frontier";
 const CURRENT: &str = "state.transactions.current";
 const ROLLBACK: &str = "state.transactions.rollback";
 
-/// Reviewed one-table reader or the closed original-writer membership group.
+/// One declared table source or an indivisible semantic/membership group.
 #[derive(Clone, Copy)]
 pub(super) enum TableMaterializer {
-    /// One existing canonical State table callback.
+    /// Raw native row encoding only, with both observations generated from the
+    /// same actual field declaration. Neither callback checks derived relations.
+    Native {
+        id: &'static str,
+        capture: fn(&State, LeafLimits) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError>,
+        frozen: fn(
+            &StateBlock<'_>,
+            LeafLimits,
+        ) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError>,
+    },
+    /// One checked structural or trigger-semantic State callback.
     Single {
         id: &'static str,
         capture: fn(&State, LeafLimits) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError>,
@@ -26,7 +36,7 @@ pub(super) enum TableMaterializer {
 impl TableMaterializer {
     pub(super) fn table_ids(self) -> impl Iterator<Item = &'static str> {
         match self {
-            Self::Single { id, .. } => [Some(id), None],
+            Self::Single { id, .. } | Self::Native { id, .. } => [Some(id), None],
             Self::MusubiSemantic(table) => [Some(table.id()), None],
             Self::TransactionMembership => [Some(CURRENT), Some(ROLLBACK)],
         }
@@ -106,6 +116,9 @@ pub(super) fn require_exact_table_materializers(
         if matches!(
             materializer,
             TableMaterializer::Single {
+                id: CURRENT | ROLLBACK,
+                ..
+            } | TableMaterializer::Native {
                 id: CURRENT | ROLLBACK,
                 ..
             }

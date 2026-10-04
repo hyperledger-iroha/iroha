@@ -4,6 +4,8 @@
 package org.hyperledger.iroha.sdk.consensus
 
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -468,32 +470,133 @@ object ValidatorStakingNoritoV1 {
         }
     }
 
-    /** One exact operation-specific monetary precondition. */
-    class MonetaryPrecondition private constructor(payload: ByteArray) {
-        private val encoded = payload.copyOf()
-        val kind: Kind
-        val activationHeight: Long
-        val binding: Bytes?
-        val slashableExposure: Quantity?
+    /** Exact peer identity bound by a bond, using the existing native public-key admission.
+     * Possession and retained validator-tenure authority remain native execution checks.
+     */
+    class PeerId private constructor(payload: ByteArray) : Record(payload, 1) {
+        val algorithm: SigningAlgorithm
+        val publicKey: Bytes
 
         init {
-            val (tag, value) = decodeVariant(encoded)
-            kind = Kind.entries.firstOrNull { it.tag == tag }
-                ?: throw IllegalArgumentException("unknown staking monetary precondition")
-            val fields = decodeFields(value, if (kind == Kind.REGISTRATION) 1 else 2)
-            activationHeight = decodeUInt(fields[0], 64)
-            binding = if (kind == Kind.BOND || kind == Kind.UNBOND) Bytes(fields[1]) else null
-            slashableExposure = if (kind == Kind.SLASH) Quantity.decode(fields[1]) else null
+            val key = vector(0, 8_259) {
+                require(it.size == 1) { "non-canonical peer public-key byte" }
+                it.single()
+            }.toByteArray()
+            require(key.isNotEmpty()) { "peer public key is empty" }
+            algorithm = SigningAlgorithm.fromBridgeCode(key[0].toInt() and 0xff)
+            val admitted = requireNotNull(decodeCompactPublicKeyPayload(key)) {
+                "invalid peer public key"
+            }
+            publicKey = Bytes(admitted.keyBytes)
         }
 
-        fun encode(): ByteArray = encoded.copyOf()
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): PeerId = PeerId(payload)
+        }
+    }
+
+    /** Exact new-validator eligibility boundary. */
+    class MonetaryRegistration private constructor(payload: ByteArray) : Record(payload, 1) {
+        val activationHeight: Long = u64(0)
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetaryRegistration = MonetaryRegistration(payload)
+        }
+    }
+
+    /** Exact validator tenure and peer observed by an additional stake operation. */
+    class MonetaryBond private constructor(payload: ByteArray) : Record(payload, 2) {
+        val activationHeight: Long = u64(0)
+        val peerId: PeerId = PeerId.decode(fields[1])
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetaryBond = MonetaryBond(payload)
+        }
+    }
+
+    /** Exact retained withdrawal request, including Rust Hash's marked 32-byte encoding. */
+    class MonetaryUnbond private constructor(payload: ByteArray) : Record(payload, 2) {
+        val activationHeight: Long = u64(0)
+        val requestHash: Bytes = fixed(1, 32)
+
+        init {
+            require(requestHash.bytes()[31].toInt() and 1 == 1) {
+                "withdrawal request hash lacks the Iroha marker"
+            }
+        }
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetaryUnbond = MonetaryUnbond(payload)
+        }
+    }
+
+    /** Exact tenure and complete eligible custody exposure before a privileged slash. */
+    class MonetarySlash private constructor(payload: ByteArray) : Record(payload, 2) {
+        val activationHeight: Long = u64(0)
+        val slashableExposure: Quantity = Quantity.decode(fields[1])
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetarySlash = MonetarySlash(payload)
+        }
+    }
+
+    /** Signed operation-specific staking precondition. Each variant owns its exact Rust layout. */
+    sealed class MonetaryPrecondition {
+        abstract val activationHeight: Long
+        abstract val kind: Kind
+        protected abstract val value: Record
+
+        class Registration(val registration: MonetaryRegistration) : MonetaryPrecondition() {
+            override val activationHeight: Long get() = registration.activationHeight
+            override val kind: Kind get() = Kind.REGISTRATION
+            override val value: Record get() = registration
+        }
+        class Bond(val bond: MonetaryBond) : MonetaryPrecondition() {
+            override val activationHeight: Long get() = bond.activationHeight
+            override val kind: Kind get() = Kind.BOND
+            override val value: Record get() = bond
+        }
+        class Unbond(val unbond: MonetaryUnbond) : MonetaryPrecondition() {
+            override val activationHeight: Long get() = unbond.activationHeight
+            override val kind: Kind get() = Kind.UNBOND
+            override val value: Record get() = unbond
+        }
+        class Slash(val slash: MonetarySlash) : MonetaryPrecondition() {
+            override val activationHeight: Long get() = slash.activationHeight
+            override val kind: Kind get() = Kind.SLASH
+            override val value: Record get() = slash
+        }
+
+        fun encode(): ByteArray = NoritoEncoder(FLAGS).apply {
+            writeUInt(kind.tag, 32)
+            val payload = value.encode()
+            writeLength(payload.size.toLong(), true)
+            writeBytes(payload)
+        }.toByteArray()
 
         enum class Kind(val tag: Long) {
             REGISTRATION(0), BOND(1), UNBOND(2), SLASH(3),
         }
 
         companion object {
-            fun decode(payload: ByteArray): MonetaryPrecondition = MonetaryPrecondition(payload)
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetaryPrecondition {
+                val (tag, value) = decodeVariant(payload)
+                val decoded = when (tag) {
+                    0L -> Registration(MonetaryRegistration.decode(value))
+                    1L -> Bond(MonetaryBond.decode(value))
+                    2L -> Unbond(MonetaryUnbond.decode(value))
+                    3L -> Slash(MonetarySlash.decode(value))
+                    else -> throw IllegalArgumentException("unknown staking monetary precondition")
+                }
+                require(decoded.encode().contentEquals(payload)) { "non-canonical staking precondition length" }
+                return decoded
+            }
         }
     }
 

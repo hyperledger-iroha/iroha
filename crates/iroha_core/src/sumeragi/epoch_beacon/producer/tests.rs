@@ -7,9 +7,9 @@
 use super::*;
 use crate::{
     beacon::{
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconCapabilityErrorV1,
-        GlobalThresholdBeaconPartialSigningCapabilityV1,
-        InMemoryGlobalThresholdBeaconPartialSignerV1, ValidatedGlobalThresholdBeaconSessionV1,
+        GlobalThresholdBeaconCapabilityErrorV1, GlobalThresholdBeaconPartialSigningCapabilityV1,
+        InMemoryGlobalThresholdBeaconPartialSignerV1,
+        RetainedFinalizedGlobalThresholdBeaconSessionV1, ValidatedGlobalThresholdBeaconSessionV1,
         prepared_session_and_signers_fixture_for_keys_v1,
     },
     state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, World},
@@ -136,9 +136,16 @@ fn fixture() -> Fixture {
         deliveries_end_height: 3,
         acceptances_end_height: 4,
     };
-    let (session, signers) = prepared_session_and_signers_fixture_for_keys_v1(dkg, &pairs);
-    let mut record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session.record().clone()).unwrap();
+    let (session, signers) = prepared_session_and_signers_fixture_for_keys_v1(
+        dkg,
+        &pairs,
+        &chain.state().ivm_execution_budget(),
+    );
+    let mut record = RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+        session: session.clone(),
+        activated_at_height: None,
+        retired_at_height: None,
+    };
     record
         .activate(session.record().adaptive_dkg.finalized_at_height)
         .unwrap();
@@ -847,9 +854,13 @@ fn native_active_session_from_a_foreign_real_committee_refuses_before_signing() 
             acceptances_end_height: 4,
         },
         &pairs,
+        &fixture.chain.state().ivm_execution_budget(),
     );
-    let mut record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session.record().clone()).unwrap();
+    let mut record = RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+        session: session.clone(),
+        activated_at_height: None,
+        retired_at_height: None,
+    };
     record
         .activate(session.record().adaptive_dkg.finalized_at_height)
         .unwrap();

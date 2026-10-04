@@ -213,7 +213,9 @@ impl HeldFile {
         self.metadata_stable()?;
         let mut offset = 0_u64;
         let mut hash = sha2::Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
+        // Bound scratch space on the Native thread stack; the complete file bound
+        // and before/after custody checks remain independent of the read chunk.
+        let mut buffer = [0_u8; 16 * 1024];
         while offset < self.length {
             let remaining = usize::try_from((self.length - offset).min(buffer.len() as u64))?;
             let count = iroha_fs::read_at(self.file.file(), &mut buffer[..remaining], offset)?;
@@ -336,8 +338,11 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
         );
         ensure!(
             body.runtime_manifest_sha256 == authority.runtime_manifest_sha256
-                && body.sdk_release_sha256 == authority.sdk_release_sha256
-                && body.sequence >= authority.minimum_sequence,
+                && body.sdk_release_sha256 == authority.sdk_release_sha256,
+            "Native inventory installed selection changed"
+        );
+        ensure!(
+            body.sequence >= authority.minimum_sequence,
             "Native inventory installed selection changed"
         );
         let (files, release, issuer, checkpoint, lineage_issuer) = admit_files(root, &body)?;
@@ -433,7 +438,7 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
         self.recheck()?;
         Ok(raw)
     }
-    /// Join exact certified S/W and real Native AccountClient to the installed ordinary policy,
+    /// Join exact certified S/W and real Native `AccountClient` to the installed ordinary policy,
     /// actual clock owner and caller-independent Core point; no selected DTO grants this custody.
     /// # Errors
     /// Rejects foreign key/account/membership/root/schema/clock/runtime or expired current evidence.
@@ -599,6 +604,8 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
         key_pair: iroha_crypto::KeyPair,
         discriminant: u16,
     ) -> Result<AccountClient> {
+        use iroha_service_model::sorafs::*;
+
         self.recheck()?;
         ensure!(
             discriminant != 0
@@ -616,7 +623,6 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
         iroha_torii_shared::ordinary_wallet_current::require_ordinary_wallet_relation_v1(
             signatory, &wallet,
         )?;
-        use iroha_service_model::sorafs::*;
         let seconds = std::time::Duration::from_secs;
         let client = Client::builder(crate::config::Config {
             chain: self.checkpoint.chain_id().parse()?,
@@ -815,7 +821,11 @@ impl KagemushaArtifactByteResolverV1 for KagemushaOrdinaryNativeArtifactResolver
                 .get(&format!("artifacts/{}", hex::encode(binding.sha256)))
                 .ok_or_else(|| eyre!("Native artifact absent"))?;
             ensure!(
-                file.sha256 == binding.sha256 && file.length == binding.byte_len,
+                file.sha256 == binding.sha256,
+                "Native artifact binding changed"
+            );
+            ensure!(
+                file.length == binding.byte_len,
                 "Native artifact binding changed"
             );
             Ok(file.bytes(usize::try_from(binding.byte_len)?)?.into())
@@ -944,16 +954,18 @@ impl OrdinaryIdentityInstalledDataV1 {
         .map_err(|_| eyre!("Native distinct Core/FI policy originals join rejected"))
     }
 }
-fn admit_files(
-    root: &Path,
-    body: &KagemushaOrdinaryNativeInventoryV1,
-) -> Result<(
+type AdmittedOriginalFiles = (
     BTreeMap<String, HeldFile>,
     Arc<KagemushaAuthenticatedReleaseV1>,
     KagemushaRetailEnrollmentIssuerPolicyV1,
     SumeragiFinalityCheckpoint,
     KagemushaOrdinaryLineageIssuerPolicyV1,
-)> {
+);
+
+fn admit_files(
+    root: &Path,
+    body: &KagemushaOrdinaryNativeInventoryV1,
+) -> Result<AdmittedOriginalFiles> {
     ensure!(
         body.version == 1
             && body.sequence != 0
@@ -1128,7 +1140,11 @@ fn admit_files(
             .get(&path)
             .ok_or_else(|| eyre!("Native release artifact descriptor absent"))?;
         ensure!(
-            file.sha256 == binding.sha256 && file.length == binding.byte_len,
+            file.sha256 == binding.sha256,
+            "Native release artifact original changed"
+        );
+        ensure!(
+            file.length == binding.byte_len,
             "Native release artifact original changed"
         );
     }
@@ -1235,6 +1251,35 @@ pub fn assemble_kagemusha_ordinary_native_inventory_v1(
 mod codec_tests {
     use super::*;
     use crate::participant_enrollment_request::NativeCustodyFixture;
+
+    #[test]
+    fn held_original_stream_checks_every_byte_across_scratch_boundaries() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let path = root.join("public-original.bin");
+        let original: Vec<u8> = (0..64 * 1024 + 31)
+            .map(|index| u8::try_from(index % 251).unwrap())
+            .collect();
+        let owner = iroha_fs::OwnerDirectory::open(&root).unwrap();
+        owner
+            .write_atomic(
+                "public-original.bin",
+                &original,
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        let length = u64::try_from(original.len()).unwrap();
+        let digest = <[u8; 32]>::from(sha2::Sha256::digest(&original));
+        let held = HeldFile::open_exact(path.clone(), digest, length, MAX_TOTAL).unwrap();
+        held.stream_check().unwrap();
+        assert_eq!(held.bytes(original.len()).unwrap(), original);
+        for index in [16 * 1024 - 1, 16 * 1024, 64 * 1024 + 30] {
+            let mut changed = original.clone();
+            changed[index] ^= 1;
+            let wrong_digest = <[u8; 32]>::from(sha2::Sha256::digest(&changed));
+            assert!(HeldFile::open_exact(path.clone(), wrong_digest, length, MAX_TOTAL).is_err());
+        }
+    }
 
     #[test]
     fn held_original_keeps_u64_budget_without_address_sized_narrowing() {

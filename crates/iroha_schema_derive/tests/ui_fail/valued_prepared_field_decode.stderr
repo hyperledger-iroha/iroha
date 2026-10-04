@@ -1,0 +1,5 @@
+error: decode_fields does not take a value
+ --> tests/ui_fail/valued_prepared_field_decode.rs:4:10
+  |
+4 | #[norito(decode_fields = true)]
+  |          ^^^^^^^^^^^^^

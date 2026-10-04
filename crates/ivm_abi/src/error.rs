@@ -71,15 +71,15 @@ pub enum HostOutputResource {
     Bytes,
 }
 /// Source location mapped from compiler-emitted debug metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VmSourceLocation {
-    pub function: Option<String>,
-    pub path: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmSourceLocation<'a> {
+    pub function: Option<&'a str>,
+    pub path: Option<&'a str>,
     pub line: Option<u32>,
     pub column: Option<u32>,
 }
 /// Budget-related execution snapshot captured at trap time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VmBudgetSnapshot {
     pub gas_limit: u64,
     pub gas_remaining: u64,
@@ -90,29 +90,35 @@ pub struct VmBudgetSnapshot {
     pub stack_bytes_used: u64,
 }
 /// Additional execution context captured at trap time.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VmExecutionContext {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmExecutionContext<'a> {
     pub entrypoint_pc: Option<u64>,
-    pub current_function: Option<String>,
+    pub current_function: Option<&'a str>,
     pub opcode: Option<u16>,
     pub syscall: Option<u32>,
     pub predecoded_loaded: bool,
     pub predecoded_hit: Option<bool>,
 }
-/// Structured runtime diagnostic emitted as a side channel when execution traps.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VmExecutionDiagnostic {
+/// Borrowed semantic-trap context; rendering also requires the original returned [`VMError`].
+///
+/// Text borrows the VM's retained source metadata. This view owns no error or allocation
+/// and cannot outlive or permit replacement of that metadata. Local refusals have no view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmExecutionDiagnostic<'a> {
     pub trap_kind: VmTrapKind,
-    pub message: String,
     pub pc: u64,
-    pub source: Option<VmSourceLocation>,
+    pub source: Option<VmSourceLocation<'a>>,
     pub budget: VmBudgetSnapshot,
-    pub context: VmExecutionContext,
+    pub context: VmExecutionContext<'a>,
 }
 /// Local inability to complete an execution attempt. This is never a protocol
 /// rejection or a deterministic VM fault and deliberately has no wire codec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionDeferral {
+    /// Original host custody or an immutable construction plan was inconsistent.
+    /// Execution rolls back without fees or rejection; the native owner must halt
+    /// for recovery rather than retry, quarantine or certify this local result.
+    LocalInvariantViolation,
     /// The host allocator could not supply the requested physical storage.
     AllocationUnavailable,
     /// The local active execution memory admission owner has no capacity.
@@ -126,10 +132,14 @@ pub enum ExecutionDeferral {
     /// A bounded native ancestry read exhausted its local source-work or byte allowance.
     /// No allocator wake source is implied by this independent read limit.
     CanonicalHistoryCapacity,
+    /// The local trace owner no longer matches its admitted invocation or storage scope.
+    /// Retry with a coherent owner; this does not establish a guest or protocol fault.
+    TraceOwnerUnavailable,
 }
 impl fmt::Display for ExecutionDeferral {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::LocalInvariantViolation => "local original execution custody invariant violated",
             Self::AllocationUnavailable => "local allocation unavailable",
             Self::ActiveMemoryCapacity => "local active execution memory capacity unavailable",
             Self::VerifierArtifactsUnavailable => "local governed verifier artifacts unavailable",
@@ -137,6 +147,7 @@ impl fmt::Display for ExecutionDeferral {
             Self::CanonicalHistoryCapacity => {
                 "local canonical execution history read capacity unavailable"
             }
+            Self::TraceOwnerUnavailable => "local execution trace owner unavailable",
         })
     }
 }
@@ -144,7 +155,8 @@ impl StdError for ExecutionDeferral {}
 /// VM errors.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VMError {
-    /// Abandon and retry this local attempt without retaining a transaction result.
+    /// Abandon this local attempt without retaining a transaction result; the
+    /// native host distinguishes retryable local pressure from recovery-only custody failure.
     ExecutionDeferred(ExecutionDeferral),
     /// Original active allocation refusal, including its exact pool's release observation.
     /// This local owner is never a metered guest fault or a wire rejection.
@@ -225,7 +237,7 @@ pub enum VMError {
     },
     ExceededMaxCycles,
     InvalidMetadata,
-    /// The fixed header declares a version outside the first-release 1.0/1.1 surface.
+    /// The fixed header declares a version outside the sole first-release 1.1 surface.
     UnsupportedProgramVersion {
         /// Declared major version.
         major: u8,
@@ -551,9 +563,11 @@ mod execution_deferral_tests {
             error
         );
         for reason in [
+            ExecutionDeferral::LocalInvariantViolation,
             ExecutionDeferral::AllocationUnavailable,
             ExecutionDeferral::ActiveMemoryCapacity,
             ExecutionDeferral::VerifierArtifactsUnavailable,
+            ExecutionDeferral::TraceOwnerUnavailable,
         ] {
             let error = VMError::ExecutionDeferred(reason);
             assert_eq!(
@@ -672,5 +686,30 @@ mod execution_deferral_tests {
                 (None, VMError::ExecutionDeferred(reason))
             );
         }
+    }
+
+    #[test]
+    fn trace_owner_mismatch_remains_local_through_nested_metering() {
+        let reason = ExecutionDeferral::TraceOwnerUnavailable;
+        assert_eq!(
+            reason.to_string(),
+            "local execution trace owner unavailable"
+        );
+        let original = VMError::ExecutionDeferred(reason);
+        let nested = VMError::Metered {
+            gas: 17,
+            source: Box::new(VMError::Metered {
+                gas: 91,
+                source: Box::new(original.clone()),
+            }),
+        };
+        assert_eq!(nested.execution_deferral(), Some(reason));
+        assert_eq!(nested.metered_gas(), None);
+        assert_eq!(VMError::metered(123, nested.clone()), original);
+        assert_eq!(
+            preserve_execution_deferral(nested.clone(), VMError::DecodeError),
+            nested
+        );
+        assert_eq!(nested.split_metered(), (None, original));
     }
 }

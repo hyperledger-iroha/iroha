@@ -842,15 +842,16 @@ impl StateTransaction<'_, '_> {
             kinds.iter().map(|kind| Ok(kind.into())),
         )
     }
-    fn prepare_quantity_candidate_inputs<'a, I>(
+    fn prepare_quantity_candidate_inputs<'a, Inputs>(
         &self,
         authority: &AccountId,
         entry_hash: Hash,
         authorization_context: Hash,
-        kinds: I,
+        kinds: Inputs,
     ) -> Result<PreparedQuantityCapture, QuantityCaptureIssue>
     where
-        I: Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+        Inputs:
+            Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
     {
         if self.world.assets.has_raw_write() || self.world.asset_definitions.has_raw_write() {
             return Err(QuantityCaptureIssue::UnownedMutation);
@@ -907,15 +908,16 @@ impl StateTransaction<'_, '_> {
         Ok(PreparedQuantityCapture { journal, archive })
     }
 
-    fn prepare_quantity_archive_inputs<'a, I>(
+    fn prepare_quantity_archive_inputs<'a, Inputs>(
         &self,
         authority: &AccountId,
         entry_hash: Hash,
         authorization_context: Hash,
-        kinds: I,
+        kinds: Inputs,
     ) -> Result<PreparedQuantityArchive, QuantityCaptureIssue>
     where
-        I: Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+        Inputs:
+            Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
     {
         if self.world.assets.has_raw_write() || self.world.asset_definitions.has_raw_write() {
             return Err(QuantityCaptureIssue::UnownedMutation);

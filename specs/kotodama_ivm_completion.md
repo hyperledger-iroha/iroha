@@ -68,12 +68,24 @@ Failed validation cannot publish result ownership. Full proof constraints for th
 traversal and coordinated ABI/gas/artifact/native/SDK regeneration and qualification
 remain open. No shallow-role compatibility decoder is permitted.
 
+Every program profile now uses header 1.1 with ABI V1. Header 1.0 is rejected
+before section decoding; test syscalls still require the compiler-owned harness
+capability. The ABI descriptor binds the accepted header version bytes. Borrowed
+fixed-header dispatch selects canonical CNTR admission once, and native preparation
+uses literal coordinates admitted from those same immutable artifact bytes.
+Generated contract/header/ABI/native fixtures must move together; their regeneration
+does not qualify execution proofs, native consumers or a release candidate.
+
 G2 has an exhaustive typed inventory of World, State, trigger and durable-history
 owners, classifying canonical authority, derived indexes, authenticated history
 and local policy. The World accumulator commits canonical World fields and their
 schema identities; derived indexes do not become independent authority. The
-complete-table catalog checks exact identities and materializers, but an unresolved
-Kagemusha runtime authority schema still closes complete inventory admission.
+complete-table catalog checks exact identities and materializers, and the typed
+inventory admits its canonical schema metadata. Kagemusha verifier authority is
+already the canonical governed World registry. The runtime handle is a local
+artifact cache: absent or stale artifacts defer monetary execution before effects
+and cannot change canonical current or predecessor authority. Inventory admission
+is not complete State capture, publication, recovery or finalized-anchor evidence.
 Dependency validation borrows its traversal ancestors without allocating graph
 scratch; this preserves exact cycle and non-authority errors. Schema-name encoding
 and the remaining capture scratch still need their own allocation custody.
@@ -137,11 +149,16 @@ touches without modifying canonical source rows or undo. This is snapshot index
 reconstruction, not an authenticated live capture or finalized State root.
 
 The canonical asset-definition reader checks exact owner groups, optional domain
-groups and definition-to-domain lookups in both retained native images before
-encoding. Referenced domains must exist in the same image, and restricted
-definitions must own a domain. All five original readers survive through the
-final identity check. Scans and referenced-domain lookups consume bounded local
-work without allocating or repairing live indexes. The balance reader separately
+groups, definition-to-domain lookups and confidential-policy transition indexes
+in both retained native images before encoding. Referenced domains must exist in
+the same image, and restricted definitions must own a domain. Pending policies
+must have a valid shape; exact height/definition memberships and nonzero counts
+are checked against the complete original definitions, not `zk_assets` or another
+derived index. All seven original readers survive through the final identity
+check. Scans, masked source rows, undo tombstones and referenced-domain lookups
+consume bounded local work without allocating or repairing live indexes. Dense
+count scans can defer locally and retry with more admitted work. The balance
+reader separately
 checks its five derived indexes, including exact domain projections and holder
 membership over all account/definition partitions. Both zero and nonzero holder
 checks use the same current or predecessor source image; source undo tombstones
@@ -175,9 +192,116 @@ original source rows and undo, complete predecessor buckets and redundant source
 touches. Snapshot reconstruction allocations, complete State publication and
 finalized custody remain open.
 
+Validation-fee proposal capture retains the original canonical proposals and
+height index through encoding. In both native images, each fee-policy or
+fee-payout-lifecycle proposal has exactly its stored ID at its creation height,
+regardless of status; enactment filtering remains the consumer's responsibility.
+Missing, orphan, non-fee, wrong-height and duplicate-height memberships reject
+capture. Physical source/index rows, masked rows, undo tombstones and lookups
+consume bounded local work. Capture neither repairs indexes nor clones proposal
+payloads, and checks both original reader identities before returning. Exhausting
+the local allowance defers capture without changing transaction validity.
+
+Proof capture checks the exact stored-key/status projection against all three
+status buckets in both native images. Ordered borrowed source/undo cursors
+precharge physical rows, tombstones and variable backend-key comparisons without
+allocating membership maps or searching variable keys in trees. Both original
+readers remain through encoding and the native identity checks; the unchecked
+proof reader is removed. Grouped captures retain encoding errors until those
+readers are dropped and the State generation is checked. A changed publication
+requires a fresh capture; only an unchanged owner can return its encoding error. Restore reconstructs both complete logical index images from
+canonical proof history, including endpoint and redundant source touches. It does
+not invent transient intermediate-status history absent from those endpoints.
+Restore scratch admission remains open. These checks neither validate proof
+contents nor grant finalized execution authority.
+
+Verifying-key capture checks the exact stored-ID inverse at each record's
+circuit/version in both retained native images. Every status and activation
+interval remains represented, including withdrawn records without a key envelope.
+The shared allocation-free relation precharges physical rows, masked rows,
+tombstones and variable-string comparison bounds before inspection; dense registries
+may require more local capture work without changing transaction validity or gas.
+Both original registry/index identities remain checked through canonical encoding
+and the final State generation fence, including validation or encoding failures.
+The unchecked catalog reader is removed. Restore uses the same relation and
+rejects a corrupt persisted inverse without rebuilding or repairing it; successful
+validation leaves its exact physical current and undo maps unchanged. Startup
+still has no work bound, and original-owner restore admission remains open. These
+checks establish neither verifier eligibility nor complete finalized State authority.
+
+Contract-subject capture retains original bindings, reverse addresses, accounts
+and active instances through both-image source validation, exact inverse checks,
+canonical encoding and the final native/State publication fences. It preserves
+the existing lifecycle, current/pending owner-account and active-code rules,
+including inactive bindings and no requirement for historical origin accounts.
+Borrowed equality scans precharge physical rows, masked rows, tombstones and
+nested key/reason geometry. Each V1 hash-to-point attempt is admitted before its
+hash and strict uncached Ed25519 check; work exhaustion remains local refusal.
+Bytes-only derivation allocates no key or error backing and never consults the
+parse cache. The same private hash/counter loop preserves ordinary `subject_id`
+cached parsing and separately owned final account construction.
+
+Restore validates both original source images before replacing the reverse
+index and retains canonical source/undo unchanged. Reverse undo records only
+differences between projected images: lifecycle-only changes do not manufacture
+reverse touches. It does not claim byte-identical arbitrary redundant inverse
+history. Original-owner startup work and reconstruction admission remain open,
+as do complete State commitments and finalized publication/recovery custody.
+
+Frozen native storage exposes borrowed current rows and physical undo entries
+from its original detached owner, preserving acquisition mode and predecessor
+identity without cloning rows or reacquiring a reader. The sealed raw-image
+boundary lets committed and frozen verifying-key, proof-status and validation-fee
+sources use their respective shared bounded both-image inverse relations. Each frozen consumer
+requires the actual StateBlock's completely frozen World, both exact State target
+owners, equal acquisition modes and its original allocation pool; it feeds current
+canonical rows into the existing paired encoder. The proof-status adapter checks
+the complete stored `ProofId`/`ProofStatus` inverse in `world.proofs_by_status` at
+both original cuts. It does not admit proof contents, proof-record payload IDs,
+verifier keys, proof tags or historical finality. Its closed status enum uses three
+borrowed stack slots and admits all physical current/undo index rows before
+inspecting logical buckets. Insufficient local work can therefore defer before
+latent empty-bucket corruption is reported; sufficient work on the same originals
+reports that corruption, and neither refusal implies success. Valid exact work
+and transaction gas are unchanged. Work, row and byte allowances remain
+caller-admitted local controls, and refusal leaves the original frozen source
+available for retry. These scoped consumers do not publish a root or establish
+complete State currentness.
+
+The fee-proposal adapter checks the exact `(created_height, stored proposal id)`
+lookup for both fee kinds and every status in both original images. Its private
+fixed-key merge admits every physical row, including masked rows and absent/no-op
+undo, before advancing, and prepays both full keys before each comparison (64
+bytes for proposal IDs and 80 for height/ID tuples). Both directions use complete
+borrowed scans with no lookup, reconstructed map/set or cloned record. One indexed
+row without undo costs 328; the committed descriptor replaces its former row-times-8
+allowance with this named local unit. Larger cuts have explicit quadratic work and
+may defer without changing gas, table validity or consensus limits. Work refusal can
+precede latent missing/foreign membership corruption until the complete required
+scan is admitted; committed source-identity changes still override either result.
+The adapter encodes only checked current canonical proposals, using the actual
+complete frozen StateBlock, both original matching-mode owners and its pool. It
+does not establish proposal admission, exact JSON, operator identity, Parliament
+execution/status/history or policy correctness.
+
+The same 217-output table catalog derives both committed and original-frozen
+callbacks from each of its 192 native field declarations. Frozen native callbacks
+retain the actual selected field and concrete storage mode, require complete World
+freeze and exact State target ownership, and use the original State encoding pool.
+They return only existing scoped paired-table snapshots. Raw encoding does not
+validate dependent indexes or other fields' modes and identities. Verifier and
+proof-status and validation-fee captures use their complete bounded inverse
+relations; 22 other
+structural, trigger, Musubi and membership outputs report an explicit missing
+original adapter instead
+of yielding partial success. Complete structural/cell/history checks and the sole
+StatePublication integration remain open.
+
 The complete root and its exact predecessor must travel with prepared State
 journals and publish under the same State generation as World, runtime and replay
-membership. Recovery must authenticate that owner before exposing State. Scoped
+membership. Retained publication policy/work admission, exhaustive frozen table
+and cell capture, and integration with the sole StatePublication owner remain
+open. Recovery must authenticate that owner before exposing State. Scoped
 paired tables already bind hash-key inclusion/absence and ordered raw-Norito-key
 range commitments to the same canonical value encoding. Their bounded range
 verifiers authenticate boundaries and interior rows, but neither these selected
@@ -187,15 +311,19 @@ integration remain open. Preserve the distinction between execution-prefix and
 finalized-State commitments to avoid a header/root/finality cycle; table membership alone grants
 no permission to disclose private rows.
 
-The Kagemusha registry freeze cannot be lifted with a direct
-`CanEnactGovernance` check: that permission covers enactment of an approved
-referendum. The certified Parliament set now has one canonical initial
-signer-policy proposal with an exact empty predecessor, effect preimage and
-head compare-and-set. Its due-certificate reducer moves a one-use, fixed-size
-authorization through transaction apply, and State rechecks the complete
-certificate digest and resulting registry before publication. Unrelated writes
-remain rejected; governed release install, activation, retirement and runtime
-reload are separate unfinished transitions.
+Kagemusha registry changes require their exact certified Parliament transition;
+`CanEnactGovernance` alone grants no direct registry mutation. Initial signer
+policy, authenticated release install, exact standby activation and standby-only
+retirement bind the predecessor, effect, proposal, attempt, certificate and due
+height. The reducer moves a one-use authorization through transaction apply, and
+State rechecks the complete transition before publication. Historical active
+releases remain retained for verification. Exact-head local reload authenticates
+all governed release identities and roles; publication does not require successor
+artifacts to be preloaded. Both retained registry images are validated on restore.
+The original frozen complete-State capture, durable node ownership and finality
+recovery remain open. Loaded/stale-artifact qualification still requires genuine
+threshold-authenticated native production bundles; fixture schema tests do not
+supply those execution inputs.
 
 G3 retirement now removes the old four-hash/16-column binding schema, Halo2
 IVM registration and key generator, dedicated native STARK binding relation,
@@ -213,6 +341,12 @@ Retain reserved-name rejection at generic proof-registration and OPEN_VERIFY
 boundaries so removing the special binding circuit cannot re-admit it through a
 generic digest circuit. The fail-closed admission is not evidence for private execution or finalized
 full-state proofs; public preparation needs a new admissible V1 response shape.
+
+The Norito lazy decode context retains its single original budget layer inline.
+Clones share the same cumulative counters and preserve enclosing limits, depth and
+unwind behavior without allocating a replacement layer vector. The counter owner,
+TLS capacity, payload/scratch and decoded values still require full admission;
+this change does not establish complete decoder allocation funding.
 
 G5 production activation still requires funded fallible remaining trace/debug and
 shared-host dispatcher allocations; scheduler graph/result/channel/pool allocations;
@@ -262,8 +396,39 @@ before their effects. Nested scopes partition the existing event quota, host mas
 preserve it without emitting, and an instruction retains its quota through delayed
 native completion. Independent diagnostic snapshots fund their own copied rows;
 retaining or evicting a shared logger never refunds another borrower's live storage.
-Delta-trace backing and the remaining trace owners are still open. State dynamic
-access prepasses now use the original prepared-cache pool
+PC and delta rows now retain fixed backing from the original VM pool. Instruction
+preflight admits public destination bounds before effects, including root argument
+preparation and payable padding; unused quota is cancelled on refusal or unwind.
+Growth funds old and new storage together, and clears initialized values and tags
+before retirement. Independent snapshots copy full public capacities with their
+own credit. Immutable runtime captures admit their shared shell and complete row
+storage before copying, retain the original optional pool through final release,
+and reject composition across different owners as a local execution deferral.
+The Kotodama test driver shares captures through checkpoints, preserves root-before-
+nested report order and creates child VMs in the caller's original pool. Trace-off
+runs allocate no capture. These changes do not fund every remaining diagnostic,
+host, scheduler or standalone owner.
+Semantic trap capture now retains only inline scalar context and a source-map
+index. Diagnostic views borrow text from the VM's original metadata owner;
+rendering uses the original returned error. Local refusals have no completed trap
+view, and run/load/reset preflight clears stale context before any early return.
+Core's public contextual mapper preserves the original typed refusal and its
+allocation owner before formatting. Completed `ContractAbort` mapping moves the
+original contract, error-type, name and optional-message backing into
+`ContractRejected` without replacement string allocations, including through
+metered abort wrappers. Other semantic errors retain their original metered
+context and diagnostic display. Initial declared-error construction, source-metadata
+storage and presentation allocations still require funding.
+CLI contract-debug invocation classifies the original VM error before draining
+host effects or constructing a completed report. Local refusals retain their typed
+error, including metered wrappers and allocation custody, at the operational error
+boundary. CLI return collection keeps its original typed decode error with static
+context rather than replacing the cause with a formatted string. Torii view and
+call-simulation return collection likewise preserves the
+original local refusal before rendering a completed rejection; deterministic
+malformed returns keep their semantic response. These checks do not fund rendered
+diagnostic strings, CLI presentation or HTTP response allocations.
+State dynamic access prepasses now use the original prepared-cache pool
 for VM construction and raw-selector preparation, preserve typed VM resource refusals,
 and decline optional hints through the existing conservative access/fence boundary.
 Shipping standalone/CLI VMs, state-free overlay helpers and State seed/restore dummy VMs
@@ -348,11 +513,115 @@ retained-owner classification and funding missing active/scratch owners remain o
 these gauges do not represent complete process RSS. The new
 pool and buffer APIs are not evidence that those production paths are funded.
 
+G6 shipping Linux recipes enable the narrow `irohad/ivm-cuda` feature, whose
+driver is loaded at runtime without CUDA toolkit or driver linkage. Plain Cargo
+daemon builds still omit that feature. The ten CUDA source families are present,
+but their PTX files and signed provenance bundle are absent; bundled release
+builds reject that missing input. Complete automatic defaults and supply the
+reproducible, authenticated and physically qualified bundle before CUDA release
+readiness can be claimed. Generated diagnostic kernels and loader-only tests do
+not satisfy that gate.
+
+Merkle construction, root-only hashing and retained-tree rehash resolve one
+operation-local policy from the complete acceleration configuration. Reapplying
+`None` restores defaults or generic inheritance; `Some(0)` is an explicit zero
+floor. Each backend's floor overrides the generic floor, and an available CPU
+SHA2 ceiling applies to all three operations. Admission retains the existing
+native qualification, staged publication and canonical fallback owners; these
+operator thresholds do not establish fastest-path calibration or CUDA readiness.
+
+G7 native Check binding and finalized verification return move-only failure owners.
+They retain the original preparation, signed transaction graph, State pool and
+absolute deadline; retry cannot replace them or request another signature.
+Canonical framed transaction bytes reserve their complete output before encoding
+and remain charged through native comparison and final readback. A single native
+frame validator preserves local codec refusals; only completed semantic errors
+become transaction rejections. Final-promotion, account, stream-token, gateway and
+pin-outbox wrappers share the same exclusive original binding slot through late
+history, clock and current-row checks. Successful readback consumes that slot;
+failed verification returns the unchanged Pending. Gateway rechecks preserve the
+already accepted UTC lower bound when returning Pending for fresh verification.
+State-backed canonical source callbacks and certificate walks carry original typed
+local refusals without inferring capacity from a wire `GasBudgetExceeded` value.
+Walk coordinates use the original State pool and refund on completion, refusal or
+abandonment; this does not fund the entire nested decoder/proof graph.
+
+Daemon and Torii service boundaries retain retry owners on their stack during
+bounded backoff, without a State view, pool mutex or parent execution lease.
+Only terminal rejection or original expiry maps back to the existing service
+error surface. Direct daemon submission borrows the pending owner's exact
+transaction and deadline. The observer's combined sign/submit/finality transport
+still has a pre-return custody gap. Signing, serializer and historical World-row
+scratch ownership, opaque historical helper diagnostics, the complete publication
+runner and restart/recovery qualification remain open. Musubi account/instruction
+frame measurements preserve original codec refusals through the same binding
+owner; pure coordinate validation cannot turn them into terminal transaction errors.
+Stream-token evidence uses one typed admission outcome: original canonical decoder,
+bounded-encoder and allocation errors remain distinct from completed semantic
+rejections. All three public evidence verifiers borrow the original expectation in
+place. Its private phase retires before verification starts and remains retired on
+success, completed rejection or unwind; only the original retryable admission result
+restores readiness. Repeated use rejects before decoding without allocating. The
+returned error owns no expectation, and the former move-out failure API is removed.
+After an observer reply returns, one move-only phase retains the exact
+reply, original expectation/challenge, native Pending and absolute deadline while
+borrowing the original receipt, token, preparation and custody markers. Bounded
+local backoff retries only admission of those returned bytes with fresh handle/time
+validation. Authentication, native verification and final acceptance have separate
+owners; no retry calls observe, signs, submits or renews a deadline. Changed pins,
+clock rollback and invalid evidence remain terminal. Immediate daemon and broker
+boundaries preserve operational versus semantic categories without granting retry
+custody through their fixed service errors.
+
+The native completed-observation producer retains its own actual verified Check,
+charged canonical frame and original Prepared deadline through unsigned body,
+fallible payload encoding, one successful observer signature, signed-frame encoding
+and a late native floor/time check. Only original evidence-admission or native
+Deferred errors retry with the same owner. The exact encoded reply is retained
+through the late check; cryptographic signing failures are terminal. This producer
+Check remains distinct from Torii's prepared Check.
+
+After its one complete socket read, the broker observer client retains the exact
+response frame, operation request, admission permit, locked connection and original
+15-second call deadline through phased canonical decoding and envelope/body
+validation. Only original typed local codec or bounded-encoding refusal retries;
+successful phases and the exact reply leaves stay owned. No retry writes, reads,
+observes, signs or submits again. Immutable metadata and protocol failures remain
+terminal. The authenticated server admits one absolute observer-operation deadline
+before provider qualification and its one synchronous Observe. Its file-configured
+budget is nonzero, defaults to the existing 15 seconds and cannot exceed that bound;
+handshake and wire ingress retain their separate transport bounds. Embedded server
+APIs carry the parsed broker policy, and standalone launchers read one bounded public
+TOML policy file instead of an endpoint override.
+
+The server's move-only completed-reply owner borrows the original accepted socket,
+request, raw frame, inbound/decode admission and lifecycle permit. It retains the
+actual returned reply, decoded query and original deadline across typed observation
+admission, separate retained record/observation copies, wire encoding, response digest,
+envelope validation and outer framing. Successful phases do not repeat; only original
+typed codec, bounded-encoder or allocation causes authorize bounded local backoff.
+Immutable handle qualification, protocol/cumulative limits and fixed backend service
+categories remain terminal. Final qualification and the first write use that same
+original deadline and complete encoded frame. Request IDs remain retired; local retry
+cannot Observe, sign, submit Check, replace the socket or renew the budget.
+
+Boundary checks suppress late publication after a synchronous provider returns; they
+do not forcibly cancel a provider already running. Once the first write is attempted,
+partial or failed I/O is terminal transport uncertainty and never re-enters the local
+reply owner. Physical bounded-encoder/allocation refusal probes, complete backing for
+existing buffers/scratch/clones and release qualification remain open. Combined
+`finalize_check` sign/submission and partial socket I/O remain separate transport-custody
+gaps; no process-local owner supplies durable restart recovery.
+Nested receipt/custody codec projections, late consumer native/current-State
+acceptance refusals and original-pool funding for existing reply buffers,
+decoder/serializer scratch and native proof owners also remain open. No continuation
+supplies durable recovery or activates the publication runner.
+
 The local physical runner is an Apple M1 Ultra with 128 GiB memory. Exact-candidate
-M1 Ultra calibration remains unrun. Local required Metal kernel parity passes;
-Graviton3, CUDA parity, mixed-hardware
-four-validator execution and publication qualification still need their required
-runners and service custody.
+M1 Ultra calibration remains unrun. Graviton3 calibration, CUDA parity,
+mixed-hardware four-validator execution and publication qualification still need
+their required runners and service custody. Historical component kernel checks
+do not qualify the current release candidate.
 
 TODO: Freeze and record one complete candidate, regenerate all native/SDK artifacts,
 and replace each open gate with its actual evidence. Physical runners, provenance

@@ -73,7 +73,7 @@ test("buildConnectWebSocketUrl rejects token query parameters", () => {
 });
 
 test("buildConnectWebSocketUrl removes unrelated query params to keep URLs referrer-safe", () => {
-  const url = buildConnectWebSocketUrl("https://torii.example/v1/connect/ws?debug=true", {
+  const url = buildConnectWebSocketUrl("https://torii.example/?debug=true#frag", {
     sid: SID_HEX,
     role: "app",
     token: TOKEN,
@@ -81,6 +81,18 @@ test("buildConnectWebSocketUrl removes unrelated query params to keep URLs refer
   assert.equal(
     url,
     `wss://torii.example/v1/connect/ws?sid=${SID_HEX}&role=app`,
+  );
+});
+
+test("buildConnectWebSocketUrl keeps a base URL path prefix", () => {
+  const url = buildConnectWebSocketUrl("https://gateway.example/torii", {
+    sid: SID_HEX,
+    role: "wallet",
+    token: TOKEN,
+  });
+  assert.equal(
+    url,
+    `wss://gateway.example/torii/v1/connect/ws?sid=${SID_HEX}&role=wallet`,
   );
 });
 

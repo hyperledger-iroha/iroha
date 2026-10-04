@@ -14,11 +14,10 @@
 //! 2. [`GlobalBeaconCeremonyPlanV1`] validates a session, its ordered seat
 //!    roster, and one production provider handle per seat.
 //! 3. [`deal_global_beacon_at_logical_clock_v1`] runs every seat in one process
-//!    for a deployment that holds every validator key before the network
-//!    starts. It returns the finalized, not yet active record and one runtime
-//!    credential per seat. A seat run on its own host drives the same
-//!    [`LocalGlobalThresholdBeaconDkgSeatV1`] and encodes its credential with
-//!    [`GlobalBeaconCeremonyPlanV1::seat_credential`].
+//!    only in explicit test fixtures. It returns one retained, finalized, not yet
+//!    active public graph and one runtime credential per seat. Production seats prepare credential output through
+//!    [`super::credential::PreparedGlobalBeaconCredentialV1`] before extracting
+//!    their private share; the daemon retains failed export custody for retry.
 //! 4. [`GlobalBeaconInstallContextV1`] drafts the `FinalizeGlobalBeaconKey`
 //!    lifecycle certificate, signs its preimage for one effective height or a
 //!    contiguous range of heights with a validator's own BLS key, and
@@ -68,17 +67,20 @@ use crate::state::{
 };
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use {
-    super::AdaptiveGlobalThresholdBeaconDkgCryptoV1,
-    super::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    super::GlobalThresholdBeaconDkgStateV1, super::LocalGlobalThresholdBeaconDkgSeatV1,
+    super::AdaptiveGlobalThresholdBeaconDkgCryptoV1, super::GlobalThresholdBeaconDkgStateV1,
+    super::LocalGlobalThresholdBeaconDkgSeatV1, super::PreparedLocalGlobalThresholdBeaconDkgSeatV1,
+    super::RetainedFinalizedGlobalThresholdBeaconSessionV1,
     super::credential::global_beacon_partial_signer_public_inventory_digest_v1,
     super::global_threshold_beacon_roster_hash_v1,
 };
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use {
-    super::credential::RuntimeGlobalBeaconShareProvisioningV1,
     super::credential::encode_global_beacon_partial_signer_credential_v1,
     super::credential::global_beacon_partial_signer_inventory_digest_v1,
+    super::credential::{
+        PreparedGlobalBeaconCredentialV1, RuntimeGlobalBeaconShareProvisioningV1,
+        SecretConsensusThresholdCredentialV1,
+    },
 };
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -91,9 +93,15 @@ pub const GLOBAL_BEACON_INSTALL_RANGE_MAX_HEIGHTS_V1: u16 = 64;
 pub const GLOBAL_BEACON_GENESIS_DKG_WINDOWS_V1: [u64; 4] = [1, 2, 3, 4];
 
 /// Closed failures of the beacon ceremony.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GlobalBeaconCeremonyErrorV1 {
+    /// An original public-session admission or construction owner refused local work.
+    #[error(transparent)]
+    Session(#[from] super::GlobalThresholdBeaconSessionError),
+    /// An original local seat producer or its prepared backing failed.
+    #[error(transparent)]
+    LocalDkg(#[from] super::LocalGlobalThresholdBeaconDkgErrorV1),
     /// The public session, roster, provider bindings, or record was invalid.
     #[error("global-beacon ceremony public input is invalid")]
     InvalidPlan,
@@ -109,6 +117,9 @@ pub enum GlobalBeaconCeremonyErrorV1 {
     /// A seat credential could not be produced.
     #[error(transparent)]
     Credential(#[from] ConsensusThresholdCredentialErrorV1),
+    /// Exact original prepared output or share-import producer failure.
+    #[error(transparent)]
+    CredentialOutput(#[from] super::credential::GlobalBeaconCredentialEncodeErrorV1),
     /// The signing key does not own a seat in the authorization roster.
     #[error("signing key is not a member of the install authorization roster")]
     NotAuthorized,
@@ -183,8 +194,11 @@ pub fn global_beacon_genesis_dkg_session_v1(
         deliveries_end_height,
         acceptances_end_height,
     };
-    GlobalThresholdBeaconDkgStateV1::new(session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)
-        .map_err(|_| GlobalBeaconCeremonyErrorV1::InvalidPlan)?;
+    GlobalThresholdBeaconDkgStateV1::validate_session(
+        &session,
+        &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+    )
+    .map_err(|_| GlobalBeaconCeremonyErrorV1::InvalidPlan)?;
     Ok(session)
 }
 
@@ -231,8 +245,8 @@ impl GlobalBeaconCeremonyPlanV1 {
         {
             return Err(GlobalBeaconCeremonyErrorV1::InvalidPlan);
         }
-        GlobalThresholdBeaconDkgStateV1::new(
-            dkg_session,
+        GlobalThresholdBeaconDkgStateV1::validate_session(
+            &dkg_session,
             &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
         )
         .map_err(|_| GlobalBeaconCeremonyErrorV1::InvalidPlan)?;
@@ -269,24 +283,26 @@ impl GlobalBeaconCeremonyPlanV1 {
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Encode one seat's runtime credential from its aggregated private share.
+    /// Encode a test fixture seat's runtime credential from its aggregated private share.
     ///
     /// `components` is the seat's own
     /// [`LocalGlobalThresholdBeaconDkgSeatV1::finalize_private_share`] output
     /// for `public`; the credential codec re-imports it against the public
-    /// transcript before any bytes exist.
+    /// transcript before writing the prepared secret frame. Production callers
+    /// prepare output before extracting the share and retain its owner on failure.
     ///
     /// # Errors
     ///
     /// Returns [`GlobalBeaconCeremonyErrorV1::InvalidPlan`] for a transcript of
     /// another session or a seat outside the roster, and
-    /// [`GlobalBeaconCeremonyErrorV1::Credential`] when the share does not
+    /// [`GlobalBeaconCeremonyErrorV1::CredentialOutput`] when the share does not
     /// match its public transcript and seat.
     pub fn seat_credential(
         &self,
-        public: GlobalThresholdBeaconKeySessionV1,
+        public: super::ValidatedGlobalThresholdBeaconSessionV1,
         signer_index: u16,
         components: Zeroizing<[[u8; 32]; 3]>,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<GlobalBeaconSeatCredentialV1, GlobalBeaconCeremonyErrorV1> {
         let offset = usize::from(signer_index)
             .checked_sub(1)
@@ -304,13 +320,18 @@ impl GlobalBeaconCeremonyPlanV1 {
         let policy_digest =
             global_beacon_partial_signer_inventory_digest_v1(network_id, &inventory)?;
         let handle = self.provider_handles[offset].clone();
-        let credential = encode_global_beacon_partial_signer_credential_v1(
+        let mut prepared = PreparedGlobalBeaconCredentialV1::new(
             network_id,
-            handle.clone(),
+            &handle,
             self.provider_revision,
             policy_digest,
-            inventory,
+            inventory
+                .iter()
+                .map(|share| (share.authenticated_session(), share.signer_index())),
+            budget,
         )?;
+        encode_global_beacon_partial_signer_credential_v1(&mut prepared, &inventory)?;
+        let credential = prepared.into_credential().map_err(|(_, error)| error)?;
         Ok(GlobalBeaconSeatCredentialV1 {
             binding: GlobalBeaconSeatBindingV1 {
                 signer_index,
@@ -333,7 +354,7 @@ impl GlobalBeaconCeremonyPlanV1 {
     /// binding differs in order, validator, handle, revision or inventory digest.
     pub fn verify_seat_bindings(
         &self,
-        record: &FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        record: &RetainedFinalizedGlobalThresholdBeaconSessionV1,
         bindings: &[GlobalBeaconSeatBindingV1],
     ) -> Result<(), GlobalBeaconCeremonyErrorV1> {
         record
@@ -348,7 +369,7 @@ impl GlobalBeaconCeremonyPlanV1 {
             let signer_index = seat_index(offset)?;
             let policy_digest = global_beacon_partial_signer_public_inventory_digest_v1(
                 record.session.network_id,
-                &[(record.session.clone(), signer_index)],
+                &[(&record.session, signer_index)],
             )?;
             if binding.signer_index != signer_index
                 || binding.validator != self.roster[offset]
@@ -400,14 +421,14 @@ pub struct GlobalBeaconSeatCredentialV1 {
     /// Public provider binding rendered into the seat's node configuration.
     pub binding: GlobalBeaconSeatBindingV1,
     /// Canonical runtime credential for the seat's supervisor; never persisted by Core.
-    pub credential: Zeroizing<Vec<u8>>,
+    pub credential: SecretConsensusThresholdCredentialV1,
 }
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
 /// Result of a completed deal: one finalized, not yet active record and every seat.
 pub struct DealtGlobalBeaconV1 {
-    /// Finalized public key-session record, installed by a lifecycle certificate.
-    pub record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    /// Finalized public key-session owner, shared unchanged with the install context.
+    pub record: RetainedFinalizedGlobalThresholdBeaconSessionV1,
     /// Seat credentials in one-based seat order.
     pub seats: Vec<GlobalBeaconSeatCredentialV1>,
 }
@@ -427,10 +448,11 @@ pub struct DealtGlobalBeaconV1 {
 /// Returns [`GlobalBeaconCeremonyErrorV1::SeatSigner`] unless there is exactly
 /// one signer per seat owning that seat, [`GlobalBeaconCeremonyErrorV1::Crypto`]
 /// when a seat, the reducer or transcript validation rejects a frame, and
-/// [`GlobalBeaconCeremonyErrorV1::Credential`] when a seat credential fails.
+/// [`GlobalBeaconCeremonyErrorV1::CredentialOutput`] when a seat credential fails.
 pub fn deal_global_beacon_at_logical_clock_v1(
     plan: &GlobalBeaconCeremonyPlanV1,
     signers: &[&KeyPair],
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<DealtGlobalBeaconV1, GlobalBeaconCeremonyErrorV1> {
     let session = plan.dkg_session;
     if signers.len() != plan.roster.len()
@@ -442,77 +464,104 @@ pub fn deal_global_beacon_at_logical_clock_v1(
         return Err(GlobalBeaconCeremonyErrorV1::SeatSigner);
     }
     let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
-    let crypto_error = |_| GlobalBeaconCeremonyErrorV1::Crypto;
-    let mut seats = signers
+    // Complete every seat's original admission before any private randomness.
+    let prepared_seats = signers
         .iter()
         .enumerate()
         .map(|(offset, signer)| {
-            LocalGlobalThresholdBeaconDkgSeatV1::new(
+            PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
                 session,
                 &plan.roster,
                 seat_index(offset)?,
                 signer,
+                budget,
             )
-            .map_err(crypto_error)
+            .map_err(GlobalBeaconCeremonyErrorV1::from)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut public =
-        GlobalThresholdBeaconDkgStateV1::new(session, &crypto).map_err(crypto_error)?;
+    let verifier = prepared_seats
+        .first()
+        .ok_or(GlobalBeaconCeremonyErrorV1::SeatSigner)?
+        .prepare_final_session_verifier()?;
+    let mut seats = prepared_seats
+        .into_iter()
+        .zip(signers)
+        .map(|(prepared, signer)| {
+            prepared
+                .generate(signer)
+                .map_err(GlobalBeaconCeremonyErrorV1::from)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut public = GlobalThresholdBeaconDkgStateV1::new(session, &crypto, budget)?;
     let (recipient_keys, dealer_commitments): (Vec<_>, Vec<_>) = seats
         .iter()
-        .map(LocalGlobalThresholdBeaconDkgSeatV1::publication)
+        .map(|seat| {
+            let (key, commitment) = seat.publication();
+            (key.clone(), commitment.clone())
+        })
         .unzip();
     for key in &recipient_keys {
-        public
-            .record_recipient_key(session.start_height, key.clone())
-            .map_err(crypto_error)?;
+        public.record_recipient_key(session.start_height, key)?;
     }
     for commitment in &dealer_commitments {
-        public
-            .record_dealer_commitment(session.start_height, commitment.clone(), &crypto)
-            .map_err(crypto_error)?;
+        public.record_dealer_commitment(session.start_height, commitment, &crypto)?;
     }
     let delivery_height = session.commitments_end_height;
     for (seat, signer) in seats.iter_mut().zip(signers) {
-        for edge in seat
-            .deliver(
-                &recipient_keys,
-                &dealer_commitments,
-                delivery_height,
-                signer,
-            )
-            .map_err(crypto_error)?
-        {
-            public
-                .record_encrypted_share(delivery_height, edge)
-                .map_err(crypto_error)?;
+        for edge in seat.deliver(
+            &recipient_keys,
+            &dealer_commitments,
+            delivery_height,
+            signer,
+        )? {
+            public.record_encrypted_share(delivery_height, edge)?;
         }
     }
-    let delivered = public.public_snapshot().map_err(crypto_error)?;
+    let delivered = public.public_snapshot()?;
     let accepted_height = session.deliveries_end_height;
     for (seat, signer) in seats.iter_mut().zip(signers) {
-        for acceptance in seat
-            .accept(&delivered, accepted_height, signer)
-            .map_err(crypto_error)?
-        {
-            public
-                .record_share_acceptance(accepted_height, acceptance)
-                .map_err(crypto_error)?;
+        for acceptance in seat.accept(&delivered, accepted_height, signer)? {
+            public.record_share_acceptance(accepted_height, acceptance)?;
         }
     }
-    let finalized = public
-        .finalize(session.acceptances_end_height, &crypto)
-        .map_err(crypto_error)?
-        .clone();
+    // The accepted snapshot has served every seat. Retire that complete graph
+    // before the reducer constructs its final projection in the same finite pool.
+    drop(delivered);
+    public.finalize(session.acceptances_end_height, &crypto)?;
+    let finalized = public.into_finalized()?;
+    let binding = super::GlobalThresholdBeaconSessionBindingV1 {
+        network_id: finalized.network_id,
+        session_id: finalized.session_id,
+        roster_hash: finalized.roster_hash,
+        transcript_hash: finalized.transcript_hash,
+    };
+    // Preserve the reducer's exact original graph and ledger. Verification uses
+    // the workspace and shared shell prepared before the first private attempt.
+    let sealed = verifier.seal(finalized.owner, &binding).map_err(
+        |(_verifier, _source, error)| match error {
+            super::GlobalThresholdBeaconSessionError::Invalid(_) => {
+                GlobalBeaconCeremonyErrorV1::Crypto
+            }
+            original => GlobalBeaconCeremonyErrorV1::Session(original),
+        },
+    )?;
     let mut credentials = Vec::with_capacity(seats.len());
     for mut seat in seats {
-        let components = seat
-            .finalize_private_share(finalized.clone())
-            .map_err(crypto_error)?;
-        credentials.push(plan.seat_credential(finalized.clone(), seat.seat_index(), components)?);
+        let components = seat.finalize_private_share(&sealed)?;
+        credentials.push(plan.seat_credential(
+            sealed.clone(),
+            seat.seat_index(),
+            components,
+            budget,
+        )?);
     }
-    let record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(finalized).map_err(crypto_error)?;
+    // Every private seat owner has retired. The outgoing lifecycle and install
+    // context continue sharing the sole authenticated original public graph.
+    let record = RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+        session: sealed,
+        activated_at_height: None,
+        retired_at_height: None,
+    };
     Ok(DealtGlobalBeaconV1 {
         record,
         seats: credentials,
@@ -551,7 +600,7 @@ pub struct GlobalBeaconInstallRangeSignaturesV1 {
 /// Public install context shared by every host signer and the controller assembler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalBeaconInstallContextV1 {
-    record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    record: RetainedFinalizedGlobalThresholdBeaconSessionV1,
     authorization_roster: Vec<PeerId>,
     public_state: Vec<u8>,
     quorum: u16,
@@ -573,7 +622,7 @@ impl GlobalBeaconInstallContextV1 {
     /// active or retired record, an oversized public state, or a roster that is
     /// empty, duplicated, or not `3f + 1`.
     pub fn new(
-        record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        record: RetainedFinalizedGlobalThresholdBeaconSessionV1,
         authorization_roster: Vec<PeerId>,
     ) -> Result<Self, GlobalBeaconCeremonyErrorV1> {
         record
@@ -607,7 +656,7 @@ impl GlobalBeaconInstallContextV1 {
 
     /// Borrow the finalized record being installed.
     #[must_use]
-    pub const fn record(&self) -> &FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
+    pub const fn record(&self) -> &RetainedFinalizedGlobalThresholdBeaconSessionV1 {
         &self.record
     }
 

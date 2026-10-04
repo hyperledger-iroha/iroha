@@ -1,7 +1,7 @@
 //! Original governed verifier registry pair, separate from local artifact availability.
 //!
-//! This owner is a native acquisition increment. It does not close Required,
-//! authenticate Kura history, issue a root, or supply a publication permit.
+//! This owner captures canonical authority independently of the local artifact cache.
+//! It does not authenticate Kura history, issue a root, or supply a publication permit.
 
 use crate::state::{State, is_stable_state_view_generation};
 use iroha_data_model::kagemusha::KagemushaGovernedVerifierRegistryV1;
@@ -94,9 +94,9 @@ impl<'state> GovernedRegistrySource<'state> {
     }
 }
 
-// TODO: register this charged original cell owner only after the complete catalog,
-// governed standby retirement, atomic current/predecessor State publication and
-// actual native replay close the Required runtime-verifier gate.
+// TODO: consume the canonical registry from the original frozen publication journal
+// with every other canonical cell/table, atomic predecessor custody and authenticated
+// native recovery. Static inventory admission does not satisfy these owner gates.
 
 use iroha_allocation::{AllocationRefusal, ChargedBuffer, ChargedBufferError};
 use mv::cell::CommittedCellObservation;

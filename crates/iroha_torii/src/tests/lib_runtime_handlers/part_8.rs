@@ -15,7 +15,7 @@ async fn incoming_read_proxy_rejects_inactive_autoscale_range_lane_hint() {
 async fn incoming_read_proxy_rejects_future_created_autoscale_lane_hint() {
     let mut app = mk_app_state_for_tests();
     let (future_lane, future_dataspace) =
-        torii_routed_read_tests::configure_future_created_autoscale_route_for_test(&mut app);
+        crate::test_utils::configure_future_created_autoscale_route_for_test(&mut app);
     let route = RoutingDecision::new(future_lane, future_dataspace);
     let response = incoming_read_proxy_response_for_route(app, route).await;
     assert_incoming_proxy_stale_route_rejection(&response, route);
@@ -52,15 +52,58 @@ async fn incoming_verified_query_proxy_rejects_inactive_autoscale_range_lane_hin
     let response = incoming_verified_query_proxy_response_for_route(app, route).await;
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }
-#[cfg(all(feature = "app_api", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn incoming_verified_query_proxy_rejects_future_created_autoscale_lane_hint() {
     let mut app = mk_app_state_for_tests();
     let (future_lane, future_dataspace) =
-        torii_routed_read_tests::configure_future_created_autoscale_route_for_test(&mut app);
+        crate::test_utils::configure_future_created_autoscale_route_for_test(&mut app);
     let route = RoutingDecision::new(future_lane, future_dataspace);
     let response = incoming_verified_query_proxy_response_for_route(app, route).await;
     assert_incoming_proxy_stale_route_rejection(&response, route);
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn incoming_signed_iterable_route_scan_refuses_before_stale_route_validation() {
+    let mut app = mk_app_state_for_tests();
+    let (future_lane, future_dataspace) =
+        crate::test_utils::configure_future_created_autoscale_route_for_test(&mut app);
+    let route = RoutingDecision::new(future_lane, future_dataspace);
+    let response = incoming_signed_query_proxy_response_for_route(app, route, |_| {
+        iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test())
+    })
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-reject-code"),
+        Some("query_unsupported")
+    );
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn incoming_signed_query_active_restricted_hint_retains_permission_refusal() {
+    let original_authority =
+        checked_torii_test_account_id(0x69, "original signed route-scan authority");
+    let app = mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&original_authority),
+        private_ingress_nexus_for_test(),
+    );
+    assert!(app.state.world_view().account(&original_authority).is_ok());
+    let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
+    assert_eq!(
+        super::validate_incoming_read_proxy_route(&app, route, "signed_query_route_scan")
+            .expect("original active restricted hint"),
+        route,
+    );
+    let response = incoming_verified_query_proxy_response_for_route(app, route).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-reject-code"),
+        Some("permission_denied")
+    );
+    assert!(torii_response_header(&response, "x-iroha-route-unavailable-reason").is_none());
 }
 
 #[cfg(feature = "connect")]
@@ -77,6 +120,93 @@ struct AuthoritativeLaneFixture {
     authoritative_peer_id: PeerId,
     fallback_peer_id: PeerId,
     route: RoutingDecision,
+}
+
+/// Execute the exact original four BLS authorities and separate manifest accounts at genesis.
+#[cfg(feature = "connect")]
+fn native_proxy_authority_app_for_test(
+    bindings: &[(AccountId, KeyPair)],
+    labels: &[String],
+) -> SharedAppState {
+    assert_eq!(
+        bindings.len(),
+        4,
+        "the original fixture has exactly four voters"
+    );
+    let accounts = bindings
+        .iter()
+        .map(|(validator, _)| Account::new(validator.clone()).build(validator));
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        World::with([], accounts, []),
+        1_000,
+    );
+    config.validator_keys = Some(bindings.iter().map(|(_, key)| key.clone()).collect());
+    assert_eq!(labels.len(), bindings.len());
+    let genesis = AccountId::new(config.genesis_key.public_key().clone());
+    config
+        .genesis_instructions
+        .push(Grant::account_permission(Permission::from(CanManageConsensusKeys), genesis).into());
+    for ((validator, key), label) in bindings.iter().zip(labels) {
+        config.genesis_instructions.push(
+            Grant::account_permission(Permission::from(CanManageConsensusKeys), validator.clone())
+                .into(),
+        );
+        for role in [ConsensusKeyRole::Validator, ConsensusKeyRole::Committee] {
+            let id = ConsensusKeyId::new(role, label.as_str());
+            config.genesis_instructions.push(
+                RegisterConsensusKey {
+                    id: id.clone(),
+                    record: ConsensusKeyRecord {
+                        id,
+                        public_key: key.public_key().clone(),
+                        pop: Some(
+                            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                                .expect("original authority PoP"),
+                        ),
+                        activation_height: 1,
+                        expiry_height: None,
+                        replaces: None,
+                        status: ConsensusKeyStatus::Active,
+                    },
+                }
+                .into(),
+            );
+        }
+    }
+    let app = native_ingress_app_with_config_for_test(config);
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let committee = app
+        .state
+        .resolve_route_authority(super::lane_authority_route(route))
+        .expect("the executed genesis authenticates the original global route");
+    assert_eq!(committee.authority_height(), 1);
+    let mut expected = bindings
+        .iter()
+        .map(|(_, key)| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(
+        committee.into_validators(),
+        expected,
+        "original BLS authority identities"
+    );
+    let view = app.state.view();
+    for (validator, _) in bindings {
+        assert!(
+            view.world().account(validator).is_ok(),
+            "original canonical manifest account"
+        );
+        assert!(
+            super::torii_account_has_permission(
+                view.world(),
+                validator,
+                &Permission::from(CanManageConsensusKeys)
+            ),
+            "original key-management grant"
+        );
+    }
+    drop(view);
+    app
 }
 
 #[cfg(feature = "connect")]
@@ -142,7 +272,21 @@ fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> Authoritati
             },
         ));
     }
-    let mut app = mk_app_state_for_tests();
+    let mut original_bindings = vec![(
+        authoritative_validator.clone(),
+        authoritative_keypair.clone(),
+    )];
+    original_bindings.extend(additional_authorities.iter().cloned());
+    let labels = (0..original_bindings.len())
+        .map(|index| {
+            if index == 0 {
+                "authoritative".to_owned()
+            } else {
+                format!("authoritative-{}", index + 1)
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut app = native_proxy_authority_app_for_test(&original_bindings, &labels);
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
@@ -153,34 +297,8 @@ fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> Authoritati
         app_mut.local_peer_id = Some(local_peer_id.clone());
     }
     {
-        let mut topology = app.state.commit_topology.block();
-        topology.clear();
-        topology.push(local_peer_id.clone());
-        topology.push(authoritative_peer_id.clone());
-        topology.extend(
-            additional_authorities
-                .iter()
-                .map(|(_, peer_keypair)| PeerId::from(peer_keypair.public_key().clone())),
-        );
-        topology.commit();
-    }
-    {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &authoritative_validator,
-            &authoritative_keypair,
-            "authoritative",
-        );
-        for (index, (validator, peer_keypair)) in additional_authorities.iter().enumerate() {
-            ensure_runtime_peer_binding_for_test(
-                state,
-                validator,
-                peer_keypair,
-                &format!("authoritative-{}", index + 2),
-            );
-        }
         let mut manifest_bindings = vec![(authoritative_validator, authoritative_peer_id.clone())];
         manifest_bindings.extend(
             additional_authorities
@@ -212,9 +330,7 @@ fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> Authoritati
             install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, manifest_bindings)]);
         }
     }
-    // Peer bindings activate at height one. Persist the existing signed block
-    // fixture and its matching State journal before resolving current authority.
-    record_latest_committed_header_for_test(&app, 1, 0);
+    // The original signed, executed genesis retains the physical Kura body and State result.
     let committed = app
         .state
         .view()
@@ -367,7 +483,7 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
     let mut app = mk_app_state_for_tests();
     let (future_lane, future_dataspace) =
-        torii_routed_read_tests::configure_future_created_autoscale_route_for_test(&mut app);
+        crate::test_utils::configure_future_created_autoscale_route_for_test(&mut app);
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
@@ -874,7 +990,18 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
     let sender_peer_id = PeerId::from(sender_keypair.public_key().clone());
     let visited_peer_id = PeerId::from(visited_keypair.public_key().clone());
     let offline_peer_id = PeerId::from(offline_keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests();
+    let mut app = native_proxy_authority_app_for_test(
+        &[
+            (
+                authoritative_validator.clone(),
+                authoritative_keypair.clone(),
+            ),
+            (sender_validator.clone(), sender_keypair.clone()),
+            (visited_validator.clone(), visited_keypair.clone()),
+            (offline_validator.clone(), offline_keypair.clone()),
+        ],
+        &["authoritative", "sender", "visited", "offline"].map(str::to_owned),
+    );
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
@@ -904,33 +1031,8 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
         app_mut.local_peer_id = Some(local_peer_id.clone());
     }
     {
-        let mut topology = app.state.commit_topology.block();
-        topology.clear();
-        topology.push(authoritative_peer_id.clone());
-        topology.commit();
-    }
-    {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &authoritative_validator,
-            &authoritative_keypair,
-            "authoritative",
-        );
-        ensure_runtime_peer_binding_for_test(state, &sender_validator, &sender_keypair, "sender");
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &visited_validator,
-            &visited_keypair,
-            "visited",
-        );
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &offline_validator,
-            &offline_keypair,
-            "offline",
-        );
         install_lane_manifest_registry_for_test(
             state,
             &[(
@@ -1631,7 +1733,7 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
     assert_eq!(body.as_ref(), b"forwarded-ok");
 }
 #[tokio::test]
-
+#[cfg(feature = "connect")]
 async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
     let app = mk_app_state_for_tests();
     let request_id = Hash::new(b"torii-proxy-dispatch");

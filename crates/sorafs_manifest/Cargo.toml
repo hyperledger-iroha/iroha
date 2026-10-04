@@ -44,6 +44,7 @@ hex = "0.4.3"
 base64 = { workspace = true, features = ["std"] }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 thiserror = "2.0.17"
+url = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
 ed25519-dalek = "2.2.0"
 iroha_crypto = { workspace = true, default-features = false, features = ["application", "bls"] }

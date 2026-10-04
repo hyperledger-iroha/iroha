@@ -713,12 +713,7 @@ fn rollback_authorization(
         reason_code: "bad-feed".into(),
         authorized_at_unix,
     };
-    let digest = hash_canonical(
-        ROLLBACK_SIGNING_DOMAIN_V1,
-        &payload,
-        MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-    )
-    .expect("rollback digest");
+    let digest = payload.signing_digest().expect("rollback digest");
     let keys = catalog_keys();
     GatewayComplianceRollbackV1 {
         payload,
@@ -781,16 +776,16 @@ fn threshold_promotion_is_durable_and_predecessor_bound() {
     let controller = GatewayComplianceController::new(config(), store.clone()).expect("controller");
     crate::frame_test_support::assert_current_frame(
         &trust_policy(),
-        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceTrustPolicyV1",
+        "sorafs_manifest::gateway_compliance::GatewayComplianceTrustPolicyV1",
     );
     let first = sign_catalog(payload(1, None));
     crate::frame_test_support::assert_current_frame(
         &first.payload,
-        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceCatalogPayloadV1",
+        "sorafs_manifest::gateway_compliance::GatewayComplianceCatalogPayloadV1",
     );
     crate::frame_test_support::assert_current_frame(
         &first,
-        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceCatalogV1",
+        "sorafs_manifest::gateway_compliance::GatewayComplianceCatalogV1",
     );
     let first_digest = controller
         .stage_catalog(first.clone(), NOW + 5, mutation_binding(1))
@@ -799,7 +794,7 @@ fn threshold_promotion_is_durable_and_predecessor_bound() {
     let first_ack = acknowledgement(0, first_digest, true);
     crate::frame_test_support::assert_current_frame(
         &first_ack.payload,
-        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceAcknowledgementPayloadV1",
+        "sorafs_manifest::gateway_compliance::GatewayComplianceAcknowledgementPayloadV1",
     );
     controller
         .acknowledge(first_ack, NOW + 10, mutation_binding(2))
@@ -1232,22 +1227,6 @@ fn checkpoint_rejects_revision_rollback_and_truncated_bytes_on_restart() {
     ));
 }
 #[test]
-fn signature_substitution_and_duplicate_quorum_fail_closed() {
-    let policy = trust_policy();
-    let mut catalog = sign_catalog(payload(1, None));
-    catalog.payload.valid_until_unix += 1;
-    assert!(matches!(
-        catalog.verify(&policy, NOW + 1, 300),
-        Err(GatewayComplianceError::InvalidSignature { .. })
-    ));
-    let mut duplicate = sign_catalog(payload(1, None));
-    duplicate.approvals[1] = duplicate.approvals[0].clone();
-    assert!(matches!(
-        duplicate.verify(&policy, NOW + 1, 300),
-        Err(GatewayComplianceError::DuplicateSigner(_))
-    ));
-}
-#[test]
 fn catalog_rejects_stale_and_future_source_anchors() {
     let controller = GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
         .expect("controller");
@@ -1357,30 +1336,6 @@ fn every_mutation_rejects_clock_rollback_before_state_change() {
             .expect("digest"),
         first_digest
     );
-}
-#[test]
-fn cid_subjects_require_canonical_lowercase_base32_round_trip() {
-    let canonical = "bafyr6iffuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuu";
-    assert_eq!(
-        normalize_subject(GatewayComplianceSubjectKindV1::Cid, canonical).expect("canonical CID"),
-        canonical
-    );
-    for malformed in [
-        "",
-        "b",
-        "Bafyr6iffuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuu",
-        "ba0",
-        "ba1",
-        "ba8",
-        "ba9",
-        "ba",
-        "b=",
-    ] {
-        assert!(
-            normalize_subject(GatewayComplianceSubjectKindV1::Cid, malformed).is_err(),
-            "malformed CID unexpectedly admitted: {malformed}"
-        );
-    }
 }
 #[test]
 fn controller_config_rejects_unbounded_fetch_and_freshness_windows() {
@@ -1650,14 +1605,9 @@ fn threshold_rollback_changes_serving_pointer_but_preserves_chain_head() {
     };
     crate::frame_test_support::assert_current_frame(
         &rollback_payload,
-        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceRollbackPayloadV1",
+        "sorafs_manifest::gateway_compliance::GatewayComplianceRollbackPayloadV1",
     );
-    let digest = hash_canonical(
-        ROLLBACK_SIGNING_DOMAIN_V1,
-        &rollback_payload,
-        MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-    )
-    .expect("rollback digest");
+    let digest = rollback_payload.signing_digest().expect("rollback digest");
     let keys = catalog_keys();
     let rollback = GatewayComplianceRollbackV1 {
         payload: rollback_payload,
@@ -2108,222 +2058,118 @@ fn file_store_rejects_symlink_checkpoint() {
 }
 
 #[test]
-fn current_feed_frames_bind_normalized_documents_and_transport_pins() {
-    let document = GatewayComplianceFeedDocumentV1 {
-        version: GATEWAY_COMPLIANCE_FEED_VERSION_V1,
-        feed_id: "baseline".into(),
-        generated_at_unix: NOW,
-        baseline_rules: Vec::new(),
-        appeal_overrides: Vec::new(),
-        legal_safety_holds: Vec::new(),
-        toggles: Vec::new(),
-    }
-    .normalize()
-    .expect("valid normalized feed");
-    let bytes = crate::frame_test_support::assert_current_frame(
-        &document,
-        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceFeedDocumentV1",
-    );
-    let decoded: GatewayComplianceFeedDocumentV1 =
-        norito::decode_canonical(&bytes).expect("decode normalized feed frame");
-    assert_eq!(
-        document.canonical_digest().expect("feed digest"),
-        decoded.canonical_digest().expect("decoded feed digest")
-    );
-    let pins = BTreeMap::from([("feed.example".to_owned(), BTreeSet::from([[0x71; 32]]))]);
-    let payload = GatewayComplianceFeedTransportPolicyDigestV1 {
-        version: 1,
-        hosts: vec![GatewayComplianceFeedTransportHostDigestV1 {
-            hostname: "feed.example".to_owned(),
-            accepted_spki_sha256: vec![[0x71; 32]],
-        }],
-    };
-    assert_eq!(
-        <GatewayComplianceFeedTransportPolicyDigestV1 as norito::NoritoSchema>::nominal_name(),
-        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceFeedTransportPolicyDigestV1",
-    );
-    let encoded = encode_bounded(&payload, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1)
-        .expect("encode-only transport fingerprint frame");
-    assert_eq!(
-        norito::core::from_bytes_view(&encoded)
-            .expect("valid transport frame")
-            .schema(),
-        norito::schema::identity::frame_hash::<GatewayComplianceFeedTransportPolicyDigestV1>(),
-    );
-    assert!(encode_bounded(&payload, encoded.len() - 1).is_err());
-    let expected = hash_canonical(
-        FEED_TRANSPORT_POLICY_DOMAIN_V1,
-        &payload,
-        MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-    )
-    .expect("hash exact framed transport payload");
-    assert_eq!(
-        gateway_compliance_feed_transport_policy_digest(&pins)
-            .expect("production pin policy digest"),
-        expected
-    );
-    let changed = BTreeMap::from([("feed.example".to_owned(), BTreeSet::from([[0x72; 32]]))]);
-    assert_ne!(
-        gateway_compliance_feed_transport_policy_digest(&changed)
-            .expect("rotated pin policy digest"),
-        expected
-    );
-}
-
-#[test]
-fn acknowledgement_signing_digest_preserves_exact_domain_and_valid_payloads() {
-    let policy = trust_policy();
-    for accepted in [true, false] {
-        let signed = acknowledgement(0, [0x81; 32], accepted);
-        let digest = signed
-            .payload
-            .signing_digest()
-            .expect("canonical acknowledgement");
-        assert_eq!(
+fn qualified_empty_feed_catalog_still_requires_signatures_ack_quorum_and_fresh_promotion() {
+    let mut selected = config();
+    selected.feeds.clear();
+    let pins = BTreeMap::new();
+    let digest = gateway_compliance_feed_transport_policy_digest(&pins).unwrap();
+    assert_ne!(digest, [0; 32]);
+    assert_ne!(digest, config().feed_transport_policy_digest().unwrap());
+    selected.feed_transport_provider = Some(
+        GatewayProviderBindingV1::try_new(
+            GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.to_owned(),
+            GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
             digest,
-            hash_canonical(
-                ACK_SIGNING_DOMAIN_V1,
-                &signed.payload,
-                MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1
-            )
-            .expect("existing exact acknowledgement framing")
-        );
-        signed
-            .verify(&policy, [0x81; 32], NOW + 10, 300)
-            .expect("valid signed acknowledgement");
-        for domain in [
-            CATALOG_SIGNING_DOMAIN_V1,
-            CATALOG_DIGEST_DOMAIN_V1,
-            ROLLBACK_SIGNING_DOMAIN_V1,
-        ] {
-            let wrong_digest = hash_canonical(
-                domain,
-                &signed.payload,
-                MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-            )
-            .expect("bounded alternate-domain payload");
-            assert_ne!(digest, wrong_digest);
-            let wrong_domain = GatewayComplianceAcknowledgementV1 {
-                payload: signed.payload.clone(),
-                signature: gateway_keys()[0].sign(&wrong_digest).to_bytes(),
-            };
-            assert!(matches!(
-                wrong_domain.verify(&policy, [0x81; 32], NOW + 10, 300),
-                Err(GatewayComplianceError::InvalidSignature { .. })
-            ));
-        }
-    }
-}
-
-#[test]
-fn acknowledgement_signing_and_verification_reject_resealed_noncanonical_payloads() {
-    type Payload = GatewayComplianceAcknowledgementPayloadV1;
-    let mutations: [(&str, fn(&mut Payload)); 10] = [
-        ("version", |p| p.version = 2),
-        ("empty gateway", |p| p.gateway_id.clear()),
-        ("uppercase gateway", |p| p.gateway_id = "GATEWAY-EU".into()),
-        ("padded gateway", |p| p.gateway_id.push(' ')),
-        ("oversized gateway", |p| p.gateway_id = "a".repeat(129)),
-        ("zero clock", |p| p.observed_at_unix = 0),
-        ("accepted with reason", |p| {
-            p.rejection_code = Some("reload-failed".into())
-        }),
-        ("rejected without reason", |p| p.accepted = false),
-        ("noncanonical reason", |p| {
-            p.accepted = false;
-            p.rejection_code = Some("RELOAD-FAILED".into());
-        }),
-        ("empty reason", |p| {
-            p.accepted = false;
-            p.rejection_code = Some(String::new());
-        }),
-    ];
-    for (label, mutate) in mutations {
-        let mut payload = acknowledgement(0, [0x81; 32], true).payload;
-        mutate(&mut payload);
-        let error = payload.signing_digest().expect_err(label);
-        // Deliberately bypass the public signer validator in this adversary:
-        // even a correct signature on malformed canonical bytes must be rejected.
-        let raw_digest = hash_canonical(
-            ACK_SIGNING_DOMAIN_V1,
-            &payload,
-            MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
         )
-        .expect("bounded malformed payload");
-        let resealed = GatewayComplianceAcknowledgementV1 {
-            payload,
-            signature: gateway_keys()[0].sign(&raw_digest).to_bytes(),
-        };
-        let verify_error = resealed
-            .verify(&trust_policy(), [0x81; 32], NOW + 10, 300)
-            .expect_err(label);
-        assert_eq!(verify_error.to_string(), error.to_string(), "{label}");
-    }
+        .unwrap(),
+    );
+    let transport =
+        crate::sorafs::gateway::ProductionGatewayComplianceFeedTransport::try_new(pins).unwrap();
+    let store = Arc::new(MemoryStore::default());
+    let controller = GatewayComplianceController::new_with_feed_transport(
+        selected.clone(),
+        store.clone(),
+        &transport,
+    )
+    .unwrap();
+    assert!(matches!(
+        controller.fetch_feed("baseline", &transport),
+        Err(GatewayComplianceError::UnknownFeed(_))
+    ));
+    let mut empty = payload(1, None);
+    empty.source_anchors.clear();
+    let signed = sign_catalog(empty);
+    let mut missing = signed.clone();
+    missing.approvals.pop();
+    assert!(matches!(
+        controller.stage_catalog(missing, NOW + 5, mutation_binding(1)),
+        Err(GatewayComplianceError::QuorumNotMet { .. })
+    ));
+    let catalog_digest = controller
+        .stage_catalog(signed.clone(), NOW + 5, mutation_binding(1))
+        .unwrap()
+        .catalog_digest;
+    assert!(matches!(
+        controller.evaluate(
+            "global",
+            GatewayComplianceSubjectKindV1::Provider,
+            &subject(1),
+            NOW + 5
+        ),
+        Err(GatewayComplianceError::NoServingCatalog)
+    ));
+    assert!(matches!(
+        controller.promote(catalog_digest, 1, NOW + 20, mutation_binding(2)),
+        Err(GatewayComplianceError::GatewayQuorumNotMet { .. })
+    ));
+    controller
+        .acknowledge(
+            acknowledgement(0, catalog_digest, true),
+            NOW + 10,
+            mutation_binding(3),
+        )
+        .unwrap();
+    assert!(matches!(
+        controller.promote(catalog_digest, 1, NOW + 20, mutation_binding(2)),
+        Err(GatewayComplianceError::GatewayQuorumNotMet { .. })
+    ));
+    controller
+        .acknowledge(
+            acknowledgement(1, catalog_digest, true),
+            NOW + 10,
+            mutation_binding(4),
+        )
+        .unwrap();
+    controller
+        .promote(catalog_digest, 1, NOW + 20, mutation_binding(2))
+        .unwrap();
+    assert_eq!(
+        controller
+            .evaluate(
+                "global",
+                GatewayComplianceSubjectKindV1::Provider,
+                &subject(1),
+                NOW + 21
+            )
+            .unwrap()
+            .source,
+        GatewayComplianceDecisionSource::NoMatch
+    );
+    assert!(matches!(
+        controller.evaluate(
+            "global",
+            GatewayComplianceSubjectKindV1::Provider,
+            &subject(1),
+            signed.payload.valid_until_unix
+        ),
+        Err(GatewayComplianceError::CatalogNotFresh)
+    ));
+    let original = store.durable_bytes().unwrap();
+    drop(controller);
+    let reopened =
+        GatewayComplianceController::new_with_feed_transport(selected, store.clone(), &transport)
+            .unwrap();
+    assert_eq!(reopened.checkpoint().unwrap().serving.unwrap(), signed);
+    assert_eq!(store.durable_bytes().unwrap(), original);
+    assert!(matches!(
+        reopened.evaluate(
+            "global",
+            GatewayComplianceSubjectKindV1::Provider,
+            &subject(1),
+            NOW + 3600
+        ),
+        Err(GatewayComplianceError::CatalogNotFresh)
+    ));
 }
 
-#[test]
-fn acknowledgement_public_signing_keeps_controller_context_and_signature_checks() {
-    let signed = acknowledgement(0, [0x81; 32], true);
-    assert!(
-        matches!(signed.verify(&trust_policy(), [0x82; 32], NOW + 10, 300),
-        Err(GatewayComplianceError::InvalidAcknowledgement(reason)) if reason == "catalog digest mismatch")
-    );
-    for now in [NOW + 10 - 301, NOW + 10 + 301] {
-        assert!(
-            matches!(signed.verify(&trust_policy(), [0x81; 32], now, 300),
-            Err(GatewayComplianceError::InvalidAcknowledgement(reason)) if reason == "acknowledgement timestamp is invalid")
-        );
-    }
-    let mut revoked = trust_policy();
-    revoked.gateway_ack_threshold = 1;
-    revoked.revoked_gateway_signer_ids = vec!["gateway-eu".into()];
-    revoked
-        .validate()
-        .expect("canonical remaining signer policy");
-    assert!(matches!(signed.verify(&revoked, [0x81; 32], NOW + 10, 300),
-        Err(GatewayComplianceError::RevokedSigner(signer)) if signer == "gateway-eu"));
-    let mut unknown = signed.clone();
-    unknown.payload.gateway_id = "gateway-unknown".into();
-    unknown.signature = gateway_keys()[0]
-        .sign(&unknown.payload.signing_digest().unwrap())
-        .to_bytes();
-    assert!(
-        matches!(unknown.verify(&trust_policy(), [0x81; 32], NOW + 10, 300),
-        Err(GatewayComplianceError::UntrustedSigner(signer)) if signer == "gateway-unknown")
-    );
-    let mutations: [fn(&mut GatewayComplianceAcknowledgementPayloadV1); 4] = [
-        |p| p.observed_at_unix += 1,
-        |p| p.catalog_digest = [0x82; 32],
-        |p| p.gateway_id = "gateway-us".into(),
-        |p| {
-            p.accepted = false;
-            p.rejection_code = Some("reload-failed".into());
-        },
-    ];
-    for mutate in mutations {
-        let mut modified = signed.clone();
-        mutate(&mut modified.payload);
-        assert!(modified.payload.signing_digest().is_ok());
-        assert!(matches!(
-            modified.verify(
-                &trust_policy(),
-                modified.payload.catalog_digest,
-                NOW + 10,
-                300
-            ),
-            Err(GatewayComplianceError::InvalidSignature { .. })
-        ));
-    }
-    let mut rejected = acknowledgement(0, [0x81; 32], false);
-    rejected.payload.rejection_code = Some("different-reason".into());
-    assert!(matches!(
-        rejected.verify(&trust_policy(), [0x81; 32], NOW + 10, 300),
-        Err(GatewayComplianceError::InvalidSignature { .. })
-    ));
-    let mut corrupted = signed;
-    corrupted.signature[0] ^= 1;
-    assert!(matches!(
-        corrupted.verify(&trust_policy(), [0x81; 32], NOW + 10, 300),
-        Err(GatewayComplianceError::InvalidSignature { .. })
-    ));
-}
+mod ack_refresh;

@@ -168,8 +168,12 @@ pub(super) fn assert_musubi_context_rejects_unmarked_network(
         raw.network_id.0[Hash::LENGTH - 1] &= !1;
         let invalid = payload(&raw);
         assert!(matches!(
-            norito::core::decode_field_canonical::<FinalizedProviderIngestMusubiContextV1>(&invalid),
-            Err(norito::Error::Message(message)) if message == "invalid hash lsb"
+            norito::core::decode_field_canonical::<FinalizedProviderIngestMusubiContextV1>(
+                &invalid
+            ),
+            Err(norito::Error::InvalidValue {
+                context: "hash lsb"
+            })
         ));
     }
 }

@@ -5,6 +5,8 @@ use axum::{
     http::{Request, StatusCode, header},
     routing::{delete, get},
 };
+#[cfg(not(feature = "app_api"))]
+use http_body_util::BodyExt as _;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

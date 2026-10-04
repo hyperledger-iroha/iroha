@@ -692,8 +692,12 @@ fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
     .unwrap();
     let retired_generations =
         mv::cell::Cell::<u64, iroha_allocation::AllocationCharge>::allocation_layouts()
-            .iter()
-            .map(std::alloc::Layout::size)
+            .into_iter()
+            .chain(mv::cell::Cell::<
+                crate::sumeragi::amx::RetainedNativeAmx,
+                iroha_allocation::AllocationCharge,
+            >::allocation_layouts())
+            .map(|layout| layout.size())
             .sum::<usize>();
     let retirement_pin = crossbeam_epoch::pin();
     drop(restored);
@@ -701,7 +705,7 @@ fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
     assert_eq!(
         budget.reserved_bytes(),
         retired_generations,
-        "the restored shortfall scalar's two original generations remain epoch-protected",
+        "both restored funded Cells retain their exact current and undo generations until epoch retirement",
     );
     drop(retirement_pin);
     collect_musubi_restore_ebr_until(&budget, 0);

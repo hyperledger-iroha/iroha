@@ -1655,6 +1655,13 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 /// Errors occurred on block validation
 #[derive(Debug, displaydoc::Display, Error)]
 pub enum BlockValidationError {
+    /// Native source publication changed; reacquire and authenticate before retrying ({authenticated_generation} -> {observed_generation})
+    NativeSourceChanged {
+        /// State generation authenticated by the original acquisition.
+        authenticated_generation: u64,
+        /// State generation observed before the unfinished attempt returned.
+        observed_generation: u64,
+    },
     /// Local State view could not be captured before candidate validation: {0}
     StateView(#[source] crate::state::StateViewError),
     /// Local World storage admission failed before State execution: {0}
@@ -1811,6 +1818,7 @@ pub enum BlockValidationError {
 }
 impl BlockValidationError {
     /// Keep local autoscale observations out of deterministic block rejection.
+    #[cfg(test)]
     pub(crate) fn from_autoscale_lifecycle_error(error: crate::state::LaneLifecycleError) -> Self {
         use crate::state::LaneLifecycleError;
         let error = match error {
@@ -1832,6 +1840,7 @@ impl BlockValidationError {
     }
 
     /// Preserve local observation provenance at the certified merge staging boundary.
+    #[cfg(test)]
     pub(crate) fn from_certified_merge_stage_error(
         error: crate::state::MergeLedgerCommitError,
     ) -> Self {
@@ -1904,6 +1913,13 @@ impl From<crate::sumeragi::lanes::merge::MergeError> for BlockValidationError {
     fn from(error: crate::sumeragi::lanes::merge::MergeError) -> Self {
         use crate::sumeragi::lanes::merge::MergeError;
         match error {
+            MergeError::SourceChanged {
+                authenticated_generation,
+                observed_generation,
+            } => Self::NativeSourceChanged {
+                authenticated_generation,
+                observed_generation,
+            },
             MergeError::StateView(error) => Self::StateView(error),
             MergeError::RoutingDeferred(reason) => Self::ExecutionDeferred(reason),
             MergeError::Storage(crate::execution_attempt::ExecutionAttemptError::Deferred(
@@ -2713,39 +2729,6 @@ mod chained {
             self.0.header.creation_time_ms = u64::try_from(time.as_millis()).ok()?;
             Some(self)
         }
-        /// Header context selected for this proposal before payload/result roots are finalized.
-        ///
-        /// Certified merge execution strips those roots and binds the remaining height, parent,
-        /// ledger-time, and view fields, so callers may use this clone to select an exact pending
-        /// merge sidecar without introducing a header-hash cycle.
-        #[inline]
-        #[must_use]
-        pub(crate) fn carrier_context_header(&self) -> BlockHeader {
-            self.0.header.clone()
-        }
-        /// Bind this proposal to the exact ledger timestamp certified by a merge batch.
-        ///
-        /// Height, parent, and view are selected by the active global round and must already
-        /// match. Only the timestamp may be adopted from the pre-executed merge application
-        /// context; payload roots are deliberately excluded from that context.
-        pub(crate) fn bind_certified_merge_application_context(
-            mut self,
-            application: &BlockHeader,
-        ) -> Result<Self, &'static str> {
-            if application.merkle_root().is_some()
-                || application.creation_time().is_zero()
-                || application.height() != self.0.header.height()
-                || application.prev_block_hash() != self.0.header.prev_block_hash()
-                || application.view_change_index() != self.0.header.view_change_index()
-            {
-                return Err(
-                    "certified merge application context differs from the active global round",
-                );
-            }
-            self.0.header.creation_time_ms = u64::try_from(application.creation_time().as_millis())
-                .map_err(|_| "certified merge application timestamp exceeds u64")?;
-            Ok(self)
-        }
         /// Attach a DA commitment bundle and update the header hash accordingly.
         #[must_use]
         pub fn with_da_commitments(mut self, commitments: Option<DaCommitmentBundle>) -> Self {
@@ -2818,39 +2801,6 @@ mod chained {
         ) -> Self {
             self.0.header.set_confidential_features(digest);
             self
-        }
-        /// Count the exact canonical proposal wire with one signature, without signing.
-        ///
-        /// The caller must have finished the actual proposal metadata. Only the
-        /// fixed-length signature contents are replaced with private sizing bytes;
-        /// every transaction, control, policy, header and Norito prefix uses the
-        /// normal `NewBlock` to `SignedBlockWire` conversion. No block or bytes
-        /// escape this sizing operation.
-        pub(crate) fn canonical_proposal_wire_len(
-            &self,
-            signatory_idx: u64,
-            algorithm: iroha_crypto::Algorithm,
-        ) -> Result<usize, String> {
-            if self.0.da_proof_policies.is_none()
-                || (!self.0.transactions.is_empty() && self.0.execution_context.is_none())
-            {
-                return Err(
-                    "proposal sizing requires explicit proof policies and execution context"
-                        .to_owned(),
-                );
-            }
-            let signature =
-                BlockSignature::new(
-                    signatory_idx,
-                    SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(
-                        &vec![0xa5; algorithm.signature_payload_len()],
-                    )),
-                );
-            let sizing_only: SignedBlock = self.clone().into_new_block(signature).into();
-            sizing_only
-                .encode_wire()
-                .map(|wire| wire.len())
-                .map_err(|error| error.to_string())
         }
         fn into_new_block(self, signature: BlockSignature) -> NewBlock {
             NewBlock {
@@ -3195,13 +3145,6 @@ pub(crate) mod valid {
         pub(crate) execution_genesis_clean_ms: u64,
         /// Total elapsed milliseconds for validation.
         pub(crate) total_ms: u64,
-    }
-    impl ValidationTimings {
-        /// Create an empty timing snapshot.
-        #[cfg(test)]
-        pub(crate) fn new() -> Self {
-            Self::default()
-        }
     }
     type Error = (Box<SignedBlock>, Box<BlockValidationError>);
     #[cfg(feature = "telemetry")]
@@ -4637,9 +4580,7 @@ pub(crate) mod valid {
             if let Err(error) = expansion.validate_publication(state) {
                 return WithEvents::new(Err((
                     Box::new(block),
-                    Box::new(BlockValidationError::LocalStorageRecoveryRequired {
-                        reason: error.to_string(),
-                    }),
+                    Box::new(BlockValidationError::from(error)),
                 )));
             }
             let source =
@@ -5480,11 +5421,6 @@ pub(crate) mod valid {
         }
         fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
             BlockValidationError::ExecutionContextInvalid(message.into())
-        }
-        fn validate_execution_context_header(
-            block: &SignedBlock,
-        ) -> Result<Option<&BlockExecutionContextBundle>, BlockValidationError> {
-            Self::checked_execution_context_header(block)
         }
         fn checked_execution_context_header(
             block: &SignedBlock,
@@ -7125,18 +7061,6 @@ pub(crate) mod valid {
                 .insert(pk_label, vec![id.clone()]);
             id
         }
-        fn insert_active_consensus_keys(world: &mut World, keypairs: &[KeyPair]) {
-            for (index, keypair) in keypairs.iter().enumerate() {
-                insert_consensus_key(
-                    world,
-                    &format!("validator-{index}"),
-                    keypair,
-                    0,
-                    None,
-                    ConsensusKeyStatus::Active,
-                );
-            }
-        }
         #[cfg(feature = "bls")]
         #[test]
         fn bls_normal_public_key_check_uses_checked_algorithm_access() {
@@ -7148,59 +7072,6 @@ pub(crate) mod valid {
             ));
         }
         include!("block/soracloud_validation_tests.rs");
-        fn signed_default_lane_block_with_execution_context(
-            label: &str,
-            transaction_count: usize,
-            context_for: impl FnOnce(
-                &[SignedTransaction],
-                &[PeerId],
-                Hash,
-            ) -> BlockExecutionContextBundle,
-        ) -> (State, Topology, TimeSource, SignedBlock) {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut key_pairs = (0..4)
-                .map(|_| crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal))
-                .collect::<Vec<_>>();
-            key_pairs.sort_by_key(|key| PeerId::new(key.public_key().clone()));
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_active_consensus_keys(&mut world, &key_pairs);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let mut transactions = Vec::with_capacity(transaction_count);
-            for idx in 0..transaction_count {
-                let (authority, signer) = gen_account_in(&format!("{label}-{idx}"));
-                let tx = TransactionBuilder::new_with_time_source(
-                    state.network_id,
-                    authority,
-                    &time_source,
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .with_instructions([Log::new(Level::INFO, format!("{label}-{idx}"))])
-                .sign(signer.private_key());
-                transactions.push(tx);
-                time_handle.advance(Duration::from_millis(1));
-            }
-            let accepted = transactions
-                .iter()
-                .cloned()
-                .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
-                .collect::<Vec<_>>();
-            let lane_incarnation = state
-                .lane_incarnation(LaneId::SINGLE)
-                .expect("default lane incarnation");
-            let execution_context = context_for(&transactions, topology.as_ref(), lane_incarnation);
-            let builder = BlockBuilder::new_with_time_source(accepted, time_source.clone())
-                .chain(0, Some(&crate::block::tests::previous_block_at_height(1)))
-                .with_execution_context(Some(execution_context));
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            (state, topology, time_source, new_block.into())
-        }
         /// Build an ordinary successor from original genesis before removing its routing context.
         fn signed_contextless_routing_fixture(
             label: &str,
@@ -8291,6 +8162,7 @@ pub(crate) mod valid {
                 ivm::error::ExecutionDeferral::AllocationUnavailable,
                 ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
                 ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable,
+                ivm::error::ExecutionDeferral::LocalInvariantViolation,
             ] {
                 assert_eq!(
                     map_block_err_to_reason(&BlockValidationError::ExecutionDeferred(
@@ -8705,13 +8577,18 @@ mod event {
             generation: u64,
         ) -> Self {
             if let Err((_, error)) = &mut self.0 {
-                if !crate::state::is_stable_state_view_generation(
-                    generation,
-                    state.state_view_generation(),
-                ) {
-                    *error = Box::new(BlockValidationError::LocalStorageRecoveryRequired {
-                        reason: "native rejection State cut advanced after source authentication"
-                            .into(),
+                // A pre-existing local failure owns its exact refusal or terminal custody.
+                // A concurrent publication cannot replace that owner or authorize rejection.
+                if !cfg!(all(test, sumeragi_core_mutation = "HC99"))
+                    && map_block_err_to_reason(error).is_none()
+                {
+                    return self;
+                }
+                let observed_generation = state.state_view_generation();
+                if !crate::state::is_stable_state_view_generation(generation, observed_generation) {
+                    *error = Box::new(BlockValidationError::NativeSourceChanged {
+                        authenticated_generation: generation,
+                        observed_generation,
                     });
                 } else {
                     emit_block_rejection(header, error, |event| self.1 = Some(event));
@@ -8871,7 +8748,9 @@ mod event {
     ) -> Option<iroha_data_model::block::error::BlockRejectionReason> {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
-            BlockValidationError::LocalStorageRecoveryRequired { .. }
+            BlockValidationError::NativeSourceChanged { .. }
+            | BlockValidationError::DaIndexHydration(_)
+            | BlockValidationError::LocalStorageRecoveryRequired { .. }
             | BlockValidationError::StateView(_)
             | BlockValidationError::LaneStorage(_)
             | BlockValidationError::StateStorageAdmission(_)
@@ -8930,7 +8809,6 @@ mod event {
             ) => Reason::DaProofPolicyMismatch,
             BlockValidationError::DaCommitmentBundle(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaPinIntentBundle(_) => Reason::DaShardCursorViolation,
-            BlockValidationError::DaIndexHydration(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaReceiptCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaShardCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::AxtEnvelopeValidationFailed(_) => {

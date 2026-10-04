@@ -118,7 +118,7 @@ export function createSorafsReplicationResponseNormalizer({ account }) {
     const authorityContext = `${context}.completion_authority`;
     const policyContext = `${authorityContext}.signer_policy`;
     const anchorContext = `${context}.finalized_anchor`;
-    const authority = record(fields.completion_authority, ["provider_owner", "signer_policy"], authorityContext);
+    const authority = record(fields.completion_authority, ["provider_owner", "completion_signer", "signer_policy"], authorityContext);
     const policy = record(authority.signer_policy, ["policy_id_hex", "revision", "predecessor_digest_hex", "policy_digest_hex"], policyContext);
     const anchor = record(fields.finalized_anchor, ["height", "block_hash_hex"], anchorContext);
     const revision = positive(policy.revision, `${policyContext}.revision`);
@@ -128,11 +128,12 @@ export function createSorafsReplicationResponseNormalizer({ account }) {
       provider_hex: hex(fields.provider_hex, `${context}.provider_hex`), completed_by: identity(fields.completed_by, `${context}.completed_by`),
       completion_epoch: u64(fields.completion_epoch, `${context}.completion_epoch`), assignment_revision: positive(fields.assignment_revision, `${context}.assignment_revision`),
       completion_authority: { provider_owner: identity(authority.provider_owner, `${authorityContext}.provider_owner`),
+        completion_signer: identity(authority.completion_signer, `${authorityContext}.completion_signer`),
         signer_policy: { policy_id_hex: hex(policy.policy_id_hex, `${policyContext}.policy_id_hex`), revision,
           predecessor_digest_hex: predecessor, policy_digest_hex: hex(policy.policy_digest_hex, `${policyContext}.policy_digest_hex`) } },
       finalized_anchor: { height: positive(anchor.height, `${anchorContext}.height`), block_hash_hex: hex(anchor.block_hash_hex, `${anchorContext}.block_hash_hex`) },
     };
-    if (result.completed_by !== result.completion_authority.provider_owner) fail(context, "must retain the provider owner's completion authority");
+    if (result.completed_by !== result.completion_authority.completion_signer) fail(context, "must retain the governed signer's completion authority");
     return result;
   }
   function orderRecord(value, context) {

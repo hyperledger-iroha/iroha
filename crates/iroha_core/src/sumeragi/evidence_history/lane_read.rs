@@ -1,6 +1,4 @@
 //! One retained original global cut and native branch through every local acquisition refusal.
-#[cfg(test)]
-use std::io;
 
 use iroha_data_model::block::consensus::LaneEvidenceScope;
 use iroha_sumeragi::message::Evidence;
@@ -148,6 +146,7 @@ impl LaneEvidenceRead {
 mod tests {
     use super::*;
     use crate::state::StateReadOnly;
+    use std::io;
     #[test]
     fn completed_lane_history_retains_original_owner_on_finish_decode_refusal() {
         let (chain, record, _guard) =

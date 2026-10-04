@@ -6,7 +6,8 @@ use iroha_core::sumeragi::native_journal::{NativeJournalCursor, authenticate_sig
 use iroha_core::{
     beacon::{
         AdaptiveGlobalThresholdBeaconDkgCryptoV1, GlobalThresholdBeaconDkgSnapshotV1,
-        GlobalThresholdBeaconDkgStateV1, global_threshold_beacon_roster_hash_v1,
+        GlobalThresholdBeaconDkgStateV1, RetainedGlobalThresholdBeaconDkgFinalizationV1,
+        RetainedGlobalThresholdBeaconDkgSnapshotV1, global_threshold_beacon_roster_hash_v1,
     },
     validator_committee_evidence::{
         ValidatorCommitteeProvisioningEvidenceV1, ValidatorCommitteeSelectionEvidenceV1,
@@ -58,6 +59,8 @@ pub struct DisposableRotationProofInput {
 /// Independently pinned inputs to one native pending-custody preparation.
 #[derive(Clone, Debug)]
 pub struct DisposablePendingCustodyInput {
+    /// Explicit original registry limit; must equal the current catalog when retaining custody.
+    pub credential_max_memory_bytes: std::num::NonZeroUsize,
     /// Signed-genesis network identity.
     pub network_id: NetworkId,
     /// Explicit finite source and cumulative decoded-allocation limits.
@@ -131,8 +134,8 @@ pub struct DisposableGenesisConfigSeat {
 
 /// Public finalized DKG result and separate private output for each real seat.
 pub struct DisposableRotationDkgOutput {
-    /// All-edge finalized public transcript.
-    pub public_session: GlobalThresholdBeaconKeySessionV1,
+    /// All-edge finalized public transcript retaining the original ceremony pool.
+    pub public_session: RetainedGlobalThresholdBeaconDkgFinalizationV1,
     /// One output per exact frozen roster seat, in roster order.
     pub seats: Vec<DisposableRotationSeatOutput>,
     /// Native operator bundle containing the independently verified public record.
@@ -144,8 +147,8 @@ pub struct DisposableRotationDkgOutput {
 
 /// Four independently provisioned genesis shares and their quorum-signed install instruction.
 pub struct DisposableGenesisDkgOutput {
-    /// Finalized public session assembled from every signed edge.
-    pub public_session: GlobalThresholdBeaconKeySessionV1,
+    /// Finalized public session and original pool custody assembled from every signed edge.
+    pub public_session: RetainedGlobalThresholdBeaconDkgFinalizationV1,
     /// One private output for each signed-genesis voter, in exact roster order.
     pub seats: Vec<DisposableRotationSeatOutput>,
     /// Native operator bundle containing the independently verified public record.
@@ -209,6 +212,7 @@ fn verify_input(
         input.network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         input.finality_limits,
+        &iroha_allocation::AllocationBudget::new(input.finality_limits.allocated_bytes),
     )
     .map_err(|error| eyre!(error))?;
     let selected = verify_validator_committee_selection_evidence_v1(
@@ -219,8 +223,9 @@ fn verify_input(
         input.transition_id.into(),
         input.finality_limits,
         verifier.attestations(),
+        verifier.allocation_budget(),
     )
-    .map_err(|error| eyre!("rotation selection evidence is invalid: {error}"))?;
+    .wrap_err("rotation selection evidence verification failed")?;
     let preparation = selected.preparation();
     let incumbent = selected
         .incumbent_authority()
@@ -344,6 +349,14 @@ fn broadcast_public<T: norito::NoritoSerialize>(
         )?;
     }
     Ok(())
+}
+
+/// Explicit bounded operation policy for disposable DKG processes.
+fn credential_memory_args(bytes: std::num::NonZeroUsize) -> [String; 2] {
+    [
+        "--credential-max-memory-bytes".to_owned(),
+        bytes.get().to_string(),
+    ]
 }
 
 fn finality_limit_args(limits: NativeFinalityLimits) -> Vec<String> {
@@ -492,8 +505,9 @@ fn merge_publications(
     session: GlobalThresholdBeaconDkgSessionV1,
     snapshots: &[GlobalThresholdBeaconDkgSnapshotV1],
     crypto: &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<GlobalThresholdBeaconDkgStateV1> {
-    let mut state = GlobalThresholdBeaconDkgStateV1::new(session, crypto)?;
+    let mut state = GlobalThresholdBeaconDkgStateV1::new(session, crypto, budget)?;
     for (index, snapshot) in snapshots.iter().enumerate() {
         let seat_index = u16::try_from(index + 1)?;
         ensure!(
@@ -507,13 +521,17 @@ fn merge_publications(
                 && snapshot.share_acceptances.is_empty(),
             "rotation publication is not one exact signed target seat"
         );
-        let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(snapshot.clone(), crypto)?;
-        state.record_recipient_key(session.start_height, snapshot.recipient_keys[0].clone())?;
+        let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(
+            snapshot,
+            crypto,
+            state.allocation_budget(),
+        )?;
+        state.record_recipient_key(session.start_height, &snapshot.recipient_keys[0])?;
     }
     for snapshot in snapshots {
         state.record_dealer_commitment(
             session.start_height,
-            snapshot.dealer_commitments[0].clone(),
+            &snapshot.dealer_commitments[0],
             crypto,
         )?;
     }
@@ -541,9 +559,13 @@ fn merge_deliveries(
                     .all(|edge| edge.dealer_index == u16::try_from(index + 1).unwrap_or(0)),
             "rotation delivery is not one exact dealer's full private-edge set"
         );
-        let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(snapshot.clone(), crypto)?;
+        let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(
+            snapshot,
+            crypto,
+            state.allocation_budget(),
+        )?;
         for edge in &snapshot.encrypted_shares {
-            state.record_encrypted_share(session.commitments_end_height, edge.clone())?;
+            state.record_encrypted_share(session.commitments_end_height, edge)?;
         }
     }
     Ok(())
@@ -571,9 +593,13 @@ fn merge_acceptances(
                         == u16::try_from(index + 1).unwrap_or(0)),
             "rotation acceptance is not one exact recipient's full edge set"
         );
-        let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(snapshot.clone(), crypto)?;
+        let _ = GlobalThresholdBeaconDkgStateV1::from_snapshot(
+            snapshot,
+            crypto,
+            state.allocation_budget(),
+        )?;
         for acceptance in &snapshot.share_acceptances {
-            state.record_share_acceptance(session.deliveries_end_height, acceptance.clone())?;
+            state.record_share_acceptance(session.deliveries_end_height, acceptance)?;
         }
     }
     Ok(())
@@ -666,6 +692,7 @@ fn spawn_seat(
     let mut command = tokio::process::Command::new(binary);
     command
         .arg("beacon-bootstrap")
+        .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("provision-rotation-seat")
         .arg("--selection-evidence")
         .arg(evidence_path)
@@ -768,10 +795,14 @@ fn verify_genesis_input(
         network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         limits,
+        &iroha_allocation::AllocationBudget::new(limits.allocated_bytes),
     )
     .map_err(|error| eyre!(error))?;
     let session = genesis_dkg_session(network_id, &roster);
-    GlobalThresholdBeaconDkgStateV1::new(session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)?;
+    GlobalThresholdBeaconDkgStateV1::validate_session(
+        &session,
+        &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+    )?;
     Ok((bundle, session, roster, verifier))
 }
 
@@ -853,6 +884,7 @@ fn spawn_genesis_seat(
     let mut command = tokio::process::Command::new(binary);
     command
         .arg("beacon-bootstrap")
+        .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("provision-genesis-seat")
         .arg("--network-id")
         .arg(session.network_id.to_string())
@@ -1047,6 +1079,7 @@ fn spawn_genesis_config_seat(
     let mut command = tokio::process::Command::new(binary);
     command
         .arg("beacon-bootstrap")
+        .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("provision-genesis-seat")
         .arg("--network-id")
         .arg(session.network_id.to_string())
@@ -1177,6 +1210,7 @@ async fn sign_genesis_draft(
     let mut command = tokio::process::Command::new(binary);
     command
         .arg("beacon-bootstrap")
+        .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("sign-genesis-install")
         .arg("--chain-id")
         .arg(chain_id.to_string())
@@ -1241,6 +1275,7 @@ async fn sign_rotation_draft(
     let mut command = tokio::process::Command::new(binary);
     command
         .arg("beacon-bootstrap")
+        .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("sign-rotation")
         .args(proof_args)
         .arg("--bundle")
@@ -1312,11 +1347,14 @@ pub async fn prepare_disposable_pending_custody(
         .chain_id
         .parse::<ChainId>()
         .map_err(|error| eyre!("invalid chain identifier: {error}"))?;
+    let credential_budget =
+        iroha_allocation::AllocationBudget::new(input.credential_max_memory_bytes.get());
     let cursor = NativeJournalCursor::new(
         chain_id.clone(),
         input.network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         input.finality_limits,
+        &credential_budget,
     )
     .map_err(|error| eyre!(error))?;
     let verified = verify_validator_committee_provisioning_evidence_v1(
@@ -1327,8 +1365,9 @@ pub async fn prepare_disposable_pending_custody(
         input.transition_id.into(),
         input.finality_limits,
         cursor.attestations(),
+        &credential_budget,
     )
-    .map_err(|error| eyre!("pending custody evidence is invalid: {error}"))?;
+    .wrap_err("pending custody evidence is invalid")?;
     ensure!(
         verified
             .transition()
@@ -1359,6 +1398,7 @@ pub async fn prepare_disposable_pending_custody(
     let mut command = tokio::process::Command::new(binary);
     command
         .arg("beacon-prepare-custody")
+        .args(credential_memory_args(input.credential_max_memory_bytes))
         .arg("--evidence")
         .arg(&evidence_path)
         .arg("--network-id")
@@ -1421,7 +1461,8 @@ pub async fn prepare_disposable_pending_custody(
 ///
 /// The retained signed genesis supplies body authority; the caller supplies a live native finality
 /// source with explicit bounded admission. This function requests h2, h3, and h4 only after each preceding
-/// public phase is ready. Every seat owns its private DKG share and signing
+/// public phase is ready, supplying its authenticated public-only snapshot to the caller.
+/// Every seat owns its private DKG share and signing
 /// descriptor; only signed public artifacts cross the coordinator.
 ///
 /// # Errors
@@ -1435,7 +1476,7 @@ pub async fn run_disposable_genesis_dkg<F, Fut>(
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
-    F: FnMut(u64) -> Fut,
+    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
     let (bundle, session, roster, verifier) = verify_genesis_input(network, limits)?;
@@ -1479,7 +1520,9 @@ where
 /// This accepts the exact signed manifest and four direct owner-private
 /// validator configs from an external disposable localnet generator. The
 /// signed voter order, h1 authority and every phase finality proof are
-/// revalidated before any credential is returned. No signer key is read into
+/// revalidated before any credential is returned. The phase callback receives
+/// the merged signed public snapshot; plaintext shares remain in their seat.
+/// No signer key is read into
 /// an argument or environment value.
 ///
 /// # Errors
@@ -1497,7 +1540,7 @@ pub async fn run_disposable_genesis_dkg_from_configs<F, Fut>(
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
-    F: FnMut(u64) -> Fut,
+    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
     ensure!(
@@ -1540,11 +1583,14 @@ where
         network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         limits,
+        &iroha_allocation::AllocationBudget::new(limits.allocated_bytes),
     )
     .map_err(|error| eyre!(error))?;
     let session = genesis_dkg_session(network_id, &roster);
-    let _ =
-        GlobalThresholdBeaconDkgStateV1::new(session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)?;
+    let _ = GlobalThresholdBeaconDkgStateV1::validate_session(
+        &session,
+        &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+    )?;
     run_genesis_dkg_with_seats(
         bundle,
         session,
@@ -1580,7 +1626,7 @@ async fn run_genesis_dkg_with_seats<F, Fut, S>(
     mut spawn_seat: S,
 ) -> Result<DisposableGenesisDkgOutput>
 where
-    F: FnMut(u64) -> Fut,
+    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
     S: FnMut(
         &Path,
@@ -1645,28 +1691,36 @@ where
     let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
 
     let publications = wait_for_snapshots(&mut processes, "publication.norito", deadline).await?;
-    let mut public = merge_publications(session, &publications, &crypto)?;
-    broadcast_public(&mut processes, &public.public_snapshot()?, deadline)?;
-    let proof = next_finality(2).await?;
+    let mut public = merge_publications(
+        session,
+        &publications,
+        &crypto,
+        verifier.allocation_budget(),
+    )?;
+    let commitments = public.public_snapshot()?;
+    broadcast_public(&mut processes, commitments.record(), deadline)?;
+    let proof = next_finality(2, commitments).await?;
     advance_native_phase(&mut verifier, &proof, 2)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
 
     let deliveries = wait_for_snapshots(&mut processes, "deliveries.norito", deadline).await?;
     merge_deliveries(&mut public, &deliveries, &crypto)?;
-    broadcast_public(&mut processes, &public.public_snapshot()?, deadline)?;
-    let proof = next_finality(3).await?;
+    let delivered = public.public_snapshot()?;
+    broadcast_public(&mut processes, delivered.record(), deadline)?;
+    let proof = next_finality(3, delivered).await?;
     advance_native_phase(&mut verifier, &proof, 3)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
 
     let acceptances = wait_for_snapshots(&mut processes, "acceptances.norito", deadline).await?;
     merge_acceptances(&mut public, &acceptances, &crypto)?;
-    let assembled = public
-        .finalize(session.acceptances_end_height, &crypto)?
-        .clone();
-    broadcast_public(&mut processes, &assembled, deadline)?;
-    let proof = next_finality(4).await?;
+    // The callback keeps the original funded acceptance graph across finalization.
+    let accepted = public.public_snapshot()?;
+    public.finalize(session.acceptances_end_height, &crypto)?;
+    let assembled = public.into_finalized()?;
+    broadcast_public(&mut processes, assembled.record(), deadline)?;
+    let proof = next_finality(4, accepted).await?;
     advance_native_phase(&mut verifier, &proof, 4)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
@@ -1694,7 +1748,7 @@ where
             norito::canonical_decode_limits(bytes.len()),
         )?;
         ensure!(
-            observed == assembled,
+            &observed == assembled.record(),
             "genesis seat finalized another public transcript"
         );
         outputs.push(DisposableRotationSeatOutput {
@@ -1710,7 +1764,10 @@ where
         });
     }
     let public_session_path = controller_path.join("public-session.norito");
-    fs::write(&public_session_path, norito::encode_canonical(&assembled)?)?;
+    fs::write(
+        &public_session_path,
+        norito::encode_canonical(assembled.record())?,
+    )?;
     let phase_paths = (0..3)
         .map(|index| {
             let path = controller_path.join(format!("phase-{}.norito", index + 2));
@@ -1724,6 +1781,10 @@ where
     let public_bundle_path = controller_path.join("genesis-public-bundle.json");
     let mut assemble_args = vec![
         "beacon-bootstrap".to_owned(),
+        "--credential-max-memory-bytes".to_owned(),
+        iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+            .get()
+            .to_string(),
         "assemble-genesis-dkg".to_owned(),
     ];
     assemble_args.extend(genesis_public_args(
@@ -1773,6 +1834,10 @@ where
     let install_instruction_path = controller_path.join("install-instruction.json");
     let mut install_args = vec![
         "beacon-bootstrap".to_owned(),
+        "--credential-max-memory-bytes".to_owned(),
+        iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+            .get()
+            .to_string(),
         "assemble-genesis-install".to_owned(),
         "--chain-id".to_owned(),
         chain_id.to_string(),
@@ -1868,8 +1933,13 @@ where
     let mut phase_proofs = Vec::with_capacity(3);
 
     let publications = wait_for_snapshots(&mut processes, "publication.norito", deadline).await?;
-    let mut public = merge_publications(session, &publications, &crypto)?;
-    broadcast_public(&mut processes, &public.public_snapshot()?, deadline)?;
+    let mut public = merge_publications(
+        session,
+        &publications,
+        &crypto,
+        verifier.allocation_budget(),
+    )?;
+    broadcast_public(&mut processes, public.public_snapshot()?.record(), deadline)?;
     let proof = next_finality(session.commitments_end_height).await?;
     advance_native_phase(&mut verifier, &proof, session.commitments_end_height)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
@@ -1877,7 +1947,7 @@ where
 
     let deliveries = wait_for_snapshots(&mut processes, "deliveries.norito", deadline).await?;
     merge_deliveries(&mut public, &deliveries, &crypto)?;
-    broadcast_public(&mut processes, &public.public_snapshot()?, deadline)?;
+    broadcast_public(&mut processes, public.public_snapshot()?.record(), deadline)?;
     let proof = next_finality(session.deliveries_end_height).await?;
     advance_native_phase(&mut verifier, &proof, session.deliveries_end_height)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
@@ -1885,10 +1955,9 @@ where
 
     let acceptances = wait_for_snapshots(&mut processes, "acceptances.norito", deadline).await?;
     merge_acceptances(&mut public, &acceptances, &crypto)?;
-    let assembled = public
-        .finalize(session.acceptances_end_height, &crypto)?
-        .clone();
-    broadcast_public(&mut processes, &assembled, deadline)?;
+    public.finalize(session.acceptances_end_height, &crypto)?;
+    let assembled = public.into_finalized()?;
+    broadcast_public(&mut processes, assembled.record(), deadline)?;
     let proof = next_finality(session.acceptances_end_height).await?;
     advance_native_phase(&mut verifier, &proof, session.acceptances_end_height)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
@@ -1910,7 +1979,7 @@ where
             norito::canonical_decode_limits(public_bytes.len()),
         )?;
         ensure!(
-            seat_session == assembled,
+            &seat_session == assembled.record(),
             "seat finalized another public transcript"
         );
         outputs.push(DisposableRotationSeatOutput {
@@ -1926,7 +1995,10 @@ where
         });
     }
     let public_session_path = controller.path().join("public-session.norito");
-    fs::write(&public_session_path, norito::encode_canonical(&assembled)?)?;
+    fs::write(
+        &public_session_path,
+        norito::encode_canonical(assembled.record())?,
+    )?;
     let phase_paths = phase_proofs
         .iter()
         .map(|proof| {
@@ -1953,6 +2025,10 @@ where
     proof_args.extend(finality_limit_args(input.finality_limits));
     let mut assemble_args = vec![
         "beacon-bootstrap".to_owned(),
+        "--credential-max-memory-bytes".to_owned(),
+        iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+            .get()
+            .to_string(),
         "assemble-rotation-dkg".to_owned(),
     ];
     assemble_args.extend(proof_args.iter().cloned());
@@ -1998,6 +2074,10 @@ where
     let finalization_instruction_path = controller.path().join("rotation-finalization.json");
     let mut finalize_args = vec![
         "beacon-bootstrap".to_owned(),
+        "--credential-max-memory-bytes".to_owned(),
+        iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+            .get()
+            .to_string(),
         "assemble-rotation".to_owned(),
     ];
     finalize_args.append(&mut proof_args);
@@ -2024,6 +2104,75 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn public_reducer_admission_retains_original_ceremony_pool_and_retry() {
+        use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseRegistration};
+        use iroha_core::beacon::GlobalThresholdBeaconSessionError;
+        use std::task::{Context, Waker};
+
+        let roster = (1_u8..=4)
+            .map(|seat| {
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![seat; 32], Algorithm::BlsNormal)
+                        .unwrap()
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let network = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            CryptoHash::new(b"disposable DKG original ceremony pool"),
+        ));
+        let session = genesis_dkg_session(network, &roster);
+        let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
+        let budget = AllocationBudget::new(1024 * 1024);
+        let mut slot = budget
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap();
+        let mut registration = ReleaseRegistration::from_reservation(&mut slot).unwrap();
+        drop(slot);
+        let floor = budget.reserved_bytes();
+        // This empty input exercises admission before any signed publication is
+        // received. It does not assert that a complete ceremony has finalized.
+        let initial = merge_publications(session, &[], &crypto, &budget).unwrap();
+        assert!(initial.allocation_budget().same_pool(&budget));
+        let retained_bytes = budget.reserved_bytes() - floor;
+        assert!(retained_bytes > 0);
+        drop(initial);
+        assert_eq!(budget.reserved_bytes(), floor);
+        let blocker = budget
+            .try_reserve_bytes(budget.limit_bytes() - floor)
+            .unwrap();
+        let expected = budget.try_reserve_bytes(retained_bytes).unwrap_err();
+        let error = merge_publications(session, &[], &crypto, &budget)
+            .err()
+            .expect("actual original pool is fully occupied");
+        let Some(GlobalThresholdBeaconSessionError::Admission(actual)) =
+            error.downcast_ref::<GlobalThresholdBeaconSessionError>()
+        else {
+            panic!("relay must retain actual typed original admission: {error:?}");
+        };
+        assert_eq!(actual, &expected);
+        let AllocationRefusal::Capacity { release, .. } = actual else {
+            panic!("occupied original pool has a real release source");
+        };
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(registration.poll_wait(release, &mut context).is_pending());
+        let foreign = AllocationBudget::new(1);
+        drop(foreign.try_reserve_bytes(1).unwrap());
+        assert!(registration.poll_wait(release, &mut context).is_pending());
+        drop(blocker);
+        assert!(registration.poll_wait(release, &mut context).is_ready());
+        registration.cancel();
+        let retry = merge_publications(session, &[], &crypto, &budget).unwrap();
+        assert!(retry.allocation_budget().same_pool(&budget));
+        assert_eq!(retry.session_id(), session.session_id);
+        assert_eq!(budget.reserved_bytes(), floor + retained_bytes);
+        drop(retry);
+        drop(registration);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
     #[test]
     fn pending_custody_descriptor_preserves_record_and_supports_native_consumption() {
         use nix::fcntl::{FcntlArg, OFlag, fcntl};
@@ -2080,6 +2229,14 @@ mod tests {
     }
 
     #[test]
+    fn credential_bound_is_forwarded_exactly_to_native_operation() {
+        assert_eq!(
+            credential_memory_args(std::num::NonZeroUsize::new(123_456).unwrap()),
+            ["--credential-max-memory-bytes", "123456"]
+        );
+    }
+
+    #[test]
     fn native_phase_bounds_are_forwarded_without_context_hash_fallback() {
         let limits = NativeFinalityLimits {
             block_bytes: 1024,
@@ -2108,6 +2265,7 @@ mod tests {
             network,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
             limits,
+            &iroha_allocation::AllocationBudget::new(limits.allocated_bytes),
         )
         .unwrap();
         let journal = NativeFinalityJournal { blocks: Vec::new() };

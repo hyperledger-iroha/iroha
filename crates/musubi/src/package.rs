@@ -2567,7 +2567,7 @@ version = "1.0.0"
 
         fn coordinate_storage(
             &mut self,
-            _request: &MusubiStorageCoordinationRequestV1,
+            _request: &iroha_musubi_service::VerifiedStorageCoordinationRequestV1<'_>,
         ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
         {
             Err(MusubiPublicationServiceBackendErrorV1::Permanent)

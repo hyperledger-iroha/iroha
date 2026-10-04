@@ -1,5 +1,6 @@
 //! Fixed pairing scratch checked against the original independently prepared relation.
 
+use super::dealer_secret_inline::inline_coefficients;
 use super::*;
 use crate::test_allocations::without_allocations;
 use blstrs::G2Prepared;
@@ -120,7 +121,7 @@ fn transcript_and_partials<P: ThresholdBlsPurpose>(
             let (secret, dealer) = DasRenDealerSecret::from_coefficients_with_rng(
                 &parameters,
                 index,
-                coefficients,
+                inline_coefficients(coefficients),
                 &mut rng,
             )
             .unwrap();

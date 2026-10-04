@@ -5,7 +5,7 @@ use crate::{
 };
 use core::str::FromStr;
 use derive_more::Display;
-use error_stack::{Report, ResultExt};
+use error_stack::{AttachmentKind, FrameKind, Report, ResultExt};
 use eyre::Result;
 use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
 use iroha_model_base::chain::ChainId;
@@ -13,7 +13,7 @@ use iroha_primitives::small::SmallStr;
 use iroha_service_model::soranet::AnonymityPolicy;
 use iroha_service_model::soranet::RolloutPhase;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use std::{path::Path, time::Duration};
+use std::{fmt, path::Path, time::Duration};
 use url::Url;
 mod private_key_file;
 mod user;
@@ -46,6 +46,19 @@ pub fn resolve_network_identity(
     );
     emitter.into_result()?;
     identity.ok_or_else(|| Report::new(ParseError::InvalidNetworkIdentity).expand())
+}
+
+/// Treat a Torii API URL as a directory, as route joins require.
+///
+/// `https://host/peer-1` and `https://host/peer-1/` both address routes below
+/// `/peer-1/`. Configuration files and [`crate::client::ClientBuilder::build`]
+/// apply the same rule.
+pub(crate) fn normalize_torii_api_url(mut url: Url) -> Url {
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    url
 }
 
 /// Default time-to-live for transactions submitted via the client API.
@@ -179,10 +192,63 @@ pub struct Config {
     /// Configured rollout phase for staged PQ activation.
     pub sorafs_rollout_phase: RolloutPhase,
 }
-/// An error type for [`Config::load`]
+/// Context of every [`ConfigLoadError`].
 #[derive(thiserror::Error, Debug, Copy, Clone)]
 #[error("Failed to load configuration")]
 pub struct LoadError;
+
+/// Failure to load a client configuration, with every reported cause.
+///
+/// `Display` renders the failed contexts followed by their fix hints on one
+/// line, so `?` into `eyre`, `anyhow` or `Box<dyn Error>` keeps the actionable
+/// message. [`Self::report`] exposes the complete `error_stack` report.
+pub struct ConfigLoadError(Report<[LoadError]>);
+
+impl ConfigLoadError {
+    /// The complete report, including parameter origins and fix hints.
+    pub const fn report(&self) -> &Report<[LoadError]> {
+        &self.0
+    }
+
+    /// Take the complete report.
+    pub fn into_report(self) -> Report<[LoadError]> {
+        self.0
+    }
+}
+
+impl From<Report<LoadError>> for ConfigLoadError {
+    fn from(report: Report<LoadError>) -> Self {
+        Self(report.into())
+    }
+}
+
+impl From<Report<[LoadError]>> for ConfigLoadError {
+    fn from(report: Report<[LoadError]>) -> Self {
+        Self(report)
+    }
+}
+
+impl fmt::Debug for ConfigLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, formatter)
+    }
+}
+
+impl fmt::Display for ConfigLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{:#}", self.0)?;
+        let mut separator = ": ";
+        for frame in self.0.frames() {
+            if let FrameKind::Attachment(AttachmentKind::Printable(hint)) = frame.kind() {
+                write!(formatter, "{separator}{hint}")?;
+                separator = "; ";
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ConfigLoadError {}
 /// Invalid signer-free account network context from a client configuration.
 #[derive(thiserror::Error, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AccountChainDiscriminantError {
@@ -240,7 +306,7 @@ impl Config {
     /// # Errors
     /// Returns an error when the table contains unknown or invalid SDK parameters, environment
     /// overrides are invalid, or completed client configuration validation fails.
-    pub fn load_table(path: impl AsRef<Path>, table: toml::Table) -> ReportResult<Self, LoadError> {
+    pub fn load_table(path: impl AsRef<Path>, table: toml::Table) -> Result<Self, ConfigLoadError> {
         Ok(ConfigReader::new()
             .with_toml_source(TomlSource::new(path.as_ref().to_path_buf(), table))
             .with_env(Box::new(iroha_config_base::env::std_env))
@@ -259,7 +325,7 @@ impl Config {
     /// # Errors
     /// Returns an error when the file cannot be read, its TOML is invalid, or the completed
     /// client configuration fails validation.
-    pub fn load_file(path: impl AsRef<Path>) -> ReportResult<Self, LoadError> {
+    pub fn load_file(path: impl AsRef<Path>) -> Result<Self, ConfigLoadError> {
         let toml_source = TomlSource::from_file(path).change_context(LoadError)?;
         let config = ConfigReader::new()
             .with_toml_source(toml_source)
@@ -280,7 +346,7 @@ impl Config {
     /// parameters, or fails client configuration validation.
     pub fn load_file_with_musubi_publication(
         path: impl AsRef<Path>,
-    ) -> ReportResult<(Self, MusubiPublicationConfig), LoadError> {
+    ) -> Result<(Self, MusubiPublicationConfig), ConfigLoadError> {
         let toml_source = TomlSource::from_file(path).change_context(LoadError)?;
         Self::load_source_with_musubi_publication(toml_source)
     }
@@ -297,7 +363,7 @@ impl Config {
     pub fn load_bytes_with_musubi_publication(
         path: impl AsRef<Path>,
         bytes: &[u8],
-    ) -> ReportResult<(Self, MusubiPublicationConfig), LoadError> {
+    ) -> Result<(Self, MusubiPublicationConfig), ConfigLoadError> {
         let source = core::str::from_utf8(bytes).change_context(LoadError)?;
         let table = source.parse::<toml::Table>().change_context(LoadError)?;
         Self::load_source_with_musubi_publication(TomlSource::new(
@@ -307,7 +373,7 @@ impl Config {
     }
     fn load_source_with_musubi_publication(
         toml_source: TomlSource,
-    ) -> ReportResult<(Self, MusubiPublicationConfig), LoadError> {
+    ) -> Result<(Self, MusubiPublicationConfig), ConfigLoadError> {
         Ok(ConfigReader::new()
             .with_toml_source(toml_source)
             .with_env(|_: &str| None::<std::borrow::Cow<'static, str>>)
@@ -321,13 +387,13 @@ impl Config {
     /// # Errors
     /// - unable to load config from a TOML file
     /// - the config is invalid
-    pub fn load(path: LoadPath<impl AsRef<Path>>) -> ReportResult<Self, LoadError> {
+    pub fn load(path: LoadPath<impl AsRef<Path>>) -> Result<Self, ConfigLoadError> {
         Self::load_with_env(path, Box::new(iroha_config_base::env::std_env))
     }
     fn load_with_env(
         path: LoadPath<impl AsRef<Path>>,
         env: impl ReadEnv + 'static,
-    ) -> ReportResult<Self, LoadError> {
+    ) -> Result<Self, ConfigLoadError> {
         let toml_source = match path {
             LoadPath::Explicit(path) => {
                 Some(TomlSource::from_file(path).change_context(LoadError)?)
@@ -566,6 +632,61 @@ mod tests {
             format!("{error:#?}"),
             "account.private_key and account.private_key_file are mutually exclusive"
         );
+    }
+    #[test]
+    fn load_errors_are_std_errors_with_actionable_messages() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("outer context")]
+        struct Outer;
+        fn assert_std_error<E: std::error::Error + Send + Sync + 'static>(_: &E) {}
+
+        let mut table = config_sample();
+        table
+            .get_mut("account")
+            .and_then(toml::Value::as_table_mut)
+            .expect("client account table")
+            .remove("private_key");
+        let error = Config::load_table("client.toml", table).expect_err("missing signer");
+        assert_std_error(&error);
+        let message = error.to_string();
+        assert!(
+            message.starts_with("Failed to load configuration: "),
+            "{message}"
+        );
+        assert_contains!(message, "missing account private-key source");
+        assert_contains!(format!("{error:?}"), "missing account private-key source");
+        let report: eyre::Report = error.into();
+        assert_contains!(report.to_string(), "missing account private-key source");
+
+        let missing = tempfile::tempdir()
+            .expect("directory")
+            .path()
+            .join("client.toml");
+        let error = Config::load_file(&missing).expect_err("missing file");
+        assert_contains!(
+            format!("{:?}", error.report()),
+            "Failed to load configuration"
+        );
+        // `error_stack` callers keep composing contexts on the typed error.
+        let wrapped = Config::load_file(&missing).change_context(Outer);
+        assert_eq!(
+            wrapped
+                .expect_err("missing file")
+                .current_context()
+                .to_string(),
+            "outer context"
+        );
+    }
+    #[test]
+    fn builder_and_loader_share_trailing_slash_normalization() {
+        for (raw, expected) in [
+            ("http://127.0.0.1:8080", "http://127.0.0.1:8080/"),
+            ("http://127.0.0.1/peer-1", "http://127.0.0.1/peer-1/"),
+            ("http://127.0.0.1/peer-1/", "http://127.0.0.1/peer-1/"),
+        ] {
+            let url = Url::parse(raw).expect("URL");
+            assert_eq!(normalize_torii_api_url(url).as_str(), expected);
+        }
     }
     #[test]
     fn torii_url_scheme_support() {

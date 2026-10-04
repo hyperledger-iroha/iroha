@@ -4,6 +4,48 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Unified Torii collection queries (`specs/torii/collection_queries.md`). Every
+  collection is a `ToriiCollection` on both `ToriiClient` and
+  `ToriiBrowserClient` (`domains`, `accounts`, `assetDefinitions`, `nfts`,
+  `rwas`, `repoAgreements`, `transactions`, `accountAssets(id)`,
+  `assetHolders(id)`, `accountTransactions(id)`) with `list()`, `pages()` and
+  `iterate()` over `POST <collection>/query`. The shared query core exports the
+  `field()` builder, `Filter` (canonical text and JSON forms, checked against
+  `fixtures/torii/list_query/vectors.json`), `SortKey`, `ListQuery` and
+  `decodePage`; pages are `{ items, nextCursor, total }`. Transaction
+  collections are history collections that reject `sort`, `includeTotal` and
+  `aggregate`. The `list*`/`query*`/`iterate*`/`iterate*Query` collection
+  helpers, `queryTransactions`/`iterateTransactionsQuery`, the
+  `*TransactionStatusTyped` and `submitTransactionAndWaitTyped` duplicates, the
+  offset/`count_mode`/`fetch_size` options and the `{Eq: ...}` filter
+  validators are removed.
+- One error hierarchy for both clients: `ToriiError` (`code`, `details`), with
+  `ToriiHttpError` (`status`, envelope `code`/`message`/`details`,
+  `x-iroha-reject-code`), `ListQueryError`, `FilterSyntaxError` (`line`,
+  `column`) and `ToriiStreamGapError`. `ToriiBrowserHttpError` and
+  `ToriiBrowserStreamGapError` are removed.
+- `streamEvents({ filter })` takes the collection-query text grammar (a
+  `Filter`, text or the JSON form) on both clients; the retired
+  `{Pipeline: ...}`/`{VerifyingKey: ...}` filter objects are rejected. Aborting
+  the signal or leaving the loop cancels the response body. Payload frames are
+  typed as `ToriiEventFrame<ToriiEventPayload>`, a union discriminated on
+  `category`, `event` and `status` (transaction rejections carry
+  `rejection_code` and `rejection_reason`); unrecognized kinds pass through
+  unchanged, u64 values beyond `Number.MAX_SAFE_INTEGER` decode as `bigint`,
+  and a payload that is not a JSON object fails with `invalid_response`. The
+  stale `MergeLedger` event and `status: string` typings are removed.
+- Collection row types mark only the identifying fields as always present;
+  every other field is optional and nullable, and u64 fields are `ToriiU64`.
+  Transaction rows carry `block_height`, `block_index`, `block_hash`,
+  `asset_ids` and `asset_definition_ids` (no `asset_id`).
+- Fixed: base URL path prefixes are kept; `getHealth()`/`getMetrics()` read
+  `/health` and `/metrics`; the public capability preflight sends no
+  credentials and no longer caches a failed or mismatched probe;
+  `fetchImpl` is never called with a client receiver; the browser client no
+  longer lowercases sort keys; `submitTransactionAndWait` derives the
+  transaction hash from the signed bytes and only verifies an asserted
+  `hashHex`; body reads honour abort signals.
+
 - Corrected retail-fee quote and assessment framing to use the declared 16-byte
   Norito schema identities. Canonical markers and payment-intent hashes now use
   the same header layout as the native codecs.

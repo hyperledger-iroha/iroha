@@ -1025,18 +1025,25 @@ fn decode_receipt(path: &Path) -> Result<DaIngestReceipt, Box<dyn Error>> {
 }
 fn decode_commitments(path: &Path) -> Result<Vec<CommitmentArtifact>, Box<dyn Error>> {
     let bytes = fs::read(path)?;
-    if let Ok(block) = decode_framed_signed_block(&bytes)
-        && let Some(bundle) = block.da_commitments()
-    {
-        let height = block.header().height();
-        return Ok(bundle
-            .commitments
-            .iter()
-            .map(|record| CommitmentArtifact {
-                record: record.clone(),
-                source: format!("{}#block_height={}", path.display(), height.get()),
-            })
-            .collect());
+    match decode_framed_signed_block(&bytes) {
+        Ok(block) => {
+            if let Some(bundle) = block.da_commitments() {
+                let height = block.header().height();
+                return Ok(bundle
+                    .commitments
+                    .iter()
+                    .map(|record| CommitmentArtifact {
+                        record: record.clone(),
+                        source: format!("{}#block_height={}", path.display(), height.get()),
+                    })
+                    .collect());
+            }
+        }
+        Err(error) if error.kind() != norito::core::DecodeAttemptErrorKind::Invalid => {
+            // A refused canonical block attempt cannot authorize another format probe.
+            return Err(Box::new(error));
+        }
+        Err(_) => {}
     }
     if let Ok(bundle) = decode_from_bytes::<DaCommitmentBundle>(&bytes) {
         return Ok(bundle
@@ -1648,6 +1655,58 @@ mod tests {
             ),
             source: String::from("block.block"),
         }
+    }
+    #[test]
+    fn commitment_block_decode_keeps_original_scope_and_retries_unchanged_file() {
+        use iroha_data_model::{
+            block::{BlockHeader, BlockPayload, SignedBlock},
+            da::commitment::DaCommitmentBundle,
+        };
+        use norito::core::DecodeAttemptErrorKind;
+        use std::{error::Error as _, num::NonZeroU64};
+
+        let expected = sample_commitment([1; 32], [2; 32], [3; 32]).record;
+        let bundle = DaCommitmentBundle::new(vec![expected.clone()]);
+        let mut header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
+        header.set_da_commitments_hash(bundle.merkle_commitment());
+        let block = SignedBlock::unsigned_with_payload(BlockPayload {
+            header,
+            external_entrypoints: Vec::new(),
+            execution_context: None,
+            da_commitments: Some(bundle),
+            da_proof_policies: None,
+            da_pin_intents: None,
+            npos_consensus_effects: None,
+            global_beacon_pulse: None,
+        });
+        let wire = block.encode_wire().expect("canonical DA block fixture");
+        let directory = tempfile::tempdir().expect("temporary original file");
+        let path = directory.path().join("block.norito");
+        std::fs::write(&path, &wire).expect("original block bytes");
+        let refusal = match norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || super::decode_commitments(&path),
+        ) {
+            Err(original) => original,
+            Ok(_) => panic!("actual inherited allocation ceiling must refuse the block attempt"),
+        };
+        let original = refusal
+            .downcast_ref::<norito::core::DecodeAttemptError>()
+            .expect("alternate bundle/JSON probes must not replace the original cause");
+        assert_eq!(original.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+        assert!(
+            original.source().is_some(),
+            "original Norito error remains available after scope exit"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), wire);
+        let records = super::decode_commitments(&path).expect("retry exact unchanged block");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].record, expected);
+        assert_eq!(
+            records[0].source,
+            format!("{}#block_height=1", path.display())
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), wire);
     }
     #[test]
     fn blob_class_labels_are_stable() {

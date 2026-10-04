@@ -14,6 +14,7 @@ use super::super::{
 };
 use super::*;
 
+/// Canonical role material stays owned through the complete generated pair lifetime.
 pub(crate) struct GeneratedOrdinaryGuardEqV1 {
     pub(crate) parameters: Arc<[u8]>,
     pub(crate) proving_key: Arc<[u8]>,
@@ -26,6 +27,7 @@ pub(crate) struct GeneratedOrdinaryGuardEqV1 {
     pub(crate) history: KagemushaEqAccumulatorV1,
 }
 
+/// Retain the same Ep role originals alongside its authenticated proof and history.
 pub(crate) struct GeneratedOrdinaryGuardEpV1 {
     pub(crate) parameters: Arc<[u8]>,
     pub(crate) proving_key: Arc<[u8]>,

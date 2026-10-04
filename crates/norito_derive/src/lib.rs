@@ -27,6 +27,7 @@ use syn::{
 };
 
 mod binary_decode;
+mod field_destination;
 use binary_decode::{derive_enum_deserialize, derive_struct_deserialize};
 
 mod decode_validation;
@@ -578,6 +579,7 @@ struct ContainerAttr {
     validate: Option<syn::Path>,
     deny_unknown_fields: bool,
     decode_from_slice: bool,
+    decode_fields: bool,
     reuse_archived: bool,
     no_fast_from_json: bool,
     tag: Option<String>,
@@ -614,6 +616,14 @@ impl ContainerAttr {
                         return Err(meta.error("duplicate deny_unknown_fields attribute"));
                     }
                     out.deny_unknown_fields = true;
+                } else if meta.path.is_ident("decode_fields") {
+                    if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+                        return Err(meta.error("decode_fields does not take a value"));
+                    }
+                    if out.decode_fields {
+                        return Err(meta.error("duplicate decode_fields attribute"));
+                    }
+                    out.decode_fields = true;
                 } else if meta.path.is_ident("decode_from_slice") {
                     if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
                         return Err(

@@ -21,7 +21,7 @@ export function sorafsReplicationProjectionFixture(owner) {
     provider_completions: [{
       provider_hex: order.assignments[0].provider_id_hex, completed_by: owner,
       completion_epoch: order.issued_at + 10, assignment_revision: 1,
-      completion_authority: { provider_owner: owner, signer_policy: {
+      completion_authority: { provider_owner: owner, completion_signer: owner, signer_policy: {
         policy_id_hex: "31".repeat(32), revision: 2, predecessor_digest_hex: "32".repeat(32), policy_digest_hex: "33".repeat(32),
       } },
       finalized_anchor: { height: 51, block_hash_hex: "42".repeat(32) },

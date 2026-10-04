@@ -220,3 +220,85 @@ fn element_sequence_keeps_individually_framed_bytes_in_every_layout() {
         assert_eq!(bytes, expected, "flags {flags:#x}");
     }
 }
+
+#[test]
+fn bounded_nested_counting_matches_exact_length_and_restores_scope() {
+    for flags in layouts() {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let calls = AtomicUsize::new(0);
+        let source = Layer {
+            value: vec![
+                Layer {
+                    value: Leaf(&calls),
+                },
+                Layer {
+                    value: Leaf(&calls),
+                },
+            ],
+        };
+        let exact = encoded_payload_len(&source).unwrap();
+        calls.store(0, Ordering::Relaxed);
+        assert_eq!(encoded_payload_len_bounded(&source, exact).unwrap(), exact);
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert!(encoded_payload_len_bounded(&source, exact - 1).is_err());
+        assert_eq!(encoded_payload_len_bounded(&source, exact).unwrap(), exact);
+        assert_eq!(encoded_payload_len(&source).unwrap(), exact);
+        let frame = encoded_frame_len(&17_u64).unwrap();
+        assert_eq!(encoded_frame_len_bounded(&17_u64, frame).unwrap(), frame);
+        assert!(encoded_frame_len_bounded(&17_u64, frame - 1).is_err());
+        assert!(encoded_frame_len_bounded(&17_u64, 0).is_err());
+    }
+}
+
+#[test]
+fn finite_count_refuses_large_child_before_visiting_later_elements() {
+    for flags in layouts() {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let calls = AtomicUsize::new(0);
+        let source = Layer {
+            value: (0..1024)
+                .map(|_| Layer {
+                    value: Leaf(&calls),
+                })
+                .collect::<Vec<_>>(),
+        };
+        assert!(encoded_payload_len_bounded(&source, 64).is_err());
+        assert!(calls.load(Ordering::Relaxed) < 64);
+        calls.store(0, Ordering::Relaxed);
+        encoded_payload_len(&source).unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1024);
+    }
+}
+
+#[test]
+fn ignored_finite_count_refusal_cannot_publish_successful_length() {
+    struct Ignored;
+    impl SerializePayload for Ignored {
+        fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
+            let _ = writer.write_all(&[7; 64]);
+            Ok(())
+        }
+    }
+    assert!(encoded_payload_len_bounded(&Ignored, 63).is_err());
+    assert_eq!(encoded_payload_len_bounded(&Ignored, 64).unwrap(), 64);
+}
+
+#[test]
+fn bounded_count_includes_every_embedded_frame_header() {
+    #[derive(crate::SerializePayload, crate::NoritoSchema)]
+    #[norito_schema(name = "norito::bounded_count::EmptyFrame")]
+    struct EmptyFrame;
+    struct Frames;
+    impl SerializePayload for Frames {
+        fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
+            for _ in 0..8 {
+                write_frame_with_prefix(&EmptyFrame, writer, |_, _| Ok(()))?;
+            }
+            Ok(())
+        }
+    }
+    let exact = encoded_payload_len(&Frames).unwrap();
+    assert_eq!(encoded_payload_len_bounded(&Frames, exact).unwrap(), exact);
+    assert!(encoded_payload_len_bounded(&Frames, exact - 1).is_err());
+    assert!(encoded_payload_len_bounded(&Frames, 0).is_err());
+}

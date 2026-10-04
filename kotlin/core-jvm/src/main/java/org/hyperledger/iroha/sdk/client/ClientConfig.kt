@@ -17,6 +17,8 @@ import org.hyperledger.iroha.sdk.telemetry.*
 class ClientConfig private constructor(builder: Builder) {
     private val localSigningContext: LocalSigningContext? = builder.localSigningContext
     private val operatorSigningContext: OperatorSigningContext? = builder.operatorSigningContext
+    private val canonicalAuth: ToriiCanonicalRequestAuth? = builder.canonicalAuth
+    private val allowPlaintextLoopback: Boolean = builder.allowPlaintextLoopback
     private val baseUri: URI = builder.baseUri
     private val sorafsGatewayUri: URI = builder.sorafsGatewayUri ?: builder.baseUri
     private val requestTimeout: Duration = builder.requestTimeout
@@ -37,6 +39,11 @@ class ClientConfig private constructor(builder: Builder) {
     private val crashTelemetryHandler: CrashTelemetryHandler?
 
     init {
+        if (canonicalAuth != null) {
+            checkNotNull(localSigningContext) {
+                "canonicalAuth requires a localSigningContext carrying the exact NetworkId"
+            }
+        }
         val resolvedExporterName = builder.resolveTelemetryExporterName()
         val instrumentedSink = if (builder.telemetrySink == null) null else TelemetryExportStatusSink.wrap(builder.telemetrySink, resolvedExporterName)
         val observerList = ArrayList(builder.observers)
@@ -66,6 +73,19 @@ class ClientConfig private constructor(builder: Builder) {
         checkNotNull(operatorSigningContext) {
             "operatorSigningContext must be configured before an operator request"
         }
+
+    /**
+     * Default account identity for requests where a signature is optional, such as collection
+     * queries (a signature only widens visibility into restricted dataspaces). `null` sends them
+     * anonymously.
+     */
+    fun canonicalAuth(): ToriiCanonicalRequestAuth? = canonicalAuth
+
+    /**
+     * Whether credential-bearing requests may use plain `http` to a loopback host (`localhost`,
+     * `127.0.0.0/8`, `::1`) for local development networks. Remote hosts always require `https`.
+     */
+    fun allowPlaintextLoopback(): Boolean = allowPlaintextLoopback
 
     fun baseUri(): URI = baseUri
     /** Base URI used for SoraFS gateway requests. Defaults to [baseUri] when unset. */
@@ -108,6 +128,8 @@ class ClientConfig private constructor(builder: Builder) {
             .setCrashTelemetryEnabled(crashTelemetryEnabled)
         localSigningContext?.let(builder::setLocalSigningContext)
         operatorSigningContext?.let(builder::setOperatorSigningContext)
+        canonicalAuth?.let(builder::setCanonicalAuth)
+        builder.setAllowPlaintextLoopback(allowPlaintextLoopback)
         return builder
     }
 
@@ -145,6 +167,8 @@ class ClientConfig private constructor(builder: Builder) {
     class Builder {
         internal var localSigningContext: LocalSigningContext? = null
         internal var operatorSigningContext: OperatorSigningContext? = null
+        internal var canonicalAuth: ToriiCanonicalRequestAuth? = null
+        internal var allowPlaintextLoopback: Boolean = false
         internal var baseUri: URI = URI.create("http://localhost:8080")
         internal var sorafsGatewayUri: URI? = null
         internal var requestTimeout: Duration = Duration.ofSeconds(10)
@@ -173,6 +197,23 @@ class ClientConfig private constructor(builder: Builder) {
             this.operatorSigningContext = context
             return this
         }
+        /**
+         * Sign requests whose signature is optional (collection queries) with [auth]. Requires a
+         * [LocalSigningContext]; [auth] must use per-request freshness (no explicit nonce).
+         */
+        fun setCanonicalAuth(auth: ToriiCanonicalRequestAuth?): Builder {
+            require(auth == null || !auth.hasExplicitFreshness) {
+                "a client-wide canonicalAuth signs many requests; omit timestampMs/nonce"
+            }
+            this.canonicalAuth = auth
+            return this
+        }
+
+        /**
+         * Allow credential-bearing requests over plain `http` to loopback hosts only, for local
+         * development networks. Off by default.
+         */
+        fun setAllowPlaintextLoopback(allow: Boolean): Builder { this.allowPlaintextLoopback = allow; return this }
         fun setBaseUri(baseUri: URI): Builder { this.baseUri = baseUri; return this }
         fun setSorafsGatewayUri(sorafsGatewayUri: URI): Builder { this.sorafsGatewayUri = sorafsGatewayUri; return this }
         fun setRequestTimeout(requestTimeout: Duration?): Builder { if (requestTimeout != null && !requestTimeout.isNegative) this.requestTimeout = requestTimeout; return this }

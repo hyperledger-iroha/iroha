@@ -101,9 +101,7 @@ try
             CanonicalRequestCredentials = credentials,
         });
 
-    var accounts = await client.Torii.GetAccountsAsync(
-        limit: 25,
-        cancellationToken: cancellationToken);
+    var capabilities = await client.Torii.GetNodeCapabilitiesAsync(cancellationToken);
 }
 finally
 {
@@ -115,6 +113,126 @@ finally
 API, and zeros its owned copy when disposed. `Ed25519KeyPair` follows the same ownership
 model; its deliberately named `ExportPrivateKeySeed()` returns a caller-owned secret
 that must also be zeroed.
+
+## Query collections
+
+Every Torii collection uses one query language and one page envelope
+(`{"items": [...], "next_cursor": ..., "total": ...}`; see
+`specs/torii/collection_queries.md`). `ToriiClient` exposes the ten collections as
+`ToriiCollection<T>` values with typed rows: `Domains`, `Accounts`, `AssetDefinitions`,
+`Nfts`, `Rwas`, `RepoAgreements`, `AccountAssets(accountId)`,
+`AssetHolders(assetDefinitionId)`, `Transactions` and `AccountTransactions(accountId)`.
+Reads are public; when credentials are configured the request is signed, which only widens
+visibility into restricted dataspaces. Row identity fields (`Id`; `AccountId`, `Asset`,
+`Scope` and `Quantity` for balances; `EntrypointHash`, `BlockHeight` and `BlockIndex` for
+transactions) are always present; every other field may be `null`.
+
+```csharp
+using Hyperledger.Iroha.Query;
+using Hyperledger.Iroha.Torii;
+
+// One page, filtered and sorted. Quantities are exact decimals (never doubles).
+var query = new ListQuery
+{
+    Filter = Filter.Field("scope").Eq("global") & Filter.Field("quantity").Gte(10.5m),
+    Sort = ["-quantity", "account_id"],
+    Limit = 50,
+};
+Page<AssetHolderRow> page = await client.Torii.AssetHolders(assetDefinitionId)
+    .GetPageAsync(query, cancellationToken);
+
+// Every item: the iterator follows next_cursor until the last page.
+await foreach (var holder in client.Torii.AssetHolders(assetDefinitionId)
+    .EnumerateAsync(query, cancellationToken))
+{
+    Console.WriteLine($"{holder.AccountId}: {holder.Quantity}");
+}
+```
+
+- Filters build with `Filter.Field(...)` and combine with `&`, `|` and `!`; parse the text
+  form with `Filter.Parse("owned_by = \"alice\" and quantity >= 10.5")`, or pass text
+  through unchanged with `ListQuery.FilterText`. `ToString()` renders the canonical text
+  and `ToJson()` the canonical JSON form.
+- Decimals are exact: pass `decimal`, `NumericV1` values or decimal strings. Torii rejects
+  fractional JSON numbers, including inside structured literals, and so does the SDK.
+- Object and array literals (`FilterLiteral.Json(...)`, for `metadata.<key>` values) exist
+  only in the JSON form. Collection reads always send JSON, so they work there;
+  `ListQuery.ToQueryString()` and event streams reject them with `invalid_filter`.
+- Sort keys use the text spelling (``"-metadata.`ui-order`"``) in both forms; `Select`,
+  `GroupBy` and filter JSON arguments use raw dotted paths (`"metadata.ui-order"`).
+- Projections (`Select`) and aggregates (`Aggregate`) return partial or computed rows;
+  read them as `JsonObject` through `.Rows`, for example
+  `client.Torii.AssetHolders(id).Rows.GetPageAsync(aggregateQuery)`. A read whose visible
+  rows span several dataspace routes cannot be aggregated exactly and fails with
+  `invalid_aggregate`; page through the rows instead.
+- `Cursor` resumes after a page (`query with { Cursor = page.NextCursor }`);
+  `IncludeTotal = true` adds `Page<T>.Total`.
+
+`Transactions` (`POST /v1/transactions/query`) and `AccountTransactions(accountId)` are
+history collections. Rows come newest first by `block_height`, then `block_index`, and the
+cursor holds block coordinates, so transactions committed while paging never shift later
+pages. `Sort`, `IncludeTotal` and `Aggregate` would scan the whole history and are rejected
+before dispatch (`invalid_sort`, `invalid_include_total`, `invalid_aggregate`). Each page has
+a bounded scan budget, so a selective filter can return a short or even empty page that
+still has a `NextCursor`; the iterators keep following it until it is `null`. Bounds on
+`block_height` in the filter's top-level `and` also bound the scan, and the list fields
+`asset_ids` and `asset_definition_ids` match element-wise (`=` and `in` keep rows where any
+element matches; `!=` and `not in` rows where none does):
+
+```csharp
+var failed = new ListQuery
+{
+    Filter = Filter.Field("block_height").Gte(1200)
+        & Filter.Field("asset_definition_ids").Eq(assetDefinitionId)
+        & Filter.Field("result_ok").Eq(false),
+};
+await foreach (var transaction in client.Torii.Transactions.EnumerateAsync(failed, cancellationToken))
+{
+    Console.WriteLine($"{transaction.BlockHeight}/{transaction.BlockIndex}: {transaction.EntrypointHash}");
+}
+```
+
+Invalid controls are rejected before any request with `ListQueryException`, and Torii
+rejections arrive as `ToriiApiException`; both derive from `IrohaException` and carry the
+Torii error code:
+
+```csharp
+try
+{
+    await client.Torii.Domains.GetPageAsync(new ListQuery { FilterText = userInput }, cancellationToken);
+}
+catch (IrohaException error) when (error.Code == "invalid_filter")
+{
+    Console.WriteLine($"{error.Message} (hint: {error.Details?.Hint})");
+}
+```
+
+Event streams (`GET /v1/events/sse`) take the same text grammar, restricted to what event
+subscriptions match: the fields `tx_status`, `tx_hash`, `tx_block_height`, `tx_lane_id`,
+`tx_dataspace_id`, `block_status`, `block_height`, `proof_backend`, `proof_call_hash` and
+`proof_envelope_hash`; `=` and `in` combined with `and` and `or`; `not` only over a status
+equality; and `tx_block_height is null`. Torii rejects anything else with `invalid_filter`.
+`StreamEventsAsync` decodes each payload into a `ToriiEvent` record:
+`ToriiTransactionEvent` (`Status` is `Queued`, `Expired`, `Approved` or `Rejected`, with
+`RejectionCode` and `RejectionReason` when rejected), `ToriiBlockEvent`,
+`ToriiPipelineWarningEvent`, `ToriiWitnessEvent`, `ToriiProofVerificationEvent`,
+`ToriiProofPrunedEvent`, `ToriiDataEvent` and `ToriiOtherEvent`. Events the SDK does not
+model arrive as `ToriiUnknownEvent` with the raw payload instead of failing the stream, and a
+terminal `stream_error` frame ends it with `ToriiStreamException`.
+`StreamPipelineEventsAsync` and `StreamProofEventsAsync` keep one event family, and
+`StreamServerSentEventsAsync` returns the raw frames.
+
+```csharp
+var filter = Filter.Field("tx_hash").Eq(transactionHashHex)
+    & Filter.Field("tx_status").In("Approved", "Rejected");
+await foreach (var pipelineEvent in client.Torii.StreamPipelineEventsAsync(filter, cancellationToken))
+{
+    if (pipelineEvent is ToriiTransactionEvent transaction)
+    {
+        Console.WriteLine($"{transaction.Hash}: {transaction.Status} {transaction.RejectionCode}");
+    }
+}
+```
 
 ## Prepared onboarding and faucet operations
 
@@ -171,8 +289,10 @@ single-operation construction object.
 
 ## Errors, cancellation, and transport ownership
 
-- Non-success HTTP responses throw `ToriiApiException` with status, request URI, and a
-  bounded response body.
+- Every SDK error with a stable code derives from `IrohaException` (`Code`, `StatusCode`,
+  `Details`). Non-success HTTP responses throw `ToriiApiException`, which parses the
+  Torii `{code, message, details}` envelope and the `x-iroha-reject-code` header
+  (`RejectCode`) and keeps the request URI and bounded response body.
 - Protocol-shape failures throw `JsonException` or `InvalidDataException` before a DTO
   reaches application code.
 - Caller cancellation remains `OperationCanceledException`.

@@ -96,7 +96,7 @@ impl PublicationAuthorityFixture {
                 endpoint.endpoint.kind = sorafs_manifest::provider_advert::EndpointKind::Torii;
                 endpoint.endpoint.host_pattern = "127.0.0.1".into();
                 endpoint.attestation.kind =
-                    sorafs_manifest::provider_admission::EndpointAttestationKind::Mtls;
+                    sorafs_manifest::provider_admission::EndpointAttestationKind::Tls;
                 endpoint.attestation.attested_at = now - 120;
                 endpoint.attestation.expires_at = now + 86400;
             }

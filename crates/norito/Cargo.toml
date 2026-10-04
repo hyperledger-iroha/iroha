@@ -8,6 +8,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+iroha_allocation.workspace = true
 byteorder = "1.5"
 thiserror.workspace = true
 norito_derive = { path = "../norito_derive" }

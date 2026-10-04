@@ -292,9 +292,17 @@ fn validate_taira_launcher_config_v1(config: &Config) -> Result<(), String> {
     )
 }
 
-/// Payload-free fixed-descriptor signer startup failure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Fixed-descriptor signer startup failure with payload-free display.
+#[derive(Debug)]
 pub enum TairaRuntimeSignerErrorV1 {
+    /// Original local decoder failure, retained until the registry boundary.
+    CredentialDecode(norito::core::DecodeAttemptError),
+    /// Original local session admission or construction failure until the registry boundary.
+    CredentialSession(iroha_core::beacon::GlobalThresholdBeaconSessionError),
+    /// Exact original credential producer refusal; never invalid key material.
+    CredentialOutput(iroha_core::beacon::credential::GlobalBeaconCredentialEncodeErrorV1),
+    /// The credential is locally unavailable without a more specific original cause.
+    CredentialUnavailable,
     /// A fixed runtime descriptor is absent or unreadable.
     DescriptorUnavailable,
     /// The descriptor does not identify one stable owner-only regular file.
@@ -307,13 +315,26 @@ impl fmt::Display for TairaRuntimeSignerErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::DescriptorUnavailable => "Taira runtime signer descriptor is unavailable",
+            Self::CredentialUnavailable => "Taira beacon credential memory is unavailable",
+            Self::CredentialDecode(_) => "Taira beacon credential decoder is unavailable",
+            Self::CredentialSession(_) => "Taira beacon credential session is unavailable",
+            Self::CredentialOutput(_) => "Taira beacon credential output is unavailable",
             Self::UntrustedDescriptor => "Taira runtime signer descriptor is not trusted",
             Self::InvalidKey => "Taira runtime signer key record is invalid",
         })
     }
 }
 
-impl std::error::Error for TairaRuntimeSignerErrorV1 {}
+impl std::error::Error for TairaRuntimeSignerErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CredentialDecode(error) => Some(error),
+            Self::CredentialSession(error) => Some(error),
+            Self::CredentialOutput(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DescriptorIdentityV1 {
@@ -438,6 +459,16 @@ pub(crate) fn load_private_record_from_file<T>(
         return Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor);
     }
     let parsed = parse(&bytes);
+    if matches!(
+        &parsed,
+        Err(TairaRuntimeSignerErrorV1::CredentialUnavailable
+            | TairaRuntimeSignerErrorV1::CredentialDecode(_)
+            | TairaRuntimeSignerErrorV1::CredentialSession(_)
+            | TairaRuntimeSignerErrorV1::CredentialOutput(_))
+    ) {
+        // A host-local refusal is retryable; it must not consume the original credential.
+        return parsed;
+    }
     bytes.fill(0);
     consume_trusted_key_file(&mut file, &before, &bytes)?;
     parsed
@@ -497,6 +528,7 @@ fn load_global_beacon_signer_from_file(
     file: File,
     network_id: &NetworkId,
     configured: &IrohaRuntimeProviderBindingV1,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<
     Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
     TairaRuntimeSignerErrorV1,
@@ -513,15 +545,22 @@ fn load_global_beacon_signer_from_file(
     }
     load_private_record_from_file(file, length, |bytes| {
         crate::external_software_signer::decode_global_beacon_runtime_signer_v1(
-            bytes, network_id, configured,
+            bytes, network_id, configured, budget,
         )
-        .map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)
+        .map_err(|error| match error {
+            crate::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(error) => TairaRuntimeSignerErrorV1::CredentialDecode(error),
+            crate::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::Session(error) => TairaRuntimeSignerErrorV1::CredentialSession(error),
+            crate::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::Output(error) => TairaRuntimeSignerErrorV1::CredentialOutput(error),
+            crate::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable => TairaRuntimeSignerErrorV1::CredentialUnavailable,
+            _ => TairaRuntimeSignerErrorV1::InvalidKey,
+        })
     })
 }
 
 fn load_inherited_global_beacon_signer(
     network_id: &NetworkId,
     configured: &IrohaRuntimeProviderBindingV1,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<
     Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
     TairaRuntimeSignerErrorV1,
@@ -530,6 +569,7 @@ fn load_inherited_global_beacon_signer(
         take_inherited_private_file(TAIRA_GLOBAL_BEACON_CREDENTIAL_FD_V1)?,
         network_id,
         configured,
+        budget,
     )
 }
 
@@ -596,12 +636,14 @@ fn taira_runtime_signer(
 }
 
 struct TairaRuntimeProviderRegistryV1 {
+    credential_budget: std::sync::OnceLock<iroha_allocation::AllocationBudget>,
     signer: Arc<node_secrets::FileRuntimeSignerV1>,
 }
 
 impl TairaRuntimeProviderRegistryV1 {
     fn from_inherited_descriptor() -> Result<Self, TairaRuntimeSignerErrorV1> {
         Ok(Self {
+            credential_budget: std::sync::OnceLock::new(),
             signer: Arc::new(taira_runtime_signer(load_inherited_key_pair()?)?),
         })
     }
@@ -643,12 +685,19 @@ impl TairaRuntimeProviderRegistryV1 {
         load_beacon: impl FnOnce(
             &NetworkId,
             &IrohaRuntimeProviderBindingV1,
+            &iroha_allocation::AllocationBudget,
         ) -> Result<
             Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
             TairaRuntimeSignerErrorV1,
         >,
     ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
         let (requested, beacon) = select_taira_provider_bindings(bindings.iter())?;
+        let credential_budget = self
+            .credential_budget
+            .get_or_init(|| bindings.new_credential_registry_budget_v1());
+        if credential_budget.limit_bytes() != bindings.credential_max_memory_bytes() {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+        }
         let exact = requested
             .soracloud_runtime_signer_binding()
             .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
@@ -668,13 +717,19 @@ impl TairaRuntimeProviderRegistryV1 {
             IrohaRuntimeDeps::default().with_soracloud_runtime_mutation_signer(signer);
         if let Some(beacon) = beacon {
             let signer =
-                load_beacon(bindings.network_id(), beacon).map_err(|error| match error {
-                    TairaRuntimeSignerErrorV1::DescriptorUnavailable => {
-                        IrohaRuntimeProviderRegistryErrorV1::Unavailable
-                    }
-                    TairaRuntimeSignerErrorV1::UntrustedDescriptor
-                    | TairaRuntimeSignerErrorV1::InvalidKey => {
-                        IrohaRuntimeProviderRegistryErrorV1::BindingMismatch
+                load_beacon(bindings.network_id(), beacon, credential_budget).map_err(|error| {
+                    match error {
+                        TairaRuntimeSignerErrorV1::DescriptorUnavailable
+                        | TairaRuntimeSignerErrorV1::CredentialUnavailable
+                        | TairaRuntimeSignerErrorV1::CredentialDecode(_)
+                        | TairaRuntimeSignerErrorV1::CredentialSession(_)
+                        | TairaRuntimeSignerErrorV1::CredentialOutput(_) => {
+                            IrohaRuntimeProviderRegistryErrorV1::Unavailable
+                        }
+                        TairaRuntimeSignerErrorV1::UntrustedDescriptor
+                        | TairaRuntimeSignerErrorV1::InvalidKey => {
+                            IrohaRuntimeProviderRegistryErrorV1::BindingMismatch
+                        }
                     }
                 })?;
             dependencies = dependencies.with_sumeragi_global_beacon_partial_signer(signer);
@@ -733,6 +788,9 @@ pub fn main_entry(build: iroha_core::release_identity::CompiledBuildMetadata) {
 
 #[cfg(test)]
 mod tests {
+    fn beacon_test_budget() -> iroha_allocation::AllocationBudget {
+        iroha_allocation::AllocationBudget::new(64 * 1024 * 1024)
+    }
     use super::*;
     use crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1;
     use iroha_crypto::{Algorithm, ExposedPrivateKey};
@@ -1576,10 +1634,10 @@ mod tests {
             DescriptorIdentityV1::from_metadata(&file.metadata().expect("launch metadata"));
         erase_trusted_key_file(&mut file, &[0; 71]).expect("erase launch record");
         fs::hard_link(&launch, directory.path().join("alias.fd198")).expect("add a link");
-        assert_eq!(
+        assert!(matches!(
             verify_consumed_key_file(&file, &identity),
             Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
-        );
+        ));
 
         let (_directory, launch) = staged_launch_key(&key_pair, "chmod.fd198");
         let mut file = open_consumable_key_file(&launch);
@@ -1588,10 +1646,10 @@ mod tests {
         erase_trusted_key_file(&mut file, &[0; 71]).expect("erase launch record");
         fs::set_permissions(&launch, fs::Permissions::from_mode(0o644)).expect("weaken mode");
         fs::remove_file(&launch).expect("launcher removes the consumed path");
-        assert_eq!(
+        assert!(matches!(
             verify_consumed_key_file(&file, &identity),
             Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
-        );
+        ));
     }
 
     #[test]
@@ -1825,6 +1883,7 @@ mod tests {
 
     fn fixture_registry() -> TairaRuntimeProviderRegistryV1 {
         TairaRuntimeProviderRegistryV1 {
+            credential_budget: std::sync::OnceLock::new(),
             signer: Arc::new(
                 taira_runtime_signer(fixture_key_pair()).expect("fixture Soracloud signer"),
             ),
@@ -1966,6 +2025,7 @@ mod tests {
             open_consumable_key_file(&launch),
             fixture.catalog.network_id(),
             binding,
+            &beacon_test_budget(),
         )
         .expect("load exact native beacon credential");
         assert_eq!(
@@ -1977,7 +2037,7 @@ mod tests {
         let digest =
             iroha_core::beacon::credential::global_beacon_partial_signer_public_inventory_digest_v1(
                 *fixture.catalog.network_id(),
-                &[(fixture.session.record().clone(), 1)],
+                &[(fixture.session.record(), 1)],
             )
             .expect("derive public inventory without private components");
         assert_eq!(binding.policy_digest(), Some(digest));
@@ -2020,7 +2080,8 @@ mod tests {
             load_global_beacon_signer_from_file(
                 open_consumable_key_file(&path),
                 &foreign_network,
-                exact
+                exact,
+                &beacon_test_budget(),
             ),
             Err(TairaRuntimeSignerErrorV1::InvalidKey)
         ));
@@ -2060,7 +2121,8 @@ mod tests {
                 load_global_beacon_signer_from_file(
                     open_consumable_key_file(&path),
                     fixture.catalog.network_id(),
-                    wrong.iter().next().expect("substituted provider")
+                    wrong.iter().next().expect("substituted provider"),
+                    &beacon_test_budget(),
                 ),
                 Err(TairaRuntimeSignerErrorV1::InvalidKey)
             ));
@@ -2071,14 +2133,15 @@ mod tests {
                 0
             );
         }
-        let mut corrupt = fixture.credential.clone();
+        let mut corrupt = Zeroizing::new(fixture.credential.to_vec());
         corrupt[0] ^= 1;
         let (_directory, path) = beacon_file(&corrupt);
         assert!(matches!(
             load_global_beacon_signer_from_file(
                 open_consumable_key_file(&path),
                 fixture.catalog.network_id(),
-                exact
+                exact,
+                &beacon_test_budget(),
             ),
             Err(TairaRuntimeSignerErrorV1::InvalidKey)
         ));
@@ -2095,8 +2158,14 @@ mod tests {
         let fixture =
             crate::external_software_signer::consensus_threshold_beacon_broker_test_fixture_v1();
         let binding = fixture.catalog.iter().next().expect("exact provider");
-        let load =
-            |file| load_global_beacon_signer_from_file(file, fixture.catalog.network_id(), binding);
+        let load = |file| {
+            load_global_beacon_signer_from_file(
+                file,
+                fixture.catalog.network_id(),
+                binding,
+                &beacon_test_budget(),
+            )
+        };
         for size in [
             0,
             u64::try_from(
@@ -2153,7 +2222,9 @@ mod tests {
         let bindings =
             IrohaRuntimeProviderBindingsV1::try_from_config(&config).expect("bootstrap catalog");
         let dependencies = registry
-            .resolve_with_beacon_loader(&bindings, |_, _| panic!("bootstrap must not access FD200"))
+            .resolve_with_beacon_loader(&bindings, |_, _, _| {
+                panic!("bootstrap must not access FD200")
+            })
             .expect("bootstrap Soracloud signer only");
         assert!(dependencies.soracloud_runtime_mutation_signer.is_some());
         assert!(dependencies.sumeragi_global_beacon_partial_signer.is_none());
@@ -2183,7 +2254,7 @@ mod tests {
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&extra)
             .expect("valid but unsupported public provider");
         assert!(matches!(
-            registry.resolve_with_beacon_loader(&bindings, |_, _| panic!(
+            registry.resolve_with_beacon_loader(&bindings, |_, _, _| panic!(
                 "extra provider rejected before FD200"
             )),
             Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
@@ -2203,13 +2274,14 @@ mod tests {
         assert_eq!(bindings.network_id(), fixture.catalog.network_id());
         let (_directory, path) = beacon_file(&fixture.credential);
         let dependencies = registry
-            .resolve_with_beacon_loader(&bindings, |network_id, configured| {
+            .resolve_with_beacon_loader(&bindings, |network_id, configured, budget| {
                 assert_eq!(network_id, fixture.catalog.network_id());
                 assert_eq!(configured, beacon);
                 load_global_beacon_signer_from_file(
                     open_consumable_key_file(&path),
                     network_id,
                     configured,
+                    budget,
                 )
             })
             .expect("resolve both exact native signers");
@@ -2220,7 +2292,7 @@ mod tests {
             0
         );
         assert!(matches!(
-            registry.resolve_with_beacon_loader(&bindings, |_, _| Err(
+            registry.resolve_with_beacon_loader(&bindings, |_, _, _| Err(
                 TairaRuntimeSignerErrorV1::DescriptorUnavailable
             )),
             Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
@@ -2236,10 +2308,282 @@ mod tests {
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&wrong)
             .expect("qualified substituted Soracloud binding");
         assert!(matches!(
-            registry.resolve_with_beacon_loader(&bindings, |_, _| panic!(
+            registry.resolve_with_beacon_loader(&bindings, |_, _, _| panic!(
                 "Soracloud mismatch rejected before FD200"
             )),
             Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
         ));
+    }
+    #[test]
+    fn beacon_memory_refusal_preserves_consumable_descriptor_and_uses_original_retry_pool() {
+        use iroha_allocation::{AllocationRefusal, release::ReleaseRegistration};
+        use std::task::{Context, Waker};
+
+        let fixture =
+            crate::external_software_signer::consensus_threshold_beacon_broker_test_fixture_v1();
+        let binding = fixture.catalog.iter().next().unwrap();
+        let (_directory, path) = beacon_file(&fixture.credential);
+        let budget = beacon_test_budget();
+        let floor = ReleaseRegistration::allocation_layout().size();
+        let mut prepaid = budget.try_reserve_bytes(floor).unwrap();
+        let mut registration = ReleaseRegistration::from_reservation(&mut prepaid).unwrap();
+        drop(prepaid);
+        let blocker = budget
+            .try_reserve_bytes(budget.limit_bytes() - floor)
+            .unwrap();
+        let failed = load_global_beacon_signer_from_file(
+            open_consumable_key_file(&path),
+            fixture.catalog.network_id(),
+            binding,
+            &budget,
+        )
+        .err()
+        .expect("actual original session admission refusal");
+        assert_eq!(
+            failed.to_string(),
+            "Taira beacon credential session is unavailable"
+        );
+        assert!(std::error::Error::source(&failed).is_some());
+        let TairaRuntimeSignerErrorV1::CredentialSession(
+            iroha_core::beacon::GlobalThresholdBeaconSessionError::Admission(original),
+        ) = failed
+        else {
+            panic!("the original session refusal must survive until the actual registry boundary");
+        };
+        let AllocationRefusal::Capacity {
+            requested_bytes,
+            ref release,
+            ..
+        } = original
+        else {
+            panic!("the retained original graph is blocked by its actual pool");
+        };
+        assert_eq!(
+            original,
+            budget.try_reserve_bytes(requested_bytes).unwrap_err()
+        );
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(registration.poll_wait(release, &mut context).is_pending());
+        let foreign_pool = iroha_allocation::AllocationBudget::new(1);
+        drop(foreign_pool.try_reserve_bytes(1).unwrap());
+        assert!(
+            registration.poll_wait(release, &mut context).is_pending(),
+            "foreign release cannot authorize original custody retry"
+        );
+        assert_eq!(
+            fs::read(&path).unwrap().as_slice(),
+            fixture.credential.as_slice()
+        );
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        drop(blocker);
+        assert!(registration.poll_wait(release, &mut context).is_ready());
+        registration.cancel();
+        let signer = load_global_beacon_signer_from_file(
+            open_consumable_key_file(&path),
+            fixture.catalog.network_id(),
+            binding,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(fs::metadata(path).unwrap().len(), 0);
+        let retained = budget.reserved_bytes();
+        assert!(retained > floor);
+        let last_reader = signer.clone();
+        drop(signer);
+        assert_eq!(budget.reserved_bytes(), retained);
+        drop(last_reader);
+        assert_eq!(budget.reserved_bytes(), floor);
+        drop(registration);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn registry_reuses_one_configured_pool_and_rejects_bound_changes_before_loading() {
+        let fixture =
+            crate::external_software_signer::consensus_threshold_beacon_broker_test_fixture_v1();
+        let registry = fixture_registry();
+        let binding = fixture.catalog.iter().next().unwrap();
+        let mut config = beacon_config(&registry, *fixture.catalog.network_id(), Some(binding));
+        let catalog = IrohaRuntimeProviderBindingsV1::try_from_config(&config).unwrap();
+        let (_directory, path) = beacon_file(&fixture.credential);
+        let dependencies = registry
+            .resolve_with_beacon_loader(&catalog, |network, binding, budget| {
+                assert_eq!(budget.limit_bytes(), catalog.credential_max_memory_bytes());
+                load_global_beacon_signer_from_file(
+                    open_consumable_key_file(&path),
+                    network,
+                    binding,
+                    budget,
+                )
+            })
+            .unwrap();
+        let original = registry.credential_budget.get().unwrap();
+        let retained = original.reserved_bytes();
+        assert!(retained > 0);
+        let blocker = original
+            .try_reserve_bytes(original.limit_bytes() - retained)
+            .unwrap();
+        let (_directory_two, path_two) = beacon_file(&fixture.credential);
+        assert!(matches!(
+            registry.resolve_with_beacon_loader(&catalog, |network, binding, budget| {
+                assert!(budget.same_pool(original));
+                load_global_beacon_signer_from_file(
+                    open_consumable_key_file(&path_two),
+                    network,
+                    binding,
+                    budget,
+                )
+            }),
+            Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+        ));
+        assert_eq!(original.reserved_bytes(), original.limit_bytes());
+        assert_eq!(
+            fs::read(&path_two).unwrap().as_slice(),
+            fixture.credential.as_slice()
+        );
+        config.runtime_provider_broker.credential_max_memory_bytes =
+            std::num::NonZeroUsize::new(original.limit_bytes() + 1).unwrap();
+        let substituted = IrohaRuntimeProviderBindingsV1::try_from_config(&config).unwrap();
+        assert!(matches!(
+            registry.resolve_with_beacon_loader(&substituted, |_, _, _| panic!(
+                "changed bound must fail before loading"
+            )),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+        drop(blocker);
+        assert_eq!(original.reserved_bytes(), retained);
+        drop(dependencies);
+        assert_eq!(original.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn beacon_decode_refusal_preserves_consumable_descriptor_and_original_cause_until_retry() {
+        let fixture =
+            crate::external_software_signer::consensus_threshold_beacon_broker_test_fixture_v1();
+        let binding = fixture.catalog.iter().next().unwrap();
+        let (_directory, path) = beacon_file(&fixture.credential);
+        let budget = beacon_test_budget();
+        let failed = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || {
+                load_global_beacon_signer_from_file(
+                    open_consumable_key_file(&path),
+                    fixture.catalog.network_id(),
+                    binding,
+                    &budget,
+                )
+            },
+        )
+        .err()
+        .expect("actual original credential decode refusal");
+        assert_eq!(
+            failed.to_string(),
+            "Taira beacon credential decoder is unavailable"
+        );
+        assert!(std::error::Error::source(&failed).is_some());
+        let TairaRuntimeSignerErrorV1::CredentialDecode(error) = failed else {
+            panic!("local pressure must retain the consumable credential");
+        };
+        assert_eq!(
+            error.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        assert!(matches!(
+            error.into_error(),
+            norito::Error::ScopedDecodeResource(_)
+        ));
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(
+            fs::read(&path).unwrap().as_slice(),
+            fixture.credential.as_slice()
+        );
+        let signer = load_global_beacon_signer_from_file(
+            open_consumable_key_file(&path),
+            fixture.catalog.network_id(),
+            binding,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(path).unwrap().len(),
+            0,
+            "successful import still consumes the trusted launch descriptor"
+        );
+        drop(signer);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn inherited_decode_failure_is_unavailable_at_both_runtime_registry_boundaries() {
+        let fixture =
+            crate::external_software_signer::consensus_threshold_beacon_broker_test_fixture_v1();
+        let registry = fixture_registry();
+        let binding = fixture.catalog.iter().next().unwrap();
+        let config = beacon_config(&registry, *fixture.catalog.network_id(), Some(binding));
+        let catalog = IrohaRuntimeProviderBindingsV1::try_from_config(&config).unwrap();
+        let (_directory, path) = beacon_file(&fixture.credential);
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        // The local loader finishes its scope before the registry classifies its original error.
+        let failed = registry.resolve_with_beacon_loader(&catalog, |network, binding, budget| {
+            norito::with_decode_limits_scope(limits, || {
+                load_global_beacon_signer_from_file(
+                    open_consumable_key_file(&path),
+                    network,
+                    binding,
+                    budget,
+                )
+            })
+        });
+        assert!(matches!(
+            failed,
+            Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+        ));
+        assert_eq!(
+            fs::read(&path).unwrap().as_slice(),
+            fixture.credential.as_slice()
+        );
+        assert_eq!(
+            registry.credential_budget.get().unwrap().reserved_bytes(),
+            0
+        );
+        let dependencies = registry
+            .resolve_with_beacon_loader(&catalog, |network, binding, budget| {
+                load_global_beacon_signer_from_file(
+                    open_consumable_key_file(&path),
+                    network,
+                    binding,
+                    budget,
+                )
+            })
+            .unwrap();
+        drop(dependencies);
+        assert_eq!(
+            registry.credential_budget.get().unwrap().reserved_bytes(),
+            0
+        );
+
+        let bundle =
+            crate::external_software_signer::encode_consensus_threshold_credential_bundle_v1(
+                Some(&fixture.credential),
+                None,
+            )
+            .unwrap();
+        let original = iroha_crypto::Hash::new(bundle.as_slice());
+        let failed = norito::with_decode_limits_scope(limits, || {
+            disposable_broker::load_with_signer(&fixture.catalog, &mut bundle.as_slice(), || {
+                panic!("threshold-only catalog never loads unrelated signer")
+            })
+        });
+        assert!(matches!(
+            failed,
+            Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+        ));
+        let loaded =
+            disposable_broker::load_with_signer(&fixture.catalog, &mut bundle.as_slice(), || {
+                panic!("threshold-only catalog never loads unrelated signer")
+            })
+            .unwrap();
+        assert_eq!(iroha_crypto::Hash::new(bundle.as_slice()), original);
+        drop(loaded);
     }
 }

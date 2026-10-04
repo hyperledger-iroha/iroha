@@ -1,7 +1,7 @@
 //! Signed private genesis cannot acquire the global AMX coordinator's authority.
 
 use super::*;
-use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig, TestChainError};
 use iroha_data_model::{
     isi::sumeragi_amx::{BeginAmxV1, RegisterAmxDataspaceV1},
     sumeragi_amx::{AmxLegV1, AmxTransactionV1},
@@ -51,10 +51,29 @@ fn signed_private_genesis_cannot_install_global_amx_coordinator() {
     let Err(failure) = result else {
         panic!("signed private genesis installed the global AMX coordinator");
     };
-    let error = failure.error.to_string();
+    // Inspect the retained typed reason: the outer Display intentionally reports
+    // the validation category while its source keeps the original refusal.
+    let TestChainError::OriginalGenesisExecution(error) = &failure.error else {
+        panic!(
+            "private AMX refused for a different startup reason: {}",
+            failure.error
+        );
+    };
+    let crate::block::BlockValidationError::InvalidGenesis(
+        crate::block::InvalidGenesisError::RejectedOutput(rejection),
+    ) = error.as_ref()
+    else {
+        panic!("private AMX did not retain its original rejected output: {error:?}");
+    };
+    assert_eq!(rejection.output_index, 0);
     assert!(
-        error.contains("AMX coordinator requires the authenticated global root"),
-        "{error}"
+        matches!(rejection.reason.as_ref(),
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted(message))
+            if message == "AMX coordinator requires the authenticated global root"
+        ),
+        "unexpected original private AMX refusal: {:?}",
+        rejection.reason
     );
     let view = failure.state.view();
     assert_eq!(view.height(), 0);

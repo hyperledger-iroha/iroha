@@ -189,7 +189,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
             include_str!("../../tests/fixtures/native_current_codec_owner_identities.json");
         assert_eq!(
             hex::encode(Sha256::digest(source.as_bytes())),
-            "6e140126fc94fb25562797f393e81a430f25f2e58fe35aa018f14c7be8706211"
+            "43098bfb7815e1c6a0b8705d8e41169f25c4e5e0bc6fe0ec851ebee2ae50196d"
         );
         let document: Value = json::from_str(source).expect("paired native owner inventory");
         assert_eq!(
@@ -259,7 +259,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
                 "duplicate captured owner"
             );
         }
-        assert_eq!(roots.len(), 1_558, "complete current nominal inventory");
+        assert_eq!(roots.len(), 1_559, "complete current nominal inventory");
         result
     })
 }

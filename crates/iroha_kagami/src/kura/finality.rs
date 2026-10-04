@@ -36,7 +36,7 @@ fn read_block(
     wire.resize(length, 0);
     store.read_block_data(index.start, &mut wire)?;
     let block = decode_framed_signed_block(&wire)
-        .map_err(|error| eyre!("invalid canonical block at {height}: {error}"))?;
+        .wrap_err_with(|| format!("failed to decode canonical block at {height}"))?;
     if block.header().height().get() != height {
         return Err(eyre!("canonical block height differs from index {height}"));
     }

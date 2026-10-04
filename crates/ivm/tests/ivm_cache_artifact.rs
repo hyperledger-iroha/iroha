@@ -26,7 +26,7 @@ fn artifact_predecode_uses_header_version() {
     assert!(ivm::cache_memory::SharedAllocation::ptr_eq(&d1, &d2));
 }
 #[test]
-fn artifact_predecode_rejects_generic_test_profile() {
+fn artifact_predecode_rejects_retired_header() {
     let mut cache = IvmCache::new(2);
     let mut artifact = ProgramMetadata {
         version_major: 1,
@@ -40,6 +40,9 @@ fn artifact_predecode_rejects_generic_test_profile() {
     artifact.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let err = cache
         .get_or_predecode_artifact(&artifact)
-        .expect_err("generic test profile must reject");
-    assert_eq!(err, ivm::VMError::InvalidMetadata);
+        .expect_err("retired header must reject");
+    assert_eq!(
+        err,
+        ivm::VMError::UnsupportedProgramVersion { major: 1, minor: 0 }
+    );
 }

@@ -13,6 +13,11 @@ crate-type = ["rlib"]
 [[bin]]
 name = "ivm_artifact_admit"
 path = "src/bin/ivm_artifact_admit.rs"
+required-features = ["dev-tools"]
+
+[features]
+# Developer-only golden-regeneration and artifact release-gate binary.
+dev-tools = []
 
 [dependencies]
 iroha_allocation = { workspace = true }

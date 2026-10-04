@@ -1532,6 +1532,7 @@ fn provider_attestation(
         provider_id: ProviderId::new([provider_byte; 32]),
         completed_by: owner.clone(),
         completion_authority: ProviderIngestCompletionAuthorityV1::new(
+            owner.clone(),
             owner,
             ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: [provider_byte.saturating_add(20); 32],

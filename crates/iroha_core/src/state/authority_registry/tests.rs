@@ -168,7 +168,6 @@ fn semantic_cursors_and_mixed_configuration_are_not_physical_caches() {
         "state.content",
         "state.settlement",
         "state.lane_compliance",
-        "state.kagemusha_v1_runtime_verifier",
     ] {
         assert!(matches!(fields[id].role, Role::Canonical(_)), "{id}");
     }
@@ -242,6 +241,7 @@ fn semantic_cursors_and_mixed_configuration_are_not_physical_caches() {
         "state.trigger_ivm_cache",
         "state.native_pending_evidence",
         "state.view_generation",
+        "state.kagemusha_v1_runtime_verifier",
     ] {
         assert!(matches!(fields[id].role, Role::Local(_)), "{id}");
     }

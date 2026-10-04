@@ -3109,7 +3109,7 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     };
     let torii_attestation = EndpointAttestationV1 {
         version: sorafs_manifest::ENDPOINT_ATTESTATION_VERSION_V1,
-        kind: EndpointAttestationKind::Mtls,
+        kind: EndpointAttestationKind::Tls,
         attested_at: 1_700_592_000,
         expires_at: 1_703_198_400,
         leaf_certificate: decode_hex_vec("3081deadbeef")?,

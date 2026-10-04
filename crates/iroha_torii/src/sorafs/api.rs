@@ -244,9 +244,8 @@ use crate::{
         gateway::{
             CanonicalHost, ClientFingerprint, GatewayComplianceController,
             GatewayComplianceDecision, GatewayComplianceDecisionSource,
-            GatewayComplianceDisposition, GatewayComplianceError, GatewayComplianceSubjectKindV1,
-            PolicyDecision, PolicyViolation, RateLimitError, RegionCode, RequestContext,
-            SORA_TLS_STATE_HEADER,
+            GatewayComplianceDisposition, GatewayComplianceError, PolicyDecision, PolicyViolation,
+            RateLimitError, RegionCode, RequestContext, SORA_TLS_STATE_HEADER,
         },
         registry::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryError,
@@ -269,6 +268,7 @@ use iroha_crypto::Signature;
 use sorafs_car::compute_chunk_plan_digest_sha3;
 #[cfg(test)]
 use sorafs_manifest::MAX_PROOF_STREAM_SAMPLE_COUNT;
+use sorafs_manifest::gateway_compliance::GatewayComplianceSubjectKindV1;
 use sorafs_orchestrator::appeals::{
     AppealClass, AppealDecision, AppealDisbursementInput, AppealDisbursementPlan,
     AppealPricingConfig, AppealQuote, AppealQuoteInput, AppealSettlementBreakdown,
@@ -37383,6 +37383,7 @@ mod advert_tests {
             completion_epoch,
             assignment_revision: 1,
             completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                completed_by.clone(),
                 completed_by,
                 ProviderIngestCompletionSignerPolicyV1 {
                     policy_id: [0xA1; 32],
@@ -41657,7 +41658,7 @@ mod advert_tests {
         advert.signature.signature = signing_key.sign(&signature_payload).to_bytes().to_vec();
         let attestation = EndpointAttestationV1 {
             version: ENDPOINT_ATTESTATION_VERSION_V1,
-            kind: EndpointAttestationKind::Mtls,
+            kind: EndpointAttestationKind::Tls,
             attested_at: issued_at.saturating_sub(60),
             expires_at: expires_at + 60,
             leaf_certificate: vec![0xAA],

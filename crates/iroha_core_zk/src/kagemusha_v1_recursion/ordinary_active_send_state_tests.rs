@@ -25,6 +25,7 @@ pub(super) struct OrdinarySendStateForTestingV1 {
     pub(super) state: KagemushaStateV1,
     pub(super) state_relation: KagemushaStateRelationWitnessV1,
     pub(super) generated: KagemushaGeneratedRecursiveStateProofV1,
+    // Retain the complete original through the Send fixture lifetime.
     pub(super) public_original: Vec<u8>,
     pub(super) preparation_relation: KagemushaGuardBundleRelationWitnessV1,
     pub(super) guard: super::ordinary_guard_generation::GeneratedOrdinaryGuardPairV1,
@@ -36,6 +37,7 @@ pub(super) struct OrdinarySendStateForTestingV1 {
     pub(super) request: KagemushaOrdinaryPaymentRequestV1,
     pub(super) receiver_credential: KagemushaOrdinaryAppCredentialV1,
     pub(super) previous_receiver_counter: Option<u32>,
+    // Retain the complete original through the Send fixture lifetime.
     pub(super) reservation: KagemushaOutboxReservationV1,
     pub(super) preparation_clock: KagemushaOrdinaryCashClockContextV1,
     pub(super) candidate_digest: DigestV1,

@@ -1031,3 +1031,6 @@ fn storage_closure_refuses_buffered_dispatch_and_each_physical_send() {
     assert!(serve_rx.try_recv().is_err());
     assert_eq!(net.sent().len(), 1);
 }
+
+#[path = "threaded_transactions.rs"]
+mod transactions;

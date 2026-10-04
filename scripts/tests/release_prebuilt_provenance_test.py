@@ -10,6 +10,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,28 @@ CUDA_PUBLIC_KEY = bytes(range(32))
 CUDA_KEY_SHA256 = hashlib.sha256(CUDA_PUBLIC_KEY).hexdigest()
 CUDA_MANIFEST = b"unit-fixture signed-manifest identity; no release claim\n"
 CUDA_MANIFEST_SHA256 = hashlib.sha256(CUDA_MANIFEST).hexdigest()
+
+
+@pytest.fixture
+def tmp_path() -> Iterator[Path]:
+    """Keep authenticated snapshot fixtures beneath an owned checkout root.
+
+    Production custody rejects shared writable ancestors. Setup creates only
+    this test's private directory with 077; bodies use ordinary 022 so explicit
+    safe source and artifact modes retain their original coverage. Always
+    restore the caller mask, including creation, body and cleanup failures.
+    """
+    original_umask = os.umask(0o077)
+    try:
+        parent = REPO
+        for component in ("target", "unit-tests", "script-tests"):
+            parent /= component
+            parent.mkdir(mode=0o700, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="release-prebuilt-provenance-", dir=parent) as directory:
+            os.umask(0o022)
+            yield Path(directory).resolve()
+    finally:
+        os.umask(original_umask)
 
 
 def load_verifier():
@@ -846,3 +870,15 @@ def test_release_feature_geometry_is_rejected_before_hashing(selected) -> None:
     verifier = load_verifier()
     with pytest.raises(verifier.ReleaseArtifactError):
         verifier._CONTRACT.release_acceleration_features(TARGET, selected)
+
+
+def test_prebuilt_snapshot_still_rejects_a_shared_ancestor(tmp_path: Path) -> None:
+    verifier, directory, _binary, cargo_lock, write_manifest = prepare_prebuilt(tmp_path)
+    shared = tmp_path / "deliberately-shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    output = shared / "snapshot"
+    with pytest.raises(verifier.ReleaseArtifactError, match="group- or world-writable"):
+        verify(verifier, directory, cargo_lock, write_manifest(), output)
+    assert shared.stat().st_mode & 0o777 == 0o777
+    assert not output.exists()

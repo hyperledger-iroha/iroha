@@ -229,10 +229,16 @@ fn address_formatting_is_validated_and_preserved_when_rebuilding() {
     );
     let mut invalid = builder;
     invalid.account_chain_discriminant = 0;
-    assert_eq!(
-        invalid.build().expect_err("zero address discriminant"),
-        SdkError::Context(AuthorityContextError::InvalidAddressDiscriminant)
-    );
+    {
+        let actual_error = invalid.build().expect_err("zero address discriminant");
+        let SdkError::Context(actual_source) = &actual_error else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!(
+            actual_source,
+            &(AuthorityContextError::InvalidAddressDiscriminant)
+        );
+    };
 }
 
 #[test]

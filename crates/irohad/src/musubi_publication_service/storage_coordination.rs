@@ -67,9 +67,15 @@ impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageB
 
     fn coordinate_storage(
         &mut self,
-        request: &MusubiStorageCoordinationRequestV1,
+        request: &iroha_musubi_service::VerifiedStorageCoordinationRequestV1<'_>,
     ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1> {
-        self.verify_current_registration(request)?;
+        if std::time::Instant::now() >= request.deadline() {
+            return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
+        }
+        self.verify_current_registration(request.request())?;
+        if std::time::Instant::now() >= request.deadline() {
+            return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
+        }
         self.delegate.coordinate_storage(request)
     }
 }

@@ -11,7 +11,7 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     account::AccountId,
-    block::{CommitCertificate, builder::BlockBuilder, decode_versioned_signed_block},
+    block::{CommitCertificate, builder::BlockBuilder, decode_framed_signed_block},
     consensus::{
         FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconChainAnchorV1,
         GlobalThresholdBeaconPulseContextV1,
@@ -100,7 +100,7 @@ fn pasta(keys: &[KeyPair], generation: u64) -> Vec<KagemushaMintFinalityValidato
         .collect()
 }
 fn block(proof: &SumeragiFinalityProof) -> SignedBlock {
-    decode_versioned_signed_block(&proof.block_wire).unwrap()
+    decode_framed_signed_block(&proof.block_wire).unwrap()
 }
 fn result(proof: &SumeragiFinalityProof) -> ExecutionResultCommitment {
     ExecutionResultCommitment::decode(block(proof).commit_certificate().unwrap().result_preimage())
@@ -1811,7 +1811,7 @@ fn catch_up_publishes_bounded_verified_pages_explicitly() {
 
 #[test]
 fn managed_custody_retains_catching_up_prefix_without_claiming_freshness() {
-    use crate::managed::stream_token_custody::retain_observation;
+    use crate::managed::native_operation::retain_observation;
     let chain = Chain::constant(4, 8);
     let source = Source::new(&chain);
     let temporary = tempfile::tempdir().unwrap();
@@ -1865,7 +1865,7 @@ fn managed_custody_retains_catching_up_prefix_without_claiming_freshness() {
 
 #[test]
 fn managed_custody_false_carrier_hint_cannot_pin_original_recovery() {
-    use crate::managed::stream_token_custody::{replay_start, verify_carrier};
+    use crate::managed::native_operation::{replay_start, verify_carrier};
     let chain = Chain::constant(4, 8);
     let source = Source::new(&chain);
     let original = chain.verifier_at(2);
@@ -1879,6 +1879,7 @@ fn managed_custody_false_carrier_hint_cannot_pin_original_recovery() {
     replay.catch_up(&source, nz(4)).unwrap();
     let confirmed = verify_carrier(&replay, transaction).unwrap();
     assert_eq!(confirmed.height, 4);
+    assert_eq!(confirmed.block_time_ms, carrier.header().creation_time_ms);
     assert_eq!(confirmed.transaction_hash, transaction.hash());
     assert_eq!(transaction.encode_wire_v1().unwrap(), wire);
     assert!(replay_start(original, Some(replay), 2).is_err());
@@ -1886,7 +1887,7 @@ fn managed_custody_false_carrier_hint_cannot_pin_original_recovery() {
 
 #[test]
 fn managed_custody_original_carrier_survives_unavailable_current_quorum() {
-    use crate::managed::stream_token_custody::retained_carrier;
+    use crate::managed::native_operation::retained_carrier;
     let chain = Chain::constant(4, 5);
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("custody");
@@ -2209,14 +2210,17 @@ fn original_genesis_policy_decode_refusal_preserves_exact_source_and_retry() {
         )
     })
     .unwrap_err();
+    let FinalityError::DecodeResource(original) = refusal else {
+        panic!("{refusal:?}");
+    };
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
     assert!(
-        matches!(
-            refusal,
-            FinalityError::DecodeResource(
-                norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
-            ) if attempted > 0
-        ),
-        "{refusal:?}"
+        matches!(original.into_error().decode_resource_error(), Some(
+        norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
+    ) if attempted > 0)
     );
     let retried = FinalityVerifier::from_checkpoint(
         checkpoint.clone(),
@@ -2247,7 +2251,7 @@ fn checkpoint_npos_refusal_follows_a_completed_original_binary_read() {
         |allocation| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64);
     let decode = || {
         norito::with_decode_limits_scope(norito::canonical_decode_limits(wire.len()), || {
-            decode_versioned_signed_block(&wire)
+            decode_framed_signed_block(&wire)
         })
     };
     let original_binary_cost = norito::with_decode_limits_scope(limits(ceiling), || {

@@ -146,7 +146,7 @@ Two genuine native captures execute all 107 owner/wire printers each, with
 identical output. The applied fixture correction preserves all 105 prior owners
 and all 395 prior wire assignments, adding only the reserve-policy owner and
 verifier-release retirement instruction. Current paired captures have 106 typed
-owners and 1,558 nominal identities; these component passes do not establish
+owners and 1,559 nominal identities; these component passes do not establish
 integrated, physical-device or release qualification.
 
 The earlier seventeen-target Core/Kagami compilation passes with stock Rust 1.93.1 on
@@ -175,9 +175,10 @@ not rewrite those outcomes. All four lane time-floor/build-count regressions pas
 The fresh lifetime compile-fail doctest passes; the separate Primitives 333 and
 Norito derive 59 unit, 17 strict-JSON and 32 compiler cases in four UI tests pass.
 Full Mint/Guard/receiver, genuine proof/export and full-State authority remain
-incomplete. The current paired capture has 106 typed codec owners and 1,558 nominal
-identities, preserving every preceding owner document. Publication and
-reduced-feature controls are not inferred from that capture.
+incomplete. The separate current fixture captures 106 typed codec owners and 1,559 nominal
+identities, preserving the 1,551 still-active historical hashes. Its new ordinary,
+publication and reduced-feature controls remain pending; the preceding capture
+and native component runs do not qualify the merged candidate.
 
 The fresh Linux and Mac optimized privacy artifacts pass all 133 private-dispatch
 controls, including all eight direct-jump and eleven CALL descriptor/frame-work
@@ -437,7 +438,9 @@ original atomic destination value/tag transition; its 37-packet schedule places
 that destination after the physical memory read, with no duplicate register or
 tag event. An `r0` destination suppresses only the register write, preserving
 memory checks and the three-gas debit. Closed opcode selection rejects other
-running operations. Current merged native controls require fresh validation.
+running operations. Native LOAD64 controls retain the admitted artifact and bind
+the original value/tag, memory, frame and architectural transitions. Native
+STORE64 controls bind original operand order, stored bytes and completion tariffs.
 Complete instruction/region semantics and finalized State binding remain open;
 these components do not enable IVM proof admission.
 

@@ -175,8 +175,12 @@ mod tests {
     #[test]
     fn key_exchange() {
         let scheme = X25519Sha256::new();
-        let (public_key1, secret_key1) = scheme.keypair(KeyGenOption::Random);
-        let (public_key2, secret_key2) = scheme.keypair(KeyGenOption::Random);
+        let (public_key1, secret_key1) = scheme.keypair(KeyGenOption::UseSeed(
+            b"iroha:test:x25519:exchange:first".to_vec(),
+        ));
+        let (public_key2, secret_key2) = scheme.keypair(KeyGenOption::UseSeed(
+            b"iroha:test:x25519:exchange:second".to_vec(),
+        ));
         let shared_secret1 = scheme
             .compute_shared_secret(&secret_key2, &public_key1)
             .expect("shared secret");

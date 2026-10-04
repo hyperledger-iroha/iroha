@@ -3,6 +3,11 @@
 Only a caller that has already verified a chain against a pinned Google
 attestation root should use this check. Other OEM roots need their own
 governed revocation policy. A successful lookup is not an issuance token.
+
+Every check fetches the current list; an older list is never reused. When no
+current, well-formed list can be obtained the check fails closed with
+``RevocationUnavailable``: the evidence is not known to be bad, so callers must
+report a retryable unavailability rather than a rejection.
 """
 
 from __future__ import annotations
@@ -26,6 +31,14 @@ _SERIAL = re.compile(r"[a-f1-9][a-f0-9]*\Z")
 _REASONS = frozenset({
     "UNSPECIFIED", "KEY_COMPROMISE", "CA_COMPROMISE", "SUPERSEDED", "SOFTWARE_FLAW",
 })
+
+
+class RevocationUnavailable(AttestationRejected):
+    """No current, well-formed Google status list could be obtained.
+
+    It remains an ``AttestationRejected`` so every generic handler fails
+    closed; issuer services report it as retryable unavailability.
+    """
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -80,7 +93,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def fetch_google_revocation_status() -> frozenset[int]:
-    """Fetch the exact Google HTTPS resource using system TLS roots, without redirects."""
+    """Fetch the exact Google HTTPS resource using system TLS roots, without redirects.
+
+    Transport failures and a changed, mistyped, oversized or malformed response
+    all raise ``RevocationUnavailable``.
+    """
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         urllib.request.HTTPSHandler(context=ssl.create_default_context()),
@@ -96,9 +113,13 @@ def fetch_google_revocation_status() -> frozenset[int]:
                     and response.headers.get("Content-Encoding", "identity").lower() == "identity",
                     "invalid Android revocation response type")
             body = response.read(MAX_STATUS_BYTES + 1)
+        return parse_google_revocation_status(body)
+    except RevocationUnavailable:
+        raise
+    except AttestationRejected as error:
+        raise RevocationUnavailable(str(error)) from error
     except (OSError, urllib.error.URLError) as error:
-        raise AttestationRejected("Android revocation status unavailable") from error
-    return parse_google_revocation_status(body)
+        raise RevocationUnavailable("Android revocation status unavailable") from error
 
 
 def certificate_serial(der: bytes) -> int:

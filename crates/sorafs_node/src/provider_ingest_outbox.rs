@@ -24,8 +24,7 @@ use iroha_data_model::{
     isi::sorafs::CompleteReplicationOrder,
     musubi::ArchiveId,
     sorafs::pin_registry::{
-        ManifestRootCid, ProviderIngestCompletionAuthorityV1,
-        ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
+        ManifestRootCid, ProviderIngestCompletionAuthorityV1, ProviderIngestFinalizedAnchorV1,
     },
     transaction::{Executable, SignedTransaction, TransactionPayload},
 };
@@ -1026,26 +1025,29 @@ pub enum ProviderIngestRetryOutcomeV1 {
     /// The job moved to terminal retry exhaustion.
     DeadLettered,
 }
-fn validate_completion_signer_policy(
-    policy: ProviderIngestCompletionSignerPolicyV1,
+fn validate_completion_authority(
+    authority: &ProviderIngestCompletionAuthorityV1,
 ) -> Result<(), ProviderIngestOutboxError> {
-    if !policy.is_valid() {
+    if !authority.is_valid()
+        || !completion_account_id_fits_canonical_bound(&authority.provider_owner)
+        || !completion_account_id_fits_canonical_bound(&authority.completion_signer)
+    {
         return Err(ProviderIngestOutboxError::InvalidSignerPolicy);
     }
     Ok(())
 }
-/// Current finalized observation used to reconcile a prepared signer policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub(crate) enum ProviderIngestSignerPolicyObservationV1 {
+/// Current finalized observation used to reconcile a prepared full completion authority.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub(crate) enum ProviderIngestCompletionAuthorityObservationV1 {
     /// Only provider ownership was checked; signer policy was not queried.
     NotChecked,
     /// The finalized policy resolver proves no eligible signer policy exists.
     Missing,
-    /// Exact active finalized signer policy.
-    Active(ProviderIngestCompletionSignerPolicyV1),
+    /// Exact active finalized provider owner, completion signer and policy.
+    Active(ProviderIngestCompletionAuthorityV1),
 }
 /// Exact evidence and timing inputs required to expire one exposed completion.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ProviderIngestExposedCompletionExpiryV1<'a> {
     /// Durable provider-ingest job identity.
     pub(crate) job_id: [u8; 32],
@@ -1053,8 +1055,8 @@ pub(crate) struct ProviderIngestExposedCompletionExpiryV1<'a> {
     pub(crate) expected_transaction_hash: [u8; 32],
     /// Current finalized owner of the configured provider identity.
     pub(crate) current_provider_owner: Option<&'a AccountId>,
-    /// Current finalized signer-policy observation for that owner.
-    pub(crate) current_signer_policy: ProviderIngestSignerPolicyObservationV1,
+    /// Current finalized full completion-authority observation for that owner.
+    pub(crate) current_authority: &'a ProviderIngestCompletionAuthorityObservationV1,
     /// Runtime clock used only to schedule a bounded retry.
     pub(crate) runtime_now_ms: u64,
     /// Finalized block time proving the retained transaction has expired.
@@ -1066,7 +1068,7 @@ pub(crate) struct ProviderIngestExposedCompletionExpiryV1<'a> {
 struct StoredFinalizedCompletionAuthorityObservationV1 {
     cursor: ProviderIngestFinalizedCursorV1,
     provider_owner: Option<AccountId>,
-    signer_policy: ProviderIngestSignerPolicyObservationV1,
+    completion_authority: ProviderIngestCompletionAuthorityObservationV1,
 }
 /// Exact finalized and fee-quoted payload handed to an isolated signer.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
@@ -1078,10 +1080,8 @@ pub struct ProviderIngestCompletionSigningContextV1 {
     pub baseline_finalized_cursor: ProviderIngestFinalizedCursorV1,
     /// Exact genesis-derived network identity signed into the payload.
     pub network_id: NetworkId,
-    /// Current finalized owner of the configured provider identity.
-    pub provider_owner: AccountId,
-    /// Exact governed signer policy resolved at the finalized baseline.
-    pub signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    /// Exact full governed completion binding resolved at the finalized baseline.
+    pub expected_authority: ProviderIngestCompletionAuthorityV1,
     /// Exact order-scoped assignment revision at the finalized baseline.
     pub assignment_revision: u64,
     /// Provider-specific completion epoch.
@@ -1095,8 +1095,7 @@ impl fmt::Debug for ProviderIngestCompletionSigningContextV1 {
             .debug_struct("ProviderIngestCompletionSigningContextV1")
             .field("baseline_finalized_cursor", &self.baseline_finalized_cursor)
             .field("network_id", &self.network_id)
-            .field("provider_owner", &self.provider_owner)
-            .field("signer_policy", &self.signer_policy)
+            .field("expected_authority", &self.expected_authority)
             .field("assignment_revision", &self.assignment_revision)
             .field("completion_epoch", &self.completion_epoch)
             .field("expected_payload", &"<redacted>")
@@ -1203,9 +1202,9 @@ struct StoredCompletionDeliveryV1 {
     baseline_finalized_block_hash: [u8; 32],
     completion_epoch: Option<u64>,
     finalized_authority_observation: Option<StoredFinalizedCompletionAuthorityObservationV1>,
-    signer_policy_owner: Option<AccountId>,
-    signer_policy_floor: Option<ProviderIngestCompletionSignerPolicyV1>,
-    signer_policy_successor_required: bool,
+    authority_owner: Option<AccountId>,
+    authority_floor: Option<ProviderIngestCompletionAuthorityV1>,
+    authority_successor_required: bool,
     signing_context: Option<ProviderIngestCompletionSigningContextV1>,
     transaction_hash: Option<[u8; 32]>,
     signed_transaction: Option<SignedTransaction>,
@@ -1224,9 +1223,9 @@ impl Default for StoredCompletionDeliveryV1 {
             baseline_finalized_block_hash: [0; 32],
             completion_epoch: None,
             finalized_authority_observation: None,
-            signer_policy_owner: None,
-            signer_policy_floor: None,
-            signer_policy_successor_required: false,
+            authority_owner: None,
+            authority_floor: None,
+            authority_successor_required: false,
             signing_context: None,
             transaction_hash: None,
             signed_transaction: None,
@@ -2842,22 +2841,22 @@ impl ProviderIngestOutbox {
                 observe_finalized_completion_authority(
                     completion,
                     Some(current_owner),
-                    ProviderIngestSignerPolicyObservationV1::Missing,
+                    &ProviderIngestCompletionAuthorityObservationV1::Missing,
                     observed_finalized_cursor,
                 )?;
-                match completion.signer_policy_owner.as_ref() {
+                match completion.authority_owner.as_ref() {
                     Some(retained_owner) if retained_owner == current_owner => {
-                        if completion.signer_policy_floor.is_some() {
-                            completion.signer_policy_successor_required = true;
+                        if completion.authority_floor.is_some() {
+                            completion.authority_successor_required = true;
                         }
                     }
                     Some(_) => {
-                        completion.signer_policy_owner = Some(current_owner.clone());
-                        completion.signer_policy_floor = None;
-                        completion.signer_policy_successor_required = false;
+                        completion.authority_owner = Some(current_owner.clone());
+                        completion.authority_floor = None;
+                        completion.authority_successor_required = false;
                     }
                     None => {
-                        completion.signer_policy_owner = Some(current_owner.clone());
+                        completion.authority_owner = Some(current_owner.clone());
                     }
                 }
             }
@@ -2916,17 +2915,17 @@ impl ProviderIngestOutbox {
         let observation_changed = observe_finalized_completion_authority(
             completion,
             Some(current_provider_owner),
-            ProviderIngestSignerPolicyObservationV1::NotChecked,
+            &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
             observed_finalized_cursor,
         )?;
         let owner_changed = completion
-            .signer_policy_owner
+            .authority_owner
             .as_ref()
             .is_some_and(|owner| owner != current_provider_owner);
         if owner_changed {
-            completion.signer_policy_owner = None;
-            completion.signer_policy_floor = None;
-            completion.signer_policy_successor_required = false;
+            completion.authority_owner = None;
+            completion.authority_floor = None;
+            completion.authority_successor_required = false;
             completion.next_attempt_at_ms = 0;
             completion.last_failure_class =
                 Some(ProviderIngestFailureClassV1::ProviderOwnerChanged);
@@ -2936,16 +2935,16 @@ impl ProviderIngestOutbox {
         }
         Ok(owner_changed)
     }
-    /// Validate the exact active signer policy for a Ready entry before fee
+    /// Validate the exact active completion authority for a Ready entry before fee
     /// quoting or payload construction performs any work.
-    pub(crate) fn validate_ready_completion_signer_policy(
+    pub(crate) fn validate_ready_completion_authority(
         &self,
         job_id: [u8; 32],
         current_provider_owner: &AccountId,
-        current_signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        current_authority: &ProviderIngestCompletionAuthorityV1,
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     ) -> Result<(), ProviderIngestOutboxError> {
-        validate_completion_signer_policy(current_signer_policy)?;
+        validate_completion_authority(current_authority)?;
         observed_finalized_cursor.validate()?;
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
@@ -2960,30 +2959,29 @@ impl ProviderIngestOutbox {
         let completion = local_completion_mut(&mut candidate.active[position])?;
         if completion.state != StoredDeliveryStateV1::Ready
             || completion
-                .signer_policy_owner
+                .authority_owner
                 .as_ref()
                 .is_some_and(|owner| owner != current_provider_owner)
         {
             return Err(ProviderIngestOutboxError::InvalidTransition);
         }
-        validate_signer_policy_progress(
-            completion.signer_policy_floor,
-            completion.signer_policy_successor_required,
-            current_signer_policy,
+        validate_authority_progress(
+            completion.authority_floor.clone(),
+            completion.authority_successor_required,
+            current_authority,
         )?;
         let observation_changed = observe_finalized_completion_authority(
             completion,
             Some(current_provider_owner),
-            ProviderIngestSignerPolicyObservationV1::Active(current_signer_policy),
+            &ProviderIngestCompletionAuthorityObservationV1::Active(current_authority.clone()),
             observed_finalized_cursor,
         )?;
-        let lineage_changed = completion.signer_policy_owner.as_ref()
-            != Some(current_provider_owner)
-            || completion.signer_policy_floor != Some(current_signer_policy)
-            || completion.signer_policy_successor_required;
-        completion.signer_policy_owner = Some(current_provider_owner.clone());
-        completion.signer_policy_floor = Some(current_signer_policy);
-        completion.signer_policy_successor_required = false;
+        let lineage_changed = completion.authority_owner.as_ref() != Some(current_provider_owner)
+            || completion.authority_floor.as_ref() != Some(current_authority)
+            || completion.authority_successor_required;
+        completion.authority_owner = Some(current_provider_owner.clone());
+        completion.authority_floor = Some(current_authority.clone());
+        completion.authority_successor_required = false;
         if observation_changed || lineage_changed {
             self.persist_candidate(&mut state, candidate)?;
         }
@@ -3017,21 +3015,23 @@ impl ProviderIngestOutbox {
             return Err(ProviderIngestOutboxError::RetryNotDue);
         }
         if completion
-            .signer_policy_owner
+            .authority_owner
             .as_ref()
-            .is_some_and(|owner| owner != &context.provider_owner)
+            .is_some_and(|owner| owner != &context.expected_authority.provider_owner)
         {
             return Err(ProviderIngestOutboxError::InvalidSigningContext);
         }
-        validate_signer_policy_progress(
-            completion.signer_policy_floor,
-            completion.signer_policy_successor_required,
-            context.signer_policy,
+        validate_authority_progress(
+            completion.authority_floor.clone(),
+            completion.authority_successor_required,
+            &context.expected_authority,
         )?;
         observe_finalized_completion_authority(
             completion,
-            Some(&context.provider_owner),
-            ProviderIngestSignerPolicyObservationV1::Active(context.signer_policy),
+            Some(&context.expected_authority.provider_owner),
+            &ProviderIngestCompletionAuthorityObservationV1::Active(
+                context.expected_authority.clone(),
+            ),
             context.baseline_finalized_cursor,
         )?;
         let generation = completion
@@ -3041,9 +3041,9 @@ impl ProviderIngestOutbox {
         completion.signing_generation = generation;
         completion.signing_claimed_at_ms = now_ms;
         completion.completion_epoch = Some(context.completion_epoch);
-        completion.signer_policy_owner = Some(context.provider_owner.clone());
-        completion.signer_policy_floor = Some(context.signer_policy);
-        completion.signer_policy_successor_required = false;
+        completion.authority_owner = Some(context.expected_authority.provider_owner.clone());
+        completion.authority_floor = Some(context.expected_authority.clone());
+        completion.authority_successor_required = false;
         completion.signing_context = Some(context.clone());
         completion.last_failure_class = None;
         completion.next_attempt_at_ms = 0;
@@ -3113,11 +3113,11 @@ impl ProviderIngestOutbox {
         })
     }
     /// Invalidate completion material prepared by a superseded provider owner
-    /// or governed signer policy.
+    /// or governed completion signer/policy.
     ///
     /// `current_provider_owner` is `None` when finalized state no longer has an owner for the
-    /// provider. `current_signer_policy` distinguishes a policy that was not queried from a proved
-    /// revocation and an exact active policy. `observed_finalized_cursor` must be strictly newer
+    /// provider. `current_authority` distinguishes an authority that was not queried from a proved
+    /// revocation and an exact active owner/key/policy record. `observed_finalized_cursor` must be strictly newer
     /// than the retained preparation baseline when ownership or signer policy differs or is absent.
     /// Only signer-owned or provably unexposed signed material may be discarded. Ambiguous,
     /// submitted, and previously exposed signed bytes remain retained for exact-hash
@@ -3129,7 +3129,7 @@ impl ProviderIngestOutbox {
         &self,
         job_id: [u8; 32],
         current_provider_owner: Option<&AccountId>,
-        current_signer_policy: ProviderIngestSignerPolicyObservationV1,
+        current_authority: &ProviderIngestCompletionAuthorityObservationV1,
         now_ms: u64,
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     ) -> Result<Option<ProviderIngestRetryOutcomeV1>, ProviderIngestOutboxError> {
@@ -3154,39 +3154,40 @@ impl ProviderIngestOutbox {
         let authority_observation_changed = observe_finalized_completion_authority(
             completion,
             current_provider_owner,
-            current_signer_policy,
+            current_authority,
             observed_finalized_cursor,
         )?;
-        let owner_matches = current_provider_owner == Some(&signing_context.provider_owner);
-        let policy_matches = match current_signer_policy {
-            ProviderIngestSignerPolicyObservationV1::NotChecked => true,
-            ProviderIngestSignerPolicyObservationV1::Missing => false,
-            ProviderIngestSignerPolicyObservationV1::Active(policy) => {
-                validate_completion_signer_policy(policy)?;
-                policy == signing_context.signer_policy
+        let owner_matches =
+            current_provider_owner == Some(&signing_context.expected_authority.provider_owner);
+        let policy_matches = match current_authority {
+            ProviderIngestCompletionAuthorityObservationV1::NotChecked => true,
+            ProviderIngestCompletionAuthorityObservationV1::Missing => false,
+            ProviderIngestCompletionAuthorityObservationV1::Active(policy) => {
+                validate_completion_authority(policy)?;
+                policy == &signing_context.expected_authority
             }
         };
         if owner_matches && policy_matches {
-            match current_signer_policy {
-                ProviderIngestSignerPolicyObservationV1::NotChecked => {
+            match current_authority {
+                ProviderIngestCompletionAuthorityObservationV1::NotChecked => {
                     if authority_observation_changed {
                         self.persist_candidate(&mut state, candidate)?;
                     }
                     return Ok(None);
                 }
-                ProviderIngestSignerPolicyObservationV1::Active(policy)
-                    if completion.signer_policy_owner.as_ref()
-                        == Some(&signing_context.provider_owner)
-                        && completion.signer_policy_floor == Some(policy)
-                        && !completion.signer_policy_successor_required =>
+                ProviderIngestCompletionAuthorityObservationV1::Active(policy)
+                    if completion.authority_owner.as_ref()
+                        == Some(&signing_context.expected_authority.provider_owner)
+                        && completion.authority_floor.as_ref() == Some(policy)
+                        && !completion.authority_successor_required =>
                 {
                     if authority_observation_changed {
                         self.persist_candidate(&mut state, candidate)?;
                     }
                     return Ok(None);
                 }
-                ProviderIngestSignerPolicyObservationV1::Active(_)
-                | ProviderIngestSignerPolicyObservationV1::Missing => {}
+                ProviderIngestCompletionAuthorityObservationV1::Active(_)
+                | ProviderIngestCompletionAuthorityObservationV1::Missing => {}
             }
         }
         validate_cursor_after_baseline(completion, observed_finalized_cursor)?;
@@ -3196,87 +3197,86 @@ impl ProviderIngestOutbox {
         ) || (completion.state == StoredDeliveryStateV1::Signed && completion.ever_exposed)
         {
             let retained = (
-                completion.signer_policy_owner.clone(),
-                completion.signer_policy_floor,
-                completion.signer_policy_successor_required,
+                completion.authority_owner.clone(),
+                completion.authority_floor.clone(),
+                completion.authority_successor_required,
             );
             match current_provider_owner {
                 None => {
-                    completion.signer_policy_owner = None;
-                    completion.signer_policy_floor = None;
-                    completion.signer_policy_successor_required = false;
+                    completion.authority_owner = None;
+                    completion.authority_floor = None;
+                    completion.authority_successor_required = false;
                 }
-                Some(owner) if owner == &signing_context.provider_owner => {
-                    match current_signer_policy {
-                        ProviderIngestSignerPolicyObservationV1::NotChecked => {}
-                        ProviderIngestSignerPolicyObservationV1::Missing => {
-                            let floor = if completion.signer_policy_owner.as_ref() == Some(owner) {
+                Some(owner) if owner == &signing_context.expected_authority.provider_owner => {
+                    match current_authority {
+                        ProviderIngestCompletionAuthorityObservationV1::NotChecked => {}
+                        ProviderIngestCompletionAuthorityObservationV1::Missing => {
+                            let floor = if completion.authority_owner.as_ref() == Some(owner) {
                                 completion
-                                    .signer_policy_floor
-                                    .or(Some(signing_context.signer_policy))
+                                    .authority_floor
+                                    .clone()
+                                    .or(Some(signing_context.expected_authority.clone()))
                             } else {
-                                Some(signing_context.signer_policy)
+                                Some(signing_context.expected_authority.clone())
                             };
-                            completion.signer_policy_owner = Some(owner.clone());
-                            completion.signer_policy_floor = floor;
-                            completion.signer_policy_successor_required = true;
+                            completion.authority_owner = Some(owner.clone());
+                            completion.authority_floor = floor;
+                            completion.authority_successor_required = true;
                         }
-                        ProviderIngestSignerPolicyObservationV1::Active(policy) => {
+                        ProviderIngestCompletionAuthorityObservationV1::Active(policy) => {
                             let same_latched_owner =
-                                completion.signer_policy_owner.as_ref() == Some(owner);
-                            validate_signer_policy_progress(
+                                completion.authority_owner.as_ref() == Some(owner);
+                            validate_authority_progress(
                                 same_latched_owner
-                                    .then_some(completion.signer_policy_floor)
+                                    .then_some(completion.authority_floor.clone())
                                     .flatten(),
-                                same_latched_owner && completion.signer_policy_successor_required,
+                                same_latched_owner && completion.authority_successor_required,
                                 policy,
                             )?;
-                            completion.signer_policy_owner = Some(owner.clone());
-                            completion.signer_policy_floor = Some(policy);
-                            completion.signer_policy_successor_required = false;
+                            completion.authority_owner = Some(owner.clone());
+                            completion.authority_floor = Some(policy.clone());
+                            completion.authority_successor_required = false;
                         }
                     }
                 }
-                Some(owner) => match current_signer_policy {
-                    ProviderIngestSignerPolicyObservationV1::Active(policy) => {
-                        let same_latched_owner =
-                            completion.signer_policy_owner.as_ref() == Some(owner);
-                        validate_signer_policy_progress(
+                Some(owner) => match current_authority {
+                    ProviderIngestCompletionAuthorityObservationV1::Active(policy) => {
+                        let same_latched_owner = completion.authority_owner.as_ref() == Some(owner);
+                        validate_authority_progress(
                             same_latched_owner
-                                .then_some(completion.signer_policy_floor)
+                                .then_some(completion.authority_floor.clone())
                                 .flatten(),
-                            same_latched_owner && completion.signer_policy_successor_required,
+                            same_latched_owner && completion.authority_successor_required,
                             policy,
                         )?;
-                        completion.signer_policy_owner = Some(owner.clone());
-                        completion.signer_policy_floor = Some(policy);
-                        completion.signer_policy_successor_required = false;
+                        completion.authority_owner = Some(owner.clone());
+                        completion.authority_floor = Some(policy.clone());
+                        completion.authority_successor_required = false;
                     }
-                    ProviderIngestSignerPolicyObservationV1::Missing => {
-                        let same_latched_owner =
-                            completion.signer_policy_owner.as_ref() == Some(owner);
+                    ProviderIngestCompletionAuthorityObservationV1::Missing => {
+                        let same_latched_owner = completion.authority_owner.as_ref() == Some(owner);
                         if !same_latched_owner {
-                            completion.signer_policy_owner = Some(owner.clone());
-                            completion.signer_policy_floor = None;
+                            completion.authority_owner = Some(owner.clone());
+                            completion.authority_floor = None;
                         }
-                        completion.signer_policy_successor_required =
-                            same_latched_owner && completion.signer_policy_floor.is_some();
+                        completion.authority_successor_required =
+                            same_latched_owner && completion.authority_floor.is_some();
                     }
-                    ProviderIngestSignerPolicyObservationV1::NotChecked
-                        if completion.signer_policy_owner.as_ref() == Some(owner) => {}
-                    ProviderIngestSignerPolicyObservationV1::NotChecked => {
-                        completion.signer_policy_owner = Some(owner.clone());
-                        completion.signer_policy_floor = None;
-                        completion.signer_policy_successor_required = false;
+                    ProviderIngestCompletionAuthorityObservationV1::NotChecked
+                        if completion.authority_owner.as_ref() == Some(owner) => {}
+                    ProviderIngestCompletionAuthorityObservationV1::NotChecked => {
+                        completion.authority_owner = Some(owner.clone());
+                        completion.authority_floor = None;
+                        completion.authority_successor_required = false;
                     }
                 },
             }
             if authority_observation_changed
                 || retained
                     != (
-                        completion.signer_policy_owner.clone(),
-                        completion.signer_policy_floor,
-                        completion.signer_policy_successor_required,
+                        completion.authority_owner.clone(),
+                        completion.authority_floor.clone(),
+                        completion.authority_successor_required,
                     )
             {
                 self.persist_candidate(&mut state, candidate)?;
@@ -3288,20 +3288,20 @@ impl ProviderIngestOutbox {
         } else {
             ProviderIngestFailureClassV1::ProviderOwnerChanged
         };
-        let (next_signer_policy_floor, signer_policy_successor_required) = if owner_matches {
-            match current_signer_policy {
-                ProviderIngestSignerPolicyObservationV1::Active(policy) => {
-                    validate_signer_policy_progress(
-                        Some(signing_context.signer_policy),
+        let (next_authority_floor, authority_successor_required) = if owner_matches {
+            match current_authority {
+                ProviderIngestCompletionAuthorityObservationV1::Active(policy) => {
+                    validate_authority_progress(
+                        Some(signing_context.expected_authority.clone()),
                         true,
                         policy,
                     )?;
-                    (Some(policy), false)
+                    (Some(policy.clone()), false)
                 }
-                ProviderIngestSignerPolicyObservationV1::Missing => {
-                    (Some(signing_context.signer_policy), true)
+                ProviderIngestCompletionAuthorityObservationV1::Missing => {
+                    (Some(signing_context.expected_authority.clone()), true)
                 }
-                ProviderIngestSignerPolicyObservationV1::NotChecked => {
+                ProviderIngestCompletionAuthorityObservationV1::NotChecked => {
                     return Err(ProviderIngestOutboxError::InvalidCheckpoint);
                 }
             }
@@ -3327,13 +3327,13 @@ impl ProviderIngestOutbox {
             }
         };
         clear_completion_signing_material(completion);
-        completion.signer_policy_owner = if owner_matches {
+        completion.authority_owner = if owner_matches {
             current_provider_owner.cloned()
         } else {
             None
         };
-        completion.signer_policy_floor = next_signer_policy_floor;
-        completion.signer_policy_successor_required = signer_policy_successor_required;
+        completion.authority_floor = next_authority_floor;
+        completion.authority_successor_required = authority_successor_required;
         if attempts >= self.policy.max_attempts {
             move_active_to_dead_letter(
                 &mut candidate,
@@ -3407,7 +3407,7 @@ impl ProviderIngestOutbox {
                 completion.signing_context = None;
                 completion.transaction_hash = None;
                 completion.ever_exposed = false;
-                normalize_signer_policy_lineage(completion);
+                normalize_authority_lineage(completion);
                 completion.signing_claimed_at_ms = 0;
                 completion.attempts =
                     consume_bounded_attempt(completion.attempts, self.policy.max_attempts)?;
@@ -3472,14 +3472,14 @@ impl ProviderIngestOutbox {
         &self,
         job_id: [u8; 32],
         current_provider_owner: &AccountId,
-        current_signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        current_authority: &ProviderIngestCompletionAuthorityV1,
         checked_finalized_cursor: ProviderIngestFinalizedCursorV1,
         now_ms: u64,
     ) -> Result<ProviderIngestCompletionSubmissionV1, ProviderIngestOutboxError> {
         if now_ms == 0 {
             return Err(ProviderIngestOutboxError::InvalidRuntimeTimestamp);
         }
-        validate_completion_signer_policy(current_signer_policy)?;
+        validate_completion_authority(current_authority)?;
         checked_finalized_cursor.validate()?;
         let state = self.lock_state()?;
         if state.checkpoint.finalized_cursor_high_water != Some(checked_finalized_cursor) {
@@ -3498,7 +3498,7 @@ impl ProviderIngestOutbox {
         validate_completion_submission_authority(
             completion,
             current_provider_owner,
-            current_signer_policy,
+            current_authority,
             checked_finalized_cursor,
         )?;
         if now_ms < completion.next_attempt_at_ms {
@@ -3616,7 +3616,7 @@ impl ProviderIngestOutbox {
                     completion.signing_context = None;
                     completion.transaction_hash = None;
                     completion.ever_exposed = false;
-                    normalize_signer_policy_lineage(completion);
+                    normalize_authority_lineage(completion);
                 }
                 attempts
             }
@@ -3651,14 +3651,14 @@ impl ProviderIngestOutbox {
         job_id: [u8; 32],
         expected_transaction_hash: [u8; 32],
         current_provider_owner: &AccountId,
-        current_signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        current_authority: &ProviderIngestCompletionAuthorityV1,
         checked_finalized_cursor: ProviderIngestFinalizedCursorV1,
         now_ms: u64,
     ) -> Result<ProviderIngestCompletionSubmissionV1, ProviderIngestOutboxError> {
         if now_ms == 0 {
             return Err(ProviderIngestOutboxError::InvalidRuntimeTimestamp);
         }
-        validate_completion_signer_policy(current_signer_policy)?;
+        validate_completion_authority(current_authority)?;
         checked_finalized_cursor.validate()?;
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
@@ -3672,7 +3672,7 @@ impl ProviderIngestOutbox {
         validate_completion_submission_authority(
             completion,
             current_provider_owner,
-            current_signer_policy,
+            current_authority,
             checked_finalized_cursor,
         )?;
         if now_ms < completion.next_attempt_at_ms {
@@ -3749,7 +3749,7 @@ impl ProviderIngestOutbox {
             job_id,
             expected_transaction_hash,
             current_provider_owner,
-            current_signer_policy,
+            current_authority,
             runtime_now_ms,
             finalized_block_time_ms,
             observed_finalized_cursor,
@@ -3771,7 +3771,7 @@ impl ProviderIngestOutbox {
             &candidate.active[position].authorization,
             observed_finalized_cursor,
         )?;
-        let (attempts, next_signer_policy_owner, next_signer_policy_floor, successor_required) = {
+        let (attempts, next_authority_owner, next_authority_floor, successor_required) = {
             let completion = local_completion_mut(&mut candidate.active[position])?;
             require_transaction_hash(completion, expected_transaction_hash)?;
             if completion.state != StoredDeliveryStateV1::Signed || !completion.ever_exposed {
@@ -3780,7 +3780,7 @@ impl ProviderIngestOutbox {
             validate_finalized_completion_authority_matches(
                 completion,
                 current_provider_owner,
-                current_signer_policy,
+                current_authority,
                 observed_finalized_cursor,
             )?;
             if observed_finalized_cursor.height <= completion.baseline_finalized_height {
@@ -3813,31 +3813,35 @@ impl ProviderIngestOutbox {
             let (next_owner, next_floor, successor_required) = match current_provider_owner {
                 None => (None, None, false),
                 Some(owner) => {
-                    let same_latched_owner = completion.signer_policy_owner.as_ref() == Some(owner);
-                    match current_signer_policy {
-                        ProviderIngestSignerPolicyObservationV1::Active(policy) => {
-                            validate_signer_policy_progress(
+                    let same_latched_owner = completion.authority_owner.as_ref() == Some(owner);
+                    match current_authority {
+                        ProviderIngestCompletionAuthorityObservationV1::Active(policy) => {
+                            validate_authority_progress(
                                 if same_latched_owner {
-                                    completion.signer_policy_floor
+                                    completion.authority_floor.clone()
                                 } else {
                                     None
                                 },
-                                same_latched_owner && completion.signer_policy_successor_required,
+                                same_latched_owner && completion.authority_successor_required,
                                 policy,
                             )?;
-                            (Some(owner.clone()), Some(policy), false)
+                            (Some(owner.clone()), Some(policy.clone()), false)
                         }
-                        ProviderIngestSignerPolicyObservationV1::Missing => {
+                        ProviderIngestCompletionAuthorityObservationV1::Missing => {
                             let floor = if same_latched_owner {
-                                completion.signer_policy_floor
-                            } else if owner == &context.provider_owner {
-                                Some(context.signer_policy)
+                                completion.authority_floor.clone()
+                            } else if owner == &context.expected_authority.provider_owner {
+                                Some(context.expected_authority.clone())
                             } else {
                                 None
                             };
-                            (floor.map(|_| owner.clone()), floor, floor.is_some())
+                            (
+                                floor.as_ref().map(|_| owner.clone()),
+                                floor.clone(),
+                                floor.is_some(),
+                            )
                         }
-                        ProviderIngestSignerPolicyObservationV1::NotChecked => {
+                        ProviderIngestCompletionAuthorityObservationV1::NotChecked => {
                             return Err(ProviderIngestOutboxError::InvalidCheckpoint);
                         }
                     }
@@ -3851,7 +3855,7 @@ impl ProviderIngestOutbox {
                 completion.signing_context = None;
                 completion.transaction_hash = None;
                 completion.ever_exposed = false;
-                normalize_signer_policy_lineage(completion);
+                normalize_authority_lineage(completion);
             }
             (attempts, next_owner, next_floor, successor_required)
         };
@@ -3870,9 +3874,9 @@ impl ProviderIngestOutbox {
         }
         let next_attempt_at_ms = retry_at(runtime_now_ms, attempts, self.policy)?;
         let completion = local_completion_mut(&mut candidate.active[position])?;
-        completion.signer_policy_owner = next_signer_policy_owner;
-        completion.signer_policy_floor = next_signer_policy_floor;
-        completion.signer_policy_successor_required = successor_required;
+        completion.authority_owner = next_authority_owner;
+        completion.authority_floor = next_authority_floor;
+        completion.authority_successor_required = successor_required;
         completion.next_attempt_at_ms = next_attempt_at_ms;
         completion.last_failure_class = Some(ProviderIngestFailureClassV1::SignerPolicyChanged);
         self.persist_candidate(&mut state, candidate)?;
@@ -4028,7 +4032,7 @@ impl ProviderIngestOutbox {
                 completion.signing_context = None;
                 completion.transaction_hash = None;
                 completion.ever_exposed = false;
-                normalize_signer_policy_lineage(completion);
+                normalize_authority_lineage(completion);
             }
             attempts
         };
@@ -4879,10 +4883,10 @@ fn clear_completion_signing_material(completion: &mut StoredCompletionDeliveryV1
     completion.next_attempt_at_ms = 0;
     completion.last_failure_class = None;
 }
-fn normalize_signer_policy_lineage(completion: &mut StoredCompletionDeliveryV1) {
-    if completion.signer_policy_floor.is_none() {
-        completion.signer_policy_owner = None;
-        completion.signer_policy_successor_required = false;
+fn normalize_authority_lineage(completion: &mut StoredCompletionDeliveryV1) {
+    if completion.authority_floor.is_none() {
+        completion.authority_owner = None;
+        completion.authority_successor_required = false;
     }
 }
 fn validate_manifest_id(
@@ -5085,7 +5089,7 @@ fn require_transaction_hash(
 fn validate_completion_submission_authority(
     completion: &StoredCompletionDeliveryV1,
     current_provider_owner: &AccountId,
-    current_signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    current_authority: &ProviderIngestCompletionAuthorityV1,
     checked_finalized_cursor: ProviderIngestFinalizedCursorV1,
 ) -> Result<(), ProviderIngestOutboxError> {
     if completion.state != StoredDeliveryStateV1::Signed {
@@ -5096,14 +5100,14 @@ fn validate_completion_submission_authority(
         .as_ref()
         .ok_or(ProviderIngestOutboxError::InvalidCheckpoint)?;
     validate_cursor_not_before(context.baseline_finalized_cursor, checked_finalized_cursor)?;
-    if &context.provider_owner != current_provider_owner
-        || completion.signer_policy_owner.as_ref() != Some(current_provider_owner)
+    if &context.expected_authority.provider_owner != current_provider_owner
+        || completion.authority_owner.as_ref() != Some(current_provider_owner)
     {
         return Err(ProviderIngestOutboxError::InvalidSigningContext);
     }
-    if context.signer_policy != current_signer_policy
-        || completion.signer_policy_floor != Some(current_signer_policy)
-        || completion.signer_policy_successor_required
+    if &context.expected_authority != current_authority
+        || completion.authority_floor.as_ref() != Some(current_authority)
+        || completion.authority_successor_required
     {
         return Err(ProviderIngestOutboxError::SignerPolicyRollback);
     }
@@ -5117,8 +5121,8 @@ fn validate_completion_submission_authority(
     if observation.provider_owner.as_ref() != Some(current_provider_owner) {
         return Err(ProviderIngestOutboxError::InvalidSigningContext);
     }
-    if observation.signer_policy
-        != ProviderIngestSignerPolicyObservationV1::Active(current_signer_policy)
+    if &observation.completion_authority
+        != &ProviderIngestCompletionAuthorityObservationV1::Active(current_authority.clone())
     {
         return Err(ProviderIngestOutboxError::SignerPolicyRollback);
     }
@@ -5163,13 +5167,13 @@ fn validate_completion_signing_context(
     policy: ProviderIngestOutboxPolicyV1,
 ) -> Result<(), ProviderIngestOutboxError> {
     context.baseline_finalized_cursor.validate()?;
-    validate_completion_signer_policy(context.signer_policy)?;
+    validate_completion_authority(&context.expected_authority)?;
     if context.assignment_revision == 0
         || context.completion_epoch == 0
         || context.network_id.as_bytes()[31] & 1 != 1
-        || !completion_account_id_fits_canonical_bound(&context.provider_owner)
+        || !completion_account_id_fits_canonical_bound(&context.expected_authority.provider_owner)
         || context.expected_payload.network_id() != Some(&context.network_id)
-        || context.expected_payload.authority() != &context.provider_owner
+        || context.expected_payload.authority() != &context.expected_authority.completion_signer
         || context.expected_payload.time_to_live().is_none()
     {
         return Err(ProviderIngestOutboxError::InvalidSigningContext);
@@ -5197,12 +5201,12 @@ fn completion_account_id_fits_canonical_bound(account_id: &AccountId) -> bool {
             })
     })
 }
-fn validate_signer_policy_progress(
-    retained: Option<ProviderIngestCompletionSignerPolicyV1>,
+fn validate_authority_progress(
+    retained: Option<ProviderIngestCompletionAuthorityV1>,
     successor_required: bool,
-    candidate: ProviderIngestCompletionSignerPolicyV1,
+    candidate: &ProviderIngestCompletionAuthorityV1,
 ) -> Result<(), ProviderIngestOutboxError> {
-    validate_completion_signer_policy(candidate)?;
+    validate_completion_authority(candidate)?;
     let Some(retained) = retained else {
         return if successor_required {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
@@ -5210,14 +5214,20 @@ fn validate_signer_policy_progress(
             Ok(())
         };
     };
-    validate_completion_signer_policy(retained)?;
-    if candidate == retained {
+    validate_completion_authority(&retained)?;
+    if candidate == &retained {
         return if successor_required {
             Err(ProviderIngestOutboxError::SignerPolicyRollback)
         } else {
             Ok(())
         };
     }
+    if candidate.provider_owner != retained.provider_owner {
+        return Err(ProviderIngestOutboxError::SignerPolicyRollback);
+    }
+    let candidate = candidate.signer_policy;
+    let retained = retained.signer_policy;
+    // Equal policy bytes do not permit replacing the key; full equality was handled above.
     if candidate.policy_id == retained.policy_id {
         let expected_revision = retained
             .revision
@@ -5237,22 +5247,26 @@ fn validate_signer_policy_progress(
 fn observe_finalized_completion_authority(
     completion: &mut StoredCompletionDeliveryV1,
     provider_owner: Option<&AccountId>,
-    signer_policy: ProviderIngestSignerPolicyObservationV1,
+    completion_authority: &ProviderIngestCompletionAuthorityObservationV1,
     cursor: ProviderIngestFinalizedCursorV1,
 ) -> Result<bool, ProviderIngestOutboxError> {
     cursor.validate()?;
-    if let ProviderIngestSignerPolicyObservationV1::Active(policy) = signer_policy {
-        validate_completion_signer_policy(policy)?;
+    if let ProviderIngestCompletionAuthorityObservationV1::Active(authority) = completion_authority
+    {
+        validate_completion_authority(authority)?;
+        if provider_owner != Some(&authority.provider_owner) {
+            return Err(ProviderIngestOutboxError::InvalidFinalizedAuthorityObservation);
+        }
     }
     if provider_owner.is_none()
-        && signer_policy != ProviderIngestSignerPolicyObservationV1::NotChecked
+        && completion_authority != &ProviderIngestCompletionAuthorityObservationV1::NotChecked
     {
         return Err(ProviderIngestOutboxError::InvalidFinalizedAuthorityObservation);
     }
     let incoming = StoredFinalizedCompletionAuthorityObservationV1 {
         cursor,
         provider_owner: provider_owner.cloned(),
-        signer_policy,
+        completion_authority: completion_authority.clone(),
     };
     let Some(retained) = completion.finalized_authority_observation.as_mut() else {
         completion.finalized_authority_observation = Some(incoming);
@@ -5267,18 +5281,21 @@ fn observe_finalized_completion_authority(
     if retained.provider_owner != incoming.provider_owner {
         return Err(ProviderIngestOutboxError::FinalizedAuthorityConflict);
     }
-    match (retained.signer_policy, incoming.signer_policy) {
+    match (
+        &retained.completion_authority,
+        &incoming.completion_authority,
+    ) {
         (
-            ProviderIngestSignerPolicyObservationV1::NotChecked,
-            ProviderIngestSignerPolicyObservationV1::NotChecked,
+            &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
+            &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
         )
         | (
-            ProviderIngestSignerPolicyObservationV1::Missing,
-            ProviderIngestSignerPolicyObservationV1::Missing,
+            &ProviderIngestCompletionAuthorityObservationV1::Missing,
+            &ProviderIngestCompletionAuthorityObservationV1::Missing,
         ) => Ok(false),
         (
-            ProviderIngestSignerPolicyObservationV1::Active(left),
-            ProviderIngestSignerPolicyObservationV1::Active(right),
+            ProviderIngestCompletionAuthorityObservationV1::Active(left),
+            ProviderIngestCompletionAuthorityObservationV1::Active(right),
         ) => {
             if left == right {
                 Ok(false)
@@ -5287,25 +5304,25 @@ fn observe_finalized_completion_authority(
             }
         }
         (
-            ProviderIngestSignerPolicyObservationV1::NotChecked,
-            ProviderIngestSignerPolicyObservationV1::Missing
-            | ProviderIngestSignerPolicyObservationV1::Active(_),
+            &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
+            ProviderIngestCompletionAuthorityObservationV1::Missing
+            | ProviderIngestCompletionAuthorityObservationV1::Active(_),
         ) => {
-            retained.signer_policy = incoming.signer_policy;
+            retained.completion_authority = incoming.completion_authority.clone();
             Ok(true)
         }
         (
-            ProviderIngestSignerPolicyObservationV1::Missing
-            | ProviderIngestSignerPolicyObservationV1::Active(_),
-            ProviderIngestSignerPolicyObservationV1::NotChecked,
+            ProviderIngestCompletionAuthorityObservationV1::Missing
+            | ProviderIngestCompletionAuthorityObservationV1::Active(_),
+            &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
         ) => Ok(false),
         (
-            ProviderIngestSignerPolicyObservationV1::Missing,
-            ProviderIngestSignerPolicyObservationV1::Active(_),
+            &ProviderIngestCompletionAuthorityObservationV1::Missing,
+            ProviderIngestCompletionAuthorityObservationV1::Active(_),
         )
         | (
-            ProviderIngestSignerPolicyObservationV1::Active(_),
-            ProviderIngestSignerPolicyObservationV1::Missing,
+            ProviderIngestCompletionAuthorityObservationV1::Active(_),
+            &ProviderIngestCompletionAuthorityObservationV1::Missing,
         ) => Err(ProviderIngestOutboxError::FinalizedAuthorityConflict),
     }
 }
@@ -5321,20 +5338,26 @@ fn validate_finalized_completion_authority_observation(
         .as_ref()
         .is_some_and(|owner| !completion_account_id_fits_canonical_bound(owner))
         || (observation.provider_owner.is_none()
-            && observation.signer_policy != ProviderIngestSignerPolicyObservationV1::NotChecked)
+            && observation.completion_authority
+                != ProviderIngestCompletionAuthorityObservationV1::NotChecked)
     {
         return Err(ProviderIngestOutboxError::InvalidCheckpoint);
     }
-    if let ProviderIngestSignerPolicyObservationV1::Active(policy) = observation.signer_policy {
-        validate_completion_signer_policy(policy)
+    if let ProviderIngestCompletionAuthorityObservationV1::Active(policy) =
+        &observation.completion_authority
+    {
+        validate_completion_authority(policy)
             .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
+        if observation.provider_owner.as_ref() != Some(&policy.provider_owner) {
+            return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+        }
     }
     Ok(())
 }
 fn validate_finalized_completion_authority_matches(
     completion: &StoredCompletionDeliveryV1,
     provider_owner: Option<&AccountId>,
-    signer_policy: ProviderIngestSignerPolicyObservationV1,
+    completion_authority: &ProviderIngestCompletionAuthorityObservationV1,
     cursor: ProviderIngestFinalizedCursorV1,
 ) -> Result<(), ProviderIngestOutboxError> {
     let observation = completion
@@ -5343,7 +5366,7 @@ fn validate_finalized_completion_authority_matches(
         .ok_or(ProviderIngestOutboxError::InvalidCheckpoint)?;
     if observation.cursor != cursor
         || observation.provider_owner.as_ref() != provider_owner
-        || observation.signer_policy != signer_policy
+        || &observation.completion_authority != completion_authority
     {
         return Err(ProviderIngestOutboxError::FinalizedAuthorityConflict);
     }
@@ -5367,11 +5390,7 @@ fn validate_completion_instruction(
     if completion.order_id().as_bytes() != &authorization.order_id
         || completion.provider_id().as_bytes() != &authorization.provider_id
         || *completion.completion_epoch() != context.completion_epoch
-        || completion.expected_authority()
-            != &ProviderIngestCompletionAuthorityV1::new(
-                context.provider_owner.clone(),
-                context.signer_policy,
-            )
+        || completion.expected_authority() != &context.expected_authority
         || *completion.expected_assignment_revision() != context.assignment_revision
         || *completion.finalized_anchor()
             != (ProviderIngestFinalizedAnchorV1 {
@@ -5400,7 +5419,7 @@ fn validate_completion_transaction(
     }
     if transaction.payload() != &context.expected_payload
         || transaction.network_id() != Some(&context.network_id)
-        || transaction.authority() != &context.provider_owner
+        || transaction.authority() != &context.expected_authority.completion_signer
         || transaction.attachments().is_some()
         || transaction.multisig_signatures().is_some()
         || transaction.verify_signature().is_err()
@@ -5895,7 +5914,7 @@ fn validate_completion_delivery(
         return Err(ProviderIngestOutboxError::InvalidCheckpoint);
     }
     if completion
-        .signer_policy_owner
+        .authority_owner
         .as_ref()
         .is_some_and(|owner| !completion_account_id_fits_canonical_bound(owner))
     {
@@ -5912,19 +5931,24 @@ fn validate_completion_delivery(
             .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
     }
     match (
-        completion.signer_policy_owner.as_ref(),
-        completion.signer_policy_floor,
+        completion.authority_owner.as_ref(),
+        completion.authority_floor.clone(),
     ) {
-        (Some(_), Some(policy)) => validate_completion_signer_policy(policy)
-            .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?,
-        (None, None) if completion.signer_policy_successor_required => {
+        (Some(owner), Some(authority)) => {
+            validate_completion_authority(&authority)
+                .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
+            if owner != &authority.provider_owner {
+                return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+            }
+        }
+        (None, None) if completion.authority_successor_required => {
             return Err(ProviderIngestOutboxError::InvalidCheckpoint);
         }
         (None, None) => {}
         (Some(_), None) if is_exposed => {}
         (Some(owner), None)
             if completion.state == StoredDeliveryStateV1::Ready
-                && !completion.signer_policy_successor_required
+                && !completion.authority_successor_required
                 && completion
                     .finalized_authority_observation
                     .as_ref()
@@ -5955,9 +5979,10 @@ fn validate_completion_delivery(
             if completion.signing_generation == 0
                 || completion.signing_claimed_at_ms == 0
                 || completion.completion_epoch != Some(context.completion_epoch)
-                || completion.signer_policy_owner.as_ref() != Some(&context.provider_owner)
-                || completion.signer_policy_floor != Some(context.signer_policy)
-                || completion.signer_policy_successor_required
+                || completion.authority_owner.as_ref()
+                    != Some(&context.expected_authority.provider_owner)
+                || completion.authority_floor.as_ref() != Some(&context.expected_authority)
+                || completion.authority_successor_required
                 || completion.baseline_finalized_height != context.baseline_finalized_cursor.height
                 || completion.baseline_finalized_block_hash
                     != context.baseline_finalized_cursor.block_hash
@@ -5984,9 +6009,11 @@ fn validate_completion_delivery(
                 || completion.signing_claimed_at_ms != 0
                 || completion.completion_epoch != Some(context.completion_epoch)
                 || (!is_exposed
-                    && (completion.signer_policy_owner.as_ref() != Some(&context.provider_owner)
-                        || completion.signer_policy_floor != Some(context.signer_policy)
-                        || completion.signer_policy_successor_required))
+                    && (completion.authority_owner.as_ref()
+                        != Some(&context.expected_authority.provider_owner)
+                        || completion.authority_floor.as_ref()
+                            != Some(&context.expected_authority)
+                        || completion.authority_successor_required))
                 || (matches!(
                     completion.state,
                     StoredDeliveryStateV1::Ambiguous | StoredDeliveryStateV1::Submitted
@@ -6033,12 +6060,14 @@ fn validate_unexposed_completion_authority_observation(
         .ok_or(ProviderIngestOutboxError::InvalidCheckpoint)?;
     validate_cursor_not_before(context.baseline_finalized_cursor, observation.cursor)
         .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
-    let signer_policy_matches = match observation.signer_policy {
-        ProviderIngestSignerPolicyObservationV1::NotChecked => true,
-        ProviderIngestSignerPolicyObservationV1::Missing => false,
-        ProviderIngestSignerPolicyObservationV1::Active(policy) => policy == context.signer_policy,
+    let signer_policy_matches = match &observation.completion_authority {
+        ProviderIngestCompletionAuthorityObservationV1::NotChecked => true,
+        ProviderIngestCompletionAuthorityObservationV1::Missing => false,
+        ProviderIngestCompletionAuthorityObservationV1::Active(policy) => {
+            policy == &context.expected_authority
+        }
     };
-    if observation.provider_owner.as_ref() != Some(&context.provider_owner)
+    if observation.provider_owner.as_ref() != Some(&context.expected_authority.provider_owner)
         || !signer_policy_matches
     {
         return Err(ProviderIngestOutboxError::InvalidCheckpoint);
@@ -6313,6 +6342,7 @@ impl From<ProviderIngestCheckpointExternalErrorV1> for ProviderIngestOutboxError
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {
+    use iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1;
     mod authorization_fixtures;
 
     use super::*;
@@ -6839,6 +6869,12 @@ mod tests {
             policy_digest: [digest_byte; 32],
         }
     }
+    fn fixture_authority(
+        owner: &AccountId,
+        policy: ProviderIngestCompletionSignerPolicyV1,
+    ) -> ProviderIngestCompletionAuthorityV1 {
+        ProviderIngestCompletionAuthorityV1::new(owner.clone(), owner.clone(), policy)
+    }
     fn owner(seed: u8) -> ProviderIngestClaimOwnerV1 {
         ProviderIngestClaimOwnerV1::new([seed; 32]).expect("owner")
     }
@@ -6895,6 +6931,7 @@ mod tests {
             provider_id: ProviderId::new(provider_id),
             completion_epoch,
             expected_authority: ProviderIngestCompletionAuthorityV1::new(
+                (provider_owner).clone(),
                 provider_owner,
                 completion_signer_policy,
             ),
@@ -6980,8 +7017,11 @@ mod tests {
             network_id: *transaction
                 .network_id()
                 .expect("ordinary completion transaction network"),
-            provider_owner: transaction.authority().clone(),
-            signer_policy: signer_policy(1),
+            expected_authority: ProviderIngestCompletionAuthorityV1::new(
+                transaction.authority().clone(),
+                transaction.authority().clone(),
+                signer_policy(1),
+            ),
             assignment_revision: 1,
             completion_epoch,
             expected_payload: transaction.payload().clone(),
@@ -7037,8 +7077,8 @@ mod tests {
         outbox.authorize_and_begin_completion_submission(
             job_id,
             transaction_hash,
-            &context.provider_owner,
-            context.signer_policy,
+            &context.expected_authority.provider_owner,
+            &context.expected_authority,
             checked_cursor,
             now_ms,
         )
@@ -7152,7 +7192,7 @@ mod tests {
             observe_finalized_completion_authority(
                 &mut completion,
                 Some(&owner),
-                ProviderIngestSignerPolicyObservationV1::NotChecked,
+                ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                 cursor(8),
             ),
             Ok(true)
@@ -7162,7 +7202,7 @@ mod tests {
             observe_finalized_completion_authority(
                 &mut completion,
                 Some(&owner),
-                ProviderIngestSignerPolicyObservationV1::NotChecked,
+                ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                 cursor(8),
             ),
             Ok(false)
@@ -7964,7 +8004,11 @@ mod tests {
         let first_transaction = signed_completion(&authorization, 8, 8);
         let first_claim =
             claim_for_transaction(&outbox, job_id, &first_transaction, 8, 102, cursor(8));
-        let completion_owner = first_claim.context.provider_owner.clone();
+        let completion_owner = first_claim
+            .context
+            .expected_authority
+            .provider_owner
+            .clone();
         let first_hash = outbox
             .store_completion_transaction(&first_claim, first_transaction)
             .unwrap();
@@ -8013,7 +8057,10 @@ mod tests {
             .invalidate_stale_completion_authority(
                 job_id,
                 Some(&completion_owner),
-                ProviderIngestSignerPolicyObservationV1::Active(signer_policy(1)),
+                &ProviderIngestCompletionAuthorityObservationV1::Active(fixture_authority(
+                    &completion_owner,
+                    signer_policy(1),
+                )),
                 210,
                 cursor(9),
             )
@@ -8994,7 +9041,7 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidSigningContext)
         );
         let mut wrong_owner = valid.clone();
-        wrong_owner.provider_owner = completed_by(0x77);
+        wrong_owner.expected_authority.provider_owner = completed_by(0x77);
         assert_eq!(
             outbox.claim_completion_signing(job_id, wrong_owner, 102),
             Err(ProviderIngestOutboxError::InvalidSigningContext)
@@ -9020,7 +9067,7 @@ mod tests {
             },
         ] {
             let mut invalid = valid.clone();
-            invalid.signer_policy = invalid_policy;
+            invalid.expected_authority.signer_policy = invalid_policy;
             assert_eq!(
                 outbox.claim_completion_signing(job_id, invalid, 102),
                 Err(ProviderIngestOutboxError::InvalidSignerPolicy)
@@ -9066,7 +9113,7 @@ mod tests {
         let transaction =
             signed_completion_with_policy_at(&authorization, 8, cursor(8), 8, signer_policy(2));
         let mut revision_two = completion_context(&transaction, 8, cursor(8));
-        revision_two.signer_policy = signer_policy(2);
+        revision_two.expected_authority.signer_policy = signer_policy(2);
         let claim = outbox
             .claim_completion_signing(job_id, revision_two.clone(), 102)
             .expect("claim revision two");
@@ -9090,7 +9137,7 @@ mod tests {
             let transaction =
                 signed_completion_with_policy_at(&authorization, 8, cursor(9), 8, invalid_policy);
             let mut invalid = completion_context(&transaction, 8, cursor(9));
-            invalid.signer_policy = invalid_policy;
+            invalid.expected_authority.signer_policy = invalid_policy;
             assert_eq!(
                 outbox.claim_completion_signing(job_id, invalid, 113),
                 Err(ProviderIngestOutboxError::SignerPolicyRollback)
@@ -9100,7 +9147,7 @@ mod tests {
         let successor_transaction =
             signed_completion_with_policy_at(&authorization, 8, cursor(9), 8, successor_policy);
         let mut canonical_successor = completion_context(&successor_transaction, 8, cursor(9));
-        canonical_successor.signer_policy = successor_policy;
+        canonical_successor.expected_authority.signer_policy = successor_policy;
         outbox
             .claim_completion_signing(job_id, canonical_successor, 113)
             .expect("claim canonical strict policy successor");
@@ -9113,10 +9160,18 @@ mod tests {
             predecessor_digest: None,
             policy_digest: [0xB2; 32],
         };
-        validate_signer_policy_progress(Some(signer_policy(2)), false, replacement)
-            .expect("replacement policy identity may restart at canonical revision one");
-        validate_signer_policy_progress(Some(signer_policy(2)), true, replacement)
-            .expect("canonical replacement satisfies a required post-revocation successor");
+        validate_authority_progress(
+            Some(fixture_authority(&completed_by(8), signer_policy(2))),
+            false,
+            &fixture_authority(&completed_by(8), replacement),
+        )
+        .expect("replacement policy identity may restart at canonical revision one");
+        validate_authority_progress(
+            Some(fixture_authority(&completed_by(8), signer_policy(2))),
+            true,
+            &fixture_authority(&completed_by(8), replacement),
+        )
+        .expect("canonical replacement satisfies a required post-revocation successor");
     }
     #[test]
     fn finalized_owner_rotation_invalidates_only_unexposed_prepared_state() {
@@ -9164,9 +9219,9 @@ mod tests {
                     .invalidate_stale_completion_authority(
                         job_id,
                         Some(&old_owner),
-                        ProviderIngestSignerPolicyObservationV1::NotChecked,
+                        &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                         104,
-                        cursor(9),
+                        cursor(9)
                     )
                     .unwrap(),
                 None,
@@ -9186,9 +9241,9 @@ mod tests {
                 outbox.invalidate_stale_completion_authority(
                     job_id,
                     Some(&replacement_owner),
-                    ProviderIngestSignerPolicyObservationV1::NotChecked,
+                    &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                     104,
-                    cursor(8),
+                    cursor(8)
                 ),
                 Err(ProviderIngestOutboxError::StaleFinalizedCursor),
                 "same-baseline owner substitution must fail for {prepared_state:?}"
@@ -9198,9 +9253,9 @@ mod tests {
                 outbox.invalidate_stale_completion_authority(
                     job_id,
                     Some(&replacement_owner),
-                    ProviderIngestSignerPolicyObservationV1::NotChecked,
+                    &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                     104,
-                    cursor(9),
+                    cursor(9)
                 ),
                 Err(ProviderIngestOutboxError::FinalizedAuthorityConflict),
                 "one finalized cursor cannot equivocate about provider ownership"
@@ -9211,7 +9266,7 @@ mod tests {
                 .invalidate_stale_completion_authority(
                     job_id,
                     Some(&replacement_owner),
-                    ProviderIngestSignerPolicyObservationV1::NotChecked,
+                    &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                     104,
                     cursor(10),
                 )
@@ -9238,14 +9293,18 @@ mod tests {
                     Some(StoredFinalizedCompletionAuthorityObservationV1 {
                         cursor: cursor(10),
                         provider_owner: Some(replacement_owner.clone()),
-                        signer_policy: ProviderIngestSignerPolicyObservationV1::NotChecked,
+                        completion_authority:
+                            ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                     })
                 );
+                assert_eq!(retained.authority_owner.as_ref(), Some(&replacement_owner));
                 assert_eq!(
-                    retained.signer_policy_owner.as_ref(),
-                    Some(&replacement_owner)
+                    retained
+                        .authority_floor
+                        .as_ref()
+                        .map(|authority| authority.signer_policy),
+                    None
                 );
-                assert_eq!(retained.signer_policy_floor, None);
                 assert_eq!(
                     outbox.store_completion_transaction(&old_claim, old_transaction),
                     Err(ProviderIngestOutboxError::InvalidSigningClaim)
@@ -9279,9 +9338,9 @@ mod tests {
                     .invalidate_stale_completion_authority(
                         job_id,
                         Some(&replacement_owner),
-                        ProviderIngestSignerPolicyObservationV1::NotChecked,
+                        &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                         105,
-                        cursor(10),
+                        cursor(10)
                     )
                     .unwrap(),
                 None,
@@ -9334,7 +9393,7 @@ mod tests {
                 .invalidate_stale_completion_authority(
                     job_id,
                     Some(&owner),
-                    ProviderIngestSignerPolicyObservationV1::NotChecked,
+                    &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                     104,
                     cursor(9),
                 )
@@ -9349,14 +9408,18 @@ mod tests {
                 Some(StoredFinalizedCompletionAuthorityObservationV1 {
                     cursor: cursor(9),
                     provider_owner: Some(owner.clone()),
-                    signer_policy: ProviderIngestSignerPolicyObservationV1::NotChecked,
+                    completion_authority:
+                        ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                 })
             );
             outbox
                 .invalidate_stale_completion_authority(
                     job_id,
                     Some(&owner),
-                    ProviderIngestSignerPolicyObservationV1::Active(signer_policy(1)),
+                    &ProviderIngestCompletionAuthorityObservationV1::Active(fixture_authority(
+                        &owner,
+                        signer_policy(1),
+                    )),
                     105,
                     cursor(9),
                 )
@@ -9370,10 +9433,10 @@ mod tests {
                 fully_checked.finalized_authority_observation,
                 Some(StoredFinalizedCompletionAuthorityObservationV1 {
                     cursor: cursor(9),
-                    provider_owner: Some(owner),
-                    signer_policy: ProviderIngestSignerPolicyObservationV1::Active(signer_policy(
-                        1
-                    ),),
+                    provider_owner: Some(owner.clone()),
+                    completion_authority: ProviderIngestCompletionAuthorityObservationV1::Active(
+                        fixture_authority(&owner, signer_policy(1))
+                    ),
                 })
             );
         }
@@ -9421,9 +9484,9 @@ mod tests {
                     .invalidate_stale_completion_authority(
                         job_id,
                         Some(&owner),
-                        ProviderIngestSignerPolicyObservationV1::NotChecked,
+                        &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                         104,
-                        cursor(9),
+                        cursor(9)
                     )
                     .expect("owner-only reconciliation"),
                 None
@@ -9433,26 +9496,32 @@ mod tests {
                     .invalidate_stale_completion_authority(
                         job_id,
                         Some(&owner),
-                        ProviderIngestSignerPolicyObservationV1::Active(signer_policy(1)),
+                        &ProviderIngestCompletionAuthorityObservationV1::Active(fixture_authority(
+                            &owner,
+                            signer_policy(1)
+                        )),
                         104,
-                        cursor(9),
+                        cursor(9)
                     )
                     .expect("same signer policy"),
                 None
             );
             let before_policy_change = stored_completion(&outbox, job_id);
             let changed_policy = if index == 0 {
-                ProviderIngestSignerPolicyObservationV1::Missing
+                ProviderIngestCompletionAuthorityObservationV1::Missing
             } else {
-                ProviderIngestSignerPolicyObservationV1::Active(signer_policy(2))
+                ProviderIngestCompletionAuthorityObservationV1::Active(fixture_authority(
+                    &owner,
+                    signer_policy(2),
+                ))
             };
             assert_eq!(
                 outbox.invalidate_stale_completion_authority(
                     job_id,
                     Some(&owner),
-                    changed_policy,
+                    &changed_policy,
                     104,
-                    cursor(8),
+                    cursor(8)
                 ),
                 Err(ProviderIngestOutboxError::StaleFinalizedCursor),
                 "same-baseline policy substitution must fail closed"
@@ -9462,9 +9531,9 @@ mod tests {
                 outbox.invalidate_stale_completion_authority(
                     job_id,
                     Some(&owner),
-                    changed_policy,
+                    &changed_policy,
                     104,
-                    cursor(9),
+                    cursor(9)
                 ),
                 Err(ProviderIngestOutboxError::FinalizedAuthorityConflict),
                 "one finalized cursor cannot equivocate about signer policy"
@@ -9475,7 +9544,7 @@ mod tests {
                 .invalidate_stale_completion_authority(
                     job_id,
                     Some(&owner),
-                    changed_policy,
+                    &changed_policy,
                     104,
                     cursor(10),
                 )
@@ -9500,25 +9569,31 @@ mod tests {
                     before_policy_change.signed_transaction
                 );
                 assert!(retained.ever_exposed);
-                assert_eq!(retained.signer_policy_owner.as_ref(), Some(&owner));
+                assert_eq!(retained.authority_owner.as_ref(), Some(&owner));
                 assert_eq!(
                     retained.finalized_authority_observation,
                     Some(StoredFinalizedCompletionAuthorityObservationV1 {
                         cursor: cursor(10),
                         provider_owner: Some(owner.clone()),
-                        signer_policy: changed_policy,
+                        completion_authority: changed_policy.clone(),
                     })
                 );
-                match changed_policy {
-                    ProviderIngestSignerPolicyObservationV1::Missing => {
-                        assert_eq!(retained.signer_policy_floor, Some(signer_policy(1)));
-                        assert!(retained.signer_policy_successor_required);
+                match &changed_policy {
+                    ProviderIngestCompletionAuthorityObservationV1::Missing => {
+                        assert_eq!(
+                            retained
+                                .authority_floor
+                                .as_ref()
+                                .map(|authority| authority.signer_policy),
+                            Some(signer_policy(1))
+                        );
+                        assert!(retained.authority_successor_required);
                     }
-                    ProviderIngestSignerPolicyObservationV1::Active(policy) => {
-                        assert_eq!(retained.signer_policy_floor, Some(policy));
-                        assert!(!retained.signer_policy_successor_required);
+                    ProviderIngestCompletionAuthorityObservationV1::Active(policy) => {
+                        assert_eq!(retained.authority_floor.as_ref(), Some(policy));
+                        assert!(!retained.authority_successor_required);
                     }
-                    ProviderIngestSignerPolicyObservationV1::NotChecked => unreachable!(),
+                    ProviderIngestCompletionAuthorityObservationV1::NotChecked => unreachable!(),
                 }
                 assert_eq!(
                     outbox.store_completion_transaction(&claim, transaction),
@@ -9542,7 +9617,7 @@ mod tests {
                 cleared.last_failure_class,
                 Some(ProviderIngestFailureClassV1::SignerPolicyChanged)
             );
-            if changed_policy == ProviderIngestSignerPolicyObservationV1::Missing {
+            if changed_policy == ProviderIngestCompletionAuthorityObservationV1::Missing {
                 observe_finalized(&outbox, cursor(11));
                 let same_policy_transaction = signed_completion(&authorization, 11, 8);
                 let same_policy = completion_context(&same_policy_transaction, 11, cursor(11));
@@ -9561,7 +9636,7 @@ mod tests {
                 );
                 let mut strict_successor =
                     completion_context(&successor_transaction, 11, cursor(11));
-                strict_successor.signer_policy = successor_policy;
+                strict_successor.expected_authority.signer_policy = successor_policy;
                 outbox
                     .claim_completion_signing(job_id, strict_successor, 114)
                     .expect("strict successor may resume after revocation");
@@ -9616,9 +9691,9 @@ mod tests {
                 outbox.invalidate_stale_completion_authority(
                     job_id,
                     None,
-                    ProviderIngestSignerPolicyObservationV1::NotChecked,
+                    &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                     104,
-                    cursor(8),
+                    cursor(8)
                 ),
                 Err(ProviderIngestOutboxError::FinalizedAuthorityConflict),
                 "one finalized cursor cannot remove the retained owner for {prepared_state:?}"
@@ -9629,7 +9704,7 @@ mod tests {
                 .invalidate_stale_completion_authority(
                     job_id,
                     None,
-                    ProviderIngestSignerPolicyObservationV1::NotChecked,
+                    &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                     104,
                     cursor(9),
                 )
@@ -9668,15 +9743,22 @@ mod tests {
                     Some(ProviderIngestFailureClassV1::ProviderOwnerChanged)
                 );
             }
-            assert_eq!(reconciled.signer_policy_owner, None);
-            assert_eq!(reconciled.signer_policy_floor, None);
-            assert!(!reconciled.signer_policy_successor_required);
+            assert_eq!(reconciled.authority_owner, None);
+            assert_eq!(
+                reconciled
+                    .authority_floor
+                    .as_ref()
+                    .map(|authority| authority.signer_policy),
+                None
+            );
+            assert!(!reconciled.authority_successor_required);
             assert_eq!(
                 reconciled.finalized_authority_observation,
                 Some(StoredFinalizedCompletionAuthorityObservationV1 {
                     cursor: cursor(9),
                     provider_owner: None,
-                    signer_policy: ProviderIngestSignerPolicyObservationV1::NotChecked,
+                    completion_authority:
+                        ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                 })
             );
             drop(outbox);
@@ -9717,7 +9799,7 @@ mod tests {
             .invalidate_stale_completion_authority(
                 job_id,
                 Some(&owner),
-                ProviderIngestSignerPolicyObservationV1::Missing,
+                &ProviderIngestCompletionAuthorityObservationV1::Missing,
                 201,
                 cursor(10),
             )
@@ -9725,7 +9807,7 @@ mod tests {
         let quarantined = stored_completion(&outbox, job_id);
         assert_eq!(quarantined.state, StoredDeliveryStateV1::Signed);
         assert!(quarantined.ever_exposed);
-        assert!(quarantined.signer_policy_successor_required);
+        assert!(quarantined.authority_successor_required);
         drop(outbox);
         outbox = ProviderIngestOutbox::open(&path, policy()).expect("restart");
         assert_eq!(stored_completion(&outbox, job_id), quarantined);
@@ -9734,7 +9816,7 @@ mod tests {
                 job_id,
                 expected_transaction_hash: transaction_hash,
                 current_provider_owner: Some(&owner),
-                current_signer_policy: ProviderIngestSignerPolicyObservationV1::Missing,
+                current_authority: &ProviderIngestCompletionAuthorityObservationV1::Missing,
                 runtime_now_ms: 1_000_000,
                 finalized_block_time_ms: 40_000,
                 observed_finalized_cursor: cursor(10),
@@ -9748,7 +9830,7 @@ mod tests {
                     job_id,
                     expected_transaction_hash: transaction_hash,
                     current_provider_owner: Some(&owner),
-                    current_signer_policy: ProviderIngestSignerPolicyObservationV1::Missing,
+                    current_authority: &ProviderIngestCompletionAuthorityObservationV1::Missing,
                     runtime_now_ms: 1_000_000,
                     finalized_block_time_ms: 20_000,
                     observed_finalized_cursor: cursor(10),
@@ -9764,9 +9846,12 @@ mod tests {
             outbox.invalidate_stale_completion_authority(
                 job_id,
                 Some(&owner),
-                ProviderIngestSignerPolicyObservationV1::Active(signer_policy(1)),
+                &ProviderIngestCompletionAuthorityObservationV1::Active(fixture_authority(
+                    &owner,
+                    signer_policy(1)
+                )),
                 202,
-                cursor(11),
+                cursor(11)
             ),
             Err(ProviderIngestOutboxError::SignerPolicyRollback)
         );
@@ -9774,7 +9859,7 @@ mod tests {
             .invalidate_stale_completion_authority(
                 job_id,
                 Some(&owner),
-                ProviderIngestSignerPolicyObservationV1::Missing,
+                &ProviderIngestCompletionAuthorityObservationV1::Missing,
                 202,
                 cursor(11),
             )
@@ -9785,7 +9870,7 @@ mod tests {
                     job_id,
                     expected_transaction_hash: transaction_hash,
                     current_provider_owner: Some(&owner),
-                    current_signer_policy: ProviderIngestSignerPolicyObservationV1::Missing,
+                    current_authority: &ProviderIngestCompletionAuthorityObservationV1::Missing,
                     runtime_now_ms: 1_000_000,
                     finalized_block_time_ms: 39_000,
                     observed_finalized_cursor: cursor(11),
@@ -9800,7 +9885,7 @@ mod tests {
             .invalidate_stale_completion_authority(
                 job_id,
                 Some(&owner),
-                ProviderIngestSignerPolicyObservationV1::Missing,
+                &ProviderIngestCompletionAuthorityObservationV1::Missing,
                 203,
                 cursor(12),
             )
@@ -9811,7 +9896,7 @@ mod tests {
                     job_id,
                     expected_transaction_hash: transaction_hash,
                     current_provider_owner: Some(&owner),
-                    current_signer_policy: ProviderIngestSignerPolicyObservationV1::Missing,
+                    current_authority: &ProviderIngestCompletionAuthorityObservationV1::Missing,
                     runtime_now_ms: 500,
                     finalized_block_time_ms: 39_001,
                     observed_finalized_cursor: cursor(12),
@@ -9824,9 +9909,15 @@ mod tests {
         assert_eq!(expired.signing_context, None);
         assert_eq!(expired.transaction_hash, None);
         assert_eq!(expired.signed_transaction, None);
-        assert_eq!(expired.signer_policy_owner.as_ref(), Some(&owner));
-        assert_eq!(expired.signer_policy_floor, Some(signer_policy(1)));
-        assert!(expired.signer_policy_successor_required);
+        assert_eq!(expired.authority_owner.as_ref(), Some(&owner));
+        assert_eq!(
+            expired
+                .authority_floor
+                .as_ref()
+                .map(|authority| authority.signer_policy),
+            Some(signer_policy(1))
+        );
+        assert!(expired.authority_successor_required);
         drop(outbox);
         outbox = ProviderIngestOutbox::open(&path, policy()).expect("restart after expiry");
         assert_eq!(stored_completion(&outbox, job_id), expired);
@@ -9843,7 +9934,7 @@ mod tests {
         let successor_transaction =
             signed_completion_with_policy_at(&authorization, 13, cursor(13), 8, successor_policy);
         let mut successor = completion_context(&successor_transaction, 13, cursor(13));
-        successor.signer_policy = successor_policy;
+        successor.expected_authority.signer_policy = successor_policy;
         outbox
             .claim_completion_signing(job_id, successor, 1_000_001)
             .expect("strict successor resumes after chain-proven expiry");
@@ -9869,9 +9960,9 @@ mod tests {
                 .invalidate_stale_completion_authority(
                     job_id,
                     None,
-                    ProviderIngestSignerPolicyObservationV1::NotChecked,
+                    &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                     104,
-                    cursor(9),
+                    cursor(9)
                 )
                 .unwrap(),
             Some(ProviderIngestRetryOutcomeV1::DeadLettered)
@@ -9937,8 +10028,8 @@ mod tests {
         let transaction = signed_completion(&preflight, 8, 8);
         let claim =
             claim_for_transaction(&outbox, preflight.job_id(), &transaction, 8, 102, cursor(8));
-        let provider_owner = claim.context().provider_owner.clone();
-        let signer_policy = claim.context().signer_policy;
+        let provider_owner = claim.context().expected_authority.provider_owner.clone();
+        let signer_policy = claim.context().expected_authority.signer_policy;
         let transaction_hash = outbox
             .store_completion_transaction(&claim, transaction)
             .unwrap();
@@ -9971,9 +10062,9 @@ mod tests {
             outbox.completion_transaction_for_authorized_preflight(
                 preflight.job_id(),
                 &provider_owner,
-                signer_policy,
+                &fixture_authority(&provider_owner, signer_policy),
                 cursor(8),
-                122,
+                122
             ),
             Err(ProviderIngestOutboxError::RetryNotDue)
         );
@@ -9981,7 +10072,7 @@ mod tests {
             .completion_transaction_for_authorized_preflight(
                 preflight.job_id(),
                 &provider_owner,
-                signer_policy,
+                &fixture_authority(&provider_owner, signer_policy),
                 cursor(8),
                 123,
             )
@@ -10313,6 +10404,250 @@ mod tests {
         assert_eq!(
             ManifestDigest::new(status.manifest_digest),
             ManifestDigest::new(authorization.manifest_digest())
+        );
+    }
+    // These are outbox component controls over actual signed envelopes. The authorization/cursor
+    // fixture is the existing test owner; these tests do not claim native State execution.
+    fn distinct_completion(
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        authority: &ProviderIngestCompletionAuthorityV1,
+        signer_seed: u8,
+        anchor: ProviderIngestFinalizedCursorV1,
+    ) -> (SignedTransaction, ProviderIngestCompletionSigningContextV1) {
+        let key = KeyPair::try_from_seed(vec![signer_seed; 32], Algorithm::Ed25519).unwrap();
+        let mut builder = TransactionBuilder::new(
+            test_network_id(),
+            AccountId::new(key.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(CompleteReplicationOrder {
+            order_id: ReplicationOrderId::new(authorization.order_id()),
+            provider_id: ProviderId::new(authorization.provider_id()),
+            completion_epoch: 8,
+            expected_authority: authority.clone(),
+            expected_assignment_revision: 1,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: anchor.height,
+                block_hash: anchor.block_hash,
+            },
+        })]);
+        builder.set_creation_time(Duration::from_secs(9));
+        builder.set_ttl(Duration::from_secs(30));
+        let transaction = builder.try_sign(key.private_key()).unwrap();
+        let context = ProviderIngestCompletionSigningContextV1 {
+            baseline_finalized_cursor: anchor,
+            network_id: test_network_id(),
+            expected_authority: authority.clone(),
+            assignment_revision: 1,
+            completion_epoch: 8,
+            expected_payload: transaction.payload().clone(),
+        };
+        (transaction, context)
+    }
+
+    #[test]
+    fn dedicated_completion_key_survives_reopen_without_becoming_provider_owner() {
+        let directory = tempdir().unwrap();
+        let path = checkpoint_path(&directory);
+        let outbox = ProviderIngestOutbox::open(&path, policy()).unwrap();
+        let authorization = authorization(0xE1, 7);
+        let job = authorization.job_id();
+        enqueue_and_store_local(&outbox, &authorization, 100);
+        observe_finalized(&outbox, cursor(8));
+        let authority = ProviderIngestCompletionAuthorityV1::new(
+            completed_by(9),
+            completed_by(8),
+            signer_policy(1),
+        );
+        let (_, wrong_context) = distinct_completion(&authorization, &authority, 9, cursor(8));
+        assert_eq!(
+            outbox.claim_completion_signing(job, wrong_context, 102),
+            Err(ProviderIngestOutboxError::InvalidSigningContext)
+        );
+        let (transaction, context) = distinct_completion(&authorization, &authority, 8, cursor(8));
+        let claim = outbox.claim_completion_signing(job, context, 102).unwrap();
+        let wire = norito::to_bytes(&transaction).unwrap();
+        let hash = outbox
+            .store_completion_transaction(&claim, transaction)
+            .unwrap();
+        drop(outbox);
+        let reopened = ProviderIngestOutbox::open(&path, policy()).unwrap();
+        let submission = reopened
+            .completion_transaction_for_authorized_preflight(
+                job,
+                &authority.provider_owner,
+                &authority,
+                cursor(8),
+                103,
+            )
+            .unwrap();
+        assert_eq!(submission.transaction_hash, hash);
+        assert_eq!(
+            submission.signed_transaction.authority(),
+            &authority.completion_signer
+        );
+        assert_ne!(
+            submission.signed_transaction.authority(),
+            &authority.provider_owner
+        );
+        assert_eq!(
+            norito::to_bytes(&submission.signed_transaction).unwrap(),
+            wire
+        );
+        assert_eq!(
+            stored_completion(&reopened, job).authority_floor.as_ref(),
+            Some(&authority)
+        );
+        let mut same_policy_other_key = authority.clone();
+        same_policy_other_key.completion_signer = completed_by(10);
+        assert!(
+            reopened
+                .completion_transaction_for_authorized_preflight(
+                    job,
+                    &authority.provider_owner,
+                    &same_policy_other_key,
+                    cursor(8),
+                    103,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            stored_completion(&reopened, job).transaction_hash,
+            Some(hash)
+        );
+    }
+
+    #[test]
+    fn full_authority_floor_rejects_same_policy_key_swap_and_same_cut_conflict() {
+        let outbox = ProviderIngestOutbox::in_memory(policy()).unwrap();
+        let authorization = authorization(0xE2, 7);
+        let job = authorization.job_id();
+        enqueue_and_store_local(&outbox, &authorization, 100);
+        observe_finalized(&outbox, cursor(8));
+        let original = ProviderIngestCompletionAuthorityV1::new(
+            completed_by(9),
+            completed_by(8),
+            signer_policy(1),
+        );
+        outbox
+            .validate_ready_completion_authority(
+                job,
+                &original.provider_owner,
+                &original,
+                cursor(8),
+            )
+            .unwrap();
+        let before = outbox.state.lock().unwrap().checkpoint.clone();
+        let mut changed = original.clone();
+        changed.completion_signer = completed_by(10);
+        assert_eq!(
+            outbox.validate_ready_completion_authority(
+                job,
+                &original.provider_owner,
+                &changed,
+                cursor(8)
+            ),
+            Err(ProviderIngestOutboxError::SignerPolicyRollback)
+        );
+        assert_eq!(outbox.state.lock().unwrap().checkpoint, before);
+        let mut observation = stored_completion(&outbox, job);
+        assert_eq!(
+            observe_finalized_completion_authority(
+                &mut observation,
+                Some(&original.provider_owner),
+                &ProviderIngestCompletionAuthorityObservationV1::Active(changed.clone()),
+                cursor(8)
+            ),
+            Err(ProviderIngestOutboxError::FinalizedAuthorityConflict)
+        );
+        observe_finalized(&outbox, cursor(9));
+        assert_eq!(
+            outbox.validate_ready_completion_authority(
+                job,
+                &original.provider_owner,
+                &changed,
+                cursor(9)
+            ),
+            Err(ProviderIngestOutboxError::SignerPolicyRollback)
+        );
+        changed.signer_policy = signer_policy(2);
+        outbox
+            .validate_ready_completion_authority(job, &original.provider_owner, &changed, cursor(9))
+            .expect("new key requires the genuine next policy binding");
+        assert_eq!(
+            stored_completion(&outbox, job).authority_floor.as_ref(),
+            Some(&changed)
+        );
+    }
+
+    #[test]
+    fn dedicated_key_rotation_keeps_exposed_original_bytes_for_reconciliation() {
+        let directory = tempdir().unwrap();
+        let path = checkpoint_path(&directory);
+        let outbox = ProviderIngestOutbox::open(&path, policy()).unwrap();
+        let authorization = authorization(0xE3, 7);
+        let job = authorization.job_id();
+        enqueue_and_store_local(&outbox, &authorization, 100);
+        observe_finalized(&outbox, cursor(8));
+        let original = ProviderIngestCompletionAuthorityV1::new(
+            completed_by(9),
+            completed_by(8),
+            signer_policy(1),
+        );
+        let (transaction, context) = distinct_completion(&authorization, &original, 8, cursor(8));
+        let wire = norito::to_bytes(&transaction).unwrap();
+        let claim = outbox.claim_completion_signing(job, context, 102).unwrap();
+        let hash = outbox
+            .store_completion_transaction(&claim, transaction)
+            .unwrap();
+        begin_submission(&outbox, job, hash, 103).unwrap();
+        observe_finalized(&outbox, cursor(9));
+        let rotated = ProviderIngestCompletionAuthorityV1::new(
+            original.provider_owner.clone(),
+            completed_by(10),
+            signer_policy(2),
+        );
+        assert_eq!(
+            outbox
+                .invalidate_stale_completion_authority(
+                    job,
+                    Some(&original.provider_owner),
+                    &ProviderIngestCompletionAuthorityObservationV1::Active(rotated.clone()),
+                    104,
+                    cursor(9)
+                )
+                .unwrap(),
+            None
+        );
+        drop(outbox);
+        let reopened = ProviderIngestOutbox::open(&path, policy()).unwrap();
+        let retained = stored_completion(&reopened, job);
+        assert_eq!(retained.state, StoredDeliveryStateV1::Ambiguous);
+        assert!(retained.ever_exposed);
+        assert_eq!(retained.transaction_hash, Some(hash));
+        assert_eq!(
+            norito::to_bytes(retained.signed_transaction.as_ref().unwrap()).unwrap(),
+            wire
+        );
+        assert_eq!(
+            retained
+                .signing_context
+                .as_ref()
+                .unwrap()
+                .expected_authority,
+            original
+        );
+        assert_eq!(retained.authority_floor.as_ref(), Some(&rotated));
+        assert!(
+            reopened
+                .completion_transaction_for_authorized_preflight(
+                    job,
+                    &rotated.provider_owner,
+                    &rotated,
+                    cursor(9),
+                    105
+                )
+                .is_err()
         );
     }
 }

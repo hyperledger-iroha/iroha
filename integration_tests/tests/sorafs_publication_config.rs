@@ -23,10 +23,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// One provider's independent owner/completion identity and four separate native role identities.
+/// One provider's distinct owner, completion signer, and four native role identities.
 pub(super) struct ProviderFixture {
     pub id: ProviderId,
     pub owner_key: KeyPair,
+    pub completion_key: KeyPair,
     pub role_keys: [KeyPair; 4],
     pub storage_dir: PathBuf,
     credential_dir: PathBuf,
@@ -73,6 +74,7 @@ impl ProviderFixture {
         Ok(Self {
             id: ProviderId::new([0xA0 + index; 32]),
             owner_key: key(0)?,
+            completion_key: key(5)?,
             role_keys: [key(1)?, key(2)?, key(3)?, key(4)?],
             storage_dir: root.join("storage"),
             credential_dir: root.join("custody"),
@@ -80,6 +82,9 @@ impl ProviderFixture {
     }
     pub fn owner(&self) -> AccountId {
         AccountId::new(self.owner_key.public_key().clone())
+    }
+    pub fn completion_signer(&self) -> AccountId {
+        AccountId::new(self.completion_key.public_key().clone())
     }
     pub fn completion_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         ProviderIngestCompletionSignerPolicyV1 {
@@ -93,9 +98,12 @@ impl ProviderFixture {
         let owner = self.owner();
         let mut instructions = vec![
             Register::account(Account::new(owner.clone())).into(),
+            Register::account(Account::new(self.completion_signer())).into(),
             Grant::account_permission(
-                Permission::from(CanCompleteSorafsReplicationOrder),
-                owner.clone(),
+                Permission::from(CanCompleteSorafsReplicationOrder {
+                    provider_id: self.id,
+                }),
+                self.completion_signer(),
             )
             .into(),
             Grant::account_permission(Permission::from(CanDeclareSorafsCapacity), owner.clone())
@@ -122,7 +130,11 @@ impl ProviderFixture {
         SetProviderIngestCompletionAuthority::new(
             self.id,
             None,
-            ProviderIngestCompletionAuthorityV1::new(self.owner(), self.completion_policy()),
+            ProviderIngestCompletionAuthorityV1::new(
+                self.owner(),
+                self.completion_signer(),
+                self.completion_policy(),
+            ),
         )
     }
     pub fn config(&self, origins: &[(ProviderId, String)]) -> Result<toml::Table> {
@@ -174,7 +186,7 @@ impl ProviderFixture {
             }
             role_paths.push(path);
         }
-        let completion = credential(&self.credential_dir, "completion.key", &self.owner_key)?;
+        let completion = credential(&self.credential_dir, "completion.key", &self.completion_key)?;
         let base = ["sorafs", "storage", "provider_ingest_runtime"];
         let policy = self.completion_policy();
         let sources = toml::Table::from_iter(
@@ -225,7 +237,7 @@ impl ProviderFixture {
             ("completion_signer_algorithm", "ed25519".into()),
             (
                 "completion_signer_public_key_hex",
-                hex::encode(self.owner_key.public_key().try_to_bytes()?.1).into(),
+                hex::encode(self.completion_key.public_key().try_to_bytes()?.1).into(),
             ),
             (
                 "checkpoint_store_handle",

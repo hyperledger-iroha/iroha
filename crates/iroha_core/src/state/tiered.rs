@@ -2474,8 +2474,8 @@ mod measured_bytes_impls {
     use crate::state::SmartContractCodeUploadDescriptor;
     use crate::{
         beacon::{
-            FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgSnapshotV1,
-            GlobalThresholdBeaconPulseLinkV1,
+            GlobalThresholdBeaconDkgSnapshotV1, GlobalThresholdBeaconPulseLinkV1,
+            RetainedFinalizedGlobalThresholdBeaconSessionV1,
         },
         governance::{parliament::ParliamentAttemptStateV1, timed_ovn::TimedOvnLifecycleStateV1},
         privacy_state::{
@@ -3855,10 +3855,10 @@ mod measured_bytes_impls {
             bytes
         }
     }
-    impl MeasuredBytes for FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
+    impl MeasuredBytes for RetainedFinalizedGlobalThresholdBeaconSessionV1 {
         fn measured_bytes(&self) -> usize {
-            size_of::<FinalizedGlobalThresholdBeaconKeySessionRecordV1>()
-                .saturating_add(norito::codec::Encode::encode(self).len())
+            size_of::<RetainedFinalizedGlobalThresholdBeaconSessionV1>()
+                .saturating_add(self.session.retained_allocation_bytes())
         }
     }
     impl MeasuredBytes for FinalizedGlobalThresholdBeaconPulseV1 {

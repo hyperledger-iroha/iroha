@@ -14,41 +14,43 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. Lifecycle/restart have component and node coverage. | Dataspace instances with their own State, cross-dataspace AMX, isolation and current-source network scale/restart. |
 | Storage and execution | `lanes::LaneRunner` and `SumeragiLaneMerge` are the production path. Kura owns a shared fail-stop gate and authenticated native tips/journals. | Original funded execution custody through acquisition, certification, publication, replay and retained-generation reclamation. |
 | Configuration and DPN | Private dataspace definitions are separate from validator settings. `iroha dataspace plan/apply/status` derives artifacts and retains once-only transactions under one budget. Kagami has an isolated BPNG catalog/paid-namespace genesis preset. | Profile-based generator closure, four-daemon paid deployment/readback and physical isolation. BPNG local contracts, fee authority and application provisioning remain incomplete. Owner-node provisioning is outside this path. |
-| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Installed-runtime fixtures cover config-free startup, all three deployment inputs, restart recovery and four-parent/four-private attachment. | The current shared branch needs combined runtime requalification, including paid provisioning, anchoring and payload isolation. Cold registry dependencies, official Taira checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency remain open. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
+| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Installed-runtime fixtures cover config-free startup, all three deployment inputs, restart recovery and four-parent/four-private attachment. | The current shared branch needs combined runtime requalification, including paid provisioning, anchoring and payload isolation. Three-provider generation with shared network policy, distinct-key ingest, aggregate activation, bounded maintenance, independent enrollment restart and automatic custody renewal are implemented but await combined native qualification. Portable publication clock/journal/seed custody, daemon storage integration and authenticated provider-inventory reads are implemented and await native service qualification. Explicit finite startup authorization, bounded unsigned-request recovery and wallet cancellation are implemented but await native interruption qualification. Native pin/outbox submission, publication-service installation and three-provider cold registry publication, official Taira checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency remain open. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
 | Rust client | Immutable account contexts, owned async transport, explicit blocking capabilities and typed fee quoting are implemented. | Remaining capability/consumer migration, unified errors and network cancellation/finality/authorization coverage. |
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
+| Torii collection queries | Domains, accounts, asset definitions, NFTs, RWA lots, balances, holders, transactions, account transactions and repo agreements share one [query language](specs/torii/collection_queries.md) and engine: text/JSON filters, sort, select, aggregates, keyset or block-coordinate cursors and optional totals, merged across dataspace routes. The Rust, Kotlin/Java, Swift, JavaScript, Python and C# SDKs and the CLI implement it against shared golden vectors. | Aggregates spanning several dataspace routes are rejected; explorer and history feeds keep their own paging; no live multi-peer qualification yet. |
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
-| IVM/Kotodama | IVM is the sole VM with ABI V1. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. |
-| SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented and under repair. | Node failures, matched daemon/harness, provider resilience and L1/L2 promotion. |
-| KAGEMUSHA | Ordinary app-owned hardware admission, Native clock/current-wallet reads and approval custody have component implementations; the current cash/Guard production library compiles. | Stock-OS journal/marker Advance, complete recursive monetary proofs, funded State transitions, ledger load/unload and device recovery measurements. |
+| IVM/Kotodama | IVM is the sole VM with ABI V1 and program header 1.1; header 1.0 is rejected. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. CUDA release builds lack the ten PTX artifacts and signed provenance; plain Cargo daemon defaults omit CUDA. |
+| SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented; the ordinary Node library tests pass. | Matched daemon/harness, provider resilience and L1/L2 promotion. |
+| KAGEMUSHA | Single-design G1 canonical objects (`kagemusha_wallet_v1`) and shared Rust/Kotlin/Swift vectors are implemented and tested; no relation, provider or ledger consumes them yet. The empty `iroha_kagemusha_attested`/`iroha_kagemusha_issuer` crates are deleted; results are in the [checklist](specs/kagemusha_evidence_gate.md#8-recorded-results). | Owner decisions on proof size versus R9 and 2 s p95 (measured: one in-circuit P-256 check alone gives a 10,112-byte k=16 proof); stock-OS journal/marker Advance, the single recursive relation, ledger load/unload and device recovery measurements. |
 | Petal Stream | `iroha_petal` implements the [Petal Stream](specs/petal_stream.md) animated optical transport (`天` orientation field, katakana, tile polarity and ring dots as three Reed–Solomon lanes under a rateless fountain) with decoder, renderer, camera simulator and `iroha offline petal`. A gain-free tile read keeps lanes `P` and `K` alive under over-exposure, veiling light and shadows. Swift, Kotlin/JVM, JavaScript, Python and C# ports reproduce the shared fixtures and decode the golden captures to the recorded lanes. Three corner blossoms suffice (a thumb, glare or frame edge may hide the fourth) and sessions track the pose between frames (about 4× cheaper per frame). Simulated reads complete a 10,000-byte KAGEMUSHA message in 11.5 s (45 s from lanes `P` and `D` alone). | All evidence is simulated: physical-camera reads on the governed Android/iOS device matrix, lane `K` at 480p or soft focus, and the public guides in `iroha-docs`. |
 
 ## Immediate blockers
 
-Exact finalized-carrier retries now authenticate the original execution and
-acknowledge admission without requeueing or charging again. The embedded MCP
-descriptor size drift that prevented daemon startup is corrected with a bounded
-loader and compile-time guard. A fixed local daemon/harness candidate completes
-the Nexus smoke workload's financial, signed RS16 finality and exact-retry checks
-across all 16 peers and preserves the settlement through all 16 restarts. Its
-settlement takes 59.17 seconds. The campaign validator now recognizes the exact
-retry observer's canonical phase label and verifies the retained evidence.
-The rebuilt disjoint-committee workload also preserves progress while one lane
-stops and after every peer restarts, covering the applied-body pruning repair.
-Ten fresh paid-settlement runs also pass on that fixed candidate, each with 16
-signed RS16 observations, exact-retry checks and finality at height 9. Qualification
-of the combined source and the settlement latency target remain open.
+The proxied pipeline-status JSON accounting mismatch is repaired. Scoped node runs
+have passed repeated paid settlements, sixteen-peer settlement with restart and
+disjoint lane isolation with restart. The latest paid 4→7→4 attempt halted after
+restart at height 66 when an ordinary State publication change was classified as
+terminal recovery. Its source-authentication retry repair passes component controls;
+fresh daemon qualification remains open. The earlier queued paid transaction after
+the certified return boundary at height 72 remains a required liveness regression.
+The runtime and trigger permission guards now reject malformed recognized payloads
+before delegation; decoder refusals preserve local deferral. Core strict lint still
+fails on unused production/resource graphs. The repaired Rust SDK client source
+passes its unit suite and strict lint; qualification of the final combined source,
+signed RS16 loss/withholding and release remains open. Exact finalized-carrier retries
+retain original execution without requeueing or charging again; changed source
+requires fresh evidence.
 
 Core/World acquisition and retained State ownership are being repaired without
 oversized-stack workarounds. The combined test graph, complete resource funding
 and original Validate-to-Apply custody remain open. Component repairs do not
 establish one retained execution through finality and restart.
 
-Remaining SoraFS Node failures concern fixture permissions, hedged-encryption
-randomness assumptions and cumulative quarantine decode budgets. The Core
-selection has scoped coverage and Torii's unit-test target compiles. Full Node
-and production qualification remain open under the
+The ordinary SoraFS Node library tests pass after correcting fixture permissions,
+hedged-encryption assertions and cumulative quarantine decoding. The Core
+selection has scoped coverage and Torii's unit-test target compiles. Production
+qualification remains open under the
 [reliability goals](specs/sorafs/first_release_reliability_goals.md) and
 [closure ledger](specs/sorafs/v1_closure_ledger.md).
 
@@ -150,7 +152,7 @@ audit refusal is retained; a supplemental audit validates the actual IVM sample
 inputs against every original compiler observation. The lifetime compile-fail test, Primitives 333, Norito derive
 59 unit and 17 strict-JSON controls, and 32 compiler cases pass.
 Complete Mint/Guard/receiver, genuine proof/export and full-State authority remain
-open. The current inventory has 106 codec owners and 1,558 nominal identities,
+open. The current inventory has 106 codec owners and 1,559 nominal identities,
 preserving every prior owner; publication and reduced-feature qualification
 remain required.
 
@@ -189,61 +191,12 @@ ordinary profile and canonical artifact layout changed; preceding transfer-only
 maximum results do not qualify this candidate. Durable completion publication,
 recovery and automatic dispatch remain unfinished.
 
-The merged-source script suite passes 722 tests and 163 subtests; typed workflows
-pass 58 controls. The rebuilt host passes its loaded ABI-25 probe and all ten
-genuine fixture modes twice with identical bytes. The current eight Kotlin tasks
-pass **2,498 tests** without failures or skips: 1,859 JVM, 30 tooling, 422 Android
-client managed, 91 wallet managed, 95 client host-JNI and one wallet host-JNI.
-The genuine native example and tooling distribution pass. Android ELF audits
-were not run in this cohort; preceding full 132-method architecture audits remain
-scoped to those artifacts. The Darwin host's four Android-only absences remain
-explicit.
-
-Preceding Apple packaging completes all five native targets and three
-XCFrameworks; fresh packaging awaits validated X509 profile and fixture repairs. The original projection-wrapper environment failure is retained
-separately from the successful official-environment projection and authentic
-Swift pin adoption. The complete Swift host replay passes all 2,358 tests
-without failures or skips. The compact metadata test-reader repair preserves
-original codec assertions. Both maintained demo bridge sources pass all 32
-native string-envelope cases; the unsigned arm64 iOS example test build and
-current ABI-25 symbol probe pass. The canonical wallet-request SDK controls pass
-all 12 tests, and both maintained demo simulator classes pass without skips: 18
-in NoritoDemoXcode and 19 in the NoritoDemo template. They cover fallible
-entropy, canonical key derivation, signature-before-key approval, fresh wallet
-launch through the SDK-owned request, once-only Open and approval,
-substitution/replay refusal, stale callbacks and credentials kept out of URLs
-and logs. Deterministic Base64/Base64URL byte and malformed-input controls
-preserve the actual session bytes. Original failures remain retained. These runs
-use the recorded Apple package and do not qualify subsequent Rust changes.
-Physical Android diagnostic APKs are built and audited, but no device is
-connected. Physical iPhone/Android results and signed release artifacts remain
-outstanding. Diagnostic development signatures do not establish release signing.
-
-The original official Node unit replay records 3,840 passes and 38 failures
-among 3,878 tests, without skips; maximum full-tree single-input unshielding and
-its adversarial controls pass on that recorded generation. A fresh official
-addon build and all seven complete affected test files pass 160 controls without
-skips on their recorded generation. The original failures remain retained, and
-the full unit profile still requires replay on the final generation. Both
-authentic retail producer outputs match the unchanged canonical fixture. The
-maintained Kotodama golden producer emits two identical sets of 61 outputs;
-after their adoption, a freshly rebuilt compiler regenerates the canonical
-JavaScript fixture twice identically. All 16 Rust artifact-admission controls
-pass, including the original semantic negatives, without assertion changes.
-These component results do not establish integrated SDK or release
-qualification.
-
-The recorded strict all-target Clippy run failed with 146 rendered diagnostic
-blocks before subsequent mechanical, fixture and duplicate-owner repairs.
-Fresh strict lint remains required; unused proof-authority joins remain unfinished. The current daemon, CLI and
-integration harnesses build. Four-validator transaction commitment, lane restart
-and FASTPQ transcript custody pass. The wallet proof-record replay observes four
-validators but its preceding run failed HTTP 502 after passing the encoded
-backend separator. The repaired binary proof fanout now passes all 23 current
-native strict-target, proof-route and retention controls without skips, including
-genuine route authority, 404/503 precedence and JSON/Norito grace boundaries.
-A complete four-validator wallet replay, workspace tests and fixed-candidate
-qualification remain open.
+Recorded script, Kotlin/Android, Swift, JavaScript and native fixture controls
+provide component coverage. Fresh canonical generation, complete SDK consumers,
+strict lint, workspace tests and four-validator recovery still require one
+integrated candidate. Physical-device, cryptographic/side-channel and signed
+release qualification remain open. The [ZK goals](specs/zk_first_release_goals.md)
+retain the current acceptance boundaries.
 
 KAGEMUSHA component coverage includes journal recovery, issuer-key and
 enrollment-floor controls, expired-preparation custody, Guard-generation and
@@ -261,28 +214,37 @@ remain open. Maximum-proof external time/RSS evidence and enforced address-space
 limits remain separate cryptographic release gates. The non-test real-proof frontend
 remains under qualification. Later Privacy source additions have a separate
 development libtest build and registry discovery (2,541 tests, 65 ignored,
-433 dep-info inputs). After the shared Norito derive correction, the current
-debug-profile libtest compiles with all 8,374 captured source, literal and control
-inputs unchanged at the closed merged revision. Its actual registry preserves
-all 61 original ignores; the 2,476 ordinary cases are running serially after a
-current resource review. The derive library, strict JSON and UI regressions pass;
-full runtime validation remains open and retains its artifact's source epoch
-across the separate test-fixture repair.
+433 dep-info inputs). The latest focused Privacy validation lists 2,628 tests,
+including 2,560 ordinary cases and 68 ignores. All original 65 ignores remain;
+three additional ignores are reviewed cost diagnostics. All five corrected
+GETGAS/scalar-history regressions pass, with captured source, Git, toolchain,
+managed inputs and artifacts unchanged through build and runtime. The earlier
+ordinary suite closed naturally with 2,424 passes, 52 failures and 65 ignores,
+with concurrent source changes. All 52 failed cases retain ordinary coverage
+and require current-source validation. Full current ordinary and merged-source
+qualification remain open. The derive library, strict JSON
+and UI regressions pass, preserving diagnostics.
 SDK Native custody and genuine production proving are mandatory even with SDK
 defaults disabled; assembly tools remain explicit
-`dev-tools` targets, and FASTPQ uses the existing STARK feature. Current exact
-CoreZK/Halo2 SDK and downstream owner boundaries and feature hygiene pass.
-Source budgets include the exact filesystem-lock, Petal, URL, wallet-manifest
-and IVM test-owner costs without growth headroom or relaxed ownership denials;
-current native frontend and proof qualification remain open.
-The signed-clock type path, Core ZK URL dependency and shared request-codec
-derive are corrected. The normal Core ZK library frontend passes with its default
-features and an unchanged source/Git interval. The repair chat installed the
-ordinary-mint submission-limit import and checkpoint genesis-error conversion
-that blocked the fee-target build; a fresh build and fee runtime remain pending.
-The current metadata sequence stops at its first build on three wallet custody
-types missing required canonical Norito schema names. Its source/Git interval
-is unchanged; the second build and strict freshness comparison have not run.
+`dev-tools` targets, and FASTPQ uses the existing STARK feature. All 21 configured
+dependency boundaries, including exact CoreZK/Halo2 SDK and downstream
+profiles, pass locked offline Cargo resolution with unchanged manifests and
+lock. The current source budget
+passes with exact reviewed declaration costs, without growth headroom or
+relaxed ownership denials; current native frontend and proof qualification
+remain open. Surface/toolchain workspace lint inheritance and Surface public
+Rustdoc still require correction.
+The compiler and proof owners have a recorded clean default Core ZK frontend
+check; focused strict lint and current repaired Privacy regressions remain open.
+The canonical Wallet Selection schema expectation now matches its owner. The
+expanded prospective Wallet registry contains 107 ordinary tests, including
+15 custody controls. Its latest build passes, but dependency source changes
+prevented runtime validation. Feature hygiene passes all 65 controls and its
+guard command. The compiler source guard seals 305 fixture includes and
+605 test names, and all 43 Python source-reader controls pass. Executable
+metadata freshness
+passes on its recorded source cut. Current workspace and merged-candidate
+qualification remain open.
 
 Ordinary recursive credential generation is blocked by the Eq circuit requiring
 8,584 advice columns against the 1,024-column limit. The complete-circuit
@@ -332,8 +294,11 @@ passes.
   a durable software provider and recursive proofs. Its Send is irreversible;
   recovery replays exact Payment bytes to the receiver, with no refund path.
   Existing ordinary code still has per-operation online-control dependencies.
-  Complete proofs, provider
-  integration, mint/redemption and device recovery measurements remain open.
+  The G1 canonical objects exist as a data-model module with cross-language
+  vectors. Measured Pasta IPA proof sizes (≈ 358 bytes per advice column at
+  k=16) mean a 10,000-byte Payment needs a narrow large-k outer proof layer;
+  that architecture and the 2 s target await owner decisions. Complete proofs,
+  provider integration, mint/redemption and device recovery measurements remain open.
   The [checklist](specs/kagemusha_evidence_gate.md) records verification without
   an approval gate; software markers claim no protection against OS takeover.
 

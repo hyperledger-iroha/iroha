@@ -847,6 +847,8 @@ mod tests {
                 chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
             },
             runtime_provider_broker: iroha_config::parameters::actual::RuntimeProviderBroker {
+                observer_operation_timeout: defaults::runtime_provider_broker::OBSERVER_OPERATION_TIMEOUT,
+                credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES,
                 endpoint_path:
                     iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(
                         defaults::runtime_provider_broker::endpoint_path(),

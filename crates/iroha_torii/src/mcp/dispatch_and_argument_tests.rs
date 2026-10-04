@@ -2698,5 +2698,339 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
         );
     }
 }
+/// Every collection tool with its query shape and single path parameter.
+const COLLECTION_TOOL_SHAPES: [(&str, CollectionQueryShape, Option<&str>); 17] = [
+    ("iroha.accounts.list", CollectionQueryShape::Get, None),
+    ("iroha.accounts.query", CollectionQueryShape::Post, None),
+    ("iroha.domains.list", CollectionQueryShape::Get, None),
+    ("iroha.domains.query", CollectionQueryShape::Post, None),
+    ("iroha.assets.definitions", CollectionQueryShape::Get, None),
+    (
+        "iroha.assets.definitions.query",
+        CollectionQueryShape::Post,
+        None,
+    ),
+    ("iroha.nfts.chain.list", CollectionQueryShape::Get, None),
+    ("iroha.nfts.query", CollectionQueryShape::Post, None),
+    ("iroha.rwas.chain.list", CollectionQueryShape::Get, None),
+    ("iroha.rwas.query", CollectionQueryShape::Post, None),
+    (
+        "iroha.accounts.assets",
+        CollectionQueryShape::Get,
+        Some("account_id"),
+    ),
+    (
+        "iroha.accounts.assets.query",
+        CollectionQueryShape::Post,
+        Some("account_id"),
+    ),
+    (
+        "iroha.assets.holders",
+        CollectionQueryShape::Get,
+        Some("definition_id"),
+    ),
+    (
+        "iroha.assets.holders.query",
+        CollectionQueryShape::Post,
+        Some("definition_id"),
+    ),
+    (
+        "iroha.accounts.transactions",
+        CollectionQueryShape::HistoryGet,
+        Some("account_id"),
+    ),
+    (
+        "iroha.accounts.transactions.query",
+        CollectionQueryShape::HistoryPost,
+        Some("account_id"),
+    ),
+    (
+        "iroha.transactions.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+];
+#[test]
+fn collection_tools_advertise_the_shared_collection_query_controls() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    for (name, shape, path_key) in COLLECTION_TOOL_SHAPES {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("collection tool `{name}` is registered"));
+        let schema = tool.input_schema.as_object().expect("object input schema");
+        assert!(
+            !schema.contains_key(collection_query_tools::COLLECTION_QUERY_SCHEMA_EXTENSION),
+            "{name} must expand its collection marker"
+        );
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&Value::Bool(false)),
+            "{name} must reject unknown arguments"
+        );
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("input properties");
+        let controls = collection_query_tools::collection_query_properties(shape);
+        let mut expected = controls.keys().map(String::as_str).collect::<BTreeSet<_>>();
+        expected.extend(["headers", "accept"]);
+        if let Some(path_key) = path_key {
+            expected.insert("path");
+            assert!(
+                schema_requires(schema, "path"),
+                "{name} must require its route path"
+            );
+            assert!(
+                properties["path"]["properties"].get(path_key).is_some(),
+                "{name} path must name `{path_key}`"
+            );
+        }
+        assert_eq!(
+            properties
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            expected,
+            "{name} must advertise exactly the shared controls of {shape:?}"
+        );
+        for (control, property) in &controls {
+            assert_eq!(&properties[control], property, "{name} `{control}`");
+        }
+        let (effect, method, _) = tool.route_backing().expect("route-backed collection tool");
+        assert_eq!(effect, ToolEffect::Read, "{name}");
+        let expected_method = match shape {
+            CollectionQueryShape::Get | CollectionQueryShape::HistoryGet => Method::GET,
+            CollectionQueryShape::Post | CollectionQueryShape::HistoryPost => Method::POST,
+        };
+        assert_eq!(method, &expected_method, "{name}");
+        for needle in ["Fields:", "Example:", "`next_cursor` as `cursor`"] {
+            assert!(
+                tool.description.contains(needle),
+                "{name} description must include {needle:?}"
+            );
+        }
+        assert_eq!(
+            tool.description.contains("newest first"),
+            matches!(
+                shape,
+                CollectionQueryShape::HistoryGet | CollectionQueryShape::HistoryPost
+            ),
+            "{name} must state the history order exactly when rows are history"
+        );
+
+        let mut arguments = Map::new();
+        if let Some(path_key) = path_key {
+            let mut path = Map::new();
+            path.insert(path_key.to_owned(), Value::from("x"));
+            arguments.insert("path".to_owned(), Value::Object(path));
+        }
+        arguments.insert("filter".to_owned(), Value::from("block_height >= 1"));
+        arguments.insert("select".to_owned(), Value::from("id"));
+        arguments.insert("limit".to_owned(), Value::from(5_u64));
+        arguments.insert("cursor".to_owned(), Value::from("c1_A-z"));
+        validate_tool_arguments(tool, &arguments)
+            .unwrap_or_else(|error| panic!("{name} rejected canonical arguments: {error}"));
+        for retired in ["offset", "pagination", "fetch_size", "count_mode", "query"] {
+            let mut retired_arguments = arguments.clone();
+            retired_arguments.insert(retired.to_owned(), Value::from(1_u64));
+            assert!(
+                validate_tool_arguments(tool, &retired_arguments).is_err(),
+                "{name} must reject retired `{retired}`"
+            );
+        }
+        let mut zero_limit = arguments.clone();
+        zero_limit.insert("limit".to_owned(), Value::from(0_u64));
+        assert!(
+            validate_tool_arguments(tool, &zero_limit).is_err(),
+            "{name} must reject `limit: 0`"
+        );
+    }
+    // The table above is the complete collection inventory: no other tool
+    // carries the shared query controls.
+    let collection_names = COLLECTION_TOOL_SHAPES
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect::<BTreeSet<_>>();
+    let shared_controls =
+        collection_query_tools::collection_query_properties(CollectionQueryShape::Get);
+    let shared_filter = &shared_controls["filter"];
+    for tool in &tools {
+        if collection_names.contains(tool.name.as_str()) || !tool.name.starts_with("iroha.") {
+            continue;
+        }
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object);
+        assert!(
+            properties.is_none_or(|properties| {
+                properties.get("filter") != Some(shared_filter)
+                    && !properties.contains_key("include_total")
+            }),
+            "{} is not in the collection tool inventory but advertises its query controls",
+            tool.name
+        );
+    }
+}
+/// Router capturing each dispatched request's method, path with query and body.
+fn install_collection_request_capturing_router(
+    app: &mut SharedAppState,
+    requests: std::sync::Arc<std::sync::Mutex<Vec<(Method, String, Vec<u8>)>>>,
+) -> McpDispatchRouterOwner {
+    let router: axum::Router =
+        axum::Router::new().fallback_service(tower::service_fn(move |request: Request<Body>| {
+            let requests = std::sync::Arc::clone(&requests);
+            async move {
+                let (parts, body) = request.into_parts();
+                let body = axum::body::to_bytes(body, 64 * 1024)
+                    .await
+                    .expect("nested collection request body");
+                requests
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((
+                        parts.method,
+                        parts
+                            .uri
+                            .path_and_query()
+                            .map_or_else(String::new, ToString::to_string),
+                        body.to_vec(),
+                    ));
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(r#"{"items":[],"next_cursor":null}"#))
+                        .expect("response"),
+                )
+            }
+        }));
+    app.mcp_dispatch_router.install(router)
+}
+#[tokio::test]
+async fn collection_tools_send_the_parsed_query_to_their_routes() {
+    use iroha_torii_shared::list_query::ListQuery;
+
+    let mut app = mk_app_state_for_tests();
+    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _router_owner =
+        install_collection_request_capturing_router(&mut app, std::sync::Arc::clone(&requests));
+    let headers = HeaderMap::new();
+    let arguments = |value: Value| match value {
+        Value::Object(map) => map,
+        other => panic!("tool arguments must be an object, got {other:?}"),
+    };
+
+    let accounts = arguments(norito::json!({
+        "filter": { "op": "gte", "args": ["metadata.tier", 2] },
+        "sort": ["-id"],
+        "select": "id,label",
+        "limit": 2
+    }));
+    let page = dispatch_iroha_accounts_list(&app, &headers, &accounts)
+        .await
+        .expect("GET collection dispatch");
+    assert_eq!(page["status"].as_u64(), Some(200));
+    let holders = arguments(norito::json!({
+        "path": { "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" },
+        "filter": "quantity > 0",
+        "sort": "-quantity",
+        "limit": 3
+    }));
+    dispatch_iroha_asset_holders(&app, &headers, &holders)
+        .await
+        .expect("path GET collection dispatch");
+    let assets = arguments(norito::json!({
+        "path": { "account_id": TEST_ACCOUNT_I105 },
+        "filter": "quantity >= 10.5",
+        "aggregate": {
+            "group_by": ["asset"],
+            "metrics": [{ "alias": "supply", "fn": "sum", "field": "quantity" }]
+        },
+        "sort": "-supply",
+        "limit": 4
+    }));
+    dispatch_iroha_account_assets_query(&app, &headers, &assets)
+        .await
+        .expect("path POST collection dispatch");
+    let transactions = arguments(norito::json!({
+        "body": { "filter": "block_height >= 1200", "select": ["entrypoint_hash"], "limit": 5 }
+    }));
+    dispatch_iroha_transactions_query(&app, &headers, &transactions)
+        .await
+        .expect("POST history dispatch");
+    for (rejected, needle) in [
+        (
+            norito::json!({ "limit": 2, "offset": 0 }),
+            "`offset` is retired",
+        ),
+        (
+            norito::json!({ "body": { "limit": 2 }, "cursor": "c1" }),
+            "`body` already holds the complete query",
+        ),
+        (norito::json!({ "filter": "id = = 1" }), "invalid `filter`"),
+    ] {
+        let error = dispatch_iroha_domains_query(&app, &headers, &arguments(rejected))
+            .await
+            .expect_err("invalid collection arguments fail before dispatch");
+        assert!(error.contains(needle), "{error}");
+    }
+    let aggregate_get = arguments(norito::json!({
+        "aggregate": { "metrics": [{ "alias": "n", "fn": "count" }] }
+    }));
+    let error = dispatch_iroha_domains_list(&app, &headers, &aggregate_get)
+        .await
+        .expect_err("aggregates have no GET form");
+    assert!(error.contains("POST /query"), "{error}");
+
+    let requests = requests
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(requests.len(), 4, "only valid queries reach Torii routes");
+    assert_eq!(requests[0].0, Method::GET);
+    assert_eq!(
+        requests[0].1,
+        "/v1/accounts?filter=metadata.tier+%3E%3D+2&sort=-id&select=id%2Clabel&limit=2"
+    );
+    assert!(requests[0].2.is_empty());
+    assert_eq!(requests[1].0, Method::GET);
+    assert_eq!(
+        requests[1].1,
+        "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders?filter=quantity+%3E+0&sort=-quantity&limit=3"
+    );
+    assert_eq!(requests[2].0, Method::POST);
+    assert!(
+        requests[2].1.starts_with("/v1/accounts/") && requests[2].1.ends_with("/assets/query"),
+        "{}",
+        requests[2].1
+    );
+    let assets_body = json::from_slice::<Value>(&requests[2].2).expect("JSON collection body");
+    assert_eq!(assets_body["sort"], norito::json!(["-supply"]));
+    assert_eq!(
+        ListQuery::from_json_value(assets_body).expect("canonical collection body"),
+        collection_query_tools::list_query_from_tool_arguments(&assets)
+            .expect("assets collection query")
+    );
+    assert_eq!(
+        (requests[3].0.clone(), requests[3].1.as_str()),
+        (Method::POST, "/v1/transactions/query")
+    );
+    let transactions_body = json::from_slice::<Value>(&requests[3].2).expect("JSON history body");
+    assert_eq!(
+        transactions_body,
+        norito::json!({
+            "filter": (iroha_torii_shared::list_query::FilterExpr::parse("block_height >= 1200")
+                .expect("filter")
+                .to_json_value()),
+            "select": ["entrypoint_hash"],
+            "limit": 5
+        })
+    );
+}
 #[path = "dispatch_and_argument_tests/canonical_paths_and_status.rs"]
 mod canonical_paths_and_status;

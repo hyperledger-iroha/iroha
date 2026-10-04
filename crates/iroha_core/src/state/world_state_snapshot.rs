@@ -11,6 +11,8 @@
 mod ordinary_mint_issuer;
 #[path = "world_state_snapshot/ordinary_wallet.rs"]
 mod ordinary_wallet;
+#[path = "world_state_snapshot/reserve_account.rs"]
+mod reserve_account;
 #[path = "world_state_snapshot/reserve_policy.rs"]
 mod reserve_policy;
 use super::world_state_cut::CutCapsule;

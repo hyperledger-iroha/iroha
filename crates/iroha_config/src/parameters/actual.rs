@@ -203,8 +203,37 @@ pub struct Root {
 /// Public endpoint of the authenticated local runtime-provider broker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeProviderBroker {
+    /// Absolute server observer-operation allowance; nonzero and at most 15 seconds.
+    ///
+    /// It starts before provider dispatch and bounds reply publication. A synchronous
+    /// provider already running cannot be forcibly cancelled by this allowance.
+    pub observer_operation_timeout: Duration,
+    /// Aggregate memory retained by one local consensus credential registry.
+    pub credential_max_memory_bytes: NonZeroUsize,
     /// Lexically validated absolute Unix socket path.
     pub endpoint_path: RuntimeProviderBrokerEndpointPath,
+}
+
+impl RuntimeProviderBroker {
+    /// Read only a broker policy table, without loading node credentials or files.
+    ///
+    /// Pass the contents of `[runtime_provider_broker]`, or an empty table for
+    /// the canonical defaults. Ambient environment variables are ignored.
+    /// The same fields and endpoint validation are used by [`Root`].
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown fields, a zero memory bound, an invalid endpoint, or an
+    /// observer-operation duration outside 1..=15_000 milliseconds.
+    pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
+        ConfigReader::new()
+            .without_env()
+            .with_toml_source(src)
+            .read_and_complete::<user::RuntimeProviderBroker>()
+            .change_context(FromTomlSourceError)?
+            .parse()
+            .change_context(FromTomlSourceError)
+    }
 }
 
 /// An absolute, bounded broker socket path with the canonical socket basename.
@@ -954,20 +983,25 @@ impl Root {
     pub fn uses_multilane_catalogs(&self) -> bool {
         self.nexus.uses_multilane_catalogs()
     }
-    /// Apply the bundled Sora Nexus geometry and safe SoraFS defaults.
+    /// Apply safe SoraFS defaults without changing the parsed Nexus geometry.
     ///
-    /// SoraFS discovery is enabled only when configuration parsing produced a
-    /// complete admission trust policy. The profile never manufactures trust
-    /// roots or an embedded storage-provider role on behalf of the operator.
-    /// Storage remains an explicit deployment choice because it requires a
-    /// governed compliance controller and runtime provider bindings.
-    pub fn apply_sora_profile(&mut self) {
+    /// Discovery requires a parsed admission trust policy. This does not
+    /// manufacture trust roots or an embedded storage-provider role.
+    pub fn apply_sora_service_defaults(&mut self) {
         self.torii.sorafs_discovery.discovery_enabled =
             self.torii.sorafs_discovery.admission.is_some();
         if self.tiered_state.da_store_root.is_none() {
             self.tiered_state.da_store_root =
                 Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT));
         }
+    }
+    /// Apply the bundled Sora Nexus geometry and safe SoraFS defaults.
+    ///
+    /// Existing non-default geometry remains intact. TOML-backed callers must
+    /// use [`crate::sora_profile::SoraProfileSelection`] to also preserve explicit
+    /// default-valued geometry and service settings.
+    pub fn apply_sora_profile(&mut self) {
+        self.apply_sora_service_defaults();
         // Apply bundled geometry only to the exact untouched default. A lane
         // can remain SINGLE/"default" while carrying security- or
         // storage-relevant overrides (for example a pinned shard); treating
@@ -7639,10 +7673,13 @@ pub struct ToriiTransport {
     pub trusted_proxy_cidrs: Vec<String>,
     /// HTTP/1 listener, parser, and socket limits.
     pub http: ToriiHttpTransport,
+    /// Optional HTTPS listener sharing the HTTP router and connection limits.
+    pub https: Option<ToriiHttpsTransport>,
     /// Norito-RPC rollout settings.
     pub norito_rpc: NoritoRpcTransport,
 }
 include!("actual/torii_http_transport.rs");
+include!("actual/torii_https_transport.rs");
 include!("actual/torii_mcp_profile.rs");
 /// Norito-RPC transport configuration (stage, allowlist, toggles).
 #[derive(Clone)]
@@ -9513,18 +9550,15 @@ pub struct SorafsProviderAttestationRuntimeBinding {
 }
 /// Bounded activation policy for the Musubi provider-attestation journal.
 ///
-/// This policy contains no filesystem selector, nonce, endpoint, credential,
-/// token, or key material. Its three bindings name the external effects that a
-/// daemon registry projects as three independent public roles. Live adapter
-/// qualification and consumption remain gated, and stock `irohad` continues
-/// to reject activation until that wiring is complete.
-/// Stock daemon activation stays closed; an activation-qualified coordinator
-/// is the only supported consumer of these three adapter/capture bindings.
+/// The native completion-credential selection binds fixed native clock, approval and inventory
+/// owners. Its clock protects process crashes only, not offline restoration. External selected
+/// bindings retain independent qualification and cannot substitute for native custody.
+/// Services remain disabled unless this complete policy is explicitly selected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsProviderAttestationJournal {
-    /// Qualified rollback-resistant UNIX-time seal provider.
-    pub clock_seal: SorafsProviderAttestationRuntimeBinding,
-    /// Qualified approval-only external or threshold signer provider.
+    /// Qualified clock: native crash-durable UTC or an independently authenticated external seal.
+    pub clock: SorafsProviderAttestationRuntimeBinding,
+    /// Qualified approval-only signer, using the dedicated completion identity.
     pub approval_signer: SorafsProviderAttestationRuntimeBinding,
     /// Qualified authenticated coordinator-inventory provider.
     pub inventory: SorafsProviderAttestationRuntimeBinding,
@@ -9646,9 +9680,8 @@ pub struct SorafsProviderIngestRuntime {
     pub finalized_archive: SorafsProviderIngestFinalizedArchive,
     /// Durable payload-free completion-outbox policy.
     pub outbox: SorafsProviderIngestOutbox,
-    /// Optional request to activate the capture-only Musubi provider-attestation
-    /// journal; stock `irohad` currently rejects `Some` until a concrete child
-    /// is qualified.
+    /// Optional native completed-bundle attestation journal. Activation requires exact
+    /// native credential bindings and explicitly initialized retained custody.
     pub provider_attestation_journal: Option<SorafsProviderAttestationJournal>,
 }
 /// Operational policy for the durable native orderbook transaction worker.

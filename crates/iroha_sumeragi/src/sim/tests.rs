@@ -10,7 +10,8 @@ use super::{
     run,
     scenario::{Perf, Profile, Scenario},
     scenarios::{self, Builder},
-    world::{World, seeds},
+    sweep::{Failures, fold_seeds},
+    world::{World, seed_iter},
 };
 use crate::types::Millis;
 
@@ -19,8 +20,89 @@ fn default_seeds() -> u64 {
 }
 
 /// Run `builder` over the configured seeds; check each World before releasing it.
-fn sweep(name: &str, builder: Builder, check: impl FnMut(&World)) {
-    sweep_seeds(name, builder, seeds(default_seeds()), check);
+fn sweep(name: &str, builder: Builder, check: impl Fn(&World) + Sync) {
+    sweep_observations(name, builder, check, |()| {});
+}
+
+/// Extract bounded observations after every original per-World assertion, then fold in seed
+/// order. No host, Core, payload custody or World crosses its worker boundary.
+fn sweep_observations<T: Send>(
+    name: &str,
+    builder: Builder,
+    observe: impl Fn(&World) -> T + Sync,
+    mut fold: impl FnMut(T),
+) {
+    let mut failures = Failures::default();
+    let mut heights = 0;
+    let mut view_changes = 0;
+    let mut crashes = 0;
+    let mut evidence = 0;
+    let mut lost = 0;
+    let mut ingress_drops = 0;
+    let mut peaks = std::collections::BTreeMap::<u32, usize>::new();
+    fold_seeds(
+        seed_iter(default_seeds()),
+        |seed| {
+            run(builder(seed)).map(|world| {
+                let observation = observe(&world);
+                let heights = world
+                    .oracle
+                    .refs
+                    .iter()
+                    .map(|r| r.len() as u64)
+                    .sum::<u64>();
+                let view_changes = world
+                    .oracle
+                    .refs
+                    .iter()
+                    .map(|r| r.values().filter(|b| b.view > 0).count() as u64)
+                    .sum::<u64>();
+                let ingress_drops = world
+                    .replicas
+                    .iter()
+                    .map(|r| r.host.ingress_drops())
+                    .sum::<u64>();
+                let mut peaks = std::collections::BTreeMap::<u32, usize>::new();
+                for r in world.honest() {
+                    *peaks
+                        .entry(world.oracle.reps[r].max_start_level)
+                        .or_default() += 1;
+                }
+                let counters = (
+                    heights,
+                    view_changes,
+                    world.stats.crashes,
+                    world.stats.evidence,
+                    world.stats.lost,
+                    ingress_drops,
+                );
+                drop(world);
+                (observation, counters, peaks)
+            })
+        },
+        |seed, result| {
+            if let Some((observation, counters, seed_peaks)) = failures.observe(seed, result) {
+                heights += counters.0;
+                view_changes += counters.1;
+                crashes += counters.2;
+                evidence += counters.3;
+                lost += counters.4;
+                ingress_drops += counters.5;
+                for (level, count) in seed_peaks {
+                    *peaks.entry(level).or_default() += count;
+                }
+                fold(observation);
+            }
+        },
+    );
+    eprintln!(
+        "{name}: {} seeds passed, {} failed; heights {heights}, commits after a view \
+         change {view_changes}, crashes {crashes}, evidence {evidence}, lost {lost}, \
+         ingress drops {ingress_drops}, peak start levels {peaks:?}",
+        failures.passed,
+        failures.failed(),
+    );
+    failures.finish(name);
 }
 
 /// Retain only aggregate statistics between seeds, so nightly memory is independent of the
@@ -196,44 +278,55 @@ scenario_test!(f14_whole_cluster_restart, "F14", scenarios::f14);
 fn f15_slow_executors() {
     // `(variant, peak start level, final start level)` → honest replicas.
     let mut levels = std::collections::BTreeMap::<(u64, u32, u32), usize>::new();
-    sweep("F15", scenarios::f15, |world| {
-        // §9.2 adaptation: where every executor is slower than `T(0)/2` (variants 1, 4 and 5),
-        // the start level rose at every honest replica; in variant 4 executions become fast at
-        // 20 s, so it decayed back to 0 by the end. In variant 5 only non-empty blocks are
-        // slow (`E ≥ T(1)`), so without the adaptation only `EMPTY` blocks would commit.
-        let variant = world.seed % 6;
-        if variant == 5 {
-            let payload = world.oracle.refs[0]
-                .values()
-                .filter(|b| b.header.payload_len > 0)
-                .count();
-            assert!(
-                payload >= 5,
-                "seed {}: only {payload} non-empty blocks of {} committed",
-                world.seed,
-                world.oracle.refs[0].len()
-            );
-        }
-        if variant != 1 && variant != 4 && variant != 5 {
-            return;
-        }
-        for r in world.honest() {
-            let Some(core) = world.replicas[r].host.core() else {
-                continue;
-            };
-            let max = world.oracle.reps[r].max_start_level;
-            let last = core.status().start_level;
-            assert!(
-                max >= 2,
-                "seed {}: replica {r} start level peaked at {max}",
-                world.seed
-            );
-            if variant == 4 {
-                assert_eq!(last, 0, "seed {}: replica {r} did not decay", world.seed);
+    sweep_observations(
+        "F15",
+        scenarios::f15,
+        |world| {
+            let mut levels = std::collections::BTreeMap::<(u64, u32, u32), usize>::new();
+            // §9.2 adaptation: where every executor is slower than `T(0)/2` (variants 1, 4 and 5),
+            // the start level rose at every honest replica; in variant 4 executions become fast at
+            // 20 s, so it decayed back to 0 by the end. In variant 5 only non-empty blocks are
+            // slow (`E ≥ T(1)`), so without the adaptation only `EMPTY` blocks would commit.
+            let variant = world.seed % 6;
+            if variant == 5 {
+                let payload = world.oracle.refs[0]
+                    .values()
+                    .filter(|b| b.header.payload_len > 0)
+                    .count();
+                assert!(
+                    payload >= 5,
+                    "seed {}: only {payload} non-empty blocks of {} committed",
+                    world.seed,
+                    world.oracle.refs[0].len()
+                );
             }
-            *levels.entry((variant, max, last)).or_default() += 1;
-        }
-    });
+            if variant != 1 && variant != 4 && variant != 5 {
+                return levels;
+            }
+            for r in world.honest() {
+                let Some(core) = world.replicas[r].host.core() else {
+                    continue;
+                };
+                let max = world.oracle.reps[r].max_start_level;
+                let last = core.status().start_level;
+                assert!(
+                    max >= 2,
+                    "seed {}: replica {r} start level peaked at {max}",
+                    world.seed
+                );
+                if variant == 4 {
+                    assert_eq!(last, 0, "seed {}: replica {r} did not decay", world.seed);
+                }
+                *levels.entry((variant, max, last)).or_default() += 1;
+            }
+            levels
+        },
+        |seed_levels| {
+            for (key, count) in seed_levels {
+                *levels.entry(key).or_default() += count;
+            }
+        },
+    );
     eprintln!("F15 start levels (variant, peak, final) → replicas: {levels:?}");
 }
 scenario_test!(f16_validator_set_change, "F16", scenarios::f16);
@@ -354,22 +447,33 @@ fn leader_turns_flags_holders_without_work() {
 fn f36_late_leaders() {
     // `(n, peak start level)` → honest replicas.
     let mut levels = std::collections::BTreeMap::<(usize, u32), usize>::new();
-    sweep("F36", scenarios::f36, |world| {
-        // §9.2: a late but valid proposal or body never raises an honest start level before
-        // the deliberate crash. A crash during the next certificate exchange may extend
-        // actual body-to-commit latency and legitimately raise it; O-PERF still checks
-        // every subsequent commit gap.
-        let n = world.instances[0].committee(1).n();
-        for r in world.honest() {
-            let peak = world.oracle.reps[r].max_start_level_before_heal;
-            assert!(
-                peak == 0,
-                "seed {}: replica {r} start level peaked at {peak}",
-                world.seed
-            );
-            *levels.entry((n, peak)).or_default() += 1;
-        }
-    });
+    sweep_observations(
+        "F36",
+        scenarios::f36,
+        |world| {
+            let mut levels = std::collections::BTreeMap::<(usize, u32), usize>::new();
+            // §9.2: a late but valid proposal or body never raises an honest start level before
+            // the deliberate crash. A crash during the next certificate exchange may extend
+            // actual body-to-commit latency and legitimately raise it; O-PERF still checks
+            // every subsequent commit gap.
+            let n = world.instances[0].committee(1).n();
+            for r in world.honest() {
+                let peak = world.oracle.reps[r].max_start_level_before_heal;
+                assert!(
+                    peak == 0,
+                    "seed {}: replica {r} start level peaked at {peak}",
+                    world.seed
+                );
+                *levels.entry((n, peak)).or_default() += 1;
+            }
+            levels
+        },
+        |seed_levels| {
+            for (key, count) in seed_levels {
+                *levels.entry(key).or_default() += count;
+            }
+        },
+    );
     eprintln!("F36 start levels (n, peak) → replicas: {levels:?}");
 }
 
@@ -628,13 +732,21 @@ fn report() {
 fn f37_commit_attestation() {
     let mut flagged = 0;
     let mut total = 0;
-    sweep("F37", scenarios::f37, |world| {
-        flagged += world.oracle.refs[0]
-            .values()
-            .filter(|b| b.header.attest)
-            .count();
-        total += world.oracle.refs[0].len();
-    });
+    sweep_observations(
+        "F37",
+        scenarios::f37,
+        |world| {
+            let flagged = world.oracle.refs[0]
+                .values()
+                .filter(|b| b.header.attest)
+                .count();
+            (flagged, world.oracle.refs[0].len())
+        },
+        |(seed_flagged, seed_total)| {
+            flagged += seed_flagged;
+            total += seed_total;
+        },
+    );
     eprintln!("F37: {flagged} of {total} committed blocks flagged");
     assert!(
         flagged * 10 >= total,

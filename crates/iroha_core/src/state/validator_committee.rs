@@ -8,9 +8,9 @@ use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::{
     beacon::{
         GlobalThresholdBeaconSessionBindingV1,
+        authenticated_global_threshold_beacon_roster_hash_iter_v1,
         authenticated_global_threshold_beacon_roster_hash_v1,
         seat_readiness::verify_global_threshold_beacon_seat_readiness_v1,
-        validate_global_threshold_beacon_session_v1,
     },
     zk::kagemusha_v1_recursion::{
         verify_kagemusha_mint_finality_candidate_possession_v1,
@@ -314,12 +314,8 @@ fn validate_current_beacon(
     {
         return Err("committee authorization differs from the active beacon lifecycle".to_owned());
     }
-    let peers = authority
-        .validators
-        .iter()
-        .map(|keys| keys.validator.clone())
-        .collect::<Vec<_>>();
-    authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &peers)
+    let peers = authority.validators.iter().map(|keys| &keys.validator);
+    authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, peers)
         .map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -610,7 +606,7 @@ pub(crate) fn current_authority(
 /// The returned flag permits next-height activation only for the genesis bootstrap.
 pub(crate) fn validate_beacon_finalization(
     state: &StateTransaction<'_, '_>,
-    record: &crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    record: &crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
     authorizing_roster: &[PeerId],
 ) -> Result<bool, Attempt<String>> {
     let (authority, authorization) = current_authority(state)?;
@@ -630,7 +626,7 @@ fn validate_beacon_preparation(
     height: u64,
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
     authorization: &KagemushaMintFinalityEpochAuthorizationV1,
-    record: &crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    record: &crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
     authorizing_roster: &[PeerId],
 ) -> Result<bool, String> {
     authorization
@@ -704,12 +700,8 @@ fn validate_beacon_preparation(
             "beacon finalization does not belong to the live preparation attempt".to_owned(),
         );
     }
-    let target_roster = preparation
-        .committee
-        .iter()
-        .map(|seat| seat.validator.clone())
-        .collect::<Vec<_>>();
-    authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &target_roster)
+    let target_roster = preparation.committee.iter().map(|seat| &seat.validator);
+    authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, target_roster)
         .map_err(|error| error.to_string())?;
     Ok(false)
 }
@@ -985,23 +977,18 @@ pub(crate) fn verify_progress(
             "beacon transcript is outside its exact preparation attempt or cutoff".to_owned(),
         );
     }
-    let peers = preparation
-        .committee
-        .iter()
-        .map(|voter| voter.validator.clone())
-        .collect::<Vec<_>>();
-    let roster_hash = authenticated_global_threshold_beacon_roster_hash_v1(session, &peers)
+    let peers = preparation.committee.iter().map(|voter| &voter.validator);
+    let roster_hash = authenticated_global_threshold_beacon_roster_hash_iter_v1(session, peers)
         .map_err(|error| error.to_string())?;
-    let validated = validate_global_threshold_beacon_session_v1(
-        session.clone(),
-        &GlobalThresholdBeaconSessionBindingV1 {
+    let validated = session;
+    validated
+        .check_binding(&GlobalThresholdBeaconSessionBindingV1 {
             network_id: preparation.network_id,
             session_id: credentials.beacon.session_id,
             roster_hash,
             transcript_hash: credentials.beacon.transcript_hash,
-        },
-    )
-    .map_err(|error| error.to_string())?;
+        })
+        .map_err(|error| error.to_string())?;
     for readiness in &transition.readiness {
         let context = transition.readiness_context(readiness.validator_index)?;
         verify_kagemusha_mint_finality_seat_readiness_v1(

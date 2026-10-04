@@ -382,7 +382,7 @@ mod tests {
     use iroha_data_model::{
         Registrable as _,
         account::{Account, AccountAddress, AccountId},
-        block::{BlockHeader, builder::BlockBuilder},
+        block::BlockHeader,
         smart_contract::{ContractAddress, ContractAlias},
         sns::{NameControllerV1, NameRecordV1},
     };

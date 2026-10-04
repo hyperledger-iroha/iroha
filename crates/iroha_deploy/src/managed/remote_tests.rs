@@ -237,7 +237,7 @@ fn failed_first_private_start_retains_exact_context_and_diagnostics_before_attac
     .unwrap();
     let store = ManagedStore::open(root.path()).unwrap();
     let binary = root.path().join("not-executable");
-    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
     request.startup_timeout = Duration::from_secs(120);
     let mut binding = Binding {

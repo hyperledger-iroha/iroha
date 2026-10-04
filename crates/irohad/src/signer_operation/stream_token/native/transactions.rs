@@ -8,12 +8,6 @@ use iroha_data_model::transaction::{
 };
 use std::time::Instant;
 
-/// The original transaction deadline begins before software signing and never renews.
-pub(super) struct NativeSignedTransactionV1 {
-    pub(super) transaction: SignedTransaction,
-    started: Instant,
-}
-
 pub(super) struct NativeTransactionsV1 {
     state: Arc<State>,
     queue: Arc<Queue>,
@@ -61,12 +55,21 @@ impl NativeTransactionsV1 {
     pub(super) fn observer(&self) -> AccountId {
         self.observer.clone()
     }
+    pub(super) fn start_deadline(&self) -> Result<Instant, SignerOperationErrorV1> {
+        Instant::now()
+            .checked_add(self.timeout)
+            .ok_or(SignerOperationErrorV1::StateUnavailable)
+    }
     pub(super) fn sign(
         &self,
         instruction: &MutateSorafsStreamTokenAuthority,
         observer: bool,
-    ) -> Result<NativeSignedTransactionV1, SignerOperationErrorV1> {
-        let started = Instant::now();
+        deadline: Instant,
+    ) -> Result<SignedTransaction, SignerOperationErrorV1> {
+        let remaining = self.remaining(deadline)?;
+        if remaining.as_millis() == 0 {
+            return Err(SignerOperationErrorV1::StateUnavailable);
+        }
         let is_check = matches!(instruction.request.action, Action::Check(_));
         if is_check != observer
             || instruction.request.network_id != *self.state.network_id_ref().as_bytes()
@@ -90,27 +93,19 @@ impl NativeTransactionsV1 {
             self.fee_payment.clone(),
         )
         .with_instructions([instruction.clone()]);
-        builder.set_ttl(self.timeout);
+        builder.set_ttl(remaining);
         let transaction = builder
             .try_sign(key.private_key())
             .map_err(|_| SignerOperationErrorV1::ProviderUnavailable)?;
-        if started.elapsed() >= self.timeout {
-            return Err(SignerOperationErrorV1::StateUnavailable);
-        }
-        Ok(NativeSignedTransactionV1 {
-            transaction,
-            started,
-        })
+        self.remaining(deadline)?;
+        Ok(transaction)
     }
     pub(super) fn submit_and_wait(
         &self,
-        attempt: &NativeSignedTransactionV1,
+        signed: &SignedTransaction,
+        deadline: Instant,
     ) -> Result<(), SignerOperationErrorV1> {
-        let started = attempt.started;
-        if started.elapsed() >= self.timeout {
-            return Err(SignerOperationErrorV1::StateUnavailable);
-        }
-        let signed = &attempt.transaction;
+        self.remaining(deadline)?;
         let hash = TransactionEntrypoint::External(signed.clone()).hash();
         let (drift, limits) = self.state.transaction_admission_limits();
         let accepted = AcceptedTransaction::accept(
@@ -125,14 +120,12 @@ impl NativeTransactionsV1 {
             .queue
             .route_plan_with_state(&accepted, &self.state)
             .map_err(|_| SignerOperationErrorV1::StateUnavailable)?;
-        if started.elapsed() >= self.timeout {
-            return Err(SignerOperationErrorV1::StateUnavailable);
-        }
+        self.remaining(deadline)?;
         // A queue failure can be ambiguous; never sign or resubmit a replacement envelope here.
         self.queue
             .push_with_lane_with_state_and_routing_plan(accepted, &self.state, plan)
             .map_err(|_| SignerOperationErrorV1::StateUnavailable)?;
-        while started.elapsed() < self.timeout {
+        while let Ok(remaining) = self.remaining(deadline) {
             {
                 let view = self.state.view();
                 if view.has_entrypoint(hash) {
@@ -145,22 +138,29 @@ impl NativeTransactionsV1 {
                         )
                         .is_ok()
                     {
+                        self.remaining(deadline)?;
                         return Ok(());
                     }
                 }
             }
-            std::thread::sleep(Duration::from_millis(25));
+            std::thread::sleep(remaining.min(Duration::from_millis(25)));
         }
         Err(SignerOperationErrorV1::StateUnavailable)
     }
-    pub(super) fn sign_observation(
+    fn remaining(&self, deadline: Instant) -> Result<Duration, SignerOperationErrorV1> {
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero() && *remaining <= self.timeout)
+            .ok_or(SignerOperationErrorV1::StateUnavailable)
+    }
+    // Payload construction remains with the move-only observation owner, before
+    // signing. None of the crypto API's string-backed errors establishes local
+    // allocation provenance, so callers never retry a failed signing invocation.
+    pub(super) fn sign_observation_payload(
         &self,
-        body: &sorafs_manifest::signer::stream_token_evidence::SignerStreamTokenStateObservationBodyV1,
+        payload: &[u8],
     ) -> Result<[u8; 64], SignerOperationErrorV1> {
-        let payload = body
-            .signing_payload()
-            .map_err(|_| SignerOperationErrorV1::InvalidOperation)?;
-        Signature::try_new(self.observer_key.private_key(), &payload)
+        Signature::try_new(self.observer_key.private_key(), payload)
             .map_err(|_| SignerOperationErrorV1::ProviderUnavailable)?
             .payload()
             .try_into()

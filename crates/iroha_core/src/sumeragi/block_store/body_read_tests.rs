@@ -4,7 +4,7 @@ use super::*;
 use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::crypto::BlsCrypto;
 use iroha_data_model::{
-    block::{CommitCertificate, decode_versioned_signed_block},
+    block::{CommitCertificate, decode_framed_signed_block},
     sumeragi_finality::{ScheduledSlot, test_fixtures::NativeFinalityFixture},
 };
 use iroha_sumeragi::{availability::AvailabilityFrame, types::Hash32};
@@ -23,7 +23,7 @@ fn fixture() -> (
         panic!("authenticated next fixture authority");
     };
     let source = crate::block::reserve_block_for_tests()
-        .initialize(decode_versioned_signed_block(&fixture.latest().block_wire).unwrap());
+        .initialize(decode_framed_signed_block(&fixture.latest().block_wire).unwrap());
     let header: iroha_sumeragi::message::BlockHeader =
         norito::decode_canonical(source.commit_certificate().unwrap().consensus_header()).unwrap();
     let crypto: SharedCrypto = Arc::new(BlsCrypto::new());

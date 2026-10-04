@@ -154,6 +154,80 @@ fn completed_replay_retains_exact_receipt_through_original_pool_scratch_refusal(
 }
 
 #[test]
+fn replay_completion_state_read_refusal_retains_original_receipt_and_retries_after_release() {
+    use std::task::{Context, Waker};
+
+    publication_tests::with_worker(|chain, worker, blocks, events| {
+        let state = Arc::clone(&worker.context.state);
+        let budget = state.ivm_execution_budget();
+        let mut registration = crate::unit_test_support::release_registration(&budget);
+        let mut context = Context::from_waker(Waker::noop());
+        let (block, qc) = publication_tests::executed(chain, worker);
+        worker
+            .prepare_with_origin(&block, &qc, CommitTelemetryOrigin::HistoricalReplay)
+            .unwrap();
+        blocks.append(&block, &qc).unwrap();
+        worker.commit(&block, &qc).unwrap();
+        let published = std::ptr::from_ref(worker.live.as_ref().unwrap());
+        while events.try_recv().is_ok() {}
+
+        // Visibility alone does not retire the original Published owner. Its single-attempt
+        // authority read defers on the actual header writer without requiring recovery.
+        let release = state.with_held_header_for_reader_test(|original_release| {
+            let error = worker.retire_completed_replay(&block, &qc).unwrap_err();
+            let PublicationError::Deferred(PublicationDeferral::StateViewBusy(release)) = error
+            else {
+                panic!("retirement must retain the actual State authority reader refusal");
+            };
+            assert_eq!(release, original_release);
+            assert!(registration.poll_wait(&release, &mut context).is_pending());
+            assert_eq!(std::ptr::from_ref(worker.live.as_ref().unwrap()), published);
+            assert!(worker.completed_replay.is_none());
+            assert!(worker.recovery.is_none());
+            release
+        });
+        assert!(registration.poll_wait(&release, &mut context).is_ready());
+        registration.cancel();
+        worker.replay(&block, &qc).unwrap();
+        assert!(worker.live.is_none());
+        let completed = std::ptr::from_ref(worker.completed_replay.as_ref().unwrap());
+
+        // An exact acknowledgement keeps the compact receipt when the same original
+        // authority source is busy. Neither unrelated capacity nor elapsed time grants it.
+        let release = state.with_held_header_for_reader_test(|original_release| {
+            let error = worker.replay(&block, &qc).unwrap_err();
+            let PublicationError::Deferred(PublicationDeferral::StateViewBusy(release)) = error
+            else {
+                panic!("acknowledgement must retain the actual State authority reader refusal");
+            };
+            assert_eq!(release, original_release);
+            assert!(registration.poll_wait(&release, &mut context).is_pending());
+            let foreign = AllocationBudget::new(1);
+            drop(foreign.try_reserve_bytes(1).unwrap());
+            assert!(registration.poll_wait(&release, &mut context).is_pending());
+            assert_eq!(
+                std::ptr::from_ref(worker.completed_replay.as_ref().unwrap()),
+                completed
+            );
+            assert!(worker.live.is_none());
+            assert!(worker.recovery.is_none());
+            release
+        });
+        assert!(registration.poll_wait(&release, &mut context).is_ready());
+        registration.cancel();
+        worker.replay(&block, &qc).unwrap();
+        assert_eq!(
+            std::ptr::from_ref(worker.completed_replay.as_ref().unwrap()),
+            completed
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "exact retries publish no duplicate events"
+        );
+    });
+}
+
+#[test]
 fn completed_replay_is_invalidated_by_the_next_original_forward_commit() {
     publication_tests::with_worker(|chain, worker, blocks, events| {
         let (block, qc) = publication_tests::executed(chain, worker);
@@ -469,4 +543,22 @@ fn check_historical_replay_retirement(case: ReplayRetirementCase) {
         }
         drop((sources, wakers, probes, registrations));
     });
+}
+
+#[test]
+fn replay_committee_hash_streams_exact_counted_key_preimage() {
+    for count in [4, 7, 31] {
+        let committee = Committee::new(
+            (0..count)
+                .map(|index| PublicKey::new(vec![index; 32 + usize::from(index % 3)]).unwrap())
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(
+            committee_digest(&committee),
+            Hash::new(iroha_sumeragi::preimage::committee_digest_preimage(
+                &committee
+            ))
+        );
+    }
 }

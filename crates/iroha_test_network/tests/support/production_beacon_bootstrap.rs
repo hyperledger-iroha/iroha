@@ -982,12 +982,30 @@ async fn spawn_provider_broker(
     )?;
     let endpoint = root.path().join("runtime-provider-broker-v1.sock");
     iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(endpoint.clone())?;
+    let policy_path = root.path().join("broker-policy.toml");
+    let mut policy = toml::Table::new();
+    policy.insert(
+        "endpoint_path".into(),
+        toml::Value::String(
+            endpoint
+                .to_str()
+                .ok_or_else(|| eyre!("broker endpoint must be UTF-8"))?
+                .into(),
+        ),
+    );
+    policy.insert(
+        "observer_operation_timeout_ms".into(),
+        toml::Value::Integer(15_000),
+    );
+    let policy_file = private_file(&policy_path, toml::to_string(&policy)?.as_bytes())?;
+    policy_file.set_permissions(fs::Permissions::from_mode(0o400))?;
+    policy_file.sync_all()?;
     let mut child = command(binary, root.path());
     child
         .arg("--catalog")
         .arg(&catalog_path)
-        .arg("--broker-endpoint")
-        .arg(&endpoint)
+        .arg("--broker-policy")
+        .arg(&policy_path)
         .stdin(Stdio::piped())
         .stderr(Stdio::from(private_file(
             &root.path().join("broker-stderr.log"),
@@ -1070,7 +1088,7 @@ async fn stage_provider_brokers(
         let digest: [u8; 32] = json::from_value(field(provider, "policy_digest")?.clone())?;
         let expected_digest = global_beacon_partial_signer_public_inventory_digest_v1(
             dkg.public_session.network_id,
-            &[(dkg.public_session.clone(), output.signer_index)],
+            &[(dkg.public_session.record(), output.signer_index)],
         )?;
         let revision = field(provider, "revision")?
             .as_u64()
@@ -1094,6 +1112,7 @@ async fn stage_provider_brokers(
             handle,
             revision,
             digest,
+            retained.credential_max_memory_bytes(),
         )?
         .export_canonical_v1()?;
         let credential_path = iroha_test_network::new_disposable_owner_private_root()?;
@@ -1279,6 +1298,7 @@ fn read_exact_finality(config_path: &Path, height: u64) -> Result<NativeFinality
         iroha_data_model::NetworkId::from_genesis_hash(native.genesis.expected_hash),
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         native_finality_limits(),
+        &iroha_allocation::AllocationBudget::new(native_finality_limits().allocated_bytes),
     )
     .map_err(|error| eyre!(error))?;
     ensure!(
@@ -1326,13 +1346,14 @@ fn verify_pulse(
         .ok_or_else(|| eyre!("signed genesis has no first mandatory pulse anchor"))?;
     let anchor_height = pulse_height - 1;
     let session = beacon::validate_global_threshold_beacon_session_v1(
-        record.session.clone(),
+        &record.session,
         &beacon::GlobalThresholdBeaconSessionBindingV1 {
             network_id: record.session.network_id,
             session_id: record.session.session_id,
             roster_hash: record.session.roster_hash,
             transcript_hash: record.session.transcript_hash,
         },
+        &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
     )?;
     let mut common = None;
     for config_path in peer_configs {
@@ -1358,6 +1379,7 @@ fn verify_pulse(
             record.session.network_id,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
             native_finality_limits(),
+            &iroha_allocation::AllocationBudget::new(native_finality_limits().allocated_bytes),
         )
         .map_err(|error| eyre!(error))?;
         let certified = with_verified_native_journal(
@@ -1366,11 +1388,12 @@ fn verify_pulse(
             &record.session.network_id,
             native_finality_limits(),
             cursor.attestations(),
+            cursor.allocation_budget(),
             |reader| {
                 reader
                     .walk(1, epoch_length + 1)
                     .collect::<std::result::Result<Vec<CertifiedBlock>, _>>()
-                    .map_err(|error| error.to_string())
+                    .map_err(iroha_core::sumeragi::native_journal::NativeJournalError::History)
             },
         )
         .map_err(|error| eyre!(error))?;
@@ -2047,7 +2070,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
             &launcher,
             native_finality_limits(),
             5,
-            move |expected| {
+            move |expected, _public_snapshot| {
                 let predecessor = Arc::clone(&predecessor);
                 let first_config = directory.join("peer0.toml");
                 let canary = canary_ref;

@@ -2783,7 +2783,7 @@ pub struct MusubiProviderBundleVerificationPayloadV1 {
     /// Exact deployment, bundle, provider, and finalized completion binding.
     pub binding: MusubiProviderBundleVerificationBindingV1,
 }
-/// One provider-owner controller approval over an exact bundle verification payload.
+/// One completion-signer controller approval over an exact bundle verification payload.
 #[derive(
     Clone,
     Debug,
@@ -2826,7 +2826,7 @@ pub struct MusubiProviderBundleVerificationApprovalV1 {
 pub struct MusubiProviderBundleVerificationAttestationV1 {
     /// Exact signed parsed-bundle and finalized-completion statement.
     pub payload: MusubiProviderBundleVerificationPayloadV1,
-    /// Canonically ordered approvals from the provider-owner controller.
+    /// Canonically ordered approvals from the completion-signer controller.
     pub approvals: Vec<MusubiProviderBundleVerificationApprovalV1>,
 }
 /// Deterministic immutable identity of one provider's proof for an archive replication order.

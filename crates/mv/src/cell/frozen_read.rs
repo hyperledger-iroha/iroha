@@ -7,8 +7,10 @@
 use super::*;
 
 impl<V: Value, A, C: Send + Sync + 'static> Detached<V, A, C> {
-    /// Borrow the exact original undo image for the existing snapshot codec.
-    pub(crate) fn original_undo(&self) -> &Option<V> {
+    /// Borrow the exact original undo image without acquiring a current reader.
+    /// For optional values, absent undo and an original `None` remain distinct.
+    /// This grants no execution or publication authority.
+    pub fn original_undo(&self) -> &Option<V> {
         &self.revert
     }
 

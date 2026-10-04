@@ -540,15 +540,32 @@ async fn diagnostics_retains_structured_http_errors_without_retries() {
             Duration::ZERO,
         );
         let operator = client.operator_client(checked_random_keypair()).unwrap();
-        assert_eq!(
-            operator.consensus().diagnostics().await.unwrap_err(),
-            Error::Http {
-                operation: DIAGNOSTICS,
-                status,
-                retry_after: Some(Duration::from_secs(2)),
-                body: b"diagnostics-unavailable".to_vec(),
-            }
-        );
+        {
+            let actual_error = operator.consensus().diagnostics().await.unwrap_err();
+            let Error::Http {
+                operation: actual_operation,
+                status: actual_status,
+                retry_after: actual_retry_after,
+                body: actual_body,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (
+                    actual_operation,
+                    actual_status,
+                    actual_retry_after,
+                    actual_body,
+                ),
+                (
+                    &(DIAGNOSTICS),
+                    &(status),
+                    &(Some(Duration::from_secs(2))),
+                    &(b"diagnostics-unavailable".to_vec()),
+                )
+            );
+        };
         assert_eq!(requests.lock().unwrap().len(), 1);
     }
 }
@@ -570,13 +587,20 @@ async fn diagnostics_rejects_oversized_and_ambiguous_responses() {
         Duration::ZERO,
     );
     let operator = client.operator_client(checked_random_keypair()).unwrap();
-    assert_eq!(
-        operator.consensus().diagnostics().await.unwrap_err(),
-        Error::ResponseTooLarge {
-            maximum: MAX_DIAGNOSTICS_RESPONSE_BYTES,
-            actual: None,
-        }
-    );
+    {
+        let actual_error = operator.consensus().diagnostics().await.unwrap_err();
+        let Error::ResponseTooLarge {
+            maximum: actual_maximum,
+            actual: actual_actual,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!(
+            (actual_maximum, actual_actual,),
+            (&(MAX_DIAGNOSTICS_RESPONSE_BYTES), &(None),)
+        );
+    };
     let (client, _, _) = attach(
         |_| {
             let mut response = response();
@@ -607,22 +631,30 @@ async fn diagnostics_deadline_cancels_pending_transport_and_blocks_expired_conte
         Duration::from_millis(10),
     );
     let operator = client.operator_client(checked_random_keypair()).unwrap();
-    assert_eq!(
-        operator.consensus().diagnostics().await.unwrap_err(),
-        Error::Timeout {
-            operation: DIAGNOSTICS
-        }
-    );
+    {
+        let actual_error = operator.consensus().diagnostics().await.unwrap_err();
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&(DIAGNOSTICS),));
+    };
     assert_eq!(requests.lock().unwrap().len(), 1);
     assert_eq!(completed.load(Ordering::SeqCst), 0);
     let client = client.with_request_deadline(std::time::Instant::now());
     let operator = client.operator_client(checked_random_keypair()).unwrap();
-    assert_eq!(
-        operator.consensus().diagnostics().await.unwrap_err(),
-        Error::Timeout {
-            operation: DIAGNOSTICS
-        }
-    );
+    {
+        let actual_error = operator.consensus().diagnostics().await.unwrap_err();
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&(DIAGNOSTICS),));
+    };
     assert_eq!(requests.lock().unwrap().len(), 1);
 }
 
@@ -635,12 +667,18 @@ async fn blocking_diagnostics_reject_async_runtime_before_io() {
     );
     let operator = client.operator_client(checked_random_keypair()).unwrap();
     let facade = crate::blocking::OperatorClient::from_client(operator).unwrap();
-    assert_eq!(
-        facade.consensus().diagnostics().unwrap_err(),
-        Error::Blocking(crate::blocking::BlockingCallError::AsyncRuntime {
-            flavor: crate::blocking::AsyncRuntimeFlavor::MultiThread,
-        })
-    );
+    {
+        let actual_error = facade.consensus().diagnostics().unwrap_err();
+        let Error::Blocking(actual_source) = &actual_error else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!(
+            actual_source,
+            &(crate::blocking::BlockingCallError::AsyncRuntime {
+                flavor: crate::blocking::AsyncRuntimeFlavor::MultiThread,
+            })
+        );
+    };
     assert!(sends.lock().unwrap().is_empty());
 }
 

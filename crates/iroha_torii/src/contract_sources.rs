@@ -1,8 +1,6 @@
 #![cfg(feature = "app_api")]
 use crate::{Error, JsonBody, data_dir};
 use axum::{http::StatusCode, response::IntoResponse};
-#[cfg(test)]
-use iroha_core::state::StateReadOnly as _;
 use iroha_core::state::{State as CoreState, WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -2933,7 +2931,6 @@ mod tests {
     }
     use crate::test_utils::TestDataDirGuard;
     use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute,

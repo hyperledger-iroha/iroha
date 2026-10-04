@@ -204,12 +204,81 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         enforce_contract_entrypoint_permission(&tx.world, &authority, &denied_context)
             .expect_err("a grant for another contract or selector must fail closed");
     }
-    Grant::account_permission(
-        Permission::new("CanInvokeContractEntrypoint".to_owned(), Json::new(())),
-        authority.clone(),
+    let malformed_permission =
+        Permission::new("CanInvokeContractEntrypoint".to_owned(), Json::new(()));
+    let staged_before = norito::to_bytes(
+        &tx.world
+            .account_permissions
+            .iter()
+            .map(|(account, permissions)| (account.clone(), permissions.clone()))
+            .collect::<Vec<_>>(),
     )
-    .execute(&authority, &mut tx)
-    .expect("store malformed name-only compatibility fixture");
+    .unwrap();
+    let published = state
+        .world
+        .account_permissions
+        .try_committed_view()
+        .unwrap();
+    let published_before = norito::to_bytes(&(
+        published
+            .current()
+            .iter()
+            .map(|(account, permissions)| (account.clone(), permissions.clone()))
+            .collect::<Vec<_>>(),
+        published
+            .undo()
+            .iter()
+            .map(|(account, permissions)| (account.clone(), permissions.clone()))
+            .collect::<Vec<_>>(),
+    ))
+    .unwrap();
+    tx.world.take_external_events();
+    let malformed_grant =
+        Grant::account_permission(malformed_permission.clone(), authority.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("native Grant rejects the recognized malformed permission before mutation");
+    assert!(matches!(
+        malformed_grant,
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)
+            if message.contains("payout runtime permission")
+    ));
+    assert_eq!(
+        norito::to_bytes(
+            &tx.world
+                .account_permissions
+                .iter()
+                .map(|(account, permissions)| (account.clone(), permissions.clone()))
+                .collect::<Vec<_>>()
+        )
+        .unwrap(),
+        staged_before
+    );
+    assert!(tx.world.take_external_events().is_empty());
+    let after = state
+        .world
+        .account_permissions
+        .try_committed_view()
+        .unwrap();
+    assert!(published.same_publication(&after));
+    assert_eq!(
+        norito::to_bytes(&(
+            after
+                .current()
+                .iter()
+                .map(|(account, permissions)| (account.clone(), permissions.clone()))
+                .collect::<Vec<_>>(),
+            after
+                .undo()
+                .iter()
+                .map(|(account, permissions)| (account.clone(), permissions.clone()))
+                .collect::<Vec<_>>(),
+        ))
+        .unwrap(),
+        published_before
+    );
+    // Seed adversarial retained DATA to test the executor's independent authority boundary.
+    tx.world
+        .add_account_permission(&authority, malformed_permission);
     let malformed_only = contract_permission_context(contract_address.clone(), "malformed_only");
     enforce_contract_entrypoint_permission(&tx.world, &authority, &malformed_only)
         .expect_err("a name-only permission must never bypass exact payload matching");
@@ -1325,7 +1394,7 @@ fn migrate_fails_on_invalid_bytecode() {
     let mut prog = Vec::new();
     // Start with a fully valid authenticated header so rejection exercises the
     // oversized code section rather than an earlier metadata failure.
-    prog.extend_from_slice(&ivm::ProgramMetadata::default_for(1, 0, 1).encode());
+    prog.extend_from_slice(&ivm::ProgramMetadata::default_for(1, 1, 1).encode());
     // Oversized code
     let heap_start =
         usize::try_from(ivm::Memory::HEAP_START).expect("HEAP_START fits within usize");
@@ -1575,10 +1644,19 @@ fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
             "{error:?}"
         );
     }
-    for permission in [
-        Permission::from(executor_permission::sorafs::CanSetSorafsPricing),
-        Permission::from(executor_permission::sorafs::CanCompleteSorafsReplicationOrder),
-    ] {
+    // A provider-scoped completion token authorizes completion work, never global inventory.
+    hold_only!(
+        executor_permission::sorafs::CanCompleteSorafsReplicationOrder {
+            provider_id: iroha_data_model::sorafs::capacity::ProviderId::new([0x71; 32]),
+        }
+    );
+    for query in &orderbook_queries {
+        validate!(query)
+            .expect_err("provider-scoped completion must not expose the global orderbook");
+    }
+    for permission in [Permission::from(
+        executor_permission::sorafs::CanSetSorafsPricing,
+    )] {
         hold_only!(permission.clone());
         for query in &orderbook_queries {
             validate!(query).unwrap_or_else(|error| {
@@ -1892,17 +1970,17 @@ fn initial_executor_rejects_malformed_dpn_payloads_even_at_genesis() {
                 .expect("malformed DPN signed genesis rejects");
             assert!(
                 matches!(&error.error,
-                crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error)
-                if matches!(error.as_ref(),
-                    crate::block::BlockValidationError::InvalidGenesis(
-                        crate::block::InvalidGenesisError::RejectedOutput(output)
-                    ) if matches!(output.reason.as_ref(),
-                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                            ValidationFail::NotPermitted(reason)
-                        ) if reason.contains(name) && reason.contains("Invalid permission payload")
+                    crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error)
+                    if matches!(error.as_ref(),
+                        crate::block::BlockValidationError::InvalidGenesis(
+                            crate::block::InvalidGenesisError::RejectedOutput(output)
+                        ) if matches!(output.reason.as_ref(),
+                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                ValidationFail::NotPermitted(reason)
+                            ) if reason.contains(name) && reason.contains("Invalid permission payload")
+                        )
                     )
-                )
-            ),
+                ),
                 "{name} {payload}: {error:?}"
             );
             let view = error.state.view();
@@ -2237,4 +2315,37 @@ fn native_account_grant_reader_preserves_refusal_and_exact_token_shape() {
         Ok(false),
         "revoking the original role revokes its exact grant"
     );
+}
+
+#[test]
+fn completion_permission_payload_requires_exact_nonzero_provider_scope() {
+    use iroha_data_model::sorafs::capacity::ProviderId;
+    use iroha_executor_data_model::permission::sorafs::CanCompleteSorafsReplicationOrder;
+    let token = CanCompleteSorafsReplicationOrder {
+        provider_id: ProviderId::new([1; 32]),
+    };
+    let exact: Permission = token.into();
+    validate_initial_permission_payload_constraints(&exact).unwrap();
+    let bytes = norito::to_bytes(&exact).unwrap();
+    let decoded = norito::decode_from_bytes::<Permission>(&bytes).unwrap();
+    assert_eq!(decoded, exact);
+    assert_eq!(
+        CanCompleteSorafsReplicationOrder::try_from(&decoded).unwrap(),
+        token
+    );
+    let mut extra = norito::json::to_value(&token).unwrap();
+    extra
+        .as_object_mut()
+        .unwrap()
+        .insert("unrelated".into(), norito::json::Value::Bool(true));
+    for malformed in [
+        Permission::new(exact.name().to_owned(), Json::new(())),
+        Permission::new(exact.name().to_owned(), Json::new(norito::json!({}))),
+        Permission::new(exact.name().to_owned(), Json::new(extra)),
+        Permission::from(CanCompleteSorafsReplicationOrder {
+            provider_id: ProviderId::new([0; 32]),
+        }),
+    ] {
+        assert!(validate_initial_permission_payload_constraints(&malformed).is_err());
+    }
 }

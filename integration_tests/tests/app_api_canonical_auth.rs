@@ -9,9 +9,7 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
-    canonical_network_request_signature_message,
-    filter::{Pagination, QueryEnvelope},
-    signature_header_value,
+    canonical_network_request_signature_message, filter::ListQuery, signature_header_value,
 };
 use norito::json::Value as JsonValue;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
@@ -105,22 +103,15 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     })?;
     let assets_json: JsonValue = norito::json::from_str(&assets_body)?;
     let total_assets = assets_json
-        .get("total")
-        .and_then(JsonValue::as_u64)
-        .unwrap_or_default();
+        .get("items")
+        .and_then(JsonValue::as_array)
+        .map_or(0, Vec::len);
     assert!(
         total_assets > 0,
         "assets endpoint should accept canonical auth"
     );
     // POST /v1/accounts/{account}/transactions/query with canonical signed headers + body hash
-    let envelope = QueryEnvelope {
-        pagination: Pagination {
-            limit: Some(4),
-            offset: 0,
-        },
-        ..QueryEnvelope::default()
-    };
-    let body = norito::json::to_vec(&envelope)?;
+    let body = norito::json::to_vec(&ListQuery::new().limit(4).to_json_value())?;
     let mut tx_url = reqwest::Url::parse(&peer.torii_url())?;
     {
         let mut segments = tx_url

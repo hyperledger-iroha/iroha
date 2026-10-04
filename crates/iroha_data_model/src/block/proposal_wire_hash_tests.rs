@@ -684,7 +684,7 @@ fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
     proposal.validate_proposal_commitments().unwrap();
     assert_exact_borrowed_proposal_wire(&proposal);
     let wire = proposal.encode_wire().unwrap();
-    let decoded = decode_versioned_signed_block(&wire).unwrap();
+    let decoded = decode_framed_signed_block(&wire).unwrap();
     assert_eq!(decoded.global_beacon_pulse(), Some(&pulse));
     assert_eq!(decoded.header(), proposal.header());
 

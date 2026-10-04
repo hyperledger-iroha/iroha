@@ -3,6 +3,7 @@
 import hashlib
 import os
 from pathlib import Path
+import tempfile
 
 import pytest
 
@@ -10,8 +11,17 @@ from scripts import release_artifact_contract as contract
 
 
 @pytest.fixture
-def held(tmp_path):
-    parent = tmp_path / "parent"
+def workspace():
+    """Own every ancestor used by the directory custody contract."""
+    target = Path(__file__).resolve().parents[2] / "target"
+    target.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=target, prefix="directory-publication-") as directory:
+        yield Path(directory)
+
+
+@pytest.fixture
+def held(workspace):
+    parent = workspace / "parent"
     stage = contract.create_fresh_directory(parent / "stage", mode=0o700)
     parent_fd, _, _ = contract._open_absolute_directory(parent, "test parent")
     stage_fd, _, _ = contract._open_absolute_directory(stage, "test stage")
@@ -77,15 +87,15 @@ def test_unsupported_host_never_uses_check_then_rename(held, monkeypatch):
     assert stage.is_dir()
 
 
-def test_empty_producer_logs_require_explicit_admission(tmp_path: Path):
-    log = tmp_path / "stderr"
+def test_empty_producer_logs_require_explicit_admission(workspace: Path):
+    log = workspace / "stderr"
     contract.exclusive_write_bytes(log, b"", mode=0o600)
     with pytest.raises(contract.ReleaseArtifactError, match="must not be empty"):
         contract.stable_hash_path(log)
     info = contract.stable_hash_path(log, max_size=0, allow_empty=True)
     assert info.size == 0 and info.sha256 == hashlib.sha256(b"").hexdigest()
     log.unlink()
-    log.symlink_to(tmp_path / "missing")
+    log.symlink_to(workspace / "missing")
     with pytest.raises(contract.ReleaseArtifactError):
         contract.stable_hash_path(log, max_size=0, allow_empty=True)
 
@@ -111,8 +121,8 @@ def test_taira_delegation_preserves_local_publication_contract(held, monkeypatch
 
 
 @pytest.mark.parametrize("depth", [1, 2])
-def test_tool_ancestor_rename_and_restore_cannot_reuse_unchanged_file_identity(tmp_path, depth):
-    parent = contract.create_fresh_directory(tmp_path / "one/two", mode=0o700)
+def test_tool_ancestor_rename_and_restore_cannot_reuse_unchanged_file_identity(workspace, depth):
+    parent = contract.create_fresh_directory(workspace / "one/two", mode=0o700)
     tool = parent / "tool"
     contract.exclusive_write_bytes(tool, b"original executable", mode=0o755)
     before = contract.stable_hash_path(tool)

@@ -114,7 +114,7 @@ required-features = ["app_api"]
 
 [dependencies]
 iroha_allocation = { workspace = true }
-iroha_core_privacy = { workspace = true }
+iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }
 iroha_sumeragi = { workspace = true }
 iroha_model_base = { workspace = true }
@@ -133,6 +133,7 @@ sorafs_node = { path = "../sorafs_node" }
 sorafs_orchestrator = { workspace = true }
 iroha_version = { workspace = true }
 iroha_torii_shared = { workspace = true }
+iroha_fs = { workspace = true }
 iroha_futures = { workspace = true }
 iroha_panic_hook = { workspace = true }
 iroha_p2p = { workspace = true }
@@ -154,6 +155,7 @@ axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", 
 tower-http = { version = "0.6.6", features = ["cors", "trace", "timeout"] }
 tower = "0.5.2"
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
 eyre = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
 async-trait = { workspace = true }

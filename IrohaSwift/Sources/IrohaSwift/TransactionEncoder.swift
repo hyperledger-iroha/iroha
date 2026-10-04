@@ -19,6 +19,9 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
     case invalidGovernanceSelector(field: String, value: String)
     case governanceOwnerMustEqualAuthority
     case invalidZkBallotPublicInputs(String)
+    /// The native transfer encoder cannot attach a memo yet; a non-empty
+    /// `TransferRequest.description` would otherwise be silently dropped.
+    case transferDescriptionUnsupported
 
     public var errorDescription: String? {
         switch self {
@@ -58,6 +61,8 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
             return "A public conviction update must be owned by its transaction authority."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
+        case .transferDescriptionUnsupported:
+            return "TransferRequest.description is not encoded into transfers yet; pass nil. A non-empty memo is rejected rather than silently dropped from the signed transaction."
         }
     }
 }
@@ -959,6 +964,11 @@ struct SwiftTransactionEncoder {
     static func encodeTransfer(transfer: TransferRequest,
                                signingKey: SigningKey,
                                creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        // TODO: encode the memo once the native transfer encoder accepts one;
+        // until then reject it rather than signing a transaction without it.
+        if let description = transfer.description, !description.isEmpty {
+            throw TransactionInputError.transferDescriptionUnsupported
+        }
         let ids = try TransactionInputValidator.validate(networkId: transfer.networkId,
                                                          authorityId: transfer.authority,
                                                          assetDefinitionId: transfer.assetDefinitionId,

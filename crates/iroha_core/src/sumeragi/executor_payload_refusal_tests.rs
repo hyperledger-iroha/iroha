@@ -78,11 +78,11 @@ fn assert_original_local_refusal<const N: usize>(ceilings: [norito::DecodeLimits
         let height = worker.state.view().height();
         for limits in ceilings {
             let error = norito::with_decode_limits_scope(limits, || {
-                iroha_data_model::block::decode_versioned_signed_block(block.payload().as_slice())
+                iroha_data_model::block::decode_framed_signed_block(block.payload().as_slice())
             })
             .unwrap_err();
             assert!(
-                error.is_decode_resource_limit(),
+                error.kind() == norito::core::DecodeAttemptErrorKind::EnclosingLimit,
                 "genuine original decoder refusal: {error:?}"
             );
             assert!(matches!(

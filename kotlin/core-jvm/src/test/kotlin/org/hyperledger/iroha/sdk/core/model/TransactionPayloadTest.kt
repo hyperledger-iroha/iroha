@@ -20,6 +20,7 @@ class TransactionPayloadTest {
         networkId = TEST_NETWORK_ID,
         authority = sampleAuthority(0x00),
         creationTimeMs = 1000L,
+        executable = Executable.ivm(byteArrayOf()),
         feePayment = FeePaymentIntent.authority(emptyList()),
     )
 

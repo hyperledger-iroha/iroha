@@ -104,13 +104,14 @@ pub(crate) fn reject_opaque_deferred_authority(
 /// # Errors
 /// Rejects nested committee or monetary staking instructions, unresolved live
 /// multisig approvals, and proposal graphs exceeding the traversal bound.
-pub(crate) fn reject_opaque_instruction_authority<'a, I>(
-    instructions: I,
+#[expect(
+    single_use_lifetimes,
+    reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
+)]
+pub(crate) fn reject_opaque_instruction_authority<'a>(
+    instructions: impl IntoIterator<Item = &'a InstructionBox>,
     state_transaction: &StateTransaction<'_, '_>,
-) -> Result<(), Attempt<ValidationFail>>
-where
-    I: IntoIterator<Item = &'a InstructionBox>,
-{
+) -> Result<(), Attempt<ValidationFail>> {
     if cfg!(all(test, sumeragi_core_mutation = "HC66")) {
         return Ok(());
     }
@@ -178,14 +179,17 @@ fn reject_opaque_committee_operation(
     Ok(())
 }
 
-fn reject_opaque_committee_operations_with<'a, I, F>(
-    instructions: I,
+#[expect(
+    single_use_lifetimes,
+    reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
+)]
+fn reject_opaque_committee_operations_with<'a, F>(
+    instructions: impl IntoIterator<Item = &'a InstructionBox>,
     visited: &mut std::collections::BTreeSet<String>,
     depth: usize,
     resolve: &mut F,
 ) -> Result<(), Attempt<OpaqueDeferredAuthorityError>>
 where
-    I: IntoIterator<Item = &'a InstructionBox>,
     F: FnMut(
         &MultisigApprove,
     ) -> Result<Option<(AccountId, Vec<InstructionBox>)>, Attempt<ValidationFail>>,

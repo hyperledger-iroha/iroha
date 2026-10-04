@@ -23,7 +23,6 @@ use super::*;
 
 /// Generated proof data. Only separate Native or stateless admission can supply authority.
 pub(in super::super) struct GeneratedOrdinaryCashPairV1 {
-    pub(in super::super) public: OrdinaryCashTerminalPublicV1,
     pub(in super::super) original: Vec<u8>,
     pub(in super::super) eq_protocol: PlonkProtocol<EqAffine>,
     pub(in super::super) ep_protocol: PlonkProtocol<EpAffine>,
@@ -487,7 +486,6 @@ pub(super) fn finish_pair(
         ));
     }
     Ok(GeneratedOrdinaryCashPairV1 {
-        public,
         original,
         eq_protocol,
         ep_protocol,

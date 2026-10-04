@@ -17,6 +17,28 @@ fn retry_delay(error: &iroha::Error, remaining: Duration) -> Option<Duration> {
     (delay < remaining).then_some(delay)
 }
 
+/// Submit once within the same phase deadline as the surrounding height observations.
+/// HTTP probes, fee quotes, dispatch and finality share this deadline; no write is retried.
+pub(super) fn submit_until<T>(
+    client: iroha::blocking::Client,
+    deadline: Instant,
+    submit: impl FnOnce(iroha::blocking::Client) -> Result<T>,
+) -> Result<T> {
+    ensure!(
+        Instant::now() < deadline,
+        "committee submission deadline elapsed"
+    );
+    let bounded =
+        iroha::blocking::Client::from_client(client.client().with_request_deadline(deadline))?;
+    // Preserve an unresolved dispatch or finality error with its exact transaction identity.
+    let result = submit(bounded)?;
+    ensure!(
+        Instant::now() < deadline,
+        "committee submission deadline elapsed"
+    );
+    Ok(result)
+}
+
 /// Read an authoritative applied height without extending the caller's deadline.
 pub(super) async fn height_until(client: &iroha::client::Client, deadline: Instant) -> Result<u64> {
     tokio::time::timeout_at(deadline.into(), async {
@@ -154,7 +176,7 @@ mod status_observation_tests {
         }
     }
 
-    fn client(transport: Arc<StatusTransport>) -> iroha::client::Client {
+    fn client(transport: Arc<dyn HttpTransport>) -> iroha::client::Client {
         use iroha_crypto::{Hash, HashOf};
         let config = iroha::config::Config {
             chain: "status-observation-test".into(),
@@ -189,6 +211,154 @@ mod status_observation_tests {
             request_budgets: Mutex::new(Vec::new()),
             consume_request_deadline: false,
         })
+    }
+
+    #[derive(Debug)]
+    struct PhaseTransport {
+        requests: Mutex<Vec<(String, Duration)>>,
+        budget: Duration,
+    }
+
+    impl HttpTransport for PhaseTransport {
+        fn send_blocking(&self, _: TransportRequest) -> Result<Response<Vec<u8>>> {
+            panic!("the blocking facade must use its owned asynchronous transport")
+        }
+
+        fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+            Box::pin(async move {
+                assert_eq!(request.method, iroha::http::Method::GET);
+                let timeout = request.timeout.expect("every phase dispatch has a budget");
+                assert!(
+                    timeout <= self.budget,
+                    "a dispatch renewed the phase budget"
+                );
+                let path = request.url.path();
+                self.requests
+                    .lock()
+                    .unwrap()
+                    .push((path.to_owned(), timeout));
+                let body = match path {
+                    "/status" => json::to_vec(&iroha_torii_shared::status::Status {
+                        blocks: 69,
+                        ..Default::default()
+                    })?,
+                    "/v1/pipeline/transactions/status" => {
+                        // The server accepted this exact request but never returns a response.
+                        // Only propagation of the original phase deadline can finish the wait.
+                        assert!(
+                            request
+                                .url
+                                .query_pairs()
+                                .any(|(key, value)| { key == "scope" && value == "local" })
+                        );
+                        return std::future::pending::<Result<Response<Vec<u8>>>>().await;
+                    }
+                    other => panic!("unexpected phase dispatch: {other}"),
+                };
+                Ok(Response::builder()
+                    .status(200)
+                    .header("content-type", "application/json")
+                    .body(body)?)
+            })
+        }
+    }
+
+    #[test]
+    fn submission_phase_deadline_bounds_prior_http_and_six_hundred_second_finality() {
+        use iroha_crypto::{Hash, HashOf};
+        let budget = Duration::from_secs(2);
+        let transport = Arc::new(PhaseTransport {
+            requests: Mutex::new(Vec::new()),
+            budget,
+        });
+        let mut builder = client(transport.clone()).to_builder();
+        builder.transaction_status_timeout = Duration::from_secs(600);
+        let original = iroha::blocking::Client::from_client(builder.build().unwrap()).unwrap();
+        let hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x71; Hash::LENGTH]));
+        let deadline = Instant::now() + budget;
+        let error = submit_until(original.clone(), deadline, |bounded| {
+            // Exercise a preceding SDK dispatch and the real finality poller on one clone.
+            // A paid submit's capability/quote requests use this same transport boundary.
+            assert_eq!(bounded.status().get()?.blocks, 69);
+            bounded.wait_for_transaction_applied_local(
+                hash,
+                iroha::client::TransactionWaitOptions {
+                    timeout: Duration::from_secs(600),
+                    poll_interval: Duration::from_secs(60),
+                },
+            )
+        })
+        .expect_err("pending finality must stop at the phase deadline");
+        assert!(
+            format!("{error:#}").contains(&hash.to_string()),
+            "the exact unresolved transaction identity must survive the deadline"
+        );
+        assert!(Instant::now().saturating_duration_since(deadline) < Duration::from_secs(2));
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "no polling read may run after the phase deadline"
+        );
+        assert_eq!(requests[0].0, "/status");
+        assert_eq!(requests[1].0, "/v1/pipeline/transactions/status");
+        assert!(
+            requests[1].1 < requests[0].1,
+            "finality must consume the remaining phase budget"
+        );
+        assert_eq!(
+            original.client().to_builder().transaction_status_timeout,
+            Duration::from_secs(600)
+        );
+    }
+
+    #[test]
+    fn submission_phase_deadline_rejects_expired_work_before_dispatch() {
+        let transport = transport([]);
+        let original = iroha::blocking::Client::from_client(client(transport.clone())).unwrap();
+        let error = submit_until(original, Instant::now(), |_| -> Result<()> {
+            panic!("expired work must not invoke the submission closure")
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("committee submission deadline elapsed")
+        );
+        assert!(transport.request_budgets.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn submission_phase_deadline_rejects_late_success_and_preserves_submission_error() {
+        let original = iroha::blocking::Client::from_client(client(transport([]))).unwrap();
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let error = submit_until(original.clone(), deadline, |_| {
+            std::thread::sleep(
+                deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(1),
+            );
+            Ok(69_u64)
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("committee submission deadline elapsed")
+        );
+        #[derive(Debug)]
+        struct OriginalDispatch;
+        impl std::fmt::Display for OriginalDispatch {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("original unresolved dispatch")
+            }
+        }
+        impl std::error::Error for OriginalDispatch {}
+        let error = submit_until(
+            original,
+            Instant::now() + Duration::from_secs(2),
+            |_| -> Result<()> { Err(OriginalDispatch.into()) },
+        )
+        .unwrap_err();
+        assert!(error.downcast_ref::<OriginalDispatch>().is_some());
     }
 
     #[tokio::test]

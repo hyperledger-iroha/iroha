@@ -1207,12 +1207,18 @@ fn archive_location_replay_fixture(
     let provider_keypair =
         KeyPair::try_from_seed(vec![seed.wrapping_add(14); 32], Algorithm::Ed25519)
             .expect("fixture provider keypair");
-    let provider_owner = AccountId::new(provider_keypair.public_key().clone());
+    let provider_signer = AccountId::new(provider_keypair.public_key().clone());
+    let provider_owner = account(seed.wrapping_add(20));
+    assert_ne!(
+        provider_owner, provider_signer,
+        "owner and completion signer are independent"
+    );
     let provider_id =
         iroha_data_model::sorafs::capacity::ProviderId::new([seed.wrapping_add(15); 32]);
     let completion_authority =
         iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
             provider_owner.clone(),
+            provider_signer.clone(),
             iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: [seed.wrapping_add(16); 32],
                 revision: 1,
@@ -1223,7 +1229,7 @@ fn archive_location_replay_fixture(
     let binding = MusubiProviderBundleVerificationBindingV1 {
         network_id: archive.staging_receipt.payload.binding.network_id,
         provider_id,
-        completed_by: provider_owner.clone(),
+        completed_by: provider_signer.clone(),
         completion_authority,
         replication_order: order,
         assignment_revision: 1,
@@ -1320,7 +1326,7 @@ fn archive_location_replay_fixture(
             provider_completions: vec![
                 iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
                     provider_id,
-                    completed_by: provider_owner.clone(),
+                    completed_by: provider_signer.clone(),
                     completion_epoch: binding.completion_epoch,
                     assignment_revision: binding.assignment_revision,
                     completion_authority: binding.completion_authority.clone(),
@@ -2007,7 +2013,7 @@ fn exact_archive_location_replay_rejects_an_invalid_stored_attestation_signature
                 .musubi_provider_bundle_attestations
                 .insert(attestation_key, record);
         },
-        "approval is not a provider-owner key",
+        "approval is not a completion-signer key",
     );
 }
 #[test]

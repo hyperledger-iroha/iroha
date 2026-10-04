@@ -48,8 +48,6 @@ impl Default for BalanceTransport {
 }
 impl HttpTransport for BalanceTransport {
     fn send_blocking(&self, request: TransportRequest) -> Result<Response<Vec<u8>>> {
-        self.requests
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         use iroha_data_model::{
             Registrable as _,
             account::Account,
@@ -58,6 +56,9 @@ impl HttpTransport for BalanceTransport {
                 QueryRequest, QueryResponse, SignedQuery, SingularQueryBox, SingularQueryOutputBox,
             },
         };
+
+        self.requests
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if request.url.path() == "/v1/node/capabilities" {
             return Ok(Response::builder()
                 .status(200)

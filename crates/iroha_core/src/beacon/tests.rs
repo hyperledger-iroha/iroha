@@ -37,6 +37,15 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+fn invalid_session(error: GlobalThresholdBeaconSessionError) -> GlobalThresholdBeaconError {
+    match error {
+        GlobalThresholdBeaconSessionError::Invalid(error) => error,
+        original => panic!(
+            "expected completed canonical rejection, got original local failure: {original:?}"
+        ),
+    }
+}
+
 #[test]
 fn active_global_beacon_session_projection_rejects_noncanonical_storage() {
     let world = World::new();
@@ -95,7 +104,7 @@ fn complete_dkg_fixture(seats: u16) -> AdaptiveBeaconFixture {
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>(),
     );
-    adaptive_beacon_fixture_for_session_and_keys(session, &keys)
+    adaptive_beacon_fixture_for_session_and_keys(session, &keys, &super::fixtures::fixture_budget())
 }
 
 fn replay_dkg_until_finalizable(
@@ -105,25 +114,26 @@ fn replay_dkg_until_finalizable(
     let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
     let session = transcript.session;
     let mut state =
-        GlobalThresholdBeaconDkgStateV1::new(session, &crypto).expect("valid DKG session");
+        GlobalThresholdBeaconDkgStateV1::new(session, &crypto, &super::fixtures::fixture_budget())
+            .expect("valid DKG session");
     for key in &transcript.recipient_keys {
         state
-            .record_recipient_key(session.start_height, key.clone())
+            .record_recipient_key(session.start_height, key)
             .expect("signed recipient key");
     }
     for commitment in &transcript.dealer_commitments {
         state
-            .record_dealer_commitment(session.start_height, commitment.clone(), &crypto)
+            .record_dealer_commitment(session.start_height, commitment, &crypto)
             .expect("verified dealer commitment");
     }
     for edge in transcript.encrypted_shares.iter().take(edge_count) {
         state
-            .record_encrypted_share(session.commitments_end_height, edge.clone())
+            .record_encrypted_share(session.commitments_end_height, edge)
             .expect("signed encrypted edge");
     }
     for acceptance in transcript.share_acceptances.iter().take(edge_count) {
         state
-            .record_share_acceptance(session.deliveries_end_height, acceptance.clone())
+            .record_share_acceptance(session.deliveries_end_height, acceptance)
             .expect("signed edge acceptance");
     }
     state
@@ -151,10 +161,12 @@ fn adaptive_dkg_reducer_requires_every_signed_private_edge_at_four_and_seven_sea
             *transcript
         );
         let mut missing = replay_dkg_until_finalizable(transcript, all_edges - 1);
-        assert_eq!(
+        assert!(matches!(
             missing.finalize(transcript.finalized_at_height, &crypto),
-            Err(GlobalThresholdBeaconError::IncompleteDkgEdges)
-        );
+            Err(GlobalThresholdBeaconSessionError::Invalid(
+                GlobalThresholdBeaconError::IncompleteDkgEdges
+            ))
+        ));
         assert_eq!(
             missing.phase_at(transcript.finalized_at_height + 1),
             GlobalThresholdBeaconDkgPhaseV1::Aborted
@@ -179,19 +191,22 @@ fn adaptive_dkg_rejects_out_of_phase_and_replayed_attempt_edges() {
     let session = transcript.session;
     let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
     let mut state =
-        GlobalThresholdBeaconDkgStateV1::new(session, &crypto).expect("valid DKG state");
-    assert_eq!(
-        state.record_encrypted_share(session.start_height, transcript.encrypted_shares[0].clone()),
-        Err(GlobalThresholdBeaconError::WrongDkgPhase)
-    );
+        GlobalThresholdBeaconDkgStateV1::new(session, &crypto, &super::fixtures::fixture_budget())
+            .expect("valid DKG state");
+    assert!(matches!(
+        state.record_encrypted_share(session.start_height, &transcript.encrypted_shares[0]),
+        Err(GlobalThresholdBeaconSessionError::Invalid(
+            GlobalThresholdBeaconError::WrongDkgPhase
+        ))
+    ));
     for key in &transcript.recipient_keys {
         state
-            .record_recipient_key(session.start_height, key.clone())
+            .record_recipient_key(session.start_height, key)
             .expect("recipient key");
     }
     for commitment in &transcript.dealer_commitments {
         state
-            .record_dealer_commitment(session.start_height, commitment.clone(), &crypto)
+            .record_dealer_commitment(session.start_height, commitment, &crypto)
             .expect("dealer commitment");
     }
     let edge = &transcript.encrypted_shares[0];
@@ -208,14 +223,16 @@ fn adaptive_dkg_rejects_out_of_phase_and_replayed_attempt_edges() {
         Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)
     );
     state
-        .record_encrypted_share(session.commitments_end_height, edge.clone())
+        .record_encrypted_share(session.commitments_end_height, edge)
         .expect("first edge");
     let mut equivocated = edge.clone();
     equivocated.encrypted_share[12] ^= 1;
-    assert_eq!(
-        state.record_encrypted_share(session.commitments_end_height, equivocated),
-        Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)
-    );
+    assert!(matches!(
+        state.record_encrypted_share(session.commitments_end_height, &equivocated),
+        Err(GlobalThresholdBeaconSessionError::Invalid(
+            GlobalThresholdBeaconError::InvalidDkgEncryptedShare
+        ))
+    ));
 }
 
 #[test]
@@ -229,56 +246,70 @@ fn adaptive_dkg_public_snapshot_roundtrips_and_restores() {
         norito::decode_from_bytes(&bytes).expect("decode public DKG snapshot");
     binary.validate().expect("validate decoded DKG snapshot");
     crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
-        &snapshot,
+        snapshot.record(),
         "iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1",
     );
     assert!(matches!(
         norito::decode_canonical::<GlobalThresholdBeaconKeySessionV1>(&bytes),
         Err(norito::Error::SchemaMismatch),
     ));
-    assert_eq!(binary, snapshot);
-    let json = norito::json::to_json(&snapshot).expect("encode public DKG snapshot JSON");
+    assert_eq!(&binary, snapshot.record());
+    let json = norito::json::to_json(snapshot.record()).expect("encode public DKG snapshot JSON");
     let decoded_json: GlobalThresholdBeaconDkgSnapshotV1 =
         norito::json::from_str(&json).expect("decode public DKG snapshot JSON");
-    assert_eq!(decoded_json, snapshot);
+    assert_eq!(&decoded_json, snapshot.record());
     let restored = GlobalThresholdBeaconDkgStateV1::from_snapshot(
-        binary,
+        &binary,
         &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+        state.allocation_budget(),
     )
     .expect("cryptographically restore public snapshot");
     assert_eq!(
-        restored.public_snapshot().expect("restored snapshot"),
-        snapshot
+        restored
+            .public_snapshot()
+            .expect("restored snapshot")
+            .record(),
+        snapshot.record()
     );
 }
 
 #[test]
 fn finalized_key_lifecycle_is_strict_and_roundtrips() {
     let (validated, _) = validated_threshold_session();
-    let mut record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(validated.record().clone())
-            .expect("valid finalized public key record");
+    let mut record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
+        validated.record().clone(),
+        &super::fixtures::fixture_budget(),
+    )
+    .expect("valid finalized public key record");
     let finalized_height = record.session.adaptive_dkg.finalized_at_height;
     assert_eq!(
-        record.activate(finalized_height - 1),
+        record
+            .activate(finalized_height - 1, &super::fixtures::fixture_budget())
+            .map_err(invalid_session),
         Err(GlobalThresholdBeaconError::InvalidKeyLifecycle)
     );
     record
-        .activate(finalized_height)
+        .activate(finalized_height, &super::fixtures::fixture_budget())
+        .map_err(invalid_session)
         .expect("activate at finalization height");
     assert!(record.is_active_at(finalized_height));
     assert_eq!(
-        record.retire(finalized_height),
+        record
+            .retire(finalized_height, &super::fixtures::fixture_budget())
+            .map_err(invalid_session),
         Err(GlobalThresholdBeaconError::InvalidKeyLifecycle)
     );
     record
-        .retire(finalized_height + 1)
+        .retire(finalized_height + 1, &super::fixtures::fixture_budget())
+        .map_err(invalid_session)
         .expect("strictly later retirement");
     assert!(!record.is_active_at(finalized_height + 1));
     let encoded = norito::to_bytes(&record).expect("encode key lifecycle");
     let decoded: FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
         norito::decode_from_bytes(&encoded).expect("decode key lifecycle");
-    decoded.validate().expect("validate decoded lifecycle");
+    decoded
+        .validate(&super::fixtures::fixture_budget())
+        .expect("validate decoded lifecycle");
     crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
         &record,
         "iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1",
@@ -323,9 +354,16 @@ pub(crate) fn finalized_key_session_fixture_for_context_v1(
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>(),
     );
-    let fixture = adaptive_beacon_fixture_for_session_and_keys(dkg_session, signing_keys);
-    FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
-        .expect("proof-valid finalized global beacon key fixture")
+    let fixture = adaptive_beacon_fixture_for_session_and_keys(
+        dkg_session,
+        signing_keys,
+        &super::fixtures::fixture_budget(),
+    );
+    FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
+        fixture.session.record().clone(),
+        &super::fixtures::fixture_budget(),
+    )
+    .expect("proof-valid finalized global beacon key fixture")
 }
 
 /// One real finalized DKG retained across historical authorization and pulse construction.
@@ -361,6 +399,7 @@ impl HistoricalBeaconFixture {
         Self(adaptive_beacon_fixture_for_session_and_keys(
             dkg_session,
             signing_keys,
+            &super::fixtures::fixture_budget(),
         ))
     }
 
@@ -392,7 +431,7 @@ impl HistoricalBeaconFixture {
         for partial in pulse_partial_signatures(fixture, &template, [0xA7; 32])
             .into_iter()
             .take(usize::from(
-                fixture.session.transcript.session().threshold(),
+                fixture.session.transcript().session().threshold(),
             ))
         {
             aggregator.accept_partial(partial).unwrap();
@@ -425,8 +464,11 @@ pub(crate) fn finalized_pulses_fixture_for_context_v1(
     Vec<FinalizedGlobalThresholdBeaconPulseV1>,
 ) {
     let fixture = HistoricalBeaconFixture::new(network_id, session_id, 1, signing_keys);
-    let record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.record().clone()).unwrap();
+    let record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
+        fixture.record().clone(),
+        &super::fixtures::fixture_budget(),
+    )
+    .unwrap();
     let pulses = anchors
         .iter()
         .map(|(anchor, context)| fixture.pulse(*anchor, *context))
@@ -499,7 +541,7 @@ fn signed_pulse_fixture() -> (
     )
     .expect("open exact pulse reducer");
     for partial in partials.into_iter().take(usize::from(
-        fixture.session.transcript.session().threshold(),
+        fixture.session.transcript().session().threshold(),
     )) {
         aggregator
             .accept_partial(partial)
@@ -518,7 +560,7 @@ fn pulse_partial_signatures(
     let mut proof_rng = StdRng::from_seed(rng_seed);
     let mut partials = Vec::new();
 
-    for recipient_index in 1_u16..=fixture.session.transcript.session().committee_size() {
+    for recipient_index in 1_u16..=fixture.session.transcript().session().committee_size() {
         let private_contributions = fixture
             .dealer_secrets
             .iter()
@@ -530,13 +572,13 @@ fn pulse_partial_signatures(
             })
             .collect::<Vec<_>>();
         let signing_share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
-            &fixture.session.transcript,
+            fixture.session.transcript(),
             &private_contributions,
         )
         .expect("aggregate exact qualified private contributions");
         partials.push(global_threshold_beacon_partial_signature_dto_v1(
             &signing_share
-                .sign_payload_with_rng(&fixture.session.transcript, &payload, &mut proof_rng)
+                .sign_payload_with_rng(fixture.session.transcript(), &payload, &mut proof_rng)
                 .expect("adaptive signature share"),
         ));
     }
@@ -558,7 +600,7 @@ fn live_fixture_in_memory_signer(
         })
         .collect::<Vec<_>>();
     let share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
-        &fixture.session.transcript,
+        fixture.session.transcript(),
         &private_contributions,
     )
     .expect("aggregate exact qualified private contributions");
@@ -567,13 +609,6 @@ fn live_fixture_in_memory_signer(
         share,
     )
     .expect("move the DKG share into the zeroizing runtime provider")
-}
-
-fn live_fixture_signer(
-    fixture: &AdaptiveBeaconFixture,
-    recipient_index: u16,
-) -> Arc<dyn GlobalThresholdBeaconPartialSignerV1> {
-    Arc::new(live_fixture_in_memory_signer(fixture, recipient_index))
 }
 
 struct FailOnceBeaconSigner {
@@ -838,14 +873,24 @@ fn threshold_beacon_session_rejects_wrong_bindings_and_malformed_points() {
     let mut wrong_network = record.clone();
     wrong_network.network_id = beacon_fixture_network_id(0x82);
     assert_eq!(
-        validate_global_threshold_beacon_session_v1(wrong_network, &expected),
+        validate_global_threshold_beacon_session_v1(
+            &(wrong_network),
+            &expected,
+            &super::fixtures::fixture_budget()
+        )
+        .map_err(invalid_session),
         Err(GlobalThresholdBeaconError::NetworkMismatch)
     );
 
     let mut wrong_roster = record.clone();
     wrong_roster.roster_hash[0] ^= 1;
     assert_eq!(
-        validate_global_threshold_beacon_session_v1(wrong_roster, &expected),
+        validate_global_threshold_beacon_session_v1(
+            &(wrong_roster),
+            &expected,
+            &super::fixtures::fixture_budget()
+        )
+        .map_err(invalid_session),
         Err(GlobalThresholdBeaconError::RosterMismatch)
     );
 
@@ -857,21 +902,36 @@ fn threshold_beacon_session_rejects_wrong_bindings_and_malformed_points() {
         ..expected
     };
     assert_eq!(
-        validate_global_threshold_beacon_session_v1(zero_roster, &zero_roster_binding),
+        validate_global_threshold_beacon_session_v1(
+            &(zero_roster),
+            &zero_roster_binding,
+            &super::fixtures::fixture_budget()
+        )
+        .map_err(invalid_session),
         Err(GlobalThresholdBeaconError::InvalidDkgSession)
     );
 
     let mut wrong_transcript = record.clone();
     wrong_transcript.transcript_hash[0] ^= 1;
     assert_eq!(
-        validate_global_threshold_beacon_session_v1(wrong_transcript, &expected),
+        validate_global_threshold_beacon_session_v1(
+            &(wrong_transcript),
+            &expected,
+            &super::fixtures::fixture_budget()
+        )
+        .map_err(invalid_session),
         Err(GlobalThresholdBeaconError::TranscriptMismatch)
     );
 
     let mut malformed_key = record;
     malformed_key.group_public_key = [0; 96];
     assert_eq!(
-        validate_global_threshold_beacon_session_v1(malformed_key, &expected),
+        validate_global_threshold_beacon_session_v1(
+            &(malformed_key),
+            &expected,
+            &super::fixtures::fixture_budget()
+        )
+        .map_err(invalid_session),
         Err(GlobalThresholdBeaconError::ThresholdBls(
             ThresholdBlsError::InvalidPublicKey
         ))
@@ -1060,11 +1120,17 @@ fn threshold_beacon_accepts_one_adaptive_final_signature_and_seed() {
 #[test]
 fn first_finalized_pulse_initializes_an_empty_ingestion_cursor() {
     let (fixture, pulse, _origin, anchor) = signed_pulse_fixture();
-    let mut key_record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
-            .expect("valid finalized beacon key");
+    let mut key_record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
+        fixture.session.record().clone(),
+        &super::fixtures::fixture_budget(),
+    )
+    .expect("valid finalized beacon key");
     key_record
-        .activate(key_record.session.adaptive_dkg.finalized_at_height)
+        .activate(
+            key_record.session.adaptive_dkg.finalized_at_height,
+            &super::fixtures::fixture_budget(),
+        )
+        .map_err(invalid_session)
         .expect("activate finalized beacon key");
     let world = World::new();
     {
@@ -1072,9 +1138,14 @@ fn first_finalized_pulse_initializes_an_empty_ingestion_cursor() {
         {
             let mut transaction =
                 block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
-            transaction
-                .global_beacon_key_sessions
-                .insert(pulse.session_id, key_record);
+            transaction.global_beacon_key_sessions.insert(
+                pulse.session_id,
+                RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(
+                    &key_record,
+                    &super::fixtures::fixture_budget(),
+                )
+                .unwrap(),
+            );
             transaction
                 .global_beacon_active_session
                 .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
@@ -1176,18 +1247,29 @@ fn late_sortition_pulse_is_rejected_after_parliament_transcript_restart_roundtri
         .expect("restored missing-pulse transcript remains canonical");
     assert!(restored_attempt.classifies_beacon_pulse_unavailable_at(logical_session, pulse.height));
 
-    let mut key_record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
-            .expect("valid finalized beacon key");
+    let mut key_record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
+        fixture.session.record().clone(),
+        &super::fixtures::fixture_budget(),
+    )
+    .expect("valid finalized beacon key");
     key_record
-        .activate(key_record.session.adaptive_dkg.finalized_at_height)
+        .activate(
+            key_record.session.adaptive_dkg.finalized_at_height,
+            &super::fixtures::fixture_budget(),
+        )
+        .map_err(invalid_session)
         .expect("activate finalized beacon key");
     let world = World::new();
     let mut block = world.block();
     let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
-    transaction
-        .global_beacon_key_sessions
-        .insert(pulse.session_id, key_record);
+    transaction.global_beacon_key_sessions.insert(
+        pulse.session_id,
+        RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(
+            &key_record,
+            &super::fixtures::fixture_budget(),
+        )
+        .unwrap(),
+    );
     transaction
         .put_parliament_attempt(restored_attempt)
         .expect("index restored terminal Parliament pulse classification");
@@ -1205,7 +1287,13 @@ fn late_sortition_pulse_is_rejected_after_parliament_transcript_restart_roundtri
 
 #[test]
 fn threshold_beacon_slot_is_identical_when_prior_unrelated_height_is_persisted_or_omitted() {
-    let fixture = adaptive_beacon_fixture();
+    let budget = super::fixtures::fixture_budget();
+    let dkg_session = super::fixtures::adaptive_dkg_session_fixture();
+    let fixture = super::fixtures::adaptive_beacon_fixture_for_session_and_keys(
+        dkg_session,
+        &super::fixtures::adaptive_fixture_signing_keys(dkg_session.committee_size),
+        &budget,
+    );
     let (template, origin, target_anchor) = pulse_fixture(&fixture.session);
     let finalize_slot =
         |height: u64, anchor: GlobalThresholdBeaconChainAnchorV1, proof_seed: [u8; 32]| {
@@ -1221,7 +1309,7 @@ fn threshold_beacon_slot_is_identical_when_prior_unrelated_height_is_persisted_o
             )
             .expect("open unchained slot aggregator");
             for partial in partials.into_iter().take(usize::from(
-                fixture.session.transcript.session().threshold(),
+                fixture.session.transcript().session().threshold(),
             )) {
                 aggregator
                     .accept_partial(partial)
@@ -1236,9 +1324,13 @@ fn threshold_beacon_slot_is_identical_when_prior_unrelated_height_is_persisted_o
         block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x87; 32])),
     };
     let prior = finalize_slot(40, prior_anchor, [0x32; 32]);
-    let mut key_record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
-            .expect("valid finalized key");
+    let mut key_record = RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+        session: fixture.session.clone(),
+        activated_at_height: None,
+        retired_at_height: None,
+    };
+    assert!(key_record.session.belongs_to(&budget));
+    assert!(key_record.session.ptr_eq(&fixture.session));
     key_record
         .activate(key_record.session.adaptive_dkg.finalized_at_height)
         .expect("activate finalized key");
@@ -1289,11 +1381,17 @@ fn threshold_beacon_slot_is_identical_when_prior_unrelated_height_is_persisted_o
 #[test]
 fn parliament_seed_reverifies_valid_and_rejects_tampered_persisted_pulse() {
     let (fixture, pulse, _origin, _anchor) = signed_pulse_fixture();
-    let mut key_record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
-            .expect("valid finalized key");
+    let mut key_record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
+        fixture.session.record().clone(),
+        &super::fixtures::fixture_budget(),
+    )
+    .expect("valid finalized key");
     key_record
-        .activate(key_record.session.adaptive_dkg.finalized_at_height)
+        .activate(
+            key_record.session.adaptive_dkg.finalized_at_height,
+            &super::fixtures::fixture_budget(),
+        )
+        .map_err(invalid_session)
         .expect("activate finalized key");
     let link = GlobalThresholdBeaconPulseLinkV1 {
         pulse_id: pulse.pulse_id,
@@ -1305,9 +1403,14 @@ fn parliament_seed_reverifies_valid_and_rejects_tampered_persisted_pulse() {
         let world = World::new();
         {
             let mut block = world.block();
-            block
-                .global_beacon_key_sessions
-                .insert(pulse.session_id, key_record.clone());
+            block.global_beacon_key_sessions.insert(
+                pulse.session_id,
+                RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(
+                    &key_record,
+                    &super::fixtures::fixture_budget(),
+                )
+                .unwrap(),
+            );
             block
                 .global_beacon_active_session
                 .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
@@ -1363,7 +1466,7 @@ fn threshold_beacon_partial_reducer_is_bound_fail_closed_and_subset_invariant() 
     let fixture = adaptive_beacon_fixture();
     let (pulse, _cursor, anchor) = pulse_fixture(&fixture.session);
     let partials = pulse_partial_signatures(&fixture, &pulse, [0xA7; 32]);
-    let threshold = usize::from(fixture.session.transcript.session().threshold());
+    let threshold = usize::from(fixture.session.transcript().session().threshold());
 
     let open_reducer = || {
         GlobalThresholdBeaconPulseAggregatorV1::new(
@@ -1536,7 +1639,7 @@ fn threshold_beacon_inline_reducer_maximum_committee_is_order_and_subset_invaria
     let fixture = complete_dkg_fixture(THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1);
     let (pulse, _, anchor) = pulse_fixture(&fixture.session);
     let partials = pulse_partial_signatures(&fixture, &pulse, [0xD5; 32]);
-    let threshold = usize::from(fixture.session.transcript.session().threshold());
+    let threshold = usize::from(fixture.session.transcript().session().threshold());
     assert_eq!(threshold, GLOBAL_BEACON_MAX_THRESHOLD);
     assert_eq!(partials.len(), GLOBAL_BEACON_PARTIAL_SLOTS);
     let open = || {
@@ -1746,8 +1849,13 @@ fn shared_beacon_frame_owners_pass_the_production_session_and_pulse_boundaries()
         "iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1",
     );
     let session_frame = norito::encode_canonical(record).expect("shared session frame");
-    let decoded = decode_global_threshold_beacon_session_v1(&session_frame, &expected)
-        .expect("canonical session passes production transcript validation");
+    let decoded = decode_global_threshold_beacon_session_v1(
+        &session_frame,
+        &expected,
+        &super::fixtures::fixture_budget(),
+    )
+    .map_err(invalid_session)
+    .expect("canonical session passes production transcript validation");
     assert_eq!(decoded.record(), record);
     let pulse_frame = norito::encode_canonical(&pulse).expect("shared pulse frame");
     let link = decode_finalized_global_threshold_beacon_pulse_v1(
@@ -1760,7 +1868,12 @@ fn shared_beacon_frame_owners_pass_the_production_session_and_pulse_boundaries()
     assert_eq!(link.height, pulse.height);
     assert_eq!(link.pulse_id, pulse.pulse_id);
     assert!(matches!(
-        decode_global_threshold_beacon_session_v1(&pulse_frame, &expected),
+        decode_global_threshold_beacon_session_v1(
+            &pulse_frame,
+            &expected,
+            &super::fixtures::fixture_budget()
+        )
+        .map_err(invalid_session),
         Err(GlobalThresholdBeaconError::InvalidEncoding)
     ));
     assert!(matches!(
@@ -1775,8 +1888,10 @@ fn shared_beacon_frame_owners_pass_the_production_session_and_pulse_boundaries()
     assert!(
         decode_global_threshold_beacon_session_v1(
             &session_frame[..session_frame.len() - 1],
-            &expected
+            &expected,
+            &super::fixtures::fixture_budget()
         )
+        .map_err(invalid_session)
         .is_err()
     );
     assert!(
@@ -1808,7 +1923,12 @@ fn threshold_beacon_canonical_decoders_reject_trailing_wire_data() {
     let mut encoded_session = norito::to_bytes(session.record()).expect("encode session");
     encoded_session.push(0);
     assert!(matches!(
-        decode_global_threshold_beacon_session_v1(&encoded_session, &expected),
+        decode_global_threshold_beacon_session_v1(
+            &encoded_session,
+            &expected,
+            &super::fixtures::fixture_budget()
+        )
+        .map_err(invalid_session),
         Err(GlobalThresholdBeaconError::InvalidEncoding)
             | Err(GlobalThresholdBeaconError::NonCanonicalEncoding)
     ));
@@ -1826,4 +1946,151 @@ fn threshold_beacon_canonical_decoders_reject_trailing_wire_data() {
         Err(GlobalThresholdBeaconError::InvalidEncoding)
             | Err(GlobalThresholdBeaconError::NonCanonicalEncoding)
     ));
+}
+
+#[test]
+fn session_decoder_preserves_actual_local_scope_without_invalidity_or_fabricated_pool() {
+    let (session, binding) = validated_threshold_session();
+    let encoded = norito::to_bytes(session.record()).unwrap();
+    let original_bytes = encoded.as_ptr();
+    let pool = super::fixtures::fixture_budget();
+    let failure = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 256),
+        || {
+            let error = decode_global_threshold_beacon_session_v1(&encoded, &binding, &pool)
+                .expect_err("actual inherited decoder allocation ceiling");
+            let GlobalThresholdBeaconSessionError::DecodeResource(original) = &error else {
+                panic!("a local decoder refusal cannot reject original canonical bytes: {error:?}")
+            };
+            assert!(matches!(
+                original.decode_resource_error(),
+                Some(norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+            ));
+            assert!(
+                norito::core::decode_error_matches_active_limits(original),
+                "the original error retains its actual surviving decoder scope"
+            );
+            assert_eq!(
+                pool.reserved_bytes(),
+                0,
+                "raw decode refused before graph admission"
+            );
+            error
+        },
+    );
+    let crate::execution_attempt::ExecutionAttemptError::Deferred(local) =
+        failure.into_execution_attempt()
+    else {
+        panic!("decoder capacity is never a completed rejection")
+    };
+    assert_eq!(
+        local.reason(),
+        ivm::error::ExecutionDeferral::AllocationUnavailable
+    );
+    assert!(
+        local.allocation_refusal().is_none(),
+        "a decoder scope does not own an allocation-pool release"
+    );
+    assert!(matches!(
+        decode_global_threshold_beacon_session_v1(&[], &binding, &pool),
+        Err(GlobalThresholdBeaconSessionError::Invalid(
+            GlobalThresholdBeaconError::InvalidEncoding
+        ))
+    ));
+    let retried = decode_global_threshold_beacon_session_v1(&encoded, &binding, &pool).unwrap();
+    assert!(retried.belongs_to(&pool));
+    assert_eq!(retried.record(), session.record());
+    assert_eq!(norito::to_bytes(&retried).unwrap(), encoded);
+    assert_eq!(encoded.as_ptr(), original_bytes);
+    drop(retried);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn finalized_session_retains_authenticated_transcript_and_checks_lifecycle() {
+    let (validated, _) = validated_threshold_session();
+    let budget = super::fixtures::fixture_budget();
+    let record = FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
+        session: validated.record().clone(),
+        activated_at_height: None,
+        retired_at_height: None,
+    };
+    let retained =
+        RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(&record, &budget).unwrap();
+    assert_eq!(retained.session.record(), validated.record());
+    assert!(retained.session.belongs_to(&budget));
+    assert!(retained.clone().session.ptr_eq(&retained.session));
+    assert_eq!(record.validate(&budget).map_err(invalid_session), Ok(()));
+    assert_eq!(retained.validate(), Ok(()));
+
+    let mut invalid = record.clone();
+    invalid.retired_at_height = Some(record.session.adaptive_dkg.finalized_at_height);
+    assert_eq!(
+        RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(&invalid, &budget)
+            .map_err(invalid_session),
+        Err(GlobalThresholdBeaconError::InvalidKeyLifecycle)
+    );
+    assert_eq!(
+        invalid.validate(&budget).map_err(invalid_session),
+        Err(GlobalThresholdBeaconError::InvalidKeyLifecycle)
+    );
+    invalid.session.group_public_key = [0; 96];
+    assert_eq!(
+        RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(&invalid, &budget)
+            .map_err(invalid_session),
+        Err(GlobalThresholdBeaconError::ThresholdBls(
+            ThresholdBlsError::InvalidPublicKey
+        ))
+    );
+    assert_eq!(
+        invalid.validate(&budget).map_err(invalid_session),
+        Err(GlobalThresholdBeaconError::ThresholdBls(
+            ThresholdBlsError::InvalidPublicKey
+        ))
+    );
+}
+
+#[test]
+fn validated_session_binding_checks_match_admission_error_order() {
+    let (session, expected) = validated_threshold_session();
+    let budget = super::fixtures::fixture_budget();
+    assert_eq!(session.check_binding(&expected), Ok(()));
+    let mut wrong = expected;
+    wrong.network_id = beacon_fixture_network_id(0x82);
+    wrong.session_id[0] ^= 1;
+    wrong.roster_hash[0] ^= 1;
+    wrong.transcript_hash[0] ^= 1;
+    for error in [
+        GlobalThresholdBeaconError::NetworkMismatch,
+        GlobalThresholdBeaconError::SessionMismatch,
+        GlobalThresholdBeaconError::RosterMismatch,
+        GlobalThresholdBeaconError::TranscriptMismatch,
+    ] {
+        assert_eq!(session.check_binding(&wrong), Err(error));
+        assert_eq!(
+            validate_global_threshold_beacon_session_v1(session.record(), &wrong, &budget)
+                .map_err(invalid_session),
+            Err(error)
+        );
+        assert_eq!(budget.reserved_bytes(), 0);
+        match error {
+            GlobalThresholdBeaconError::NetworkMismatch => wrong.network_id = expected.network_id,
+            GlobalThresholdBeaconError::SessionMismatch => wrong.session_id = expected.session_id,
+            GlobalThresholdBeaconError::RosterMismatch => wrong.roster_hash = expected.roster_hash,
+            GlobalThresholdBeaconError::TranscriptMismatch => {
+                wrong.transcript_hash = expected.transcript_hash
+            }
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(session.check_binding(&wrong), Ok(()));
+    let mut unsupported = session.record().clone();
+    unsupported.version = 0;
+    wrong.network_id = beacon_fixture_network_id(0x82);
+    assert_eq!(
+        validate_global_threshold_beacon_session_v1(&unsupported, &wrong, &budget)
+            .map_err(invalid_session),
+        Err(GlobalThresholdBeaconError::UnsupportedVersion { actual: 0 })
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
 }

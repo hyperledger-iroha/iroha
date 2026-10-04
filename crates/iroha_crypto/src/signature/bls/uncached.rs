@@ -79,7 +79,8 @@ pub(super) enum Signature {
 // INPUT, not IETF/Ethereum ciphersuite DSTs.
 pub(super) const NORMAL_PREFIX: &[u8] =
     b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_for signing messages";
-const SMALL_PREFIX: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_for signing messages";
+pub(super) const SMALL_PREFIX: &[u8] =
+    b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_for signing messages";
 pub(super) const HASH_TO_FIELD_DST: &[u8] = &[1];
 
 fn g1(bytes: &[u8]) -> Option<G1Affine> {

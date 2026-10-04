@@ -1,29 +1,23 @@
-//! Canonical semantic projection of the installed Kagemusha verifier runtime.
+//! Exact local artifact comparison against the canonical governed verifier registry.
 //!
-//! The projection records authenticated release identities and lifecycle
-//! decisions, never local artifact paths, trait-object addresses, or loaded key
-//! allocations. An authenticated local runtime must match the independently
-//! finalized release authority before it can replace the fail-closed verifier.
-//! State publication checks the immutable local cache without requiring successor
-//! artifacts to be loaded. Actual monetary execution separately checks the exact
-//! governed registry and defers unavailable/stale local artifacts before effects.
-//! The diagnostic projection below is not a complete-State commitment.
+//! The World registry owns release identities and eligibility. The immutable local
+//! runtime may be absent or stale; monetary execution then defers before effects.
+//! Reload requires the exact captured State head and every governed identity.
+//! Publication validates cache integrity independently of successor availability.
+//! No runtime projection or local artifact mode enters a State commitment.
 
 use std::any::Any;
 
 use iroha_data_model::kagemusha::{
     KagemushaGovernedVerifierRegistryV1, KagemushaGovernedVerifierReleaseV1,
 };
-use norito::{Decode, Encode, NoritoSchema};
 
 use super::{
     AuthenticatedKagemushaV1RuntimeVerifier, KagemushaVerifierReleaseStatusV1,
     RejectAllKagemushaV1RuntimeVerifier,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
-#[norito(deny_unknown_fields)]
-#[norito_schema(name = "iroha:state:kagemusha-verifier-release:v1")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct KagemushaVerifierReleaseAuthorityV1 {
     release_id: [u8; 32],
     status: u8,
@@ -37,17 +31,6 @@ struct KagemushaVerifierReleaseAuthorityV1 {
     provider_policy_root: [u8; 32],
     suite_id: [u8; 32],
     vk_set_digest: [u8; 32],
-}
-
-/// Canonical, path-free runtime policy that can be compared with governed State.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
-#[norito(deny_unknown_fields)]
-#[norito_schema(name = "iroha:state:kagemusha-verifier-authority:v1")]
-pub(crate) struct KagemushaVerifierAuthorityV1 {
-    /// Zero is the fail-closed runtime; one is the authenticated release registry.
-    mode: u8,
-    active_release_id: Option<[u8; 32]>,
-    releases: Vec<KagemushaVerifierReleaseAuthorityV1>,
 }
 
 fn status_tag(status: KagemushaVerifierReleaseStatusV1) -> u8 {
@@ -74,48 +57,6 @@ fn release_matches_governed(
         && local.provider_policy_root == governed.provider_policy_root
         && local.suite_id == governed.suite_id
         && local.vk_set_digest == governed.vk_set_digest
-}
-
-impl AuthenticatedKagemushaV1RuntimeVerifier {
-    fn semantic_authority(&self) -> Result<KagemushaVerifierAuthorityV1, String> {
-        self.lifecycle.validate()?;
-        if self.releases.is_empty() || self.releases.len() != self.lifecycle.statuses.len() {
-            return Err("Kagemusha verifier release and lifecycle sets differ".to_owned());
-        }
-        let mut releases = Vec::new();
-        releases
-            .try_reserve_exact(self.releases.len())
-            .map_err(|_| "Kagemusha verifier authority allocation unavailable".to_owned())?;
-        for (release_id, runtime) in &self.releases {
-            let status = self
-                .lifecycle
-                .status(*release_id)
-                .ok_or_else(|| "Kagemusha verifier release has no lifecycle status".to_owned())?;
-            let artifacts = runtime.artifacts.recursion_artifacts();
-            if artifacts.release_id != *release_id {
-                return Err("Kagemusha verifier artifact release identity differs".to_owned());
-            }
-            releases.push(KagemushaVerifierReleaseAuthorityV1 {
-                release_id: *release_id,
-                status: status_tag(status),
-                profile_digest: artifacts.profile_digest,
-                artifact_manifest_digest: artifacts.artifact_manifest_digest,
-                receipt_digest: runtime.release_receipt_digest,
-                attestation_digest: runtime.release_attestation_digest,
-                authority_policy_digest: runtime.release_authority_policy_digest,
-                hardware_policy_digest: runtime.release_hardware_policy_digest,
-                native_profile_digest: runtime.artifacts.native_profile_digest(),
-                provider_policy_root: runtime.artifacts.provider_policy_root(),
-                suite_id: runtime.artifacts.suite_id(),
-                vk_set_digest: runtime.artifacts.vk_set_digest(),
-            });
-        }
-        Ok(KagemushaVerifierAuthorityV1 {
-            mode: 1,
-            active_release_id: self.lifecycle.active_release_id,
-            releases,
-        })
-    }
 }
 
 /// Rebind already authenticated artifacts to the complete finalized lifecycle.
@@ -208,24 +149,6 @@ fn adopt_governed_statuses(
     }
     lifecycle.active_release_id = registry.active_release_id;
     Ok(())
-}
-
-/// Project only the two built-in runtime implementations; unknown local code
-/// cannot claim consensus authority by reporting plausible release identifiers.
-pub(crate) fn runtime_verifier_authority(
-    verifier: &dyn Any,
-) -> Result<KagemushaVerifierAuthorityV1, String> {
-    if verifier.is::<RejectAllKagemushaV1RuntimeVerifier>() {
-        return Ok(KagemushaVerifierAuthorityV1 {
-            mode: 0,
-            active_release_id: None,
-            releases: Vec::new(),
-        });
-    }
-    verifier
-        .downcast_ref::<AuthenticatedKagemushaV1RuntimeVerifier>()
-        .ok_or_else(|| "unrecognized Kagemusha verifier runtime cannot enter State".to_owned())?
-        .semantic_authority()
 }
 
 /// Validate the immutable local artifact cache without granting governed authority.
@@ -339,7 +262,6 @@ mod tests {
     use iroha_data_model::kagemusha::{
         KAGEMUSHA_WIRE_VERSION_V1, KagemushaReleaseAuthorityPolicyV1,
     };
-    use norito::{decode_canonical, encode_canonical};
 
     use super::*;
     use crate::smartcontracts::isi::kagemusha::KagemushaVerifierReleaseLifecycleV1;
@@ -352,19 +274,6 @@ mod tests {
             status_tag(KagemushaVerifierReleaseStatusV1::VerificationOnly),
             3
         );
-    }
-
-    #[test]
-    fn reject_all_is_canonical_and_unknown_code_is_rejected() {
-        let policy = runtime_verifier_authority(&RejectAllKagemushaV1RuntimeVerifier).unwrap();
-        assert_eq!(policy.mode, 0);
-        assert!(policy.releases.is_empty());
-        let bytes = encode_canonical(&policy).unwrap();
-        assert_eq!(
-            decode_canonical::<KagemushaVerifierAuthorityV1>(&bytes).unwrap(),
-            policy
-        );
-        assert!(runtime_verifier_authority(&0_u8).is_err());
     }
 
     #[test]
@@ -409,7 +318,6 @@ mod tests {
             releases: BTreeMap::new(),
             lifecycle: KagemushaVerifierReleaseLifecycleV1::default(),
         };
-        assert!(runtime_verifier_authority(&verifier).is_err());
         assert!(
             runtime_matches_governed_registry(
                 &verifier,
@@ -493,63 +401,6 @@ mod tests {
         changed_digest!(provider_policy_root);
         changed_digest!(suite_id);
         changed_digest!(vk_set_digest);
-    }
-
-    #[test]
-    fn every_release_authority_field_changes_the_canonical_preimage() {
-        let row = KagemushaVerifierReleaseAuthorityV1 {
-            release_id: [1; 32],
-            status: 1,
-            profile_digest: [2; 32],
-            artifact_manifest_digest: [3; 32],
-            receipt_digest: [4; 32],
-            attestation_digest: [5; 32],
-            authority_policy_digest: [6; 32],
-            hardware_policy_digest: [7; 32],
-            native_profile_digest: [8; 32],
-            provider_policy_root: [9; 32],
-            suite_id: [10; 32],
-            vk_set_digest: [11; 32],
-        };
-        let baseline = KagemushaVerifierAuthorityV1 {
-            mode: 1,
-            active_release_id: Some(row.release_id),
-            releases: vec![row.clone()],
-        };
-        let expected = encode_canonical(&baseline).unwrap();
-        let mut variants = Vec::new();
-        let mut changed = baseline.clone();
-        changed.mode = 0;
-        variants.push(changed);
-        let mut changed = baseline.clone();
-        changed.active_release_id = None;
-        variants.push(changed);
-        let mut changed = baseline.clone();
-        changed.releases[0].status = 2;
-        variants.push(changed);
-        macro_rules! changed_digest {
-            ($field:ident) => {{
-                let mut changed = baseline.clone();
-                changed.releases[0].$field = [42; 32];
-                variants.push(changed);
-            }};
-        }
-        changed_digest!(release_id);
-        changed_digest!(profile_digest);
-        changed_digest!(artifact_manifest_digest);
-        changed_digest!(receipt_digest);
-        changed_digest!(attestation_digest);
-        changed_digest!(authority_policy_digest);
-        changed_digest!(hardware_policy_digest);
-        changed_digest!(native_profile_digest);
-        changed_digest!(provider_policy_root);
-        changed_digest!(suite_id);
-        changed_digest!(vk_set_digest);
-        assert!(
-            variants
-                .iter()
-                .all(|variant| encode_canonical(variant).unwrap() != expected)
-        );
     }
 
     fn governed_lifecycle_fixture() -> KagemushaGovernedVerifierRegistryV1 {

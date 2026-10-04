@@ -19,12 +19,16 @@ fn ascending_native_continuation_charges_one_reverse_and_one_forward_source_pass
         let mut frames_left = expected_heights.len() as u64;
         let mut bytes_left = expected_bytes;
         let mut admit = |count, length| {
-            frames_left = frames_left
-                .checked_sub(count)
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-            bytes_left = bytes_left
-                .checked_sub(length)
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            frames_left = frames_left.checked_sub(count).ok_or(
+                crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                ),
+            )?;
+            bytes_left = bytes_left.checked_sub(length).ok_or(
+                crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                ),
+            )?;
             Ok(())
         };
         chain.kura().reset_canonical_query_reads_for_test();
@@ -81,11 +85,17 @@ fn ascending_native_continuation_refuses_changed_source_and_stops_after_failure(
     let mut refused = reader.walk_from_execution(
         NonZeroUsize::new(4).unwrap(),
         NonZeroUsize::new(5).unwrap(),
-        |_, _| Err(QueryExecutionFail::GasBudgetExceeded),
+        |_, _| {
+            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ))
+        },
     );
     assert!(matches!(
         refused.next(),
-        Some(Err(QueryExecutionFail::GasBudgetExceeded))
+        Some(Err(
+            crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+        ))
     ));
     assert!(refused.next().is_none());
     assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
@@ -98,7 +108,9 @@ fn ascending_native_continuation_refuses_changed_source_and_stops_after_failure(
                 |_, _| Ok(())
             )
             .next()),
-        Some(Err(QueryExecutionFail::GasBudgetExceeded))
+        Some(Err(
+            crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+        ))
     ));
 }
 
@@ -160,7 +172,7 @@ fn ascending_native_continuation_refuses_same_proposal_changed_result_before_fir
     std::fs::write(&path, original_file).unwrap();
     assert_eq!(reads, 4);
     assert!(
-        matches!(result, Some(Err(QueryExecutionFail::Conversion(ref reason)))
+        matches!(result, Some(Err(crate::execution_attempt::ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(ref reason))))
         if reason == "certificate differs from its original execution result")
     );
 }
@@ -281,12 +293,16 @@ fn state_certificate_reads_only_target_and_parent_under_exact_source_limits() {
                 reader.certified_from_execution(
                     NonZeroUsize::new(height as usize).unwrap(),
                     |work, bytes| {
-                        remaining_work = remaining_work
-                            .checked_sub(work)
-                            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-                        remaining_bytes = remaining_bytes
-                            .checked_sub(bytes)
-                            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                        remaining_work = remaining_work.checked_sub(work).ok_or(
+                            crate::execution_attempt::ExecutionAttemptError::Deferred(
+                                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                            ),
+                        )?;
+                        remaining_bytes = remaining_bytes.checked_sub(bytes).ok_or(
+                            crate::execution_attempt::ExecutionAttemptError::Deferred(
+                                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                            ),
+                        )?;
                         Ok(())
                     },
                 )
@@ -301,7 +317,10 @@ fn state_certificate_reads_only_target_and_parent_under_exact_source_limits() {
                 );
                 assert_eq!(observed.qcs, [height]);
             } else {
-                assert!(matches!(result, Err(QueryExecutionFail::GasBudgetExceeded)));
+                assert!(matches!(
+                    result,
+                    Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+                ));
                 assert!(observed.qcs.is_empty());
             }
         }
@@ -467,7 +486,9 @@ fn state_certificate_genesis_admission_precedes_every_body_read() {
         let result = CertifiedChain::new_with_source_admission(&view, |count, length| {
             charges.push((count, length));
             if count > work || length > bytes {
-                return Err(QueryExecutionFail::GasBudgetExceeded);
+                return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                ));
             }
             Ok(())
         });
@@ -476,7 +497,10 @@ fn state_certificate_genesis_admission_precedes_every_body_read() {
             assert_eq!(result.unwrap().genesis().as_ref(), expected.as_ref());
             assert_eq!(chain.kura().canonical_query_reads_for_test(), (1, length));
         } else {
-            assert!(matches!(result, Err(QueryExecutionFail::GasBudgetExceeded)));
+            assert!(matches!(
+                result,
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+            ));
             assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
         }
     }
@@ -488,9 +512,11 @@ fn state_certificate_genesis_admission_precedes_every_body_read() {
     chain.kura().reset_canonical_query_reads_for_test();
     assert!(matches!(
         CertifiedChain::new_with_source_admission(&view, |_, _| Err(
-            QueryExecutionFail::GasBudgetExceeded
+            crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into()
+            )
         )),
-        Err(QueryExecutionFail::GasBudgetExceeded)
+        Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
     ));
     assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
     assert!(CertifiedChain::new_with_source_admission(&view, |_, _| Ok(())).is_err());
@@ -506,7 +532,10 @@ fn state_certificate_genesis_decode_refusal_is_typed_and_retryable() {
             CertifiedChain::new_with_source_admission(&view, |_, _| Ok(()))
         });
     assert!(
-        matches!(refusal, Err(QueryExecutionFail::GasBudgetExceeded)),
+        matches!(
+            refusal,
+            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+        ),
         "{refusal:?}"
     );
     let reader = CertifiedChain::new_with_source_admission(&view, |_, _| Ok(())).unwrap();
@@ -538,12 +567,16 @@ fn state_certificate_source_allowance_includes_genesis_and_recent_ancestry() {
             let mut work_left = work_limit;
             let mut bytes_left = byte_limit;
             let mut admit = |work, bytes| {
-                let work_next = work_left
-                    .checked_sub(work)
-                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-                let bytes_next = bytes_left
-                    .checked_sub(bytes)
-                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                let work_next = work_left.checked_sub(work).ok_or(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                    ),
+                )?;
+                let bytes_next = bytes_left.checked_sub(bytes).ok_or(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                    ),
+                )?;
                 work_left = work_next;
                 bytes_left = bytes_next;
                 Ok(())
@@ -555,7 +588,10 @@ fn state_certificate_source_allowance_includes_genesis_and_recent_ancestry() {
                 assert_eq!(result.unwrap().id(), chain.committed(height).id());
                 assert_eq!((work_left, bytes_left), (0, 0));
             } else {
-                assert!(matches!(result, Err(QueryExecutionFail::GasBudgetExceeded)));
+                assert!(matches!(
+                    result,
+                    Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+                ));
             }
         }
     }
@@ -581,12 +617,16 @@ fn state_certificate_selected_ancestor_reuses_original_walk_and_adjacent_parent(
                 reader.certified_with_ancestor_from_execution(
                     NonZeroUsize::new(5).unwrap(),
                     |work, bytes| {
-                        work_left = work_left
-                            .checked_sub(work)
-                            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-                        bytes_left = bytes_left
-                            .checked_sub(bytes)
-                            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                        work_left = work_left.checked_sub(work).ok_or(
+                            crate::execution_attempt::ExecutionAttemptError::Deferred(
+                                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                            ),
+                        )?;
+                        bytes_left = bytes_left.checked_sub(bytes).ok_or(
+                            crate::execution_attempt::ExecutionAttemptError::Deferred(
+                                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                            ),
+                        )?;
                         Ok(())
                     },
                     |latest| {
@@ -596,7 +636,10 @@ fn state_certificate_selected_ancestor_reuses_original_walk_and_adjacent_parent(
                 )
             });
             if refused {
-                assert!(matches!(result, Err(QueryExecutionFail::GasBudgetExceeded)));
+                assert!(matches!(
+                    result,
+                    Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+                ));
             } else {
                 let (latest, ancestor) = result.unwrap();
                 assert_eq!(latest.id(), latest_id);
@@ -1052,12 +1095,16 @@ fn parent_service_source_allowance_counts_every_original_before_authentication()
         let mut remaining_bytes = allowance;
         let (result, count) = relation_counts::measure(|| {
             reader.authenticate_parent_service(&proposal, |work, bytes| {
-                remaining_work = remaining_work
-                    .checked_sub(work)
-                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-                remaining_bytes = remaining_bytes
-                    .checked_sub(bytes)
-                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                remaining_work = remaining_work.checked_sub(work).ok_or(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                    ),
+                )?;
+                remaining_bytes = remaining_bytes.checked_sub(bytes).ok_or(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                    ),
+                )?;
                 Ok(())
             })
         });
@@ -1070,9 +1117,151 @@ fn parent_service_source_allowance_counts_every_original_before_authentication()
             assert!(matches!(
                 result,
                 Err(ParentServiceError::Deferred(reason))
-                    if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+                    if reason.reason() == ivm::error::ExecutionDeferral::CanonicalHistoryCapacity
             ));
             assert!(count.qcs.is_empty());
         }
     }
+}
+
+#[test]
+fn original_walk_pool_refusal_precedes_source_and_keeps_its_release_owner() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseRegistration};
+    use std::{
+        future::Future as _,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+    // Keep old State generations alive so only the explicit held owner can refund
+    // the original pool and wake this test's release observation.
+    let _retirement_pin = crossbeam_epoch::pin();
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new_with_source_admission(&view, |_, _| Ok(())).unwrap();
+    let budget = view.execution_budget();
+    let baseline = budget.reserved_bytes();
+    let mut funding = budget
+        .try_reserve(ReleaseRegistration::allocation_layout())
+        .unwrap();
+    let mut registration = ReleaseRegistration::from_reservation(&mut funding).unwrap();
+    drop(funding);
+    let held = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let mut callbacks = 0;
+    chain.kura().reset_canonical_query_reads_for_test();
+    let mut walk = reader.walk_from_execution(
+        NonZeroUsize::new(4).unwrap(),
+        NonZeroUsize::new(5).unwrap(),
+        |_, _| {
+            callbacks += 1;
+            Ok(())
+        },
+    );
+    let failure = walk.next().unwrap().err().unwrap();
+    assert!(walk.next().is_none());
+    drop(walk);
+    assert_eq!(
+        callbacks, 0,
+        "coordinate admission precedes original source I/O"
+    );
+    assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    let ExecutionAttemptError::Deferred(original) = failure else {
+        panic!("original local owner")
+    };
+    let Some(AllocationRefusal::Capacity { release, .. }) = original.allocation_refusal() else {
+        panic!("original capacity release owner")
+    };
+    let mut wait = release.clone().wait_for_release(&mut registration);
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    let foreign = AllocationBudget::new(1);
+    drop(foreign.try_reserve_bytes(1).unwrap());
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    drop(held);
+    assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
+    drop(wait);
+    drop(registration);
+    assert_eq!(budget.reserved_bytes(), baseline);
+    let blocks = reader
+        .walk_from_execution(
+            NonZeroUsize::new(4).unwrap(),
+            NonZeroUsize::new(5).unwrap(),
+            |_, _| Ok(()),
+        )
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        blocks
+            .iter()
+            .map(|block| block.height())
+            .collect::<Vec<_>>(),
+        [4, 5]
+    );
+    drop(blocks);
+    assert_eq!(budget.reserved_bytes(), baseline);
+}
+
+#[test]
+fn original_walk_keeps_semantic_gas_rejection_and_refunds_partial_coordinates() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    // Retain unrelated retired State generations while measuring the walk's exact
+    // coordinate admission, error refund and abandonment against one baseline.
+    let _retirement_pin = crossbeam_epoch::pin();
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new_with_source_admission(&view, |_, _| Ok(())).unwrap();
+    let budget = view.execution_budget();
+    let baseline = budget.reserved_bytes();
+    let refusal = std::cell::Cell::new(false);
+    let mut walk = reader.walk_from_execution(
+        NonZeroUsize::new(4).unwrap(),
+        NonZeroUsize::new(5).unwrap(),
+        |_, _| {
+            if refusal.get() {
+                Err(ExecutionAttemptError::Rejected(
+                    QueryExecutionFail::GasBudgetExceeded,
+                ))
+            } else {
+                Ok(())
+            }
+        },
+    );
+    let first = walk.next().unwrap().unwrap();
+    assert_eq!(first.height(), 4);
+    drop(first);
+    assert!(
+        budget.reserved_bytes() > baseline,
+        "partial walk retains real original-pool coordinates"
+    );
+    refusal.set(true);
+    chain.kura().reset_canonical_query_reads_for_test();
+    assert!(matches!(
+        walk.next(),
+        Some(Err(ExecutionAttemptError::Rejected(
+            QueryExecutionFail::GasBudgetExceeded
+        )))
+    ));
+    assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    assert_eq!(
+        budget.reserved_bytes(),
+        baseline,
+        "error releases scratch while exhausted iterator is still alive"
+    );
+    assert!(walk.next().is_none());
+    drop(walk);
+    let mut abandoned = reader.walk_from_execution(
+        NonZeroUsize::new(4).unwrap(),
+        NonZeroUsize::new(5).unwrap(),
+        |_, _| Ok(()),
+    );
+    drop(abandoned.next().unwrap().unwrap());
+    assert!(budget.reserved_bytes() > baseline);
+    drop(abandoned);
+    assert_eq!(
+        budget.reserved_bytes(),
+        baseline,
+        "abandonment releases the exact funded backing"
+    );
 }

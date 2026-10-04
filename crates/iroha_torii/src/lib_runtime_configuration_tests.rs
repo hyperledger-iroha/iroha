@@ -137,31 +137,6 @@ mod universal_kagemusha_readiness_tests {
     };
     use std::{sync::Arc, time::Duration};
 
-    fn configured_kagemusha_command_runtime() -> Arc<kagemusha_commands::KagemushaCommandRuntime> {
-        let key_pair =
-            iroha_crypto::KeyPair::try_from_seed(vec![0x4f; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("derive KAGEMUSHA command admission fixture key");
-        Arc::new(kagemusha_commands::KagemushaCommandRuntime::from_config(
-            iroha_config::parameters::actual::ToriiKagemushaV1Commands {
-                redemption_issuer: Some(
-                    iroha_config::parameters::actual::ToriiKagemushaV1RedemptionIssuer {
-                        authority: iroha_data_model::account::AccountId::new(
-                            key_pair.public_key().clone(),
-                        ),
-                        key_pair,
-                        minimum_xor_balance: iroha_primitives::numeric::Quantity::from(1_u32),
-                    },
-                ),
-                operation_registry_max_entries: std::num::NonZeroUsize::new(1)
-                    .expect("positive KAGEMUSHA command registry entry limit"),
-                operation_registry_max_bytes: std::num::NonZeroUsize::new(
-                    iroha_config::parameters::defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
-                )
-                .expect("positive KAGEMUSHA command registry byte limit"),
-            },
-        ))
-    }
-
     #[test]
     fn universal_capability_is_ready_and_asset_neutral() {
         let capability = universal_kagemusha_readiness_v1();
@@ -196,7 +171,8 @@ mod universal_kagemusha_readiness_tests {
     }
     #[tokio::test]
     async fn node_probes_do_not_depend_on_kagemusha_application_state() {
-        let app = super::mk_app_state_for_tests();
+        let fixture = crate::tests_runtime_handlers::ReadinessNode::start();
+        let app = Arc::clone(&fixture.app);
         let readiness = handler_readyz(axum::extract::State(app)).await;
         assert_eq!(readiness.status(), axum::http::StatusCode::OK);
         let body = axum::body::to_bytes(readiness.into_body(), usize::MAX)
@@ -855,6 +831,46 @@ mod connect_token_tests {
         let token = resolve_connect_ws_token(&headers).expect("bearer token ok");
         assert_eq!(token.token, "test-token");
         assert!(token.protocol.is_none());
+    }
+    #[test]
+    fn resolve_connect_ws_token_preserves_protocol_and_exact_matching_bearer() {
+        let mut headers = HeaderMap::new();
+        let protocol = "iroha-connect.token.v1.dGVzdC10b2tlbg";
+        headers.insert(header::SEC_WEBSOCKET_PROTOCOL, protocol.parse().unwrap());
+        let token = resolve_connect_ws_token(&headers).expect("canonical protocol token");
+        assert_eq!(token.token, "test-token");
+        assert_eq!(token.protocol.as_deref(), Some(protocol));
+        headers.insert(header::AUTHORIZATION, "Bearer test-token".parse().unwrap());
+        let token = resolve_connect_ws_token(&headers).expect("matching independent header token");
+        assert_eq!(token.token, "test-token");
+        assert_eq!(token.protocol.as_deref(), Some(protocol));
+    }
+    #[test]
+    fn resolve_connect_ws_token_rejects_corrupt_protocol_and_substituted_bearer() {
+        for encoded in ["%%%", "", "_w"] {
+            let mut headers = HeaderMap::new();
+            let protocol = format!("iroha-connect.token.v1.{encoded}");
+            headers.insert(header::SEC_WEBSOCKET_PROTOCOL, protocol.parse().unwrap());
+            let error = resolve_connect_ws_token(&headers)
+                .expect_err("corrupt, empty or non-UTF8 protocol token must fail closed");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "encoded: {encoded}"
+            );
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            "iroha-connect.token.v1.dGVzdC10b2tlbg".parse().unwrap(),
+        );
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer substituted-token".parse().unwrap(),
+        );
+        let error = resolve_connect_ws_token(&headers)
+            .expect_err("independent authorization must match the original protocol token");
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
     }
     #[test]
     fn resolve_connect_ws_token_rejects_duplicate_authorization_headers() {
@@ -2304,10 +2320,10 @@ mod gateway_runtime_config_tests {
                 BTreeSet::from([[0x71; 32], [0x72; 32]]),
             )]);
             Ok(sorafs::gateway::GatewayComplianceFeedTransportIdentityV1 {
-                provider_handle: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1
+                provider_handle: iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1
                     .to_owned(),
-                revision: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
-                policy_digest: sorafs::gateway::gateway_compliance_feed_transport_policy_digest(
+                revision: iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+                policy_digest: sorafs_manifest::gateway_compliance::gateway_compliance_feed_transport_policy_digest(
                     &pins_by_hostname,
                 )
                 .expect("test feed policy digest"),
@@ -2360,9 +2376,9 @@ mod gateway_runtime_config_tests {
             BTreeSet::from([[0x71; 32], [0x72; 32]]),
         )]);
         iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
-            provider_handle: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.into(),
-            revision: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
-            policy_digest: sorafs::gateway::gateway_compliance_feed_transport_policy_digest(
+            provider_handle: iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.into(),
+            revision: iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+            policy_digest: sorafs_manifest::gateway_compliance::gateway_compliance_feed_transport_policy_digest(
                 &pins_by_hostname,
             )
             .expect("test feed transport policy digest"),

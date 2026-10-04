@@ -20,14 +20,6 @@ impl<'a> BorrowedMcpJsonObject<'a> {
         Ok(Self { entries })
     }
 
-    fn insert_value(&mut self, key: &'a str, value: &'a Value) {
-        self.entries.push((key, BorrowedMcpJson::Value(value)));
-    }
-
-    fn insert_object(&mut self, key: &'a str, value: Self) {
-        self.entries.push((key, BorrowedMcpJson::Object(value)));
-    }
-
     fn get(&self, key: &str) -> Option<&'a Value> {
         self.entries
             .iter()
@@ -36,12 +28,6 @@ impl<'a> BorrowedMcpJsonObject<'a> {
                 BorrowedMcpJson::Value(value) => Some(*value),
                 BorrowedMcpJson::Object(_) => None,
             })
-    }
-
-    fn sorted(mut self) -> Self {
-        self.entries
-            .sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
-        self
     }
 }
 
@@ -152,47 +138,6 @@ fn decode_base64_any(input: &str, invalid_message: &str) -> Result<Vec<u8>, Stri
         }
     }
     Err(invalid_message.to_owned())
-}
-
-fn build_query_envelope_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
-    if let Some(body) = arguments.get("body") {
-        body.as_object()
-            .ok_or_else(|| "`body` must be an object".to_owned())?;
-        return Ok(BorrowedMcpJson::Value(body));
-    }
-    let mut env =
-        BorrowedMcpJsonObject::try_with_capacity(7, "borrowed MCP query-envelope fields")?;
-    for key in [
-        "query",
-        "filter",
-        "select",
-        "aggregate",
-        "sort",
-        "fetch_size",
-    ] {
-        if let Some(value) = arguments.get(key) {
-            env.insert_value(key, value);
-        }
-    }
-    if let Some(pagination) = arguments.get("pagination") {
-        pagination
-            .as_object()
-            .ok_or_else(|| "`pagination` must be an object".to_owned())?;
-        env.insert_value("pagination", pagination);
-    } else {
-        let mut pagination =
-            BorrowedMcpJsonObject::try_with_capacity(2, "borrowed MCP pagination fields")?;
-        if let Some(limit) = arguments.get("limit") {
-            pagination.insert_value("limit", limit);
-        }
-        if let Some(offset) = arguments.get("offset") {
-            pagination.insert_value("offset", offset);
-        }
-        if !pagination.entries.is_empty() {
-            env.insert_object("pagination", pagination.sorted());
-        }
-    }
-    Ok(BorrowedMcpJson::Object(env.sorted()))
 }
 
 fn build_object_body_or_default(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {

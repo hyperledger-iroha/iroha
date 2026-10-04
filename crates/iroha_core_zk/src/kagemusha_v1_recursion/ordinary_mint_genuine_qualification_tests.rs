@@ -24,7 +24,7 @@ use iroha_crypto::{
 use iroha_data_model::kagemusha::*;
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 
-use super::ordinary_zero_bootstrap_fixture as originals;
+use super::ordinary_originals::core as originals;
 
 pub(super) struct MintOriginals {
     enrollment: originals::Fixture,

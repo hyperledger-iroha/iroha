@@ -13,7 +13,7 @@ pub(in crate::query::stream_token_authority) struct PreparedStreamTokenHistoryV1
     finality_bytes: usize,
     reserved_seen: bool,
     terminal_seen: bool,
-    target_error: Option<Error>,
+    target_error: Option<crate::execution_attempt::ExecutionAttemptError<Error>>,
     failed: bool,
 }
 impl<'view, 'state> PreparedStreamTokenHistoryV1<'view, 'state> {
@@ -78,9 +78,9 @@ impl<'view, 'state> PreparedStreamTokenHistoryV1<'view, 'state> {
     pub(in crate::query::stream_token_authority) fn consume(
         &mut self,
         block: &SignerCertifiedBlockV1<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
         if self.failed {
-            return Err(Error::Execution);
+            return Err(Error::Execution.into());
         }
         self.failed = true;
         let block = block.in_view(self.view).map_err(|_| Error::Finality)?;
@@ -92,14 +92,14 @@ impl<'view, 'state> PreparedStreamTokenHistoryV1<'view, 'state> {
         if self.next_height != Some(height)
             || self.view.block_hashes().get(offset).copied() != Some(block.block_hash())
         {
-            return Err(Error::Finality);
+            return Err(Error::Finality.into());
         }
         charge_finality_len(&mut self.finality_bytes, block.certificate_len())?;
         if height == self.floor.height
             && (*block.block_hash().as_ref() != self.floor.block_hash
                 || block.id() != self.floor.context_id)
         {
-            return Err(Error::Finality);
+            return Err(Error::Finality.into());
         }
         if height == self.start {
             self.target_error = authenticate_target(
@@ -119,7 +119,7 @@ impl<'view, 'state> PreparedStreamTokenHistoryV1<'view, 'state> {
                 block,
             )
             .err();
-            self.target_error = self.target_error.or(error);
+            self.target_error = self.target_error.take().or(error);
             self.terminal_seen = true;
         }
         self.next_height = if height == self.floor.height {
@@ -132,13 +132,16 @@ impl<'view, 'state> PreparedStreamTokenHistoryV1<'view, 'state> {
     }
     pub(in crate::query::stream_token_authority) fn finish(
         self,
-    ) -> Result<VerifiedStreamTokenHistoryV1<'view, 'state>, Error> {
+    ) -> Result<
+        VerifiedStreamTokenHistoryV1<'view, 'state>,
+        crate::execution_attempt::ExecutionAttemptError<Error>,
+    > {
         if self.failed
             || self.next_height.is_some()
             || !self.reserved_seen
             || (self.terminal_height.is_some() && !self.terminal_seen)
         {
-            return Err(Error::Finality);
+            return Err(Error::Finality.into());
         }
         if let Some(error) = self.target_error {
             return Err(error);

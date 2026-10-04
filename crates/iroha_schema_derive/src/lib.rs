@@ -92,6 +92,7 @@ impl NoritoContainerAttrs {
         let mut no_fast_from_json = false;
         let mut reuse_archived = false;
         let mut decode_from_slice = false;
+        let mut decode_fields = false;
         let mut deny_unknown_fields = false;
         let mut schema_name = false;
         let mut validate = false;
@@ -136,6 +137,14 @@ impl NoritoContainerAttrs {
                         return Err(meta.error("duplicate reuse_archived attribute"));
                     }
                     reuse_archived = true;
+                } else if meta.path.is_ident("decode_fields") {
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(meta.error("decode_fields does not take a value"));
+                    }
+                    if decode_fields {
+                        return Err(meta.error("duplicate decode_fields attribute"));
+                    }
+                    decode_fields = true;
                 } else if meta.path.is_ident("decode_from_slice") {
                     if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
                         return Err(
@@ -962,6 +971,63 @@ mod tests {
             #[norito(no_fast_from_json, reuse_archived, decode_from_slice, validate = "Self::checked")]
         )];
         NoritoContainerAttrs::from_attributes(&attrs).expect("known shared flags should parse");
+    }
+    #[test]
+    fn prepared_field_decode_flag_is_checked_without_changing_schema_attributes() {
+        let attrs =
+            NoritoContainerAttrs::from_attributes(&[parse_quote!(#[norito(decode_fields)])])
+                .unwrap();
+        assert!(attrs.rename_all.is_none());
+        assert!(attrs.tag.is_none());
+        assert!(attrs.content.is_none());
+        for (attr, expected) in [
+            (
+                parse_quote!(#[norito(decode_fields, decode_fields)]),
+                "duplicate decode_fields attribute",
+            ),
+            (
+                parse_quote!(#[norito(decode_fields = true)]),
+                "decode_fields does not take a value",
+            ),
+            (
+                parse_quote!(#[norito(decode_fields(true))]),
+                "decode_fields does not take a value",
+            ),
+        ] {
+            let error = NoritoContainerAttrs::from_attributes(&[attr]).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+    #[test]
+    fn field_decode_flag_preserves_schema_and_rejects_malformed_flags() {
+        let plain: syn::DeriveInput = parse_quote! { struct Record { value: u64 } };
+        let flagged: syn::DeriveInput = parse_quote! {
+            #[norito(decode_fields)]
+            struct Record { value: u64 }
+        };
+        let generated = |declaration: &syn::DeriveInput| {
+            let input = IntoSchemaInput::from_derive_input(declaration).unwrap();
+            let mut emitter = Emitter::new();
+            impl_into_schema(&mut emitter, &input, None).to_string()
+        };
+        assert_eq!(generated(&plain), generated(&flagged));
+        for (attr, expected) in [
+            (
+                parse_quote!(#[norito(decode_fields, decode_fields)]),
+                "duplicate decode_fields attribute",
+            ),
+            (
+                parse_quote!(#[norito(decode_fields = true)]),
+                "decode_fields does not take a value",
+            ),
+            (
+                parse_quote!(#[norito(decode_fields())]),
+                "decode_fields does not take a value",
+            ),
+        ] {
+            let error = NoritoContainerAttrs::from_attributes(&[attr]).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
     #[test]
     fn binary_validation_paths_are_checked_without_changing_schema_attributes() {

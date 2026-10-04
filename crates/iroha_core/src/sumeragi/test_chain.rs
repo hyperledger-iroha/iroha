@@ -1,7 +1,7 @@
 //! A certified test chain (test support): a real signed genesis applied by
 //! [`startup::apply_genesis`], blocks built by the leader's payload builder, executed, prepared,
 //! stored and applied through the node's executor and block store, and every block certified by a
-//! `CommitQC` of the fixed four-validator genesis committee with real BLS-normal signatures. The
+//! `CommitQC` of the exact authenticated four-validator committee with real BLS-normal signatures. The
 //! [`certified_chain`](super::certified_chain) reader accepts its blocks as it accepts a running
 //! node's.
 //!
@@ -18,6 +18,8 @@ mod lane_authority;
 pub use lane_authority::TestLaneStoreAuthorities;
 #[path = "test_chain/availability.rs"]
 mod availability;
+#[path = "test_chain/committee_custody.rs"]
+mod committee_custody;
 #[cfg(test)]
 mod genesis_policy;
 mod local_certificate;
@@ -258,7 +260,6 @@ pub struct CertifiedTestChain {
     blocks: KuraBlockStore,
     availability: Arc<dyn AvailabilitySchedule>,
     signers: Vec<KeyPairSigner>,
-    committee: Committee,
     validators: Vec<(PeerId, Vec<u8>)>,
     crypto: Arc<BlsCrypto>,
     instance: Hash32,
@@ -266,6 +267,7 @@ pub struct CertifiedTestChain {
     tip: (u64, Hash32, Hash32),
     clock: KeyPair,
     pasta_seeds: Vec<zeroize::Zeroizing<[u8; 32]>>,
+    candidate_pasta_seeds: Vec<(PeerId, zeroize::Zeroizing<[u8; 32]>)>,
     lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
 }
 
@@ -618,13 +620,6 @@ impl CertifiedTestChain {
             .iter()
             .map(|key| KeyPairSigner::new(key).expect("BLS-normal fixture key"))
             .collect::<Vec<_>>();
-        let committee = Committee::new(
-            signers
-                .iter()
-                .map(|signer| signer.public_key().clone())
-                .collect(),
-        )
-        .expect("fixture committee");
         let authority = Arc::new(
             crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
                 generation,
@@ -662,13 +657,13 @@ impl CertifiedTestChain {
             blocks,
             availability,
             signers,
-            committee,
             validators,
             crypto,
             instance,
             tip: (GENESIS_HEIGHT, tip.block_hash, tip.result),
             clock,
             pasta_seeds,
+            candidate_pasta_seeds: Vec::new(),
             lane_blocks,
         })
     }
@@ -748,8 +743,8 @@ impl CertifiedTestChain {
     /// The absent case reaches the real boundary check without corrupting World indexes.
     fn npos_boundary_fixture_with_currency(include_currency: bool) -> Self {
         use crate::beacon::{
-            FinalizedGlobalThresholdBeaconKeySessionRecordV1,
             GlobalThresholdBeaconPartialSignerV1 as _, GlobalThresholdBeaconPulseAggregatorV1,
+            RetainedFinalizedGlobalThresholdBeaconSessionV1,
             prepared_session_and_signers_fixture_for_keys_v1,
         };
         use iroha_data_model::consensus::{
@@ -839,10 +834,13 @@ impl CertifiedTestChain {
                 acceptances_end_height: 4,
             },
             &pairs,
+            &chain.state().ivm_execution_budget(),
         );
-        let mut record =
-            FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session.record().clone())
-                .unwrap();
+        let mut record = RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+            session: session.clone(),
+            activated_at_height: None,
+            retired_at_height: None,
+        };
         record
             .activate(session.record().adaptive_dkg.finalized_at_height)
             .unwrap();
@@ -935,7 +933,8 @@ impl CertifiedTestChain {
         self.tip.0
     }
 
-    /// The validators with their proofs of possession, in committee order.
+    /// The original signed-genesis validators and their proofs of possession.
+    /// Later certificate authority is resolved from each authenticated scheduling context.
     #[must_use]
     pub fn validators(&self) -> &[(PeerId, Vec<u8>)] {
         &self.validators
@@ -1289,23 +1288,8 @@ impl CertifiedTestChain {
         attest: bool,
         signers: Signers,
     ) -> Qc {
-        let epoch = if height <= self.tip.0 {
-            super::schedule::core_epoch(&self.committed(height).commitment().schedule.current)
-                .unwrap()
-                .id
-        } else {
-            let view = self.state.view();
-            super::schedule::core_epoch(
-                &view
-                    .world()
-                    .consensus_schedule()
-                    .ready(height)
-                    .unwrap()
-                    .epoch,
-            )
-            .unwrap()
-            .id
-        };
+        let context = self.certificate_context(height);
+        let epoch = super::schedule::core_epoch(&context).unwrap().id;
         let witness = if attest {
             if height <= self.tip.0 {
                 self.committed_body(height)
@@ -1359,23 +1343,25 @@ impl CertifiedTestChain {
                 result
             );
         }
-        let epoch = if height <= self.tip.0 {
-            super::schedule::core_epoch(&self.committed(height).commitment().schedule.current)
-                .unwrap()
-                .id
-        } else {
-            let view = self.state.view();
-            super::schedule::core_epoch(
-                &view
-                    .world()
-                    .consensus_schedule()
-                    .ready(height)
-                    .unwrap()
-                    .epoch,
-            )
-            .unwrap()
-            .id
-        };
+        let context = self.certificate_context(height);
+        assert_eq!(context.committee.len(), 4, "four-seat component fixture");
+        let epoch = super::schedule::core_epoch(&context).unwrap().id;
+        let committee = Committee::new(
+            context
+                .committee
+                .iter()
+                .map(|member| super::crypto::core_key(member.validator.public_key()).unwrap())
+                .collect(),
+        )
+        .expect("the exact authenticated committee");
+        if let Some(witness) = &witness {
+            let original = super::commitment::ExecutionResultCommitment::decode(witness.as_slice())
+                .expect("original native execution witness");
+            assert_eq!(
+                original.schedule.current, context,
+                "certificate seats belong to the exact executed scheduling context"
+            );
+        }
         let votes = signers
             .indices()
             .iter()
@@ -1406,7 +1392,9 @@ impl CertifiedTestChain {
                     let result =
                         super::commitment::ExecutionResultCommitment::decode(witness.as_slice())
                             .unwrap();
-                    let custody = self.pasta_custody(signer);
+                    let custody = self
+                        .pasta_custody_for_peer(&context.committee[signer as usize].validator)
+                        .expect("provisioned exact scheduled Pasta custody");
                     let signer = custody
                         .signer_for_authority(&result.schedule.current.authority)
                         .unwrap();
@@ -1417,17 +1405,20 @@ impl CertifiedTestChain {
                         ),
                     });
                 }
-                vote.sig = self.signers[signer as usize].sign(&vote.preimage());
+                vote.sig = self
+                    .signer_for_member(&context.committee[signer as usize].validator)
+                    .expect("provisioned exact scheduled BLS custody")
+                    .sign(&vote.preimage());
                 vote
             })
             .collect::<Vec<_>>();
         let refs = votes.iter().collect::<Vec<_>>();
-        match form_qc(&*self.crypto, self.committee.n(), &refs) {
+        match form_qc(&*self.crypto, committee.n(), &refs) {
             Ok(qc) => qc,
             // Under- or oversized sets are refused by `form_qc`: aggregate by hand only
             // to supply a genuinely signed malformed certificate to negative tests.
             Err(_) => {
-                let mut signers_bitmap = iroha_sumeragi::types::Bitmap::new(self.committee.n());
+                let mut signers_bitmap = iroha_sumeragi::types::Bitmap::new(committee.n());
                 for vote in &votes {
                     signers_bitmap.set(vote.signer);
                 }
@@ -1811,32 +1802,7 @@ pub(super) fn prepare_configured_genesis(
                 )),
             });
         }
-        let (mut state, kura) = if let Some(nexus) = nexus_config {
-            let (mut state, kura) =
-                State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
-                    world,
-                    nexus.clone(),
-                    LiveQueryStore::start_test(),
-                    chain_id.clone(),
-                    network,
-                );
-            // The generic State fixture disables fees. Reinstall the explicit caller policy
-            // before the first staged genesis execution, preserving its authenticated geometry.
-            state
-                .set_nexus_from_config(nexus.clone())
-                .expect("configured fixture Nexus");
-            (state, kura)
-        } else {
-            let kura = Kura::blank_kura_for_testing();
-            let state = State::new_with_chain_and_network_id_for_testing(
-                world,
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-                network,
-            );
-            (state, kura)
-        };
+        let (mut state, kura) = fixture_bootstrap_state(world, chain_id, network, nexus_config);
         if let Some(zk) = zk {
             if let Err(error) = state.set_zk(zk.clone()) {
                 return Err(StartFailure {
@@ -1858,31 +1824,14 @@ pub(super) fn prepare_configured_genesis(
             Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance))
         });
         state.install_lane_manifests_for_testing(&manifests);
-        let policies = {
-            let validation = crate::block::ValidBlock::validate_signed_genesis(
-                genesis.clone(),
-                &topology,
-                &account,
-                &TimeSource::new_system(),
-                &state,
-                mode.into(),
-            )
-            .unpack(|_| {});
-            match validation {
-                Ok((valid, overlay)) => {
-                    drop((valid, overlay));
-                    Ok(None)
-                }
-                Err((_, error)) => match *error {
-                    crate::block::BlockValidationError::GenesisPolicyMismatch {
-                        actual_execution,
-                        actual_nexus,
-                        ..
-                    } if attempt == 0 => Ok(Some((actual_execution, actual_nexus))),
-                    error => Err(Box::new(error)),
-                },
-            }
-        };
+        let policies = validate_fixture_genesis_policy(
+            genesis.clone(),
+            &topology,
+            &account,
+            &state,
+            mode.into(),
+            attempt,
+        );
         let policies = match policies {
             Ok(policies) => policies,
             Err(error) => {
@@ -1935,6 +1884,78 @@ pub(super) fn prepare_configured_genesis(
         world = state.world;
     }
     unreachable!("second native validation either succeeds or returns its typed failure")
+}
+
+// Constructor temporaries retire before the original signed genesis executes. This helper
+// preserves the exact fresh State's network, Nexus geometry, fee policy and original owners.
+fn fixture_bootstrap_state(
+    world: World,
+    chain_id: &ChainId,
+    network: NetworkId,
+    nexus_config: Option<&iroha_config::parameters::actual::Nexus>,
+) -> (State, Arc<Kura>) {
+    if let Some(nexus) = nexus_config {
+        let (mut state, kura) =
+            State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+                world,
+                nexus.clone(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+                network,
+            );
+        // The generic State fixture disables fees. Reinstall the explicit caller policy
+        // before the first staged genesis execution, preserving its authenticated geometry.
+        state
+            .set_nexus_from_config(nexus.clone())
+            .expect("configured fixture Nexus");
+        (state, kura)
+    } else {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+            network,
+        );
+        (state, kura)
+    }
+}
+
+// Complete original validation owners are destroyed before the caller adjusts signed policy.
+// This retains genuine genesis execution and its original rejection/refusal classification.
+fn validate_fixture_genesis_policy(
+    genesis: SignedBlock,
+    topology: &super::network_topology::Topology,
+    account: &AccountId,
+    state: &State,
+    mode: iroha_data_model::parameter::system::ConsensusMode,
+    attempt: u8,
+) -> Result<Option<(iroha_crypto::Hash, iroha_crypto::Hash)>, Box<crate::block::BlockValidationError>>
+{
+    let validation = crate::block::ValidBlock::validate_signed_genesis(
+        genesis,
+        topology,
+        account,
+        &TimeSource::new_system(),
+        state,
+        mode,
+    )
+    .unpack(|_| {});
+    match validation {
+        Ok((valid, overlay)) => {
+            drop((valid, overlay));
+            Ok(None)
+        }
+        Err((_, error)) => match *error {
+            crate::block::BlockValidationError::GenesisPolicyMismatch {
+                actual_execution,
+                actual_nexus,
+                ..
+            } if attempt == 0 => Ok(Some((actual_execution, actual_nexus))),
+            error => Err(Box::new(error)),
+        },
+    }
 }
 
 /// Build a signed genesis with an explicit NPoS policy for authority-reader tests.
@@ -2560,6 +2581,32 @@ mod tests {
                 .iter()
                 .map(|key| PeerId::new(key.public_key().clone())),
         );
+        assert!(
+            validate_fixture_genesis_policy(
+                prepared.genesis.block().clone(),
+                &topology,
+                &AccountId::new(key.public_key().clone()),
+                &prepared.state,
+                ConsensusMode::Permissioned,
+                1,
+            )
+            .unwrap()
+            .is_none(),
+            "the helper preserves genuine completed genesis validation"
+        );
+        assert!(matches!(
+            *validate_fixture_genesis_policy(
+                wrong.clone(),
+                &topology,
+                &AccountId::new(key.public_key().clone()),
+                &prepared.state,
+                ConsensusMode::Permissioned,
+                0,
+            )
+            .unwrap_err(),
+            crate::block::BlockValidationError::ProofPolicyHashMismatch { expected: hash, actual }
+                if hash == HashOf::new(&expected) && actual == Some(HashOf::new(&wrong_policy))
+        ));
         {
             let validation = crate::block::ValidBlock::validate_signed_genesis(
                 wrong,

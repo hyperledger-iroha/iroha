@@ -22,7 +22,7 @@ use ivm::{
 fn assemble(code: &[u8]) -> Vec<u8> {
     let mut v = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 0,
@@ -103,7 +103,7 @@ fn wrap_v1(value: &BigInt) -> BigInt {
 fn bench_numeric_limb_work(c: &mut Criterion) {
     let mut group = c.benchmark_group("ivm-numeric-limb-cal");
     let entry_instruction = encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_INT_NEG);
-    let mut entry_program = ProgramMetadata::default_for(1, 0, 1).encode();
+    let mut entry_program = ProgramMetadata::default_for(1, 1, 1).encode();
     entry_program.extend_from_slice(&entry_instruction.to_le_bytes());
     entry_program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     // Keep the benchmark denominator scoped to the staged numeric lifecycle.

@@ -210,9 +210,9 @@ impl StreamTokenStateObserverClientV1 for StreamTokenObserverBrokerClient {
     ) -> Result<StreamTokenObserverReplyV1, StreamTokenSignerCallErrorV1> {
         let deadline =
             BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1).map_err(stream_token_transport_error)?;
-        let payload = request
-            .encode_canonical()
-            .map_err(|_| StreamTokenSignerCallErrorV1::Refused)?;
+        let payload = request.encode_canonical().map_err(|error| {
+            stream_token_transport_error(stream_token_evidence_error(&error, BrokerError::Rejected))
+        })?;
         decode_stream_token_observer_request(&self.binding, &payload)
             .map_err(stream_token_transport_error)?;
         // The observer remains separately routed and usable after the Sign connection is
@@ -220,22 +220,19 @@ impl StreamTokenStateObserverClientV1 for StreamTokenObserverBrokerClient {
         let session =
             stream_token_read_session(&self.session, &self.binding, self.metadata_digest, deadline)
                 .map_err(stream_token_transport_error)?;
-        let result = session
-            .call_before(
-                &self.binding,
-                self.metadata_digest,
-                OPERATION_STREAM_TOKEN_OBSERVE_V1,
-                ScrubbedBytes::new(payload.clone()),
-                false,
-                deadline,
+        let (reply, _) = session
+            .exchange_before_with_result(
+                OutboundExchangeV1 {
+                    binding: &self.binding,
+                    metadata_digest: self.metadata_digest,
+                    operation: OPERATION_STREAM_TOKEN_OBSERVE_V1,
+                    payload: ScrubbedBytes::new(payload),
+                    mutating: false,
+                    deadline,
+                },
+                |received| received.observer(request),
             )
             .map_err(stream_token_transport_error)?;
-        // Typed result validation already ran under the result-owned decode admission. This
-        // second conversion only transfers the bounded untrusted wire leaves to Torii's owner.
-        let _scope = result.enter_decode_admission();
-        let reply = decode_stream_token_observer_reply(&self.binding, &payload, &result)
-            .map_err(stream_token_transport_error)?;
-        deadline.remaining().map_err(stream_token_transport_error)?;
         Ok(reply)
     }
 }

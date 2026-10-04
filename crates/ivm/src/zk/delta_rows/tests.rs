@@ -206,14 +206,23 @@ fn foreign_scope_pending_overlap_and_overflow_do_not_change_credit() {
     let mut log = DeltaTraceLog::new(Some(&original));
     assert_eq!(
         log.prepare_batch(1, 256, 0, None),
-        Err(VMError::HostUnavailable)
+        Err(VMError::ExecutionDeferred(
+            crate::error::ExecutionDeferral::TraceOwnerUnavailable
+        ))
     );
     foreign.with_deferred_refund_notifications(|scope| {
         assert_eq!(
             log.prepare_batch(1, 256, 0, Some(scope)),
-            Err(VMError::HostUnavailable)
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::TraceOwnerUnavailable
+            ))
         );
-        assert_eq!(log.reset(Some(scope)), Err(VMError::HostUnavailable));
+        assert_eq!(
+            log.reset(Some(scope)),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::TraceOwnerUnavailable
+            ))
+        );
     });
     assert!(matches!(
         prepare(&mut log, usize::MAX, 256, 256, &original),
@@ -226,7 +235,9 @@ fn foreign_scope_pending_overlap_and_overflow_do_not_change_credit() {
     let before = original.reserved_bytes();
     assert_eq!(
         prepare(&mut log, 1, 0, 0, &original),
-        Err(VMError::HostUnavailable)
+        Err(VMError::ExecutionDeferred(
+            crate::error::ExecutionDeferral::TraceOwnerUnavailable
+        ))
     );
     log.record_reserved(4, [0; 256], [false; 256]);
     log.record_reserved(8, [0; 256], [false; 256]);
@@ -278,6 +289,71 @@ fn snapshot_preserves_prepaid_public_spans_and_independent_final_owner() {
     drop(owner);
     assert_eq!(original.reserved_bytes(), before);
     drop(borrowed);
+    assert_eq!(original.reserved_bytes(), 0);
+}
+
+#[test]
+fn discarded_unobserved_credit_preserves_partial_history_and_allows_caught_retry() {
+    let original = AllocationBudget::new(LIMIT);
+    let mut log = DeltaTraceLog::new(Some(&original));
+    prepare(&mut log, 3, 2, 0, &original).unwrap();
+    let initial_credit = original.reserved_bytes();
+    log.discard_unobserved();
+    assert!(log.is_empty());
+    assert!(log.last.is_none());
+    assert_eq!(original.reserved_bytes(), initial_credit);
+    // A refused root/first instruction has not consumed the first full image.
+    original.set_limit_bytes(0);
+    prepare(&mut log, 3, 0, 0, &original).unwrap();
+    log.record_reserved(12, [41; 256], [true; 256]);
+    log.record_reserved(16, [41; 256], [true; 256]);
+    let rows = log.rows.as_slice().as_ptr();
+    let changes = log.changes.as_slice().as_ptr();
+    log.discard_unobserved();
+    log.discard_unobserved();
+    assert_eq!(log.len(), 2);
+    assert_eq!(log.entry(0).unwrap().changes[255], (255, 41, true));
+    assert!(log.entry(1).unwrap().changes.is_empty());
+    assert_eq!(log.changes.as_slice().len(), 256);
+    // A retry with no new register changes uses the original pending capacity;
+    // canceling did not erase `last` and cannot force another 256-word image.
+    prepare(&mut log, 1, 0, 0, &original).unwrap();
+    log.record_reserved(20, [41; 256], [true; 256]);
+    assert!(log.entry(2).unwrap().changes.is_empty());
+    assert_eq!(log.rows.as_slice().as_ptr(), rows);
+    assert_eq!(log.changes.as_slice().as_ptr(), changes);
+    assert_eq!(original.reserved_bytes(), initial_credit);
+    drop(log);
+    assert_eq!(original.reserved_bytes(), 0);
+}
+
+#[test]
+fn discarding_snapshot_pending_credit_does_not_cancel_the_original_batch() {
+    let original = AllocationBudget::new(LIMIT);
+    let mut log = DeltaTraceLog::new(Some(&original));
+    first(&mut log, &original);
+    prepare(&mut log, 2, 1, 0, &original).unwrap();
+    let credit = original.reserved_bytes();
+    let mut copied = original
+        .with_deferred_refund_notifications(|scope| log.try_clone_allocation(Some(scope)))
+        .unwrap();
+    assert_eq!(original.reserved_bytes(), 2 * credit);
+    original.set_limit_bytes(0);
+    copied.discard_unobserved();
+    let mut values = [0; 256];
+    values[7] = 19;
+    log.record_reserved(16, values, [false; 256]);
+    log.record_reserved(20, values, [false; 256]);
+    prepare(&mut copied, 1, 0, 0, &original).unwrap();
+    copied.record_reserved(24, [0; 256], [false; 256]);
+    assert_eq!(log.entry(1).unwrap().changes, &[(7, 19, false)]);
+    assert!(copied.entry(1).unwrap().changes.is_empty());
+    assert_eq!(log.len(), 3);
+    assert_eq!(copied.len(), 2);
+    assert_eq!(original.reserved_bytes(), 2 * credit);
+    drop(log);
+    assert_eq!(original.reserved_bytes(), credit);
+    drop(copied);
     assert_eq!(original.reserved_bytes(), 0);
 }
 
@@ -345,6 +421,32 @@ fn partial_private_change_copy_unwind_scrubs_new_backing_and_keeps_original_cred
     prepare(&mut log, 1, 256, 0, &original).unwrap();
     log.record_reserved(45, [0; 256], [false; 256]);
     assert_eq!(log.entry(1).unwrap().changes.len(), 256);
+    drop(log);
+    assert_eq!(original.reserved_bytes(), 0);
+}
+
+#[test]
+fn diagnostic_capture_rejects_corrupt_indices_without_a_raw_row_constructor() {
+    let original = AllocationBudget::new(LIMIT);
+    let mut log = DeltaTraceLog::new(Some(&original));
+    first(&mut log, &original);
+    let before = original.reserved_bytes();
+    // Corruption is confined to the canonical owner's private test module;
+    // consumers cannot construct or mutate live owned delta rows.
+    log.changes.as_mut_slice()[7].0 = 256;
+    let source = crate::zk::DiagnosticTraceSource {
+        registers: crate::zk::DiagnosticRegisterSource::Deltas(&log),
+        constraints: &[],
+        memory_events: &[],
+        register_events: &[],
+        steps: &[],
+    };
+    assert!(matches!(
+        source.try_snapshot(&original),
+        Err(VMError::DecodeError)
+    ));
+    assert_eq!(original.reserved_bytes(), before);
+    assert_eq!(log.changes.as_slice()[7].0, 256);
     drop(log);
     assert_eq!(original.reserved_bytes(), 0);
 }

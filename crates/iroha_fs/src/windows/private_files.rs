@@ -183,12 +183,33 @@ impl Directory {
     }
 
     pub(crate) fn open_retained_read_only(&self, name: &OsStr) -> io::Result<RetainedFile> {
-        self.revalidate()?;
+        RetainedFile::open_read_only(self.clone(), name.to_owned())
+    }
+
+    pub(crate) fn create_borrowed_private<'a>(
+        &'a self,
+        name: &'a OsStr,
+    ) -> io::Result<RetainedFile<&'a Self, &'a OsStr>> {
+        RetainedFile::open(self, name, true, true)
+    }
+
+    pub(crate) fn open_borrowed_read_only<'a>(
+        &'a self,
+        name: &'a OsStr,
+    ) -> io::Result<RetainedFile<&'a Self, &'a OsStr>> {
+        RetainedFile::open_read_only(self, name)
+    }
+}
+
+impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
+    fn open_read_only(directory: D, name: N) -> io::Result<Self> {
+        let parent = directory.borrow();
+        parent.revalidate()?;
         // Metadata-frozen creator capabilities can still hold their original write/delete
         // rights. Admit a read-only handle without requiring those exact retained objects to
         // close; strict DACL and snapshot checks continue to govern every use.
         let file = open_file(
-            &self.path().join(name),
+            &parent.path().join(name.as_ref()),
             GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             OPEN_EXISTING,
@@ -197,9 +218,9 @@ impl Directory {
         )?;
         let before = snapshot(&file, true, false)?;
         validate_read_only(&file)?;
-        let retained = RetainedFile {
-            directory: self.clone(),
-            name: name.to_owned(),
+        let retained = Self {
+            directory,
+            name,
             file,
             before,
             private: true,
@@ -210,9 +231,6 @@ impl Directory {
         retained.revalidate()?;
         Ok(retained)
     }
-}
-
-impl RetainedFile {
     pub(crate) fn seal_read_only(mut self) -> io::Result<Self> {
         if !self.publishable || !self.writable {
             return Err(denied("only a newly created writer may be sealed"));
@@ -224,12 +242,15 @@ impl RetainedFile {
         self.before = snapshot(&self.file, true, false)?;
         self.writable = false;
         self.read_only = true;
-        self.directory.sync()?;
+        self.directory.borrow().sync()?;
         self.revalidate()?;
         Ok(self)
     }
 
-    pub(crate) fn publish_new_name(mut self, name: &OsStr) -> io::Result<Self> {
+    pub(crate) fn publish_with_name<M: AsRef<OsStr>>(
+        self,
+        name: M,
+    ) -> io::Result<RetainedFile<D, M>> {
         if !self.publishable || self.writable || !self.read_only {
             return Err(denied(
                 "publication requires a newly created strictly sealed file",
@@ -239,10 +260,9 @@ impl RetainedFile {
         let before = snapshot(&self.file, true, false)?;
         rename_handle(
             &self.file,
-            &self.directory.path().join(name),
+            &self.directory.borrow().path().join(name.as_ref()),
             PublishMode::CreateNew,
         )?;
-        self.name = name.to_owned();
         self.file.sync_all()?;
         let after = snapshot(&self.file, true, false)?;
         if before.id != after.id
@@ -252,10 +272,95 @@ impl RetainedFile {
         {
             return Err(changed());
         }
-        self.before = after;
-        self.publishable = false;
-        self.directory.sync()?;
-        self.revalidate()?;
-        Ok(self)
+        let published = RetainedFile {
+            directory: self.directory,
+            name,
+            file: self.file,
+            before: after,
+            private: self.private,
+            writable: self.writable,
+            read_only: self.read_only,
+            publishable: false,
+        };
+        published.directory.borrow().sync()?;
+        published.revalidate()?;
+        Ok(published)
+    }
+}
+
+impl RetainedFile {
+    pub(crate) fn publish_new_name(self, name: &OsStr) -> io::Result<Self> {
+        self.publish_with_name(name.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_reopen_rejects_shared_links_even_with_an_exact_read_only_dacl() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory =
+            PrivateDirectory::open_or_create(temporary.path().join("receipts")).unwrap();
+        let name = OsStr::new("receipt");
+        let path = directory.path().join(name);
+        // Build the hostile native fixture before applying the exact immutable ACL. This
+        // does not use a retained receipt constructor or bypass any production validation.
+        let mut file = open_file(
+            &path,
+            GENERIC_READ | GENERIC_WRITE | WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            CREATE_NEW,
+            false,
+            true,
+        )
+        .unwrap();
+        file.write_all(b"original").unwrap();
+        std::fs::hard_link(&path, directory.path().join("shared")).unwrap();
+        set_read_only_acl(&file).unwrap();
+        assert!(read_only_acl(&file).unwrap());
+        drop(file);
+        for name in [name, OsStr::new("shared")] {
+            let error = directory.open_borrowed_read_only(name, 16).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(error.to_string().contains("shared links"));
+        }
+    }
+
+    #[test]
+    fn borrowed_reopen_rejects_native_file_and_directory_reparse_points() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let directory =
+            PrivateDirectory::open_or_create(temporary.path().join("receipts")).unwrap();
+        let mut writer = directory
+            .create_borrowed_private(OsStr::new("receipt"), 16)
+            .unwrap();
+        writer.write_all(b"original").unwrap();
+        let sealed = writer.seal_read_only().unwrap();
+        let before = sealed.snapshot().unwrap();
+        // Native Windows qualification must provide symlink privilege or Developer Mode;
+        // do not silently skip the reparse-point boundary when that fixture cannot be made.
+        symlink_file("receipt", directory.path().join("redirect"))
+            .expect("native Windows reparse fixture requires symlink creation authority");
+        assert!(
+            directory
+                .open_borrowed_read_only(OsStr::new("redirect"), 16)
+                .is_err()
+        );
+        assert!(
+            directory
+                .create_borrowed_private(OsStr::new("redirect"), 16)
+                .is_err()
+        );
+        let alias = temporary.path().join("directory-redirect");
+        symlink_dir(directory.path(), &alias)
+            .expect("native Windows reparse fixture requires symlink creation authority");
+        assert!(PrivateDirectory::open_exact(&alias).is_err());
+        assert_eq!(sealed.snapshot().unwrap(), before);
+        std::fs::remove_file(directory.path().join("redirect")).unwrap();
+        std::fs::remove_dir(alias).unwrap();
     }
 }

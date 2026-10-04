@@ -2,9 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 use iroha_crypto::{PublicKey, SignatureOf};
-use iroha_data_model::block::{
-    BlockHeader, decode_framed_signed_block, decode_versioned_signed_block,
-};
+use iroha_data_model::block::{BlockHeader, decode_framed_signed_block};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -30,9 +28,7 @@ Set IROHA_GENESIS_FILE to point at a signed genesis payload."
     let mut file = File::open(&genesis_path).expect("open genesis");
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).expect("read genesis");
-    let block = decode_framed_signed_block(&bytes)
-        .or_else(|_| decode_versioned_signed_block(&bytes))
-        .expect("decode genesis block");
+    let block = decode_framed_signed_block(&bytes).expect("decode genesis block");
     let pub_key = PublicKey::from_str(&pub_key_str).expect("parse pub key");
     println!("Genesis hash: {:?}", block.hash());
     println!("Signatures: {:?}", block.signatures().count());

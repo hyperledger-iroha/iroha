@@ -1,8 +1,7 @@
-//! Bounded immutable original intents, with UTC signing limits independent of recovery I/O.
+//! Immutable native custody bodies; dispatch clocks and paid authorization live in bounded attempts.
 
 use super::*;
-use iroha_data_model::{asset::AssetDefinitionId, transaction::FeePaymentIntent};
-use iroha_primitives::numeric::Quantity;
+use crate::managed::native_operation::attempts::{self, History, Observation, Purpose, Selected};
 use norito::{Decode, Encode};
 use sorafs_manifest::signer::{
     custody::{
@@ -11,163 +10,179 @@ use sorafs_manifest::signer::{
     },
     custody_control::SignerCustodyControlStateV1,
 };
-use std::collections::BTreeMap;
 
 const MAX_ORIGINAL_BYTES: usize = MAX_CHECKPOINT_BYTES + 128 * 1024;
 
-#[derive(Clone, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_deploy::managed::stream_token_custody::Terms")]
-pub(super) struct Terms {
-    pub requested_deadline_unix_ms: u64,
-    pub signing_deadline_unix_ms: u64,
-    fee_payment: FeePaymentIntent,
-    max_total_fees: BTreeMap<AssetDefinitionId, Quantity>,
+#[derive(Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_deploy::managed::stream_token_custody::EnrollmentValidity")]
+pub(super) struct EnrollmentValidity {
+    pub issued_at_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
 }
-
-impl Terms {
-    pub fn new(deadline_unix_ms: u64, options: &BoundedTransactionOptions) -> Result<Self> {
-        validate_options(options)?;
-        require_deadline(options.deadline)?;
-        let now = now_ms()?;
-        if deadline_unix_ms <= now || deadline_unix_ms == u64::MAX {
-            return Err(invalid(
-                "original custody UTC authorization is expired or unbounded",
-            ));
-        }
-        let remaining = options.deadline.saturating_duration_since(Instant::now());
-        let io_end = now
-            .checked_add(
-                u64::try_from(remaining.as_millis())
-                    .map_err(|_| invalid("custody deadline exceeds bound"))?,
-            )
-            .ok_or_else(|| invalid("custody deadline overflow"))?;
-        if io_end <= now {
-            return Err(invalid("custody signing budget elapsed"));
-        }
-        Ok(Self {
-            requested_deadline_unix_ms: deadline_unix_ms,
-            signing_deadline_unix_ms: deadline_unix_ms.min(io_end),
-            fee_payment: options.fee_payment.clone(),
-            max_total_fees: options.max_total_fees.clone(),
-        })
-    }
-    pub fn options(&self, deadline: Instant) -> BoundedTransactionOptions {
-        BoundedTransactionOptions {
-            fee_payment: self.fee_payment.clone(),
-            max_total_fees: self.max_total_fees.clone(),
-            deadline,
+impl EnrollmentValidity {
+    pub(super) fn from_interval(interval: ManagedCustodyEnrollmentInterval) -> Self {
+        Self {
+            issued_at_unix_ms: interval.issued_at_unix_ms,
+            expires_at_unix_ms: interval.expires_at_unix_ms,
         }
     }
-    pub fn signing_deadline(&self, deadline: Instant) -> Result<Instant> {
-        require_deadline(deadline)?;
-        let remaining = self
-            .signing_deadline_unix_ms
-            .checked_sub(now_ms()?)
-            .filter(|value| *value > 0)
-            .ok_or_else(|| invalid("original custody signing interval expired"))?;
-        Ok(deadline.min(
-            Instant::now()
-                .checked_add(Duration::from_millis(remaining))
-                .ok_or_else(|| invalid("custody monotonic deadline overflow"))?,
-        ))
-    }
-    fn matches(&self, deadline_unix_ms: u64, options: &BoundedTransactionOptions) -> Result<()> {
-        validate_options(options)?;
-        if self.requested_deadline_unix_ms != deadline_unix_ms
-            || self.fee_payment != options.fee_payment
-            || self.max_total_fees != options.max_total_fees
-        {
-            return Err(invalid("original custody UTC or fee authorization changed"));
+    pub(super) fn interval(self, deadline_unix_ms: u64) -> ManagedCustodyEnrollmentInterval {
+        ManagedCustodyEnrollmentInterval {
+            issued_at_unix_ms: self.issued_at_unix_ms,
+            expires_at_unix_ms: self.expires_at_unix_ms,
+            deadline_unix_ms,
         }
-        Ok(())
-    }
-    fn validate(&self) -> Result<()> {
-        if self.requested_deadline_unix_ms == 0
-            || self.requested_deadline_unix_ms == u64::MAX
-            || self.signing_deadline_unix_ms == 0
-            || self.signing_deadline_unix_ms > self.requested_deadline_unix_ms
-        {
-            return Err(invalid("invalid original custody signing authorization"));
-        }
-        validate_fees(&self.fee_payment, &self.max_total_fees)
     }
 }
-
-fn validate_options(options: &BoundedTransactionOptions) -> Result<()> {
-    validate_fees(&options.fee_payment, &options.max_total_fees)
-}
-fn validate_fees(
-    fee_payment: &FeePaymentIntent,
-    max_total_fees: &BTreeMap<AssetDefinitionId, Quantity>,
-) -> Result<()> {
-    if max_total_fees.len() > 16
-        || fee_payment.charge_limits().len() > 16
-        || !matches!(fee_payment, FeePaymentIntent::Authority(_))
-        || max_total_fees.values().any(Quantity::is_zero)
-    {
-        return Err(invalid(
-            "custody fees require bounded authority-paid maxima",
-        ));
-    }
-    fee_payment
-        .validate()
-        .map_err(|_| invalid("invalid custody fee authorization"))
-}
-
 #[derive(Clone, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_deploy::managed::stream_token_custody::Action")]
 pub(super) enum Action {
     Configure(SignerCustodyPolicyV1),
     Enroll {
         anchor: SignerCustodyAnchorV1,
-        observed_at_unix_ms: u64,
-        interval: ManagedCustodyEnrollmentInterval,
+        selected_at_unix_ms: u64,
+        validity: EnrollmentValidity,
         enrollment: Vec<u8>,
     },
 }
-
 #[derive(Clone, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_deploy::managed::stream_token_custody::Original")]
 pub(super) struct Original {
     pub selection: StreamTokenCustodySelection,
     pub action: Action,
-    pub terms: Terms,
     pub checkpoint: Vec<u8>,
 }
-
 pub(super) enum Request {
     Configure(StreamTokenCustodyConfigureRequest),
     Enroll(StreamTokenCustodyEnrollRequest),
 }
-
+impl Request {
+    pub(super) fn inspect(
+        &self,
+        account: &AccountService,
+        path: &std::path::Path,
+    ) -> Result<iroha_wallet::operations::VerifiedNativePreparation> {
+        match self {
+            Self::Configure(request) => {
+                account.inspect_stream_token_custody_configure_preparation(path, request)
+            }
+            Self::Enroll(request) => {
+                account.inspect_stream_token_custody_enroll_preparation(path, request)
+            }
+        }
+        .map_err(|_| invalid("custody wallet preparation differs from original request"))
+    }
+    pub(super) fn retain(
+        &self,
+        account: &AccountService,
+        path: &std::path::Path,
+    ) -> Result<iroha_wallet::operations::VerifiedNativePreparation> {
+        match self {
+            Self::Configure(request) => {
+                account.retain_stream_token_custody_configure_request(request, path)
+            }
+            Self::Enroll(request) => {
+                account.retain_stream_token_custody_enroll_request(request, path)
+            }
+        }
+        .map_err(|_| invalid("cannot retain exact unsigned custody request"))
+    }
+    pub(super) fn retire(
+        &self,
+        account: &AccountService,
+        path: &std::path::Path,
+    ) -> Result<iroha_wallet::operations::RetiredNativeRequest> {
+        match self {
+            Self::Configure(request) => {
+                account.retire_stream_token_custody_configure_unprepared(path, request)
+            }
+            Self::Enroll(request) => {
+                account.retire_stream_token_custody_enroll_unprepared(path, request)
+            }
+        }
+        .map_err(|_| invalid("custody unsigned request could not retire"))
+    }
+}
 impl Original {
-    pub fn request(&self, deadline: Instant) -> Request {
-        match &self.action {
+    pub fn request(
+        &self,
+        terms: &Terms,
+        observation: Observation,
+        deadline: Instant,
+    ) -> Result<Request> {
+        Ok(match &self.action {
             Action::Configure(policy) => Request::Configure(StreamTokenCustodyConfigureRequest {
                 selection: self.selection.clone(),
                 policy: policy.clone(),
-                deadline_unix_ms: self.terms.signing_deadline_unix_ms,
-                options: self.terms.options(deadline),
+                deadline_unix_ms: terms.signing_deadline_unix_ms,
+                options: terms.options(deadline),
             }),
             Action::Enroll {
                 anchor,
-                observed_at_unix_ms,
-                interval,
+                validity,
                 enrollment,
+                ..
             } => Request::Enroll(StreamTokenCustodyEnrollRequest {
                 selection: self.selection.clone(),
                 anchor: *anchor,
-                anchor_observed_at_unix_ms: *observed_at_unix_ms,
-                issued_at_unix_ms: interval.issued_at_unix_ms,
-                expires_at_unix_ms: interval.expires_at_unix_ms,
+                anchor_observed_at_unix_ms: observation.enrollment_observed_at_unix_ms.ok_or_else(
+                    || invalid("enrollment request has no retained native observation"),
+                )?,
+                issued_at_unix_ms: validity.issued_at_unix_ms,
+                expires_at_unix_ms: validity.expires_at_unix_ms,
                 enrollment: enrollment.clone(),
-                deadline_unix_ms: self.terms.signing_deadline_unix_ms,
-                options: self.terms.options(deadline),
+                deadline_unix_ms: terms.signing_deadline_unix_ms,
+                options: terms.options(deadline),
             }),
+        })
+    }
+    pub fn initial_observation(&self) -> Observation {
+        Observation {
+            enrollment_observed_at_unix_ms: match &self.action {
+                Action::Configure(_) => None,
+                Action::Enroll {
+                    selected_at_unix_ms,
+                    ..
+                } => Some(*selected_at_unix_ms),
+            },
         }
     }
+    pub fn dispatch_purpose(&self) -> Result<Purpose> {
+        let provider = self.selection.provider_id;
+        match &self.action {
+            Action::Configure(_) => Ok(Purpose::CustodyConfigure(provider)),
+            Action::Enroll { enrollment, .. } => {
+                let sequence = enrollment::decode_enrollment(enrollment)?
+                    .statement
+                    .sequence;
+                if sequence == 1 {
+                    Ok(Purpose::CustodyEnroll(provider))
+                } else {
+                    renewal::directory_name(sequence)?;
+                    Ok(Purpose::CustodyRenewal { provider, sequence })
+                }
+            }
+        }
+    }
+    pub fn digest(&self) -> Result<[u8; 32]> {
+        attempts::semantic_digest(self, MAX_ORIGINAL_BYTES)
+    }
+    pub fn control(&self) -> Result<SignerCustodyControlStateV1> {
+        let predecessor = self
+            .selection
+            .current
+            .as_ref()
+            .ok_or_else(|| invalid("original enrollment lacks its selected predecessor"))?;
+        if predecessor.control_state.len() > 16 * 1024 {
+            return Err(invalid("original custody control exceeds its bound"));
+        }
+        norito::decode_canonical_with_limits(
+            &predecessor.control_state,
+            norito::DecodeLimits::new(4096, 16 * 1024, 16 * 1024, 1024 * 1024, 32),
+        )
+        .map_err(|_| invalid("invalid original custody control"))
+    }
     pub fn validate(&self) -> Result<()> {
-        self.terms.validate()?;
         if self.checkpoint.is_empty()
             || self.checkpoint.len() > MAX_CHECKPOINT_BYTES
             || norito::canonical_frame_len(&self.selection)
@@ -176,75 +191,94 @@ impl Original {
         {
             return Err(invalid("original custody intent exceeds bound"));
         }
-        if let Action::Enroll {
-            enrollment,
-            interval,
-            observed_at_unix_ms,
-            anchor,
-        } = &self.action
-        {
-            if enrollment.is_empty()
-                || enrollment.len() > 16 * 1024
-                || interval.deadline_unix_ms != self.terms.requested_deadline_unix_ms
-            {
-                return Err(invalid(
-                    "original enrollment differs from immutable request",
-                ));
+        match &self.action {
+            Action::Configure(policy) => {
+                encode(policy, 16 * 1024)?;
             }
-            validate_interval(*interval, *observed_at_unix_ms)?;
-            let predecessor = self
-                .selection
-                .current
-                .as_ref()
-                .ok_or_else(|| invalid("original enrollment lacks its selected predecessor"))?;
-            if predecessor.control_state.len() > 16 * 1024 {
-                return Err(invalid("original custody control exceeds its bound"));
-            }
-            let control: SignerCustodyControlStateV1 = norito::decode_canonical_with_limits(
-                &predecessor.control_state,
-                norito::DecodeLimits::new(4096, 16 * 1024, 16 * 1024, 1024 * 1024, 32),
-            )
-            .map_err(|_| invalid("invalid original custody control"))?;
-            let verified = verify_signer_custody_enrollment_v1(
+            Action::Enroll {
                 enrollment,
-                &self.selection.binding,
-                &control.policy.custody_trust(),
-                &SignerCustodyEnrollmentContextV1 {
-                    now_unix_ms: *observed_at_unix_ms,
-                    anchor_observed_at_unix_ms: *observed_at_unix_ms,
-                    current_anchor: *anchor,
-                    next_sequence: control.next_sequence,
-                    predecessor_digest: control.predecessor_digest,
-                    signer_revoked: control.signer_revoked,
-                    attester_revoked: control.attester_revoked,
-                },
-            )
-            .map_err(|_| {
-                invalid("enrollment exceeds its original governed custody authorization")
-            })?;
-            if verified.statement().issued_at_unix_ms != interval.issued_at_unix_ms
-                || verified.statement().expires_at_unix_ms != interval.expires_at_unix_ms
-            {
-                return Err(invalid(
-                    "enrollment statement differs from original requested interval",
-                ));
+                validity,
+                selected_at_unix_ms,
+                anchor,
+            } => {
+                if enrollment.is_empty()
+                    || enrollment.len() > 16 * 1024
+                    || *selected_at_unix_ms == 0
+                    || validity.issued_at_unix_ms == 0
+                    || validity.issued_at_unix_ms > *selected_at_unix_ms
+                    || validity.expires_at_unix_ms <= *selected_at_unix_ms
+                    || validity.expires_at_unix_ms == u64::MAX
+                {
+                    return Err(invalid(
+                        "original enrollment differs from immutable body validity",
+                    ));
+                }
+                let control = self.control()?;
+                let verified = verify_signer_custody_enrollment_v1(
+                    enrollment,
+                    &self.selection.binding,
+                    &control.policy.custody_trust(),
+                    &SignerCustodyEnrollmentContextV1 {
+                        now_unix_ms: *selected_at_unix_ms,
+                        anchor_observed_at_unix_ms: *selected_at_unix_ms,
+                        current_anchor: *anchor,
+                        next_sequence: control.next_sequence,
+                        predecessor_digest: control.predecessor_digest,
+                        signer_revoked: control.signer_revoked,
+                        attester_revoked: control.attester_revoked,
+                    },
+                )
+                .map_err(|_| {
+                    invalid("enrollment exceeds its original governed custody authorization")
+                })?;
+                if verified.statement().issued_at_unix_ms != validity.issued_at_unix_ms
+                    || verified.statement().expires_at_unix_ms != validity.expires_at_unix_ms
+                {
+                    return Err(invalid(
+                        "enrollment statement differs from original requested interval",
+                    ));
+                }
             }
-        } else if let Action::Configure(policy) = &self.action {
-            encode(policy, 16 * 1024)?;
         }
         Ok(())
     }
-    pub fn matches_configuration(
-        &self,
-        policy: &SignerCustodyPolicyV1,
-        deadline: u64,
-        options: &BoundedTransactionOptions,
-    ) -> Result<()> {
+    pub fn matches_configuration(&self, policy: &SignerCustodyPolicyV1) -> Result<()> {
         self.validate()?;
         if !matches!(&self.action, Action::Configure(saved) if saved == policy) {
             return Err(invalid("initial custody configuration cannot be replaced"));
         }
-        self.terms.matches(deadline, options)
+        Ok(())
+    }
+    pub fn matches_enrollment_policy(&self, policy: &SignerCustodyPolicyV1) -> Result<()> {
+        self.validate()?;
+        if !matches!(self.action, Action::Enroll { .. }) || self.control()?.policy != *policy {
+            return Err(invalid(
+                "initial custody enrollment policy cannot be replaced",
+            ));
+        }
+        Ok(())
+    }
+}
+impl Selected<Original> {
+    pub fn request(&self, deadline: Instant) -> Result<Request> {
+        Original::request(self, &self.terms, self.observation()?, deadline)
+    }
+    pub fn interval(&self) -> Result<ManagedCustodyEnrollmentInterval> {
+        match self.action {
+            Action::Enroll { validity, .. } => {
+                Ok(validity.interval(self.terms.requested_deadline_unix_ms))
+            }
+            Action::Configure(_) => Err(invalid("configuration is not an enrollment interval")),
+        }
+    }
+    pub fn matches_configuration(
+        &self,
+        policy: &SignerCustodyPolicyV1,
+        utc: u64,
+        options: &BoundedTransactionOptions,
+    ) -> Result<()> {
+        Original::matches_configuration(self, policy)?;
+        self.terms.matches(utc, options)
     }
     pub fn matches_enrollment(
         &self,
@@ -252,43 +286,38 @@ impl Original {
         options: &BoundedTransactionOptions,
     ) -> Result<()> {
         self.validate()?;
-        if !matches!(&self.action, Action::Enroll { interval: saved, .. } if *saved == interval) {
+        if self.interval()? != interval {
             return Err(invalid("initial custody enrollment cannot be renewed"));
         }
         self.terms.matches(interval.deadline_unix_ms, options)
     }
-}
-
-pub(super) fn encode<T: norito::NoritoSerialize>(value: &T, maximum: usize) -> Result<Vec<u8>> {
-    if norito::canonical_frame_len(value).map_err(|_| invalid("cannot size custody record"))?
-        > maximum
-    {
-        return Err(invalid("custody record exceeds byte bound"));
-    }
-    norito::encode_canonical(value).map_err(|_| invalid("cannot encode custody record"))
-}
-pub(super) fn read_optional(
-    directory: &PrivateDirectory,
-    name: &str,
-    maximum: usize,
-) -> Result<Option<Vec<u8>>> {
-    match directory.read(name, maximum) {
-        Ok(bytes) => Ok(Some(bytes.to_vec())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            directory.revalidate()?;
-            Ok(None)
-        }
-        Err(error) => Err(error.into()),
+    pub fn matches_selected_enrollment(
+        &self,
+        policy: &SignerCustodyPolicyV1,
+        interval: ManagedCustodyEnrollmentInterval,
+        options: &BoundedTransactionOptions,
+    ) -> Result<()> {
+        self.matches_enrollment_policy(policy)?;
+        self.matches_enrollment(interval, options)
     }
 }
-pub(super) fn read_original(directory: &PrivateDirectory) -> Result<Option<Original>> {
+pub(super) fn read_intent(directory: &PrivateDirectory) -> Result<Option<Original>> {
+    let names = directory.entries(3)?;
+    if names.iter().any(|name| {
+        !["original.nrt", "dispatch.nrt", "attempts"]
+            .iter()
+            .any(|allowed| name == *allowed)
+    }) {
+        return Err(invalid("custody intent contains unknown material"));
+    }
     let Some(bytes) = read_optional(directory, "original.nrt", MAX_ORIGINAL_BYTES)? else {
+        require_empty(directory)?;
         return Ok(None);
     };
     let original: Original = norito::decode_canonical_with_limits(
         &bytes,
         norito::DecodeLimits::new(
-            4096,
+            MAX_CHECKPOINT_BYTES,
             MAX_ORIGINAL_BYTES,
             MAX_ORIGINAL_BYTES,
             96 * 1024 * 1024,
@@ -299,21 +328,60 @@ pub(super) fn read_original(directory: &PrivateDirectory) -> Result<Option<Origi
     original.validate()?;
     Ok(Some(original))
 }
-pub(super) fn required_original(directory: &PrivateDirectory) -> Result<Original> {
+pub(super) fn read_original(directory: &PrivateDirectory) -> Result<Option<Selected<Original>>> {
+    let Some(intent) = read_intent(directory)? else {
+        return Ok(None);
+    };
+    let history = History::read(directory, intent.dispatch_purpose()?, intent.digest()?)?;
+    Selected::from_history(intent, history).map(Some)
+}
+pub(super) fn required_original(directory: &PrivateDirectory) -> Result<Selected<Original>> {
     read_original(directory)?.ok_or_else(|| invalid("original custody request is absent"))
 }
-pub(super) fn publish_original(directory: &PrivateDirectory, original: &Original) -> Result<()> {
+pub(super) fn publish_intent(directory: &PrivateDirectory, original: &Original) -> Result<()> {
     original.validate()?;
-    directory.write_atomic(
-        "original.nrt",
-        &encode(original, MAX_ORIGINAL_BYTES)?,
-        PublishMode::CreateNew,
-    )?;
+    let bytes = encode(original, MAX_ORIGINAL_BYTES)?;
+    if let Some(retained) = read_optional(directory, "original.nrt", MAX_ORIGINAL_BYTES)? {
+        if retained != bytes {
+            return Err(invalid("original native custody body changed"));
+        }
+        return Ok(());
+    }
+    directory.write_atomic("original.nrt", &bytes, PublishMode::CreateNew)?;
     Ok(())
 }
-pub(super) fn require_empty(directory: &PrivateDirectory) -> Result<()> {
-    if !directory.entries(0)?.is_empty() {
-        return Err(invalid("custody journal has no original request"));
-    }
-    Ok(())
+pub(super) fn explicit(
+    directory: &PrivateDirectory,
+    original: &Original,
+    utc: u64,
+    options: &BoundedTransactionOptions,
+    account: &AccountService,
+) -> Result<()> {
+    let purpose = original.dispatch_purpose()?;
+    let history = History::read(directory, purpose, original.digest()?)?;
+    let terms = match history.last() {
+        Some(attempt) => {
+            attempt.terms().matches(utc, options)?;
+            attempt.terms().clone()
+        }
+        None => Terms::new(utc, options)?,
+    };
+    attempts::initial(
+        directory,
+        purpose,
+        original.digest()?,
+        terms,
+        original.initial_observation(),
+        options.deadline,
+        |attempt| {
+            original
+                .request(attempt.terms(), attempt.observation()?, options.deadline)?
+                .inspect(account, &attempt.wallet_path())
+        },
+        |attempt, observation, deadline| {
+            original
+                .request(attempt.terms(), observation, deadline)?
+                .retain(account, &attempt.wallet_path())
+        },
+    )
 }

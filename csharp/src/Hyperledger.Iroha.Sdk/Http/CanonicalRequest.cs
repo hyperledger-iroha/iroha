@@ -333,7 +333,8 @@ public static partial class CanonicalRequest
         var expectedAccount = AccountAddress.FromPublicKey(publicKey);
         if (!account!.ControllerBytes().AsSpan().SequenceEqual(expectedAccount.ControllerBytes()))
         {
-            var expectedAccountId = expectedAccount.ToI105(AccountAddress.DefaultChainDiscriminant);
+            _ = AccountAddress.TryGetI105Discriminant(accountId, out var discriminant);
+            var expectedAccountId = expectedAccount.ToI105(discriminant);
             throw new ArgumentException(
                 $"accountId must match the account derived from privateKeySeed: {expectedAccountId}.",
                 accountParamName);

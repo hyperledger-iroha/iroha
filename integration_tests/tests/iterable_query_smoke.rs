@@ -45,7 +45,10 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
         None => return Ok(()),
     };
     // GET /v1/accounts?limit=1 should return genesis accounts (non-empty items, accurate total)
-    let accounts_url = format!("{}/v1/accounts?limit=1&offset=0", peer.torii_url());
+    let accounts_url = format!(
+        "{}/v1/accounts?limit=1&include_total=true",
+        peer.torii_url()
+    );
     let accounts_body = rt.block_on(async {
         http.get(&accounts_url)
             .send()
@@ -74,7 +77,7 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
     );
     // GET /v1/accounts/{alice}/assets?limit=1 should list genesis balances
     let alice_assets_url = format!(
-        "{}/v1/accounts/{}/assets?limit=1",
+        "{}/v1/accounts/{}/assets?limit=1&include_total=true",
         peer.torii_url(),
         &*ALICE_ID
     );

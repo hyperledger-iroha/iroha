@@ -3,6 +3,10 @@
 use super::super::{tests as dispatch_tests, wide};
 use super::*;
 use ivm::{Memory, encoding::wide as enc};
+use ivm::{
+    execution_diagnostics::DiagnosticExecutionRecorders,
+    execution_memory_recorder::{DiagnosticMemoryAccessKind, DiagnosticMemoryPrivacyTag},
+};
 use packet::Event;
 
 #[derive(Clone)]
@@ -62,11 +66,6 @@ fn program(base: u8, destination: u8, imm: i8) -> Program {
     ))
     .unwrap()
 }
-struct NativeSource {
-    descriptors: [u64; 10],
-    gas: u64,
-    cycles: u64,
-}
 impl Fixture {
     fn new(program: &Program, address: u64, mask: u16, active: u16, old_tag: bool) -> Self {
         Self::at(program, 0, address, mask, active, old_tag)
@@ -79,30 +78,8 @@ impl Fixture {
         active: u16,
         old_tag: bool,
     ) -> Self {
-        Self::at_with_source(program, pc_slot, address, mask, active, old_tag, None)
-    }
-    fn at_with_source(
-        program: &Program,
-        pc_slot: usize,
-        address: u64,
-        mask: u16,
-        active: u16,
-        old_tag: bool,
-        source: Option<NativeSource>,
-    ) -> Self {
         let schedule = Schedule::new(7, 64).unwrap();
-        let mut dispatch = if let Some(source) = &source {
-            dispatch_tests::Fixture::with_controls(
-                program,
-                pc_slot,
-                false,
-                0,
-                source.gas,
-                source.cycles,
-            )
-        } else {
-            dispatch_tests::Fixture::new(program, pc_slot, false, 0)
-        };
+        let mut dispatch = dispatch_tests::Fixture::new(program, pc_slot, false, 0);
         dispatch.schedule = schedule.dispatch();
         let instruction = program.words[pc_slot];
         let base = address.wrapping_sub(i64::from(wide::imm8(instruction)) as u64);
@@ -161,9 +138,6 @@ impl Fixture {
             Memory::HEAP_START + 0x900,
             Memory::HEAP_START + 0x910,
         ];
-        let descriptors = source
-            .as_ref()
-            .map_or(descriptors, |source| source.descriptors);
         let mut frame = frame_access::tests::Fixture::new(
             true,
             active,
@@ -225,10 +199,10 @@ impl Fixture {
         }
         let cell = if address < program.code_end() {
             core::array::from_fn(|i| {
-                // CODE starts at the original metadata boundary, including the
-                // admitted interface prefix; instruction words alone are not this image.
-                program.artifact().artifact()[program.artifact().header_len()..]
-                    .get((address & !15) as usize + i)
+                program
+                    .artifact()
+                    .artifact()
+                    .get(program.artifact().header_len() + (address & !15) as usize + i)
                     .copied()
                     .unwrap_or(0)
             })
@@ -700,9 +674,16 @@ fn all_thirty_seven_original_packets_and_all_eight_stages_share_one_private_hist
     assert_eq!(original.producer(33)[INDEX], F(3));
 }
 
-const NATIVE_STACK: u64 = Memory::STACK_START + Memory::MIN_STACK_SIZE - 16;
-const NATIVE_CELL: u128 = 0xfedc_ba98_7654_3210_0123_4567_89ab_cdef;
-
+// Native controls retain the exact admitted image, root frame and Unit return.
+fn native_program(body: &[u32], frame_bytes: u32) -> Program {
+    let original = dispatch_tests::contract(body, 128, ivm::ivm_mode::ZK);
+    let mut interface = original.contract_interface().clone();
+    interface.callables[0].frame_bytes = frame_bytes;
+    let mut artifact = original.metadata().encode();
+    artifact.extend_from_slice(&interface.encode_section());
+    artifact.extend_from_slice(&original.artifact()[original.code_offset()..]);
+    Program::new(ivm::prepare_contract(std::sync::Arc::<[u8]>::from(artifact)).unwrap()).unwrap()
+}
 fn native(program: &Program, gas: u64) -> ivm::IVM {
     let mut vm = ivm::IVM::new(gas);
     vm.load_prepared(program.artifact()).unwrap();
@@ -710,250 +691,335 @@ fn native(program: &Program, gas: u64) -> ivm::IVM {
     assert_eq!(vm.pc(), u64::from(program.first_pc));
     vm
 }
-fn root_setup_gas() -> u64 {
-    // The actual empty-argument owner allocates one Unit result word and
-    // the declared 16-byte frame owns its initialization bitmap.
-    8 + 16_u64.div_ceil(8) + 1
-}
-fn root_events(program: &Program) -> Vec<(bool, usize, u64, bool)> {
-    let tables = [(10, 0), (11, 0), (12, Memory::HEAP_START), (13, 1)];
-    let mut expected = tables.map(|(r, v)| (true, r, v, false)).to_vec();
-    expected.extend(tables.map(|(r, v)| (false, r, v, false)));
-    for (r, v) in [(31, NATIVE_STACK + 16), (1, program.code_end())] {
-        expected.extend([(true, r, v, false); 2]);
-    }
-    expected.extend([
-        (false, 10, 0, false),
-        (false, 12, Memory::HEAP_START, false),
-        (false, 11, 0, false),
-        (false, 13, 1, false),
-    ]);
-    expected
-}
-fn assert_native_load_events(
-    vm: &ivm::IVM,
-    program: &Program,
-    fixture: &Fixture,
-    private_half: Option<u64>,
-) {
-    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
-    let capture = vm.try_diagnostic_snapshot(&budget).unwrap();
-    let actual = capture
-        .register_events()
-        .map(|e| (e.written, e.index, e.value, e.tag))
-        .collect::<Vec<_>>();
-    // Explain every event; no prefix/suffix filtering can hide an unexpected
-    // root-call access or a changed STORE/LOAD chronology.
-    let mut expected = root_events(program);
-    for (register, half) in [(5, 0), (6, 8)] {
-        expected.push((false, 4, NATIVE_STACK, false));
-        expected.push((
-            false,
-            register,
-            (NATIVE_CELL >> (half * 8)) as u64,
-            private_half == Some(half),
-        ));
-    }
-    let originals = fixture.borrowed();
-    let base = originals.producer(4);
-    expected.push((
-        false,
-        base[INDEX].0 as usize,
-        packet::half(base, BEFORE, 0),
-        base[BEFORE_TAG] == F::ONE,
-    ));
-    let destination = originals.producer(33);
-    if destination[ENABLED] == F::ONE {
-        assert_eq!(destination[WRITE], F::ONE);
-        let index = destination[INDEX].0 as usize;
-        let value = packet::half(destination, AFTER, 0);
-        // The semantic history owns one atomic value/tag transition. Native
-        // diagnostic logging exposes its ordered value write, retaining the
-        // old tag, and then the tag write with the same completed value.
-        expected.push((true, index, value, destination[BEFORE_TAG] == F::ONE));
-        expected.push((true, index, value, destination[AFTER_TAG] == F::ONE));
-    }
-    assert_eq!(
-        actual, expected,
-        "complete root setup, stack initialization, base read and ordered value/tag writes"
-    );
-}
-
-fn native_load_case(
-    region: u64,
-    half: u64,
-    destination: u8,
-    imm: i8,
-    old_tag: bool,
-    private: bool,
-) {
-    let words = [
-        enc::encode_store(wide::memory::STORE64, 4, 5, 0),
-        enc::encode_store(wide::memory::STORE64, 4, 6, 8),
-        enc::encode_load(wide::memory::LOAD64, destination, 2, imm),
-        enc::encode_halt(),
-    ];
-    let program = Program::new(dispatch_tests::contract_with_frame(
-        &words,
-        1_000,
-        ivm::ivm_mode::ZK,
-        16,
-    ))
+fn run_native(vm: &mut ivm::IVM) -> DiagnosticExecutionRecorders {
+    let plan = DiagnosticExecutionRecorders::allocation_plan(16, 256, None).unwrap();
+    let budget = iroha_allocation::AllocationBudget::new(plan.requested_bytes());
+    let mut recorder = DiagnosticExecutionRecorders::try_new(16, 256, None, &budget).unwrap();
+    vm.run_with_host_diagnostic_steps_and_memory(
+        &mut ivm::host::DefaultHost::default(),
+        &mut recorder.steps,
+        &recorder.memory_accesses,
+    )
     .unwrap();
-    let address = region + half;
-    let private_half = private.then_some(half);
-    let gas = 100;
-    let before_gas = gas - root_setup_gas() - 6;
-    let fixture = Fixture::at_with_source(
-        &program,
-        2,
-        address,
-        if private { 0xff << half } else { 0 },
-        1,
-        old_tag,
-        Some(NativeSource {
-            descriptors: [
-                NATIVE_STACK,
-                NATIVE_STACK + 16,
-                0,
-                0,
-                Memory::HEAP_START,
-                Memory::HEAP_START + 8,
-                0,
-                0,
-                Memory::HEAP_START,
-                Memory::HEAP_START + 8,
-            ],
-            gas: before_gas,
-            cycles: 2,
-        }),
-    );
-    assert!(fixture.accepts(&program));
-    let mut vm = native(&program, gas);
-    let originals = fixture.borrowed();
-    let memory = originals.producer(32);
-    let data = core::array::from_fn::<_, 16, _>(|i| {
-        ((memory[BEFORE + i / 2].0 >> (8 * (i % 2))) & 255) as u8
-    });
-    if region == Memory::INPUT_START {
-        vm.memory.preload_input(0, &data).unwrap();
-    } else if region != 0 && region != NATIVE_STACK {
-        vm.memory
-            .store_u128(region, u128::from_le_bytes(data))
-            .unwrap();
+    assert_eq!(vm.call_result_word_count(), Ok(1));
+    assert_eq!(vm.public_call_result_word(0), Ok(0));
+    recorder
+}
+impl Fixture {
+    fn bind_native_control(
+        &mut self,
+        program: &Program,
+        record: &ivm::execution_step_recorder::DiagnosticStepRecord,
+        vm: &ivm::IVM,
+        recorder: &DiagnosticExecutionRecorders,
+        load_step: usize,
+    ) {
+        use super::super::{CARRIES, DEPTH_BITS, DEPTH_BITS_PER_VALUE, WORDS};
+        let before = &record.before;
+        let after = &record.after;
+        for (word, value) in [
+            (1, before.gas_remaining),
+            (2, after.gas_remaining),
+            (3, before.cycles),
+            (4, after.cycles),
+            (9, program.cycle_limit - 1 - before.cycles),
+        ] {
+            dispatch_tests::bits(
+                &mut self.rows[0][WORDS + word * 64..WORDS + (word + 1) * 64],
+                value,
+            );
+        }
+        for (offset, left, right, subtract) in [
+            (0, before.gas_remaining, 3, true),
+            (4, before.cycles, 1, false),
+            (16, program.cycle_limit - 1, before.cycles, true),
+        ] {
+            dispatch_tests::carries(
+                &mut self.rows[0][CARRIES + offset..CARRIES + offset + 4],
+                left,
+                right,
+                subtract,
+            );
+        }
+        self.rows[0][DEPTH_BITS..DEPTH_BITS + 2 * DEPTH_BITS_PER_VALUE].fill(F::ZERO);
+        for (slot, left, right) in [
+            (0, before.pc, before.pc),
+            (1, before.gas_remaining, after.gas_remaining),
+            (14, 0, 0),
+            (18, before.pc, after.pc),
+            (19, before.cycles, after.cycles),
+        ] {
+            let packet = &mut self.rows[0]
+                [PACKETS + slot * packet::WIDTH..PACKETS + (slot + 1) * packet::WIDTH];
+            for limb in 0..4 {
+                packet[BEFORE + limb] = F((left >> (16 * limb)) & 0xffff);
+                packet[AFTER + limb] = F((right >> (16 * limb)) & 0xffff);
+            }
+        }
+        for index in 0..3 {
+            let original = *port(&self.rows[0], 18 + index);
+            set_port(&mut self.rows[3], 2 + index, original);
+            for row in self.rows.iter_mut() {
+                row[CARRY + COMPLETION + index * packet::WIDTH
+                    ..CARRY + COMPLETION + (index + 1) * packet::WIDTH]
+                    .copy_from_slice(&original);
+            }
+        }
+        // This fresh invocation has one authenticated root. Its table registers
+        // are installed before the first diagnostic instruction; no body word
+        // changes them or the entry stack pointer before this LOAD.
+        let stack_top = vm.memory.stack_top();
+        assert_eq!(before.registers[31], stack_top);
+        assert!(!before.tags[31]);
+        assert_eq!(before.registers[10], 0);
+        assert_eq!(before.registers[11], 0);
+        assert_eq!(before.registers[12], Memory::HEAP_START);
+        assert_eq!(before.registers[13], 1);
+        let stack_start =
+            stack_top - u64::from(program.artifact().contract_interface().callables[0].frame_bytes);
+        let arguments = before.registers[10];
+        let argument_end = arguments + before.registers[11] * 8;
+        let results = before.registers[12];
+        let result_end = results + before.registers[13] * 8;
+        let descriptors = [
+            stack_start,
+            stack_top,
+            arguments,
+            argument_end,
+            results,
+            result_end,
+            arguments,
+            argument_end,
+            results,
+            result_end,
+        ];
+        let originals = self.borrowed();
+        let memory = originals.producer(32);
+        let instruction = record.instruction.unwrap();
+        let address = before.registers[wide::rs1(instruction)]
+            .wrapping_add_signed(i64::from(wide::imm8(instruction)));
+        assert_eq!(memory[INDEX], F(address >> 4));
+        let cell = address & !15;
+        let privacy = memory[BEFORE_TAG].0 as u16;
+        // Root initialization starts empty. Only prior checked guest writes
+        // establish its stack bitmap; pre-run host bytes cannot initialize it.
+        let initialized = recorder.memory_accesses.with_records(|accesses| {
+            let mut initialized = 0_u16;
+            for access in accesses {
+                if access.kind == DiagnosticMemoryAccessKind::Write
+                    && access
+                        .step_ordinal
+                        .is_some_and(|step| step < load_step as u64)
+                    && (cell..cell + 16).contains(&access.address)
+                {
+                    initialized |= 1 << (access.address - cell);
+                }
+            }
+            let reads = accesses
+                .iter()
+                .filter(|access| {
+                    access.kind == DiagnosticMemoryAccessKind::Read
+                        && access.step_ordinal == Some(load_step as u64)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(reads.len(), 8);
+            for (byte, access) in reads.into_iter().enumerate() {
+                let offset = ((address & 15) as usize) + byte;
+                assert_eq!(access.address, address + byte as u64);
+                assert_eq!(access.byte_offset, byte as u32);
+                let value = ((memory[BEFORE + offset / 2].0 >> (8 * (offset % 2))) & 255) as u8;
+                assert_eq!((access.before, access.after), (value, value));
+                assert_eq!(
+                    access.privacy_tag,
+                    if privacy & (1 << offset) != 0 {
+                        DiagnosticMemoryPrivacyTag::Private
+                    } else {
+                        DiagnosticMemoryPrivacyTag::Public
+                    }
+                );
+            }
+            initialized
+        });
+        let mut frame =
+            frame_access::tests::Fixture::new(true, 1, address, 8, false, descriptors, initialized);
+        self.rows[2][..frame_access::WIDTH].copy_from_slice(&frame.row);
+        for index in 0..12 {
+            if frame.ports[index][ENABLED] == F::ONE {
+                frame.ports[index][CLOCK] = F(u64::from(self.schedule.clock(20 + index)));
+            }
+            set_port(&mut self.rows[2], index, frame.ports[index]);
+        }
+        assert_eq!(packet::half(self.borrowed().producer(20), BEFORE, 0), 1);
+        for (index, descriptor) in descriptors.into_iter().enumerate() {
+            assert_eq!(
+                packet::half(self.borrowed().producer(21 + index), BEFORE, 0),
+                descriptor
+            );
+        }
+        if (stack_start..stack_top).contains(&address) {
+            assert_eq!(initialized, 0xff << (address & 8));
+            assert_eq!(
+                packet::half(self.borrowed().producer(31), BEFORE, 0),
+                u64::from(initialized)
+            );
+        } else {
+            assert_eq!(self.borrowed().producer(31), &[F::ZERO; packet::WIDTH]);
+        }
+        let policies = [
+            stack_top,
+            Memory::HEAP_START + vm.memory.heap_limit(),
+            program.code_end(),
+        ];
+        for (index, value) in policies.into_iter().enumerate() {
+            let original = word_event(
+                POLICY_INDEXES[index],
+                self.schedule.clock(17 + index),
+                value,
+                value,
+                false,
+            );
+            set_port(&mut self.rows[1], index, original);
+            for row in self.rows.iter_mut() {
+                row[CARRY + POLICY + index * packet::WIDTH
+                    ..CARRY + POLICY + (index + 1) * packet::WIDTH]
+                    .copy_from_slice(&original);
+            }
+        }
+        self.rows[3][..effect::WIDTH]
+            .copy_from_slice(&effect::witness(address, true, policies, privacy));
+        assert!(self.accepts(program));
     }
-    vm.set_register(2, address.wrapping_sub(i64::from(imm) as u64));
-    vm.set_register(4, NATIVE_STACK);
-    vm.set_register(5, NATIVE_CELL as u64);
-    vm.set_register(6, (NATIVE_CELL >> 64) as u64);
-    vm.registers.set_tag(5, private_half == Some(0));
-    vm.registers.set_tag(6, private_half == Some(8));
-    if destination == 3 {
-        vm.set_register(3, 0x1234_5678);
-        vm.registers.set_tag(3, old_tag);
-    }
-    vm.memory.clear_tracking();
-    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
-    let mut recorder =
-        ivm::execution_step_recorder::DiagnosticStepRecorder::try_new(3, &budget).unwrap();
-    // A prepaid diagnostic stop occurs before the next instruction. This is
-    // a completed LOAD prefix, not a successful full invocation or a HALT bypass.
+}
+fn assert_native_load_record(
+    record: &ivm::execution_step_recorder::DiagnosticStepRecord,
+    fixture: &Fixture,
+) {
     assert_eq!(
-        vm.run_with_host_diagnostic_steps(&mut ivm::host::DefaultHost::default(), &mut recorder),
-        Err(ivm::VMError::ExecutionDeferred(
-            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
-        ))
+        record.outcome,
+        ivm::execution_step_recorder::DiagnosticStepOutcome::Completed
     );
-    assert_eq!(recorder.records().len(), 3);
-    for (slot, record) in recorder.records().iter().enumerate() {
-        assert_eq!(record.instruction, Some(words[slot]));
-        assert_eq!(
-            record.outcome,
-            ivm::execution_step_recorder::DiagnosticStepOutcome::Completed
-        );
-        assert_eq!(record.opcode_gas, Some(3));
-        assert_eq!(
-            record.before.pc,
-            u64::from(program.first_pc) + slot as u64 * 4
-        );
-        assert_eq!(record.after.pc, record.before.pc + 4);
-        assert_eq!(record.after.cycles, record.before.cycles + 1);
-        assert_eq!(record.after.gas_remaining, record.before.gas_remaining - 3);
-    }
-    let step = &recorder.records()[2];
+    assert_eq!(record.opcode_gas, Some(3));
+    let instruction = record.instruction.unwrap();
+    assert_eq!(wide::opcode(instruction), wide::memory::LOAD64);
+    let base = wide::rs1(instruction);
+    let destination = wide::rd(instruction);
+    let original = fixture.borrowed();
     assert_eq!(
-        (step.before.gas_remaining, step.before.cycles),
-        (before_gas, 2)
+        record.before.registers[base],
+        packet::half(original.producer(4), BEFORE, 0)
     );
+    assert!(!record.before.tags[base]);
+    for register in 0..256 {
+        if register == destination && register != 0 {
+            let packet = original.producer(33);
+            assert_eq!(
+                record.before.registers[register],
+                packet::half(packet, BEFORE, 0)
+            );
+            assert_eq!(record.before.tags[register], packet[BEFORE_TAG] == F::ONE);
+            assert_eq!(
+                record.after.registers[register],
+                packet::half(packet, AFTER, 0)
+            );
+            assert_eq!(record.after.tags[register], packet[AFTER_TAG] == F::ONE);
+        } else {
+            assert_eq!(
+                record.after.registers[register],
+                record.before.registers[register]
+            );
+            assert_eq!(record.after.tags[register], record.before.tags[register]);
+        }
+    }
     for (slot, before, after) in [
-        (34, step.before.pc, step.after.pc),
-        (1, step.before.gas_remaining, step.after.gas_remaining),
-        (35, step.before.cycles, step.after.cycles),
+        (0, record.before.pc, record.before.pc),
+        (1, record.before.gas_remaining, record.after.gas_remaining),
+        (34, record.before.pc, record.after.pc),
+        (35, record.before.cycles, record.after.cycles),
     ] {
-        assert_eq!(packet::half(originals.producer(slot), BEFORE, 0), before);
-        assert_eq!(packet::half(originals.producer(slot), AFTER, 0), after);
+        assert_eq!(packet::half(original.producer(slot), BEFORE, 0), before);
+        assert_eq!(packet::half(original.producer(slot), AFTER, 0), after);
     }
-    assert_native_load_events(&vm, &program, &fixture, private_half);
-    let value = if destination == 0 {
-        0
-    } else {
-        packet::half(originals.producer(33), AFTER, 0)
-    };
-    let mut values = step.before.registers;
-    let mut tags = step.before.tags;
-    if destination != 0 {
-        values[destination as usize] = value;
-        tags[destination as usize] = private;
-    }
-    assert_eq!(step.after.registers, values);
-    assert_eq!(step.after.tags, tags);
-    assert_eq!(vm.registers.get(destination as usize), value);
-    assert_eq!(
-        vm.registers.tag(destination as usize),
-        private && destination != 0
-    );
-    assert!(
-        vm.memory
-            .try_read_log_snapshot()
-            .unwrap()
-            .iter()
-            .any(|r| (r.addr, r.len) == (address, 8))
-    );
-    assert_eq!(
-        vm.memory
-            .try_write_log_snapshot()
-            .unwrap()
-            .iter()
-            .map(|w| (w.address(), w.bytes().len()))
-            .collect::<Vec<_>>(),
-        [(NATIVE_STACK, 8), (NATIVE_STACK + 8, 8)]
-    );
-    assert_eq!(
-        (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
-        (before_gas - 3, u64::from(program.first_pc) + 12, 3)
-    );
-    assert!(
-        vm.call_result_word_count().is_err(),
-        "diagnostic stop does not complete invocation authority"
-    );
+    assert_eq!(record.before.gas_remaining - record.after.gas_remaining, 3);
+    assert_eq!(record.after.cycles - record.before.cycles, 1);
+    assert_eq!(record.after.pc - record.before.pc, 4);
 }
 
 #[test]
 fn actual_native_load_matches_five_regions_both_halves_aliases_zero_and_signed_immediates() {
-    // HEAP data does not overlap the actual root result table; STACK data
-    // belongs to the declared root frame and is initialized by guest STOREs.
+    let stack = ivm::IVM::new(10_000).memory.stack_top() - 512;
     for region in [
         0,
         Memory::HEAP_START + 0x100,
         Memory::INPUT_START,
         Memory::OUTPUT_START,
-        NATIVE_STACK,
+        stack,
     ] {
         for half in [0, 8] {
             for destination in [0, 2, 3] {
                 for imm in [-128, -8, 0, 127] {
                     for old_tag in [false, true] {
-                        native_load_case(region, half, destination, imm, old_tag, false);
+                        let load = enc::encode_load(wide::memory::LOAD64, destination, 2, imm);
+                        let body = if region == stack {
+                            vec![enc::encode_store(wide::memory::STORE64, 2, 4, imm), load]
+                        } else {
+                            vec![load]
+                        };
+                        let program = native_program(&body, 512);
+                        let address = region + half;
+                        let mut fixture =
+                            Fixture::at(&program, body.len() - 1, address, 0, 0, old_tag);
+                        assert!(fixture.accepts(&program));
+                        let data = {
+                            let original = fixture.borrowed();
+                            let memory = original.producer(32);
+                            core::array::from_fn::<_, 16, _>(|i| {
+                                ((memory[BEFORE + i / 2].0 >> (8 * (i % 2))) & 255) as u8
+                            })
+                        };
+                        let mut vm = native(&program, 10_000);
+                        if region == Memory::INPUT_START {
+                            vm.memory.preload_input(0, &data).unwrap();
+                        } else if region != 0 {
+                            vm.memory
+                                .store_u128(region, u128::from_le_bytes(data))
+                                .unwrap();
+                        }
+                        vm.set_register(2, address.wrapping_sub(i64::from(imm) as u64));
+                        vm.set_register(
+                            4,
+                            u64::from_le_bytes(
+                                data[half as usize..half as usize + 8].try_into().unwrap(),
+                            ),
+                        );
+                        if destination == 3 {
+                            vm.set_register(3, 0x1234_5678);
+                            vm.registers.set_tag(3, old_tag);
+                        }
+                        vm.memory.clear_tracking();
+                        let recorder = run_native(&mut vm);
+                        let record = &recorder.steps.records()[body.len() - 1];
+                        fixture.bind_native_control(
+                            &program,
+                            record,
+                            &vm,
+                            &recorder,
+                            body.len() - 1,
+                        );
+                        assert_native_load_record(record, &fixture);
+                        assert!(!record.after.tags[usize::from(destination)]);
+                        assert!(vm.memory.try_read_log_snapshot().unwrap().iter().any(|r| (
+                            r.addr, r.len
+                        ) == (
+                            address, 8
+                        )));
+                        let writes = vm.memory.try_write_log_snapshot().unwrap();
+                        assert_eq!(
+                            writes.iter().filter(|w| w.address() == address).count(),
+                            usize::from(region == stack)
+                        );
+                        assert_eq!(vm.memory.load_u128(region).unwrap().to_le_bytes(), data);
+                        assert_eq!(vm.pc(), program.code_end());
+                        assert_eq!(vm.get_cycle_count(), program.cycle_limit);
                     }
                 }
             }
@@ -964,87 +1030,174 @@ fn actual_native_load_matches_five_regions_both_halves_aliases_zero_and_signed_i
 #[test]
 fn actual_native_private_stack_load_preserves_atomic_value_and_tag_and_rejects_failed_success_paths()
  {
+    let stack = ivm::IVM::new(10_000).memory.stack_top() - 512;
     for half in [0, 8] {
         for destination in [0, 2, 3] {
-            native_load_case(NATIVE_STACK, half, destination, 0, false, true);
+            let words = [
+                enc::encode_store(wide::memory::STORE64, 2, 4, 0),
+                enc::encode_load(wide::memory::LOAD64, destination, 2, 0),
+            ];
+            let program = native_program(&words, 512);
+            let address = stack + half;
+            let mut fixture = Fixture::at(&program, 1, address, 0xff << half, 0, false);
+            assert!(fixture.accepts(&program));
+            let value = packet::half(fixture.borrowed().producer(32), BEFORE, (half / 8) as usize);
+            let mut vm = native(&program, 10_000);
+            vm.memory
+                .store_u128(
+                    address & !15,
+                    0xfedc_ba98_7654_3210_0123_4567_89ab_cdef_u128,
+                )
+                .unwrap();
+            vm.set_register(2, address);
+            vm.set_register(4, value);
+            vm.registers.set_tag(4, true);
+            if destination == 3 {
+                vm.set_register(3, 0x1234_5678);
+            }
+            vm.memory.clear_tracking();
+            let recorder = run_native(&mut vm);
+            let record = &recorder.steps.records()[1];
+            fixture.bind_native_control(&program, record, &vm, &recorder, 1);
+            assert_native_load_record(record, &fixture);
+            assert_eq!(
+                record.after.tags[usize::from(destination)],
+                destination != 0
+            );
+            assert_eq!(
+                record.after.registers[usize::from(destination)],
+                if destination == 0 { 0 } else { value }
+            );
+            assert!(
+                vm.memory
+                    .try_read_log_snapshot()
+                    .unwrap()
+                    .iter()
+                    .any(|r| (r.addr, r.len) == (address, 8))
+            );
+            assert_eq!(vm.pc(), program.code_end());
+            assert_eq!(vm.get_cycle_count(), program.cycle_limit);
         }
     }
-    let p = Program::new(dispatch_tests::contract_with_frame(
-        &[
-            enc::encode_load(wide::memory::LOAD64, 3, 2, 0),
-            enc::encode_halt(),
-        ],
-        1_000,
-        ivm::ivm_mode::ZK,
-        16,
-    ))
-    .unwrap();
-    let outside_code = (p.code_end() + 7) & !7;
-    for (address, private_base, opcode_gas, trap) in [
-        (
-            Memory::HEAP_START + 0x100,
-            true,
-            100,
-            ivm::error::VmTrapKind::PrivacyViolation,
-        ),
-        (
-            Memory::HEAP_START + 0x101,
-            false,
-            100,
-            ivm::error::VmTrapKind::MemoryFault,
-        ),
-        (
-            Memory::HEAP_START + 0x100,
-            false,
-            2,
-            ivm::error::VmTrapKind::OutOfGas,
-        ),
-        (
-            outside_code,
-            false,
-            100,
-            ivm::error::VmTrapKind::MemoryFault,
-        ),
-    ] {
-        let mut vm = native(&p, root_setup_gas() + opcode_gas);
-        vm.set_register(2, address);
-        vm.registers.set_tag(2, private_base);
-        vm.set_register(3, 99);
-        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
-        let mut recorder =
-            ivm::execution_step_recorder::DiagnosticStepRecorder::try_new(1, &budget).unwrap();
-        assert!(
-            vm.run_with_host_diagnostic_steps(
-                &mut ivm::host::DefaultHost::default(),
-                &mut recorder
-            )
-            .is_err()
+    for frame_bytes in [0, 512] {
+        let p = native_program(
+            &[enc::encode_load(wide::memory::LOAD64, 3, 2, 0)],
+            frame_bytes,
         );
-        assert_eq!(
-            recorder.records().len(),
-            1,
-            "actual opcode refusal, not a root setup failure"
-        );
-        let step = &recorder.records()[0];
-        assert_eq!(step.instruction, Some(p.words[0]));
-        assert_eq!(
-            step.outcome,
-            ivm::execution_step_recorder::DiagnosticStepOutcome::Trapped(trap)
-        );
-        assert_eq!(step.before.gas_remaining, opcode_gas);
-        assert_eq!(vm.registers.get(3), 99);
-        assert_eq!(vm.pc(), u64::from(p.first_pc));
-        assert_eq!(vm.get_cycle_count(), 0);
+        let stack_top = native(&p, 1_000).memory.stack_top();
+        let stack_start = stack_top - u64::from(frame_bytes);
+        let setup_gas = 8 + ivm::call_gas::frame(frame_bytes, 1).unwrap();
+        use ivm::error::{Perm, VMError, VmTrapKind};
+        let read_fault = |address| VMError::MemoryAccessViolation {
+            addr: address as u32,
+            perm: Perm::READ,
+        };
+        // LOAD64 checks base privacy before reading; load_u64 checks alignment
+        // before permissions. Base gas is charged before those checks, but an
+        // instruction that cannot pay its base gas stops without a debit.
+        for (address, private_base, gas, expected_error, expected_trap) in [
+            (
+                Memory::HEAP_START + 0x100,
+                true,
+                1_000,
+                VMError::PrivacyViolation,
+                VmTrapKind::PrivacyViolation,
+            ),
+            (
+                Memory::HEAP_START + 0x101,
+                false,
+                1_000,
+                VMError::MisalignedAccess {
+                    addr: (Memory::HEAP_START + 0x101) as u32,
+                },
+                VmTrapKind::MemoryFault,
+            ),
+            (
+                Memory::HEAP_START + 0x100,
+                false,
+                setup_gas + 2,
+                VMError::OutOfGas,
+                VmTrapKind::OutOfGas,
+            ),
+            (
+                p.code_end().next_multiple_of(8),
+                false,
+                1_000,
+                read_fault(p.code_end().next_multiple_of(8)),
+                VmTrapKind::MemoryFault,
+            ),
+            // The active frame rejects reads outside its stack and reads of
+            // its unwritten bytes, including all stack reads in an empty frame.
+            (
+                stack_start - 8,
+                false,
+                1_000,
+                read_fault(stack_start - 8),
+                VmTrapKind::MemoryFault,
+            ),
+            (
+                stack_top,
+                false,
+                1_000,
+                read_fault(stack_top),
+                VmTrapKind::MemoryFault,
+            ),
+            (
+                stack_start,
+                false,
+                1_000,
+                read_fault(stack_start),
+                VmTrapKind::MemoryFault,
+            ),
+        ] {
+            let mut vm = native(&p, gas);
+            vm.set_register(2, address);
+            vm.registers.set_tag(2, private_base);
+            vm.set_register(3, 99);
+            let budget = iroha_allocation::AllocationBudget::new(
+                16 * core::mem::size_of::<ivm::execution_step_recorder::DiagnosticStepRecord>(),
+            );
+            let mut recorder =
+                ivm::execution_step_recorder::DiagnosticStepRecorder::try_new(16, &budget).unwrap();
+            assert_eq!(
+                vm.run_with_host_diagnostic_steps(
+                    &mut ivm::host::DefaultHost::default(),
+                    &mut recorder
+                ),
+                Err(expected_error)
+            );
+            let record = &recorder.records()[0];
+            assert_eq!(record.instruction, Some(p.words[0]));
+            assert_eq!(
+                record.outcome,
+                ivm::execution_step_recorder::DiagnosticStepOutcome::Trapped(expected_trap)
+            );
+            assert_eq!(record.before.registers[3], 99);
+            assert_eq!(record.after.registers[3], 99);
+            assert_eq!(record.after.pc, record.before.pc);
+            assert_eq!(record.after.cycles, record.before.cycles);
+            assert_eq!(record.before.gas_remaining, gas - setup_gas);
+            assert_eq!(record.before.registers[31], stack_top);
+            assert_eq!(record.before.registers[12], Memory::HEAP_START);
+            assert_eq!(record.before.registers[13], 1);
+            assert_eq!(
+                record.before.gas_remaining - record.after.gas_remaining,
+                if gas - setup_gas < 3 { 0 } else { 3 }
+            );
+            assert_eq!(vm.pc(), u64::from(p.first_pc));
+            assert_eq!(vm.get_cycle_count(), 0);
+        }
     }
     let mut exhausted = program(2, 3, 0);
     let candidate = Fixture::new(&exhausted, Memory::HEAP_START, 0, 0, false);
     exhausted.cycle_limit = 100;
     assert!(!candidate.accepts(&exhausted));
-    let mut base_private = Fixture::new(&p, Memory::HEAP_START, 0, 0, false);
+    let original = program(2, 3, 0);
+    let mut base_private = Fixture::new(&original, Memory::HEAP_START, 0, 0, false);
     for offset in [BEFORE_TAG, AFTER_TAG] {
         base_private.rows[0][PACKETS + 4 * packet::WIDTH + offset] = F::ONE;
     }
-    assert!(!base_private.accepts(&p));
+    assert!(!base_private.accepts(&original));
 }
 
 #[test]

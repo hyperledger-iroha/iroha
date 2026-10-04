@@ -104,6 +104,8 @@ pub(super) fn build_entrypoint_descriptors(
                 writes = fallback_writes.iter().cloned().collect();
             }
         }
+        let reads = canonical_state_hint_keys(reads);
+        let writes = canonical_state_hint_keys(writes);
         let triggers = triggers_by_name
             .get(func.name.as_str())
             .cloned()

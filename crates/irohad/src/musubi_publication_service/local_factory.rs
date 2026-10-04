@@ -27,13 +27,14 @@ use std::{path::PathBuf, sync::Arc};
 /// Non-secret local paths, bounds, and public identity for one injected publication service.
 ///
 /// A deployment must derive these values from `iroha_config` and explicitly initialize the
-/// journal and durable clock at provisioning time. Ordinary startup only reopens them.
+/// journal, seed-owner marker, and durable clock in native private custody at provisioning time.
+/// Ordinary startup only reopens these initialized owners; a missing marker is not repaired.
 pub struct MusubiPublicationPrivateLocalFactorySettingsV1 {
     /// Exact public service identity and timing limits.
     pub service: MusubiPublicationServiceConfigurationV1,
     /// Initialized durable replay-journal directory.
     pub journal_root: PathBuf,
-    /// Private exact-CAR seed staging directory.
+    /// Initialized private exact-CAR seed staging directory.
     pub seed_root: PathBuf,
     /// Initialized durable clock-floor directory.
     pub clock_root: PathBuf,

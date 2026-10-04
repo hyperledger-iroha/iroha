@@ -7,13 +7,15 @@
 //! TODO: connect the independently configured observer service, durable approved spending,
 //! qualified UTC and rollback-protected floor persistence in the final-promotion source factory.
 
+use crate::native_check_binding::{CheckTermination, complete_binding, complete_binding_waiting};
 use iroha_core::query::{
     final_promotion_account_custody::observation::{
         PendingFinalPromotionAccountCheckV1, PreparedFinalPromotionAccountCheckV1,
         validate_final_promotion_account_transaction_envelope_v1,
     },
     final_promotion_authority::observation::{
-        PendingFinalPromotionCheckV1, PreparedFinalPromotionCheckV1,
+        FinalPromotionCheckBindingFailureV1, PendingFinalPromotionCheckV1,
+        PreparedFinalPromotionCheckV1,
     },
 };
 use iroha_crypto::{Algorithm, Signature};
@@ -42,6 +44,8 @@ pub enum FinalPromotionObserverTransactionErrorV1 {
     Check,
     /// The configured observer service failed or returned a wrong-key/message signature.
     Provider,
+    /// Local binding resources remained unavailable until the original Check deadline.
+    Unavailable,
 }
 impl std::fmt::Display for FinalPromotionObserverTransactionErrorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -50,6 +54,7 @@ impl std::fmt::Display for FinalPromotionObserverTransactionErrorV1 {
             Self::Payload => "final-promotion observer payload rejected",
             Self::Check => "final-promotion observer Check rejected",
             Self::Provider => "final-promotion observer signer unavailable",
+            Self::Unavailable => "final-promotion observer Check resources unavailable",
         })
     }
 }
@@ -150,7 +155,8 @@ impl FinalPromotionObserverTransactionsV1 {
     /// Sign precisely one original receipt Check, then return its existing Core pending owner.
     ///
     /// Provider failure, invalid signature and expiry consume the original challenge. This method
-    /// does not retry, return a bare signature or renew the original independent floor/deadline.
+    /// never retries the signer or renews the original independent floor/deadline. Local binding
+    /// refusals retain and retry only the exact signed Core owner until that deadline.
     ///
     /// # Errors
     /// Rejects a foreign Check, changed instruction/fees, expiry or substituted provider output.
@@ -159,6 +165,19 @@ impl FinalPromotionObserverTransactionsV1 {
         prepared: PreparedFinalPromotionCheckV1,
         payload: TransactionPayload,
         provider: impl FnOnce(&FinalPromotionObserverKeyRequestV1<'_>) -> Result<Signature, Error>,
+    ) -> Result<PendingFinalPromotionCheckV1, Error> {
+        self.sign_receipt_waiting(prepared, payload, provider, |_, delay| {
+            std::thread::sleep(delay)
+        })
+    }
+
+    /// Keep the same signed owner while the service waits on local binding resources.
+    pub(super) fn sign_receipt_waiting(
+        &self,
+        prepared: PreparedFinalPromotionCheckV1,
+        payload: TransactionPayload,
+        provider: impl FnOnce(&FinalPromotionObserverKeyRequestV1<'_>) -> Result<Signature, Error>,
+        wait: impl FnMut(&FinalPromotionCheckBindingFailureV1, std::time::Duration),
     ) -> Result<PendingFinalPromotionCheckV1, Error> {
         prepared.ensure_live().map_err(|_| Error::Check)?;
         if prepared.binding() != &self.receipt_binding
@@ -179,9 +198,11 @@ impl FinalPromotionObserverTransactionsV1 {
         prepared.ensure_live().map_err(|_| Error::Check)?;
         let signature = self.sign(&payload, &message, provider)?;
         prepared.ensure_live().map_err(|_| Error::Check)?;
-        prepared
-            .bind_signed_transaction(builder.build_with_signature(signature))
-            .map_err(|_| Error::Check)
+        complete_binding_waiting(
+            prepared.bind_signed_transaction(builder.build_with_signature(signature)),
+            wait,
+        )
+        .map_err(binding_error)
     }
 
     /// Sign precisely one original account Check under the same distinct observer and fee policy.
@@ -220,9 +241,8 @@ impl FinalPromotionObserverTransactionsV1 {
         prepared.ensure_live().map_err(|_| Error::Check)?;
         let signature = self.sign(&payload, &message, provider)?;
         prepared.ensure_live().map_err(|_| Error::Check)?;
-        prepared
-            .bind_signed_transaction(builder.build_with_signature(signature))
-            .map_err(|_| Error::Check)
+        complete_binding(prepared.bind_signed_transaction(builder.build_with_signature(signature)))
+            .map_err(binding_error)
     }
 
     fn validate_payload(
@@ -261,5 +281,12 @@ impl FinalPromotionObserverTransactionsV1 {
             )
             .map_err(|_| Error::Provider)?;
         Ok(signature)
+    }
+}
+
+fn binding_error<F>(terminal: CheckTermination<F>) -> Error {
+    match terminal {
+        CheckTermination::Terminal(_) => Error::Check,
+        CheckTermination::Expired => Error::Unavailable,
     }
 }

@@ -71,7 +71,6 @@ fn validate_initial_permission_payload_constraints(
         | "CanSubmitSorafsTelemetry"
         | "CanFileSorafsCapacityDispute"
         | "CanIssueSorafsReplicationOrder"
-        | "CanCompleteSorafsReplicationOrder"
         | "CanSetSorafsPricing"
         | "CanSetSorafsReservePolicy"
         | "CanManageSorafsModeration"
@@ -137,6 +136,18 @@ fn validate_initial_permission_payload_constraints(
                 return Err(invalid_initial_permission_payload(
                     permission,
                     "permission requires the exact provider scope",
+                ));
+            }
+        }
+        "CanCompleteSorafsReplicationOrder" => {
+            let token = executor_permission::sorafs::CanCompleteSorafsReplicationOrder::try_from(
+                permission,
+            )
+            .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if token.provider_id.as_bytes() == &[0; 32] || Permission::from(token) != *permission {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact nonzero provider scope",
                 ));
             }
         }

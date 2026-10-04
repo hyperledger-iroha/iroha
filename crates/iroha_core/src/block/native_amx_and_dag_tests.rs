@@ -1,23 +1,3 @@
-fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
-    let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
-    let address =
-        iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
-    let record = iroha_data_model::sns::NameRecordV1::new(
-        selector.clone(),
-        owner.clone(),
-        vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-        0,
-        0,
-        u64::MAX,
-        u64::MAX,
-        u64::MAX,
-        Metadata::default(),
-    );
-    world.smart_contract_state_mut_for_testing().insert(
-        crate::sns::record_storage_key(&selector),
-        norito::codec::Encode::encode(&record),
-    );
-}
 #[test]
 fn map_overlay_error_labels_amx_budget() {
     let err =

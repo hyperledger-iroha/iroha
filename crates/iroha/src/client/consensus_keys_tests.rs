@@ -31,20 +31,28 @@ fn consensus_keys_reader_requires_operator_auth_and_bounded_canonical_records() 
 
     let mut trailing = norito::encode_canonical(&records).unwrap();
     trailing.push(0);
-    for response in [
+    for (case, response) in [
         norito_response(StatusCode::OK, &vec![record.clone(), record.clone()]),
         norito_response(StatusCode::OK, &vec![record; 129]),
         mk_response(StatusCode::OK, trailing, Some(APPLICATION_NORITO)),
         json_response(StatusCode::OK, "[]"),
         empty_response(StatusCode::FORBIDDEN),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let (result, _) = capture_request(response, |transport| {
             client
                 .clone()
                 .with_test_http_transport(transport)
                 .get_sumeragi_consensus_keys()
         });
-        assert!(result.is_err());
+        let error = result.expect_err("invalid observation must fail");
+        if case == 2 {
+            assert!(matches!(error.downcast_ref::<crate::Error>(),
+                Some(crate::Error::CanonicalDecode { operation: "sumeragi.consensus_keys.read", source })
+                    if source.kind() == norito::core::DecodeAttemptErrorKind::Invalid));
+        }
     }
     let (result, requests) = capture_requests(empty_response(StatusCode::OK), |transport| {
         client
