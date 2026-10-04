@@ -364,10 +364,10 @@ impl ProvisioningOperations for Operations {
             self.binding.faucet.max_operation_fee
         );
         if !path_exists(journal)? {
-            let _held = iroha_wallet::operation_journal::Journal::create_prepared(journal, request)
-                .unwrap();
+            let _held =
+                iroha_operation_journal::Journal::create_prepared(journal, request).unwrap();
         } else {
-            let held = iroha_wallet::operation_journal::Journal::open(journal).unwrap();
+            let held = iroha_operation_journal::Journal::open(journal).unwrap();
             assert_eq!(
                 &held.read_operation::<AliasSetupPlanRequestV1>().unwrap(),
                 request
@@ -698,7 +698,7 @@ fn namespace_quote_survives_failure_before_journal_without_requoting_or_new_fees
         .unwrap();
     assert_eq!(*ops.calls.borrow(), vec!["reserve"]);
     assert_eq!(store.record.namespace.as_ref(), Some(&request));
-    let journal = iroha_wallet::operation_journal::Journal::open(
+    let journal = iroha_operation_journal::Journal::open(
         &store.directory.path().join("operations/namespace"),
     )
     .unwrap();

@@ -2,7 +2,7 @@
 //!
 //! The generated artifact/journal field walk remains the only wire traversal. These
 //! destinations borrow raw byte leaves and retain physically funded spans instead of
-//! copying each artifact body. Decoded SignedBlock graphs are a separate obligation.
+//! copying each artifact body. Decoded `SignedBlock` graphs are a separate obligation.
 
 use super::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits};
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
@@ -24,7 +24,7 @@ enum Frames<'a> {
     },
 }
 
-/// One borrowed native journal source, with one canonical SignedBlockWire per height.
+/// One borrowed native journal source, with one canonical `SignedBlockWire` per height.
 /// This transport view grants no finality authority and never decodes blocks itself.
 #[derive(Clone, Copy)]
 pub struct NativeFinalitySource<'a> {
@@ -380,7 +380,7 @@ impl DecodeField<0, Vec<NativeFinalityArtifact>> for JournalDestination<'_, '_> 
             if plan.used() != bytes.len() {
                 return Err(norito::Error::LengthMismatch.into());
             }
-            let blocks = &mut self.blocks;
+            let blocks = &mut *self.blocks;
             let source = self.source;
             plan.decode_elements::<NativeFinalityArtifact, PreparedNativeFinalityDestinationError>(
                 |index, field| {

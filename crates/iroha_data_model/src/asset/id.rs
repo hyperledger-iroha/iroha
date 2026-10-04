@@ -155,14 +155,28 @@ impl<'de> DeserializePayload<'de> for AssetDefinitionId {
 
 impl norito::json::FastJsonWrite for AssetId {
     fn write_json(&self, out: &mut String) {
-        let literal = self.canonical_literal();
-        norito::json::JsonSerialize::json_serialize(&literal, out);
+        norito::json::write_json_unbounded(self, out);
     }
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::write_json_string_to(&self.canonical_literal(), out)
+        // Every canonical component excludes JSON quotes and escapes. Stream
+        // the existing checked I105 writer instead of formatting an owned
+        // account/controller graph or a complete intermediate asset literal.
+        out.push('"')?;
+        norito::json::visit_json_display_text(self.definition(), |chunk| out.push_str(chunk))?;
+        out.push('#')?;
+        norito::json::JsonObjectKey::visit_json_key_text_checked(self.account(), |chunk| {
+            out.push_str(chunk)
+        })?;
+        if let AssetBalanceScope::Dataspace(dataspace) = self.scope {
+            out.push_str("#dataspace:")?;
+            norito::json::visit_json_display_text(&dataspace.as_u64(), |chunk| {
+                out.push_str(chunk)
+            })?;
+        }
+        out.push('"')
     }
 }
 
@@ -171,7 +185,10 @@ impl norito::json::JsonDeserialize for AssetId {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
-        AssetId::parse_literal(&value).map_err(|err| norito::json::Error::Message(err.to_string()))
+        let (definition, account_literal, scope) = AssetId::parse_literal_parts(&value)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        let account = norito::json::JsonObjectKeyOwned::from_json_key_text(account_literal)?;
+        Ok(AssetId::with_scope(definition, account, scope))
     }
 }
 impl AssetId {
@@ -458,6 +475,47 @@ mod tests {
         let id = AssetId::new(def, account);
         let s = format!("{id:?}");
         assert_eq!(s, id.canonical_literal());
+    }
+    #[test]
+    fn asset_id_checked_json_stream_preserves_literal_and_native_allocation_custody() {
+        let kp = checked_random_keypair();
+        let definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("asset_stream", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+        for scope in [
+            AssetBalanceScope::Global,
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+        ] {
+            let id = AssetId::with_scope(
+                definition.clone(),
+                AccountId::new(kp.public_key().clone()),
+                scope,
+            );
+            let expected = norito::json::to_json(&id.canonical_literal()).unwrap();
+            assert_eq!(norito::json::to_json(&id).unwrap(), expected);
+            let bytes = norito::json::to_json_bounded_boxed(&id, expected.len()).unwrap();
+            assert_eq!(&*bytes, expected.as_bytes());
+            assert!(norito::json::to_json_bounded_boxed(&id, expected.len() - 1).is_err());
+            assert_eq!(norito::json::from_slice::<AssetId>(&bytes).unwrap(), id);
+            let no_allocation =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32);
+            assert!(
+                norito::with_decode_limits_scope(no_allocation, || {
+                    norito::json::to_json_bounded_boxed(&id, expected.len())
+                })
+                .is_err(),
+                "the native account formatter scratch must retain allocation custody"
+            );
+            let literal = norito::json::Value::String(id.canonical_literal());
+            assert!(
+                norito::with_decode_limits_scope(no_allocation, || {
+                    norito::json::from_value::<AssetId>(literal)
+                })
+                .is_err(),
+                "the native account parser must retain allocation custody"
+            );
+        }
     }
     #[test]
     fn asset_definition_id_binary_decode_preserves_local_refusal_and_uuid_checks() {

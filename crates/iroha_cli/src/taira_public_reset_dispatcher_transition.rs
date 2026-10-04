@@ -33,12 +33,11 @@ const MAX_PROOF: u64 = 16 * 1024 * 1024;
 #[cfg(any(target_os = "linux", test))]
 const MAX_BINARY: u64 = 512 * 1024 * 1024;
 #[cfg(any(target_os = "linux", test))]
-const SLUGS: [&str; 5] = [
+const SLUGS: [&str; 4] = [
     "taira-validator-1",
     "taira-validator-2",
     "taira-validator-3",
     "taira-validator-4",
-    "taira-edge",
 ];
 
 /// Inspect, apply, or reverse an exact root-owned dispatcher transition.
@@ -74,7 +73,9 @@ struct Candidate {
     commit: String,
     tree: String,
     signer_fingerprint: String,
+    revision: super::super::RevisionV1,
     executable: Pin,
+    native_edge_candidate: super::super::host_pair::SignedNativeEdgeCandidateV1,
     preparation: Pin,
     request: Pin,
     checks: Pin,
@@ -118,6 +119,8 @@ struct Predecessor {
     inventory_sha256: String,
     authorization_sha256: String,
     authorization_nonce: String,
+    /// Independently authenticated native Mac predecessor; never part of guest role files.
+    native_edge_capture: super::super::host_pair::SignedNativeEdgeCaptureV1,
     /// The selected host session ended with a complete native rollback.
     rolled_back: bool,
     completed_next_step: u16,
@@ -136,6 +139,7 @@ struct Plan {
     schema: String,
     operation_id: String,
     host_identity_sha256: String,
+    hosts: super::super::host_pair::ResetHostPairV1,
     trusted_public_key: Pin,
     candidate: Candidate,
     predecessor: Predecessor,

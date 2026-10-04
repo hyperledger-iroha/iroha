@@ -151,6 +151,7 @@ fn minimal_config_snapshot() {
 fn minimal_config_inherits_large_application_rate_budgets() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("minimal node configuration");
+    assert_eq!(config.compute.slo.max_requests_per_second.get(), 1_000_000);
     let content = &config.content.limits;
     assert_eq!(content.max_requests_per_second.get(), 1_000_000);
     assert_eq!(content.request_burst.get(), 10_000_000);

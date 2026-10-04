@@ -585,8 +585,17 @@ mod tests {
                 },
             }],
         };
-        let oversized_string = "x".repeat(MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES);
-        let payload = Json::from(norito::json!({"value": oversized_string}));
+        // The JSON object must fit its own inclusive limit before the complete
+        // pointer and Norito record framing can exercise the public ABI limit.
+        let string_bytes = iroha_primitives::json::MAX_JSON_BYTES - r#"{"value":""}"#.len();
+        let oversized_string = "x".repeat(string_bytes);
+        let value = norito::json!({"value": oversized_string});
+        let payload = Json::from_norito_value_ref(&value).expect("valid bounded canonical JSON");
+        assert_eq!(payload.get().len(), iroha_primitives::json::MAX_JSON_BYTES);
+        let record = argument_record_from_json(&schema, &payload)
+            .expect("valid canonical string and argument schema");
+        let complete = canonical_norito_frame(&record).expect("encode complete argument record");
+        assert!(complete.len() > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES);
         assert_eq!(
             encode_argument_record_from_json(&schema, &payload),
             Err(VMError::NoritoInvalid)

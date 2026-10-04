@@ -42,7 +42,7 @@ iroha_data_model = { workspace = true, default-features = false, features = ["ap
 iroha_fs = { workspace = true }
 iroha_model_base = { workspace = true, optional = true }
 iroha_telemetry = { workspace = true }
-iroha_wallet = { workspace = true }
+iroha_operation_journal = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 reqwest = { workspace = true, features = ["blocking"] }
 sorafs_car = { workspace = true, features = ["manifest"] }

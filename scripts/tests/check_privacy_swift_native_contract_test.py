@@ -63,6 +63,43 @@ def workflow_job(source: str, name: str) -> str:
     return match.group(0)
 
 
+def make_bridge_fixture(base: Path) -> tuple[Path, dict[str, str], Path, Path]:
+    """Run the real Make target with inert builder and checksum executables."""
+
+    root, tools = base / "repo with spaces", base / "tools"
+    (root / "scripts").mkdir(parents=True)
+    tools.mkdir()
+    (root / "Makefile").write_text(read("Makefile"), encoding="utf-8")
+    (root / "Cargo.lock").write_text("source graph must not be selected implicitly\n")
+    (root / "scripts/build_norito_xcframework.sh").write_text(
+        'printf \'%s\\0\' "$@" > "$BRIDGE_TEST_BUILDER_LOG"\n'
+        'exit "${BRIDGE_TEST_BUILDER_STATUS:-0}"\n',
+        encoding="utf-8",
+    )
+    swift = tools / "swift"
+    swift.write_text(
+        '#!/bin/sh\n'
+        'printf \'%s\\0\' "$@" > "$BRIDGE_TEST_CHECKSUM_LOG"\n',
+        encoding="utf-8",
+    )
+    swift.chmod(0o755)
+    selected_lock = base / "external selected graph.lock"
+    selected_lock.write_bytes(b"reviewed external graph\n")
+    selected_lock.chmod(0o400)
+    builder_log, checksum_log = base / "builder-call", base / "checksum-call"
+    environment = {
+        "PATH": f"{tools}:/usr/bin:/bin",
+        "SOURCE_DATE_EPOCH": "1730000000",
+        "NORITO_BRIDGE_OUT_DIR": str(base / "external artifact"),
+        "NORITO_BRIDGE_BUILD_DIR": str(base / "external build"),
+        "NORITO_BRIDGE_ARCHIVE_OUTPUT": str(base / "release output.zip"),
+        "MOBILE_SDK_CARGO_LOCKFILE": str(selected_lock),
+        "BRIDGE_TEST_BUILDER_LOG": str(builder_log),
+        "BRIDGE_TEST_CHECKSUM_LOG": str(checksum_log),
+    }
+    return root, environment, builder_log, checksum_log
+
+
 class PrivacySwiftNativeContractTests(unittest.TestCase):
     """Guard the release Swift tests against native capability skips."""
 
@@ -313,10 +350,70 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                     "scripts/check_mobile_sdk_artifacts.sh --apple-only" in line or
                     "run: bash scripts/package_mobile_sdk_artifacts.sh --apple " in line):
                     self.assertIn(f'--lockfile-path "{selected_lock}"', line, path)
-        self.assertIn('--lockfile-path "$(CURDIR)/Cargo.lock"', read("Makefile"))
+        makefile = read("Makefile")
+        self.assertIn('--lockfile-path "$$MOBILE_SDK_CARGO_LOCKFILE"', makefile)
+        self.assertNotIn('--lockfile-path "$(CURDIR)/Cargo.lock"', makefile)
         self.assertIn('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only --lockfile-path "${PRIVACY_RELEASE_CARGO_LOCK}"', read("ci/check_privacy_swift_sdk.sh"))
         android = read("kotlin/client-android/build.gradle.kts")
         self.assertEqual(android.count('"--lockfile-path",\n                tools.cargoLock.toString(),'), 2)
+
+    def test_make_bridge_requires_selected_external_lock_before_builder(self) -> None:
+        for selector in (None, ""):
+            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as temporary:
+                root, environment, builder_log, checksum_log = make_bridge_fixture(
+                    Path(temporary).resolve()
+                )
+                if selector is None:
+                    environment.pop("MOBILE_SDK_CARGO_LOCKFILE")
+                else:
+                    environment["MOBILE_SDK_CARGO_LOCKFILE"] = selector
+                result = subprocess.run(
+                    ["/usr/bin/make", "bridge-xcframework"], cwd=root,
+                    env=environment, capture_output=True, text=True, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("MOBILE_SDK_CARGO_LOCKFILE is required", result.stderr)
+                self.assertFalse(builder_log.exists())
+                self.assertFalse(checksum_log.exists())
+
+    def test_make_bridge_forwards_selected_lock_and_archive_without_rewriting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, environment, builder_log, checksum_log = make_bridge_fixture(
+                Path(temporary).resolve()
+            )
+            result = subprocess.run(
+                ["/usr/bin/make", "bridge-xcframework"], cwd=root,
+                env=environment, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                builder_log.read_bytes().split(b"\0"),
+                [b"--lockfile-path", os.fsencode(environment["MOBILE_SDK_CARGO_LOCKFILE"]),
+                 b"--archive-output", os.fsencode(environment["NORITO_BRIDGE_ARCHIVE_OUTPUT"]), b""],
+            )
+            self.assertEqual(
+                checksum_log.read_bytes().split(b"\0"),
+                [b"package", b"compute-checksum",
+                 os.fsencode(environment["NORITO_BRIDGE_ARCHIVE_OUTPUT"]), b""],
+            )
+            selected_lock = Path(environment["MOBILE_SDK_CARGO_LOCKFILE"])
+            self.assertEqual(selected_lock.read_bytes(), b"reviewed external graph\n")
+            self.assertEqual(selected_lock.stat().st_mode & 0o777, 0o400)
+
+    def test_make_bridge_preserves_builder_lock_refusal_before_checksum(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, environment, builder_log, checksum_log = make_bridge_fixture(
+                Path(temporary).resolve()
+            )
+            environment["BRIDGE_TEST_BUILDER_STATUS"] = "19"
+            result = subprocess.run(
+                ["/usr/bin/make", "bridge-xcframework"], cwd=root,
+                env=environment, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(builder_log.exists())
+            self.assertIn("Error 19", result.stderr)
+            self.assertFalse(checksum_log.exists())
 
     def test_swift_authenticated_external_lock_allows_execution(self) -> None:
         source = read("ci/check_privacy_swift_sdk.sh")

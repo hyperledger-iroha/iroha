@@ -16,9 +16,11 @@ untracked.
 
 Current state: SW1 is active against a signed, frozen checkout with an external
 canonical lock and artifact directory, reusing the fixed warm Cargo build lane.
+The arm64 macOS archive builds and passes the whole-archive native consumer;
+the remaining Apple targets and completed XCFramework are still pending.
 SW2's Cargo configuration isolation, canonical-lock binding, SwiftPM export
-retention and workflow lock handoffs are implemented. SwiftPM-only delivery and
-CocoaPods retirement are in progress; actual native consumer qualification
-remains open. SW3 and SW4 await the completed framework and Swift
-validation. Physical-device qualification and signed public publication require
+retention and workflow lock handoffs are implemented. SwiftPM-only tooling and
+CocoaPods retirement are implemented; ZIP installation and actual Swift native
+consumer qualification remain open. SW3 and SW4 await the completed framework
+and Swift validation. Physical-device qualification and signed public publication require
 their own release evidence.

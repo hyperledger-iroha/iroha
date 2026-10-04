@@ -354,78 +354,65 @@ impl ReserveAccountProofV1 {
             }
             world.verify_asset_definition_key_present(&expected_policy.asset_definition)?;
             let key = reserve_provider_key(expected_provider);
-            let current = match &self.current {
-                Some(bytes) => {
-                    world.verify_table_value("world.smart_contract_state", &key, bytes)?;
-                    let account = decode_reserve_provider_frame(bytes, expected_provider)
+            let current = if let Some(bytes) = &self.current {
+                world.verify_table_value("world.smart_contract_state", &key, bytes)?;
+                let account =
+                    decode_reserve_provider_frame(bytes, expected_provider).map_err(map_invalid)?;
+                if account.terms.provider_account != *expected_owner
+                    || account.updated_at_unix > world.block_time_ms() / 1_000
+                {
+                    return Err(invalid(
+                        "Reserve provider owner or timestamp differs from certified cut",
+                    ));
+                }
+                // Do not normalize policy_digest or recompute a credit cap. Native updates
+                // perform that projection lazily; this reader must preserve original bytes.
+                Some(account)
+            } else {
+                world.verify_smart_contract_state_absent(&key)?;
+                None
+            };
+            let credit = if let Some(bytes) = &self.credit {
+                // The complete World is already authenticated. Decode exactly once; the
+                // native table stores the typed record, not this response's byte vector.
+                let record: ProviderCreditRecord =
+                    norito::decode_canonical_with_limits(bytes, RESERVE_ACCOUNT_CREDIT_LIMITS_V1)
                         .map_err(map_invalid)?;
-                    if account.terms.provider_account != *expected_owner
-                        || account.updated_at_unix > world.block_time_ms() / 1_000
-                    {
-                        return Err(invalid(
-                            "Reserve provider owner or timestamp differs from certified cut",
-                        ));
-                    }
-                    // Do not normalize policy_digest or recompute a credit cap. Native updates
-                    // perform that projection lazily; this reader must preserve original bytes.
-                    Some(account)
+                if record.provider_id != expected_provider {
+                    return Err(invalid("Reserve credit provider differs from selected key"));
                 }
-                None => {
-                    world.verify_smart_contract_state_absent(&key)?;
-                    None
-                }
+                world.verify_table_value(
+                    "world.provider_credit_ledger",
+                    &expected_provider,
+                    &record,
+                )?;
+                // Preserve all native projection values, even when settlement/telemetry has
+                // not caught up. No copied Metadata graph or additional policy is imposed.
+                Some(record)
+            } else {
+                world.verify_provider_credit_absent(&expected_provider)?;
+                None
             };
-            let credit = match &self.credit {
-                Some(bytes) => {
-                    // The complete World is already authenticated. Decode exactly once; the
-                    // native table stores the typed record, not this response's byte vector.
-                    let record: ProviderCreditRecord = norito::decode_canonical_with_limits(
-                        bytes,
-                        RESERVE_ACCOUNT_CREDIT_LIMITS_V1,
-                    )
-                    .map_err(map_invalid)?;
-                    if record.provider_id != expected_provider {
-                        return Err(invalid("Reserve credit provider differs from selected key"));
-                    }
-                    world.verify_table_value(
-                        "world.provider_credit_ledger",
-                        &expected_provider,
-                        &record,
-                    )?;
-                    // Preserve all native projection values, even when settlement/telemetry has
-                    // not caught up. No copied Metadata graph or additional policy is imposed.
-                    Some(record)
+            let capacity = if let Some(bytes) = &self.capacity {
+                let record: CapacityDeclarationRecord =
+                    norito::decode_canonical_with_limits(bytes, RESERVE_ACCOUNT_CAPACITY_LIMITS_V1)
+                        .map_err(map_invalid)?;
+                if record.provider_id != expected_provider {
+                    return Err(invalid(
+                        "Reserve capacity provider differs from selected key",
+                    ));
                 }
-                None => {
-                    world.verify_provider_credit_absent(&expected_provider)?;
-                    None
-                }
-            };
-            let capacity = match &self.capacity {
-                Some(bytes) => {
-                    let record: CapacityDeclarationRecord = norito::decode_canonical_with_limits(
-                        bytes,
-                        RESERVE_ACCOUNT_CAPACITY_LIMITS_V1,
-                    )
-                    .map_err(map_invalid)?;
-                    if record.provider_id != expected_provider {
-                        return Err(invalid(
-                            "Reserve capacity provider differs from selected key",
-                        ));
-                    }
-                    world.verify_table_value(
-                        "world.capacity_declarations",
-                        &expected_provider,
-                        &record,
-                    )?;
-                    // Exact committed facts: native execution owns payload semantics, current
-                    // backing and active allocations. Expired or future rows remain unchanged.
-                    Some(record)
-                }
-                None => {
-                    world.verify_capacity_declaration_absent(&expected_provider)?;
-                    None
-                }
+                world.verify_table_value(
+                    "world.capacity_declarations",
+                    &expected_provider,
+                    &record,
+                )?;
+                // Exact committed facts: native execution owns payload semantics, current
+                // backing and active allocations. Expired or future rows remain unchanged.
+                Some(record)
+            } else {
+                world.verify_capacity_declaration_absent(&expected_provider)?;
+                None
             };
             let pricing: PricingScheduleRecord = norito::decode_canonical_with_limits(
                 &self.pricing,

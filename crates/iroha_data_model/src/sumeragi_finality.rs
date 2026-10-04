@@ -137,10 +137,10 @@ pub fn consensus_configuration_fingerprint(
             return Err("native configuration requires explicit signed instructions".into());
         };
         for instruction in instructions {
-            if let Some(set) = instruction.as_any().downcast_ref::<SetParameter>() {
-                if let Parameter::Sumeragi(parameter) = set.inner() {
-                    parameters.insert(*parameter)?;
-                }
+            if let Some(set) = instruction.as_any().downcast_ref::<SetParameter>()
+                && let Parameter::Sumeragi(parameter) = set.inner()
+            {
+                parameters.insert(*parameter)?;
             }
         }
     }

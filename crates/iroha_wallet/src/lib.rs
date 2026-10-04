@@ -5,9 +5,6 @@
 
 mod custody;
 mod custody_fs;
-/// Exact-wire, crash-safe operation journals: one prepared operation, one
-/// pre-dispatch marker and immutable applied evidence per directory.
-pub mod operation_journal;
 
 /// Shared bounded native faucet proof-of-work implementation.
 pub mod faucet_pow;

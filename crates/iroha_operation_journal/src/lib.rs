@@ -1,16 +1,20 @@
-//! Descriptor-anchored immutable public evidence shared by wallet operations.
+//! Descriptor-anchored immutable operation evidence for native purpose owners.
 //!
-//! Native transaction journals publish `preparation.json` and the lock atomically, retain the
-//! exact quoted `payload.json` before local signing, and retain `operation.json` before dispatch.
-//! A distinct onboarding owner uses [`Journal::create_prepared`] to publish its complete operation.
-//! Both owners retain `submission.json` before their only dispatch and exact `applied.json`
-//! evidence afterward. Native RequestOnly retirement appends `retired.json` under the same lock;
-//! it never removes or renews evidence. Private staging siblings are never authority selectors.
+//! This crate owns bounded canonical JSON records, atomic original publication, retained native
+//! directory and lock custody, and immutable pre-dispatch and applied-evidence markers. Wallet,
+//! service and daemon callers own request validation, permissions, fees, finality and signing.
+//! A stored record or successful local marker grants none of that authority.
 //!
-//! Every record is immutable: rewriting different bytes fails. The directory is
-//! pinned by descriptor, exclusively locked while open, and rejects links and
-//! group/other permissions. The deployment engine's exact-wire canary writes
-//! (`iroha_deploy` gate G6, P2) are meant to use the same journal.
+//! Native preparation publishes `preparation.json` and the lock atomically, retains exact
+//! `payload.json` before signing and `operation.json` before dispatch. Prepared onboarding and
+//! session owners publish their complete original with [`Journal::create_prepared`]. Purpose
+//! owners retain `submission.json` before their sole dispatch and exact `applied.json` evidence
+//! afterward. Request-only retirement appends `retired.json` under the original lock and never
+//! removes or renews evidence. Private staging siblings are never authority selectors.
+//!
+//! Every record is immutable, with one canonical first-release layout and the existing fixed
+//! submission-intent schema. Retained descriptors bind the owner-private directory and original
+//! exclusive lock; changed ancestry, links, access, identities and record bytes are refused.
 use eyre::{Result, WrapErr as _, eyre};
 use iroha_fs::{FileIdentity, OwnerDirectory, PrivateDirectory, PublishMode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -20,7 +24,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(crate) const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
+const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
 const APPLIED_EVIDENCE: &str = "applied.json";
 
 /// Fixed native preparation stages; arbitrary journal names cannot enter this interface.
@@ -46,8 +50,12 @@ impl NativeRecord {
     }
 }
 
-/// Count and charge the exact canonical output before allocating it.
-pub(crate) fn canonical_bytes<T: JsonSerialize + ?Sized>(value: &T) -> Result<Box<[u8]>> {
+/// Count and charge the exact canonical JSON output before allocating it.
+/// This storage encoding grants no request, signing or dispatch authority.
+///
+/// # Errors
+/// Refuses output above the original four-MiB ceiling or inherited allocation budget.
+pub fn canonical_bytes<T: JsonSerialize + ?Sized>(value: &T) -> Result<Box<[u8]>> {
     norito::json::to_json_bounded_boxed(value, MAX_JOURNAL_BYTES)
         .map_err(|error| eyre!("bounded journal encoding: {error:?}"))
 }
@@ -124,8 +132,12 @@ impl Journal {
         Self::lock_directory(directory, false)
     }
 
-    /// Distinguish only a missing canonical name; malformed or incomplete custody is an error.
-    pub(crate) fn open_optional(path: &Path) -> Result<Option<Self>> {
+    /// Distinguish only a missing canonical name under its retained safe parent.
+    /// Malformed or incomplete custody is an error; absence grants no preparation authority.
+    ///
+    /// # Errors
+    /// Refuses unsafe or missing parents, invalid existing custody and native observation errors.
+    pub fn open_optional(path: &Path) -> Result<Option<Self>> {
         let absolute = if path.is_absolute() {
             path.to_owned()
         } else {
@@ -149,8 +161,13 @@ impl Journal {
         outcome
     }
 
-    /// Retirement never infers an unsigned history while unknown or incomplete material exists.
-    pub(crate) fn require_request_only_inventory(&self) -> Result<()> {
+    /// Require the complete request-only fixed namespace under the original held lock.
+    /// Unknown or later-stage material is refused. The purpose owner must still authenticate the
+    /// original request and decide whether its exact request may retire; this is storage shape only.
+    ///
+    /// # Errors
+    /// Refuses changed custody, unknown or unsafe entries and excessive inventory size.
+    pub fn require_request_only_inventory(&self) -> Result<()> {
         self.revalidate()?;
         self.directory.visit_private_files(3, |name, _| {
             if ["lock", "preparation.json", "retired.json"]
@@ -330,9 +347,9 @@ impl Journal {
     }
     /// Durably record the pre-dispatch marker for `operation`.
     ///
-    /// Returns `true` only for the call that created the marker; that caller
-    /// alone may dispatch. `false` means an earlier attempt exists and the
-    /// operation must be reconciled, never resubmitted.
+    /// Returns `true` only for the call that created the original local marker. Its purpose
+    /// owner may dispatch only after independent protocol and authority checks. `false` means
+    /// an earlier attempt exists and the operation must be reconciled, never resubmitted.
     ///
     /// # Errors
     /// Fails when a marker exists for different bytes or cannot be installed.

@@ -101,9 +101,56 @@ def test_native_filesystem_owner_selects_real_custody_consumers() -> None:
         "iroha_fs", "iroha_contract_deploy", "iroha_deploy",
         "iroha_kagami", "iroha_storage_client",
     } <= set(result.impacted_packages)
-    assert result.lane_packages["foundation"] == ("iroha_fs",)
+    assert result.lane_packages["foundation"] == ("iroha_fs", "iroha_operation_journal")
     assert "iroha_storage_client" in result.lane_packages["services"]
     assert "iroha_deploy" in result.lane_packages["node"]
+
+
+@pytest.mark.parametrize("changed_path", (
+    "crates/iroha_operation_journal/src/lib.rs",
+    "crates/iroha_operation_journal/Cargo.toml",
+))
+def test_operation_journal_foundation_change_selects_real_storage_consumers(changed_path: str) -> None:
+    """The shared storage owner retains Wallet and CLI checks while deferring network consumers."""
+
+    metadata = rust_ci.load_cargo_metadata(root=ROOT)
+    manifest = rust_ci.load_lane_manifest()
+    assert manifest.package_lane["iroha_operation_journal"] == "foundation"
+    result = rust_ci.classify_paths(
+        [changed_path], metadata=metadata, manifest=manifest, root=ROOT,
+    )
+    assert result.changed_packages == ("iroha_operation_journal",)
+    assert result.foundation_only and not result.full
+    assert {
+        "iroha_operation_journal", "iroha_wallet", "iroha_sccp_wallet",
+        "iroha_musubi_service", "iroha_deploy", "irohad_lib", "irohad",
+        "iroha_cli_lib", "iroha_cli", "iroha_test_network", "integration_tests",
+    } <= set(result.impacted_packages)
+    assert result.lane_packages["foundation"] == ("iroha_operation_journal",)
+    assert "iroha_wallet" in result.lane_packages["node"]
+    assert "iroha_deploy" in result.lane_packages["node"]
+    assert "iroha_cli_lib" in result.lane_packages["node"]
+    assert "iroha_cli" in result.lane_packages["node"]
+    assert "iroha_musubi_service" in result.lane_packages["services"]
+    assert "iroha_sccp_wallet" in result.lane_packages["services"]
+    assert {
+        "irohad_lib", "irohad", "iroha_test_network", "integration_tests",
+    } <= set(result.deferred_packages)
+    assert set(result.deferred_packages).isdisjoint(
+        package for packages in result.lane_packages.values() for package in packages
+    )
+    assert {"consistency", "pytests", "sora_parliament_lifecycle"} <= set(result.deferred_consumers)
+    assert result.binaries == () and not any(result.consumers.values())
+    document = result.as_dict()
+    assert document["binary_matrix"] == {"include": []}
+    assert not document["has_binary_rust"] and not document["has_binaries"]
+    assert document["has_binary_free_rust"]
+    selected = tuple(package for packages in result.lane_packages.values() for package in packages)
+    for command in rust_ci.commands_for_checks(selected, ("clippy", "build", "test", "doc")):
+        assert "iroha_cli" in command and "iroha_wallet" in command
+        assert "irohad" not in command and "irohad_lib" not in command
+        assert "iroha_test_network" not in command and "integration_tests" not in command
+        assert "--workspace" not in command
 
 
 def test_package_change_expands_reverse_dependency_closure(tmp_path: Path) -> None:

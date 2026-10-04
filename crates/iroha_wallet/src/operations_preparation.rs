@@ -3,8 +3,8 @@
 //! Inspection grants no current-state authority. Only explicit preparation can complete a retained
 //! payload; submission remains a separate once-only transition after exact signed bytes are durable.
 use super::*;
-use crate::operation_journal::{NativeRecord, canonical_bytes};
 use iroha_data_model::transaction::{TransactionDomain, TransactionPayload};
+use iroha_operation_journal::{NativeRecord, canonical_bytes};
 use sha2::{Digest as _, Sha256};
 
 const PAYLOAD_MAX: usize = 1024 * 1024;

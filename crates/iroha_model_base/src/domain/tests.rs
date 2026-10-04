@@ -101,3 +101,23 @@ fn domain_key_accounts_canonicalization_before_owner_allocations() {
     assert!(noncanonical.is_err());
     assert_eq!(usage.total_allocated_bytes(), 0);
 }
+
+#[test]
+fn domain_checked_json_stream_has_only_exact_destination_allocation() {
+    let id = DomainId::try_new("Treasury", "CentralBank").unwrap();
+    let expected = norito::json::to_json(&id.to_string()).unwrap();
+    let limits = |bytes| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, 32);
+    let (encoded, usage) =
+        norito::core::with_decode_limits_measured(limits(expected.len()), || {
+            norito::json::to_json_bounded_boxed(&id, expected.len())
+        });
+    assert_eq!(&*encoded.unwrap(), expected.as_bytes());
+    assert_eq!(usage.total_allocated_bytes(), expected.len());
+    assert!(
+        norito::with_decode_limits_scope(limits(expected.len() - 1), || {
+            norito::json::to_json_bounded_boxed(&id, expected.len())
+        })
+        .is_err()
+    );
+    assert!(norito::json::to_json_bounded_boxed(&id, expected.len() - 1).is_err());
+}

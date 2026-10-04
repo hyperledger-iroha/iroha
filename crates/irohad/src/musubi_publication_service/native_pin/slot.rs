@@ -12,8 +12,8 @@ use iroha_data_model::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
     },
 };
+use iroha_operation_journal::{Journal, NativeRecord};
 use iroha_version::codec::DecodeVersioned as _;
-use iroha_wallet::operation_journal::{Journal, NativeRecord};
 use norito::json::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest as _, Sha256};
 use std::{path::Path, time::Instant};

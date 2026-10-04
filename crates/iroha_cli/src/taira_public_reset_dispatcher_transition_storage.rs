@@ -99,9 +99,9 @@ fn load_identities(root: &Path, bytes: &[u8]) -> Result<Identities> {
     let ids: Identities = json::from_slice(&raw)?;
     need(
         ids.plan_sha256 == sha256_hex(bytes)
-            && ids.old_guards.len() == 5
-            && ids.original_guards.len() == 5
-            && ids.new_guards.len() == 5,
+            && ids.old_guards.len() == SLUGS.len()
+            && ids.original_guards.len() == SLUGS.len()
+            && ids.new_guards.len() == SLUGS.len(),
         "transition identity intent differs",
     )?;
     same(root, &ids.root)?;
@@ -127,7 +127,7 @@ fn load_restoration(root: &Path, bytes: &[u8]) -> Result<Option<Restoration>> {
     }
     let value: Restoration = json::from_slice(&bounded_record(&root.join("restoration.json"))?)?;
     need(
-        value.plan_sha256 == sha256_hex(bytes) && value.guards.len() == 5,
+        value.plan_sha256 == sha256_hex(bytes) && value.guards.len() == SLUGS.len(),
         "restoration identity differs",
     )?;
     Ok(Some(value))

@@ -64,6 +64,7 @@ tokio = { workspace = true, features = ["rt", "net", "io-util", "time"] }
 windows-sys = { version = "0.61.2", features = ["Win32_System_Pipes", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+iroha_operation_journal = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_version = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }

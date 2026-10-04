@@ -6559,6 +6559,20 @@ pub(crate) struct QueryAdmissionPermit {
     _fanout_memory: Option<QueryFanoutMemoryReservation>,
 }
 impl QueryAdmissionPermit {
+    /// Use the response phase granted by this worker's retained query owner.
+    /// Response custody alone cannot grant producer allocation authority.
+    pub(crate) fn response_body_budget(&self) -> Result<usize, Error> {
+        self._fanout_memory
+            .as_ref()
+            .and_then(|owner| owner.admission)
+            .map(|admission| admission.envelope.route_body_bytes)
+            .ok_or_else(|| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(
+                    "The query worker has no admitted response memory owner.".to_owned(),
+                ))
+            })
+    }
+
     #[cfg(test)]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         self._body = Some(permit);
