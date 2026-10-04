@@ -99,6 +99,8 @@ mod inputs;
 mod public_inputs;
 #[path = "taira_public_reset_runtime_clients.rs"]
 mod runtime_clients;
+#[path = "taira_public_reset_staging_canary.rs"]
+mod staging_canary;
 #[path = "taira_public_reset_validator_units.rs"]
 mod validator_units;
 
@@ -158,6 +160,8 @@ enum PublicResetCommand {
     PreparePublicInputs(public_inputs::PreparePublicInputs),
     /// Prepare exact private client configs and public validator/faucet identities from native inputs.
     PrepareRuntimeClients(runtime_clients::PrepareRuntimeClients),
+    /// Run or read-only recover the ordered canary on one independent private candidate.
+    StageCanary(staging_canary::StageCanary),
     /// Derive the signed-network-bound beacon request and exact renderer seat paths.
     PrepareBeaconInputs(inputs::PrepareBeaconInputs),
     /// Render four public validator units from the embedded signed custody renderer.
@@ -390,6 +394,7 @@ impl PublicReset {
                 public_inputs::prepare(args, &mut output)?;
                 return Ok(());
             }
+            PublicResetCommand::StageCanary(args) => return args.run(&mut output),
             PublicResetCommand::PrepareRuntimeClients(args) => {
                 runtime_clients::prepare(args, &mut output)?;
                 return Ok(());

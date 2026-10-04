@@ -34,7 +34,8 @@ use super::{
     rng::{Rng, seed_of},
     run,
     scenario::Scenario,
-    world::seeds,
+    sweep::{Failures, fold_seeds},
+    world::seed_iter,
 };
 use crate::{
     Core,
@@ -670,17 +671,17 @@ fn f09r(seed: u64) -> Scenario {
 #[test]
 fn f09r_vote_blackout_until_gst() {
     let default = if cfg!(debug_assertions) { 5 } else { 20 };
-    let mut failures = Vec::new();
+    let mut failures = Failures::default();
     let mut lost = 0;
-    for seed in seeds(default) {
-        match run(f09r(seed)) {
-            Ok(world) => lost += world.stats.lost,
-            Err(report) => failures.push((seed, report)),
-        }
-    }
-    if let Some((seed, report)) = failures.first() {
-        let seeds: Vec<u64> = failures.iter().map(|(s, _)| *s).collect();
-        panic!("F9r: failing seeds {seeds:?}; first (seed {seed}):\n{report}");
-    }
+    fold_seeds(
+        seed_iter(default),
+        |seed| run(f09r(seed)).map(|world| world.stats.lost),
+        |seed, result| {
+            if let Some(seed_lost) = failures.observe(seed, result) {
+                lost += seed_lost;
+            }
+        },
+    );
+    failures.finish("F9r");
     assert!(lost > 0, "the blackout dropped votes");
 }

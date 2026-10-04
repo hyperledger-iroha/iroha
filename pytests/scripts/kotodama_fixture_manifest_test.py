@@ -49,6 +49,11 @@ def _copy_fixture_tree(destination: Path) -> Path:
             copied_source = destination / included_source
             copied_source.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / included_source, copied_source)
+    for modules in checker.EXPECTED_TEST_MODULES.values():
+        for _, source_path in modules:
+            copied_source = destination / source_path
+            copied_source.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / source_path, copied_source)
     for fixture in payload["fixtures"]:
         asset = ROOT / fixture["asset"]
         copied_asset = destination / fixture["asset"]
@@ -59,8 +64,93 @@ def _copy_fixture_tree(destination: Path) -> Path:
 
 def test_checked_in_inventory_seals_current_consumers() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
-    assert stats.fixtures == 302
-    assert stats.tests == 595
+    assert stats.fixtures == 308
+    assert stats.tests == 616
+
+
+def test_child_modules_seal_literal_and_canonical_pool_consumers() -> None:
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    compiler = payload["source_files"][0]
+    assert compiler["test_modules"] == [
+        list(module) for module in checker.EXPECTED_TEST_MODULES[compiler["path"]]
+    ]
+    literal = next(
+        fixture for fixture in payload["fixtures"]
+        if fixture["asset"].endswith("/literal_homes.ko")
+    )
+    assert literal["owner_function"] == "rematerialized_literals_reduce_emitted_memory_traffic_and_authenticated_frames"
+    assert literal["owner_is_test"] is True
+    for asset, owners in checker.SHARED_EXTERNAL_FIXTURE_OWNERS.items():
+        observed = [fixture for fixture in payload["fixtures"] if fixture["asset"] == asset]
+        assert len(observed) == len(owners)
+        assert {
+            (fixture["owner_source"], fixture["owner_function"], fixture["owner_is_test"])
+            for fixture in observed
+        } == owners
+        assert len({fixture["content_sha256"] for fixture in observed}) == 1
+
+
+@pytest.mark.parametrize("mutation", ["missing", "wrong-path", "unsealed", "multiline", "tab", "spaced-semicolon", "raw"])
+def test_child_module_declaration_drift_fails_closed(tmp_path: Path, mutation: str) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    parent = tmp_path / checker.OUT_OF_LINE_TEST_SOURCES[checker.EXPECTED_SOURCES[0]]
+    declaration = '#[path = "tests/literal_helpers.rs"]\nmod literal_helpers;'
+    source = parent.read_text(encoding="utf-8")
+    if mutation == "missing":
+        source = source.replace(declaration, "")
+    elif mutation == "wrong-path":
+        source = source.replace('"tests/literal_helpers.rs"', '"tests/unreviewed.rs"')
+    else:
+        declaration = {
+            "unsealed": "mod unreviewed;",
+            "multiline": "mod\n unreviewed;",
+            "tab": "mod\tunreviewed;",
+            "spaced-semicolon": "mod unreviewed ;",
+            "raw": "mod r#unreviewed;",
+        }[mutation]
+        source += f"\n{declaration}\n"
+    parent.write_text(source, encoding="utf-8")
+    with pytest.raises(checker.ValidationError, match="test module (inventory|declaration) changed"):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    ["mod unreviewed;", "mod\n unreviewed;", "mod\tunreviewed;", "mod unreviewed ;", "mod r#unreviewed;"],
+)
+def test_child_module_cannot_add_out_of_line_children(tmp_path: Path, declaration: str) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    child_path = checker.EXPECTED_TEST_MODULES[checker.EXPECTED_SOURCES[0]][0][1]
+    child = tmp_path / child_path
+    child.write_text(child.read_text(encoding="utf-8") + f"\n{declaration}\n", encoding="utf-8")
+    with pytest.raises(checker.ValidationError, match="test module nesting is not sealed"):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+def test_child_module_file_is_required(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    child = checker.EXPECTED_TEST_MODULES[checker.EXPECTED_SOURCES[0]][0][1]
+    (tmp_path / child).unlink()
+    with pytest.raises(FileNotFoundError):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+@pytest.mark.parametrize("mutation", ["owner", "duplicate"])
+def test_shared_pool_fixture_requires_each_exact_test_consumer(tmp_path: Path, mutation: str) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    child = tmp_path / dict(checker.EXPECTED_TEST_MODULES[checker.EXPECTED_SOURCES[0]])["rematerialized"]
+    source = child.read_text(encoding="utf-8")
+    if mutation == "owner":
+        source = source.replace(
+            "fn canonical_dlmm_rematerialization_measures_same_compiler_artifacts_and_metadata()",
+            "fn unreviewed_pool_consumer()",
+        )
+    else:
+        include = 'include_str!("../../../../iroha_core/src/validation_fee/fixtures/dlmm_pool.ko")'
+        source = source.replace(include, f"{{ let _ = {include}; {include} }}")
+    child.write_text(source, encoding="utf-8")
+    with pytest.raises(checker.ValidationError, match="shared fixture consumer changed"):
+        checker.validate_manifest(tmp_path, copied_manifest)
 
 
 def test_out_of_line_test_module_is_required(tmp_path: Path) -> None:
@@ -294,7 +384,10 @@ def test_manifest_omission_cannot_hide_a_referenced_fixture(tmp_path: Path) -> N
 def test_duplicate_fixture_include_fails_closed(tmp_path: Path) -> None:
     copied_manifest = _copy_fixture_tree(tmp_path)
     payload = json.loads(copied_manifest.read_text(encoding="utf-8"))
-    fixture = payload["fixtures"][0]
+    fixture = next(
+        fixture for fixture in payload["fixtures"]
+        if fixture["asset"] not in checker.SHARED_EXTERNAL_FIXTURE_OWNERS
+    )
     owner = tmp_path / fixture["owner_source"]
     with owner.open("a", encoding="utf-8") as source:
         source.write(

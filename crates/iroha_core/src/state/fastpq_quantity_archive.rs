@@ -163,16 +163,19 @@ impl QuantityTape {
     }
 
     /// Retain one complete replacement before executing its new original effects.
-    pub(super) fn prepare_inputs<'a>(
+    pub(super) fn prepare_inputs<'a, Inputs>(
         context: FastpqExecutionEffectContextV1,
         prefix: &[FastpqExecutionEffectV1],
-        added: impl Clone
-        + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+        added: Inputs,
         authority_digest: Hash,
         authorization_context: Hash,
         max_effects: usize,
         budget: &AllocationBudget,
-    ) -> Result<Self, QuantityCaptureIssue> {
+    ) -> Result<Self, QuantityCaptureIssue>
+    where
+        Inputs:
+            Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+    {
         let count = prefix
             .len()
             .checked_add(added.len())

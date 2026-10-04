@@ -113,7 +113,10 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
     for owner in TABLE_MATERIALIZERS {
         for table in owner.table_ids() {
             if matches!(owner, TableMaterializer::Native { .. })
-                || matches!(table, "world.verifying_keys" | "world.proofs")
+                || matches!(
+                    table,
+                    "world.verifying_keys" | "world.proofs" | "world.governance_proposals"
+                )
             {
                 continue;
             }
@@ -126,7 +129,8 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
             missing.push(table);
         }
     }
-    assert_eq!(missing.len(), 23);
+    assert_eq!(missing.len(), 22);
+    assert!(!missing.contains(&"world.governance_proposals"));
     assert!(missing.contains(&"world.domains"));
     assert!(missing.contains(&"triggers.data"));
     assert!(missing.contains(&"world.musubi_archive_availability"));

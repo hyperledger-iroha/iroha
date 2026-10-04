@@ -17,7 +17,6 @@ use crate::kagemusha_v1_state::DigestV1;
 use crate::kagemusha_v1_state::{
     OrdinarySendPreviewForQualificationV1, ordinary_send_preview_for_qualification_v1,
 };
-use ff::Field as _;
 use iroha_data_model::kagemusha::*;
 
 /// Actual funded→Send proof and full originals; no authenticated Native capability is constructed.
@@ -26,6 +25,7 @@ pub(super) struct OrdinarySendStateForTestingV1 {
     pub(super) state: KagemushaStateV1,
     pub(super) state_relation: KagemushaStateRelationWitnessV1,
     pub(super) generated: KagemushaGeneratedRecursiveStateProofV1,
+    // Retain the complete original through the Send fixture lifetime.
     pub(super) public_original: Vec<u8>,
     pub(super) preparation_relation: KagemushaGuardBundleRelationWitnessV1,
     pub(super) guard: super::ordinary_guard_generation::GeneratedOrdinaryGuardPairV1,
@@ -37,6 +37,7 @@ pub(super) struct OrdinarySendStateForTestingV1 {
     pub(super) request: KagemushaOrdinaryPaymentRequestV1,
     pub(super) receiver_credential: KagemushaOrdinaryAppCredentialV1,
     pub(super) previous_receiver_counter: Option<u32>,
+    // Retain the complete original through the Send fixture lifetime.
     pub(super) reservation: KagemushaOutboxReservationV1,
     pub(super) preparation_clock: KagemushaOrdinaryCashClockContextV1,
     pub(super) candidate_digest: DigestV1,
@@ -51,6 +52,11 @@ pub(super) fn prove_ordinary_send_state_for_testing_v1(
     wrapper_ep: &PlonkProtocol<EpAffine>,
     apple: bool,
 ) -> OrdinarySendStateForTestingV1 {
+    assert_eq!(
+        funded.consumed_credits.root(),
+        funded.state.consumed_credit_root,
+        "the funded predecessor must retain the actual Mint replay tree"
+    );
     let eq = canonical_kagemusha_eq_parameters_v1();
     let ep = canonical_kagemusha_ep_parameters_v1();
     let seed = KagemushaRecoverySeedV1::from_unsealed([44; 32]).unwrap();

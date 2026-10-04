@@ -6,6 +6,7 @@
 
 #[path = "../crates/iroha_torii_shared/src/multisig_execution_evidence/path.rs"]
 mod multisig_execution_evidence;
+
 #[path = "../crates/iroha_torii_shared/src/route_catalog.rs"]
 mod route_catalog;
 

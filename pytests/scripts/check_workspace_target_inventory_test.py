@@ -458,7 +458,22 @@ def test_runtime_libraries_do_not_capture_executable_source_revisions() -> None:
     for package_name, crate_name in (("irohad", "irohad"), ("iroha_cli", "iroha_cli")):
         library = packages[package_name + "_lib"]
         executable = packages[package_name]
-        assert not any("custom-build" in target["kind"] for target in library["targets"])
+        library_builds = [
+            target for target in library["targets"] if "custom-build" in target["kind"]
+        ]
+        if package_name == "irohad":
+            # The daemon library owns test-only mutation selection. Its build
+            # script must stay independent of executable source revision metadata.
+            mutation_build = ROOT / "crates" / package_name / "build.rs"
+            assert [Path(target["src_path"]) for target in library_builds] == [mutation_build]
+            mutation_source = mutation_build.read_text(encoding="utf-8")
+            assert "CARGO_FEATURE_MUTATION_TESTING" in mutation_source
+            assert "SUMERAGI_DAEMON_MUTATION" in mutation_source
+            assert "VERGEN" not in mutation_source
+            assert "IROHA_GIT_COMMIT_HASH" not in mutation_source
+            assert "build-support" not in mutation_source
+        else:
+            assert library_builds == []
         assert any(target["name"] == crate_name and target["kind"] == ["lib"]
                    for target in library["targets"])
         assert any("custom-build" in target["kind"] for target in executable["targets"])

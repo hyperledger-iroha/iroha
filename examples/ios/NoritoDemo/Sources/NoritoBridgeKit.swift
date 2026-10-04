@@ -1,6 +1,7 @@
 // This file is conditionally compiled when NoritoBridge.xcframework is linked.
 #if canImport(NoritoBridge)
 import Foundation
+import Darwin
 import NoritoBridge
 
 @_silgen_name("connect_norito_encode_ciphertext_frame")
@@ -63,7 +64,7 @@ public final class NoritoBridgeKit {
   public func encodeEnvelopeSignRequestRaw(seq: UInt64, domainTag: String, bytes: Data) throws -> Data {
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
     let rc = domainTag.utf8CString.withUnsafeBufferPointer { tb in
-      let td = Data(tb.dropLast())
+      let td = Data(bytes: tb.baseAddress!, count: tb.count - 1)
       return td.withUnsafeBytes { tpb in
         bytes.withUnsafeBytes { bp in
           ffi_env_sreq_raw(seq, tpb.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(td.count), bp.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(bytes.count), &outPtr, &outLen)
@@ -82,10 +83,10 @@ public final class NoritoBridgeKit {
   public func encodeEnvelopeSignResultErr(seq: UInt64, code: String, message: String) throws -> Data {
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
     let rc = code.utf8CString.withUnsafeBufferPointer { cb in
-      let cd = Data(cb.dropLast())
+      let cd = Data(bytes: cb.baseAddress!, count: cb.count - 1)
       return cd.withUnsafeBytes { c in
         message.utf8CString.withUnsafeBufferPointer { mb in
-          let md = Data(mb.dropLast())
+          let md = Data(bytes: mb.baseAddress!, count: mb.count - 1)
           return md.withUnsafeBytes { m in ffi_env_sres_err(seq, c.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(cd.count), m.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(md.count), &outPtr, &outLen) }
         }
       }
@@ -96,7 +97,7 @@ public final class NoritoBridgeKit {
   public func encodeEnvelopeClose(seq: UInt64, who: UInt8, code: UInt16, reason: String, retryable: Bool) throws -> Data {
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
     let rc = reason.utf8CString.withUnsafeBufferPointer { rb in
-      let rd = Data(rb.dropLast())
+      let rd = Data(bytes: rb.baseAddress!, count: rb.count - 1)
       return rd.withUnsafeBytes { r in ffi_env_close(seq, who, code, r.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(rd.count), retryable ? 1 : 0, &outPtr, &outLen) }
     }
     guard rc == 0, let p = outPtr else { throw NoritoError.ffi(rc) }
@@ -105,10 +106,10 @@ public final class NoritoBridgeKit {
   public func encodeEnvelopeReject(seq: UInt64, code: UInt16, codeId: String, reason: String) throws -> Data {
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
     let rc = codeId.utf8CString.withUnsafeBufferPointer { ib in
-      let id = Data(ib.dropLast())
+      let id = Data(bytes: ib.baseAddress!, count: ib.count - 1)
       return id.withUnsafeBytes { i in
         reason.utf8CString.withUnsafeBufferPointer { rb in
-          let rd = Data(rb.dropLast())
+          let rd = Data(bytes: rb.baseAddress!, count: rb.count - 1)
           return rd.withUnsafeBytes { r in ffi_env_reject(seq, code, i.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(id.count), r.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(rd.count), &outPtr, &outLen) }
         }
       }
@@ -132,7 +133,7 @@ public final class NoritoBridgeKit {
 
   // Current Control frame helpers (via dlsym; throw if unavailable)
   public func decodeControlKind(_ frame: Data) throws -> (sid: Data, dir: UInt8, seq: UInt64, kind: UInt16) {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_decode_control_kind") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_decode_control_kind") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UInt8>, UnsafeMutablePointer<UInt8>, UnsafeMutablePointer<UInt64>, UnsafeMutablePointer<UInt16>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var sidOut = Data(count: 32); var dir: UInt8 = 0; var seq: UInt64 = 0; var kind: UInt16 = 0
@@ -145,7 +146,7 @@ public final class NoritoBridgeKit {
     return (sid: sidOut, dir: dir, seq: seq, kind: kind)
   }
   public func decodeControlOpenPub(_ frame: Data) throws -> Data {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_decode_control_open_pub") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_decode_control_open_pub") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UInt8>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var out = Data(count: 32)
@@ -156,7 +157,7 @@ public final class NoritoBridgeKit {
     return out
   }
   public func decodeControlApprovePub(_ frame: Data) throws -> Data {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_decode_control_approve_pub") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_decode_control_approve_pub") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UInt8>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var out = Data(count: 32)
@@ -167,7 +168,7 @@ public final class NoritoBridgeKit {
     return out
   }
   public func decodeControlApproveAccount(_ frame: Data) throws -> Data {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_decode_control_approve_account") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_decode_control_approve_account") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var ptr: UnsafeMutablePointer<UInt8>? = nil; var len: CUnsignedLong = 0
@@ -178,7 +179,7 @@ public final class NoritoBridgeKit {
     let d = Data(bytes: p, count: Int(len)); ffi_free(p); return d
   }
   public func decodeControlApproveSig(_ frame: Data) throws -> Data {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_decode_control_approve_sig") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_decode_control_approve_sig") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UInt8>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var out = Data(count: 64)
@@ -190,7 +191,7 @@ public final class NoritoBridgeKit {
   }
 
   public func decodeControlApproveAccountJson(_ frame: Data) throws -> String {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_decode_control_approve_account_json") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_decode_control_approve_account_json") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
@@ -203,7 +204,7 @@ public final class NoritoBridgeKit {
   }
 
   public func decodeControlOpenPermissionsJson(_ frame: Data) throws -> String {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_decode_control_open_permissions_json") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_decode_control_open_permissions_json") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
@@ -213,7 +214,7 @@ public final class NoritoBridgeKit {
     return String(data: data, encoding: .utf8) ?? "{}"
   }
   public func decodeControlApprovePermissionsJson(_ frame: Data) throws -> String {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_decode_control_approve_permissions_json") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_decode_control_approve_permissions_json") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
@@ -224,7 +225,7 @@ public final class NoritoBridgeKit {
   }
 
   public func encodeControlOpenExt(sid: Data, dir: UInt8, seq: UInt64, appPub: Data, nonce: Data, appMetaJson: Data?, networkId: Data, permissionsJson: Data?) throws -> Data {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_encode_control_open_ext") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_encode_control_open_ext") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, UInt8, UInt64, UnsafePointer<UInt8>, CUnsignedLong, UnsafePointer<UInt8>, CUnsignedLong, UnsafePointer<UInt8>?, CUnsignedLong, UnsafePointer<UInt8>, CUnsignedLong, UnsafePointer<UInt8>?, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
@@ -252,7 +253,7 @@ public final class NoritoBridgeKit {
   }
 
   public func encodeControlApproveExt(sid: Data, dir: UInt8, seq: UInt64, walletPub: Data, accountId: String, permissionsJson: Data?, proofJson: Data?, sig: Data) throws -> Data {
-    guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_encode_control_approve_ext") else { throw NoritoError.ffi(-1) }
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2)), "connect_norito_encode_control_approve_ext") else { throw NoritoError.ffi(-1) }
     typealias Fn = @convention(c) (UnsafePointer<UInt8>, UInt8, UInt64, UnsafePointer<UInt8>, CUnsignedLong, UnsafePointer<CChar>, UnsafePointer<UInt8>?, CUnsignedLong, UnsafePointer<UInt8>?, CUnsignedLong, UnsafePointer<UInt8>, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0

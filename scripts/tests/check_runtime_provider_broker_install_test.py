@@ -78,6 +78,12 @@ class RuntimeProviderBrokerInstallCheckerTests(unittest.TestCase):
         catalog.write_bytes(self.catalog_bytes)
         catalog.chmod(0o440)
 
+        policy = checker._under_root(self.install_root, layout.policy)
+        if policy.exists():
+            policy.chmod(0o640)
+        policy.write_text(f'endpoint_path = "{layout.socket}"\nobserver_operation_timeout_ms = 15000\n', encoding="utf-8")
+        policy.chmod(0o440)
+
         runtime_directory = checker._under_root(
             self.install_root, layout.runtime_directory
         )
@@ -127,6 +133,35 @@ class RuntimeProviderBrokerInstallCheckerTests(unittest.TestCase):
 
     def test_complete_macos_install_passes(self) -> None:
         self.validate(self.install_valid_layout("macos"))
+
+    def test_enabled_install_requires_secure_finite_public_policy(self) -> None:
+        layout = self.install_valid_layout("linux")
+        policy = checker._under_root(self.install_root, layout.policy)
+        policy.unlink()
+        with self.assertRaisesRegex(checker.InstallCheckError, "policy is not installed"):
+            self.validate(layout)
+        for contents, expected in [
+            (f'endpoint_path = "{layout.socket}"\nobserver_operation_timeout_ms = 0\n', "operation timeout"),
+            (f'endpoint_path = "{layout.socket}"\nobserver_operation_timeout_ms = 15001\n', "operation timeout"),
+            (f'endpoint_path = "{layout.socket}"\nprivate_key = "secret"\n', "unknown fields"),
+            ('endpoint_path = "/tmp/wrong.sock"\n', "endpoint differs"),
+            ('not TOML', "invalid TOML"),
+        ]:
+            policy.write_text(contents, encoding="utf-8")
+            policy.chmod(0o440)
+            with self.assertRaisesRegex(checker.InstallCheckError, expected):
+                self.validate(layout)
+            policy.chmod(0o640)
+        policy.write_text(f'endpoint_path = "{layout.socket}"\nobserver_operation_timeout_ms = 1\n', encoding="utf-8")
+        with self.assertRaisesRegex(checker.InstallCheckError, "unsafe owner or mode"):
+            self.validate(layout)
+        policy.chmod(0o440)
+        self.validate(layout)
+        policy.chmod(0o640)
+        policy.write_bytes(b" " * (checker.BROKER_POLICY_MAX_BYTES_V1 + 1))
+        policy.chmod(0o440)
+        with self.assertRaisesRegex(checker.InstallCheckError, "policy exceeds"):
+            self.validate(layout)
 
     def test_nonempty_catalog_requires_broker_executable(self) -> None:
         layout = self.install_valid_layout("linux")
@@ -486,7 +521,7 @@ class RuntimeProviderBrokerInstallCheckerTests(unittest.TestCase):
 
 
 class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
-    def test_systemd_unit_uses_public_catalog_endpoint_uid_and_runtime_directory(self) -> None:
+    def test_systemd_unit_uses_public_catalog_policy_uid_and_runtime_directory(self) -> None:
         unit = SYSTEMD_UNIT.read_text(encoding="utf-8")
         for required in (
             "Type=notify",
@@ -503,13 +538,14 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
             (
                 "ExecStart=/usr/local/libexec/iroha-runtime-provider-broker-v1 "
                 "--catalog /etc/iroha/runtime-provider-broker/catalog.norito "
-                "--broker-endpoint /run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock"
+                "--broker-policy /etc/iroha/runtime-provider-broker/policy.toml"
             ),
         ):
             self.assertIn(required, unit)
         self.assertNotIn("Environment=", unit)
         self.assertNotIn("EnvironmentFile=", unit)
         self.assertNotIn("PrivateUsers=true", unit)
+        self.assertNotIn("--broker-endpoint", unit)
         self.assertNotIn("--socket", unit)
         self.assertNotIn("--plugin", unit)
         self.assertNotIn("--private-key", unit)
@@ -542,8 +578,8 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
                 "/usr/local/libexec/iroha-runtime-provider-broker-v1",
                 "--catalog",
                 "/private/etc/iroha/runtime-provider-broker/catalog.norito",
-                "--broker-endpoint",
-                "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+                "--broker-policy",
+                "/private/etc/iroha/runtime-provider-broker/policy.toml",
             ],
         )
         self.assertEqual(

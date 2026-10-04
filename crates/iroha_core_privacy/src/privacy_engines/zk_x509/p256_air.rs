@@ -405,14 +405,25 @@ struct ExpandedOperationV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpandedOperationV1 {
     fn base_row(
-        self,
+        &self,
         fixed: ZkX509P256ArithmeticFixedRowV1,
     ) -> Result<[F; P256_ARITHMETIC_BASE_WIDTH_V1], ZkX509P256AirErrorV1> {
+        // Refuse invalid carries before any private output cells are populated.
+        let carry = self.carries[usize::from(fixed.coefficient)];
+        if carry.unsigned_abs() >= CARRY_ABSOLUTE_BOUND as u64 {
+            return Err(ZkX509P256AirErrorV1::CarryRange);
+        }
+        let encoded = carry
+            .checked_add(CARRY_BIAS)
+            .ok_or(ZkX509P256AirErrorV1::CarryRange)?;
+        if !(0..(1_i64 << CARRY_BITS)).contains(&encoded) {
+            return Err(ZkX509P256AirErrorV1::CarryRange);
+        }
         let mut row = [F::ZERO; P256_ARITHMETIC_BASE_WIDTH_V1];
-        write_limbs_v1(&mut row[A_START..A_START + LIMBS], self.a);
-        write_limbs_v1(&mut row[B_START..B_START + LIMBS], self.b);
-        write_limbs_v1(&mut row[C_START..C_START + LIMBS], self.c);
-        write_limbs_v1(&mut row[Q_START..Q_START + LIMBS], self.q);
+        write_limbs_v1(&mut row[A_START..A_START + LIMBS], &self.a);
+        write_limbs_v1(&mut row[B_START..B_START + LIMBS], &self.b);
+        write_limbs_v1(&mut row[C_START..C_START + LIMBS], &self.c);
+        write_limbs_v1(&mut row[Q_START..Q_START + LIMBS], &self.q);
         let slot = fixed.range_slot();
         write_bits_v1(&mut row[A_BITS..A_BITS + LIMB_BITS], self.a[slot]);
         write_bits_v1(&mut row[B_BITS..B_BITS + LIMB_BITS], self.b[slot]);
@@ -440,16 +451,6 @@ impl ExpandedOperationV1 {
             row[A_BORROW_AFTER] = F(u64::from(self.a_borrow[slot + 1]));
             row[B_BORROW_AFTER] = F(u64::from(self.b_borrow[slot + 1]));
             row[C_BORROW_AFTER] = F(u64::from(self.c_borrow[slot + 1]));
-        }
-        let carry = self.carries[usize::from(fixed.coefficient)];
-        if carry.unsigned_abs() >= CARRY_ABSOLUTE_BOUND as u64 {
-            return Err(ZkX509P256AirErrorV1::CarryRange);
-        }
-        let encoded = carry
-            .checked_add(CARRY_BIAS)
-            .ok_or(ZkX509P256AirErrorV1::CarryRange)?;
-        if !(0..(1_i64 << CARRY_BITS)).contains(&encoded) {
-            return Err(ZkX509P256AirErrorV1::CarryRange);
         }
         row[CARRY] = F(encoded as u64);
         for bit in 0..CARRY_BITS {
@@ -1219,8 +1220,8 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; LIMBS] {
     })
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn write_limbs_v1(target: &mut [F], limbs: [u16; LIMBS]) {
-    for (target, limb) in target.iter_mut().zip(limbs) {
+fn write_limbs_v1(target: &mut [F], limbs: &[u16; LIMBS]) {
+    for (target, limb) in target.iter_mut().zip(limbs.iter().copied()) {
         *target = F(u64::from(limb));
     }
 }
@@ -1924,3 +1925,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "p256_compact_arithmetic.rs"]
+pub(super) mod compact_arithmetic;

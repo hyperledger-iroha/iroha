@@ -1,18 +1,34 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The receive-side object an app holds while its camera is open."""
+"""The receive-side object an app holds while its camera is open.
+
+After a frame decodes, the next frames are first read by tracking the code from
+its last pose (:func:`~iroha_petal.decode.track_frame`), which skips the finder
+search; a full :func:`~iroha_petal.decode.decode_frame` runs when tracking fails
+or the last pose is older than :data:`TRACK_WINDOW_MS`.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Optional
+from typing import Optional, Tuple
 
-from .decode import DecodedFrame, DecodeError, DecodeErrorKind, DecodeOptions, decode_frame
+from .decode import (
+    DecodedFrame,
+    DecodeError,
+    DecodeErrorKind,
+    DecodeOptions,
+    decode_frame,
+    track_frame,
+)
 from .image import Luma
 from .stream import AssemblerLimits, Completed, Progress, StreamAssembler
 
-__all__ = ["ScanLimits", "ScanStats", "ScanOutcome", "ScanSession"]
+__all__ = ["TRACK_WINDOW_MS", "ScanLimits", "ScanStats", "ScanOutcome", "ScanSession"]
+
+#: How long a decoded pose stays usable for tracking the next frames.
+TRACK_WINDOW_MS = 500
 
 
 @dataclass(frozen=True)
@@ -45,6 +61,10 @@ class ScanStats:
     lane_k: int = 0
     #: Lane ``D`` successes.
     lane_d: int = 0
+    #: Frames read by tracking the previous pose instead of a full search.
+    tracked: int = 0
+    #: Frames read with one corner finder hidden and inferred.
+    inferred: int = 0
 
 
 @dataclass(frozen=True)
@@ -72,6 +92,7 @@ class ScanSession:
         self._started_ms: Optional[int] = None
         self._progress_ms = 0
         self._last_rank = 0
+        self._last_pose: Optional[Tuple[DecodedFrame, int]] = None
 
     @property
     def limits(self) -> ScanLimits:
@@ -91,9 +112,14 @@ class ScanSession:
         self._assembler.reset()
         self._started_ms = None
         self._last_rank = 0
+        self._last_pose = None
 
     def push(self, image: Luma, now_ms: int) -> ScanOutcome:
-        """Offer one camera luma plane captured at monotonic time ``now_ms``."""
+        """Offer one camera luma plane captured at monotonic time ``now_ms``.
+
+        While the last decoded pose is at most :data:`TRACK_WINDOW_MS` old the frame
+        is first read by tracking that pose; a full decode runs when tracking fails.
+        """
         start = self._started_ms
         if start is not None and (
             max(now_ms - self._progress_ms, 0) > self._limits.idle_timeout_ms
@@ -103,11 +129,21 @@ class ScanSession:
         self._stats = replace(self._stats, frames=self._stats.frames + 1)
         error: Optional[DecodeErrorKind] = None
         lanes = ""
-        try:
-            frame = decode_frame(image, self._limits.decode)
-        except DecodeError as failure:
-            error = failure.kind
-        else:
+        frame: Optional[DecodedFrame] = None
+        last_pose = self._last_pose
+        if last_pose is not None and max(now_ms - last_pose[1], 0) <= TRACK_WINDOW_MS:
+            frame = track_frame(image, last_pose[0], self._limits.decode)
+            if frame is not None:
+                self._stats = replace(self._stats, tracked=self._stats.tracked + 1)
+        if frame is None:
+            try:
+                frame = decode_frame(image, self._limits.decode)
+            except DecodeError as failure:
+                error = failure.kind
+        if frame is not None:
+            if frame.inferred_corner is not None:
+                self._stats = replace(self._stats, inferred=self._stats.inferred + 1)
+            self._last_pose = (frame, now_ms)
             lanes = self._absorb(frame)
         if error not in (DecodeErrorKind.NO_FINDERS, DecodeErrorKind.UNSUPPORTED_IMAGE):
             self._stats = replace(self._stats, located=self._stats.located + 1)

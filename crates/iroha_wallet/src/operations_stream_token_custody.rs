@@ -644,3 +644,7 @@ impl AccountService {
 #[cfg(test)]
 #[path = "operations_stream_token_custody_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "operations_stream_token_custody_request_tests.rs"]
+mod request_tests;

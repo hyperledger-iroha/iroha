@@ -75,6 +75,9 @@ mod main_deep_replay;
 #[path = "main_resources.rs"]
 mod main_resources;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_retained_rfc.rs"]
+mod main_retained_rfc;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_trace_replay.rs"]
 mod main_trace_replay;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -188,6 +191,7 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
                 core::mem::size_of_val(&self.sha),
                 self.projection.allocated_payload_bytes_v1(),
                 self.io.allocated_payload_bytes_v1(),
+                self.base_polynomials.retained_rfc_payload_v1(),
             ],
         )?;
         self.base_polynomials
@@ -258,6 +262,8 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 self.log19.allocated_payload_bytes_v1(),
                 self.projection.allocated_payload_bytes_v1(),
                 self.io.allocated_payload_bytes_v1(),
+                self.base_polynomials.retained_rfc_payload_v1(),
+                self.aux_polynomials.retained_rfc_payload_v1(),
             ],
         )?;
         self.base_polynomials
@@ -544,6 +550,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
                 log19.allocated_payload_bytes_v1(),
                 projection.allocated_payload_bytes_v1(),
                 io.allocated_payload_bytes_v1(),
+                base_polynomials.retained_rfc_payload_v1(),
             ],
         )?;
         #[cfg(test)]
@@ -1900,6 +1907,8 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
         }
     }
     let mut seen_registrations = 0_usize;
+    #[cfg(test)]
+    let registered_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionRegisteredProviders);
     for (group_index, provider) in providers.iter().enumerate() {
         let expected = layout
             .registered_segments
@@ -1932,11 +1941,15 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
                 )?,
                 zeroize_extension_lanes_v1,
             );
+            #[cfg(test)]
+            let fold_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionRegistrationFold);
             add_main_composition_coefficient_chunks_v1(
                 &mut coefficient_chunks,
                 &contribution,
                 coefficient_cap,
             )?;
+            #[cfg(test)]
+            fold_timer.complete_v1();
             seen_in_group += 1;
             seen_registrations += 1;
             Ok(())
@@ -1945,12 +1958,16 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
     }
+    #[cfg(test)]
+    registered_timer.complete_v1();
     if seen_registrations != layout.registered_segments.len() {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     if SECURITY_LANES != 1 {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
+    #[cfg(test)]
+    let terminal_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionTerminalLinks);
     main_terminal_links::MainTerminalLinkPlanV1::new_v1(layout)?.accumulate_v1(
         layout,
         aux_polynomials,
@@ -1962,6 +1979,11 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
             .and_then(|lane| lane.get_mut(0))
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
     )?;
+    #[cfg(test)]
+    terminal_timer.complete_v1();
+
+    #[cfg(test)]
+    let key_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionKeyLinks);
     key_plan.accumulate_v1(
         layout,
         base_polynomials,
@@ -1972,6 +1994,11 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
             .get_mut(0)
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
     )?;
+    #[cfg(test)]
+    key_timer.complete_v1();
+
+    #[cfg(test)]
+    let union_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionShaUnion);
     sha_union_plan.accumulate_v1(
         layout,
         aux_polynomials,
@@ -1980,6 +2007,9 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
         bounded_transform,
         &mut coefficient_chunks,
     )?;
+    #[cfg(test)]
+    union_timer.complete_v1();
+
     let ca_originals = if let Some(ca) = ca {
         ca.buffers.check_original_owners_v1(
             main_ca_resources::MainCaBufferPhaseV1::Registration,
@@ -1987,6 +2017,8 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
             None,
         )?;
         // All registration-local caches and fixed rows are now out of scope.
+        #[cfg(test)]
+        let ca_retention_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionCaRetention);
         let retained = ca.plan.retain_original_auxiliary_v1(
             layout,
             aux_polynomials,
@@ -1994,11 +2026,15 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
             ca.original,
             bounded_transform,
         )?;
+        #[cfg(test)]
+        ca_retention_timer.complete_v1();
         ca.buffers.check_original_owners_v1(
             main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
             ca.original,
             Some(&retained),
         )?;
+        #[cfg(test)]
+        let ca_links_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionCaLinks);
         ca.plan.accumulate_v1(
             layout,
             aux_polynomials,
@@ -2009,10 +2045,14 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
             bounded_transform,
             &mut coefficient_chunks,
         )?;
+        #[cfg(test)]
+        ca_links_timer.complete_v1();
         Some(retained)
     } else {
         None
     };
+    #[cfg(test)]
+    let blinding_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionBlinding);
     let geometry = super::super::composition_masking::QuotientChunkGeometryV1::new_v1(
         &shared_layout,
         AGGREGATE_PARAMETERS_V1,
@@ -2023,8 +2063,15 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
             .blind_v1(lane, rng)
             .map_err(map_aggregate_error_v1)?;
     }
+    #[cfg(test)]
+    blinding_timer.complete_v1();
+    #[cfg(test)]
+    let fp4_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionFp4Evaluations);
     let evaluations =
         evaluate_main_composition_coefficient_chunks_v1(&coefficient_chunks, &shared_layout)?;
+    #[cfg(test)]
+    fp4_timer.complete_v1();
+
     Ok((
         RetainedCompositionMaterialV1 {
             evaluations,
@@ -2101,13 +2148,17 @@ fn main_fri_bases_from_polynomials_v1(
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        let points = main_deep_replay::MainNativeDeepPointsV1::new_v1(
+        let retained_columns = base_polynomials
+            .retained_group_width_v1(group_index)
+            .checked_add(aux_polynomials.retained_group_width_v1(group_index))
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let points = main_deep_replay::MainMixedDeepPointsV1::new_v1(
             group_layout.native_trace_log2,
             deep_point,
+            retained_columns != 0,
+            main_resources::MainProverBufferPlanV1::new_v1(layout)?.replay_batch,
         )?;
-        let mut weighted = (0..SECURITY_LANES)
-            .map(|_| main_deep_replay::MainNativeDeepQuotientV1::new_v1(&points))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut weighted = main_deep_replay::MainMixedDeepQuotientV1::new_lanes_v1(&points)?;
         points.check_workspace_v1(&weighted, weighted.capacity(), &[], 0)?;
         for (kind, polynomials, width, current, next) in [
             (
@@ -2127,22 +2178,27 @@ fn main_fri_bases_from_polynomials_v1(
         ] {
             for first in (0..width).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
                 let end = width.min(first + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
-                let native = sources.native_columns_v1(layout, kind, group_index, first..end)?;
+                let native =
+                    polynomials.deep_batch_v1(layout, kind, group_index, first..end, sources)?;
                 points.check_workspace_v1(
                     &weighted,
                     weighted.capacity(),
-                    &native,
-                    native.capacity(),
+                    &native.native,
+                    native.native.capacity(),
                 )?;
                 let masks = polynomials.original_masks_v1(layout, kind, group_index, first..end)?;
-                if native.len() != end - first || masks.len() != native.len() {
+                if native.length != end - first || masks.len() != native.length {
                     return Err(ZkX509StarkErrorV1::InternalInvariant);
                 }
                 for lane in 0..SECURITY_LANES {
-                    let mut batch: [main_deep_replay::NativeColumnV1<'_>;
+                    let mut batch: [main_deep_replay::MainMixedColumnV1<'_>;
                         aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
-                        core::array::from_fn(|_| -> main_deep_replay::NativeColumnV1<'_> {
-                            (&[], &[], [E::ZERO; 2], [E::ZERO; 2])
+                        core::array::from_fn(|_| -> main_deep_replay::MainMixedColumnV1<'_> {
+                            (
+                                main_deep_replay::MainMixedInputV1::Native(&[], &[]),
+                                [E::ZERO; 2],
+                                [E::ZERO; 2],
+                            )
                         });
                     for (offset, column) in (first..end).enumerate() {
                         let scales = match kind {
@@ -2156,19 +2212,21 @@ fn main_fri_bases_from_polynomials_v1(
                             ],
                         };
                         batch[offset] = (
-                            &native[offset],
-                            masks[offset].coefficients(),
+                            native.input_v1(offset, masks[offset].coefficients())?,
                             [current[column], next[column]],
                             scales,
                         );
                     }
-                    weighted[lane].add_batch_v1(&points, &batch[..native.len()])?;
+                    weighted[lane].add_batch_v1(&points, &batch[..native.length])?;
                 }
             }
         }
         for (lane, weighted) in weighted.into_iter().enumerate() {
             weighted.accumulate_v1(
-                group_layout.base_width + group_layout.aux_width,
+                (group_layout.base_width + group_layout.aux_width)
+                    .checked_sub(retained_columns)
+                    .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+                retained_columns,
                 &mut accumulators[lane].0,
             )?;
         }

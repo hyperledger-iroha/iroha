@@ -339,6 +339,25 @@ impl PreparedMusubiPinOutboxCheckV1 {
             .map_err(MusubiPinOutboxCheckBindingFailureV1)
     }
 
+    /// Bind the exact signed Check already copied under this original State's physical pool.
+    ///
+    /// The move-only graph owner survives binding/finality refusal and current-row retry. This
+    /// uses the same signature/profile/floor verifier as ordinary binding, not an admission bypass.
+    /// # Errors
+    /// Retains the complete original allocated graph on any refusal, including a foreign pool.
+    pub fn bind_allocated_transaction(
+        self,
+        signed: iroha_data_model::transaction::signed::pin_allocation::AllocatedPinTransactionV1,
+    ) -> Result<PendingMusubiPinOutboxCheckV1, MusubiPinOutboxCheckBindingFailureV1> {
+        bind_signed_check_v1(
+            self,
+            SignedCheckAttempt::from_allocated_pin(signed),
+            Self::binding_scope,
+        )
+        .map(|(prepared, bound)| PendingMusubiPinOutboxCheckV1 { prepared, bound })
+        .map_err(MusubiPinOutboxCheckBindingFailureV1)
+    }
+
     fn binding_scope(&mut self) -> Result<BindingScope<'_>, NativeCheckErrorV1> {
         Ok(BindingScope {
             state: &self.state,

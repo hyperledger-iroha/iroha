@@ -604,3 +604,49 @@ fn swapping_inactive_cells_cannot_replace_the_fixed_scan_schedule() {
     fixture.packets.scan.swap(1, return_copyback::CELLS - 1);
     assert!(fixture.accepts(&program));
 }
+
+#[test]
+fn shared_child_selection_derives_every_field_from_original_fetch_and_schemas() {
+    let program = program();
+    for slot in 0..private_dispatch::MAX_WORDS {
+        let mut fetch = [F::ZERO; CAPACITY];
+        fetch[slot] = F::ONE;
+        let (child, selected, absolute) = program.callables().select_child(&fetch);
+        if let Some(index) = program.callables().children[slot] {
+            let original = &program.artifact().contract_interface().callables[index];
+            let limbs = |value: u64| core::array::from_fn(|i| F((value >> (16 * i)) & 0xffff));
+            assert_eq!(selected, F::ONE);
+            assert_eq!(*child.entry_pc(), limbs(original.entry_pc));
+            assert_eq!(child.frame_bytes(), F(u64::from(original.frame_bytes)));
+            assert_eq!(
+                child.argument_words(),
+                F(original.argument_word_count().unwrap() as u64)
+            );
+            assert_eq!(
+                child.result_words(),
+                F(original.result_word_count().unwrap() as u64)
+            );
+            assert_eq!(
+                absolute,
+                limbs(
+                    (program.artifact().code_offset() - program.artifact().header_len()) as u64
+                        + original.entry_pc
+                )
+            );
+        } else {
+            assert_eq!(selected, F::ZERO);
+            assert_eq!(*child.entry_pc(), [F::ZERO; 4]);
+            assert_eq!(child.frame_bytes(), F::ZERO);
+            assert_eq!(child.argument_words(), F::ZERO);
+            assert_eq!(child.result_words(), F::ZERO);
+            assert_eq!(absolute, [F::ZERO; 4]);
+        }
+    }
+    let (child, selected, absolute) = program.callables().select_child(&[F::ZERO; CAPACITY]);
+    assert_eq!(selected, F::ZERO);
+    assert_eq!(*child.entry_pc(), [F::ZERO; 4]);
+    assert_eq!(child.frame_bytes(), F::ZERO);
+    assert_eq!(child.argument_words(), F::ZERO);
+    assert_eq!(child.result_words(), F::ZERO);
+    assert_eq!(absolute, [F::ZERO; 4]);
+}

@@ -42,6 +42,8 @@ use sorafs_manifest::{
 };
 use std::{collections::BTreeSet, convert::TryInto, env, fs, num::NonZeroU64, path::PathBuf};
 const FIXTURE_PATH: &str = "tests/fixtures/sorafs_pin_registry/snapshot.json";
+const ORDER_ISSUED_EPOCH: u64 = 20;
+const ORDER_DEADLINE_EPOCH: u64 = 28;
 #[test]
 fn pin_registry_snapshot_matches_fixture() {
     let state = make_state();
@@ -55,22 +57,40 @@ fn pin_registry_snapshot_matches_fixture() {
         Some(completion_anchor().block_hash),
         "provider completion anchor must name the exact committed prefix"
     );
-    let mut block = state.block(block_header(2));
-    let mut tx = block.transaction();
-    bootstrap_sorafs(&mut tx);
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
     let council_keys = council_keypair();
-    register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
     let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 36, &council_keys);
-    BindManifestAlias {
-        digest,
-        binding: alias_binding.clone(),
-        bound_epoch: 12,
-        expiry_epoch: 36,
+    {
+        // Approval and completion observe their real consensus-time headers in
+        // separate component overlays; neither overlay invents block finality.
+        let mut block = state.block(block_header_at(2, 5_000));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
+        bootstrap_sorafs(&mut tx);
+        register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
+        assert_eq!(
+            tx.world()
+                .pin_manifests()
+                .get(&digest)
+                .expect("approved pin")
+                .approved_epoch,
+            Some(5)
+        );
+        BindManifestAlias {
+            digest,
+            binding: alias_binding.clone(),
+            bound_epoch: 12,
+            expiry_epoch: 36,
+        }
+        .execute(&alice(), &mut tx)
+        .expect("bind alias");
+        tx.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit the component approval overlay");
     }
-    .execute(&alice(), &mut tx)
-    .expect("bind alias");
+    let mut block = state.block(block_header_at(2, 25_000));
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     let providers = [
         ProviderId::new([0x51; 32]),
         ProviderId::new([0x52; 32]),
@@ -82,8 +102,8 @@ fn pin_registry_snapshot_matches_fixture() {
     IssueReplicationOrder {
         order_id,
         order_payload,
-        issued_epoch: 20,
-        deadline_epoch: 28,
+        issued_epoch: ORDER_ISSUED_EPOCH,
+        deadline_epoch: ORDER_DEADLINE_EPOCH,
         musubi_archive: None,
     }
     .execute(&alice(), &mut tx)
@@ -207,8 +227,20 @@ fn replication_order_fixture_decodes() {
             default_chunker().semver
         )
     );
-    assert_eq!(order.issued_at, 1_700_000_000);
-    assert_eq!(order.deadline_at, 1_700_086_400);
+    assert_eq!(order.issued_at, ORDER_ISSUED_EPOCH);
+    assert_eq!(
+        order_entry.get("issued_epoch").and_then(Value::as_u64),
+        Some(order.issued_at)
+    );
+    assert_eq!(order.deadline_at, ORDER_DEADLINE_EPOCH);
+    assert_eq!(
+        order_entry.get("deadline_epoch").and_then(Value::as_u64),
+        Some(order.deadline_at)
+    );
+    assert_eq!(
+        u64::from(order.sla.ingest_deadline_secs),
+        order.deadline_at - order.issued_at
+    );
     let reencoded = to_bytes(&order).expect("re-encode replication order");
     assert_eq!(
         BASE64_STD.encode(reencoded),
@@ -222,7 +254,7 @@ fn duplicate_alias_binding_is_rejected() {
     let council_keys = council_keypair();
     {
         let mut block = state.block(block_header(1));
-        let mut tx = block.transaction();
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
         bootstrap_sorafs(&mut tx);
         let digest = default_digest();
         let chunk_digest = default_chunk_digest();
@@ -244,7 +276,7 @@ fn duplicate_alias_binding_is_rejected() {
     let digest_b = manifest_digest_for_seed(0xBB);
     let chunk_digest_b = chunk_digest_for_seed(0xBB);
     let mut block = state.block(block_header(2));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest_b, chunk_digest_b, &council_keys);
     let alias_binding = alias_binding_for(digest_b, "sora", "docs", 16, 36, &council_keys);
@@ -275,7 +307,7 @@ fn replication_order_with_mismatched_profile_is_rejected() {
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
     let providers = [
@@ -290,8 +322,8 @@ fn replication_order_with_mismatched_profile_is_rejected() {
     let err = IssueReplicationOrder {
         order_id,
         order_payload,
-        issued_epoch: 20,
-        deadline_epoch: 28,
+        issued_epoch: ORDER_ISSUED_EPOCH,
+        deadline_epoch: ORDER_DEADLINE_EPOCH,
         musubi_archive: None,
     }
     .execute(&alice(), &mut tx)
@@ -313,7 +345,7 @@ fn alias_binding_with_expiry_before_bound_is_rejected() {
     let state = make_state();
     let council_keys = council_keypair();
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
@@ -344,17 +376,25 @@ fn alias_binding_exceeding_retention_is_rejected() {
     let state = make_state();
     let council_keys = council_keypair();
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-    let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 100, &council_keys);
+    let expiry_after_retention = default_policy().retention_epoch + 1;
+    let alias_binding = alias_binding_for(
+        digest,
+        "sora",
+        "docs",
+        12,
+        expiry_after_retention,
+        &council_keys,
+    );
     let err = BindManifestAlias {
         digest,
         binding: alias_binding,
         bound_epoch: 12,
-        expiry_epoch: 100,
+        expiry_epoch: expiry_after_retention,
     }
     .execute(&alice(), &mut tx)
     .expect_err("expiry after retention must be rejected");
@@ -377,7 +417,7 @@ fn replication_order_below_min_replicas_is_rejected() {
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
     let providers = [
@@ -391,8 +431,8 @@ fn replication_order_below_min_replicas_is_rejected() {
     let err = IssueReplicationOrder {
         order_id,
         order_payload,
-        issued_epoch: 20,
-        deadline_epoch: 28,
+        issued_epoch: ORDER_ISSUED_EPOCH,
+        deadline_epoch: ORDER_DEADLINE_EPOCH,
         musubi_archive: None,
     }
     .execute(&alice(), &mut tx)
@@ -410,10 +450,59 @@ fn replication_order_below_min_replicas_is_rejected() {
     }
 }
 #[test]
+fn register_manifest_requires_retained_component_invocation() {
+    let state = make_state();
+    let invocation = Hash::prehashed([0x91; Hash::LENGTH]);
+    let instruction = RegisterPinManifest {
+        manifest_payload: manifest_payload_for_seed(0xAA),
+        alias: None,
+        successor_of: None,
+    };
+    {
+        let mut block = state.block(block_header(1));
+        let mut tx = block.transaction();
+        tx.tx_call_hash = Some(invocation);
+        bootstrap_sorafs(&mut tx);
+        let alice_before = pin_fee_balance(&tx, &alice());
+        let treasury = tx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_before = pin_fee_balance(&tx, &treasury);
+        let error = instruction
+            .clone()
+            .execute(&alice(), &mut tx)
+            .expect_err("copying a call hash cannot create its retained invocation");
+        assert!(
+            matches!(error, InstructionExecutionError::InvariantViolation(reason)
+            if reason.contains("FASTPQ source has no retained producer invocation"))
+        );
+        assert!(tx.world().pin_manifests().get(&default_digest()).is_none());
+        assert_eq!(pin_fee_balance(&tx, &alice()), alice_before);
+        assert_eq!(pin_fee_balance(&tx, &treasury), treasury_before);
+    }
+    {
+        let mut block = state.block(block_header(1));
+        // This existing fixture API retains a finite E owner; it does not
+        // authenticate a Network input or grant finalized publication authority.
+        let mut tx = block.transaction_for_fastpq_testing(invocation);
+        bootstrap_sorafs(&mut tx);
+        instruction
+            .execute(&alice(), &mut tx)
+            .expect("the same call hash with its actual retained component owner");
+        assert!(tx.world().pin_manifests().get(&default_digest()).is_some());
+    }
+    assert!(
+        state
+            .view()
+            .world()
+            .pin_manifests()
+            .get(&default_digest())
+            .is_none()
+    );
+}
+#[test]
 fn register_manifest_rejects_unknown_chunker_profile() {
     let state = make_state();
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let mut manifest = manifest_fixture(0xCC);
     manifest.chunking.namespace = "unknown".into();
@@ -468,7 +557,7 @@ fn register_manifest_rejects_storage_class_outside_governance_allowlist() {
 fn register_manifest_rejects_unknown_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let unknown_parent = manifest_digest_for_seed(0xF1);
     let err = RegisterPinManifest {
@@ -492,7 +581,7 @@ fn register_manifest_rejects_unknown_successor() {
 fn register_manifest_rejects_self_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let digest = manifest_digest_for_seed(0xE2);
     let err = RegisterPinManifest {
@@ -516,7 +605,7 @@ fn register_manifest_rejects_self_successor() {
 fn register_manifest_accepts_active_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let parent = manifest_digest_for_seed(0xE3);
     RegisterPinManifest {
@@ -531,7 +620,7 @@ fn register_manifest_accepts_active_successor() {
         .commit_empty_block_for_testing()
         .expect("commit predecessor");
     let mut block = state.block(block_header(2));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE4),
@@ -553,7 +642,7 @@ fn register_manifest_rejects_retired_successor() {
     let council_keys = council_keypair();
     let parent = manifest_digest_for_seed(0xE5);
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE5), &council_keys);
     tx.apply();
@@ -561,7 +650,7 @@ fn register_manifest_rejects_retired_successor() {
         .commit_empty_block_for_testing()
         .expect("commit approved predecessor");
     let mut block = state.block(block_header(2));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     RetirePinManifest {
         digest: parent,
@@ -574,8 +663,16 @@ fn register_manifest_rejects_retired_successor() {
         .commit_empty_block_for_testing()
         .expect("commit retirement");
     let mut block = state.block(block_header(3));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
+    assert!(matches!(
+        tx.world()
+            .pin_manifests()
+            .get(&parent)
+            .expect("retired predecessor")
+            .status,
+        PinStatus::Retired(_)
+    ));
     let err = RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE6),
         alias: None,
@@ -587,7 +684,7 @@ fn register_manifest_rejects_retired_successor() {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
         )) => assert!(
-            message.contains("was retired"),
+            message.contains("must be approved and live"),
             "expected retired successor guard message, got {message}"
         ),
         other => panic!("expected invalid parameter error, received {other:?}"),
@@ -599,7 +696,7 @@ fn register_manifest_with_successor_persists_pointer() {
     let council_keys = council_keypair();
     let parent = manifest_digest_for_seed(0xE7);
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE7), &council_keys);
     tx.apply();
@@ -607,7 +704,7 @@ fn register_manifest_with_successor_persists_pointer() {
         .commit_empty_block_for_testing()
         .expect("commit approved predecessor");
     let mut block = state.block(block_header(2));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let child = manifest_digest_for_seed(0xE8);
     RegisterPinManifest {
@@ -632,7 +729,7 @@ fn bind_alias_rejects_expiry_before_bound_epoch() {
     let digest = manifest_digest_for_seed(0xD1);
     let chunk_digest = chunk_digest_for_seed(0xD1);
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
     let alias_binding = alias_binding_for(digest, "sora", "docs", 20, 18, &council_keys);
@@ -660,10 +757,18 @@ fn bind_alias_rejects_bound_epoch_before_approval() {
     let council_keys = council_keypair();
     let digest = manifest_digest_for_seed(0xD2);
     let chunk_digest = chunk_digest_for_seed(0xD2);
-    let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut block = state.block(block_header_at(1, 5_000));
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
+    assert_eq!(
+        tx.world()
+            .pin_manifests()
+            .get(&digest)
+            .expect("approved pin")
+            .approved_epoch,
+        Some(5)
+    );
     let alias_binding = alias_binding_for(digest, "sora", "docs", 4, 20, &council_keys);
     let err = BindManifestAlias {
         digest,
@@ -690,7 +795,7 @@ fn bind_alias_rejects_expiry_after_retention_epoch() {
     let digest = manifest_digest_for_seed(0xD3);
     let chunk_digest = chunk_digest_for_seed(0xD3);
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
     let alias_binding = alias_binding_for(
@@ -727,10 +832,16 @@ fn make_state() -> State {
     let alice = alice();
     let bob = iroha_test_samples::BOB_ID.clone();
     let domain = Domain::new(default_domain.clone()).build(&alice);
+    // The pin fixture starts with its fee-asset owning domain. Live domain
+    // registration still requires the production SNS lease; it is not a pin ISI.
+    let fee_domain = Domain::new(
+        DomainId::try_new("universal", "universal").expect("SoraFS fee asset owning domain"),
+    )
+    .build(&alice);
     let alice_account = Account::new(alice.clone()).build(&alice);
     let bob_account = Account::new(bob.clone()).build(&bob);
     let world = World::with(
-        [domain],
+        [domain, fee_domain],
         [alice_account, bob_account],
         std::iter::empty::<AssetDefinition>(),
     );
@@ -760,7 +871,7 @@ fn completion_anchor_header() -> iroha_data_model::block::BlockHeader {
 fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
     ProviderIngestFinalizedAnchorV1 {
         height: 1,
-        block_hash: *iroha_crypto::HashOf::new(&completion_anchor_header()).as_ref(),
+        block_hash: *completion_anchor_header().hash().as_ref(),
     }
 }
 fn seed_completion_anchor(state: &State) {
@@ -833,7 +944,7 @@ fn pin_fee_balance(
 }
 fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_message: &str) {
     let mut block = state.block(block_header(1));
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let alice_balance_before = pin_fee_balance(&tx, &alice());
     let treasury_account = tx.gov.sorafs_pin_fee_treasury_account.clone();
@@ -882,8 +993,11 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
     );
 }
 fn block_header(height: u64) -> iroha_data_model::block::BlockHeader {
+    block_header_at(height, 0)
+}
+fn block_header_at(height: u64, creation_time_ms: u64) -> iroha_data_model::block::BlockHeader {
     let nz_height = NonZeroU64::new(height).expect("height must be non-zero");
-    iroha_data_model::block::BlockHeader::new(nz_height, None, None, 0, 0)
+    iroha_data_model::block::BlockHeader::new(nz_height, None, None, creation_time_ms, 0)
 }
 fn default_digest() -> ManifestDigest {
     manifest_digest_for_seed(0xAA)
@@ -953,13 +1067,16 @@ fn default_policy() -> PinPolicy {
     PinPolicy {
         min_replicas: 3,
         storage_class: StorageClass::Hot,
-        retention_epoch: 42,
+        // A positive manifest must outlive the mandatory automatic ingest deadline.
+        // Alias rejection tests derive their out-of-range epoch from this policy.
+        retention_epoch: u64::from(
+            iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+        ) + 42,
     }
 }
 fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
-    if tx.tx_call_hash.is_none() {
-        tx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
-    }
+    // The caller retains this component's bounded source invocation before
+    // borrowing State. Assigning a call hash here cannot create that ownership.
     let alice = alice();
     let default_domain =
         DomainId::try_new("default", "universal").expect("explicit fixture domain");
@@ -1098,10 +1215,11 @@ fn replication_order(
         ),
         target_replicas,
         assignments,
-        issued_at: 1_700_000_000,
-        deadline_at: 1_700_086_400,
+        issued_at: ORDER_ISSUED_EPOCH,
+        deadline_at: ORDER_DEADLINE_EPOCH,
         sla: ReplicationOrderSlaV1 {
-            ingest_deadline_secs: 86_400,
+            ingest_deadline_secs: u32::try_from(ORDER_DEADLINE_EPOCH - ORDER_ISSUED_EPOCH)
+                .expect("fixture order window fits the V1 SLA"),
             min_availability_percent_milli: 99_500,
             min_por_success_percent_milli: 98_000,
         },

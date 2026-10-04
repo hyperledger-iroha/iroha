@@ -130,7 +130,7 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "b5597e8812bd464c23f4b1cd4594854ff95aa6a421e88762b346c1b5d167d14a"
+    "9db6655a28e5cde66111195e612aa0c3b9787bdaf3dc3c35892baf43b916f719"
 )
 HOSTILE_CARGO_ENVIRONMENT = frozenset(
     {
@@ -2503,15 +2503,48 @@ def android_native_artifact_targets(
         raise RuntimeError(
             f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo feature scope is not exact"
         )
+    # Cargo uses the authenticated workspace root lock through the canonical
+    # root manifest. --lockfile-path belongs to the source-seal helper only;
+    # the hermetic Cargo owner deliberately rejects alternate lock authorities.
     required_markers = (
         'tools.hermeticRunner.toString()',
         '"--profile",\n                        "android-cargo"',
-        '"--locked",\n                        "--offline"',
-        '"--lockfile-path",\n                        tools.cargoLock.toString()',
     )
-    if any(marker not in command for marker in required_markers):
+    cargo_envelope = (
+        r'"build",\s*"--locked",\s*"--offline",\s*'
+        r'"--jobs",\s*"1",\s*"--manifest-path",\s*'
+        r'irohaRoot\.resolve\("Cargo\.toml"\)\.absolutePath'
+    )
+    if (
+        any(marker not in command for marker in required_markers)
+        or len(re.findall(cargo_envelope, command)) != 1
+    ):
         raise RuntimeError(
             f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo envelope is incomplete"
+        )
+    command_literals = re.findall(r'"([^"\n]*)"', command)
+    if (
+        any(command_literals.count(value) != 1 for value in (
+            "build", "--locked", "--offline", "--jobs", "--manifest-path",
+        ))
+        or any(
+            value.startswith(("-j", "-Z", "--jobs=", "--manifest-path=",
+                              "--lockfile-path", "--config"))
+            for value in command_literals
+        )
+    ):
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo envelope is not exact"
+        )
+    root_lock_markers = (
+        'val cargoLock = canonicalIrohaRoot.resolve("Cargo.lock")',
+        "Files.isRegularFile(cargoLock, LinkOption.NOFOLLOW_LINKS)",
+        "!Files.isSymbolicLink(cargoLock)",
+        "cargoLock.toRealPath(LinkOption.NOFOLLOW_LINKS) == cargoLock",
+    )
+    if any(marker not in source for marker in root_lock_markers):
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android root Cargo.lock custody changed"
         )
     packaging_markers = (
         "inputDirectory.set(compileNativeLibs.flatMap { it.outputDirectory })",
@@ -2526,10 +2559,25 @@ def android_native_artifact_targets(
     runner = (repo / ANDROID_HERMETIC_RUNNER).read_text(encoding="utf-8")
     runner_markers = (
         'if args.profile == "android-cargo":',
-        'authenticate_android_cargo_arguments(\n            args.command',
+        'root_lock, lock_identity = authenticate_regular_file(\n'
+        '        "Android root Cargo.lock",\n'
+        '        canonical_workspace / "Cargo.lock",',
+        'manifest_position = exact_pair("--manifest-path", '
+        'str(canonical_workspace / "Cargo.toml"))',
+        'value == "--lockfile-path"',
+        'for name, (path, expected_identity) in authenticated_files.items():',
+        '_, current_identity = authenticate_regular_file(name, path)',
+        'if current_identity != expected_identity:',
         'resolved != authenticated_tools["CARGO"][0]',
     )
-    if any(marker not in runner for marker in runner_markers):
+    tracked_lock_call = (
+        r'authenticated_files\["Android root Cargo\.lock"\]\s*=\s*'
+        r'authenticate_android_cargo_arguments\(\s*args\.command\s*\)'
+    )
+    if (
+        any(marker not in runner for marker in runner_markers)
+        or len(re.findall(tracked_lock_call, runner)) != 1
+    ):
         raise RuntimeError(
             f"{ANDROID_HERMETIC_RUNNER}: Android Cargo authentication changed"
         )

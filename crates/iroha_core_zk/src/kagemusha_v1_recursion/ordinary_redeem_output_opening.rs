@@ -56,7 +56,6 @@ pub(super) struct OrdinaryRedeemOutputSourcesV1<'a, F: KagemushaPoseidonFieldV1>
 }
 pub(super) struct OrdinaryRedeemOutputOpeningV1<F: KagemushaPoseidonFieldV1> {
     pub(super) manifest_digest: Bytes<F>,
-    pub(super) output_digest: Bytes<F>,
 }
 fn equal<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
@@ -262,7 +261,6 @@ pub(super) fn constrain_ordinary_redeem_output_opening_v1<F: KagemushaPoseidonFi
     equal(ctx, range, output, expected);
     Ok(OrdinaryRedeemOutputOpeningV1 {
         manifest_digest: manifest,
-        output_digest: output,
     })
 }
 

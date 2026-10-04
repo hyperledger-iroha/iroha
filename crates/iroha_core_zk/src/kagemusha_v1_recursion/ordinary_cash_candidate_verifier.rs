@@ -5,9 +5,9 @@
 //! rebuilds every State input from that owner and requires actual paired proofs and whole histories.
 
 use super::{
-    DigestV1, KagemushaAuthenticatedRecursiveVerifierV1, KagemushaOperationV1,
-    KagemushaPairedProofV1, KagemushaPastaParityV1, KagemushaPreparedIntentCommitmentsV1,
-    KagemushaRecursionArtifactsV1, KagemushaStateRelationPublicInputsV1,
+    DigestV1, KagemushaOperationV1, KagemushaPairedProofV1, KagemushaPastaParityV1,
+    KagemushaPreparedIntentCommitmentsV1, KagemushaRecursionArtifactsV1,
+    KagemushaStateRelationPublicInputsV1,
     ordinary_guard_verifier::KagemushaAuthenticatedOrdinaryPreparationGuardV1,
     ordinary_state_reserved::kagemusha_ordinary_state_outer_protocol_positions_v1,
     terminal_authorization::kagemusha_candidate_envelope_digest_v1,
@@ -67,12 +67,6 @@ impl KagemushaAuthenticatedOrdinaryCashCandidateV1 {
     pub(crate) fn full_state_sha256(&self) -> DigestV1 {
         self.state_sha256
     }
-    pub(crate) fn predecessor_state(&self) -> &KagemushaStateV1 {
-        self.public_inputs
-            .predecessor
-            .as_ref()
-            .expect("closed outgoing candidate predecessor")
-    }
     pub(crate) fn successor_state(&self) -> &KagemushaStateV1 {
         &self.public_inputs.successor
     }
@@ -82,30 +76,8 @@ impl KagemushaAuthenticatedOrdinaryCashCandidateV1 {
     pub(crate) fn private_checkpoint_original(&self) -> &[u8] {
         &self.private_checkpoint_original
     }
-    pub(crate) fn with_retained_checkpoint(
-        &self,
-        verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
-        consume: &mut dyn for<'a> FnMut(
-            &'a super::KagemushaGeneratedRecursiveStateProofV1,
-        ) -> core::result::Result<(), KagemushaStateErrorV1>,
-    ) -> Result<()> {
-        let restored = super::KagemushaRecursiveStateCheckpointV1::decode_canonical_exact(
-            &self.private_checkpoint_original,
-            verifier,
-        )
-        .map_err(material)?
-        .restore(verifier, &self.public_inputs)
-        .map_err(material)?;
-        if restored.proof != self.proof {
-            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-        }
-        consume(&restored)
-    }
     pub(crate) fn proof(&self) -> &KagemushaPairedProofV1 {
         &self.proof
-    }
-    pub(crate) fn preparation_operation_id(&self) -> DigestV1 {
-        self.operation_id
     }
 
     /// Recheck the same immutable candidate selection before the Native terminal intent is made.

@@ -151,7 +151,7 @@ pub const KAGEMUSHA_ORDINARY_FINALIZED_MINT_CREDIT_MAX_BYTES_V1: usize =
         + super::KAGEMUSHA_MINT_CREDIT_MAX_BYTES_V1
         + 4096;
 
-/// Full ordinary finalized debit and its actual neutral MintAuthority credit proof originals.
+/// Full ordinary finalized debit and its actual neutral `MintAuthority` credit proof originals.
 /// Decoding gives data only: independent release/finality/proof admission remains mandatory.
 #[derive(
     Clone,
@@ -174,7 +174,7 @@ pub struct KagemushaOrdinaryFinalizedMintCreditOriginalV1 {
     pub version: u16,
     /// Exact complete finalized debit original, including actual native receipt/membership.
     pub finalized_source_original: Vec<u8>,
-    /// Exact canonical full neutral MintCredit, including both proofs and histories.
+    /// Exact canonical full neutral `MintCredit`, including both proofs and histories.
     pub mint_credit_original: Vec<u8>,
 }
 impl KagemushaOrdinaryFinalizedMintCreditOriginalV1 {

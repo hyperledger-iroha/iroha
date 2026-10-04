@@ -40,6 +40,61 @@ class PetalScanSessionTest {
     }
 
     @Test
+    fun aSteadyCameraIsTrackedAfterTheFirstFrame() {
+        val encoder = PetalStreamEncoder(payload(300), 2)
+        val config = PetalCameraSimulator.fitToFrame(
+            PetalCaptureConfig.modern().copy(width = 640, height = 480, rotationDeg = 8.0),
+            4.0,
+        )
+        val session = PetalScanSession()
+        for (frame in 0 until 6) {
+            val outcome = session.push(PetalCameraSimulator.capture(render(encoder, frame), config), frame * 125L)
+            assertNull(outcome.error, "frame $frame")
+        }
+        assertEquals(6L, session.stats().readable)
+        assertEquals(5L, session.stats().tracked, "every frame after the first follows the pose")
+        // a pause longer than the tracking window forces a full search again
+        val late = 5 * 125L + PetalScanSession.TRACK_WINDOW_MILLIS + 1
+        session.push(PetalCameraSimulator.capture(render(encoder, 6), config), late)
+        assertEquals(5L, session.stats().tracked)
+        assertEquals(7L, session.stats().readable)
+    }
+
+    /** Frame [frame] rendered at 512 pixels with the blossom of canonical corner [corner] painted over. */
+    private fun hiddenBlossom(encoder: PetalStreamEncoder, frame: Int, corner: Int): PetalLuma {
+        val rgb = render(encoder, frame)
+        val n = rgb.width
+        val scale = n / 1024.0
+        val reach = 75.0 * scale
+        val data = rgb.data()
+        for (y in 0 until n) {
+            for (x in 0 until n) {
+                val dx = x + 0.5 - PetalLayout.finderCenterX(corner) * scale
+                val dy = y + 0.5 - PetalLayout.finderCenterY(corner) * scale
+                if (dx * dx + dy * dy <= reach * reach) for (c in 0 until 3) data[(y * n + x) * 3 + c] = 0
+            }
+        }
+        return assertNotNull(PetalRgb.fromRaw(n, n, data)).toLuma()
+    }
+
+    @Test
+    fun inferredCornersAreCountedAndResetForgetsThePose() {
+        val encoder = PetalStreamEncoder(payload(2000), 1)
+        val session = PetalScanSession()
+        assertEquals("PKD", session.push(render(encoder, 0).toLuma(), 0).lanes)
+        // a thumb arrives over the bottom-right blossom: tracking infers it
+        assertEquals("PKD", session.push(hiddenBlossom(encoder, 1, 2), 125).lanes)
+        assertEquals(1L, session.stats().tracked)
+        assertEquals(1L, session.stats().inferred)
+        // a full search infers it as well
+        session.reset()
+        assertEquals("PKD", session.push(hiddenBlossom(encoder, 2, 2), 250).lanes)
+        assertEquals(1L, session.stats().tracked, "reset forgets the pose")
+        assertEquals(2L, session.stats().inferred)
+        assertEquals(3L, session.stats().readable)
+    }
+
+    @Test
     fun legacyCapturesStillDeliverThePayload() {
         val data = payload(300)
         val encoder = PetalStreamEncoder(data, 1)
@@ -75,7 +130,7 @@ class PetalScanSessionTest {
         // the finder levels cannot describe the blown-out tiles: the level read alone reads neither tile lane
         val pose = assertNotNull(PetalDecoder.decode(first).frame)
         val h = pose.homography.m
-        val reference = assertNotNull(PetalDecoder.referenceLevels(first, h), "reference levels")
+        val reference = assertNotNull(PetalDecoder.referenceLevels(first, h, PetalDecoder.NO_CORNER), "reference levels")
         val workspace = PetalWorkspace()
         PetalDecoder.samplePatches(first, h, workspace)
         val words = PetalDecoder.tileWords(PetalDecoder.readTiles(reference, PetalDecodeOptions.DEFAULT, workspace))

@@ -163,38 +163,75 @@ impl LaneStores {
             *owned |= runtime_owner;
             return Ok(Arc::clone(store));
         }
-        let (opening, runtime_owner) = match stores.remove(&key) {
-            Some(StoreSlot::Opening(opening, owned)) => (opening, owned || runtime_owner),
+        if stores.contains_key(&key) {
+            return Self::resume_store_opening(&mut stores, key, runtime_owner);
+        }
+        // The absent-key removal originally had no owner to move. Keep the map locked
+        // while acquiring the same authority, before entering either large opening stage.
+        let instance = self.instance(lane, incarnation);
+        let authority = self
+            .authorities
+            .authority(lane, incarnation, instance)?
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "historical lane authority is unresolved",
+                )
+            })?;
+        if authority.schedule.instance() != instance {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "historical lane schedule belongs to another incarnation",
+            )
+            .into());
+        }
+        self.open_store_with_authority(&mut stores, key, instance, authority, runtime_owner)
+    }
+
+    // Only this post-authority stage constructs the large opening owner. The original
+    // registry lock and finite pool remain the same through acquisition and completion.
+    fn open_store_with_authority(
+        &self,
+        stores: &mut BTreeMap<(LaneId, [u8; 32]), StoreSlot>,
+        key: (LaneId, [u8; 32]),
+        instance: Hash32,
+        authority: LaneStoreAuthority,
+        runtime_owner: bool,
+    ) -> Result<Arc<FileLaneBlockStore>, Attempt<io::Error>> {
+        let opening = FileLaneBlockStore::begin_open(
+            &self.root,
+            &instance,
+            Arc::clone(&self.crypto),
+            self.budget.clone(),
+            authority.schedule,
+            authority.verifier,
+        )?;
+        Self::complete_store_opening(stores, key, opening, runtime_owner)
+    }
+
+    // The caller observed this key under the same exclusive map guard and returned any
+    // Ready owner already. Removal therefore transfers this exact retained Opening once.
+    fn resume_store_opening(
+        stores: &mut BTreeMap<(LaneId, [u8; 32]), StoreSlot>,
+        key: (LaneId, [u8; 32]),
+        runtime_owner: bool,
+    ) -> Result<Arc<FileLaneBlockStore>, Attempt<io::Error>> {
+        let (opening, owned) = match stores.remove(&key) {
+            Some(StoreSlot::Opening(opening, owned)) => (opening, owned),
             Some(StoreSlot::Ready(..)) => unreachable!("ready owner returned while lock held"),
-            None => {
-                let instance = self.instance(lane, incarnation);
-                let authority = self
-                    .authorities
-                    .authority(lane, incarnation, instance)?
-                    .ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::WouldBlock,
-                            "historical lane authority is unresolved",
-                        )
-                    })?;
-                if authority.schedule.instance() != instance {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "historical lane schedule belongs to another incarnation",
-                    )
-                    .into());
-                }
-                let opening = FileLaneBlockStore::begin_open(
-                    &self.root,
-                    &instance,
-                    Arc::clone(&self.crypto),
-                    self.budget.clone(),
-                    authority.schedule,
-                    authority.verifier,
-                )?;
-                (opening, runtime_owner)
-            }
+            None => unreachable!("opening observed while the same map lock is held"),
         };
+        Self::complete_store_opening(stores, key, opening, owned || runtime_owner)
+    }
+
+    // A refused completion returns its unchanged original owner to the same key. Only
+    // a fully recovered store publishes Ready; historical/runtime ownership is preserved.
+    fn complete_store_opening(
+        stores: &mut BTreeMap<(LaneId, [u8; 32]), StoreSlot>,
+        key: (LaneId, [u8; 32]),
+        opening: LaneStoreOpen,
+        runtime_owner: bool,
+    ) -> Result<Arc<FileLaneBlockStore>, Attempt<io::Error>> {
         match opening.complete() {
             Ok(store) => {
                 let store = Arc::new(store);

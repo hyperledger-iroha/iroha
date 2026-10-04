@@ -23,7 +23,7 @@ impl Client {
             MAX_RESERVE_POLICY_PROOF_BYTES_V1, ReservePolicyProofV1,
         };
         expected_policy.validate()?;
-        block.verify_global_scope(self.network_id, &self.chain.to_string())?;
+        block.verify_global_scope(self.network_id, self.chain.as_ref())?;
         if expected_manager != &self.account || block.height() < 2 {
             return Err(eyre!(
                 "reserve policy state requires this client's manager account and a non-genesis Global decision"
@@ -48,7 +48,7 @@ impl Client {
         )?;
         let proof = ReservePolicyProofV1::decode_frame(body)?;
         let verified = proof.verify(
-            &self.chain.to_string(),
+            self.chain.as_ref(),
             self.network_id,
             expected_manager,
             expected_policy,

@@ -258,13 +258,15 @@ pub struct AccelerationConfig {
     pub enable_cuda: bool,
     /// Maximum number of GPUs to initialize (None = auto/no cap).
     pub max_gpus: Option<usize>,
-    /// Minimum number of leaves to use GPU for Merkle leaf hashing (None = use default).
+    /// Minimum leaves for a Merkle GPU attempt (None = default, Some(0) = no floor).
     pub merkle_min_leaves_gpu: Option<usize>,
-    /// Backend-specific thresholds (None = inherit generic GPU threshold).
+    /// Metal Merkle floor (None = inherit generic, Some(0) = no floor).
     pub merkle_min_leaves_metal: Option<usize>,
+    /// CUDA Merkle floor (None = inherit generic, Some(0) = no floor).
     pub merkle_min_leaves_cuda: Option<usize>,
-    /// Prefer CPU SHA2 for trees up to this many leaves (per-arch). If None, use defaults.
+    /// Prefer available AArch64 CPU SHA2 through this leaf count; None restores the default.
     pub prefer_cpu_sha2_max_leaves_aarch64: Option<usize>,
+    /// Prefer available x86 CPU SHA2 through this leaf count; None restores the default.
     pub prefer_cpu_sha2_max_leaves_x86: Option<usize>,
     /// Shared physical-owner ceilings; no omitted field means unlimited.
     pub resource_limits: iroha_accel::RegistryLimits,
@@ -304,7 +306,8 @@ fn write_acceleration_config(cfg: AccelerationConfig) {
 /// Apply acceleration configuration. Optional; when not called the VM
 /// automatically uses all available hardware, subject to golden self-tests.
 /// Metal discovery, qualification and calibration run when acceleration is requested,
-/// rather than while applying policy.
+/// rather than while applying policy. Each call replaces the complete policy;
+/// omitted Merkle thresholds resolve to their defaults or generic inheritance.
 pub fn set_acceleration_config(cfg: AccelerationConfig) {
     write_acceleration_config(cfg);
     iroha_accel::ProcessResources::install(cfg.resource_limits);
@@ -321,23 +324,6 @@ pub fn set_acceleration_config(cfg: AccelerationConfig) {
         let installed = iroha_accel::cuda::CudaProcess::install(cfg.resource_limits).is_ok();
         crate::cuda_dispatch::configure(cfg.enable_cuda && installed, cfg.max_gpus);
         crate::cuda::set_cuda_enabled(cfg.enable_cuda);
-    }
-    if let Some(min) = cfg.merkle_min_leaves_gpu {
-        crate::byte_merkle_tree::set_merkle_gpu_min_leaves(min);
-    }
-    if let Some(min) = cfg.merkle_min_leaves_metal {
-        crate::byte_merkle_tree::set_merkle_metal_min_leaves(min);
-    }
-    if let Some(min) = cfg.merkle_min_leaves_cuda {
-        crate::byte_merkle_tree::set_merkle_cuda_min_leaves(min);
-    }
-    #[cfg(target_arch = "aarch64")]
-    if let Some(v) = cfg.prefer_cpu_sha2_max_leaves_aarch64 {
-        crate::byte_merkle_tree::set_prefer_cpu_sha2_max_leaves_aarch64(v);
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if let Some(v) = cfg.prefer_cpu_sha2_max_leaves_x86 {
-        crate::byte_merkle_tree::set_prefer_cpu_sha2_max_leaves_x86(v);
     }
 }
 /// Return the most recently applied [`AccelerationConfig`]. When

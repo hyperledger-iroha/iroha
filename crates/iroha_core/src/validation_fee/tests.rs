@@ -1,4 +1,6 @@
 //! Conversion provenance and protected runtime fixture tests.
+#[path = "permission_guard_tests.rs"]
+mod permission_guard_tests;
 #[path = "registry_refusal_tests.rs"]
 mod registry_refusal_tests;
 #[path = "runtime_dlmm_tests.rs"]
@@ -290,17 +292,42 @@ pub(crate) fn with_validation_fee_payout_state_at_time(
     timestamp_ms: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
 ) {
-    with_validation_fee_payout_block_at_time(
+    with_validation_fee_payout_component_state(
         height,
         timestamp_ms,
-        |block, deployer, code, code_hash| {
-            test(
-                &mut block.transaction_for_callback_testing(),
-                deployer,
-                code,
-                code_hash,
-            );
-        },
+        PayoutComponentSource::Unowned,
+        test,
+    );
+}
+
+/// Retain a finite invocation owner before opening a direct component fixture.
+/// This does not authenticate a Network input or authorize publication.
+pub(crate) fn with_validation_fee_payout_invocation_at_time(
+    height: u64,
+    timestamp_ms: u64,
+    invocation: Hash,
+    test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+) {
+    with_validation_fee_payout_component_state(
+        height,
+        timestamp_ms,
+        PayoutComponentSource::Invocation(invocation),
+        test,
+    );
+}
+
+/// Own only the finite mandatory-purpose component scope for an idle maintenance test.
+/// This grants neither complete carrier inventory nor publication authority.
+pub(crate) fn with_validation_fee_payout_protocol_at_time(
+    height: u64,
+    timestamp_ms: u64,
+    test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+) {
+    with_validation_fee_payout_component_state(
+        height,
+        timestamp_ms,
+        PayoutComponentSource::Mandatory,
+        test,
     );
 }
 
@@ -323,6 +350,112 @@ pub(crate) fn with_validation_fee_payout_block_at_time(
     );
     let mut block = state.block(header);
     test(&mut block, &deployer, &code, code_hash);
+}
+
+enum PayoutComponentSource {
+    Unowned,
+    Invocation(Hash),
+    Mandatory,
+}
+
+fn with_validation_fee_payout_component_state(
+    height: u64,
+    timestamp_ms: u64,
+    invocation: PayoutComponentSource,
+    test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+) {
+    // Execute the original signed genesis; committed root metadata is never seeded by hand.
+    // The requested height is only this component projection, not certified native history.
+    let (chain, deployer, code, code_hash) =
+        signed_original_fixtures::signed_fee_registry_root_fixture();
+    let state = std::sync::Arc::clone(chain.state());
+    let header = BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("test height is non-zero"),
+        state.view().latest_block_hash(),
+        None,
+        timestamp_ms,
+        0,
+    );
+    let mut block = state.block(header);
+    // Retain each component's explicit finite purpose before borrowing State.
+    // This grants no Network admission or block publication authority.
+    let mut state_tx = match invocation {
+        PayoutComponentSource::Invocation(hash) => block.transaction_for_fastpq_testing(hash),
+        PayoutComponentSource::Mandatory => block.transaction_for_fastpq_protocol_testing(),
+        PayoutComponentSource::Unowned => block.transaction(),
+    };
+    let deployment_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
+    crate::smartcontracts::Execute::execute(
+        iroha_data_model::isi::Grant::account_permission(deployment_permission, deployer.clone()),
+        &deployer,
+        &mut state_tx,
+    )
+    .expect("grant contract lifecycle authority");
+    test(&mut state_tx, &deployer, &code, code_hash);
+}
+
+#[test]
+fn payout_component_quantity_requires_exact_retained_invocation() {
+    use crate::smartcontracts::Execute;
+    let invocation = Hash::new(b"payout component quantity source");
+    let check = |state_tx: &mut StateTransaction<'_, '_>, retained: bool| {
+        assert_eq!(
+            crate::sumeragi::lanes::routing::read_committed_root_scope(&state_tx.world).unwrap(),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+        );
+        let owner = account(2);
+        let recipient = account(3);
+        let source = AssetId::new(fee_asset(), owner.clone());
+        let destination = AssetId::new(fee_asset(), recipient.clone());
+        **state_tx
+            .world
+            .asset_or_insert_exact(&source, Quantity::zero())
+            .unwrap() = Quantity::from(10_u32);
+        let result =
+            Transfer::asset_quantity(source.clone(), 1_u32, recipient).execute(&owner, state_tx);
+        if retained {
+            result.expect("the original finite component invocation owns its transfer");
+            assert_eq!(state_tx.tx_call_hash, Some(invocation));
+            assert_eq!(state_tx.retail_fee_transcripts_for_test().len(), 1);
+            assert_eq!(
+                state_tx.retail_fee_transcripts_for_test()[0].batch_hash,
+                invocation
+            );
+            assert_eq!(
+                state_tx.world.assets.get(&source).unwrap().as_ref(),
+                &Quantity::from(9_u32)
+            );
+            assert_eq!(
+                state_tx.world.assets.get(&destination).unwrap().as_ref(),
+                &Quantity::one()
+            );
+        } else {
+            let error = result.expect_err("a copied or substituted hash cannot grant custody");
+            assert!(
+                error
+                    .to_string()
+                    .contains("FASTPQ source has no retained producer invocation")
+            );
+            assert_eq!(
+                state_tx.world.assets.get(&source).unwrap().as_ref(),
+                &Quantity::from(10_u32)
+            );
+            assert!(state_tx.world.assets.get(&destination).is_none());
+            assert!(state_tx.retail_fee_transcripts_for_test().is_empty());
+        }
+    };
+    with_validation_fee_payout_state_at_time(2, 0, |state_tx, _, _, _| {
+        state_tx.tx_call_hash = Some(invocation);
+        check(state_tx, false);
+    });
+    with_validation_fee_payout_invocation_at_time(2, 0, invocation, |state_tx, _, _, _| {
+        state_tx.tx_call_hash = Some(Hash::new(b"substituted component source"));
+        check(state_tx, false);
+    });
+    with_validation_fee_payout_invocation_at_time(2, 0, invocation, |state_tx, _, _, _| {
+        check(state_tx, true);
+    });
 }
 
 pub(crate) fn activate_bound_payout_runtime(

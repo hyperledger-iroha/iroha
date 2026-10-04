@@ -37,6 +37,8 @@ pub mod governance_proposal_api;
 pub mod kagemusha_api;
 /// Native complete World snapshots and original KAGEMUSHA authority values.
 pub mod kagemusha_state;
+/// The list-query language (filter, sort, projection, pagination) shared by Torii, SDKs and CLI.
+pub mod list_query;
 /// Shared MCP wire constants for Torii and repository clients.
 pub mod mcp;
 /// Original multisig execution records at a certified native World cut.

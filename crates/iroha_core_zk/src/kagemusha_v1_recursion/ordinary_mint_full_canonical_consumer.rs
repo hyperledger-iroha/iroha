@@ -57,16 +57,11 @@ pub(super) struct OrdinaryMintCanonicalProofSourcesV1<'a, F: KagemushaPoseidonFi
 /// Exact constrained originals used to open the finalized IncomingReservation value. This is
 /// a mathematical byte result, never a Native source loan or a verified monetary capability.
 pub(super) struct OrdinaryMintCanonicalOriginalsV1<F: KagemushaPoseidonFieldV1> {
-    pub(super) authorization_original: Stream<F>,
-    pub(super) authorization_original_digest: Bytes<F>,
-    pub(super) request_original: Stream<F>,
     pub(super) request_original_sha256: Bytes<F>,
-    pub(super) finalized_credit_original: Stream<F>,
     pub(super) finalized_credit_original_sha256: Bytes<F>,
     pub(super) lineage_payload: Stream<F>,
     pub(super) source_semantic_digest: Bytes<F>,
     pub(super) predecessor_payload: Stream<F>,
-    pub(super) context_digest: Bytes<F>,
     pub(super) clock_digest: Bytes<F>,
 }
 fn raw<F: KagemushaPoseidonFieldV1>(
@@ -694,16 +689,11 @@ pub(super) fn constrain_ordinary_mint_canonical_originals_v1<F: KagemushaPoseido
         assemble_bounded_canonical_frame_v1(ctx, range, request_g.framing(), &request_payload)?;
     let request_original_sha256 = raw_hash(ctx, range, jobs, &request_original)?;
     Ok(OrdinaryMintCanonicalOriginalsV1 {
-        authorization_original,
-        authorization_original_digest,
-        request_original,
         request_original_sha256,
-        finalized_credit_original,
         finalized_credit_original_sha256,
         lineage_payload,
         source_semantic_digest: semantic,
         predecessor_payload,
-        context_digest,
         clock_digest,
     })
 }

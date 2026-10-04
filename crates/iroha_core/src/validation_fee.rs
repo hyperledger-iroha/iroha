@@ -294,46 +294,62 @@ pub(crate) fn is_enacted_validation_fee_payout_invocation(
 }
 
 fn trigger_id_from_permission(
+    state_transaction: &StateTransaction<'_, '_>,
     permission: &iroha_data_model::permission::Permission,
-) -> Option<iroha_data_model::trigger::TriggerId> {
-    iroha_executor_data_model::permission::trigger::CanUnregisterTrigger::try_from(permission)
-        .map(|token| token.trigger)
-        .or_else(|_| {
-            iroha_executor_data_model::permission::trigger::CanModifyTrigger::try_from(permission)
-                .map(|token| token.trigger)
-        })
-        .or_else(|_| {
-            iroha_executor_data_model::permission::trigger::CanExecuteTrigger::try_from(permission)
-                .map(|token| token.trigger)
-        })
-        .or_else(|_| {
-            iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata::try_from(
-                permission,
-            )
-            .map(|token| token.trigger)
-        })
-        .ok()
+) -> Result<
+    Option<iroha_data_model::trigger::TriggerId>,
+    iroha_data_model::isi::error::InstructionExecutionError,
+> {
+    use iroha_executor_data_model::permission::{
+        Permission as _,
+        trigger::{
+            CanExecuteTrigger, CanModifyTrigger, CanModifyTriggerMetadata, CanUnregisterTrigger,
+        },
+    };
+    if permission.name() == CanUnregisterTrigger::name() {
+        return decode_payout_runtime_permission(state_transaction, permission)
+            .map(|token: CanUnregisterTrigger| Some(token.trigger));
+    }
+    if permission.name() == CanModifyTrigger::name() {
+        return decode_payout_runtime_permission(state_transaction, permission)
+            .map(|token: CanModifyTrigger| Some(token.trigger));
+    }
+    if permission.name() == CanExecuteTrigger::name() {
+        return decode_payout_runtime_permission(state_transaction, permission)
+            .map(|token: CanExecuteTrigger| Some(token.trigger));
+    }
+    if permission.name() == CanModifyTriggerMetadata::name() {
+        return decode_payout_runtime_permission(state_transaction, permission)
+            .map(|token: CanModifyTriggerMetadata| Some(token.trigger));
+    }
+    Ok(None)
 }
 
 pub(crate) fn permission_targets_enacted_validation_fee_payout_trigger(
     state_transaction: &StateTransaction<'_, '_>,
     permission: &iroha_data_model::permission::Permission,
-) -> bool {
-    trigger_id_from_permission(permission).is_some_and(|trigger_id| {
+) -> Result<bool, iroha_data_model::isi::error::InstructionExecutionError> {
+    let trigger_id = match trigger_id_from_permission(state_transaction, permission) {
+        Ok(trigger_id) => trigger_id,
+        Err(_) if cfg!(all(test, sumeragi_core_mutation = "HC97")) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    Ok(trigger_id.is_some_and(|trigger_id| {
         is_enacted_validation_fee_payout_trigger(state_transaction, &trigger_id)
-    })
+    }))
 }
 
 pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
     state_transaction: &StateTransaction<'_, '_>,
     permission: &iroha_data_model::permission::Permission,
-) -> Option<AccountId> {
-    if let Ok(scoped) =
-        iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint::try_from(
-            permission,
-        )
-    {
-        return state_transaction
+) -> Result<Option<AccountId>, iroha_data_model::isi::error::InstructionExecutionError> {
+    use iroha_executor_data_model::permission::{
+        Permission as _, asset::CanTransferAsset, smart_contract::CanInvokeContractEntrypoint,
+    };
+    if permission.name() == CanInvokeContractEntrypoint::name() {
+        let scoped: CanInvokeContractEntrypoint =
+            decode_payout_runtime_permission(state_transaction, permission)?;
+        return Ok(state_transaction
             .world
             .governance_proposals
             .iter()
@@ -353,28 +369,62 @@ pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
                 let pool_selector = scoped.contract.subject_id() == binding.pool_vault_account_id
                     && scoped.entrypoint == VALIDATION_FEE_POOL_SWAP_ENTRYPOINT;
                 (wrapper_selector || pool_selector).then(|| binding.treasury_account_id.clone())
-            });
+            }));
     }
-    let transfer =
-        iroha_executor_data_model::permission::asset::CanTransferAsset::try_from(permission)
-            .ok()?;
+    if permission.name() != CanTransferAsset::name() {
+        return Ok(None);
+    }
+    let transfer: CanTransferAsset =
+        decode_payout_runtime_permission(state_transaction, permission)?;
     // Enactment atomically replaces derived permissions. Its new head owns this
     // permission immediately, even though conversion eligibility begins next block.
     // Historical proposal iteration cannot select a retired pool as the holder.
     let registry = match validated_policy_registry_in_world(&state_transaction.world) {
-        Ok(registry) => registry?,
-        Err(ExecutionAttemptError::Rejected(_)) => return None,
-        Err(ExecutionAttemptError::Deferred(reason)) => {
-            let _ = state_transaction.world.defer_execution(reason);
-            return None;
+        Ok(Some(registry)) => registry,
+        Ok(None) => return Ok(None),
+        Err(error) => {
+            if cfg!(all(test, sumeragi_core_mutation = "HC96")) {
+                return Ok(None);
+            }
+            return Err(state_transaction.world.attempt_error_to_instruction_error(
+                error.map_rejection(|error| {
+                    iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                        format!("validation-fee permission guard rejected registry: {error}")
+                            .into(),
+                    )
+                }),
+            ));
         }
     };
-    let binding = &registry.payout_policies.head()?.payout_binding;
+    let Some(head) = registry.payout_policies.head() else {
+        return Ok(None);
+    };
+    let binding = &head.payout_binding;
     let wrapper_ds_asset = AssetId::new(
         binding.ds_asset_id.clone(),
         binding.treasury_account_id.clone(),
     );
-    (transfer.asset == wrapper_ds_asset).then(|| binding.pool_vault_account_id.clone())
+    Ok((transfer.asset == wrapper_ds_asset).then(|| binding.pool_vault_account_id.clone()))
+}
+
+/// Decode only a recognized runtime permission, retaining its original local refusal.
+fn decode_payout_runtime_permission<P: norito::json::JsonDeserialize>(
+    state_transaction: &StateTransaction<'_, '_>,
+    permission: &iroha_data_model::permission::Permission,
+) -> Result<P, iroha_data_model::isi::error::InstructionExecutionError> {
+    norito::json::from_str(permission.payload().get()).map_err(|error| {
+        state_transaction.world.attempt_error_to_instruction_error(
+            crate::execution_attempt::json_decode_attempt_error(error, |error| {
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "validation-fee payout runtime permission {} is malformed: {error}",
+                        permission.name()
+                    )
+                    .into(),
+                )
+            }),
+        )
+    })
 }
 
 pub(crate) fn enforce_validation_fee_admission(

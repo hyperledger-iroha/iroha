@@ -55,6 +55,7 @@ enum EffectFault {
     Bytes { maximum: u64 },
     Cycles { maximum: u64 },
     Owner(String),
+    NativeAmx(iroha_data_model::isi::error::InstructionExecutionError),
 }
 
 impl EffectFault {
@@ -72,6 +73,7 @@ impl EffectFault {
                 ValidationFail::NotPermitted(format!("quarantine cycle budget exceeded: {maximum}"))
             }
             Self::Owner(message) => ValidationFail::InternalError(message.clone()),
+            Self::NativeAmx(error) => ValidationFail::InstructionFailed(error.clone()),
         }
     }
 }
@@ -153,6 +155,27 @@ impl RootEffects {
 }
 
 impl StateTransaction<'_, '_> {
+    /// Retain a completed native AMX monetary failure across an inner contract catch.
+    /// The actual signed root closes with the same deterministic instruction failure;
+    /// its disposable World/transcript overlay cannot publish partial policy effects.
+    pub(crate) fn reject_native_amx_effects(
+        &mut self,
+        error: iroha_data_model::isi::error::InstructionExecutionError,
+    ) {
+        let matches = matches!(&self.execution_effects.state, EffectState::Root(root)
+            if root.matches(self) && !root.closed);
+        if matches {
+            if let EffectState::Root(root) = &mut self.execution_effects.state
+                && root.fault.is_none()
+            {
+                root.fault = Some(EffectFault::NativeAmx(error));
+            }
+        } else {
+            self.break_execution_effect_owner(
+                "native AMX monetary failure lost its signed execution owner",
+            );
+        }
+    }
     /// Start the actual signed root, freezing its agreed instruction limits.
     pub(crate) fn begin_execution_effect_budget(
         &mut self,

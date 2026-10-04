@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 import requests
 from requests.structures import CaseInsensitiveDict
-from norito.errors import DecodeError
+from norito.errors import (
+    ChecksumMismatchError, LengthMismatchError, SchemaMismatchError, UnsupportedVersionError,
+)
 
 from iroha_python import KotodamaQuantity, LocalSigningContext, ToriiClient
 from iroha_python.crypto import NetworkId
@@ -81,12 +83,17 @@ def test_native_preparation_frames_keep_exact_intent_global_xor_and_additive_res
 def test_preparation_frames_reject_bad_identity_layout_padding_crc_truncation_and_oversize():
     request, _, request_bytes, response_bytes = fixture()
     for end in range(len(response_bytes)):
-        with pytest.raises((ValueError, TypeError, DecodeError)): decode(StakingPreparationV1, response_bytes[:end])
-    for index in (4, 5, 6, 22, 23, 31, 39):
+        with pytest.raises(LengthMismatchError): decode(StakingPreparationV1, response_bytes[:end])
+    for index, error in ((4, UnsupportedVersionError), (5, UnsupportedVersionError),
+                         (6, SchemaMismatchError), (22, ValueError), (23, LengthMismatchError),
+                         (31, ChecksumMismatchError), (39, SchemaMismatchError)):
         changed = bytearray(response_bytes); changed[index] ^= 1
-        with pytest.raises((ValueError, TypeError, DecodeError)): decode(StakingPreparationV1, bytes(changed))
-    for bad in (request_bytes, response_bytes + b"\0", response_bytes[:40] + b"\0" + response_bytes[40:], bytes(256 * 1024 + 1)):
-        with pytest.raises((ValueError, TypeError, DecodeError)): decode(StakingPreparationV1, bad)
+        with pytest.raises(error): decode(StakingPreparationV1, bytes(changed))
+    for bad, error in ((request_bytes, SchemaMismatchError),
+                       (response_bytes + b"\0", LengthMismatchError),
+                       (response_bytes[:40] + b"\0" + response_bytes[40:], ValueError),
+                       (bytes(256 * 1024 + 1), ValueError)):
+        with pytest.raises(error): decode(StakingPreparationV1, bad)
     with pytest.raises(ValueError, match="positive"): replace(request, valid_for_blocks=0)
 
 

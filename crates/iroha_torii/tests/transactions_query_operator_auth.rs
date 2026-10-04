@@ -10,7 +10,6 @@ use iroha_core::state::World;
 use iroha_data_model::{Registrable, account::Account, domain::Domain};
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-use iroha_torii::filter::QueryEnvelope;
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -34,7 +33,7 @@ async fn dataspace_transaction_query_accepts_signed_and_anonymous_public_readers
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
     let app = torii.router();
-    let body = norito::json::to_vec(&QueryEnvelope::default()).expect("query envelope JSON");
+    let body = br#"{"limit": 10}"#.to_vec();
 
     let account_request = fixtures::app_signed_request(
         torii.state.network_id_ref(),

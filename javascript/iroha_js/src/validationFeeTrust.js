@@ -31,9 +31,10 @@ export function record(value, label) {
 
 export function exactKeys(value, expected, label) {
   const keys = Object.keys(value).sort();
+  const expectedKeys = [...expected].sort();
   if (
-    keys.length !== expected.length ||
-    keys.some((key, index) => key !== expected[index])
+    keys.length !== expectedKeys.length ||
+    keys.some((key, index) => key !== expectedKeys[index])
   ) {
     throw new TypeError(`${label} must contain exactly ${expected.join(", ")}`);
   }

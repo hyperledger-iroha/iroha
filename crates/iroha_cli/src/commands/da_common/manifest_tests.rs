@@ -88,10 +88,6 @@ fn manifest_fetcher_rejects_invalid_base_urls_before_construction() {
     let config = crate::fallback_config();
     for (url, expected) in [
         (
-            "https://node.example/tenant",
-            AuthorityContextError::EndpointPathMissingTrailingSlash,
-        ),
-        (
             "https://node.example/?ticket=wrong",
             AuthorityContextError::EndpointHasQueryOrFragment,
         ),

@@ -45,7 +45,7 @@ impl<'view, 'state, 'round, 'bound> PreparedCheckExecutionV1<'view, 'state, 'rou
                 return Err(Error::Finality.into());
             }
             let entry_hash = bound
-                .signed
+                .signed_transaction()
                 .try_hash_as_entrypoint()
                 .map_err(native_codec_attempt_error)?;
             let height_index = view

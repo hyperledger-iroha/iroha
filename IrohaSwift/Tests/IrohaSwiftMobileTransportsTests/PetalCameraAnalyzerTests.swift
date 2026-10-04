@@ -122,6 +122,9 @@ final class PetalCameraAnalyzerTests: XCTestCase {
         XCTAssertTrue(analyzer.isCompleted)
         XCTAssertTrue(analyzer.progress.complete)
         XCTAssertEqual(analyzer.stats.frames, UInt32(recorder.outcomes.count))
+        // the code stays where it is: every frame after the first follows the previous pose
+        XCTAssertEqual(analyzer.stats.tracked + 1, analyzer.stats.frames)
+        XCTAssertEqual(analyzer.stats.inferred, 0)
         XCTAssertNotNil(recorder.outcomes.last?.completed)
 
         // frames after completion are ignored until reset

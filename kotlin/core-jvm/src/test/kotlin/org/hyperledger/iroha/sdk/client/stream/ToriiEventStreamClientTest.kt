@@ -4,7 +4,6 @@ import org.hyperledger.iroha.sdk.client.RequestSigner
 
 import java.net.URI
 import java.net.URLDecoder
-import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.KeyPairGenerator
 import java.security.Signature
@@ -251,7 +250,7 @@ class ToriiEventStreamClientTest {
             event: stream_error
             data: {"code":"stream_lagged","message":"receiver lagged","dropped_messages":18446744073709551615,"replay_available":false}
 
-        """.trimIndent()
+        """.trimIndent() + "\n"
         val client = ToriiEventStreamClient(
             baseUri = URI.create("http://example.com"),
             transport = object : TransportExecutor {
@@ -291,7 +290,7 @@ class ToriiEventStreamClientTest {
             event: stream_error
             data: {"code":"stream_source_closed","message":"source closed","dropped_messages":null,"replay_available":false}
 
-        """.trimIndent()
+        """.trimIndent() + "\n"
         val observedError = AtomicReference<Throwable?>()
         val errorLatch = CountDownLatch(1)
         val client = ToriiEventStreamClient(
@@ -359,172 +358,235 @@ class ToriiEventStreamClientTest {
     }
 
     @Test
-    fun rejectsUnsupportedProductionBackendFiltersBeforeRequest() {
-        var requestSent = false
+    fun typedEventFiltersAreSentAsCanonicalText() {
+        var recorded: TransportRequest? = null
         val client = ToriiEventStreamClient(
             baseUri = URI.create("http://example.com/base"),
             transport = object : TransportExecutor {
                 override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-                    requestSent = true
+                    recorded = request
                     return okSse()
                 }
             },
         )
+        val filter = (EventFields.TX_HASH eq "ab".repeat(32)) and EventFields.TX_STATUS.isIn("Applied", "Rejected")
 
-        for (filter in listOf(
-            """{"VerifyingKey":{"id_matcher":{"backend":"halo2/ipa/orchard","name":"vk"},"event_set":{"Registered":true}}}""",
-            """{"VerifyingKey":{"id_matcher":{"backend":" halo2/ipa","name":"vk"},"event_set":{"Registered":true}}}""",
-            """{"Proof":{"id_matcher":{"backend":"mock/dev","hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"event_set":{"Verified":true}}}""",
-            """{"Proof":{"id_matcher":{"backend":"groth16/bls12-377","hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"event_set":{"Verified":true}}}""",
-        )) {
-            assertFailsWith<IllegalArgumentException> {
-                client.openSseStream("/v1/events/sse", eventFilterOptions(filter), noopListener())
-            }
-            assertFalse(requestSent)
-        }
+        client.openEventStream(filter, noopListener()).completion().get(1, TimeUnit.SECONDS)
+
+        val request = assertNotNull(recorded)
+        assertEquals("/base/v1/events/sse", request.uri.rawPath)
+        assertEquals(
+            "tx_hash = \"${"ab".repeat(32)}\" and tx_status in [\"Applied\", \"Rejected\"]",
+            queryParameter(request.uri.rawQuery, "filter"),
+        )
     }
 
     @Test
-    fun rejectsMalformedVerifyingKeyEventNamesBeforeRequest() {
-        var requestSent = false
+    fun textEventFiltersPassThroughUnchanged() {
+        var recorded: TransportRequest? = null
         val client = ToriiEventStreamClient(
             baseUri = URI.create("http://example.com/base"),
             transport = object : TransportExecutor {
                 override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-                    requestSent = true
+                    recorded = request
                     return okSse()
                 }
             },
         )
+        val text = "block_height >= 10   AND proof_backend = 'halo2/ipa'"
+        val options = ToriiEventStreamOptions.builder().setFilter(text).build()
 
-        for (nameJson in listOf(
-            "\"\"",
-            "\"   \"",
-            "\"\\t\"",
-            "\"\\n\"",
-            "\"vk:main\"",
-            "42",
-        )) {
-            val filter = "{\"VerifyingKey\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"name\":$nameJson},\"event_set\":{\"Registered\":true}}}"
-            val error = assertFailsWith<IllegalArgumentException> {
-                client.openSseStream("/v1/events/sse", eventFilterOptions(filter), noopListener())
-            }
-            val message = error.message.orEmpty()
-            assertTrue(
-                message.contains("non-empty string") ||
-                    message.contains("must be a string") ||
-                    message.contains("must not contain ':'"),
-                "unexpected name rejection message: $message",
-            )
-            assertFalse(requestSent)
-        }
-    }
+        client.openSseStream("/v1/events/sse", options, noopListener()).completion().get(1, TimeUnit.SECONDS)
 
-    @Test
-    fun rejectsMalformedProofEventHashesBeforeRequest() {
-        var requestSent = false
-        val client = ToriiEventStreamClient(
-            baseUri = URI.create("http://example.com/base"),
-            transport = object : TransportExecutor {
-                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-                    requestSent = true
-                    return okSse()
-                }
-            },
-        )
-
-        for (hashJson in listOf(
-            "\"\"",
-            "\"abc\"",
-            "\"" + "z".repeat(64) + "\"",
-            "\"0x0x" + "a".repeat(64) + "\"",
-            "42",
-        )) {
-            val filter = "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"hash_hex\":$hashJson},\"event_set\":{\"Verified\":true}}}"
-            assertFailsWith<IllegalArgumentException> {
-                client.openSseStream("/v1/events/sse", eventFilterOptions(filter), noopListener())
-            }
-            assertFalse(requestSent)
-        }
-    }
-
-    @Test
-    fun rejectsPathQueryEventFiltersBeforeRequest() {
-        var requestSent = false
-        val client = ToriiEventStreamClient(
-            baseUri = URI.create("http://example.com/base"),
-            transport = object : TransportExecutor {
-                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-                    requestSent = true
-                    return okSse()
-                }
-            },
-        )
-        val filter =
-            """{"Proof":{"id_matcher":{"backend":"halo2/ipa/orchard","hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"event_set":{"Verified":true}}}"""
-        val path = "/v1/events/sse?filter=${URLEncoder.encode(filter, "UTF-8")}"
-
+        assertEquals(text, queryParameter(assertNotNull(recorded).uri.rawQuery, "filter"))
         assertFailsWith<IllegalArgumentException> {
-            client.openSseStream(path, ToriiEventStreamOptions.defaultOptions(), noopListener())
+            client.openSseStream(
+                "/v1/events/sse",
+                ToriiEventStreamOptions.builder().setFilter(text).putQueryParameter("filter", text).build(),
+                noopListener(),
+            )
         }
-        assertFalse(requestSent)
     }
 
     @Test
-    fun canonicalizesVerifyingKeyNameFiltersBeforeRequest() {
+    fun rejectedFiltersSurfaceTheTypedErrorEnvelope() {
+        val failure = AtomicReference<Throwable?>()
+        val client = ToriiEventStreamClient(
+            baseUri = URI.create("http://example.com/base"),
+            transport = object : TransportExecutor {
+                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> =
+                    CompletableFuture.completedFuture(
+                        TransportResponse.builder()
+                            .setStatusCode(400)
+                            .setBody(
+                                """{"code":"invalid_filter","message":"invalid `filter`: unexpected character `~` (column 9)","details":{"field":"filter"}}"""
+                                    .toByteArray(StandardCharsets.UTF_8),
+                            )
+                            .build(),
+                    )
+            },
+        )
+        val stream = client.openSseStream(
+            "/v1/events/sse",
+            ToriiEventStreamOptions.builder().setFilter("tx_hash ~ 1").build(),
+            object : ToriiEventStreamListener {
+                override fun onEvent(event: ServerSentEvent) = Unit
+
+                override fun onError(error: Throwable) {
+                    failure.set(error)
+                }
+            },
+        )
+        assertFailsWith<ExecutionException> { stream.completion().get(5, TimeUnit.SECONDS) }
+        val error = assertIs<org.hyperledger.iroha.sdk.client.ToriiApiException>(failure.get())
+        assertEquals(400, error.status)
+        assertEquals("invalid_filter", error.code)
+        assertEquals("filter", error.field)
+    }
+
+    @Test
+    fun subscribeDecodesTypedEventsAndToleratesUnknownOnes() {
+        val payloads = listOf(
+            """{"category":"Pipeline","event":"Transaction","hash":"ab","lane_id":0,"dataspace_id":7,"block_height":null,"status":"Rejected","rejection_code":"validation","rejection_reason":"Transaction validation failed."}""",
+            """{"category":"Pipeline","event":"Block","status":"Rejected","rejection_code":"EmptyBlock"}""",
+            """{"category":"Pipeline","event":"Warning","kind":"slow","details":"late commit","height":4}""",
+            """{"category":"Pipeline","event":"Witness","block_hash":"cd","height":5,"view":1,"epoch":0,"read_count":3,"write_count":2}""",
+            """{"category":"Data","event":"ProofVerified","backend":"halo2/ipa","proof_hash":"aa","call_hash":null,"envelope_hash":"bb","vk_ref":"halo2/ipa::vk","vk_commitment":null}""",
+            """{"category":"Data","event":"ProofRejected","backend":"halo2/ipa","proof_hash":"aa","call_hash":"cc","envelope_hash":null,"vk_ref":null,"vk_commitment":null}""",
+            """{"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_count":1,"remaining":9,"cap":10,"grace_blocks":2,"prune_batch":4,"pruned_at_height":77,"pruned_by":"alice@wonderland","origin":"Manual","removed":[{"backend":"halo2/ipa","proof_hash":"aa"}]}""",
+            """{"category":"Data","event":"Asset","summary":"AssetEvent(..)"}""",
+            """{"category":"Other","event":"Time","summary":"TimeEvent(..)"}""",
+            """{"category":"Pipeline","event":"Transaction","hash":"ab","lane_id":0,"dataspace_id":7,"block_height":3,"status":"Teleported"}""",
+            """{"category":"Data","event":"Holograms","summary":"?"}""",
+            """{"category":"Future","event":"Thing"}""",
+            "not json",
+        )
+        val body = payloads.joinToString("") { "data: $it\n\n" } +
+            "event: stream_error\ndata: {\"code\":\"stream_lagged\",\"message\":\"receiver lagged\",\"dropped_messages\":3,\"replay_available\":false}\n\n"
         var recorded: TransportRequest? = null
         val client = ToriiEventStreamClient(
             baseUri = URI.create("http://example.com/base"),
             transport = object : TransportExecutor {
                 override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
                     recorded = request
-                    return okSse()
+                    return CompletableFuture.completedFuture(
+                        TransportResponse.builder().setStatusCode(200).setBody(body.toByteArray(StandardCharsets.UTF_8)).build(),
+                    )
                 }
             },
         )
-        val filter =
-            """{"VerifyingKey":{"id_matcher":{"backend":"halo2/ipa","name":" vk_main "},"event_set":{"Registered":true}}}"""
+        val events = ArrayList<ToriiEvent>()
+        val terminal = AtomicReference<ToriiStreamException?>()
 
-        client.openSseStream("/v1/events/sse", eventFilterOptions(filter), noopListener())
-            .completion()
-            .get(1, TimeUnit.SECONDS)
+        client.subscribe(
+            EventFields.TX_STATUS eq TransactionEventStatus.REJECTED.wireName,
+            object : ToriiEventListener {
+                override fun onEvent(event: ToriiEvent) {
+                    events.add(event)
+                }
 
-        val request = assertNotNull(recorded)
-        val normalizedFilter = queryParameter(request.uri.rawQuery, "filter")
-        assertContains(normalizedFilter, "\"name\":\"vk_main\"")
+                override fun onStreamError(error: ToriiStreamException) {
+                    terminal.set(error)
+                }
+            },
+        ).completion().get(5, TimeUnit.SECONDS)
+
+        assertEquals("tx_status = \"Rejected\"", queryParameter(assertNotNull(recorded).uri.rawQuery, "filter"))
+        assertEquals(payloads.size, events.size)
+        val transaction = assertIs<ToriiEvent.Transaction>(events[0])
+        assertEquals(TransactionEventStatus.REJECTED, transaction.status)
+        assertEquals(TransactionRejectionCode.VALIDATION, transaction.rejectionCode)
+        assertEquals("Transaction validation failed.", transaction.rejectionReason)
+        assertEquals(7L, transaction.dataspaceId)
+        assertNull(transaction.blockHeight)
+        val block = assertIs<ToriiEvent.Block>(events[1])
+        assertEquals(BlockEventStatus.REJECTED, block.status)
+        assertEquals("EmptyBlock", block.rejectionCode)
+        assertEquals("late commit", assertIs<ToriiEvent.Warning>(events[2]).details)
+        assertEquals(2L, assertIs<ToriiEvent.Witness>(events[3]).writeCount)
+        val verified = assertIs<ToriiEvent.ProofVerified>(events[4])
+        assertEquals("halo2/ipa::vk", verified.vkRef)
+        assertNull(verified.callHash)
+        assertEquals("cc", assertIs<ToriiEvent.ProofRejected>(events[5]).callHash)
+        val pruned = assertIs<ToriiEvent.ProofPruned>(events[6])
+        assertEquals(ProofPruneOrigin.MANUAL, pruned.origin)
+        assertEquals("aa", pruned.removed.single().proofHash)
+        assertEquals(DataEventKind.ASSET, assertIs<ToriiEvent.DataChange>(events[7]).kind)
+        assertEquals(OtherEventKind.TIME, assertIs<ToriiEvent.Other>(events[8]).kind)
+        events.subList(9, events.size).forEach { assertIs<ToriiEvent.Unknown>(it) }
+        assertEquals("not json", (events.last() as ToriiEvent.Unknown).raw)
+        assertEquals("stream_lagged", assertNotNull(terminal.get()).code)
+        assertNull(ServerSentEvent("stream_error", "{}", null).toriiEvent())
+        assertIs<ToriiEvent.Block>(ServerSentEvent("message", payloads[1], null).toriiEvent())
     }
 
     @Test
-    fun canonicalizesProofHashFiltersBeforeRequest() {
-        var recorded: TransportRequest? = null
+    fun eventsCutOffByTheEndOfTheStreamAreDiscarded() {
+        val body = "data: one\n\n" +
+            "event: ping\nid: 7\n\n" +
+            "data: two\r\ndata: lines\r\n\r\n" +
+            "data: three\rid: 9\r\r" +
+            "data: partial"
+        val events = collectEvents(body)
+        assertEquals(listOf("one", "two\nlines", "three"), events.map { it.data })
+        assertEquals("9", events.last().id)
+    }
+
+    @Test
+    fun oversizedLinesFailTheStream() {
+        val failure = AtomicReference<Throwable?>()
         val client = ToriiEventStreamClient(
             baseUri = URI.create("http://example.com/base"),
             transport = object : TransportExecutor {
-                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-                    recorded = request
-                    return okSse()
+                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> =
+                    CompletableFuture.completedFuture(
+                        TransportResponse.builder()
+                            .setStatusCode(200)
+                            .setBody(("data: " + "x".repeat(1024 * 1024 + 1) + "\n\n").toByteArray(StandardCharsets.UTF_8))
+                            .build(),
+                    )
+            },
+        )
+        val stream = client.openSseStream(
+            "/v1/events/sse",
+            null,
+            object : ToriiEventStreamListener {
+                override fun onEvent(event: ServerSentEvent) = Unit
+
+                override fun onError(error: Throwable) {
+                    failure.set(error)
                 }
             },
         )
-        val hash = "A".repeat(64)
-        val proofHash = "B".repeat(64)
-        val filter =
-            "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"hash_hex\":\"0x$hash\",\"proof_hash_hex\":\"$proofHash\"},\"event_set\":{\"Verified\":true}}}"
-
-        client.openSseStream("/v1/events/sse", eventFilterOptions(filter), noopListener())
-            .completion()
-            .get(1, TimeUnit.SECONDS)
-
-        val request = assertNotNull(recorded)
-        val normalizedFilter = queryParameter(request.uri.rawQuery, "filter")
-        assertContains(normalizedFilter, "\"hash_hex\":\"${"a".repeat(64)}\"")
-        assertContains(normalizedFilter, "\"proof_hash_hex\":\"${"b".repeat(64)}\"")
+        assertFailsWith<ExecutionException> { stream.completion().get(5, TimeUnit.SECONDS) }
+        assertContains(assertNotNull(failure.get()).cause?.message.orEmpty(), "exceeds")
     }
 
-    private fun eventFilterOptions(filter: String): ToriiEventStreamOptions =
-        ToriiEventStreamOptions.builder()
-            .putQueryParameter("filter", filter)
-            .build()
+    private fun collectEvents(body: String): List<ServerSentEvent> {
+        val events = mutableListOf<ServerSentEvent>()
+        val client = ToriiEventStreamClient(
+            baseUri = URI.create("http://example.com/base"),
+            transport = object : TransportExecutor {
+                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> =
+                    CompletableFuture.completedFuture(
+                        TransportResponse.builder()
+                            .setStatusCode(200)
+                            .setBody(body.toByteArray(StandardCharsets.UTF_8))
+                            .build(),
+                    )
+            },
+        )
+        client.openSseStream(
+            "/v1/events/sse",
+            null,
+            object : ToriiEventStreamListener {
+                override fun onEvent(event: ServerSentEvent) {
+                    events.add(event)
+                }
+            },
+        ).completion().get(5, TimeUnit.SECONDS)
+        return events
+    }
 
     private fun noopListener(): ToriiEventStreamListener =
         object : ToriiEventStreamListener {

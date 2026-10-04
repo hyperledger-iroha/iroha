@@ -3493,7 +3493,7 @@ async function waitForAuthoritativeApplied(client, hashHex, options) {
     intervalMs: options.pollIntervalMs ?? 500,
     timeoutMs: options.timeoutMs ?? 30_000,
   };
-  return client.waitForTransactionStatusTyped(hashHex, pollOptions);
+  return client.waitForTransactionStatus(hashHex, pollOptions);
 }
 
 /** @internal Source-level test facade; intentionally absent from package exports. */

@@ -652,6 +652,9 @@ fn validation_wrappers_keep_real_capacity_and_terminal_custody_distinct() {
             BlockValidationError::StateStorageAdmission(StateStorageAdmissionError::World(
                 AdmittedStorageError::Allocation(original.clone()),
             )),
+            BlockValidationError::StateStorageAdmission(StateStorageAdmissionError::NativeAmx(
+                crate::sumeragi::amx::NativeAmxAdmissionError::Admission(original.clone()),
+            )),
             BlockValidationError::EvidencePreparation(EvidencePreparationError::Admission(
                 original.clone(),
             )),
@@ -719,6 +722,9 @@ fn validation_wrappers_keep_real_capacity_and_terminal_custody_distinct() {
                 layout: std::alloc::Layout::new::<u64>(),
             },
         )),
+        BlockValidationError::StateStorageAdmission(StateStorageAdmissionError::NativeAmx(
+            crate::sumeragi::amx::NativeAmxAdmissionError::Allocator { bytes: 8 },
+        )),
         BlockValidationError::EvidencePreparation(EvidencePreparationError::Allocator {
             requested_bytes: 8,
         }),
@@ -743,6 +749,16 @@ fn validation_wrappers_keep_real_capacity_and_terminal_custody_distinct() {
         )),
         BlockValidationError::StateStorageAdmission(StateStorageAdmissionError::World(
             AdmittedStorageError::ScopeIdentity,
+        )),
+        BlockValidationError::StateStorageAdmission(StateStorageAdmissionError::NativeAmx(
+            crate::sumeragi::amx::NativeAmxAdmissionError::Invalid(
+                "original native AMX custody invariant changed".into(),
+            ),
+        )),
+        BlockValidationError::StateStorageAdmission(StateStorageAdmissionError::NativeAmx(
+            crate::sumeragi::amx::NativeAmxAdmissionError::Admission(
+                AllocationRefusal::DemandOverflow,
+            ),
         )),
         BlockValidationError::EvidencePreparation(EvidencePreparationError::Invariant),
         BlockValidationError::BlockHashAdmission(BlockHashAdmissionError::Poisoned),
@@ -845,4 +861,42 @@ fn original_local_custody_invariant_halts_worker_without_fee_result_or_quarantin
             Err(PublicationError::RecoveryRequired(_))
         ));
     });
+}
+
+#[test]
+fn native_source_publication_change_retries_without_recovery_or_quarantine() {
+    for error in [
+        BlockValidationError::NativeSourceChanged {
+            authenticated_generation: 2,
+            observed_generation: 4,
+        },
+        BlockValidationError::from(crate::sumeragi::lanes::merge::MergeError::SourceChanged {
+            authenticated_generation: 2,
+            observed_generation: 4,
+        }),
+    ] {
+        assert!(!super::super::control::transaction_rejection(&error));
+        assert!(matches!(
+            validation_failure(&error),
+            Some(PublicationError::Retryable(_))
+        ));
+        assert!(matches!(
+            super::super::classify(2, &error),
+            Err(PublicationError::Retryable(_))
+        ));
+    }
+    for terminal in [
+        BlockValidationError::StateView(crate::state::StateViewError::Changed),
+        BlockValidationError::StateView(crate::state::StateViewError::Poisoned),
+        BlockValidationError::DaIndexHydration("original index corrupt".into()),
+        BlockValidationError::LocalStorageRecoveryRequired {
+            reason: "original custody lost".into(),
+        },
+    ] {
+        assert!(matches!(
+            validation_failure(&terminal),
+            Some(PublicationError::RecoveryRequired(_))
+        ));
+        assert!(!super::super::control::transaction_rejection(&terminal));
+    }
 }

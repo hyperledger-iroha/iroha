@@ -1,6 +1,6 @@
 //! Explicit structured key storage; the normal two-basis runtime key is preserved.
 //!
-//! Fixed columns have canonical constant/bitset/raw modes; permutation columns store exact directed
+//! Fixed columns choose canonical smallest constant/bitset/raw/sparse-zero payloads; permutation columns store exact directed
 //! u32 target IDs in canonical identity/sparse/bitmap/dense modes. There is no implicit codec fallback. Authentication, circuit/role binding and
 //! outer EOF remain caller duties. The ordinary reader retains both polynomial banks; the indexed
 //! reader retains checked range metadata for the caller-owned original frame. Neither authenticates it.
@@ -22,9 +22,9 @@ use permutation_columns::*;
 
 const MAGIC: &[u8; 16] = b"Halo2SparsePK1\0\0";
 const HEADER_BYTES: u64 = 16 + 32 + 8;
-const CONSTANT: u8 = 0;
-const BITSET: u8 = 1;
-const RAW: u8 = 2;
+use super::fixed_column_codec::{
+    BITSET, CONSTANT, FixedColumnAccumulator, FixedColumnEncoding, RAW, SPARSE_ZERO,
+};
 
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -173,43 +173,29 @@ fn scalar_bytes<F: PrimeField>() -> usize {
 }
 
 fn read_scalar<F: PrimeField, R: Read>(reader: &mut R) -> io::Result<F> {
-    // The legacy SerdePrimeField processed reader unwraps I/O; do not call it here.
+    // Decode the advertised canonical scalar directly and preserve I/O errors.
     let mut repr = F::Repr::default();
     reader.read_exact(repr.as_mut())?;
     Option::from(F::from_repr(repr)).ok_or_else(|| invalid("noncanonical structured scalar"))
 }
 
-fn fixed_mode<F: Field>(values: &[F]) -> io::Result<u8> {
-    let first = values
-        .first()
-        .ok_or_else(|| invalid("empty structured fixed column"))?;
-    Ok(if values.iter().all(|value| value == first) {
-        CONSTANT
-    } else if values
-        .iter()
-        .all(|value| *value == F::ZERO || *value == F::ONE)
-    {
-        BITSET
-    } else {
-        RAW
-    })
-}
-
-fn fixed_payload_bytes<F: PrimeField>(mode: u8, rows: usize) -> io::Result<u64> {
-    match mode {
-        CONSTANT => Ok(scalar_bytes::<F>() as u64),
-        BITSET => Ok(rows.div_ceil(8) as u64),
-        RAW => (rows as u64)
-            .checked_mul(scalar_bytes::<F>() as u64)
-            .ok_or_else(|| invalid("structured fixed size overflow")),
-        _ => Err(invalid("unknown structured fixed mode")),
+fn fixed_encoding<F: PrimeField>(values: &[F]) -> io::Result<FixedColumnEncoding> {
+    let mut column = FixedColumnAccumulator::new();
+    for &value in values {
+        column.observe(super::Assigned::Trivial(value), 1);
     }
+    column.encoding(scalar_bytes::<F>())
 }
 
-fn write_fixed<F: PrimeField, W: Write>(writer: &mut W, values: &[F]) -> io::Result<()> {
-    let mode = fixed_mode(values)?;
-    writer.write_all(&[mode])?;
-    match mode {
+#[cfg(test)]
+fn fixed_mode<F: PrimeField>(values: &[F]) -> io::Result<u8> {
+    Ok(fixed_encoding(values)?.mode)
+}
+
+pub(super) fn write_fixed<F: PrimeField, W: Write>(writer: &mut W, values: &[F]) -> io::Result<()> {
+    let encoding = fixed_encoding(values)?;
+    writer.write_all(&[encoding.mode])?;
+    match encoding.mode {
         CONSTANT => writer.write_all(values[0].to_repr().as_ref()),
         BITSET => {
             for chunk in values.chunks(8) {
@@ -227,37 +213,55 @@ fn write_fixed<F: PrimeField, W: Write>(writer: &mut W, values: &[F]) -> io::Res
             }
             Ok(())
         }
+        SPARSE_ZERO => {
+            writer.write_all(&encoding.nonzero.to_le_bytes())?;
+            for (row, value) in values
+                .iter()
+                .enumerate()
+                .filter(|(_, value)| **value != F::ZERO)
+            {
+                writer.write_all(&(row as u32).to_le_bytes())?;
+                writer.write_all(value.to_repr().as_ref())?;
+            }
+            Ok(())
+        }
         _ => Err(invalid("unknown structured fixed mode")),
     }
 }
 
-// One streaming mode parser is used by the full scan and the standalone dense test adapter.
-// A None event starts a validated-size column; Some(value) appends `count` repetitions.
+// All consumers use this parser. None starts a bounded column; Some emits exact value runs.
 fn scan_fixed<F: PrimeField, R: Read, W: Write, V>(
     reader: &mut R,
     rows: usize,
     writer: &mut W,
     mut values: V,
-) -> io::Result<u8>
+) -> io::Result<FixedColumnEncoding>
 where
     V: FnMut(Option<F>, usize) -> io::Result<()>,
 {
-    if rows == 0 {
-        return Err(invalid("empty structured fixed column"));
+    if rows == 0 || u32::try_from(rows).is_err() {
+        return Err(invalid("invalid structured fixed domain"));
     }
     let mut mode = [0];
     reader.read_exact(&mut mode)?;
-    fixed_payload_bytes::<F>(mode[0], rows)?;
+    if mode[0] > SPARSE_ZERO {
+        return Err(invalid("unknown structured fixed mode"));
+    }
     values(None, rows)?;
     writer.write_all(&mode)?;
+    let mut column = FixedColumnAccumulator::new();
+    let mut emit = |value: F, count: usize| {
+        column.observe(super::Assigned::Trivial(value), count);
+        values(Some(value), count)
+    };
     match mode[0] {
         CONSTANT => {
             let value = read_scalar::<F, _>(reader)?;
             writer.write_all(value.to_repr().as_ref())?;
-            values(Some(value), rows)?;
+            emit(value, rows)?;
         }
         BITSET => {
-            let (mut at, mut any_zero, mut any_one) = (0, false, false);
+            let mut at = 0;
             while at < rows {
                 let mut byte = [0];
                 reader.read_exact(&mut byte)?;
@@ -266,39 +270,63 @@ where
                     return Err(invalid("nonzero structured bitset padding"));
                 }
                 for bit in 0..bits {
-                    let one = byte[0] >> bit & 1 != 0;
-                    any_one |= one;
-                    any_zero |= !one;
-                    values(Some(if one { F::ONE } else { F::ZERO }), 1)?;
+                    emit(
+                        if byte[0] >> bit & 1 != 0 {
+                            F::ONE
+                        } else {
+                            F::ZERO
+                        },
+                        1,
+                    )?;
                 }
                 writer.write_all(&byte)?;
                 at += bits;
             }
-            if !any_zero || !any_one {
-                return Err(invalid("nonminimal structured fixed mode"));
-            }
         }
         RAW => {
-            let mut first = None;
-            let (mut constant, mut binary) = (true, true);
             for _ in 0..rows {
                 let value = read_scalar::<F, _>(reader)?;
-                if let Some(first) = first {
-                    constant &= value == first;
-                } else {
-                    first = Some(value);
-                }
-                binary &= value == F::ZERO || value == F::ONE;
                 writer.write_all(value.to_repr().as_ref())?;
-                values(Some(value), 1)?;
-            }
-            if constant || binary {
-                return Err(invalid("nonminimal structured fixed mode"));
+                emit(value, 1)?;
             }
         }
-        _ => return Err(invalid("unknown structured fixed mode")),
+        SPARSE_ZERO => {
+            let mut count = [0; 4];
+            reader.read_exact(&mut count)?;
+            let count = u32::from_le_bytes(count);
+            if count as usize > rows {
+                return Err(invalid("structured sparse fixed count exceeds domain"));
+            }
+            writer.write_all(&count.to_le_bytes())?;
+            let mut next = 0;
+            for _ in 0..count {
+                let mut row = [0; 4];
+                reader.read_exact(&mut row)?;
+                let row = u32::from_le_bytes(row) as usize;
+                if row < next || row >= rows {
+                    return Err(invalid(
+                        "structured sparse fixed rows are not increasing in domain",
+                    ));
+                }
+                let value = read_scalar::<F, _>(reader)?;
+                if value == F::ZERO {
+                    return Err(invalid("explicit zero in structured sparse fixed column"));
+                }
+                emit(F::ZERO, row - next)?;
+                emit(value, 1)?;
+                next = row + 1;
+                writer.write_all(&(row as u32).to_le_bytes())?;
+                writer.write_all(value.to_repr().as_ref())?;
+            }
+            emit(F::ZERO, rows - next)?;
+        }
+        _ => unreachable!(),
     }
-    Ok(mode[0])
+    let encoding = column.encoding(scalar_bytes::<F>())?;
+    if encoding.mode != mode[0] {
+        return Err(invalid("nonminimal structured fixed mode"));
+    }
+    Ok(encoding)
 }
 
 #[cfg(test)]
@@ -483,6 +511,7 @@ impl CheckedRange {
 #[derive(Debug)]
 struct FixedRecord {
     mode: u8,
+    nonzero: u32,
     payload: CheckedRange,
 }
 
@@ -693,15 +722,17 @@ where
     let (base_bytes, rows) = shape_bytes(&vk)?;
     let fixed_columns = vk.cs.num_fixed_columns;
     let columns = fixed_columns as u64;
-    let constant = fixed_payload_bytes::<C::Scalar>(CONSTANT, rows)?;
-    let binary = fixed_payload_bytes::<C::Scalar>(BITSET, rows)?;
-    let raw = fixed_payload_bytes::<C::Scalar>(RAW, rows)?;
+    let constant = scalar_bytes::<C::Scalar>() as u64;
+    let binary = rows.div_ceil(8) as u64;
+    let raw = (rows as u64)
+        .checked_mul(constant)
+        .ok_or_else(|| invalid("structured fixed size overflow"))?;
     let minimum = columns
-        .checked_mul(1 + constant.min(binary).min(raw))
+        .checked_mul(1 + constant.min(binary).min(4))
         .and_then(|n| base_bytes.checked_add(n))
         .ok_or_else(|| invalid("structured minimum size overflow"))?;
     let maximum = columns
-        .checked_mul(1 + constant.max(binary).max(raw))
+        .checked_mul(1 + raw)
         .and_then(|n| base_bytes.checked_add(n))
         .and_then(|n| n.checked_add((rows as u64) * (vk.cs.permutation.columns.len() as u64) * 4))
         .ok_or_else(|| invalid("structured maximum size overflow"))?;
@@ -754,7 +785,7 @@ where
         let offset = frame_position(&frame, expected_bytes)?
             .checked_add(1)
             .ok_or_else(|| invalid("structured fixed offset overflow"))?;
-        let mode =
+        let encoding =
             scan_fixed::<C::Scalar, _, _, _>(&mut frame, rows, &mut output, |value, count| {
                 if let Some(value) = value {
                     values.fixed_values(value, count)
@@ -762,15 +793,15 @@ where
                     values.begin_fixed(count)
                 }
             })?;
-        let payload = CheckedRange::new(
-            offset,
-            fixed_payload_bytes::<C::Scalar>(mode, rows)?,
-            expected_bytes,
-        )?;
+        let payload = CheckedRange::new(offset, encoding.payload_bytes, expected_bytes)?;
         if payload.offset + payload.length != frame_position(&frame, expected_bytes)? {
             return Err(invalid("structured fixed payload length mismatch"));
         }
-        fixed.push(FixedRecord { mode, payload });
+        fixed.push(FixedRecord {
+            mode: encoding.mode,
+            nonzero: encoding.nonzero,
+            payload,
+        });
     }
     let columns = vk.cs.permutation.columns.len();
     read_count(&mut frame, columns)?;
@@ -865,7 +896,7 @@ where
             rows,
         )?;
         for polynomial in &self.fixed_values {
-            let payload = fixed_payload_bytes::<C::Scalar>(fixed_mode(polynomial)?, rows)?;
+            let payload = fixed_encoding(polynomial)?.payload_bytes;
             length = length
                 .checked_add(1)
                 .and_then(|n| n.checked_add(payload))
@@ -895,7 +926,9 @@ where
     /// coefficient masks, fixed-count-u32-BE and each fixed column's tag/data, then
     /// permutation-count-u32-BE and each column's canonical mode tag and payload.
     /// Fixed tags are constant=0 (one scalar), bitset=1 (low-bit-first rows), raw=2 (n scalars),
-    /// with constant > bitset > raw priority. Permutation tags are identity=0 (no payload),
+    /// and sparse-zero=3 (u32-LE count and ascending u32-LE row/nonzero-scalar pairs). Choose
+    /// the smallest eligible fixed payload, breaking ties by ascending tag. Permutation tags
+    /// are identity=0 (no payload),
     /// sparse=1 (u32-LE E and ascending u32-LE row/target pairs), bitmap=2 (low-bit-first row
     /// bitmap then u32-LE exceptional targets), dense=3 (all exact u32-LE targets). E counts
     /// directed targets differing from their own source cell. Choose the smallest payload,

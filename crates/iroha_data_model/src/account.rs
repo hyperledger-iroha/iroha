@@ -603,8 +603,7 @@ impl AccountId {
         &self,
         network_prefix: u16,
     ) -> Result<String, AccountAddressError> {
-        self.to_account_address()?
-            .to_i105_for_discriminant(network_prefix)
+        AccountAddress::retained_account_i105(self, network_prefix)
     }
     /// Encode the account as canonical I105 using the configured chain discriminant.
     ///
@@ -615,10 +614,11 @@ impl AccountId {
     /// The literal is derived for each call rather than retained in a process-wide cache. Account
     /// controllers are externally supplied and can be large, so caching both their encoded keys and
     /// rendered literals would turn a bounded request into persistent memory growth.
+    /// Output borrows retained keys and does not cross an inbound decoder admission boundary.
     #[inline]
     pub fn canonical_i105(&self) -> Result<String, AccountAddressError> {
         let prefix = address::chain_discriminant();
-        self.to_account_address()?.to_i105_for_discriminant(prefix)
+        self.to_i105_for_discriminant(prefix)
     }
     /// Encode the account as canonical lowercase hexadecimal.
     ///
@@ -627,7 +627,7 @@ impl AccountId {
     /// Returns [`AccountAddressError`] when canonical payload construction fails.
     #[inline]
     pub fn to_canonical_hex(&self) -> Result<String, AccountAddressError> {
-        self.to_account_address()?.canonical_hex()
+        AccountAddress::retained_account_hex(self)
     }
     /// Parse a canonical I105 account identifier from text.
     ///

@@ -453,7 +453,7 @@ def test_signed_role_scoped_escrow_queries_use_native_query_payloads(
         b"buyer-query",
     ]
     assert query_network_ids == [NETWORK_ID, NETWORK_ID]
-    assert all(call["url"].endswith("/query") for call in session.calls)
+    assert [call["url"] for call in session.calls] == ["http://torii.example/v1/query"] * 2
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,8 @@
 
 use std::ops::Range;
 
+use ff::PrimeField as _;
+
 use super::*;
 use crate::kagemusha_v1_recursion::deferred_parent::DeferredEcPoint;
 

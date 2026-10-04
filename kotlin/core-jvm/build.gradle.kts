@@ -83,6 +83,7 @@ tasks.test {
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/sumeragi/native_lanes_v1.tsv"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/validator_staking/norito_v1.tsv"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/torii/list_query/vectors.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_enrolled_open_selector_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_enrolled_open_challenge_v1.json"))

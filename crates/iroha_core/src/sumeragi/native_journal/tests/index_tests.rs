@@ -12,20 +12,28 @@ use std::{
 fn native_journal_indexes_retain_exact_backing_and_share_original_blocks_without_allocation() {
     let (chain, _) = fixture();
     let pool = chain.state().ivm_execution_budget();
-    let floor = pool.reserved_bytes();
+    let chain_floor = pool.reserved_bytes();
     let count = 3;
-    let bytes = Layout::array::<SharedSignedBlock>(count).unwrap().size()
-        + Layout::array::<HashOf<BlockHeader>>(count).unwrap().size();
-    let mut index = NativeJournalIndex::new(count, &pool).unwrap();
-    assert_eq!(pool.reserved_bytes(), floor + bytes);
-    assert_eq!(index.frames.capacity(), count);
-    assert_eq!(index.hashes.capacity(), count);
+    // Canonical history reads create independent original shared controls. Keep
+    // those exact source owners before measuring the separate index backing.
     let blocks = [
         chain.committed(1).block().clone(),
         chain.committed(2).block().clone(),
         chain.committed(3).block().clone(),
     ];
     let hashes = blocks.each_ref().map(|block| block.hash());
+    let floor = pool.reserved_bytes();
+    assert_eq!(
+        floor,
+        chain_floor + count * SharedSignedBlock::allocation_layout().size()
+    );
+    assert!(blocks.iter().all(|block| block.belongs_to(&pool)));
+    let bytes = Layout::array::<SharedSignedBlock>(count).unwrap().size()
+        + Layout::array::<HashOf<BlockHeader>>(count).unwrap().size();
+    let mut index = NativeJournalIndex::new(count, &pool).unwrap();
+    assert_eq!(pool.reserved_bytes(), floor + bytes);
+    assert_eq!(index.frames.capacity(), count);
+    assert_eq!(index.hashes.capacity(), count);
     let allocations = allocations_during(|| {
         for (block, hash) in blocks.iter().zip(hashes) {
             index.hashes.push_reserved(hash);
@@ -40,6 +48,8 @@ fn native_journal_indexes_retain_exact_backing_and_share_original_blocks_without
     assert_eq!(pool.reserved_bytes(), floor + bytes);
     drop(index);
     assert_eq!(pool.reserved_bytes(), floor);
+    drop(blocks);
+    assert_eq!(pool.reserved_bytes(), chain_floor);
 }
 
 #[test]

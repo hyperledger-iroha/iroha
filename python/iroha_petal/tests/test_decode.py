@@ -1,10 +1,12 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frame decoding on rendered frames, transformed frames and garbage images."""
+"""Frame decoding on rendered frames, transformed frames and garbage images, hidden
+corner blossoms, the ``天`` ranking and tracking."""
 
 from __future__ import annotations
 
+import dataclasses
 import unittest
 from unittest import mock
 
@@ -29,6 +31,7 @@ from iroha_petal import (
     DecodeError,
     DecodeErrorKind,
     DecodeOptions,
+    Finder,
     FrameCells,
     Homography,
     Lane,
@@ -41,24 +44,32 @@ from iroha_petal import (
     decode_frame,
     decode_frame_at,
     encode_lane,
+    locate,
     observed_cells,
     render_frame,
     tile_center,
     tile_match_error,
+    track_frame,
 )
 from iroha_petal._numeric import round_half_away
 from iroha_petal.decode import (
+    _EMPTY_CELLS,
     _build_patterns,
+    _canonical_corner,
     _classify,
     _decode_with_erasures,
+    _hypotheses,
+    _mask_score,
     _patch_levels,
     _projector,
     _read_tile_lanes,
     _read_tiles,
     _read_tiles_normalised,
     _reference_levels,
+    _refine_inferred_corner,
     _rescale,
     _rescaled_patterns,
+    _ring_brightness,
     _sample_patches,
 )
 
@@ -97,6 +108,60 @@ def clean_patches(frame: int):
     luma = setup(frame)
     h = render_homography()
     return luma, h, _sample_patches(_projector(luma, h))
+
+
+def hidden_blossom(frame: int, corner: int) -> Luma:
+    """A 768-pixel render of frame ``frame`` with the blossom of canonical corner ``corner``
+    painted over with background (black RGB is luma 0)."""
+    image = setup(frame)
+    n = image.width
+    scale = n / 1024.0
+    cx, cy = FINDER_CENTERS[corner]
+    cx, cy = cx * scale, cy * scale
+    radius = 75.0 * scale
+    limit = radius * radius
+    data = bytearray(image.data)
+    # the reference tests every pixel; nothing outside this box is within the disc
+    reach = int(radius) + 2
+    for y in range(max(0, int(cy) - reach), min(n, int(cy) + reach + 1)):
+        dy = y + 0.5 - cy
+        for x in range(max(0, int(cx) - reach), min(n, int(cx) + reach + 1)):
+            dx = x + 0.5 - cx
+            if dx * dx + dy * dy <= limit:
+                data[y * n + x] = 0
+    return Luma(n, n, bytes(data))
+
+
+def shifted(image: Luma, dx: int, dy: int) -> Luma:
+    """Shifts a luma image by whole pixels, filling with black."""
+    w, h = image.width, image.height
+    data = bytes(image.data)
+    blank = bytes(w)
+    rows = []
+    for y in range(h):
+        sy = y - dy
+        if not 0 <= sy < h:
+            rows.append(blank)
+            continue
+        row = data[sy * w : (sy + 1) * w]
+        if dx >= 0:
+            rows.append(bytes(min(dx, w)) + row[: max(w - dx, 0)])
+        else:
+            rows.append(row[min(-dx, w) :] + bytes(min(-dx, w)))
+    return Luma(w, h, b"".join(rows))
+
+
+def padded(image: Luma, pad: int) -> Luma:
+    """Places a luma image in the middle of a larger black frame."""
+    width = image.width + 2 * pad
+    data = bytes(image.data)
+    side = bytes(pad)
+    blank = bytes(width)
+    rows = [blank] * pad
+    for y in range(image.height):
+        rows.append(side + data[y * image.width : (y + 1) * image.width] + side)
+    rows += [blank] * pad
+    return Luma(width, image.height + 2 * pad, b"".join(rows))
 
 
 def distort(patches):
@@ -260,15 +325,21 @@ class DecodeTest(unittest.TestCase):
                 continue
             self.assertEqual(frame.lanes_ok, 0, f"scene {scene} produced lane data from blobs")
 
-    def test_a_valid_code_with_a_missing_finder_is_not_misread(self) -> None:
+    def test_a_large_hidden_region_never_reads_wrong_data(self) -> None:
+        # the whole bottom-right quarter is gone: rings and tiles with it
         image = setup(2)
         n = image.width
         data = bytearray(image.data)
-        # erase the bottom-right blossom
         for y in range(n * 3 // 4, n):
             data[y * n + n * 3 // 4 : y * n + n] = bytes(n - n * 3 // 4)
-        with self.assertRaises(DecodeError):
-            decode_frame(Luma(n, n, bytes(data)))
+        p, k, d = lane_data(2)
+        try:
+            frame = decode_frame(Luma(n, n, bytes(data)))
+        except DecodeError:
+            return
+        for lane, truth in ((frame.p, p), (frame.k, k), (frame.d, d)):
+            if lane is not None:
+                self.assertEqual(lane.data, truth)
 
     def test_known_pose_decoding_reads_every_lane(self) -> None:
         image = setup(4)
@@ -635,6 +706,200 @@ class TileReadTest(unittest.TestCase):
         for pose in (Homography((nan,) * 9), Homography((0.0,) * 9)):
             decoded = decode_frame_at(image, pose)
             self.assertTrue(decoded is None or decoded.lanes_ok == 0)
+
+
+class HiddenCornerTest(unittest.TestCase):
+    """Three blossoms forming a corner, the inferred fourth and the ``天`` ranking."""
+
+    def test_a_hidden_blossom_is_inferred_and_every_lane_still_reads(self) -> None:
+        p, k, d = lane_data(2)
+        for corner in range(4):
+            decoded = decode_frame(hidden_blossom(2, corner))
+            self.assertEqual(decoded.inferred_corner, corner, f"corner {corner}")
+            self.assertEqual((decoded.rotation, decoded.mirrored), (0, False), f"corner {corner}")
+            self.assertEqual(decoded.p.data if decoded.p else None, p, f"corner {corner} lane P")
+            self.assertEqual(decoded.k.data if decoded.k else None, k, f"corner {corner} lane K")
+            self.assertEqual(decoded.d.data if decoded.d else None, d, f"corner {corner} lane D")
+
+    def test_the_inferred_corner_is_reported_in_code_coordinates_when_mirrored(self) -> None:
+        # hide the top-right blossom of the code, then mirror the picture: the hidden
+        # blossom appears top-left in the image but is still corner 1 of the code
+        decoded = decode_frame(hidden_blossom(3, 1).mirrored())
+        self.assertTrue(decoded.mirrored)
+        self.assertEqual(decoded.inferred_corner, 1)
+        self.assertEqual(decoded.d.data if decoded.d else None, lane_data(3)[2])
+
+    def test_canonical_corners_follow_the_hypothesis_enumeration(self) -> None:
+        # the hypothesis (rotation, mirrored) sends quad corner `(i + r) % 4` (or
+        # `(r - i) % 4` mirrored) to canonical corner i; the canonical index of a quad
+        # corner inverts that
+        for rotation in range(4):
+            for i in range(4):
+                self.assertEqual(_canonical_corner((i + rotation) % 4, rotation, False), i)
+                self.assertEqual(_canonical_corner((rotation + 4 - i) % 4, rotation, True), i)
+
+    def test_the_tian_mask_tells_the_quarter_turns_apart(self) -> None:
+        self.assertEqual(len(_EMPTY_CELLS), 400 - 256)
+        image = setup(5)
+        quad = locate(image)
+        self.assertIsNotNone(quad, "four finders")
+        by_rotation = [None] * 4
+        for rotation, mirrored, h in _hypotheses(quad, True):
+            project = _projector(image, h)
+            reference = _reference_levels(project)
+            self.assertIsNotNone(reference, "levels")
+            if not mirrored:
+                by_rotation[rotation] = _mask_score(project, reference)
+        # upright wins clearly over the three other quarter turns
+        for rotation in range(1, 4):
+            self.assertGreater(by_rotation[0], by_rotation[rotation] + 0.1, by_rotation)
+
+    def test_inferred_levels_extrapolate_the_other_three_corners(self) -> None:
+        image = setup(5)
+        scale = 768.0 / 1024.0
+        pose = Homography((scale, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, 1.0))
+        project = _projector(image, pose)
+        seen = _reference_levels(project)
+        self.assertIsNotNone(seen)
+        for corner in range(4):
+            guessed = _reference_levels(project, corner)
+            n1, opposite, n2 = (corner + 1) % 4, (corner + 2) % 4, (corner + 3) % 4
+            for levels, truth in ((guessed.lit, seen.lit), (guessed.dark, seen.dark)):
+                # the three seen corners are measured as before
+                for other in (n1, opposite, n2):
+                    self.assertEqual(levels[other], truth[other])
+                parallelogram = truth[n1] + truth[n2] - truth[opposite]
+                low = min(truth[n1], truth[opposite], truth[n2])
+                high = max(truth[n1], truth[opposite], truth[n2])
+                self.assertEqual(levels[corner], min(max(parallelogram, low), high))
+        # a hidden corner on a blank picture still has no contrast at the others
+        self.assertIsNone(_reference_levels(_projector(Luma(768, 768), pose), 2))
+
+    def test_the_rings_pull_an_inferred_corner_into_place(self) -> None:
+        image = hidden_blossom(2, 2)
+        scale = 768.0 / 1024.0
+        truth = [Finder(x * scale, y * scale, 90.0) for x, y in FINDER_CENTERS]
+        # start 12 pixels off: the ring search pulls the corner most of the way back (the
+        # ring dots are 16 pixels wide here, so the brightness has a plateau a few pixels
+        # wide and the first of its brightest points wins)
+        corners = list(truth)
+        corners[2] = Finder(truth[2].x + 9.0, truth[2].y - 8.0, 90.0)
+        refined = _refine_inferred_corner(image, corners, 2)
+        self.assertEqual(refined[:2] + refined[3:], tuple(corners[:2] + corners[3:]))
+        self.assertEqual(refined[2].size, 90.0)
+        self.assertLess(abs(refined[2].x - truth[2].x), 6.0, refined[2])
+        self.assertLess(abs(refined[2].y - truth[2].y), 6.0, refined[2])
+        # the refined corner is brighter on the rings than where it started
+        points = [(f.x, f.y) for f in corners]
+        better = [(f.x, f.y) for f in refined]
+        self.assertGreater(_ring_brightness(image, better), _ring_brightness(image, points))
+        # a degenerate quad has no pose
+        self.assertIsNone(_ring_brightness(image, [(1.0, 1.0)] * 4))
+
+
+class TrackingTest(unittest.TestCase):
+    """Following a code from the previous frame's pose."""
+
+    def test_tracking_follows_a_small_movement_and_gives_up_on_a_jump(self) -> None:
+        image = padded(setup(6), 100)
+        first = decode_frame(image)
+        p, k, d = lane_data(6)
+        followed = track_frame(shifted(image, 9, -6), first)
+        self.assertIsNotNone(followed, "tracks a 9 px move")
+        self.assertEqual(followed.p.data if followed.p else None, p)
+        self.assertEqual(followed.k.data if followed.k else None, k)
+        self.assertEqual(followed.d.data if followed.d else None, d)
+        self.assertIsNone(followed.inferred_corner)
+        # more than a finder diameter: tracking refuses, a full decode is needed
+        jumped = shifted(image, 95, 0)
+        self.assertIsNone(track_frame(jumped, first))
+        decode_frame(jumped)
+
+    def test_an_inferred_corner_needs_contrast_too(self) -> None:
+        def level_card(levels):
+            data = bytearray(1024 * 1024)
+            for (cx, cy), (lit, dark) in zip(((72, 72), (952, 72), (952, 952), (72, 952)), levels):
+                sx = 1 if cx < 512 else -1
+                sy = 1 if cy < 512 else -1
+                for px, py, radius, value in (
+                    (cx, cy, 30, lit),
+                    (cx + sx * 100, cy, 12, dark),
+                    (cx, cy + sy * 100, 12, dark),
+                ):
+                    for y in range(py - radius, py + radius + 1):
+                        data[y * 1024 + px - radius : y * 1024 + px + radius + 1] = bytes(
+                            [value] * (2 * radius + 1)
+                        )
+            return _projector(Luma(1024, 1024, bytes(data)), Homography.IDENTITY)
+
+        # even light: the hidden corner (3) gets levels between the others'
+        even = _reference_levels(level_card([(230, 30), (220, 25), (210, 20), (0, 0)]), 3)
+        self.assertIsNotNone(even)
+        self.assertGreaterEqual(even.lit[3] - even.dark[3], 12.0)
+        # the hidden corner's neighbours disagree (one dim, one veiled): the estimates cross
+        uneven = level_card([(60, 45), (250, 20), (200, 185), (0, 0)])
+        self.assertIsNone(_reference_levels(uneven, 3))
+        # with every corner seen, the same light is fine
+        seen = level_card([(60, 45), (250, 20), (200, 185), (240, 20)])
+        self.assertIsNotNone(_reference_levels(seen))
+
+    def test_broken_poses_are_refused_without_crashing(self) -> None:
+        image = setup(4)
+        previous = decode_frame(image)
+        # a good pose that names a corner that does not exist
+        self.assertIsNotNone(track_frame(image, previous))
+        for corner in (4, 255, -1):
+            named = dataclasses.replace(previous, inferred_corner=corner)
+            self.assertIsNone(track_frame(image, named), corner)
+        nan, inf = float("nan"), float("inf")
+        non_finite = [
+            Homography((nan,) * 9),
+            Homography((inf, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)),
+        ]
+        for broken in non_finite:
+            self.assertIsNone(decode_frame_at(image, broken))
+        # the last one makes every finder far larger than the image
+        huge = Homography((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+        for broken in non_finite + [huge]:
+            for inferred in (None, 2):
+                stale = dataclasses.replace(previous, homography=broken, inferred_corner=inferred)
+                self.assertIsNone(track_frame(image, stale), (broken, inferred))
+        # an unusable image is refused before any work
+        self.assertIsNone(track_frame(Luma(40, 40), previous))
+
+    def test_tracking_survives_a_blossom_that_disappears(self) -> None:
+        first = decode_frame(setup(4))
+        # the same code, slightly moved, now with the bottom-left blossom covered
+        moved = shifted(hidden_blossom(4, 3), -5, 4)
+        followed = track_frame(moved, first)
+        self.assertIsNotNone(followed, "tracks with three blossoms")
+        self.assertEqual(followed.inferred_corner, 3)
+        self.assertEqual(followed.d.data if followed.d else None, lane_data(4)[2])
+        self.assertEqual((followed.rotation, followed.mirrored), (first.rotation, first.mirrored))
+
+    def test_a_blossom_that_reappears_is_seen_again(self) -> None:
+        covered = hidden_blossom(4, 3)
+        first = decode_frame(covered)
+        self.assertEqual(first.inferred_corner, 3)
+        # the thumb moves away and the hand moves a little
+        followed = track_frame(shifted(setup(4), 4, -3), first)
+        self.assertIsNotNone(followed, "tracks")
+        self.assertIsNone(followed.inferred_corner)
+        self.assertEqual(followed.d.data if followed.d else None, lane_data(4)[2])
+        # still covered: still inferred
+        followed = track_frame(shifted(covered, 4, -3), first)
+        self.assertIsNotNone(followed, "tracks")
+        self.assertEqual(followed.inferred_corner, 3)
+
+    def test_two_lost_blossoms_end_tracking(self) -> None:
+        first = decode_frame(setup(4))
+        image = hidden_blossom(4, 3)
+        n = image.width
+        data = bytearray(image.data)
+        # also cover the top-right blossom
+        for y in range(0, n // 4):
+            data[y * n + n * 3 // 4 : y * n + n] = bytes(n - n * 3 // 4)
+        self.assertIsNone(track_frame(Luma(n, n, bytes(data)), first))
 
 
 if __name__ == "__main__":

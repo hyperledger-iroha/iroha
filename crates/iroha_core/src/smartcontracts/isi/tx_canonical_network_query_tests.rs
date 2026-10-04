@@ -313,7 +313,7 @@ fn canonical_query_measures_full_projected_row_before_cloning() {
     for index in 0..projection.count {
         let mut charged = None;
         let transaction = projection
-            .transaction_at(index, |bytes| {
+            .transaction_at(index, TRANSACTION_HISTORY_MAX_BYTES, |bytes| {
                 charged = Some(bytes);
                 Ok(())
             })
@@ -335,7 +335,7 @@ fn canonical_query_refuses_a_row_before_materialization_and_preserves_carrier() 
     .expect("valid carrier");
     let mut admission_calls = 0;
     let error = projection
-        .transaction_at(1, |bytes| {
+        .transaction_at(1, TRANSACTION_HISTORY_MAX_BYTES, |bytes| {
             assert!(bytes > 0);
             admission_calls += 1;
             Err(QueryExecutionFail::GasBudgetExceeded)
@@ -344,7 +344,11 @@ fn canonical_query_refuses_a_row_before_materialization_and_preserves_carrier() 
     assert!(matches!(error, QueryExecutionFail::GasBudgetExceeded));
     assert_eq!(admission_calls, 1);
     assert_eq!(block.encode_wire().unwrap(), before);
-    assert!(projection.transaction_at(0, |_| Ok(())).is_ok());
+    assert!(
+        projection
+            .transaction_at(0, TRANSACTION_HISTORY_MAX_BYTES, |_| Ok(()))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -356,7 +360,7 @@ fn canonical_query_projects_only_the_requested_row_after_full_validation() {
     .expect("valid carrier");
     let mut admitted = 0;
     let selected = projection
-        .transaction_at(1, |_| {
+        .transaction_at(1, TRANSACTION_HISTORY_MAX_BYTES, |_| {
             admitted += 1;
             Ok(())
         })
@@ -369,7 +373,9 @@ fn canonical_query_projects_only_the_requested_row_after_full_validation() {
     assert!(selected.result().is_err());
     assert!(
         projection
-            .transaction_at(2, |_| panic!("internal output has no input admission"))
+            .transaction_at(2, TRANSACTION_HISTORY_MAX_BYTES, |_| panic!(
+                "internal output has no input admission"
+            ))
             .is_err()
     );
 }

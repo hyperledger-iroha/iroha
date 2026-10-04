@@ -688,6 +688,7 @@ fn native(program: &Program, gas: u64) -> ivm::IVM {
     let mut vm = ivm::IVM::new(gas);
     vm.load_prepared(program.artifact()).unwrap();
     vm.set_zk_trace_enabled(true);
+    assert_eq!(vm.pc(), u64::from(program.first_pc));
     vm
 }
 fn run_native(vm: &mut ivm::IVM) -> DiagnosticExecutionRecorders {

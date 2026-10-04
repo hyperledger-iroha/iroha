@@ -16,7 +16,6 @@ use iroha_data_model::{
     transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use mv::storage::StorageReadOnly as _;
 use std::{num::NonZeroUsize, time::Duration};
 
 const SCAN_INSTRUCTIONS_PER_ROUND: usize = 256;

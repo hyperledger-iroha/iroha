@@ -17,6 +17,12 @@ pub const NATIVE_FINALITY_MAX_JOURNAL_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum number of consecutive source frames in one bounded journal.
 pub const NATIVE_FINALITY_MAX_BLOCK_COUNT: usize = 65_536;
 
+mod prepared_source;
+pub use prepared_source::{
+    NativeFinalityFrames, NativeFinalitySource, PreparedNativeFinalityDestinationError,
+    PreparedNativeFinalityError, PreparedNativeFinalityJournal,
+};
+
 /// Explicit caller-owned admission bounds. There is no implicit unbounded/default mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeFinalityLimits {
@@ -81,7 +87,7 @@ impl NativeFinalityLimits {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_data_model::sumeragi::finality::NativeFinalityArtifact")]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 pub struct NativeFinalityArtifact {
     /// The only source body. JSON transports the same bytes as base64.
     #[norito(
@@ -256,7 +262,7 @@ impl NativeFinalityArtifact {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_data_model::sumeragi::finality::NativeFinalityJournal")]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 pub struct NativeFinalityJournal {
     /// Exact canonical source frames in ascending one-based height order.
     pub blocks: Vec<NativeFinalityArtifact>,
@@ -268,23 +274,7 @@ impl NativeFinalityJournal {
     /// Rejects invalid limits, empty or excessive block counts, invalid frame sizes, or an
     /// overflowing or excessive aggregate source length.
     pub fn validate_source(&self, limits: NativeFinalityLimits) -> Result<(), String> {
-        limits.validate()?;
-        if self.blocks.is_empty() || self.blocks.len() > limits.block_count {
-            return Err("native journal block count exceeds its configured bound".into());
-        }
-        let mut total = 0_usize;
-        for block in &self.blocks {
-            if block.block_wire.is_empty() || block.block_wire.len() > limits.block_bytes {
-                return Err("native journal contains an oversized or empty frame".into());
-            }
-            total = total
-                .checked_add(block.block_wire.len())
-                .ok_or("native journal size overflow")?;
-            if total > limits.journal_bytes {
-                return Err("native journal exceeds its configured aggregate byte bound".into());
-            }
-        }
-        Ok(())
+        NativeFinalitySource::from(self).validate(limits)
     }
 
     /// Decode a canonical journal archive within the supplied aggregate byte/allocation caps.

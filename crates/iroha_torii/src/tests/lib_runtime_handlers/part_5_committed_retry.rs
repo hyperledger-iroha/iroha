@@ -91,27 +91,30 @@ async fn committed_retry_acknowledges_exact_carrier_without_requeueing() {
             torii_response_header(&response, "x-iroha-transactions-accepted"),
             Some("2")
         );
-        let sender = chain.validators()[1].0.clone();
-        let response = super::execute_incoming_torii_proxy_request(
-            &app,
-            ToriiProxyRequestV1 {
-                schema_version: TORII_PROXY_REQUEST_VERSION_V1,
-                request_id: Hash::new(b"exact committed retry at proxy receiver"),
-                deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
-                hop_count: 1,
-                max_hops: 3,
-                visited_peer_ids: vec![sender.clone()],
-                request: ToriiProxyRequestKindV1::SubmitTransaction {
-                    transaction: TransactionEntrypoint::External(transaction.clone()),
-                    expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(
-                        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                    )),
+        #[cfg(feature = "connect")]
+        {
+            let sender = chain.validators()[1].0.clone();
+            let response = super::execute_incoming_torii_proxy_request(
+                &app,
+                ToriiProxyRequestV1 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+                    request_id: Hash::new(b"exact committed retry at proxy receiver"),
+                    deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+                    hop_count: 1,
+                    max_hops: 3,
+                    visited_peer_ids: vec![sender.clone()],
+                    request: ToriiProxyRequestKindV1::SubmitTransaction {
+                        transaction: TransactionEntrypoint::External(transaction.clone()),
+                        expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(
+                            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                        )),
+                    },
                 },
-            },
-            Some(sender),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
+                Some(sender),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
         assert_eq!(app.queue.active_len(), 0);
         assert_eq!(chain.height(), 2);
         assert_eq!(chain.committed(2).block().encode_wire().unwrap(), original);

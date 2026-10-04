@@ -10,6 +10,8 @@ use iroha_core::{
     sumeragi::certified_chain::CertifiedChain,
     validator_committee_evidence::validate_validator_committee_selection_binding_v1,
 };
+#[cfg(test)]
+use iroha_data_model::Registrable as _;
 use iroha_data_model::{
     nexus::{
         ValidatorCandidateKeysV1, ValidatorCommitteeSelectionStatusV1, ValidatorCommitteeStatusV1,

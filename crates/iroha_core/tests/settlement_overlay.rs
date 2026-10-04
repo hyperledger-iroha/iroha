@@ -17,6 +17,7 @@ use iroha_data_model::{
     domain::Domain,
     isi::{
         Grant, InstructionBox,
+        error::{InstructionExecutionError, MathError},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
             SettlementLeg, SettlementPlan,
@@ -236,13 +237,13 @@ fn dvp_overlay_rejects_underfunded_leg() {
     );
     let err = apply_overlay(&mut stx, &ALICE_ID, vec![InstructionBox::from(instruction)])
         .expect_err("insufficient payment leg should fail admission");
-    match err {
-        ValidationFail::InstructionFailed(exec_err) => {
-            let msg = exec_err.to_string();
-            assert!(msg.contains("available"), "unexpected error message: {msg}");
-        }
-        other => panic!("unexpected validation error: {other:?}"),
-    }
+    assert_eq!(
+        err,
+        ValidationFail::InstructionFailed(InstructionExecutionError::Math(
+            MathError::NotEnoughQuantity
+        )),
+        "the original numeric preflight must reject the underfunded payment leg"
+    );
     // Ensure balances remain unchanged
     let alice_bond = AssetId::new(delivery_def_id, ALICE_ID.clone());
     let bob_cash = AssetId::new(payment_def_id, BOB_ID.clone());

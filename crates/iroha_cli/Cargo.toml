@@ -37,7 +37,7 @@ cli_integration_harness = []
 bridge = []
 
 [dependencies]
-iroha_core_privacy = { workspace = true }
+iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }
 iroha_model_base = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }

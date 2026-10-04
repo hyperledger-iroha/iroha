@@ -4,6 +4,59 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- Collection queries follow `specs/torii/collection_queries.md`: `ToriiFilter`
+  (builder operators, result builder, canonical text `description` and JSON
+  `jsonData()`, client-side limits), `ToriiSortKey`, `ToriiAggregate`,
+  `ToriiListQuery` (canonical `POST /query` body and `GET` parameters),
+  `ToriiPage` and the on-demand `ToriiPageSequence`/`ToriiItemSequence`, checked
+  against `fixtures/torii/list_query/vectors.json`. `ToriiClient` exposes
+  `domains`, `accounts` (with `get(_:)`), `assetDefinitions`, `nfts`, `rwas`,
+  `repoAgreements`, `accountAssets(of:)`, `assetHolders(of:)`, the history
+  collections `transactions` and `accountTransactions(of:)` (rows
+  `ToriiTransaction`, newest first; `sort`, `includeTotal` and `aggregate`
+  rejected locally; pagers follow `nextCursor` across short and empty pages)
+  with typed rows whose non-identity fields are optional. Filters with object or
+  array literals are sent only in the JSON form (`queryItems()` and event
+  streams reject them). Removed `listDomains`,
+  `iterateDomains`, `listRwas`, `queryRwas`, `iterateRwas`, `getAssets`,
+  `getTransactions`, their completion/Combine/`IrohaSDK` twins and
+  `ToriiListOptions`/`ToriiListFilter`/`ToriiListSort`/`ToriiQueryEnvelope`
+  and the offset/`total`-based page types.
+- Torii error responses surface as `ToriiClientError.api(ToriiAPIError)` with
+  `status`, envelope `code`, `message`, `details` and the `X-Iroha-Reject-Code`
+  header; `ToriiClientError.invalidQuery` reports locally rejected controls with
+  the same codes. `ToriiClientError.httpStatus` was removed.
+- Event streams decode the specified `/v1/events/sse` payloads into `ToriiEvent`
+  (pipeline transaction, block, warning and witness events; proof verified,
+  rejected and pruned events; `.data`/`.other` notices for every other kind, so
+  unknown events never fail a stream), wrapped in `ToriiEventMessage`.
+  Transaction statuses, block statuses and `ToriiTransactionRejectionCode` are
+  typed from their names. New `streamEvents(filter:)`/`streamEvents(filterText:)`
+  take the collection text grammar, and built filters are checked against the
+  event-stream subset before connecting. The transaction-status stream sends
+  `tx_hash = "…"` and checks every event's hash (including the trailing one);
+  proof streams send `proof_backend`/`proof_call_hash`/`proof_envelope_hash`
+  filters and match pruning events too; `streamVerifyingKeyEvents()` and
+  `streamTriggerEvents()` recognise their events by kind. The retired
+  `{"VerifyingKey": …}`, `{"Trigger": …}` and `{"Proof": …}` shapes, their
+  typed payloads and filters (`ToriiVerifyingKeyEventFilter`,
+  `ToriiTriggerEventFilter`, `ToriiVerifyingKeyEvent`, `ToriiTriggerEvent`) were
+  removed. Event streams follow the same transport policy as other requests
+  (HTTPS for credentials, no redirects) and surface rejections with the parsed
+  error envelope.
+- `+` in query values is percent-encoded; `getStatusSnapshot()` no longer races
+  on its sample state; `AccountId.make(publicKey:)` throws instead of trapping;
+  building a transfer with a non-empty `TransferRequest.description` throws
+  `TransactionInputError.transferDescriptionUnsupported` instead of silently
+  dropping the memo; the always-failing `deployContractInstance` and
+  `activateContractInstance` were removed.
+- `ToriiCanonicalRequestAuth` is now only the account credential
+  (`accountId`, `privateKey`); its `timestampMs`/`nonce` were removed because a
+  reused credential replayed one nonce. `ToriiClient`, `MusubiToriiClientV1` and
+  `AtomicPrivateSettlementToriiClientV1` draw a fresh timestamp and nonce for
+  every signed request from `ToriiCanonicalRequestFreshness` (injectable for
+  tests), so pinned-freshness errors and their both-or-neither checks are gone.
+
 - Added the Petal Stream optical transport (`Sources/IrohaSwift/Petal/`), a
   function-by-function port of `crates/iroha_petal`: CRC-32C bound streams,
   whitened GF(256) Reed–Solomon lanes with errors-and-erasures decoding,
@@ -13,11 +66,17 @@ All notable changes to `IrohaSwift` are documented in this file.
   homographies, joint polarity/katakana tile matching read against the finder
   levels and, for a lane that stays unreadable, again with every patch and
   template normalised by its own contrast so over-exposure, veiling light,
-  glare and shadows cancel; rotation and mirror hypotheses) and
-  `PetalScanSession`. The suites check every section of
-  `fixtures/petal/petal_stream_v1.json`, decode all nine golden captures in
+  glare and shadows cancel; rotation and mirror hypotheses ranked by the ring
+  gates and the `天` silhouette; a blossom hidden by a thumb, a glare or the
+  frame edge is inferred from the other three and reported as
+  `PetalDecodedFrame.inferredCorner`) and `PetalScanSession`, which follows
+  the code from its last pose (`PetalDecoder.track`, within 500 ms) instead
+  of searching every frame and counts `tracked` and `inferred` frames in
+  `PetalScanStats`. The suites check every section of
+  `fixtures/petal/petal_stream_v1.json`, decode all eleven golden captures in
   `fixtures/petal/petal_captures_v1.json` with exactly the reference lanes and
-  reproduce the clean capture pixel for pixel. `IrohaSwiftTransferUI` adds
+  inferred corners, follow both tracking pairs and reproduce the clean capture
+  pixel for pixel. `IrohaSwiftTransferUI` adds
   `PetalCoreGraphicsRenderer`, `PetalFrameView` and the animated
   `PetalStreamView`; `IrohaSwiftMobileTransports` adds the AVFoundation
   `PetalCameraAnalyzer` and `PetalCameraFrame` pixel-buffer conversion.

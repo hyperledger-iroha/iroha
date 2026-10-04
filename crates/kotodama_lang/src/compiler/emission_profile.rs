@@ -115,7 +115,7 @@ fn canonical_dlmm_lowering_attribution_preserves_exact_artifact_and_reports_comp
     let code_bytes = plain.artifact.len() - parsed.code_offset;
     // Measure the same compiled artifact; standalone field encodings below are
     // diagnostic attribution only and are not additive section byte counts.
-    use norito::Encode as _;
+    use norito::codec::Encode as _;
     let interface = parsed.contract_interface.as_ref().expect("production CNTR");
     let contract_bytes = interface.encode_section();
     assert_eq!(

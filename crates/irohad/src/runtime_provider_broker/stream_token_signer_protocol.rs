@@ -360,25 +360,38 @@ impl Drop for StreamTokenObserverReplyWireV1 {
     }
 }
 
-fn encode_stream_token_observer_reply(
+#[cfg(test)]
+fn prepare_stream_token_observer_wire(
     request: &SignerStreamTokenObservationRequestV1,
     reply: &StreamTokenObserverReplyV1,
-) -> Result<Vec<u8>, BrokerError> {
-    let wire = match request.subject {
+) -> Result<StreamTokenObserverReplyWireV1, CanonicalAttemptErrorV1> {
+    let limit = MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1;
+    Ok(match request.subject {
         SignerStreamTokenObservationRequestSubjectV1::CurrentCustody { .. } => {
             let (record, observation) = reply.current_evidence().ok_or(BrokerError::Protocol)?;
+            let mut record = canonical_attempt::copy(record, limit)?;
+            let mut observation = canonical_attempt::copy(observation, limit)?;
             StreamTokenObserverReplyWireV1::Current {
-                record: record.to_vec(),
-                observation: observation.to_vec(),
+                record: record.take(),
+                observation: observation.take(),
             }
         }
         SignerStreamTokenObservationRequestSubjectV1::CompletedOperation { .. } => {
             let observation = reply.completed_observation().ok_or(BrokerError::Protocol)?;
+            let mut observation = canonical_attempt::copy(observation, limit)?;
             StreamTokenObserverReplyWireV1::Completed {
-                observation: observation.to_vec(),
+                observation: observation.take(),
             }
         }
-    };
+    })
+}
+#[cfg(test)]
+fn encode_stream_token_observer_reply(
+    request: &SignerStreamTokenObservationRequestV1,
+    reply: &StreamTokenObserverReplyV1,
+) -> Result<Vec<u8>, BrokerError> {
+    let wire = prepare_stream_token_observer_wire(request, reply)
+        .map_err(|error| error.service_error())?;
     encode_canonical(&wire, MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1)
 }
 

@@ -1,6 +1,7 @@
 //! Bridge commands: genesis readiness probes and typed bridge receipts.
 use crate::{Run, RunContext};
 mod genesis_readiness;
+mod retained_network;
 use clap::Subcommand;
 use eyre::Result;
 use iroha::data_model::prelude::*;
@@ -9,6 +10,8 @@ use iroha_model_base::topology::LaneId;
 pub enum Command {
     /// Probe the original node and genesis once with authenticated readiness evidence.
     GenesisReadiness(genesis_readiness::Args),
+    /// Verify archived four-peer public identity against an independently pinned genesis/prefix.
+    VerifyRetainedNetwork(retained_network::Args),
     /// Emit a bridge receipt as a typed event.
     EmitReceipt(EmitReceiptArgs),
 }
@@ -43,6 +46,7 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::GenesisReadiness(args) => genesis_readiness::run(context, args),
+            Self::VerifyRetainedNetwork(args) => retained_network::run(context, args),
             Self::EmitReceipt(args) => emit_receipt(context, args),
         }
     }

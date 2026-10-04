@@ -211,10 +211,41 @@ where
             let mut repeated = Vec::new();
             restored.write_structured_v1(&mut repeated).unwrap();
             assert_eq!(repeated, bytes);
-            // Actual fixture contains raw, configured binary, and constant-zero fixed columns.
-            assert_eq!(fixed_mode(&pk.fixed_values[0]).unwrap(), RAW);
+            // The eight populated nonbinary rows now have a smaller sparse wire payload.
+            // Keep the real key and its fixed value classes; the wire planner chooses the
+            // canonical byte minimum independently of those diagnostic value classes.
+            assert_eq!(
+                pk.fixed_values[0]
+                    .iter()
+                    .filter(|value| **value != C::Scalar::ZERO)
+                    .count(),
+                8
+            );
+            assert_eq!(fixed_mode(&pk.fixed_values[0]).unwrap(), SPARSE_ZERO);
+            assert_eq!(
+                fixed_encoding(&pk.fixed_values[0]).unwrap().payload_bytes,
+                4 + 8 * (4 + scalar_bytes::<C::Scalar>() as u64)
+            );
             assert_eq!(fixed_mode(&pk.fixed_values[1]).unwrap(), BITSET);
-            assert_eq!(fixed_mode(&pk.fixed_values[2]).unwrap(), CONSTANT);
+            assert!(
+                pk.fixed_values[2]
+                    .iter()
+                    .all(|value| *value == C::Scalar::ZERO)
+            );
+            // At 32 rows the four-byte bitset ties the sparse count, so the lower tag wins;
+            // at 64 rows the four-byte empty sparse count is strictly smaller.
+            assert_eq!(
+                fixed_mode(&pk.fixed_values[2]).unwrap(),
+                match k {
+                    5 => BITSET,
+                    6 => SPARSE_ZERO,
+                    _ => unreachable!("the real proof fixture uses k5 and k6"),
+                }
+            );
+            assert_eq!(
+                fixed_encoding(&pk.fixed_values[2]).unwrap().payload_bytes,
+                4
+            );
             for witness in [C::Scalar::from(3), C::Scalar::from(19)] {
                 let before = proof(&params, &pk, witness);
                 let after = proof(&params, &restored, witness);
@@ -293,7 +324,7 @@ fn modes<F: PrimeField>() {
         write_fixed(&mut bytes, &values).unwrap();
         assert_eq!(
             bytes.len() as u64,
-            1 + fixed_payload_bytes::<F>(fixed_mode(&values).unwrap(), 3).unwrap()
+            1 + fixed_encoding(&values).unwrap().payload_bytes
         );
         assert_eq!(
             read_fixed::<F, _>(&mut bytes.as_slice(), 3).unwrap(),
@@ -306,8 +337,8 @@ fn modes<F: PrimeField>() {
     for bad in [
         vec![255],
         vec![BITSET, 0b1000_0010],
-        vec![BITSET, 0],
-        vec![BITSET, 7],
+        vec![SPARSE_ZERO, 0, 0, 0, 0], // 3-row zero uses the smaller bitset
+        vec![BITSET, 0b0000_1111],     // nonzero unused fourth bit
     ] {
         assert!(read_fixed::<F, _>(&mut bad.as_slice(), 3).is_err());
     }
@@ -405,8 +436,7 @@ where
     let mut offset = fixed_count + 4;
     let mut fixed_offsets = Vec::new();
     for polynomial in &pk.fixed_values {
-        let payload =
-            fixed_payload_bytes::<C::Scalar>(fixed_mode(polynomial).unwrap(), 64).unwrap() as usize;
+        let payload = fixed_encoding(polynomial).unwrap().payload_bytes as usize;
         fixed_offsets.push((offset, payload));
         offset += 1 + payload;
     }
@@ -674,3 +704,84 @@ fn structured_reader_and_writer_propagate_io_errors_without_legacy_unwraps() {
 }
 
 mod consuming;
+
+fn sparse_fixed_cases<F: PrimeField>() {
+    let rows = 65536;
+    let mut values = vec![F::ZERO; rows];
+    values[7] = F::from(7);
+    values[255] = F::from(11);
+    let mut bytes = Vec::new();
+    write_fixed(&mut bytes, &values).unwrap();
+    assert_eq!(bytes[0], SPARSE_ZERO);
+    assert_eq!(bytes.len(), 1 + 4 + 2 * (4 + scalar_bytes::<F>()));
+    assert_eq!(&bytes[1..5], &2_u32.to_le_bytes());
+    assert_eq!(
+        read_fixed::<F, _>(&mut bytes.as_slice(), rows).unwrap(),
+        values
+    );
+    for cut in [0, 1, 4, 5, 8, 9, bytes.len() - 1] {
+        assert!(read_fixed::<F, _>(&mut &bytes[..cut], rows).is_err());
+    }
+    let width = scalar_bytes::<F>();
+    let stride = 4 + width;
+    let mut malformed = Vec::new();
+    for count in [3_u32, 65537, u32::MAX] {
+        let mut bad = bytes.clone();
+        bad[1..5].copy_from_slice(&count.to_le_bytes());
+        malformed.push(bad);
+    }
+    for row in [7_u32, 6, 65536, u32::MAX] {
+        let mut bad = bytes.clone();
+        bad[5 + stride..9 + stride].copy_from_slice(&row.to_le_bytes());
+        malformed.push(bad);
+    }
+    let mut zero = bytes.clone();
+    zero[9..9 + width].copy_from_slice(F::ZERO.to_repr().as_ref());
+    malformed.push(zero);
+    let mut noncanonical = bytes.clone();
+    noncanonical[9..9 + width].fill(255);
+    malformed.push(noncanonical);
+    for bad in malformed {
+        assert!(read_fixed::<F, _>(&mut bad.as_slice(), rows).is_err());
+    }
+    let mut binary = vec![SPARSE_ZERO];
+    binary.extend_from_slice(&1_u32.to_le_bytes());
+    binary.extend_from_slice(&7_u32.to_le_bytes());
+    binary.extend_from_slice(F::ONE.to_repr().as_ref());
+    assert!(read_fixed::<F, _>(&mut binary.as_slice(), 64).is_err()); // 8-byte bitset is cheaper
+    let mut dense = vec![RAW];
+    for value in &values {
+        dense.extend_from_slice(value.to_repr().as_ref());
+    }
+    assert!(read_fixed::<F, _>(&mut dense.as_slice(), rows).is_err());
+    let mut zeros = Vec::new();
+    write_fixed(&mut zeros, &vec![F::ZERO; rows]).unwrap();
+    assert_eq!(zeros, vec![SPARSE_ZERO, 0, 0, 0, 0]);
+    assert_eq!(
+        read_fixed::<F, _>(&mut zeros.as_slice(), rows).unwrap(),
+        vec![F::ZERO; rows]
+    );
+    let mut obsolete_zero = vec![CONSTANT];
+    obsolete_zero.extend_from_slice(F::ZERO.to_repr().as_ref());
+    assert!(read_fixed::<F, _>(&mut obsolete_zero.as_slice(), rows).is_err());
+    for (n, tag, payload) in [
+        (1, BITSET, 1),
+        (248, BITSET, 31),
+        (255, CONSTANT, 32),
+        (256, CONSTANT, 32),
+    ] {
+        let mut one = Vec::new();
+        write_fixed(&mut one, &vec![F::ONE; n]).unwrap();
+        assert_eq!(one[0], tag);
+        assert_eq!(one.len(), 1 + payload);
+        assert_eq!(
+            read_fixed::<F, _>(&mut one.as_slice(), n).unwrap(),
+            vec![F::ONE; n]
+        );
+    }
+}
+#[test]
+fn both_fields_sparse_fixed_zero_gaps_canonical_ties_and_all_malformed_controls() {
+    sparse_fixed_cases::<Fp>();
+    sparse_fixed_cases::<Fq>();
+}

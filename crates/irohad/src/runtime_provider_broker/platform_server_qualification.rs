@@ -349,25 +349,7 @@ fn make_server_observation(
             }
         }
         slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
-            // This is immutable routing metadata only. Torii separately authenticates fresh
-            // signed custody observations against its independent approved anchor and Core state.
-            let signer_backend = binding
-                .stream_token_signer_binding
-                .as_ref()
-                .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            let client = server_backend!(backends, stream_token_signer_client);
-            let observer = server_backend!(backends, stream_token_state_observer);
-            for _ in 0..2 {
-                let client_handle = client.handle();
-                let observer_handle = observer.handle();
-                if signer_backend.validate().is_err()
-                    || client_handle != signer_backend.custody().runtime_handle
-                    || observer_handle != signer_backend.observer_handle()
-                    || client_handle == observer_handle
-                {
-                    return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
-                }
-            }
+            validate_stream_token_backend_metadata(binding, backends)?;
         }
         slot if slot == IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id() => {
             let signer = appeal_finance_signer_backend(backends, &binding.handle)?;
@@ -1656,13 +1638,14 @@ fn requalify_server_state(
     }
     Ok(())
 }
-/// Immutable endpoint and filesystem-identity policy for one connection.
+/// Immutable endpoint identity and admitted-observer operation policy.
 #[derive(Clone, Debug)]
 pub(super) struct EndpointPolicy {
     path: PathBuf,
     expected_service_uid: u32,
     socket_mode: u32,
     verify_all_ancestors: bool,
+    observer_operation_timeout: Duration,
 }
 impl EndpointPolicy {
     /// Return the same-service-UID production policy at one validated public path.
@@ -1685,7 +1668,20 @@ impl EndpointPolicy {
             expected_service_uid,
             socket_mode: STOCK_BROKER_SOCKET_MODE_V1,
             verify_all_ancestors,
+            observer_operation_timeout: BROKER_IO_TIMEOUT_V1,
         }
+    }
+    pub(super) fn from_server_policy(
+        config: &iroha_config::parameters::actual::RuntimeProviderBroker,
+    ) -> Result<Self, RuntimeProviderBrokerServerErrorV1> {
+        if config.observer_operation_timeout.is_zero()
+            || config.observer_operation_timeout > BROKER_IO_TIMEOUT_V1
+        {
+            return Err(RuntimeProviderBrokerServerErrorV1::Protocol);
+        }
+        let mut policy = Self::production(&config.endpoint_path);
+        policy.observer_operation_timeout = config.observer_operation_timeout;
+        Ok(policy)
     }
     #[cfg(test)]
     fn for_test(path: PathBuf) -> Self {
@@ -2058,4 +2054,46 @@ fn sign_native_transaction(
             })
         }
     }
+}
+
+/// Stream-token qualification is immutable metadata, without a transient provider call.
+fn validate_stream_token_backend_metadata(
+    binding: &ProviderBindingWireV1,
+    backends: &RuntimeProviderBrokerBackendsV1,
+) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
+    let signer_backend = binding
+        .stream_token_signer_binding
+        .as_ref()
+        .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+    let client = server_backend!(backends, stream_token_signer_client);
+    let observer = server_backend!(backends, stream_token_state_observer);
+    for _ in 0..2 {
+        let client_handle = client.handle();
+        let observer_handle = observer.handle();
+        if signer_backend.validate().is_err()
+            || client_handle != signer_backend.custody().runtime_handle
+            || observer_handle != signer_backend.observer_handle()
+            || client_handle == observer_handle
+        {
+            return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+        }
+    }
+    Ok(())
+}
+fn qualify_stream_token_observer_metadata(
+    state: &BrokerServerStateV1,
+    request: &OperationRequestV1,
+) -> Result<(), BrokerError> {
+    if request.binding.slot != IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id()
+        || request.operation != OPERATION_STREAM_TOKEN_OBSERVE_V1
+        || configured_observation(state, &request.binding)?.metadata_digest
+            != request.provider_metadata_digest
+    {
+        return Err(BrokerError::BindingMismatch);
+    }
+    // This capability's observation has no mutable provider fields. Startup used
+    // the same handle checks and computed the configured metadata once. Rechecking
+    // those exact handles needs neither a cloned observation nor re-encoding None fields.
+    validate_stream_token_backend_metadata(&request.binding, &state.backends)
+        .map_err(|_| BrokerError::StaleOrRevoked)
 }

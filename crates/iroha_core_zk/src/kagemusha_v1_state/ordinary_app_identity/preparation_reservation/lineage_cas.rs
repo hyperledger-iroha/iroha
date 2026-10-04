@@ -578,14 +578,6 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
             Sha256::digest(&self.initialize.policy_original).into(),
         ))
     }
-    /// Recheck the exact already-held private WAL/financial/purpose identity without a live grant.
-    /// This cannot create a receipt or make a cold acknowledgement current.
-    pub(crate) fn recheck_retained_custody(
-        &self,
-        financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
-    ) -> Result<()> {
-        self.recheck_historical(financial)
-    }
     fn recheck_historical(
         &self,
         financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
@@ -915,8 +907,9 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
         })
     }
 }
+// Receipt roles expose only the operations their actual custody consumers need.
 macro_rules! receipt {
-    ($t:ident, $variant:ident, $selector:ty, $getter:ident) => {
+    ($t:ident, $variant:ident, $selector:ty, $getter:ident; $($capability:ident),+ $(,)?) => {
         impl $t<'_> {
             pub(crate) fn $getter(&self) -> Result<&$selector> {
                 self.owner.recheck_journal()?;
@@ -932,6 +925,19 @@ macro_rules! receipt {
                     _ => Err(Rejected),
                 }
             }
+            pub(crate) fn recheck_historical(
+                &self,
+                financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+            ) -> Result<()> {
+                self.owner.acknowledged(self.request_sha256, financial)?;
+                self.$getter()?;
+                Ok(())
+            }
+        }
+        $(receipt!(@$capability, $t);)+
+    };
+    (@original, $t:ident) => {
+        impl $t<'_> {
             pub(crate) fn original(&self) -> Result<&[u8]> {
                 self.owner.recheck_journal()?;
                 Ok(&self
@@ -942,14 +948,10 @@ macro_rules! receipt {
                     .originals
                     .signed_result)
             }
-            pub(crate) fn recheck_historical(
-                &self,
-                financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
-            ) -> Result<()> {
-                self.owner.acknowledged(self.request_sha256, financial)?;
-                self.$getter()?;
-                Ok(())
-            }
+        }
+    };
+    (@effect, $t:ident) => {
+        impl $t<'_> {
             pub(crate) fn recheck_for_effect(
                 &self,
                 financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
@@ -969,6 +971,10 @@ macro_rules! receipt {
                 )?;
                 self.owner.recheck_live(financial, current)
             }
+        }
+    };
+    (@request_digest, $t:ident) => {
+        impl $t<'_> {
             pub(crate) fn request_original_sha256(&self) -> [u8; 32] {
                 self.request_sha256
             }
@@ -979,32 +985,32 @@ receipt!(
     KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
     Anchor,
     KagemushaOrdinaryLineageAnchorV1,
-    anchor
+    anchor; effect
 );
 receipt!(
     KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1,
     Reserve,
     KagemushaOrdinaryLineageReservationV1,
-    reservation
+    reservation; original, request_digest
 );
 receipt!(
     KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
     Commit,
     KagemushaOrdinaryLineageCommitV1,
-    commit
+    commit; effect
 );
 
 receipt!(
     KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1,
     ReserveIncoming,
     KagemushaOrdinaryIncomingReservationV1,
-    reservation
+    reservation; original, request_digest
 );
 receipt!(
     KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,
     CommitIncoming,
     KagemushaOrdinaryIncomingCommitV1,
-    commit
+    commit; original, effect
 );
 
 fn encode(r: &Record) -> Result<Vec<u8>> {

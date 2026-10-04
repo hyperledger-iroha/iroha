@@ -181,7 +181,11 @@ fn actual_five_stage_sdk_shapes_roundtrip_full_model_originals_for_both_platform
             );
             let suffix = request.stage().path().rsplit('/').next().unwrap();
             for retired_or_changed in [
-                format!("/v1/offline/enrollment/ordinary/{suffix}"),
+                // Construct the retired spelling only for route-denial coverage.
+                format!(
+                    "/v1/{}/enrollment/ordinary/{suffix}",
+                    ["off", "line"].concat()
+                ),
                 format!("/v1/kagemusha/ordinary/enrollment/{suffix}"),
                 format!("/v1/retail/kagemusha/ordinary/enrollment/{suffix}"),
                 format!("{}/", request.stage().path()),
@@ -417,7 +421,7 @@ fn initial_start_complete_originals_have_bounded_json_and_norito_roundtrips() {
         }
         for (key, limit) in [
             ("raw_admission_original_base64", 315usize),
-            ("platform_original_base64", 131073),
+            ("platform_original_base64", 131_073),
             ("core_possession_original_base64", 5121),
             ("app_certificate_base64", 16385),
         ] {

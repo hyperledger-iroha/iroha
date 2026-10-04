@@ -68,13 +68,14 @@ def tree(tmp_path, projection):
 
 
 def test_exact_global_projection_preserves_original_bytes_modes_and_nested_owners(projection):
-    assert len(projection.members) == 229
+    assert len(projection.members) == 228
     rows = {row.path: row for row in projection.members}
-    attested = rows["@iroha/iroha-js/dist/kagemushaAttestedV1.js"]
-    assert attested.owner == "node_modules/@iroha/iroha-js"
-    assert attested.archive_member == "dist/kagemushaAttestedV1.js"
-    assert attested.content == dict(projection.sources)["src/kagemushaAttestedV1.js"]
-    assert attested.mode == 0o644
+    ordinary = rows["@iroha/iroha-js/dist/crc64Xz.js"]
+    assert ordinary.owner == "node_modules/@iroha/iroha-js"
+    assert ordinary.archive_member == "dist/crc64Xz.js"
+    assert ordinary.content == dict(projection.sources)["src/crc64Xz.js"]
+    assert ordinary.mode == 0o644
+    assert "@iroha/iroha-js/dist/kagemushaAttestedV1.js" not in rows
     for path, owner in (("@noble/hashes/index.js", "node_modules/@noble/hashes"),
                         ("@scure/bip39/node_modules/@noble/hashes/index.js", "node_modules/@scure/bip39/node_modules/@noble/hashes")):
         assert rows[path].content == owner.encode()
@@ -99,7 +100,7 @@ def test_projection_and_captured_content_verification_do_no_io(originals, monkey
                                           modes={row.path: row.mode for row in result.members})
 
 
-@pytest.mark.parametrize("name", ("@iroha/iroha-js/dist/native.js", "@iroha/iroha-js/dist/kagemushaAttestedV1.js", "@noble/hashes/index.js",
+@pytest.mark.parametrize("name", ("@iroha/iroha-js/dist/native.js", "@iroha/iroha-js/dist/crc64Xz.js", "@noble/hashes/index.js",
     "@scure/bip39/node_modules/@noble/hashes/index.js", "@iroha/iroha-js/native/iroha_js_host.checksums.json"))
 @pytest.mark.parametrize("change", ("bytes", "mode", "missing"))
 def test_exact_installed_content_cannot_substitute_a_declared_member(projection, name, change):

@@ -30,7 +30,12 @@ pub(super) use contract_aliases::CheckedContractAliases;
 mod account_rekeys;
 pub(super) use account_rekeys::CheckedAccountRekeys;
 mod validation_fee_proposals;
-pub(super) use validation_fee_proposals::CheckedValidationFeeProposals;
+#[cfg(test)]
+pub(in crate::state) use validation_fee_proposals::test_support as validation_fee_proposal_test_support;
+pub(in crate::state) use validation_fee_proposals::validate_original_validation_fee_proposals;
+pub(super) use validation_fee_proposals::{
+    CheckedValidationFeeProposals, VALIDATION_FEE_PROPOSAL_WORK_PER_ROW,
+};
 mod proof_status;
 pub(super) use proof_status::CheckedProofRecords;
 pub(in crate::state) use proof_status::validate_original_proofs;

@@ -41,9 +41,10 @@ reduce the artifact without changing its public interface or gas prices.
 Dead-operand register allocation is included in that measurement and passes the
 focused compiler checks; VM and actual Core payout checks remain, and the
 reduction does not yet close this gap.
-The last actual Core payout measurement was 5,341,844 gas with the
-preceding 80,629-byte compiler output; the latest compiler reduction has not been
-remeasured through Core. The component fixture authenticates a finite
+The latest retained actual Core payout diagnostic measured 4,720,196 gas with a
+71,397-byte pool artifact. That wider Core cohort failed nine tests and its sources
+changed during execution, so the measurement establishes no candidate qualification.
+The latest compiler output has not been remeasured through Core. The component fixture authenticates a finite
 eight-million-gas limit in its original signed genesis. TODO: finish optimizing and qualify the enacted
 payout under the default policy on the disposable network; the component limit
 does not establish that the default policy can execute the payout.
@@ -395,8 +396,12 @@ prepared verifier instead of overlapping a cloned graph with the delivered snaps
 The daemon's single `SeatDkgAttempt` retains the claim, input descriptors, partial
 frames, decoded banks, signing phase and publication offsets across refusal.
 It advances beyond signing before attempting publication and preserves the original
-deadline. Native finality retains its once-decoded journal on a refused advancement;
-its artifact copies and decoded block/index graph still require physical funding.
+deadline. Native finality retains prepaid ranges into its original funded frame
+through refused advancement. Ordinary and prepared journal decoding share the
+same generated canonical field walk and source bounds; the native cursor uses
+the same complete finality verifier. Journal indexes retain actual backing from
+the original pool. TODO: fund the nested decoded SignedBlock and result graphs
+through their complete physical lifetime.
 These changes await compilation, Core and daemon runtime qualification.
 Process exit still cancels the in-memory export owner; this does not establish
 restart recovery for an unfinished DKG attempt.

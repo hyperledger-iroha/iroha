@@ -474,8 +474,9 @@ fn torii_routed_read_exact_vec<T>(
 /// Heap bytes reachable from a native JSON `Value` after parsing.
 ///
 /// Strings and arrays use the parser's exact-reserve requests. The lexical profile sums Norito
-/// core's checked node-count bound separately for every object, so empty and differently sized
-/// objects cannot inflate one another's topology charge. The parser separately charges any
+/// core's original parser allocation charge separately for every object, including the leaf/split
+/// boundary, so empty and differently sized objects cannot inflate one another's topology charge.
+/// The parser separately charges any
 /// allocator capacity returned above an exact-reserve request.
 fn torii_routed_read_json_value_graph_bytes(
     profile: norito::json::JsonPreflightProfile,
@@ -484,12 +485,7 @@ fn torii_routed_read_json_value_graph_bytes(
         .array_entries()
         .checked_mul(core::mem::size_of::<Value>())
         .ok_or_else(torii_routed_read_accounting_response)?;
-    let object_nodes = profile.object_btree_node_upper_bound();
-    let object_bytes = norito::core::owned_btree_maps_allocation_bytes::<String, Value>(
-        object_nodes,
-        object_nodes,
-    )
-    .map_err(|_| torii_routed_read_accounting_response())?;
+    let object_bytes = profile.object_btree_allocation_bytes();
     profile
         .string_capacity_bytes()
         .checked_add(array_bytes)

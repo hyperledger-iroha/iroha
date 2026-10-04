@@ -142,7 +142,10 @@ mod native {
 
     fn authenticate_peer(stream: &UnixStream) -> Result<()> {
         #[cfg(any(target_os = "linux", target_os = "android"))]
-        let uid = rustix::net::sockopt::socket_peercred(stream)?.uid.as_raw();
+        let uid = rustix::net::sockopt::socket_peercred(stream)
+            .map_err(std::io::Error::from)?
+            .uid
+            .as_raw();
         #[cfg(target_os = "macos")]
         let uid = {
             use std::os::fd::AsRawFd as _;
@@ -268,6 +271,30 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn linux_peer_credentials_authenticate_both_owned_socket_pair_ends() {
+            let (left, right) = UnixStream::pair().unwrap();
+            authenticate_peer(&left).unwrap();
+            authenticate_peer(&right).unwrap();
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn linux_peer_credentials_map_non_socket_failure_to_managed_io_error() {
+            use std::os::fd::OwnedFd;
+
+            let descriptor = OwnedFd::from(fs::File::open("/dev/null").unwrap());
+            let non_socket = UnixStream::from(descriptor);
+            let Err(Error::Io(error)) = authenticate_peer(&non_socket) else {
+                panic!("a non-socket descriptor must remain an I/O authentication failure");
+            };
+            assert_eq!(
+                error.raw_os_error(),
+                Some(rustix::io::Errno::NOTSOCK.raw_os_error())
+            );
+        }
 
         #[test]
         fn local_endpoint_selection_counts_bytes_and_reserves_the_nul_terminator() {

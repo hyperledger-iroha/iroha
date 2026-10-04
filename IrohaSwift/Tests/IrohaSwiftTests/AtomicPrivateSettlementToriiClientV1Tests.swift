@@ -1012,9 +1012,7 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         ToriiCanonicalRequestAuth(
             accountId: try Keypair(privateKeyBytes: sponsorSeed)
                 .accountId(networkPrefix: AccountId.defaultNetworkPrefix),
-            privateKey: sponsorSeed,
-            timestampMs: 1_700_000_000_000,
-            nonce: "atomic-private-settlement-test"
+            privateKey: sponsorSeed
         )
     }
 

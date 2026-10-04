@@ -217,7 +217,9 @@ fn apply_explicit_xor_allocations(
     let pinned = effective
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .ok_or("profile manifest requires committed NPoS XOR identity")?
         .xor_asset_definition_id;
     if allocations.asset_definition_id != pinned {
@@ -258,7 +260,7 @@ fn apply_explicit_xor_allocations(
             AssetId::new(pinned.clone(), allocation.account.clone()),
         ));
     }
-    Ok(builder.build_raw()?.with_consensus_meta())
+    Ok(builder.build_raw()?.with_consensus_meta()?)
 }
 
 pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
@@ -554,7 +556,7 @@ fn inject_topology(
         .set_topology(topology)
         .build_raw()?
         .with_consensus_mode(consensus_mode)
-        .with_consensus_meta()
+        .with_consensus_meta()?
         .with_chain_discriminant(chain_discriminant);
     Ok(manifest)
 }
@@ -880,7 +882,7 @@ fn portable_bound_profile_manifest(
     }
     let expected_fingerprint = generated_manifest
         .with_sumeragi_context_parameters(resolved_bound_manifest.sumeragi_context_parameters())
-        .with_consensus_meta()
+        .with_consensus_meta()?
         .consensus_fingerprint();
     if expected_fingerprint != resolved_bound_manifest.consensus_fingerprint() {
         return Err(
@@ -1628,7 +1630,8 @@ mod tests {
         .complete_for_test()
         .build_raw()
         .expect("complete portable bound-manifest fixture")
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let portable = portable_bound_profile_manifest(
             stub_genesis(),
             &resolved_bound_manifest,
@@ -1657,7 +1660,8 @@ mod tests {
         .complete_for_test()
         .build_raw()
         .expect("complete leaking bound-manifest fixture")
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let error = portable_bound_profile_manifest(
             stub_genesis(),
             &leaking_bound_manifest,
@@ -1680,7 +1684,8 @@ mod tests {
         .build_raw()
         .expect("complete non-default-discriminant fixture")
         .with_chain_discriminant(non_default_discriminant)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         portable_bound_profile_manifest(
             generated_manifest,
             &resolved_bound_manifest,
@@ -1688,6 +1693,176 @@ mod tests {
         )
         .expect("non-default chain discriminant must survive the portable projection");
     }
+    fn profile_npos_manifest(
+        custom: Option<iroha_data_model::parameter::CustomParameter>,
+    ) -> RawGenesisTransaction {
+        let mut builder = stub_genesis().into_builder();
+        if let Some(custom) = custom {
+            builder = builder.append_parameter(Parameter::Custom(custom));
+        }
+        builder
+            .build_raw()
+            .expect("complete NPoS profile fixture")
+            .with_consensus_mode(SumeragiConsensusMode::Npos)
+    }
+
+    #[test]
+    fn explicit_xor_allocations_preserve_the_committed_asset_and_consensus() {
+        use iroha_data_model::{
+            account::Account,
+            asset::{AssetBalancePolicy, AssetDefinition, AssetId},
+            isi::{InstructionBox, Mint, Register},
+            parameter::system::SumeragiNposParameters,
+        };
+        let parameters = SumeragiNposParameters::default();
+        let asset = parameters.xor_asset_definition_id.clone();
+        let account = AccountId::new(
+            deterministic_keypair("profile-xor-allocation", Algorithm::Ed25519)
+                .expect("derive allocation fixture account")
+                .public_key()
+                .clone(),
+        );
+        let amount = iroha_primitives::numeric::Quantity::from(123_u32);
+        let allocations = ProfileXorAllocationsV1 {
+            version: 1,
+            asset_definition_id: asset.clone(),
+            allocations: vec![ProfileXorAllocationV1 {
+                account: account.clone(),
+                amount: amount.clone(),
+            }],
+        };
+        let source = profile_npos_manifest(Some(parameters.into_custom_parameter()));
+        let expected_consensus = source
+            .clone()
+            .with_consensus_meta()
+            .expect("valid committed NPoS parameters")
+            .consensus_fingerprint();
+        let patched = apply_explicit_xor_allocations(source.clone(), &allocations)
+            .expect("apply canonical XOR allocation");
+        assert_eq!(patched.consensus_mode(), SumeragiConsensusMode::Npos);
+        assert_eq!(patched.consensus_fingerprint(), expected_consensus);
+        assert_eq!(
+            patched
+                .effective_parameters()
+                .expect("effective patched parameters"),
+            source
+                .effective_parameters()
+                .expect("effective source parameters")
+        );
+        let transactions = patched.transactions();
+        assert_eq!(transactions.len(), 2);
+        let expected: Vec<InstructionBox> = vec![
+            Register::asset_definition(AssetDefinition::new(
+                asset.clone(),
+                "XOR".to_owned(),
+                iroha_primitives::numeric::NumericSpec::fractional(9),
+                AssetBalancePolicy::Global,
+                None,
+            ))
+            .into(),
+            Register::account(Account::new(account.clone())).into(),
+            Mint::asset_quantity(amount, AssetId::new(asset, account)).into(),
+        ];
+        assert_eq!(
+            transactions
+                .last()
+                .expect("allocation transaction")
+                .instructions(),
+            expected.as_slice()
+        );
+        let mut mismatched = allocations;
+        mismatched.asset_definition_id = AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::parse_fully_qualified("allocation.universal")
+                .expect("valid fixture asset domain"),
+            "other".parse().expect("valid fixture asset name"),
+        );
+        let error = apply_explicit_xor_allocations(source, &mismatched)
+            .expect_err("allocation asset must match the committed XOR identity");
+        assert_eq!(
+            error.to_string(),
+            "explicit allocations disagree with committed XOR identity"
+        );
+    }
+
+    #[test]
+    fn profile_edits_preserve_matching_npos_payload_errors() {
+        use iroha_data_model::parameter::{CustomParameter, system::SumeragiNposParameters};
+        let peers = build_peers(&PROFILES[0]).expect("build deterministic profile peers");
+        let staging = tempdir().expect("profile staging directory");
+        let bound = stub_genesis()
+            .with_consensus_meta()
+            .expect("valid bound fixture consensus");
+        let allocations = ProfileXorAllocationsV1 {
+            version: 1,
+            asset_definition_id: SumeragiNposParameters::default().xor_asset_definition_id,
+            allocations: Vec::new(),
+        };
+        let invalid = SumeragiNposParameters {
+            max_validators: 5,
+            ..SumeragiNposParameters::default()
+        };
+        for custom in [
+            CustomParameter::new(
+                SumeragiNposParameters::parameter_id(),
+                iroha_primitives::json::Json::new(false),
+            ),
+            invalid.into_custom_parameter(),
+        ] {
+            let expected = SumeragiNposParameters::from_custom_parameter(&custom)
+                .expect_err("matching malformed or invalid NPoS payload must reject")
+                .to_string();
+            let manifest = profile_npos_manifest(Some(custom));
+            let errors = [
+                apply_explicit_xor_allocations(manifest.clone(), &allocations)
+                    .expect_err("allocation edit must retain decoder error"),
+                inject_topology(manifest.clone(), &peers)
+                    .expect_err("topology edit must retain decoder error"),
+                portable_bound_profile_manifest(manifest, &bound, staging.path())
+                    .expect_err("portable edit must retain decoder error"),
+            ];
+            for error in errors {
+                assert_eq!(
+                    error.to_string(),
+                    expected,
+                    "an invalid matching payload cannot become missing metadata"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn profile_edits_reject_missing_committed_npos_parameters() {
+        use iroha_data_model::parameter::system::SumeragiNposParameters;
+        let manifest = profile_npos_manifest(None);
+        let peers = build_peers(&PROFILES[0]).expect("build deterministic profile peers");
+        let staging = tempdir().expect("profile staging directory");
+        let bound = stub_genesis()
+            .with_consensus_meta()
+            .expect("valid bound fixture consensus");
+        let allocations = ProfileXorAllocationsV1 {
+            version: 1,
+            asset_definition_id: SumeragiNposParameters::default().xor_asset_definition_id,
+            allocations: Vec::new(),
+        };
+        assert_eq!(
+            apply_explicit_xor_allocations(manifest.clone(), &allocations)
+                .expect_err("allocations require an explicit committed XOR identity")
+                .to_string(),
+            "profile manifest requires committed NPoS XOR identity"
+        );
+        for error in [
+            inject_topology(manifest.clone(), &peers)
+                .expect_err("topology cannot invent NPoS policy"),
+            portable_bound_profile_manifest(manifest, &bound, staging.path())
+                .expect_err("portable projection cannot invent NPoS policy"),
+        ] {
+            assert_eq!(
+                error.to_string(),
+                "NPoS genesis requires `sumeragi_npos_parameters`"
+            );
+        }
+    }
+
     #[test]
     fn peers_are_deterministic_and_populated() {
         let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");

@@ -474,11 +474,9 @@ struct ParsedHeaderV1<'a> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn inverse_or_zero_v1(value: F) -> F {
-    if value == F::ZERO {
-        F::ZERO
-    } else {
-        value.inv().unwrap_or(F::ZERO)
-    }
+    // Only malformed residues take the rejection path; canonical zero uses
+    // the same fixed exponentiation schedule as every canonical nonzero value.
+    F::canonical(value.0).map_or(F::ZERO, F::inverse_or_zero_canonical_v1)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn pack_bits_v1(bits: &[F]) -> F {
@@ -4764,6 +4762,23 @@ mod tests {
         der::{ZkX509DerLimitsV1, parse_single_der_value_v1},
         io_air::{ZkX509IoChallengesV1, ZkX509IoLaneChallengesV1, build_zk_x509_io_trace_v1},
     };
+    #[test]
+    fn private_inverse_witness_preserves_zero_bytes_and_malformed_fallback() {
+        use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+
+        for word in (0_u64..=255).chain([
+            65_535,
+            GOLDILOCKS_MODULUS_V1 - 1,
+            GOLDILOCKS_MODULUS_V1,
+            GOLDILOCKS_MODULUS_V1 + 1,
+            u64::MAX,
+        ]) {
+            let value = F(word);
+            let expected = value.inv().unwrap_or(F::ZERO);
+            assert_eq!(inverse_or_zero_v1(value), expected, "word {word}");
+        }
+    }
+
     fn tlv(tag: &[u8], contents: &[u8]) -> Vec<u8> {
         let mut encoded = tag.to_vec();
         if contents.len() < 128 {

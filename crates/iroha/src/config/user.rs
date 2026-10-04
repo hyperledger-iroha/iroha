@@ -380,16 +380,7 @@ impl Root {
                 .attach("Note: only `http` and `https` protocols are supported"),
             ),
         }
-        let torii_api_url = {
-            let mut url = torii_url.into_value();
-            let path = url.path();
-            // Ensure torii url ends with a trailing slash
-            if !path.ends_with('/') {
-                let path = path.to_owned() + "/";
-                url.set_path(&path)
-            }
-            url
-        };
+        let torii_api_url = super::normalize_torii_api_url(torii_url.into_value());
         let chain_discriminant = match profile.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(profile_name) => {
                 if let Some(profile) = network_profile(profile_name) {
@@ -660,8 +651,11 @@ impl fmt::Debug for MusubiPublication {
 pub struct MusubiPublicationProviderGateway {
     /// Lowercase hexadecimal public `SoraFS` provider identifier.
     pub provider_id: String,
-    /// Provider-specific authenticated readback HTTPS base URL.
+    /// Authenticated private readback HTTPS base URL; providers may share a service.
     pub url: String,
+    /// Exact provider management origin for account-signed attestation inventory reads.
+    /// HTTPS is required except for an explicitly selected numeric loopback HTTP origin.
+    pub attestation_url: String,
 }
 impl fmt::Debug for MusubiPublicationProviderGateway {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

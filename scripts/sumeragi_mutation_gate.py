@@ -569,6 +569,8 @@ CORE_MUTATIONS = [
       ['sumeragi::runtime_availability::history::source_refusal_tests::original_archive_read_refusal_preserves_pool_release_and_same_lane_prefix', 'sumeragi::runtime_availability::history::source_refusal_tests::original_certificate_projection_refusal_preserves_pool_release_and_exact_carrier', 'sumeragi::runtime_availability::history::source_refusal_tests::original_lane_evidence_handoff_preserves_actual_decode_refusal_and_exact_cut', 'sumeragi::lanes::registry::tests::original_native_lane_authority_refusal_reaches_merge_and_original_pool_retry', 'sumeragi::evidence::tests::original_lane_history_refusal_reaches_evidence_without_recovery_or_rejection', 'sumeragi::executor::publication_tests::original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_retry']),
     m("HC87", "stake-index quantities: release original magnitude charges before their physical owners",
       ["smartcontracts::isi::staking::tests::stake_index_quantities_prepaid_and_borrowed_from_original_pool"]),
+    m("HC94", "replay completion: accept replacement source configuration after receipt retirement",
+      ["sumeragi::executor::publication_tests::replay_completion_retirement_keeps_exact_source_and_original_pool_retry"]),
     m("HC53", "network time: omit host suspension from admission time and probe custody",
       ['time::tests::suspend_inclusive_clock_advances_admission_and_expires_retained_probes', 'time::tests::suspend_inclusive_clock_counts_entire_probe_round_trip']),
     m("HC48", "incumbent authority and key lifecycle: turn local read refusal into completed instruction failure",
@@ -580,6 +582,8 @@ CORE_MUTATIONS = [
       ['sumeragi::finality::tests::original_checkpoint_binary_refusal_is_local_and_retries_exact_original_source']),
     m("HC54", "beacon custody: accept a genuine same-roster DKG from another authority generation",
       ['state::validator_committee::tests::generation::committee_bootstrap_rejects_genuine_dkg_from_another_generation', 'state::validator_committee::tests::generation::committee_restore_rejects_genuine_dkg_from_another_generation']),
+    m("HC95", "native AMX participant: let a certified Begin authorize a different signed debit source",
+      ["sumeragi::amx::native::tests::native_amx_paid_commit_survives_certified_restart_and_rejects_bypass"]),
     m("HC55", "fee reward claims: ignore signed custody, entitlement and beneficiary preconditions",
       ['validation_fee_rewards::tests::signed_fee_reward_claim_rejects_every_changed_binding_before_mutation']),
     m("HC56", "shared custody: omit fee obligations from the combined staking and reward reserve floor",
@@ -670,6 +674,14 @@ CORE_MUTATIONS = [
       ["beacon::dkg_local_seat::ownership_tests::prepared_local_outputs_are_complete_before_randomness_at_four_and_thirty_one"]),
     m("HC92", "credential output: allocate a second whole secret frame after private extraction",
       ["beacon::credential::prepared_output::tests::prepared_credential_uses_exact_original_output_without_late_growth_at_four_and_thirty_one"]),
+    m("HC96", "validation-fee permission guard: treat a failed protected registry read as unrestricted delegation",
+      ["validation_fee::tests::permission_guard_tests::malformed_protected_registry_rejects_account_grant_before_permission_mutation"]),
+    m("HC97", "validation-fee trigger permission guard: discard a recognized trigger payload decode error and permit delegation",
+      ["validation_fee::tests::permission_guard_tests::trigger_permission_guard_tests::malformed_trigger_permission_rejects_account_grant_before_mutation"]),
+    m("HC98", "native source publication: halt instead of reacquiring ordinary State publication",
+      ["sumeragi::executor::preparation::tests::native_source_publication_change_retries_without_recovery_or_quarantine"]),
+    m("HC99", "native source publication: replace the original local capacity refusal",
+      ["block::valid::native_header_source_tests::native_local_refusal_after_source_publication_retains_original_capacity"]),
 ]
 
 

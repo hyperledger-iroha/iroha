@@ -124,7 +124,12 @@ fn assessment_marker_bounds_the_complete_message_before_original_decode() {
     let bounded_error = decode_assessment_marker(&bounded).unwrap_err();
     assert!(matches!(bounded_error, ExecutionAttemptError::Rejected(_)));
     assert!(
-        bounded_error.to_string().contains("not canonical"),
+        matches!(
+            &bounded_error,
+            ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(message)
+            )) if message.contains("not canonical")
+        ),
         "bounded malformed DATA reaches the original canonical decoder"
     );
     let oversized = Log::new(Level::TRACE, format!("{}00", bounded.msg));
@@ -137,9 +142,12 @@ fn assessment_marker_bounds_the_complete_message_before_original_decode() {
         ExecutionAttemptError::Rejected(_)
     ));
     assert!(
-        oversized_error
-            .to_string()
-            .contains("bounded canonical lowercase hex"),
+        matches!(
+            &oversized_error,
+            ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(message)
+            )) if message.contains("bounded canonical lowercase hex")
+        ),
         "oversized DATA is rejected before the local allocation scope"
     );
     let exact_limit = Log::new(Level::TRACE, format!("{}0", bounded.msg));

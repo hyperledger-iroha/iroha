@@ -106,7 +106,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         },
     ])
     .expect("dataspace catalog");
-    let (state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+    let (state, _kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
         world,
         nexus,
         query,
@@ -387,7 +387,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         },
     ])
     .expect("dataspace catalog");
-    let (state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+    let (state, _kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
         world,
         nexus,
         query,
@@ -682,7 +682,7 @@ async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uai
         },
     ])
     .expect("dataspace catalog");
-    let (mut state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+    let (mut state, _kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
         world,
         nexus,
         query,

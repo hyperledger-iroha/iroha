@@ -207,7 +207,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query
             "params": {
                 "name": "iroha.assets.definitions",
                 "arguments": {
-                    "limit": 0
+                    "filter": "unknown_field = 1"
                 }
             }
         }),
@@ -216,7 +216,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query
     assert_eq!(status, StatusCode::OK);
     assert!(
         tool_is_error(&call),
-        "invalid flat asset-definitions limit should be marked as MCP tool error"
+        "a filter on a field asset definitions do not expose should be marked as MCP tool error: {call:?}"
     );
     let structured = structured_content(&call);
     assert!(
@@ -224,7 +224,35 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query
             .get("status")
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
-        "expected invalid flat asset-definitions limit to be rejected"
+        "expected Torii to reject the unknown asset-definition field: {call:?}"
+    );
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1062242,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.assets.definitions",
+                "arguments": {
+                    "sort": "name,id",
+                    "select": "id,name",
+                    "limit": 2
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "a valid asset-definition collection query should dispatch successfully: {call:?}"
+    );
+    assert_eq!(
+        structured_content(&call)
+            .get("status")
+            .and_then(Value::as_u64),
+        Some(200)
     );
 }
 mcp_alias_dispatch_test! {
@@ -284,7 +312,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_canonical_path
                     "path": {
                         "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
                     },
-                    "limit": 0
+                    "filter": "unknown_field = 1"
                 }
             }
         }),
@@ -293,7 +321,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_canonical_path
     assert_eq!(status, StatusCode::OK);
     assert!(
         tool_is_error(&call),
-        "invalid flat asset-holders limit should be marked as MCP tool error"
+        "a filter on a field asset holders do not expose should be marked as MCP tool error: {call:?}"
     );
     let structured = structured_content(&call);
     assert!(
@@ -301,7 +329,30 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_canonical_path
             .get("status")
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
-        "expected invalid flat asset-holders limit to be rejected"
+        "expected Torii to reject the unknown asset-holder field: {call:?}"
+    );
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1062261,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.assets.holders",
+                "arguments": {
+                    "path": {
+                        "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+                    },
+                    "pagination": { "limit": 2, "offset": 0 }
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_tool_schema_error(
+        &call,
+        "offset pagination is retired; collections page with `limit` and `cursor`",
     );
 }
 #[tokio::test]

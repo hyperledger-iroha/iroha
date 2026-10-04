@@ -284,19 +284,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         Ok(digest)
     }
 
-    /// Full actual fsynced selection for the Native account/Core transport; public data only.
-    pub(crate) fn retained_incoming_selection_original(
-        &self,
-    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
-        self.require_current_financial_control()?;
-        let p = self
-            .pending_incoming
-            .as_ref()
-            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        p.intent.recheck_historical(self)?;
-        norito::encode_canonical(&p.intent.selection).map_err(material)
-    }
-
     pub(super) fn replay_incoming_intent(
         &mut self,
         intent: IncomingIntentOriginals,

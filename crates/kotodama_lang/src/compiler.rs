@@ -9,6 +9,7 @@
 //! Kotodama targets the IVM bytecode format exclusively. All helpers in this
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
+mod access_hint_normalization;
 #[cfg(test)]
 mod emission_profile;
 mod entrypoint_descriptors;
@@ -16,6 +17,7 @@ mod entrypoint_descriptors;
 mod numeric_operands;
 #[cfg(test)]
 mod state_operands;
+use access_hint_normalization::canonical_state_hint_keys;
 use entrypoint_descriptors::build_entrypoint_descriptors;
 
 /// Opaque phase boundaries used by the compiler regression benchmark.
@@ -9203,8 +9205,8 @@ fn build_access_set_hints(
         reads.insert(key);
     }
     Ok(Some(AccessSetHints {
-        read_keys: reads.into_iter().collect(),
-        write_keys: writes.into_iter().collect(),
+        read_keys: canonical_state_hint_keys(reads.into_iter().collect()),
+        write_keys: canonical_state_hint_keys(writes.into_iter().collect()),
         dynamic_reads,
         dynamic_writes,
     }))

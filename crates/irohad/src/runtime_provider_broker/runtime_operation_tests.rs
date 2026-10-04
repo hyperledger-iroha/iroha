@@ -2095,3 +2095,29 @@ fn provider_ingest_signer_wire_binds_both_accounts_and_refuses_missing_authority
     trailing.expected_authority.push(0);
     assert!(provider_ingest_signer_context_from_wire(&trailing).is_err());
 }
+
+#[test]
+fn server_endpoint_policy_preserves_and_rejects_programmatic_observer_deadlines() {
+    let mut config = iroha_config::parameters::actual::RuntimeProviderBroker {
+        endpoint_path: validated_production_endpoint(),
+        credential_max_memory_bytes:
+            iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES,
+        observer_operation_timeout: Duration::from_millis(500),
+    };
+    let policy = EndpointPolicy::from_server_policy(&config).unwrap();
+    assert_eq!(
+        policy.observer_operation_timeout,
+        Duration::from_millis(500)
+    );
+    assert_eq!(policy.path.as_path(), config.endpoint_path.as_path());
+    for invalid in [
+        Duration::ZERO,
+        BROKER_IO_TIMEOUT_V1 + Duration::from_millis(1),
+    ] {
+        config.observer_operation_timeout = invalid;
+        assert_eq!(
+            EndpointPolicy::from_server_policy(&config).unwrap_err(),
+            RuntimeProviderBrokerServerErrorV1::Protocol
+        );
+    }
+}

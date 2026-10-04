@@ -866,7 +866,7 @@ pub mod isi {
             if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                 state_transaction,
                 &permission,
-            ) {
+            )? {
                 return Err(Error::InvariantViolation(
                     "an enacted validation-fee payout lifecycle forbids delegating control of its trigger"
                         .into(),
@@ -875,7 +875,7 @@ pub mod isi {
             if crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
                 state_transaction,
                 &permission,
-            )
+            )?
             .is_some_and(|required_owner| required_owner != account_id)
             {
                 return Err(Error::InvariantViolation(
@@ -925,7 +925,7 @@ pub mod isi {
             if crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
                 state_transaction,
                 &permission,
-            )
+            )?
             .is_some_and(|required_owner| required_owner == account_id)
             {
                 return Err(Error::InvariantViolation(

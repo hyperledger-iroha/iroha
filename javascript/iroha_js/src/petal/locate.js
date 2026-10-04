@@ -6,9 +6,15 @@
 // similarly sized quadrilateral. Solid blossoms survive defocus that would
 // fill in the gaps of a ring-shaped marker.
 //
+// When a finger, a glare or the edge of the frame hides one blossom, three
+// large blossoms that form a corner still identify the code: the fourth
+// corner is inferred (and later refined by the decoder).
+//
 // Large per-frame buffers (integral image, mask, labels) are kept in a
-// module-level scratch area and reused across frames; every function here is
-// synchronous, so the reuse is never observable.
+// module-level scratch area and reused across frames. Every public function
+// here is synchronous, so the reuse is never observable; the lazy candidate
+// generator used by the decoder keeps the integral image across its yields,
+// and the decoder never runs another finder search in between.
 
 import { fmax, fmin, totalCmp } from "./support.js";
 
@@ -384,25 +390,45 @@ function orderClockwise(set) {
   return [quad[start], quad[(start + 1) % 4], quad[(start + 2) % 4], quad[(start + 3) % 4]];
 }
 
-function selectQuadFrom(finders) {
-  if (finders.length < 4) {
-    return null;
+/**
+ * The finders of the largest size class: lit tiles and merged dots form blob
+ * candidates too, but the corner finders are the biggest isolated round blobs
+ * in view. Exported for tests only.
+ */
+export function strongFinders(finders) {
+  let largest = 0;
+  for (const finder of finders) {
+    largest = fmax(largest, finder.size);
   }
-  // Largest first (ties keep discovery order) so that clutter in a busy scene
-  // cannot push the real finders out of the ten candidates that are combined.
-  const ranked = finders
+  return finders.filter((finder) => finder.size >= 0.55 * largest);
+}
+
+/**
+ * The ten largest candidates, largest first (ties keep discovery order), so
+ * that clutter in a busy scene cannot push the real finders out of the set
+ * that is combined.
+ */
+function ranked(finders) {
+  return finders
     .map((finder, index) => ({ finder, index }))
     .sort((a, b) => totalCmp(b.finder.size, a.finder.size) || a.index - b.index)
     .slice(0, 10)
     .map((entry) => entry.finder);
+}
+
+function selectQuadFrom(finders) {
+  if (finders.length < 4) {
+    return null;
+  }
+  const pool = ranked(finders);
   let best = null;
   let bestScore = 0;
-  const n = ranked.length;
+  const n = pool.length;
   for (let a = 0; a < n; a += 1) {
     for (let b = a + 1; b < n; b += 1) {
       for (let c = b + 1; c < n; c += 1) {
         for (let d = c + 1; d < n; d += 1) {
-          const set = [ranked[a], ranked[b], ranked[c], ranked[d]];
+          const set = [pool[a], pool[b], pool[c], pool[d]];
           let smin = Number.MAX_VALUE;
           let smax = 0;
           for (const finder of set) {
@@ -458,20 +484,117 @@ export function selectQuad(finders) {
   if (!Array.isArray(finders)) {
     throw new TypeError("finders must be an array");
   }
-  let largest = 0;
-  for (const finder of finders) {
-    largest = fmax(largest, finder.size);
-  }
-  const strong = finders.filter((finder) => finder.size >= 0.55 * largest);
-  return selectQuadFrom(strong) ?? selectQuadFrom(finders);
+  return selectQuadFrom(strongFinders(finders)) ?? selectQuadFrom(finders);
 }
 
 /**
- * Sharpens a finder centre with an intensity-weighted centroid.
+ * Chooses three finders that look like three corners of one code (an `L`:
+ * similar sizes, two similar legs at a roughly right angle) and completes the
+ * fourth corner as a parallelogram.
  *
- * @returns {{x: number, y: number, size: number}}
+ * @returns {{corners: Array<{x: number, y: number, size: number}>, inferred: number} | null}
+ *   the clockwise quad and the index of the inferred corner in it
  */
-export function refineCenter(image, finder) {
+export function selectTriple(finders) {
+  if (!Array.isArray(finders)) {
+    throw new TypeError("finders must be an array");
+  }
+  const pool = ranked(finders);
+  const n = pool.length;
+  let best = null;
+  let bestScore = 0;
+  for (let a = 0; a < n; a += 1) {
+    for (let b = a + 1; b < n; b += 1) {
+      for (let c = b + 1; c < n; c += 1) {
+        const set = [pool[a], pool[b], pool[c]];
+        let smin = Number.MAX_VALUE;
+        let smax = 0;
+        for (const finder of set) {
+          smin = fmin(smin, finder.size);
+          smax = fmax(smax, finder.size);
+        }
+        if (smax / smin > 1.9) {
+          continue;
+        }
+        const meanSize = (set[0].size + set[1].size + set[2].size) / 3;
+        for (let corner = 0; corner < 3; corner += 1) {
+          const k = set[corner];
+          const p = set[(corner + 1) % 3];
+          const q = set[(corner + 2) % 3];
+          const ux = p.x - k.x;
+          const uy = p.y - k.y;
+          const vx = q.x - k.x;
+          const vy = q.y - k.y;
+          const lu = Math.sqrt(ux * ux + uy * uy);
+          const lv = Math.sqrt(vx * vx + vy * vy);
+          if (lu <= 0 || lv <= 0) {
+            continue;
+          }
+          const legs = fmax(lu, lv) / fmin(lu, lv);
+          const cos = (ux * vx + uy * vy) / (lu * lv);
+          // canvas geometry: side / finder diameter = 880 / 120
+          const ratio = (0.5 * (lu + lv)) / meanSize;
+          if (legs > 2 || Math.abs(cos) > 0.5 || !(ratio >= 4.8 && ratio <= 10.5)) {
+            continue;
+          }
+          const fourth = { x: p.x + q.x - k.x, y: p.y + q.y - k.y, size: meanSize };
+          const quad = orderClockwise([k, p, q, fourth]);
+          if (quad === null) {
+            continue;
+          }
+          // the inferred corner is found by its coordinates, as in the reference
+          const inferred = quad.findIndex((f) => Object.is(f.x, fourth.x) && Object.is(f.y, fourth.y));
+          if (inferred < 0) {
+            continue;
+          }
+          const score = smax / smin - 1 + (legs - 1) + Math.abs(cos) + Math.abs((ratio - 7.33) / 7.33);
+          if (best === null || score < bestScore) {
+            best = { corners: quad, inferred };
+            bestScore = score;
+          }
+        }
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * A blob of at least 0.3 x the finder size within 0.3 legs of the inferred
+ * corner of a triple completes it into a seen quad; `null` when there is none
+ * or the result is not a convex quad. Exported for tests only.
+ */
+export function completeTriple(finders, quad, missing) {
+  const d = quad[missing];
+  const distance = (f) => Math.sqrt((f.x - d.x) * (f.x - d.x) + (f.y - d.y) * (f.y - d.y));
+  const leg = 0.5 * (distance(quad[(missing + 1) % 4]) + distance(quad[(missing + 3) % 4]));
+  // the nearest such blob; the first of equally near ones
+  let fourth = null;
+  let nearest = 0;
+  for (const finder of finders) {
+    if (!(finder.size >= 0.3 * d.size && distance(finder) <= 0.3 * leg)) {
+      continue;
+    }
+    const away = distance(finder);
+    if (fourth === null || totalCmp(away, nearest) < 0) {
+      fourth = finder;
+      nearest = away;
+    }
+  }
+  if (fourth === null) {
+    return null;
+  }
+  const full = quad.slice();
+  full[missing] = fourth;
+  return orderClockwise(full);
+}
+
+/**
+ * The intensity-weighted centroid of the bright part of the disc of diameter
+ * `finder.size` around the finder, or `null` when that disc has less than 20
+ * levels of contrast (nothing bright is there).
+ */
+function centroid(image, finder) {
   const radius = Math.ceil(finder.size * 0.5);
   const cx = Math.floor(finder.x);
   const cy = Math.floor(finder.y);
@@ -479,17 +602,20 @@ export function refineCenter(image, finder) {
   const h = image.height;
   const data = image.data;
   const limit = finder.size * 0.5;
+  // The reference walks the whole square and skips pixels outside the image;
+  // walking only its part inside the image visits the same pixels in the
+  // same order, and bounds the work for any finder size.
+  const y0 = Math.max(cy - radius, 0);
+  const y1 = Math.min(cy + radius, h - 1);
+  const x0 = Math.max(cx - radius, 0);
+  const x1 = Math.min(cx + radius, w - 1);
   // Two passes over the same pixels in the same order as the reference's
   // sample list: extremes first, then the weighted centroid.
   let floor = Number.MAX_VALUE;
   let peak = 0;
-  for (let dy = -radius; dy <= radius; dy += 1) {
-    const y = cy + dy;
-    if (y < 0 || y >= h) continue;
+  for (let y = y0; y <= y1; y += 1) {
     const py = y + 0.5;
-    for (let dx = -radius; dx <= radius; dx += 1) {
-      const x = cx + dx;
-      if (x < 0 || x >= w) continue;
+    for (let x = x0; x <= x1; x += 1) {
       const px = x + 0.5;
       if (Math.sqrt((px - finder.x) * (px - finder.x) + (py - finder.y) * (py - finder.y)) <= limit) {
         const value = data[y * w + x];
@@ -499,19 +625,15 @@ export function refineCenter(image, finder) {
     }
   }
   if (peak - floor < 20) {
-    return finder;
+    return null;
   }
   const threshold = floor + 0.5 * (peak - floor);
   let sw = 0;
   let sx = 0;
   let sy = 0;
-  for (let dy = -radius; dy <= radius; dy += 1) {
-    const y = cy + dy;
-    if (y < 0 || y >= h) continue;
+  for (let y = y0; y <= y1; y += 1) {
     const py = y + 0.5;
-    for (let dx = -radius; dx <= radius; dx += 1) {
-      const x = cx + dx;
-      if (x < 0 || x >= w) continue;
+    for (let x = x0; x <= x1; x += 1) {
       const px = x + 0.5;
       if (Math.sqrt((px - finder.x) * (px - finder.x) + (py - finder.y) * (py - finder.y)) <= limit) {
         const weight = fmax(data[y * w + x] - threshold, 0);
@@ -521,33 +643,145 @@ export function refineCenter(image, finder) {
       }
     }
   }
-  if (sw <= 0) {
-    return finder;
+  if (!(sw > 0)) {
+    return null;
   }
   return { x: sx / sw, y: sy / sw, size: finder.size };
 }
 
-/** Finder search shared by `locate` and the decoder; returns four finders or `null`. */
-export function locateFinders(image) {
-  const prepared = prepareThreshold(image);
-  scratch.mask = grow(scratch.mask, image.width * image.height, Uint8Array);
-  for (const sensitivity of [0.12, 0.22, 0.34]) {
-    const mask = binarizeInto(image, prepared, sensitivity, scratch.mask);
-    const table = labelTable(mask, image.width, image.height);
-    const quad = selectQuad(blossomsFromTable(table));
-    if (quad !== null) {
-      return quad.map((finder) => refineCenter(image, finder));
-    }
-  }
-  return null;
+/**
+ * Sharpens a finder centre with an intensity-weighted centroid (the finder
+ * itself when its disc has less than 20 levels of contrast).
+ *
+ * @returns {{x: number, y: number, size: number}}
+ */
+export function refineCenter(image, finder) {
+  return centroid(image, finder) ?? finder;
 }
 
 /**
- * Locates the four finders of a code, trying progressively stricter
- * thresholds so blurred rings still separate from their cores.
+ * Re-finds a finder near where it is expected (from the previous frame's pose).
+ *
+ * A first centroid over a disc twice the finder's diameter catches a blossom
+ * that moved up to about one diameter (nothing else bright is that close to a
+ * corner finder); centroids over the finder's own disc then repeat, at most
+ * five times, until the centre moves less than a quarter pixel. `null` when
+ * nothing bright is there or the result is more than 0.75 diameters from the
+ * expected centre, which means the code moved too far for tracking.
+ *
+ * @returns {{x: number, y: number, size: number} | null}
+ */
+export function followFinder(image, expected) {
+  const wide = centroid(image, { x: expected.x, y: expected.y, size: 2 * expected.size });
+  if (wide === null) {
+    return null;
+  }
+  let current = { x: wide.x, y: wide.y, size: expected.size };
+  for (let pass = 0; pass < 5; pass += 1) {
+    const next = centroid(image, current);
+    if (next === null) {
+      return null;
+    }
+    const step = Math.sqrt((next.x - current.x) * (next.x - current.x) + (next.y - current.y) * (next.y - current.y));
+    current = next;
+    if (step < 0.25) {
+      break;
+    }
+  }
+  const moved = Math.sqrt(
+    (current.x - expected.x) * (current.x - expected.x) + (current.y - expected.y) * (current.y - expected.y),
+  );
+  return moved <= 0.75 * expected.size ? current : null;
+}
+
+/**
+ * Binarisation thresholds, from the most to the least permissive: a higher
+ * sensitivity separates blurred blossoms from their surroundings.
+ */
+export const SENSITIVITIES = Object.freeze([0.12, 0.22, 0.34]);
+
+/**
+ * Candidate finder sets `{corners, inferred}` for one frame, produced lazily
+ * in the order a decoder should try them, so that a clean frame costs one
+ * binarisation.
+ *
+ * For each threshold of `SENSITIVITIES` in turn: four finders of the largest
+ * size class that form a quad. Then, from the first threshold that had them,
+ * three large finders forming a corner, completed by the nearest smaller blob
+ * within 0.3 legs of where the fourth corner belongs (steep tilt makes the far
+ * finder small); then the first quad that smaller blobs form; and last the
+ * same three finders with the fourth corner inferred (`inferred` is its index
+ * in `corners`; the nearby blob may have been merged ring dots, a quad may
+ * have been clutter).
+ *
+ * The generator reuses the module's scratch buffers between its yields, so a
+ * caller must not run another finder search before it has finished with it.
+ */
+export function* finderCandidates(image) {
+  const prepared = prepareThreshold(image);
+  scratch.mask = grow(scratch.mask, image.width * image.height, Uint8Array);
+  const mask = scratch.mask;
+  const refine = (finder) => refineCenter(image, finder);
+  let completed = null;
+  let smaller = null;
+  let inferred = null;
+  for (const sensitivity of SENSITIVITIES) {
+    binarizeInto(image, prepared, sensitivity, mask);
+    const finders = blossomsFromTable(labelTable(mask, image.width, image.height));
+    const strong = strongFinders(finders);
+    if (inferred === null) {
+      const triple = selectTriple(strong);
+      if (triple !== null) {
+        const full = completeTriple(finders, triple.corners, triple.inferred);
+        completed = full === null ? null : full.map(refine);
+        inferred = {
+          corners: triple.corners.map((corner, index) => (index === triple.inferred ? corner : refine(corner))),
+          inferred: triple.inferred,
+        };
+      }
+    }
+    if (smaller === null) {
+      const quad = selectQuadFrom(finders);
+      smaller = quad === null ? null : quad.map(refine);
+    }
+    const quad = selectQuadFrom(strong);
+    if (quad !== null) {
+      yield { corners: quad.map(refine), inferred: null };
+    }
+  }
+  if (completed !== null) {
+    yield { corners: completed, inferred: null };
+  }
+  if (smaller !== null) {
+    yield { corners: smaller, inferred: null };
+  }
+  if (inferred !== null) {
+    yield inferred;
+  }
+}
+
+/**
+ * All candidate finder sets for one frame, in the order the decoder tries
+ * them: four seen finders (`inferred: null`) or three seen finders and a
+ * fourth inferred one (`inferred` is its index in `corners`).
+ *
+ * @returns {Array<{corners: Array<{x: number, y: number, size: number}>, inferred: number | null}>}
+ */
+export function locateCandidates(image) {
+  return Array.from(finderCandidates(image));
+}
+
+/**
+ * Locates four seen finders of a code (the first candidate of
+ * {@link locateCandidates} without an inferred corner).
  *
  * @returns {Array<{x: number, y: number, size: number}> | null} clockwise from the top-left
  */
 export function locate(image) {
-  return locateFinders(image);
+  for (const set of finderCandidates(image)) {
+    if (set.inferred === null) {
+      return set.corners;
+    }
+  }
+  return null;
 }

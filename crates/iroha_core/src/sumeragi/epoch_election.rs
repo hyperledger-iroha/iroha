@@ -172,6 +172,7 @@ impl<'a> CheckedElectionView<'a> {
         })
     }
 
+    #[cfg(test)]
     /// Exact source for one peer, if it retains enough real XOR throughout the target tenure.
     /// Missing custody fails the target attempt; it never permits a smaller activation roster.
     pub(super) fn eligible(
@@ -190,6 +191,7 @@ impl<'a> CheckedElectionView<'a> {
             .then_some(seat.record)
     }
 
+    #[cfg(test)]
     /// Readiness of an already frozen seat ignores a later voluntary election exit request.
     /// Its actual tenure, custody and frozen minimum remain binding through the target epoch.
     /// Mutable fresh BLS registration is deliberately not consulted here.

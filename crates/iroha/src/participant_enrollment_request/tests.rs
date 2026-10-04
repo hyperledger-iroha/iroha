@@ -42,7 +42,12 @@ impl Fixture {
             )
             .unwrap(),
         );
-        let value = Owned::new(AccountDetails::new(Default::default(), None, None, vec![]));
+        let value = Owned::new(AccountDetails::new(
+            iroha_model_base::metadata::Metadata::default(),
+            None,
+            None,
+            vec![],
+        ));
         let mut entries = vec![signatory.clone(), wallet.clone()]
             .into_iter()
             .map(|id| WorldStateSnapshotEntryV1 {
@@ -74,7 +79,7 @@ impl Fixture {
     fn nodes() -> [SelectedEnrollmentReadNodeV1; 4] {
         std::array::from_fn(|i| SelectedEnrollmentReadNodeV1 {
             peer_id: PeerId::new(
-                KeyPair::from_seed(vec![i as u8 + 1; 32], Algorithm::BlsNormal)
+                KeyPair::from_seed(vec![u8::try_from(i).unwrap() + 1; 32], Algorithm::BlsNormal)
                     .public_key()
                     .clone(),
             ),
@@ -88,7 +93,8 @@ impl Fixture {
         nodes: &[SelectedEnrollmentReadNodeV1; 4],
     ) -> [SumeragiFinalityAttestation; 4] {
         std::array::from_fn(|i| {
-            let signer = KeyPair::from_seed(vec![i as u8 + 1; 32], Algorithm::BlsNormal);
+            let signer =
+                KeyPair::from_seed(vec![u8::try_from(i).unwrap() + 1; 32], Algorithm::BlsNormal);
             let node = &nodes[i];
             let body = SumeragiFinalityAttestationBody {
                 observed_at_unix_ms: 1_000_000,
@@ -121,7 +127,7 @@ impl Fixture {
                     unanchored: false,
                     abstaining: false,
                     halted: None,
-                    footprint: Default::default(),
+                    footprint: iroha_data_model::sumeragi::SumeragiFootprint::default(),
                 },
                 finality_proof: self.native.latest().clone(),
             };
@@ -209,7 +215,7 @@ fn exact_ed_request_binds_fi_session_origin_body_route_and_idempotency() {
             4 => v.body = b"{\"attempt\":2}",
             5 => v.idempotency_key = "different-attempt",
             _ => v.nonce = "fixture-fresh-nonce-0002",
-        };
+        }
         variants.push(v.signing_message().unwrap());
     }
     for changed in variants {
@@ -393,7 +399,7 @@ fn actual_owner_rejects_another_network_schema_peer_config_and_retained_certifie
     );
 }
 
-pub(crate) struct NativeCustodyFixture(Fixture);
+pub struct NativeCustodyFixture(Fixture);
 #[cfg(unix)]
 impl NativeCustodyFixture {
     pub(crate) fn new() -> Self {

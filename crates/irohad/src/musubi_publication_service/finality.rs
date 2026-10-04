@@ -649,195 +649,6 @@ pub(crate) mod tests {
             vec![registration_instruction(&material.archive).into()],
         )
     }
-    #[test]
-    fn pin_outbox_high_water_requires_exact_successful_signed_advance() {
-        use iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1;
-        let material = registration_material();
-        let advance = AdvanceMusubiPinOutboxV1 {
-            network_id: material.network_id,
-            pin_authority: AccountId::new(material.publisher_key.public_key().clone()),
-            session_id: [0x81; 32],
-            expected_revision: 0,
-            expected_inventory_digest: [0; 32],
-            inventory_digest: [0x82; 32],
-        };
-        let transaction = signed_transaction(
-            material.network_id,
-            &material.publisher_key,
-            vec![advance.clone().into()],
-        );
-        let block = signed_block_with_results(vec![transaction.clone()], None);
-        let record = advance
-            .recorded_high_water(block.header().height().get(), *transaction.hash().as_ref())
-            .expect("canonical high-water");
-        assert!(super::super::pin_outbox_finality::validate_advance_transaction(&record, &block));
-        for case in 0..8 {
-            let mut changed = record.clone();
-            match case {
-                0 => changed.version = 2,
-                1 => {
-                    changed.network_id = NetworkId::from_genesis_hash(
-                        HashOf::from_untyped_unchecked(Hash::new([0x91; 32])),
-                    );
-                }
-                2 => changed.pin_authority = AccountId::new(keypair(0x92).public_key().clone()),
-                3 => changed.session_id = [0x93; 32],
-                4 => changed.revision += 1,
-                5 => changed.inventory_digest = [0x94; 32],
-                6 => changed.recorded_at_height += 1,
-                7 => changed.transaction_hash = [0x95; 32],
-                _ => unreachable!("closed mutation matrix"),
-            }
-            assert!(
-                !super::super::pin_outbox_finality::validate_advance_transaction(&changed, &block),
-                "mutation {case} must fail",
-            );
-        }
-        let rejected = signed_block_with_results(vec![transaction], Some(0));
-        assert!(
-            !super::super::pin_outbox_finality::validate_advance_transaction(&record, &rejected)
-        );
-    }
-    #[test]
-    fn pin_outbox_high_water_reader_binds_network_and_reports_absence_without_invention() {
-        let fixture = reader_fixture();
-        let reader =
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                fixture.query.network_id,
-                Arc::clone(&fixture.state),
-            )
-            .expect("same-network finalized reader");
-        assert!(
-            reader
-                .read_current(&fixture.archive.registered_by)
-                .expect("no high-water has been submitted")
-                .is_none()
-        );
-        let anchor = reader
-            .read_current_anchor(&fixture.archive.registered_by)
-            .expect("the empty signer lineage still has an authenticated local tip");
-        assert_eq!(anchor.network_id, fixture.query.network_id);
-        assert_eq!(anchor.tip_height, fixture.query.snapshot.finalized_height);
-        assert_eq!(
-            anchor.tip_block_hash,
-            fixture.query.snapshot.finalized_block_hash
-        );
-        assert!(anchor.high_water.is_none());
-        let uncommitted_height = anchor.tip_height + 1;
-        let synthetic_header = BlockHeader::new(
-            NonZeroU64::new(uncommitted_height).expect("next height is nonzero"),
-            Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-                anchor.tip_block_hash,
-            ))),
-            None,
-            2_001,
-            0,
-        );
-        fixture
-            .state
-            .block(synthetic_header)
-            .commit_empty_block_for_testing()
-            .expect("advance State only for a mismatched-tip test");
-        assert_eq!(
-            reader.read_current_anchor(&fixture.archive.registered_by),
-            Err(super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReadErrorV1::LocallyAhead),
-            "a State tip beyond durable Kura cannot yield a signer anchor",
-        );
-        assert!(
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                network_id(0x77),
-                fixture.state,
-            )
-            .is_err()
-        );
-    }
-    fn advance_pin_outbox(
-        fixture: &mut ReaderFixture,
-    ) -> (
-        iroha_data_model::block::SharedSignedBlock,
-        iroha_data_model::musubi::MusubiPinOutboxHighWaterV1,
-    ) {
-        use iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1;
-        let advance = AdvanceMusubiPinOutboxV1 {
-            network_id: fixture.query.network_id,
-            pin_authority: fixture.archive.registered_by.clone(),
-            session_id: [0x81; 32],
-            expected_revision: 0,
-            expected_inventory_digest: [0; 32],
-            inventory_digest: [0x82; 32],
-        };
-        let transaction = signed_transaction(
-            fixture.query.network_id,
-            &keypair(0x31),
-            vec![advance.clone().into()],
-        );
-        let transaction_hash = *transaction.hash().as_ref();
-        assert_eq!(fixture.chain.commit_at(2_500, vec![transaction]), [true]);
-        let height = fixture.chain.height();
-        let block = fixture
-            .chain
-            .kura()
-            .get_block(
-                NonZeroUsize::new(height.try_into().unwrap()).unwrap(),
-                &fixture.state.query_view().execution_budget(),
-            )
-            .unwrap()
-            .unwrap();
-        let high_water = advance
-            .recorded_high_water(height, transaction_hash)
-            .unwrap();
-        (block, high_water)
-    }
-    #[test]
-    fn pin_outbox_high_water_reader_authenticates_executed_finalized_advance() {
-        let mut fixture = reader_fixture();
-        let (committed, high_water) = advance_pin_outbox(&mut fixture);
-        let reader =
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                fixture.query.network_id,
-                Arc::clone(&fixture.state),
-            )
-            .expect("same-network finalized reader");
-        let anchor = reader
-            .read_current_anchor(&fixture.archive.registered_by)
-            .expect("authenticate the native State record and exact successful transaction");
-        assert_eq!(anchor.network_id, fixture.query.network_id);
-        assert_eq!(anchor.tip_height, committed.header().height().get());
-        assert_eq!(anchor.tip_block_hash, *committed.hash().as_ref());
-        assert_eq!(anchor.high_water, Some(high_water.clone()));
-        assert_eq!(
-            reader.read_current(&fixture.archive.registered_by),
-            Ok(Some(high_water))
-        );
-    }
-    #[test]
-    fn pin_outbox_high_water_reader_rejects_kura_ahead_of_state() {
-        let fixture = reader_fixture();
-        let mut source = reader_fixture();
-        assert_eq!(source.query, fixture.query, "same original native prefix");
-        let (committed, _) = advance_pin_outbox(&mut source);
-        let state_height = fixture.state.query_view().block_hashes().len();
-        fixture.chain.kura().store_block(committed).expect(
-            "persist original native successor without publishing its State on this replica",
-        );
-        assert_eq!(
-            fixture.chain.kura().exact_durable_blocks_count().unwrap(),
-            state_height + 1
-        );
-        assert_eq!(
-            fixture.state.query_view().block_hashes().len(),
-            state_height
-        );
-        let reader =
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                fixture.query.network_id,
-                Arc::clone(&fixture.state),
-            )
-            .unwrap();
-        assert_eq!(reader.read_current_anchor(&fixture.archive.registered_by),
-            Err(super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReadErrorV1::LocallyAhead),
-            "an absent State record cannot bypass a durable Kura tip ahead of State");
-    }
     fn signed_proposal(transactions: Vec<SignedTransaction>) -> SignedBlock {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1_001, 0);
         let mut builder = BlockBuilder::new(header);
@@ -1599,16 +1410,35 @@ pub(crate) mod tests {
                 .expect_err("an uncertified Kura body must fail closed"),
             invalid()
         );
-        let pin_reader =
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                fixture.query.network_id,
-                Arc::clone(&fixture.state),
-            )
-            .expect("same-network pin-outbox reader");
-        assert_eq!(
-            pin_reader.read_current_anchor(&fixture.archive.registered_by),
-            Err(super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReadErrorV1::Invalid),
-            "an absent high-water cannot bypass missing tip finality",
+        use iroha_core::query::musubi_pin_outbox::{
+            MusubiPinOutboxCheckExpectedV1, begin_musubi_pin_outbox_check_v1,
+        };
+        use iroha_data_model::musubi::{
+            MusubiPinOutboxCheckExpectationV1, MusubiPinOutboxCheckFloorV1,
+        };
+        let block = fixture
+            .chain
+            .committed(fixture.query.snapshot.finalized_height);
+        let result = begin_musubi_pin_outbox_check_v1(
+            Arc::clone(&fixture.state),
+            MusubiPinOutboxCheckExpectedV1 {
+                chain_id: fixture.state.chain_id_ref().clone(),
+                network_id: fixture.query.network_id,
+                pin_authority: fixture.archive.registered_by.clone(),
+                session_id: [0x81; 32],
+                inventory_digest: [0x82; 32],
+                floor: MusubiPinOutboxCheckFloorV1 {
+                    height: block.height(),
+                    block_hash: *block.block_hash().as_ref(),
+                    context_id: block.id(),
+                },
+                expected: MusubiPinOutboxCheckExpectationV1::Absent,
+            },
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+        );
+        assert!(
+            result.is_err(),
+            "an absent high-water cannot bypass missing tip finality"
         );
     }
     #[test]

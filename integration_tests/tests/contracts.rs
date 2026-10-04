@@ -25,7 +25,6 @@ use iroha_executor_data_model::permission::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_sumeragi::availability::recommended_data_availability_layout;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};

@@ -15,16 +15,15 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
             try failRequiredNativeTestCapability("Invalid fixture private key")
         }
         let signingKey = try SigningKey.fromMultihashPrivateKey(privateKeyBytes)
-        let authority = AccountId.make(publicKey: try signingKey.publicKey())
+        let authority = try AccountId.make(publicKey: try signingKey.publicKey())
         let sponsorKeypair = try Keypair(privateKeyBytes: Data(repeating: 0x12, count: 32))
-        let sponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
+        let sponsor = try AccountId.make(publicKey: sponsorKeypair.publicKey)
         let programId = try FeeSponsorProgramId(sponsor: sponsor, name: "wallet_fx")
         let request = TransferRequest(networkId: TestNetworkIds.canonical,
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "2",
                                       destination: authority,
-                                      description: "fee-sponsor",
                                       feePayment: .sponsor(
                                           programId: programId,
                                           programRevision: 1,
@@ -116,7 +115,6 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
                                       assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "7",
                                       destination: authority,
-                                      description: "secp256k1-transfer",
                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: 240)
         let envelope = try SwiftTransactionEncoder.encodeTransfer(transfer: request,

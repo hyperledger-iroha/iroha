@@ -485,7 +485,7 @@ impl PendingFinalPromotionCheckV1 {
 
     /// Exact signed envelope for ordinary native submission or reconciliation; no replacement API.
     #[must_use]
-    pub const fn signed_transaction(&self) -> &SignedTransaction {
+    pub fn signed_transaction(&self) -> &SignedTransaction {
         self.bound.signed_transaction()
     }
 

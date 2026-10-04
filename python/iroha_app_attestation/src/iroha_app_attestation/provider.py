@@ -48,6 +48,15 @@ APPLE_APP_ATTESTATION_ROOT_SHA256 = bytes.fromhex(
 APPLE_RECEIPT_ROOT_SHA256 = bytes.fromhex(
     "63343abfb89a6a03ebb57e9b3f5fa7be7c4f5c756f3017b3a8c488c3653e9179"
 )
+# Invented roots that exist in this repository for mocks and demos (for
+# example under certs/ and fixtures/android/attestation/). Some carry vendor
+# names, so none of them may be configured as an OEM attestation anchor.
+INVENTED_REPOSITORY_ROOT_SHA256 = frozenset(bytes.fromhex(value) for value in (
+    "b01d535d9a470962a3ffc814fda8ea63fbc52a893d6bf39d865cb60a2c695a05",  # "Iroha HMS Safety Detect Root"
+    "56be40cf19b693d4887cbf30d7265eae9fe267dd4698e1acf29530ffabf09e5e",  # "Iroha Play Integrity Root"
+    "8425db5da2915e7c931ce32b96f60b35f3f325c2dc85d26394c83912196ca2c2",  # "Mock Huawei StrongBox Root"
+    "bf25fa06eb409c2e022b263cfeb7fe168a9491f506fa78ab3fc7202f2842cf8b",  # "Mock OSP KeyMint Root"
+))
 
 
 
@@ -170,6 +179,8 @@ class OemKeyMintPolicy:
         require(self.attestation_root_sha256 not in GOOGLE_ATTESTATION_ROOT_SHA256
                 and callable(self.revocation_verifier),
                 "OEM profile needs a non-Google root and live revocation verifier")
+        require(self.attestation_root_sha256 not in INVENTED_REPOSITORY_ROOT_SHA256,
+                "invented repository root cannot be an OEM attestation anchor")
 
 
 @dataclass(frozen=True)

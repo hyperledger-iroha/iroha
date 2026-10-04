@@ -355,7 +355,7 @@ fn complete_ca_translation_admission_and_original_auxiliary_openings_are_exact()
         E::ZERO,
         E::ONE,
         E::from_base(F(7)),
-        E::from_base(F(u64::MAX)),
+        E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]),
     ] {
         assert!(!plan.admissible_v1(bad).unwrap());
     }
@@ -403,10 +403,12 @@ fn complete_ca_translation_admission_and_original_auxiliary_openings_are_exact()
     assert!(plan.ca_supplemental_v1(E::ONE, &values, &mixes).is_err());
     for index in 0..108 {
         let mut bad_values = values;
-        bad_values[index] = E::from_base(F(u64::MAX));
+        bad_values[index] =
+            E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]);
         assert!(plan.ca_supplemental_v1(z, &bad_values, &mixes).is_err());
         let mut bad_mixes = mixes;
-        bad_mixes[index] = E::from_base(F(u64::MAX));
+        bad_mixes[index] =
+            E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]);
         assert!(plan.ca_supplemental_v1(z, &values, &bad_mixes).is_err());
     }
 }

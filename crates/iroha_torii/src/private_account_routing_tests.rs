@@ -5,48 +5,12 @@ use http_body_util::BodyExt;
 use iroha_core::state::World;
 use iroha_data_model::{
     Account, Registrable,
-    block::consensus::{SumeragiRootScope, ValidatorPower},
+    block::consensus::SumeragiRootScope,
     nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
-    parameter::{
-        Parameter,
-        custom::CustomParameter,
-        system::{
-            ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
-            consensus_metadata,
-        },
-    },
+    parameter::{Parameter, custom::CustomParameter, system::consensus_metadata},
 };
 
-/// Explicit root authority for routing-only fixtures; this never supplies native finality.
-pub(crate) fn bind_fixture_root(world: &mut World, scope: SumeragiRootScope) {
-    let validators = iroha_core::sumeragi::test_chain::fixture_validators()
-        .into_iter()
-        .map(|(validator, _)| ValidatorPower {
-            validator,
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let mut context = iroha_core_zk::kagemusha_v1_test_fixtures::genesis_context_parameters();
-    context.root_scope = scope;
-    let metadata = ConsensusHandshakeMetadata {
-        mode: SumeragiConsensusMode::Permissioned,
-        block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
-        wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
-        consensus_fingerprint: ConsensusFingerprint::new([0xC7; 32]),
-        kagemusha_mint_finality:
-            iroha_core_zk::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&validators),
-        sumeragi_context: context,
-    };
-    metadata.validate().unwrap();
-    let mut block = world.block();
-    block
-        .parameters
-        .set_parameter(Parameter::Custom(CustomParameter::new(
-            consensus_metadata::handshake_meta_id(),
-            iroha_primitives::json::Json::new(metadata),
-        )));
-    block.commit();
-}
+use crate::test_utils::bind_fixture_root;
 
 fn private_app() -> (SharedAppState, AccountId, AccountId, DataSpaceId) {
     let owner = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());

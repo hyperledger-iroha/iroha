@@ -139,11 +139,11 @@ fn replacement_rewind_retains_notifications_through_original_capture_refusal_and
         // it does not manufacture replacement or membership authority.
         {
             let fields = carrier.fields.as_mut().unwrap();
-            fields.da_rewind_releases = Some(da_hydration::DaRewindReleases::new(&state));
+            fields._da_rewind_releases = Some(da_hydration::DaRewindReleases::new(&state));
             state
                 .rewind_da_indexes_to_height_with_releases(
                     0,
-                    fields.da_rewind_releases.as_mut().unwrap(),
+                    fields._da_rewind_releases.as_mut().unwrap(),
                 )
                 .unwrap();
         }

@@ -1484,7 +1484,7 @@ test("contract manifest codec validates every flat query schema and ordinary str
     ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Quantity")]],
     [
       "AssetDefinitionView",
-      ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+      ["id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata"],
       [
         leaf("AssetDefinitionId"),
         leaf("String"),
@@ -1492,6 +1492,8 @@ test("contract manifest codec validates every flat query schema and ordinary str
         leaf("String"),
         leaf("AccountId"),
         leaf("Quantity"),
+        { kind: "Option", value: null },
+        leaf("Int"),
         leaf("Json"),
       ],
     ],

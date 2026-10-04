@@ -40,6 +40,23 @@ impl RetainedConsensusSchedule {
     ) -> Result<Self, ScheduleError> {
         crate::sumeragi::epoch_election::retain_schedule(source, budget).map_err(Into::into)
     }
+    /// Borrow the next configuration from this exact validated applied cut.
+    ///
+    /// Only `epoch_election::retain_slots` constructs a nonempty owner, after
+    /// `ConsensusSchedule::from_owned_entries` validates the complete graph and
+    /// its original proofs. Sharing cannot mutate that graph. Informational
+    /// readers can use this invariant without repeating cryptographic validation;
+    /// an absent owner, different applied cut, overflow or pending boundary has
+    /// no next configuration. Decoded DTO admission still validates independently.
+    #[cfg(any(feature = "telemetry", test))]
+    pub(crate) fn ready_after_tip(&self, applied_height: u64) -> Option<&super::ScheduledConfig> {
+        self.owner.as_ref()?;
+        let canonical = self.canonical();
+        if canonical.tip() != Some(applied_height) {
+            return None;
+        }
+        canonical.ready(applied_height.checked_add(1)?).ok()
+    }
     /// Read the canonical value; callers cannot mutate, extract or replace its allocations.
     pub(crate) fn canonical(&self) -> &ConsensusSchedule {
         static EMPTY: ConsensusSchedule = ConsensusSchedule::empty();
@@ -91,5 +108,97 @@ impl JsonSerialize for RetainedConsensusSchedule {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         self.canonical().json_serialize_to(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        state::{World, WorldReadOnly as _},
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    use iroha_data_model::parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, SumeragiNposParameters},
+    };
+    #[test]
+    fn informational_next_config_binds_validated_owner_to_exact_applied_height() {
+        assert!(
+            RetainedConsensusSchedule::default()
+                .ready_after_tip(0)
+                .is_none()
+        );
+        for mode in [
+            SumeragiConsensusMode::Permissioned,
+            SumeragiConsensusMode::Npos,
+        ] {
+            let mut config = TestChainConfig::new(World::new(), 1000);
+            config.consensus_mode = mode;
+            if mode == SumeragiConsensusMode::Npos {
+                config.genesis_parameters.push(Parameter::Custom(
+                    SumeragiNposParameters {
+                        epoch_seed: [0x61; 32],
+                        ..Default::default()
+                    }
+                    .into_custom_parameter(),
+                ));
+            }
+            let chain = CertifiedTestChain::start(config).unwrap();
+            let view = chain.state().view();
+            let source = view.world().consensus_schedule();
+            assert_eq!(source.ready_after_tip(1), Some(source.ready(2).unwrap()));
+            assert!(source.ready_after_tip(0).is_none());
+            assert!(source.ready_after_tip(2).is_none());
+            assert!(source.ready_after_tip(u64::MAX).is_none());
+            let copy = source.clone();
+            drop(view);
+            assert_eq!(copy.ready_after_tip(1).unwrap().height, 2);
+        }
+    }
+    #[test]
+    fn informational_next_config_refuses_an_authenticated_pending_boundary() {
+        use crate::sumeragi::schedule::{ScheduledConfig, ScheduledSlot};
+        let mut config = TestChainConfig::new(World::new(), 1000);
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        config.genesis_parameters.push(Parameter::Custom(
+            SumeragiNposParameters {
+                epoch_seed: [0x62; 32],
+                ..Default::default()
+            }
+            .into_custom_parameter(),
+        ));
+        let chain = CertifiedTestChain::start(config).unwrap();
+        let view = chain.state().view();
+        let original = view.world().consensus_schedule().ready(2).unwrap();
+        let boundary = original.epoch.authorization.last_height;
+        let predecessor = original.epoch.context_id().unwrap();
+        let params = original.params;
+        let schedule = ConsensusSchedule::from_owned_entries(vec![
+            ScheduledSlot::Ready(ScheduledConfig {
+                height: boundary,
+                epoch: original.epoch.clone(),
+                params,
+            }),
+            ScheduledSlot::PendingBoundary {
+                height: boundary + 1,
+                boundary_height: boundary,
+                predecessor_context_id: predecessor,
+                params,
+            },
+            ScheduledSlot::PendingBoundary {
+                height: boundary + 2,
+                boundary_height: boundary,
+                predecessor_context_id: predecessor,
+                params,
+            },
+        ])
+        .unwrap();
+        let retained =
+            RetainedConsensusSchedule::admit(&schedule, &AllocationBudget::new(1024 * 1024))
+                .unwrap();
+        assert_eq!(retained.tip(), Some(boundary));
+        assert!(retained.ready(boundary).is_ok());
+        assert!(retained.ready_after_tip(boundary).is_none());
     }
 }

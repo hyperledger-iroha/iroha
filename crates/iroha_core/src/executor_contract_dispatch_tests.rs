@@ -204,12 +204,81 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         enforce_contract_entrypoint_permission(&tx.world, &authority, &denied_context)
             .expect_err("a grant for another contract or selector must fail closed");
     }
-    Grant::account_permission(
-        Permission::new("CanInvokeContractEntrypoint".to_owned(), Json::new(())),
-        authority.clone(),
+    let malformed_permission =
+        Permission::new("CanInvokeContractEntrypoint".to_owned(), Json::new(()));
+    let staged_before = norito::to_bytes(
+        &tx.world
+            .account_permissions
+            .iter()
+            .map(|(account, permissions)| (account.clone(), permissions.clone()))
+            .collect::<Vec<_>>(),
     )
-    .execute(&authority, &mut tx)
-    .expect("store malformed name-only compatibility fixture");
+    .unwrap();
+    let published = state
+        .world
+        .account_permissions
+        .try_committed_view()
+        .unwrap();
+    let published_before = norito::to_bytes(&(
+        published
+            .current()
+            .iter()
+            .map(|(account, permissions)| (account.clone(), permissions.clone()))
+            .collect::<Vec<_>>(),
+        published
+            .undo()
+            .iter()
+            .map(|(account, permissions)| (account.clone(), permissions.clone()))
+            .collect::<Vec<_>>(),
+    ))
+    .unwrap();
+    tx.world.take_external_events();
+    let malformed_grant =
+        Grant::account_permission(malformed_permission.clone(), authority.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("native Grant rejects the recognized malformed permission before mutation");
+    assert!(matches!(
+        malformed_grant,
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)
+            if message.contains("payout runtime permission")
+    ));
+    assert_eq!(
+        norito::to_bytes(
+            &tx.world
+                .account_permissions
+                .iter()
+                .map(|(account, permissions)| (account.clone(), permissions.clone()))
+                .collect::<Vec<_>>()
+        )
+        .unwrap(),
+        staged_before
+    );
+    assert!(tx.world.take_external_events().is_empty());
+    let after = state
+        .world
+        .account_permissions
+        .try_committed_view()
+        .unwrap();
+    assert!(published.same_publication(&after));
+    assert_eq!(
+        norito::to_bytes(&(
+            after
+                .current()
+                .iter()
+                .map(|(account, permissions)| (account.clone(), permissions.clone()))
+                .collect::<Vec<_>>(),
+            after
+                .undo()
+                .iter()
+                .map(|(account, permissions)| (account.clone(), permissions.clone()))
+                .collect::<Vec<_>>(),
+        ))
+        .unwrap(),
+        published_before
+    );
+    // Seed adversarial retained DATA to test the executor's independent authority boundary.
+    tx.world
+        .add_account_permission(&authority, malformed_permission);
     let malformed_only = contract_permission_context(contract_address.clone(), "malformed_only");
     enforce_contract_entrypoint_permission(&tx.world, &authority, &malformed_only)
         .expect_err("a name-only permission must never bypass exact payload matching");
@@ -2257,9 +2326,11 @@ fn completion_permission_payload_requires_exact_nonzero_provider_scope() {
     };
     let exact: Permission = token.into();
     validate_initial_permission_payload_constraints(&exact).unwrap();
-    let bytes = norito::to_bytes(&token).unwrap();
+    let bytes = norito::to_bytes(&exact).unwrap();
+    let decoded = norito::decode_from_bytes::<Permission>(&bytes).unwrap();
+    assert_eq!(decoded, exact);
     assert_eq!(
-        norito::decode_from_bytes::<CanCompleteSorafsReplicationOrder>(&bytes).unwrap(),
+        CanCompleteSorafsReplicationOrder::try_from(&decoded).unwrap(),
         token
     );
     let mut extra = norito::json::to_value(&token).unwrap();
@@ -2269,7 +2340,7 @@ fn completion_permission_payload_requires_exact_nonzero_provider_scope() {
         .insert("unrelated".into(), norito::json::Value::Bool(true));
     for malformed in [
         Permission::new(exact.name().to_owned(), Json::new(())),
-        Permission::new(exact.name().to_owned(), Json::new(norito::json::json!({}))),
+        Permission::new(exact.name().to_owned(), Json::new(norito::json!({}))),
         Permission::new(exact.name().to_owned(), Json::new(extra)),
         Permission::from(CanCompleteSorafsReplicationOrder {
             provider_id: ProviderId::new([0; 32]),

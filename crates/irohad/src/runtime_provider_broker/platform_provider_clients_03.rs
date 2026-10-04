@@ -4090,20 +4090,20 @@ fn resolve_with_decode_pool(
 /// Serve the stock catalog on one validated endpoint.
 pub(super) fn serve(
     bindings: &IrohaRuntimeProviderBindingsV1,
-    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
     serve_with_policy(
         bindings,
         backends,
-        &EndpointPolicy::production(endpoint_path),
+        &EndpointPolicy::from_server_policy(policy)?,
         Arc::new(RuntimeProviderBrokerLifecycleV1::new()),
     )
 }
 /// Serve the stock catalog with a fallible readiness publication.
 pub(super) fn serve_with_fallible_readiness<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
-    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
     on_ready: R,
@@ -4114,7 +4114,7 @@ where
     serve_with_policy_and_fallible_readiness(
         bindings,
         backends,
-        &EndpointPolicy::production(endpoint_path),
+        &EndpointPolicy::from_server_policy(policy)?,
         lifecycle,
         on_ready,
     )

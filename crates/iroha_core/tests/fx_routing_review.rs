@@ -238,7 +238,19 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
     feed.feed_id = corridor.oracle_feed_id.clone();
     let lanes = lane_catalog();
-    let dataspaces = dataspace_catalog();
+    let mut dataspace_entries = dataspace_catalog().entries().to_vec();
+    if let Some(alias) = active_sns_alias {
+        // An active SNS lease does not itself admit a dataspace to the catalog.
+        // Admit it explicitly so this fixture reaches the missing-lane guard.
+        dataspace_entries.push(DataSpaceMetadata {
+            id: iroha_core::sns::dataspace_id_for_sns_alias(alias).expect("SNS-only dataspace id"),
+            alias: alias.to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        });
+    }
+    let dataspaces = DataSpaceCatalog::new(dataspace_entries)
+        .expect("explicit active SNS catalog without a canonical lane");
     let policy = routing_policy();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.lane_catalog = lanes.clone();

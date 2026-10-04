@@ -87,18 +87,8 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     let env = norito::json::object([
         ("filter", filter),
         (
-            "pagination",
-            norito::json::object([
-                (
-                    "limit",
-                    norito::json::to_value(&100).expect("serialize limit"),
-                ),
-                (
-                    "offset",
-                    norito::json::to_value(&0).expect("serialize offset"),
-                ),
-            ])
-            .expect("serialize pagination"),
+            "limit",
+            norito::json::to_value(&100).expect("serialize limit"),
         ),
     ])
     .expect("serialize request envelope");

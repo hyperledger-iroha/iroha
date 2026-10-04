@@ -362,6 +362,112 @@ public sealed class PetalImageTests
     }
 
     [Fact]
+    public void ThreeFindersFormingACornerInferTheFourth()
+    {
+        static PetalFinder Blob(double x, double y) => new(x, y, 60.0);
+        // top-left, top-right and bottom-left of a slightly rotated square, plus clutter
+        var finders = new List<PetalFinder> { Blob(100.0, 110.0), Blob(540.0, 90.0), Blob(120.0, 550.0) };
+        finders.AddRange(Enumerable.Range(0, 5).Select(static i => new PetalFinder(300.0 + 10.0 * i, 300.0, 14.0)));
+        var triple = PetalLocator.SelectTriple(finders.ToArray());
+        Assert.NotNull(triple);
+        var (quad, inferred) = triple.Value;
+        var fourth = quad[inferred];
+        Assert.True(Math.Abs(fourth.X - 560.0) < 1e-9 && Math.Abs(fourth.Y - 530.0) < 1e-9, $"{fourth}");
+        // the inferred corner is bottom-right in clockwise order
+        Assert.Equal(2, inferred);
+        // three blossoms in a row are no corner
+        Assert.Null(PetalLocator.SelectTriple([Blob(0.0, 0.0), Blob(440.0, 0.0), Blob(880.0, 0.0)]));
+        Assert.Null(PetalLocator.SelectTriple([Blob(0.0, 0.0), Blob(440.0, 0.0)]));
+    }
+
+    [Fact]
+    public void ASmallerBlobAtTheInferredCornerCompletesTheQuad()
+    {
+        // steep tilt: the far finder is under 0.55 of the largest, but it is where the
+        // fourth corner belongs
+        PetalFinder[] finders =
+        [
+            new(100.0, 100.0, 64.0),
+            new(540.0, 100.0, 60.0),
+            new(100.0, 540.0, 62.0),
+            new(520.0, 515.0, 30.0),
+        ];
+        var strong = PetalLocator.StrongFinders(finders);
+        Assert.Equal(3, strong.Length);
+        var triple = PetalLocator.SelectTriple(strong);
+        Assert.NotNull(triple);
+        var full = PetalLocator.CompleteTriple(finders, triple.Value.Quad, triple.Value.Inferred);
+        Assert.NotNull(full);
+        Assert.Contains(full, static f => Math.Abs(f.X - 520.0) < 1e-9 && Math.Abs(f.Y - 515.0) < 1e-9);
+        // a blob too far from the parallelogram point does not complete it
+        finders[3] = new PetalFinder(400.0, 400.0, 30.0);
+        Assert.Null(PetalLocator.CompleteTriple(finders, triple.Value.Quad, triple.Value.Inferred));
+    }
+
+    [Fact]
+    public void AHiddenBlossomYieldsAnInferredCandidate()
+    {
+        var encoder = new PetalStreamEncoder(Enumerable.Repeat((byte)9, 200).ToArray(), 1);
+        var luma = PetalTestSupport.RenderLuma(encoder, 1, 512, 2);
+        // a clean frame: the first candidate is the quad of four seen blossoms
+        var clean = PetalLocator.Candidates(luma).First();
+        Assert.Null(clean.Inferred);
+        Assert.Equal(PetalLocator.Locate(luma), clean.Corners.ToArray());
+        // paint over the bottom-left blossom (centre 36, 476 at this size)
+        var n = luma.Width;
+        for (var y = 420; y < n; y++)
+            luma.Data.AsSpan(y * n, 92).Clear();
+        var candidates = PetalLocator.LocateCandidates(luma);
+        var inferred = candidates.First(static set => set.Inferred is not null);
+        var corner = inferred.Corners[inferred.Inferred ?? 0];
+        Assert.True(Math.Abs(corner.X - 36.0) < 4.0 && Math.Abs(corner.Y - 476.0) < 4.0, $"{corner}");
+        // nothing else forms a code, so nothing is located with four seen blossoms
+        Assert.Null(PetalLocator.Locate(luma));
+    }
+
+    [Fact]
+    public void FollowingFindsAMovedBlossomAndRefusesALostOne()
+    {
+        var encoder = new PetalStreamEncoder(Enumerable.Repeat((byte)9, 200).ToArray(), 1);
+        var luma = PetalTestSupport.RenderLuma(encoder, 1, 512, 2);
+        var found = PetalLocator.Follow(luma, new PetalFinder(48.0, 27.0, 60.0));
+        Assert.NotNull(found);
+        Assert.True(Math.Abs(found.Value.X - 36.0) < 1.5 && Math.Abs(found.Value.Y - 36.0) < 1.5, $"{found}");
+        // nothing bright near the centre of the canvas corner gap
+        Assert.Null(PetalLocator.Follow(luma, new PetalFinder(140.0, 36.0, 30.0)));
+        // absurd expectations (a broken pose) are refused and never overflow
+        foreach (var (x, y, size) in new[]
+        {
+            (1e300, 36.0, 60.0),
+            (-1e300, -1e300, 60.0),
+            (double.NaN, 36.0, 60.0),
+            (36.0, double.PositiveInfinity, 60.0),
+            (36.0, 36.0, double.NaN),
+        })
+        {
+            Assert.Null(PetalLocator.Follow(luma, new PetalFinder(x, y, size)));
+        }
+
+        // a huge disc just covers the whole image
+        _ = PetalLocator.Follow(luma, new PetalFinder(36.0, 36.0, 1e300));
+    }
+
+    [Fact]
+    public void SaturatingIndexArithmeticMatchesTheReference()
+    {
+        Assert.Equal(long.MaxValue, PetalMath.ToIsize(1e300));
+        Assert.Equal(long.MinValue, PetalMath.ToIsize(double.NegativeInfinity));
+        Assert.Equal(0L, PetalMath.ToIsize(double.NaN));
+        Assert.Equal(-3L, PetalMath.ToIsize(-3.0));
+        Assert.Equal(long.MaxValue, PetalMath.SaturatingAdd(long.MaxValue - 1, 5));
+        Assert.Equal(long.MinValue, PetalMath.SaturatingAdd(long.MinValue + 1, -5));
+        Assert.Equal(long.MinValue, PetalMath.SaturatingSubtract(long.MinValue + 1, 5));
+        Assert.Equal(long.MaxValue, PetalMath.SaturatingSubtract(long.MaxValue - 1, -5));
+        Assert.Equal(7L, PetalMath.SaturatingAdd(3, 4));
+        Assert.Equal(-1L, PetalMath.SaturatingSubtract(3, 4));
+    }
+
+    [Fact]
     public void ABlankImageHasNoFinders()
     {
         Assert.Null(PetalLocator.Locate(new PetalLuma(200, 200)));

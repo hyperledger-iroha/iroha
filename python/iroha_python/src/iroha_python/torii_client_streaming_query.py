@@ -1,11 +1,11 @@
-"""Streaming and query-envelope helpers shared by the high-level Torii client."""
+"""Server-Sent Event streaming helpers shared by the high-level Torii client."""
 
 from __future__ import annotations
 
 import json
 import math
 import time
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
 
 import requests
 from iroha_torii_client.canonical_transport import (
@@ -15,7 +15,6 @@ from iroha_torii_client.canonical_transport import (
     OperatorRequestHeaderPlan as _OperatorRequestHeaderPlan,
 )
 
-from .query import AggregateSpec, ensure_aggregate
 from .stream_events import EventCursor, SseEvent, SseStreamError
 
 _DEFAULT_SSE_EVENT_MAX_BYTES = 1024 * 1024
@@ -88,32 +87,14 @@ def create_torii_client_streaming_query_mixin(
     *,
     require_crypto: Callable[[], Any],
     expect_sorafs_reputation_status: Callable[..., None],
-    normalize_count_mode_arg: Callable[[Optional[str]], Optional[str]],
-    normalize_optional_string: Callable[[Any, str], Optional[str]],
 ) -> Any:
     """Bind client-local hooks to the reusable streaming/query implementation."""
 
     _require_crypto = require_crypto
     _expect_sorafs_reputation_status = expect_sorafs_reputation_status
-    _normalize_count_mode_arg = normalize_count_mode_arg
-    _normalize_optional_string = normalize_optional_string
 
     class ToriiClientStreamingQueryMixin:
         _base_url: str
-
-        @staticmethod
-        def _maybe_json(response: requests.Response) -> Optional[Any]:
-            if not hasattr(response, "content"):
-                try:
-                    return response.json()
-                except ValueError:
-                    return getattr(response, "text", "") or None
-            if not response.content:
-                return None
-            try:
-                return response.json()
-            except ValueError:
-                return response.text or None
 
         @staticmethod
         def _maybe_transaction_receipt(response: requests.Response) -> Optional[Any]:
@@ -421,102 +402,5 @@ def create_torii_client_streaming_query_mixin(
                     break
 
             return iterator()
-
-        @staticmethod
-        def _build_query_envelope(
-            *,
-            filter: Optional[Mapping[str, Any]] = None,
-            select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-            sort: Optional[Any] = None,
-            limit: Optional[int] = None,
-            offset: Optional[int] = None,
-            fetch_size: Optional[int] = None,
-            count_mode: Optional[str] = None,
-            query_name: Optional[str] = None,
-            aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-        ) -> Dict[str, Any]:
-            body: Dict[str, Any] = {}
-            if filter is not None:
-                body["filter"] = dict(filter)
-            normalized_select = ToriiClientStreamingQueryMixin._normalize_query_select(select)
-            if normalized_select is not None:
-                body["select"] = normalized_select
-            if sort is not None:
-                body["sort"] = sort
-            pagination: Dict[str, int] = {}
-            if limit is not None:
-                pagination["limit"] = int(limit)
-            if offset is not None:
-                pagination["offset"] = int(offset)
-            if pagination:
-                body["pagination"] = pagination
-            if fetch_size is not None:
-                body["fetch_size"] = int(fetch_size)
-            if count_mode is not None:
-                body["count_mode"] = _normalize_count_mode_arg(count_mode)
-            query_name_value = _normalize_optional_string(query_name, "query_name")
-            if query_name_value is not None:
-                body["query"] = query_name_value
-            aggregate_value = ensure_aggregate(aggregate)
-            if aggregate_value is not None:
-                if normalized_select is not None:
-                    raise ValueError("select and aggregate are mutually exclusive")
-                body["aggregate"] = aggregate_value
-            return body
-
-        @staticmethod
-        def _normalize_query_select(
-            select: Optional[Iterable[Union[str, Mapping[str, Any]]]],
-        ) -> Optional[List[Union[str, Dict[str, Any]]]]:
-            if select is None:
-                return None
-            if isinstance(select, (str, bytes, bytearray)):
-                raise TypeError("select must be a sequence of field paths or objects")
-            normalized: List[Union[str, Dict[str, Any]]] = []
-            for index, entry in enumerate(select):
-                if isinstance(entry, str):
-                    field_path = entry.strip()
-                    if not field_path:
-                        raise ValueError(f"select[{index}] must be a non-empty field path")
-                    normalized.append(field_path)
-                elif isinstance(entry, Mapping):
-                    normalized.append(dict(entry))
-                else:
-                    raise TypeError(f"select[{index}] must be a field-path string or mapping")
-            return normalized
-
-        @staticmethod
-        def _ensure_no_query_args(
-            *,
-            envelope: Mapping[str, Any],
-            filter: Optional[Mapping[str, Any]],
-            select: Optional[Iterable[Union[str, Mapping[str, Any]]]],
-            sort: Optional[Any],
-            limit: Optional[int],
-            offset: Optional[int],
-            fetch_size: Optional[int],
-            count_mode: Optional[str],
-            query_name: Optional[str],
-            aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]],
-        ) -> None:
-            if any(
-                value is not None
-                for value in (
-                    filter,
-                    select,
-                    sort,
-                    limit,
-                    offset,
-                    fetch_size,
-                    count_mode,
-                    query_name,
-                    aggregate,
-                )
-            ):
-                raise ValueError(
-                    "provide either `envelope` or builder arguments "
-                    "(filter/select/sort/limit/offset/fetch_size/count_mode/query_name/aggregate), "
-                    "not both"
-                )
 
     return ToriiClientStreamingQueryMixin

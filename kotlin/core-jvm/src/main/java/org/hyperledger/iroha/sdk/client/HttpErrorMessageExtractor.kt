@@ -92,6 +92,10 @@ internal object HttpErrorMessageExtractor {
         return truncate(text)
     }
 
+    /** `(code, message, rejectCode)` of a Norito-framed error envelope, or `null`. */
+    fun decodeNoritoEnvelope(body: ByteArray): Triple<String, String, String?>? =
+        decodeNoritoErrorEnvelope(body)?.let { Triple(it.code, it.message, it.rejectCode) }
+
     private fun decodeNoritoErrorEnvelope(body: ByteArray): ErrorEnvelopeSummary? {
         if (!hasNoritoMagic(body)) return null
         return try {

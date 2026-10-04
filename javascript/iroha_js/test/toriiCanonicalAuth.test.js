@@ -36,10 +36,10 @@ test("ToriiClient emits an exact ASCII alias credential and a verifiable signatu
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 9) });
   const targetAccountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
 
-  await client.listAccountAssets(targetAccountId, {
-    canonicalAuth: { accountId: AUTH_ALIAS, privateKey },
-    limit: 1,
-  });
+  await client.accountAssets(targetAccountId).list(
+    { limit: 1 },
+    { canonicalAuth: { accountId: AUTH_ALIAS, privateKey } },
+  );
 
   assert.equal(captured.length, 1);
   const { url, init } = captured[0];
@@ -63,7 +63,7 @@ test("ToriiClient emits an exact ASCII alias credential and a verifiable signatu
     method: init.method,
     path: parsed.pathname,
     query: parsed.search ? parsed.search.slice(1) : "",
-    body: "",
+    body: init.body,
     timestampMs,
     nonce,
   });
@@ -84,10 +84,10 @@ test("ToriiClient transports an exact canonical I105 credential as canonical hex
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 10) });
   const accountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
 
-  await client.listAccountAssets(accountId, {
-    canonicalAuth: { accountId, privateKey },
-    limit: 1,
-  });
+  await client.accountAssets(accountId).list(
+    { limit: 1 },
+    { canonicalAuth: { accountId, privateKey } },
+  );
 
   assert.equal(captured.length, 1);
   assert.equal(
@@ -118,10 +118,10 @@ test("ToriiClient rejects every noncanonical canonical-auth credential before fe
   for (const accountId of invalidCredentials) {
     await assert.rejects(
       () =>
-        client.listAccountAssets(targetAccountId, {
-          canonicalAuth: { accountId, privateKey },
-          limit: 1,
-        }),
+        client.accountAssets(targetAccountId).list(
+          { limit: 1 },
+          { canonicalAuth: { accountId, privateKey } },
+        ),
       (error) =>
         error?.name === "ValidationError" &&
         error?.code === ValidationErrorCode.INVALID_OBJECT &&
@@ -146,10 +146,10 @@ test("ToriiClient canonical auth accepts byte-array private keys", async () => {
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 3) });
   const targetAccountId = AccountAddress.fromAccount({ publicKey }).toI105();
 
-  await client.listAccountAssets(targetAccountId, {
-    canonicalAuth: { accountId: AUTH_ALIAS, privateKey: Array.from(privateKey) },
-    limit: 1,
-  });
+  await client.accountAssets(targetAccountId).list(
+    { limit: 1 },
+    { canonicalAuth: { accountId: AUTH_ALIAS, privateKey: Array.from(privateKey) } },
+  );
 
   assert.equal(captured.length, 1);
   assert.equal(captured[0].init.headers["X-Iroha-Account"], AUTH_ALIAS);
@@ -171,15 +171,15 @@ test("ToriiClient uses its configured signer for optional account reads", async 
     canonicalRequestAuth: { accountId: AUTH_ALIAS, privateKey },
   });
 
-  await client.listAccountAssets(targetAccountId);
-  await client.listAccountTransactions(targetAccountId);
+  await client.accountAssets(targetAccountId).list();
+  await client.accountTransactions(targetAccountId).list();
   await client.listAccountPermissions(targetAccountId);
 
   assert.deepEqual(
     captured.map(({ url }) => url.pathname),
     [
-      `/v1/accounts/${encodeURIComponent(targetAccountId)}/assets`,
-      `/v1/accounts/${encodeURIComponent(targetAccountId)}/transactions`,
+      `/v1/accounts/${encodeURIComponent(targetAccountId)}/assets/query`,
+      `/v1/accounts/${encodeURIComponent(targetAccountId)}/transactions/query`,
       `/v1/accounts/${encodeURIComponent(targetAccountId)}/permissions`,
     ],
   );
@@ -208,8 +208,8 @@ test("ToriiClient permits explicit anonymous optional account reads", async () =
     canonicalRequestAuth: { accountId: AUTH_ALIAS, privateKey },
   });
 
-  await client.listAccountAssets(targetAccountId, { canonicalAuth: null });
-  await client.listAccountTransactions(targetAccountId, { canonicalAuth: null });
+  await client.accountAssets(targetAccountId).list({}, { canonicalAuth: null });
+  await client.accountTransactions(targetAccountId).list({}, { canonicalAuth: null });
   await client.listAccountPermissions(targetAccountId, { canonicalAuth: null });
 
   assert.equal(captured.length, 3);
@@ -233,10 +233,10 @@ test("ToriiClient canonical auth rejects non-byte private key arrays", async () 
 
   await assert.rejects(
     () =>
-      client.listAccountAssets(targetAccountId, {
-        canonicalAuth: { accountId: AUTH_ALIAS, privateKey: [256] },
-        limit: 1,
-      }),
+      client.accountAssets(targetAccountId).list(
+        { limit: 1 },
+        { canonicalAuth: { accountId: AUTH_ALIAS, privateKey: [256] } },
+      ),
     (error) => error?.name === "ValidationError" && /privateKey\[0\]/u.test(error.message),
   );
 });

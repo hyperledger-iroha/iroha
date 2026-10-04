@@ -649,4 +649,5 @@ mod stream_token_mutation_tests {
 
     include!("stream_token_recovery_tests.rs");
     include!("stream_token_observer_custody_tests.rs");
+    include!("stream_token_server_custody_tests.rs");
 }

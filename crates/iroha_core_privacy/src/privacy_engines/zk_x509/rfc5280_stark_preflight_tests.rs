@@ -290,9 +290,12 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         Err(ZkX509Rfc5280StarkErrorV1::Semantic),
         "the old prefix-only producer flag cannot match the verifier's exact-end table"
     );
-    // The bounded batch clears every per-row context and all fixed column
-    // states. On refusal its output guard clears the failed column, then the
-    // outer owned table clears that already-zero backing a second time.
+    // The production window clears each row's copied two-sum state, all 24
+    // eight-cell pairs (including 21 unused pairs), and four working cells.
+    // The original row contexts and eight final states still clear once each.
+    // On refusal the output guard clears the failed column, then its outer
+    // owned table clears that already-zero backing a second time. These are
+    // repeated clearing events, not simultaneously resident allocations.
     let mut ownership_census = std::collections::BTreeMap::new();
     for entry in &erased {
         let counts = ownership_census.entry(entry.cells).or_insert((0, 0));
@@ -301,11 +304,12 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         assert_eq!(entry.nonzero_after, 0);
     }
     let rows = ZK_X509_RFC5280_STARK_TRACE_SIZE_V1;
+    let batch = crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1;
+    let pairs = 3 * batch;
     let mut expected_clears = [
-        (
-            2,
-            crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
-        ),
+        (2, rows + batch),
+        (4, rows),
+        (8, pairs * rows),
         (16, 1),
         (ZK_X509_RFC5280_STARK_BASE_WIDTH_V1, rows),
         (ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, rows),
@@ -321,9 +325,43 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         "every stack context, column state and failed output owner must clear"
     );
     assert_eq!(ownership_census[&rows].1, 1, "failed output is dirty once");
+    // Per-row copies precede the eight final-state drops. Preserve the
+    // original assertion on those final owners, separately from the copies.
     assert_eq!(
-        ownership_census[&2].1, 1,
-        "only the requested state is active"
+        erased
+            .iter()
+            .filter(|entry| entry.cells == 2)
+            .skip(rows)
+            .filter(|entry| entry.nonzero_before > 0)
+            .count(),
+        1,
+        "only the requested final state is active"
+    );
+    assert_eq!(
+        erased
+            .iter()
+            .find(|entry| entry.cells == 2)
+            .unwrap()
+            .nonzero_before,
+        0,
+        "the first copied recurrence starts with zero sums"
+    );
+    assert!(
+        erased
+            .iter()
+            .filter(|entry| entry.cells == 2)
+            .take(rows)
+            .any(|entry| entry.nonzero_before > 0),
+        "later copied recurrences carry private prefix sums"
+    );
+    // The profile descriptor requests exactly three factors on every row.
+    // All remaining pairs are zero but must still be erased by the same owner.
+    for (index, entry) in erased.iter().filter(|entry| entry.cells == 8).enumerate() {
+        assert_eq!(entry.nonzero_before > 0, index % pairs < 3);
+    }
+    assert_eq!(
+        ownership_census[&4].1, rows,
+        "every product workspace is live"
     );
     assert!(ownership_census[&ZK_X509_RFC5280_STARK_BASE_WIDTH_V1].1 > 0);
     assert!(ownership_census[&ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1].1 > 0);
@@ -332,7 +370,8 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         2 * rows
             + 16
             + rows * (ZK_X509_RFC5280_STARK_BASE_WIDTH_V1 + ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1)
-            + 2 * crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            + 2 * batch
+            + rows * (2 + 4 + pairs * 8)
     );
     assert_eq!(
         erased

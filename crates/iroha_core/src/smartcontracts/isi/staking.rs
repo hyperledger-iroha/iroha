@@ -623,16 +623,6 @@ impl PublicLaneStakeIndex {
             .map(|index| &groups[index])
     }
 
-    /// Original physical allocations, for tests of move-only index custody.
-    #[cfg(test)]
-    pub(crate) fn allocation_identity_for_test(&self) -> (usize, usize, usize) {
-        (
-            self.share_keys.as_slice().as_ptr() as usize,
-            self.groups.as_slice().as_ptr() as usize,
-            self._nested_account_charges.as_slice().as_ptr() as usize,
-        )
-    }
-
     #[cfg(test)]
     pub(crate) fn row_visits(&self) -> usize {
         self.row_visits

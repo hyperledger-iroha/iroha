@@ -1255,6 +1255,9 @@ impl<'s> Worker<'s> {
                 self.routing_refusal = None;
                 expansion
             }
+            Err(error @ lanes::merge::MergeError::SourceChanged { .. }) => {
+                return Err(PublicationError::Retryable(error.to_string()));
+            }
             Err(lanes::merge::MergeError::StateView(error)) => return Err(error.into()),
             Err(lanes::merge::MergeError::RoutingDeferred(reason)) => {
                 self.routing_refusal = Some(reason.clone());
@@ -1664,6 +1667,7 @@ impl<'s> Worker<'s> {
     }
 
     /// Pin the original execution and exactly one certified frame for durable append.
+    #[cfg(test)]
     fn prepare(
         &mut self,
         block: &AvailableBody,
@@ -2309,6 +2313,14 @@ impl<'s> Worker<'s> {
             || self.publication_pending()
             || height != self.applied.0.saturating_add(1)
         {
+            iroha_logger::debug!(
+                height,
+                view,
+                applied_height = self.applied.0,
+                pending_commit = self.pending_commit.is_some(),
+                publication_pending = self.publication_pending(),
+                "sumeragi: payload selection awaits its original applied parent"
+            );
             return Ok((None, false));
         }
         if self.payload_build.as_ref().is_some_and(|build| {
@@ -2336,9 +2348,19 @@ impl<'s> Worker<'s> {
                 }
             })?;
         let Some(parent) = parent else {
+            iroha_logger::debug!(
+                height,
+                view,
+                "sumeragi: payload selection has no published parent"
+            );
             return Ok((None, false));
         };
         let Some(scheduled) = self.scheduled(height) else {
+            iroha_logger::debug!(
+                height,
+                view,
+                "sumeragi: payload selection has no authenticated scheduled authority"
+            );
             return Ok((None, false));
         };
         let boundary_attestation = height == scheduled.epoch.authorization.last_height;
@@ -2384,6 +2406,14 @@ impl<'s> Worker<'s> {
                 return Err(PublicationError::Retryable(message));
             }
         };
+        iroha_logger::debug!(
+            height,
+            view,
+            transactions = selected.len(),
+            lane_merges = merges.merges.len(),
+            boundary_attestation,
+            "sumeragi: payload selection completed"
+        );
         // Only real work may activate the pulse signer. A pulse cannot create a block.
         if selected.is_empty() && merges.merges.is_empty() {
             return Ok((None, false));
@@ -2476,6 +2506,12 @@ impl<'s> Worker<'s> {
             |source, writer| source.block.write_resultless_proposal_wire(writer),
         ) {
             Ok((source, payload)) => {
+                iroha_logger::debug!(
+                    height,
+                    view,
+                    bytes = payload.as_slice().len(),
+                    "sumeragi: original funded payload build completed"
+                );
                 self.last_built = Some((height, view, source.hashes));
                 Ok((Some(payload), source.attest))
             }

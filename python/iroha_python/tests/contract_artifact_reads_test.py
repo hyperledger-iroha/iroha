@@ -9,9 +9,13 @@ import json
 import pytest
 
 from client_contract_manifest_test import _full_manifest_payload
-from expensive_query_auth_test import ACCOUNT_ID, NETWORK_ID, _Session, _client, _response
+from collection_query_auth_test import ACCOUNT_ID, NETWORK_ID, _response, _Session
+from collection_query_auth_test import _signed_client as _client
 from iroha_python import ContractArtifactId
-from iroha_python.client import ToriiCanonicalRequestAuth, canonical_network_request_signature_message
+from iroha_python.client import (
+    ToriiCanonicalRequestAuth,
+    canonical_network_request_signature_message,
+)
 
 
 def _auth(captured: list[bytes]) -> ToriiCanonicalRequestAuth:

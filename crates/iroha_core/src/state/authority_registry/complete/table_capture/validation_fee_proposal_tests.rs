@@ -129,10 +129,11 @@ fn actual_fee_proposal_capture_preserves_original_pool_refusal_and_final_owner()
 fn retained_tombstones_exhaust_only_the_local_catalog_work_allowance() {
     let state = state();
     // Each absent removal is one physical undo row. The current canonical
-    // count remains one, but the checked capture must inspect the full cut.
+    // count remains one. The complete scans cost 658, exceeding the descriptor
+    // allowance of two rows times 328; a larger local allowance admits the cut.
     {
         let mut block = state.world.governance_proposals.block();
-        for tag in 60..80 {
+        for tag in 60..161 {
             block.remove([tag; 32]);
         }
         block.commit();

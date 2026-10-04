@@ -13,6 +13,7 @@ for setup, configuration, and client examples.
 ## Features
 
 * Submit one or several Iroha Special Instructions (ISI) as a Transaction to Iroha Peer
+* Read Torii collections with one filter, sort and cursor language
 * Request data based on Iroha Queries from a Peer
 
 Transaction finality waits require state-resolved `Applied` status. Temporary
@@ -79,12 +80,112 @@ with `client.operator_client(operator_key_pair)?`. Synchronous applications use
 runtime. Remaining synchronous capability methods and authority-owned operations
 are tracked in the repository's first-release architecture redesign record.
 
-Account queries use `account.query_single(query).await?` or, with
-`iroha::query::AsyncQueryBuilderExt` imported,
-`account.query(query).execute_all().await?`. Use `execute().await?` to obtain a
-typed `QueryStream` and consume individual rows with `next().await`. Each
+Signed Iroha queries use `account.query_single(query).await?` for singular
+lookups such as `FindAccountById`. Iterable signed queries
+(`account.query(query)` with `iroha::query::AsyncQueryBuilderExt` imported)
+stream typed rows through `execute().await?` and `next().await`. Each
 continuation consumes its cursor before dispatch; a failed or cancelled
-continuation ends that stream and cannot replay the signed request.
+continuation ends that stream and cannot replay the signed request. When the
+node reports more rows but returns no continuation cursor, the stream ends with
+`QueryError::Truncated` instead of stopping silently. List collections with the
+collection queries below.
+
+## Collection queries
+
+Domains, accounts, asset definitions, NFTs, RWA lots, account assets, asset
+holders, transactions, account transactions and repo agreements share one query
+language and one page envelope; the wire contract is
+`specs/torii/collection_queries.md`.
+Build a `ListQuery` with `iroha::collections` and read a `Collection`:
+
+```rust
+use iroha::{
+    Error,
+    client::Client,
+    collections::{Collection, FilterExpr, ListQuery, SortKey, TryStreamExt as _, field},
+    config::Config,
+};
+
+async fn list_definitions() -> eyre::Result<()> {
+    let client = Client::builder(Config::load_file("client.toml")?).build()?;
+
+    // Filter, sort and page size. `field(..)` builders and text filters
+    // produce the same tree; `&`, `|` and `!` combine conditions.
+    let query = ListQuery::new()
+        .filter(field("owned_by").eq("sorau…") & field("metadata.tier").is_not_null())
+        .sort_by(SortKey::desc("id"))
+        .limit(50);
+    let same: FilterExpr = r#"owned_by = "sorau…" and metadata.tier is not null"#.parse()?;
+    assert_eq!(query.filter.as_ref(), Some(&same));
+
+    // One page and its continuation.
+    let page = client.list_page(&Collection::AssetDefinitions, &query).await?;
+    if let Some(next) = query.next_page(&page) {
+        let _second = client.list_page(&Collection::AssetDefinitions, &next).await?;
+    }
+
+    // Every row: `next_cursor` is followed lazily until the last page.
+    let mut rows = client.list(Collection::AssetDefinitions, query);
+    while let Some(row) = rows.try_next().await? {
+        println!("{:?}", row.get("id"));
+    }
+
+    // Torii rejections carry the `{code, message, details}` envelope.
+    let bad = ListQuery::new().filter(field("colour").eq("red"));
+    match client.list_page(&Collection::AssetDefinitions, &bad).await {
+        Err(Error::Api { error, .. }) if error.code() == "invalid_filter" => {
+            let details = error.details();
+            eprintln!(
+                "{}; accepted fields: {:?}",
+                error.message(),
+                details.and_then(|details| details.expected())
+            );
+        }
+        other => {
+            other?;
+        }
+    }
+    Ok(())
+}
+```
+
+`Client` reads are public and unsigned. `client.account_client()?.list_page(..)`
+and `.list(..)` add the account's canonical request signature, which only widens
+visibility into restricted dataspaces; multisignature member contexts read
+publicly. Parameterised collections carry their subject:
+`Collection::AccountAssets(account_id)`, `Collection::AssetHolders(definition_id)`
+and `Collection::AccountTransactions(account_id)`.
+
+`Collection::Transactions` and `Collection::AccountTransactions` are history
+collections (`Collection::is_history`): rows arrive newest first by
+`block_height`, then `block_index`, and `sort`, `include_total` and `aggregate`
+are rejected. A page may hold fewer rows than `limit`, or none, and still carry
+a `next_cursor`; `list` keeps following it until it is absent. Bounds on
+`block_height` in the filter's top-level `and` also bound Torii's scan, as in
+`field("block_height").gte(1_200) & field("result_ok").eq(true)`. Aggregates
+over rows that span several dataspace routes are rejected with
+`invalid_aggregate`; page through the rows instead. Object and array literals
+(only valid against `metadata.<key>`) exist only in the JSON form that the SDK
+sends.
+
+Queries are validated before dispatch: a query Torii would reject returns
+`Error::InvalidListQuery` with the same code. `Error::code()` returns the code of
+either error; `ApiError` also exposes the HTTP status, `details.field` (the
+offending control), `expected`, `actual`, `hint`, the `x-iroha-reject-code`
+header and `Retry-After`. Responses without an envelope remain `Error::Http`.
+
+The blocking facade signs with its bound account and returns a lazy iterator:
+
+```rust
+use iroha::collections::{Collection, ListQuery};
+
+fn print_domains(client: &iroha::blocking::Client) -> iroha::Result<()> {
+    for domain in client.list(Collection::Domains, ListQuery::new().limit(200)) {
+        println!("{:?}", domain?.get("id"));
+    }
+    Ok(())
+}
+```
 
 ## Node diagnostics
 

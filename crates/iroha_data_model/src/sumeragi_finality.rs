@@ -74,9 +74,14 @@ use norito::{
 use crate::{
     NetworkId,
     block::{BlockHeader, SignedBlock, decode_framed_signed_block},
+    isi::SetParameter,
+    parameter::{
+        Parameter,
+        system::{SumeragiParameter, SumeragiParameters},
+    },
     query::CommittedTransaction,
     sumeragi::SumeragiStatus,
-    transaction::TransactionEntrypoint,
+    transaction::{Executable, TransactionEntrypoint},
 };
 #[cfg(test)]
 use iroha_sumeragi::preimage::{InstanceKind, instance_id};
@@ -111,6 +116,102 @@ pub enum FinalityReadError {
     /// Intrinsic format ceilings are not automatically a retryable caller refusal.
     #[error("checkpoint decoder resource: {0}")]
     DecodeResource(#[source] norito::core::DecodeAttemptError),
+}
+
+/// Authenticate signed genesis and fingerprint its exact native consensus configuration.
+///
+/// This binds protocol, initial epoch authority and all explicit signed Sumeragi parameters.
+/// It is distinct from the reporting node's local resource and driver fingerprint.
+///
+/// # Errors
+/// Preserves unfinished signed-parameter decoder errors and rejects invalid signatures,
+/// omitted or repeated parameters, and invalid native parameter geometry.
+pub fn consensus_configuration_fingerprint(
+    genesis: &SignedBlock,
+) -> Result<Hash, GenesisReadError> {
+    let epoch = genesis_epoch(genesis)?;
+    let metadata = signed_genesis_consensus_metadata(genesis)?;
+    let mut parameters = ExplicitParameters::new(metadata.block_cadence_ms);
+    for transaction in genesis.external_transactions() {
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return Err("native configuration requires explicit signed instructions".into());
+        };
+        for instruction in instructions {
+            if let Some(set) = instruction.as_any().downcast_ref::<SetParameter>() {
+                if let Parameter::Sumeragi(parameter) = set.inner() {
+                    parameters.insert(*parameter)?;
+                }
+            }
+        }
+    }
+    let parameters = parameters.finish()?;
+    let encoded = norito::encode_canonical(&(crate::sumeragi::PROTOCOL_VERSION, epoch, parameters))
+        .map_err(|error| error.to_string())?;
+    Ok(Hash::new_from_chunks(&[
+        b"iroha:native-config:v1",
+        &encoded,
+    ]))
+}
+
+struct ExplicitParameters {
+    value: SumeragiParameters,
+    seen: u8,
+}
+impl ExplicitParameters {
+    fn new(cadence: std::num::NonZeroU64) -> Self {
+        Self {
+            value: SumeragiParameters {
+                block_cadence_ms: cadence,
+                ..SumeragiParameters::default()
+            },
+            seen: 0,
+        }
+    }
+    fn insert(&mut self, parameter: SumeragiParameter) -> Result<(), String> {
+        let bit = match parameter {
+            SumeragiParameter::PayloadRetryIntervalMs(value) => {
+                self.value.payload_retry_interval_ms = value;
+                1
+            }
+            SumeragiParameter::ExecBudgetMs(value) => {
+                self.value.exec_budget_ms = value;
+                2
+            }
+            SumeragiParameter::ApplyBudgetMs(value) => {
+                self.value.apply_budget_ms = value;
+                4
+            }
+            SumeragiParameter::MaxBlockBytes(value) => {
+                self.value.max_block_bytes = value;
+                8
+            }
+            SumeragiParameter::EpochLengthBlocks(value) => {
+                self.value.epoch_length_blocks = value;
+                16
+            }
+            SumeragiParameter::MaxClockDriftMs(value) => {
+                self.value.max_clock_drift_ms = value;
+                32
+            }
+            SumeragiParameter::DemotionWindow(value) => {
+                self.value.demotion_window = value;
+                64
+            }
+        };
+        if self.seen & bit != 0 {
+            return Err("signed genesis repeats a native Sumeragi parameter".into());
+        }
+        self.seen |= bit;
+        Ok(())
+    }
+    fn finish(self) -> Result<ChainParamsRecord, String> {
+        if self.seen != 0x7f {
+            return Err("signed genesis omits an explicit native Sumeragi parameter".into());
+        }
+        let parameters = ChainParamsRecord::from_parameters(&self.value);
+        parameters.validate().map_err(|error| error.to_string())?;
+        Ok(parameters)
+    }
 }
 
 fn need(condition: bool, reason: &str) -> Result<(), FinalityError> {
@@ -1151,3 +1252,118 @@ pub(crate) mod tests;
 /// Fixed public signing material for native proof tests; never deployment trust or execution evidence.
 #[cfg(all(any(test, feature = "test-fixtures"), feature = "transparent_api"))]
 pub mod test_fixtures;
+
+#[cfg(all(test, feature = "transparent_api"))]
+mod configuration_fingerprint_tests {
+    use super::*;
+    use crate::{
+        account::AccountId,
+        transaction::{FeePaymentIntent, TransactionBuilder},
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use std::time::Duration;
+
+    fn signed_parameters(
+        original: &SignedBlock,
+        parameters: Vec<SumeragiParameter>,
+    ) -> SignedBlock {
+        let mut instructions: Vec<crate::isi::InstructionBox> = original
+            .external_transactions()
+            .flat_map(|transaction| {
+                let Executable::Instructions(instructions) = transaction.instructions() else {
+                    panic!("fixture requires signed instructions");
+                };
+                instructions
+                    .iter()
+                    .filter(|instruction| {
+                        !instruction
+                            .as_any()
+                            .downcast_ref::<SetParameter>()
+                            .is_some_and(|set| matches!(set.inner(), Parameter::Sumeragi(_)))
+                    })
+                    .cloned()
+            })
+            .collect();
+        instructions.extend(
+            parameters
+                .into_iter()
+                .map(|parameter| SetParameter::new(Parameter::Sumeragi(parameter)).into()),
+        );
+        let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
+        let mut transaction = TransactionBuilder::new_genesis(
+            AccountId::new(authority.public_key().clone()),
+            FeePaymentIntent::authority(vec![], None),
+        );
+        transaction.set_creation_time(Duration::ZERO);
+        let transaction = transaction
+            .with_instructions(instructions)
+            .sign(authority.private_key());
+        SignedBlock::try_genesis(vec![transaction], authority.private_key(), None, None).unwrap()
+    }
+
+    #[test]
+    fn explicit_parameters_reject_every_missing_and_repeated_signed_field() {
+        let fixture = test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
+        let parameters: Vec<_> = SumeragiParameters::default().parameters().collect();
+        assert_eq!(parameters.len(), 7);
+        let expected = consensus_configuration_fingerprint(fixture.genesis()).unwrap();
+        assert_eq!(
+            expected,
+            consensus_configuration_fingerprint(&signed_parameters(
+                fixture.genesis(),
+                parameters.clone()
+            ))
+            .unwrap()
+        );
+        for index in 0..parameters.len() {
+            let mut missing = parameters.clone();
+            missing.remove(index);
+            assert!(
+                consensus_configuration_fingerprint(&signed_parameters(fixture.genesis(), missing))
+                    .is_err()
+            );
+            let mut repeated = parameters.clone();
+            repeated.push(parameters[index]);
+            assert!(
+                consensus_configuration_fingerprint(&signed_parameters(
+                    fixture.genesis(),
+                    repeated
+                ))
+                .is_err()
+            );
+        }
+        assert!(
+            consensus_configuration_fingerprint(
+                test_fixtures::NativeFinalityFixture::new().genesis()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn signed_configuration_changes_bind_the_hash_and_invalid_signatures_refuse() {
+        let fixture = test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
+        let original = consensus_configuration_fingerprint(fixture.genesis()).unwrap();
+        let mut parameters: Vec<_> = SumeragiParameters::default().parameters().collect();
+        for parameter in &mut parameters {
+            if let SumeragiParameter::PayloadRetryIntervalMs(value) = parameter {
+                *value = std::num::NonZeroU64::new(value.get() + 1).unwrap();
+            }
+        }
+        let changed = signed_parameters(fixture.genesis(), parameters);
+        assert_ne!(
+            original,
+            consensus_configuration_fingerprint(&changed).unwrap()
+        );
+        let mut tampered = fixture.genesis().clone();
+        let foreign = KeyPair::from_seed(vec![0xC9; 32], Algorithm::Ed25519);
+        let signature = crate::block::BlockSignature::new(
+            0,
+            SignatureOf::new(foreign.private_key(), &tampered.header()),
+        );
+        tampered
+            .replace_signatures(std::collections::BTreeSet::from([signature]))
+            .unwrap();
+        assert!(consensus_configuration_fingerprint(&tampered).is_err());
+    }
+}

@@ -16,7 +16,7 @@ use super::{
     crypto::{SimSigner, aggregate},
     driver::{encode_tx, reference_exec},
     scenario::Scenario,
-    world::{Machine, World},
+    world::{Machine, SharedWire, World},
 };
 use crate::{
     api::{Action, ExecOutcome},
@@ -213,7 +213,7 @@ pub struct Adversary {
     /// Each malicious replica injects one unsolicited corrupt copy per exact row identity.
     /// Receiving another adversary's copy must not recursively amplify the test traffic.
     forged_rows: BTreeSet<(usize, Hash32, u64, Hash32, u32)>,
-    twins: VecDeque<(usize, Millis, Vec<usize>, Rc<WireMessage>)>,
+    twins: VecDeque<(usize, Millis, Vec<usize>, Rc<SharedWire>)>,
     /// Late leader (body): when the full copy of `(instance, h)` goes out.
     late_bodies: BTreeMap<(usize, u64), Millis>,
     counter: u64,
@@ -378,7 +378,7 @@ impl World {
     }
 
     fn byz_send_all(&mut self, r: usize, height: u64, msg: WireMessage, at: Millis) {
-        let msg = Rc::new(msg);
+        let msg = SharedWire::share(msg);
         for target in self.members_except(r, height) {
             self.send_to_replica(r, target, Rc::clone(&msg), at);
         }
@@ -731,8 +731,8 @@ impl World {
                                 .filter_map(|m| self.replica_of(*m, inst))
                                 .collect();
                             let (half_a, half_b) = recipients.split_at(recipients.len() / 2);
-                            let a = Rc::new(a);
-                            let b = Rc::new(b);
+                            let a = SharedWire::share(a);
+                            let b = SharedWire::share(b);
                             for &x in half_a {
                                 self.send_to_replica(r, x, Rc::clone(&a), at);
                             }
@@ -854,7 +854,7 @@ impl World {
                                         r,
                                         due,
                                         recipients,
-                                        Rc::new(msg.clone()),
+                                        SharedWire::share(msg.clone()),
                                     ));
                                     keep = false;
                                 }
@@ -1170,11 +1170,11 @@ impl World {
 
     /// Observe a message arriving at a Byzantine replica.
     #[allow(clippy::too_many_lines)] // one dispatch over the strategies
-    pub fn byz_observe(&mut self, r: usize, from: &PublicKey, msg: &Rc<WireMessage>) {
+    pub fn byz_observe(&mut self, r: usize, from: &PublicKey, msg: &Rc<SharedWire>) {
         let strategies = self.adv.strategies(r);
         let inst = self.replicas[r].inst;
         for strategy in &strategies {
-            match (strategy, &**msg) {
+            match (strategy, msg.message()) {
                 (Strategy::TcMinHq, WireMessage::Timeout(t)) => self.observe_timeout(r, t),
                 (Strategy::ForgeEchoes, WireMessage::Status(s)) => {
                     if let Some(nonce) = s.probe {
@@ -1188,7 +1188,7 @@ impl World {
                     if self.adv.requests.len() < 256 {
                         self.adv
                             .requests
-                            .push_back((r, from.clone(), (**msg).clone()));
+                            .push_back((r, from.clone(), msg.message().clone()));
                     }
                 }
                 (Strategy::ForgeBodies, WireMessage::PayloadChunk(chunk)) => {
@@ -1244,12 +1244,12 @@ impl World {
                 }
                 (Strategy::Replay, _) => {
                     if self.adv.replay.len() < 512 {
-                        self.adv.replay.push_back((inst, (**msg).clone()));
+                        self.adv.replay.push_back((inst, msg.message().clone()));
                     }
                 }
                 (Strategy::SplitBrain, _) => self.split_brain_observe(r, msg),
                 (Strategy::ReplayOldPqc, _) => {
-                    let found: Vec<&Qc> = match &**msg {
+                    let found: Vec<&Qc> = match msg.message() {
                         WireMessage::Qc(q) => vec![q],
                         WireMessage::Timeout(t) => t.high_pqc.iter().collect(),
                         WireMessage::Tc(t) => t.high_pqc.iter().collect(),
@@ -1456,7 +1456,7 @@ impl World {
                             .collect();
                         for s in forged {
                             self.adv.counter += 1;
-                            let vote = Rc::new(WireMessage::Vote(Vote {
+                            let vote = SharedWire::share(WireMessage::Vote(Vote {
                                 epoch,
                                 kind: VoteKind::Commit,
                                 instance,
@@ -1745,8 +1745,8 @@ impl World {
                     let all: Vec<usize> = (0..self.replicas.len())
                         .filter(|x| self.replicas[*x].inst == inst && *x != r)
                         .collect();
-                    let status = Rc::new(WireMessage::Status(Box::new(status)));
-                    let bare = Rc::new(WireMessage::Qc(qc));
+                    let status = SharedWire::share(WireMessage::Status(Box::new(status)));
+                    let bare = SharedWire::share(WireMessage::Qc(qc));
                     for x in all {
                         self.send_to_replica(r, x, Rc::clone(&status), now);
                         self.send_to_replica(r, x, Rc::clone(&bare), now);
@@ -1772,8 +1772,8 @@ impl World {
                                 continue;
                             };
                             let id = self.instances[other].id;
-                            let relabelled = Rc::new(relabel(&msg, id));
-                            let raw = Rc::new(msg.clone());
+                            let relabelled = SharedWire::share(relabel(&msg, id));
+                            let raw = SharedWire::share(msg.clone());
                             // Deliver to every replica of the other instance (bypassing
                             // routing for the unchanged copy).
                             let targets: Vec<usize> = (0..self.replicas.len())
@@ -1847,7 +1847,12 @@ impl World {
             },
         ));
         for msg in out {
-            self.net_send(r, to, Rc::new(WireMessage::Status(Box::new(msg))), now);
+            self.net_send(
+                r,
+                to,
+                SharedWire::share(WireMessage::Status(Box::new(msg))),
+                now,
+            );
         }
     }
 
@@ -1896,7 +1901,7 @@ impl World {
                             header: block.header().clone(),
                             availability: block.availability().clone(),
                         });
-                        self.net_send(r, &from, Rc::new(manifest), now);
+                        self.net_send(r, &from, SharedWire::share(manifest), now);
                         let chunk = WireMessage::PayloadChunk(PayloadChunk {
                             instance,
                             height: q.height,
@@ -1904,7 +1909,7 @@ impl World {
                             index: 0,
                             bytes: crate::availability::RowBytes::from_untrusted(row).unwrap(),
                         });
-                        self.net_send(r, &from, Rc::new(chunk), now);
+                        self.net_send(r, &from, SharedWire::share(chunk), now);
                     }
                 }
                 WireMessage::SyncRequest(q) => {
@@ -1945,7 +1950,7 @@ impl World {
                         .collect();
                     if !blocks.is_empty() {
                         let msg = WireMessage::SyncResponse(SyncResponse { instance, blocks });
-                        self.net_send(r, &from, Rc::new(msg), now);
+                        self.net_send(r, &from, SharedWire::share(msg), now);
                     }
                 }
                 _ => {}
@@ -1960,9 +1965,9 @@ impl World {
         &mut self,
         from: usize,
         to: usize,
-        msg: Rc<WireMessage>,
+        msg: Rc<SharedWire>,
         depart: Millis,
-    ) -> Option<(Rc<WireMessage>, Millis)> {
+    ) -> Option<(Rc<SharedWire>, Millis)> {
         let from_m = self.replicas[from].machine;
         let to_m = self.replicas[to].machine;
         let inst = self.replicas[from].inst;
@@ -1973,7 +1978,7 @@ impl World {
             let done = i == inst
                 && !from_byz
                 && from_m != xm
-                && match &*msg {
+                && match msg.message() {
                     WireMessage::Qc(q) => q.height == h && q.kind == VoteKind::Commit,
                     WireMessage::Status(s) => {
                         s.committed_qc.as_ref().is_some_and(|q| q.height >= h)
@@ -2008,14 +2013,14 @@ impl World {
         if let Some(relay) = self.adv.rules.iter().find_map(|rule| match rule {
             NetRule::RelayEchoes(m) => Some(*m),
             _ => None,
-        }) && let WireMessage::Status(s) = &*msg
+        }) && let WireMessage::Status(s) = msg.message()
             && s.echo.is_some()
             && !self.machines[from_m].byz
             && let Some(relay_r) = self.replica_of(relay, inst)
             && relay_r != to
         {
             let relay_key = self.net_key(relay_r);
-            self.inject(to, relay_key, (*msg).clone(), 50);
+            self.inject(to, relay_key, msg.message().clone(), 50);
             return None;
         }
         // Hidden PQC (F33): keep the holder's lock out of the next TC, make the next view fail,
@@ -2023,7 +2028,7 @@ impl World {
         if let Some((i, h, v, xm)) = self.adv.hidden
             && i == inst
         {
-            let released = match &*msg {
+            let released = match msg.message() {
                 WireMessage::Tc(tc) => tc.height == h && tc.view > v,
                 WireMessage::Qc(q) => q.height == h && q.kind == VoteKind::Commit,
                 WireMessage::Proposal(p) => {
@@ -2036,7 +2041,7 @@ impl World {
                 self.trace(from, format!("hidden PQC of h{h} released"));
             } else {
                 let to_byz = self.machines[to_m].byz;
-                match &*msg {
+                match msg.message() {
                     // The holder's round messages (votes, its lock-carrying timeouts) are slow.
                     _ if from_m == xm && !to_byz && msg.round_height() == Some(h) => {
                         return Some((msg, 2_500));
@@ -2052,7 +2057,7 @@ impl World {
                     WireMessage::Status(s) if from_m == xm && s.high_pqc.is_some() => {
                         let mut s2 = (**s).clone();
                         s2.high_pqc = None;
-                        return Some((Rc::new(WireMessage::Status(Box::new(s2))), 0));
+                        return Some((SharedWire::share(WireMessage::Status(Box::new(s2))), 0));
                     }
                     _ => {}
                 }
@@ -2064,7 +2069,7 @@ impl World {
         let mut extra = 0;
         let mut msg = msg;
         for rule in self.adv.rules.clone() {
-            match (rule, &*msg) {
+            match (rule, msg.message()) {
                 (NetRule::DelayLockedTimeouts(ms), WireMessage::Timeout(t))
                     if t.high_pqc.is_some() =>
                 {
@@ -2086,7 +2091,7 @@ impl World {
                         bytes[0] ^= 0xcc;
                         changed.bytes =
                             crate::availability::RowBytes::from_untrusted(bytes).unwrap();
-                        msg = Rc::new(WireMessage::PayloadChunk(changed));
+                        msg = SharedWire::share(WireMessage::PayloadChunk(changed));
                     }
                 }
                 (NetRule::DropCommitVotes { from, until }, WireMessage::Vote(v))
@@ -2104,7 +2109,7 @@ impl World {
                 {
                     let mut s2 = (**s).clone();
                     s2.high_pqc = None;
-                    msg = Rc::new(WireMessage::Status(Box::new(s2)));
+                    msg = SharedWire::share(WireMessage::Status(Box::new(s2)));
                 }
                 (NetRule::DropRowsTo(target), WireMessage::PayloadChunk(_)) if to_m == target => {
                     return None;
@@ -2152,7 +2157,7 @@ mod tests {
             world.byz_observe(
                 relay,
                 &source,
-                &Rc::new(WireMessage::PayloadChunk(chunk.clone())),
+                &SharedWire::share(WireMessage::PayloadChunk(chunk.clone())),
             );
         }
         let injected = enqueued(&world);
@@ -2167,7 +2172,7 @@ mod tests {
                 world.byz_observe(
                     relay,
                     &source,
-                    &Rc::new(WireMessage::PayloadChunk(chunk.clone())),
+                    &SharedWire::share(WireMessage::PayloadChunk(chunk.clone())),
                 );
             }
         }
@@ -2181,7 +2186,7 @@ mod tests {
             world.byz_observe(
                 relay,
                 &source,
-                &Rc::new(WireMessage::PayloadChunk(chunk.clone())),
+                &SharedWire::share(WireMessage::PayloadChunk(chunk.clone())),
             );
         }
         assert_eq!(

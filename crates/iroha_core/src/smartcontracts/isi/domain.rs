@@ -2438,6 +2438,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+            crate::sumeragi::amx::ensure_retained_definitions(
+                &state_transaction.world,
+                &BTreeSet::from([asset_definition_id.clone()]),
+            )?;
             crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_retail_daily_limit(
                 state_transaction,
                 &BTreeSet::from([asset_definition_id.clone()]),

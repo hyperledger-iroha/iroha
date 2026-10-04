@@ -35,6 +35,9 @@ pub(in crate::state) mod frozen_verifying_keys;
 #[path = "complete/frozen_proofs.rs"]
 pub(in crate::state) mod frozen_proofs;
 
+#[path = "complete/frozen_validation_fee_proposals.rs"]
+pub(in crate::state) mod frozen_validation_fee_proposals;
+
 #[path = "complete/grouped_capture.rs"]
 mod grouped_capture;
 pub(crate) use grouped_capture::{

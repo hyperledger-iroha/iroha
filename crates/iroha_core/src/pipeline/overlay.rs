@@ -1281,7 +1281,8 @@ pub(crate) enum VmAccessFence {
     Global,
 }
 impl VmAccessFence {
-    /// Derive a fail-closed fence from decoded bytecode rather than CNTR claims.
+    /// Derive a fail-closed fixture fence from decoded bytecode rather than CNTR claims.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn from_program_analysis(analysis: &ivm::analysis::ProgramAnalysis) -> Self {
         Self::from_syscall_numbers(analysis.syscalls.iter().map(|usage| usage.number))
@@ -6769,7 +6770,6 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
 mod tests {
     use super::test_support::{execution_block, seed_active_contract};
     use super::*;
-    use crate::state::State;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Registrable,

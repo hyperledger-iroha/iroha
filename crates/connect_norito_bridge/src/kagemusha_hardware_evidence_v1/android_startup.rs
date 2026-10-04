@@ -50,7 +50,7 @@ impl Startup {
 /// Read the actual package Context only. Context is transport to the Android framework, not
 /// an authority DTO: root/source pins are compiled, library bytes come from this loaded symbol,
 /// and Core independently authenticates app identity in raw KeyMint and Play Integrity originals.
-pub(super) fn initialize_if_packaged<'a>(
+pub(crate) fn initialize_if_packaged<'a>(
     env: &mut JNIEnv<'a>,
     application: &JObject<'a>,
     offered_root: &Path,

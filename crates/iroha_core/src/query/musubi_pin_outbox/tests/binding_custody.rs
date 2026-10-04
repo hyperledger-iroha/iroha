@@ -226,3 +226,76 @@ fn final_readback_moves_original_charged_frame_and_releases_only_on_final_drop()
     drop(readback);
     assert_eq!(budget.reserved_bytes(), baseline - original_len);
 }
+
+#[test]
+fn allocated_original_check_retains_exact_graph_through_frame_refusal_and_native_readback() {
+    use iroha_data_model::transaction::signed::pin_allocation::AllocatedPinTransactionV1;
+    let _retirement_pin = crossbeam_epoch::pin();
+    let mut fixture = Fixture::new();
+    let prepared = fixture.prepare();
+    let original = fixture.sign(prepared.instruction().clone().into());
+    let exact = original.encode_wire_v1().unwrap();
+    let deadline = prepared.deadline();
+    let budget = fixture.chain.state().ivm_execution_budget();
+    let before = budget.reserved_bytes();
+    let allocated = AllocatedPinTransactionV1::copy_from(&original, &budget).unwrap();
+    let graph_bytes = allocated.allocation_bytes().unwrap();
+    let pointer = backing(allocated.signed());
+    let held = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let failure = prepared
+        .bind_allocated_transaction(allocated)
+        .err()
+        .expect("original State pool full");
+    assert!(failure.error().is_retryable());
+    assert_eq!(backing(failure.0.signed.signed_transaction()), pointer);
+    assert_eq!(failure.deadline(), deadline);
+    drop(held);
+    assert_eq!(budget.reserved_bytes(), before + graph_bytes);
+    let pending = failure.retry().unwrap();
+    assert_eq!(backing(pending.signed_transaction()), pointer);
+    assert_eq!(
+        pending.signed_transaction().encode_wire_v1().unwrap(),
+        exact
+    );
+    assert_eq!(pending.deadline(), deadline);
+    assert_eq!(
+        budget.reserved_bytes(),
+        before + graph_bytes + pending.bound.canonical_external().len()
+    );
+    // Execute the separately retained original signed envelope, never a synthesized output.
+    assert!(fixture.chain.commit(vec![original])[0]);
+    let readback = pending
+        .verify_finalized()
+        .unwrap()
+        .consume_current(fixture.chain.state())
+        .unwrap();
+    assert_eq!(readback.high_water(), None);
+    assert_eq!(readback.applied_floor().height, fixture.chain.height());
+    assert_eq!(readback.canonical_external().is_empty(), false);
+    // Native State itself now owns new generations. Only the graph/frame delta is asserted above;
+    // this test does not equate State's later complete allocation total with its earlier cut.
+}
+
+#[test]
+fn allocated_check_rejects_a_different_pool_before_frame_allocation_without_losing_custody() {
+    use iroha_data_model::transaction::signed::pin_allocation::AllocatedPinTransactionV1;
+    let fixture = Fixture::new();
+    let prepared = fixture.prepare();
+    let signed = fixture.sign(prepared.instruction().clone().into());
+    let foreign = AllocationBudget::new(1024 * 1024);
+    let allocated = AllocatedPinTransactionV1::copy_from(&signed, &foreign).unwrap();
+    let bytes = allocated.allocation_bytes().unwrap();
+    let pointer = backing(allocated.signed());
+    let failure = prepared
+        .bind_allocated_transaction(allocated)
+        .err()
+        .expect("foreign pool");
+    assert_eq!(failure.rejection(), Some(Error::Transaction));
+    assert!(!failure.error().is_retryable());
+    assert_eq!(backing(failure.0.signed.signed_transaction()), pointer);
+    assert_eq!(foreign.reserved_bytes(), bytes);
+    drop(failure);
+    assert_eq!(foreign.reserved_bytes(), 0);
+}

@@ -621,6 +621,7 @@ sorafs.pop.wallet.import	POST	/v1/sorafs/pop/wallet/import	public	protocol_hands
 sorafs.pop.wallet.prove	POST	/v1/sorafs/pop/wallet/prove	public	protocol_handshake	authenticated_protocol_principal	compute	http	feature(app_api)	true	true	false	false
 sorafs.pop.wallet.synchronize	POST	/v1/sorafs/pop/wallet/synchronize	public	protocol_handshake	authenticated_protocol_principal	mutation	http	feature(app_api)	true	true	false	false
 sorafs.proof_stream.build	POST	/v1/sorafs/proof/stream	public	operator_signature	operator	compute	http	feature(app_api)	true	true	false	true
+sorafs.provider.attestation	POST	/v1/sorafs/provider/attestation	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
 sorafs.provider.list	GET	/v1/sorafs/providers	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 sorafs.provider.source	POST	/v1/sorafs/provider/source	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
 sorafs.provider_advert.submit	POST	/v1/sorafs/providers/advert	public	protocol_handshake	authenticated_protocol_principal	mutation	http	feature(app_api)	true	true	false	false

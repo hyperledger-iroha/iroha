@@ -10,6 +10,7 @@ using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Queries;
+using Hyperledger.Iroha.Query;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
 
@@ -895,10 +896,9 @@ public sealed partial class ToriiClientTests
               "query": {
                 "aggregate": {
                   "exact_results": true,
-                  "supported_resources": ["accounts", "assets"],
+                  "supported_resources": ["domains", "accounts", "asset_definitions", "nfts", "rwas", "account_assets", "asset_holders", "repo_agreements"],
                   "v1": true
                 },
-                "indexed_snapshot_marker": true,
                 "projection": {
                   "archive_export_v1": true,
                   "archive_version": 1,
@@ -915,8 +915,7 @@ public sealed partial class ToriiClientTests
                   "rowset_codec": "application/x-iroha-query-shard-rowset+norito",
                   "schema_version": 1,
                   "shard_catalog_v1": true
-                },
-                "row_enrichment_fields": ["primary_alias", "primary_alias_name", "primary_alias_dataspace", "primary_alias_domain", "has_primary_alias"]
+                }
               }
             }
             """;
@@ -932,7 +931,6 @@ public sealed partial class ToriiClientTests
         var allowedSigning = Assert.IsType<string[]>(capabilities.Crypto.Sm.AllowedSigning);
         var allowedCurveIds = Assert.IsType<int[]>(capabilities.Crypto.Curves.AllowedCurveIds);
         var allowedCurveBitmap = Assert.IsType<ulong[]>(capabilities.Crypto.Curves.AllowedCurveBitmap);
-        var rowEnrichmentFields = Assert.IsType<string[]>(capabilities.Query.RowEnrichmentFields);
         var supportedResources = Assert.IsType<string[]>(capabilities.Query.Aggregate.SupportedResources);
         var metadataKeys = Assert.IsType<string[]>(capabilities.Query.Projection.MetadataKeys);
         var exportSupportedResources = Assert.IsType<string[]>(capabilities.Query.Projection.ExportSupportedResources);
@@ -943,15 +941,14 @@ public sealed partial class ToriiClientTests
         allowedSigning[0] = "mutated";
         allowedCurveIds[0] = 99;
         allowedCurveBitmap[0] = 0;
-        rowEnrichmentFields[0] = "mutated";
         supportedResources[0] = "mutated";
         metadataKeys[0] = "mutated";
         exportSupportedResources[0] = "mutated";
         Assert.Contains("ed25519", capabilities.Crypto.Sm.AllowedSigning);
         Assert.Equal(1, capabilities.Crypto.Curves.AllowedCurveIds[0]);
         Assert.Equal((ulong)26, capabilities.Crypto.Curves.AllowedCurveBitmap[0]);
-        Assert.Equal("primary_alias", capabilities.Query.RowEnrichmentFields[0]);
-        Assert.Equal("accounts", capabilities.Query.Aggregate.SupportedResources[0]);
+        Assert.Equal("domains", capabilities.Query.Aggregate.SupportedResources[0]);
+        Assert.Equal(8, capabilities.Query.Aggregate.SupportedResources.Count);
         Assert.Equal("query_projection.locator", capabilities.Query.Projection.MetadataKeys[0]);
         Assert.Equal("accounts", capabilities.Query.Projection.ExportSupportedResources[0]);
         Assert.Equal("/v1/node/capabilities", handler.LastRequest!.RequestUri!.AbsolutePath);
@@ -978,7 +975,6 @@ public sealed partial class ToriiClientTests
             AllowedCurveIds = allowedCurveIds,
             AllowedCurveBitmap = allowedCurveBitmap,
         };
-        string[] rowEnrichmentFields = ["primary_alias"];
         string[] supportedResources = ["accounts"];
         var aggregate = new ToriiNodeAggregateQueryCapabilities
         {
@@ -1006,15 +1002,12 @@ public sealed partial class ToriiClientTests
         var query = new ToriiNodeQueryCapabilities
         {
             Aggregate = aggregate,
-            IndexedSnapshotMarker = true,
-            RowEnrichmentFields = rowEnrichmentFields,
             Projection = projection,
         };
 
         allowedSigning[0] = "mutated";
         allowedCurveIds[0] = 99;
         allowedCurveBitmap[0] = 0;
-        rowEnrichmentFields[0] = "mutated";
         supportedResources[0] = "mutated";
         metadataKeys[0] = "mutated";
         exportSupportedResources[0] = "mutated";
@@ -1022,7 +1015,6 @@ public sealed partial class ToriiClientTests
         AssertDetachedStringList(() => sm.AllowedSigning, "ed25519", "mutated-getter");
         AssertDetachedIntList(() => curves.AllowedCurveIds, 1, 99);
         AssertDetachedUInt64List(() => curves.AllowedCurveBitmap, 26, 0);
-        AssertDetachedStringList(() => query.RowEnrichmentFields, "primary_alias", "mutated-getter");
         AssertDetachedStringList(() => aggregate.SupportedResources, "accounts", "mutated-getter");
         AssertDetachedStringList(() => projection.MetadataKeys, "query_projection.locator", "mutated-getter");
         AssertDetachedStringList(() => projection.ExportSupportedResources, "accounts", "mutated-getter");
@@ -1366,31 +1358,6 @@ public sealed partial class ToriiClientTests
             NodeCapabilitiesResponseJson("query.aggregate.supported_resources", new JsonArray("accounts", "accounts")),
             "duplicate capability labels",
         };
-        yield return new object?[]
-        {
-            "query.indexed_snapshot_marker",
-            NodeCapabilitiesResponseJson("query.indexed_snapshot_marker", false),
-            "must be true",
-        };
-        yield return new object?[]
-        {
-            "query.row_enrichment_fields",
-            NodeCapabilitiesResponseJson("query.row_enrichment_fields", null),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "query.row_enrichment_fields[1]",
-            NodeCapabilitiesResponseJson(
-                "query.row_enrichment_fields",
-                new JsonArray(
-                    "primary_alias",
-                    "primary_alias_dataspace",
-                    "primary_alias_name",
-                    "primary_alias_domain",
-                    "has_primary_alias")),
-            "expected projection metadata key",
-        };
         yield return new object?[] { "query.projection", NodeCapabilitiesResponseJson("query.projection", null), "must not be null" };
         yield return new object?[]
         {
@@ -1597,10 +1564,9 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "curves", "allowed_curve_bitmap[0]", NodeCapabilitiesPayloadJson("curves", "allowed_curve_bitmap[0]", "26"), "unsigned integer" };
         yield return new object[] { "query", "node query capabilities", "null", "must not be null" };
         yield return new object[] { "query", "node query capabilities", "[]", "object" };
-        yield return new object[] { "query", "indexed_snapshot_marker", NodeCapabilitiesDuplicatePropertyJson("query", "indexed_snapshot_marker"), "must not appear more than once" };
+        yield return new object[] { "query", "aggregate", NodeCapabilitiesDuplicatePropertyJson("query", "aggregate"), "must not appear more than once" };
         yield return new object[] { "query", "node query capabilities.audit.nonce", NodeCapabilitiesUnknownExtensionDuplicateJson("query"), "must not appear more than once" };
-        yield return new object[] { "query", "indexed_snapshot_marker", NodeCapabilitiesPayloadJson("query", "indexed_snapshot_marker", "true"), "boolean" };
-        yield return new object[] { "query", "row_enrichment_fields", NodeCapabilitiesPayloadJson("query", "row_enrichment_fields", 1), "array" };
+        yield return new object[] { "query", "aggregate", NodeCapabilitiesPayloadJson("query", "aggregate", 1), "object" };
         yield return new object[] { "aggregate", "node aggregate query capabilities", "null", "must not be null" };
         yield return new object[] { "aggregate", "node aggregate query capabilities", "[]", "object" };
         yield return new object[] { "aggregate", "v1", NodeCapabilitiesDuplicatePropertyJson("aggregate", "v1"), "must not appear more than once" };
@@ -1641,20 +1607,28 @@ public sealed partial class ToriiClientTests
         {
             Query = response.Query with
             {
-                RowEnrichmentFields =
-                [
-                    "primary_alias",
-                    "primary_alias_dataspace",
-                    "primary_alias_name",
-                    "primary_alias_domain",
-                    "has_primary_alias",
-                ],
+                Projection = response.Query.Projection with
+                {
+                    MetadataKeys =
+                    [
+                        "query_projection.locator",
+                        "query_projection.partition_id",
+                        "query_projection.resource",
+                        "query_projection.asset_definition_id",
+                        "query_projection.indexed_height",
+                        "query_projection.indexed_block_hash_hex",
+                        "query_projection.row_count",
+                        "query_projection.rowset_codec",
+                        "query_projection.rowset_hash_hex",
+                        "query_projection.emitted_at_unix",
+                    ],
+                },
             },
         };
 
         var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
 
-        Assert.Contains("row_enrichment_fields[1]", error.Message);
+        Assert.Contains("metadata_keys[1]", error.Message);
         Assert.Contains("expected projection metadata key", error.Message);
     }
 
@@ -1693,7 +1667,6 @@ public sealed partial class ToriiClientTests
         yield return new object?[] { "curves", "AllowedCurveIds[0]", -1 };
 
         yield return new object?[] { "query", "Aggregate", null };
-        yield return new object?[] { "query", "RowEnrichmentFields[0]", "primary alias" };
         yield return new object?[] { "query", "Projection", null };
 
         yield return new object?[] { "aggregate", "V1", false };
@@ -1728,205 +1701,11 @@ public sealed partial class ToriiClientTests
         Assert.Equal(propertyName, error.ParamName);
     }
 
-    [Fact]
-    public async Task GetAccountsAsyncAddsPaginationAndDeserializesPage()
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent($$"""
-                {
-                  "items": [
-                    { "id": "{{CanonicalAccountId}}" }
-                  ],
-                  "total": 7
-                }
-                """),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var page = await client.GetAccountsAsync(limit: 5, offset: 2, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Single(page.Items);
-        Assert.Equal(CanonicalAccountId, page.Items[0].Id);
-        Assert.Equal(7, page.Total);
-        Assert.Equal("/v1/accounts?limit=5&offset=2", handler.LastRequest!.RequestUri!.PathAndQuery);
-    }
-
-    public static IEnumerable<object?[]> InvalidAccountsPageResponses()
-    {
-        yield return new object?[] { "items", AccountsPageResponseJson("items", null), "must not be null" };
-        yield return new object?[] { "items[0]", AccountsPageResponseJson("items[0]", null), "must not be null" };
-        yield return new object?[] { "items[0].id", AccountsPageResponseJson("items[0].id", null), "must not be null" };
-        yield return new object?[]
-        {
-            "items[0].id",
-            RemoveFirstArrayItemObjectJsonField(AccountsPageResponseJson("total", 1), "items", "id"),
-            "must not be null",
-        };
-        yield return new object?[] { "items[0].id", AccountsPageResponseJson("items[0].id", ""), "non-empty" };
-        yield return new object?[]
-        {
-            "items[0].id",
-            AccountsPageResponseJson("items[0].id", "sorauロ 1Ntest"),
-            "whitespace",
-        };
-        yield return new object?[]
-        {
-            "items[0].id",
-            AccountsPageResponseJson("items[0].id", "sorauロ1Ntest\u0001"),
-            "control characters",
-        };
-        yield return new object?[]
-        {
-            "items[0].id",
-            AccountsPageResponseJson("items[0].id", "merchant@sora"),
-            "canonical I105",
-        };
-        yield return new object?[]
-        {
-            "items[0].id",
-            AccountsPageResponseJson("items[0].id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"),
-            "canonical I105",
-        };
-        yield return new object?[]
-        {
-            "items[0].id",
-            AccountsPageResponseJson("items[0].id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"),
-            "canonical I105",
-        };
-        yield return new object?[] { "total", AccountsPageResponseJson("total", -1L), "non-negative" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidAccountsPageResponses))]
-    public async Task GetAccountsAsyncRejectsMalformedResponse(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() => client.GetAccountsAsync(cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Equal("/v1/accounts", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    public static IEnumerable<object[]> InvalidRawAccountSummaries()
-    {
-        yield return new object[] { "account summary", "null", "must not be null" };
-        yield return new object[] { "account summary", "[]", "object" };
-        yield return new object[]
-        {
-            "id",
-            AccountSummaryDuplicatePropertyJson("id"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "account summary.audit.nonce", JsonWithIgnoredAuditDuplicate(AccountSummaryJson("id", CanonicalAccountId)), "must not appear more than once" };
-        yield return new object[] { "id", AccountSummaryJson("id", null), "must not be null" };
-        yield return new object[] { "id", RemoveTopLevelJsonField(AccountSummaryJson("id", CanonicalAccountId), "id"), "must not be null" };
-        yield return new object[] { "id", AccountSummaryJson("id", 1), "string" };
-        yield return new object[] { "id", AccountSummaryJson("id", "sorauロ 1Ntest"), "whitespace" };
-        yield return new object[] { "id", AccountSummaryJson("id", "merchant@sora"), "canonical I105" };
-        yield return new object[] { "id", AccountSummaryJson("id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
-        yield return new object[] { "id", AccountSummaryJson("id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawAccountSummaries))]
-    public void RawAccountSummaryRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiAccountSummary>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawAccountsPages()
-    {
-        yield return new object[] { "accounts response", "null", "must not be null" };
-        yield return new object[] { "accounts response", "[]", "object" };
-        yield return new object[]
-        {
-            "items",
-            AccountsPageDuplicatePropertyJson("items"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "accounts response.audit.nonce", JsonWithIgnoredAuditDuplicate(AccountsPageResponseJson("total", 1)), "must not appear more than once" };
-        yield return new object[] { "items", AccountsPageResponseJson("items", null), "must not be null" };
-        yield return new object[] { "items", AccountsPageResponseJson("items", 1), "array" };
-        yield return new object[] { "items[0]", AccountsPageResponseJson("items[0]", null), "must not be null" };
-        yield return new object[]
-        {
-            "items[0].id",
-            AccountsPageDuplicateItemPropertyJson("id"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "items[0].audit.nonce", JsonWithFirstItemIgnoredAuditDuplicate(AccountsPageResponseJson("total", 1)), "must not appear more than once" };
-        yield return new object[] { "items[0].id", AccountsPageResponseJson("items[0].id", null), "must not be null" };
-        yield return new object[] { "items[0].id", RemoveFirstArrayItemObjectJsonField(AccountsPageResponseJson("total", 1), "items", "id"), "must not be null" };
-        yield return new object[] { "total", RemoveTopLevelJsonField(AccountsPageResponseJson("total", 1), "total"), "must not be null" };
-        yield return new object[] { "total", AccountsPageResponseJson("total", "1"), "integer" };
-        yield return new object[] { "total", AccountsPageResponseJson("total", -1L), "non-negative" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawAccountsPages))]
-    public void RawAccountsPageRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiAccountsPage>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public void RawAccountsPageWriteRejectsNegativeTotal()
-    {
-        var response = new ToriiAccountsPage
-        {
-            Items = [new ToriiAccountSummary { Id = CanonicalAccountId }],
-            Total = -1,
-        };
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("total", error.Message);
-        Assert.Contains("non-negative", error.Message);
-    }
-
     public static IEnumerable<object?[]> InvalidDirectAccountQueryMetadata()
     {
-        yield return new object?[] { "summary", "Id", "merchant@sora" };
-        yield return new object?[] { "summary", "Id", " " + CanonicalAccountId };
-        yield return new object?[] { "summary", "Id", CanonicalAccountId + "\u0001" };
-
-        yield return new object?[] { "asset-balance", "Asset", "" };
-        yield return new object?[] { "asset-balance", "Asset", " rose#wonderland.paynet" };
-        yield return new object?[] { "asset-balance", "AccountId", "merchant@sora" };
-        yield return new object?[] { "asset-balance", "Scope", "glob\u0001al" };
-        yield return new object?[] { "asset-balance", "AssetName", " rose" };
-        yield return new object?[] { "asset-balance", "AssetAlias", "" };
-        yield return new object?[] { "asset-balance", "Quantity", "01" };
-        yield return new object?[] { "asset-balance", "Quantity", "1.20" };
-
         yield return new object?[] { "permission", "Name", "" };
         yield return new object?[] { "permission", "Name", " CanResolveAccountAlias" };
         yield return new object?[] { "permission", "Name", "CanResolveAccountAlias\u0001" };
-
-        yield return new object?[] { "transaction", "Authority", "merchant@sora" };
-        yield return new object?[] { "transaction", "Authority", " " + CanonicalAccountId };
-        yield return new object?[] { "transaction", "TimestampMilliseconds", 0L };
-        yield return new object?[] { "transaction", "EntrypointHash", ToriiTransactionHashHex.ToUpperInvariant() };
-        yield return new object?[] { "transaction", "EntrypointHash", "0x" + ToriiTransactionHashHex };
     }
 
     [Theory]
@@ -1955,36 +1734,6 @@ public sealed partial class ToriiClientTests
             var secondAccess = Assert.IsType<T[]>(getItems());
             Assert.Same(original, Assert.Single(secondAccess));
         }
-
-        var accountSummary = new ToriiAccountSummary { Id = CanonicalAccountId };
-        var replacementAccountSummary = new ToriiAccountSummary { Id = ExplorerDirectoryAccountId };
-        var accountItems = new List<ToriiAccountSummary> { accountSummary };
-        var accountsPage = new ToriiAccountsPage { Items = accountItems, Total = 1 };
-
-        AssertSnapshot(accountItems, () => accountsPage.Items, accountSummary, replacementAccountSummary);
-        var accountsJson = JsonSerializer.Serialize(accountsPage);
-        var roundTripAccounts = Assert.IsType<ToriiAccountsPage>(
-            JsonSerializer.Deserialize<ToriiAccountsPage>(accountsJson));
-        Assert.Equal(CanonicalAccountId, Assert.Single(roundTripAccounts.Items).Id);
-
-        var assetBalance = new ToriiAssetBalance
-        {
-            Asset = "rose#wonderland.paynet",
-            AccountId = CanonicalAccountId,
-            Scope = "global",
-            AssetName = "rose",
-            AssetAlias = "merchant-rose",
-            Quantity = "10",
-        };
-        var replacementAssetBalance = assetBalance with { AssetName = "iris", Quantity = "20" };
-        var assetItems = new List<ToriiAssetBalance> { assetBalance };
-        var assetPage = new ToriiAssetBalancesPage { Items = assetItems, Total = 1 };
-
-        AssertSnapshot(assetItems, () => assetPage.Items, assetBalance, replacementAssetBalance);
-        var assetJson = JsonSerializer.Serialize(assetPage);
-        var roundTripAssets = Assert.IsType<ToriiAssetBalancesPage>(
-            JsonSerializer.Deserialize<ToriiAssetBalancesPage>(assetJson));
-        Assert.Equal("rose", Assert.Single(roundTripAssets.Items).AssetName);
 
         var aliasItem = new ToriiAccountAliasLookupItem
         {
@@ -2023,27 +1772,6 @@ public sealed partial class ToriiClientTests
         var roundTripPermissions = Assert.IsType<ToriiAccountPermissionsPage>(
             JsonSerializer.Deserialize<ToriiAccountPermissionsPage>(permissionsJson));
         Assert.Equal("CanResolveAccountAlias", Assert.Single(roundTripPermissions.Items).Name);
-
-        var transaction = new ToriiTransactionSummary
-        {
-            Authority = CanonicalAccountId,
-            TimestampMilliseconds = 1,
-            EntrypointHash = ToriiTransactionHashHex,
-            ResultOk = true,
-        };
-        var replacementTransaction = transaction with
-        {
-            Authority = ExplorerTransactionAuthorityAccountId,
-            ResultOk = false,
-        };
-        var transactionItems = new List<ToriiTransactionSummary> { transaction };
-        var transactionsPage = new ToriiTransactionsPage { Items = transactionItems, Total = 1 };
-
-        AssertSnapshot(transactionItems, () => transactionsPage.Items, transaction, replacementTransaction);
-        var transactionsJson = JsonSerializer.Serialize(transactionsPage);
-        var roundTripTransactions = Assert.IsType<ToriiTransactionsPage>(
-            JsonSerializer.Deserialize<ToriiTransactionsPage>(transactionsJson));
-        Assert.Equal(CanonicalAccountId, Assert.Single(roundTripTransactions.Items).Authority);
     }
 
     [Fact]
@@ -4568,612 +4296,6 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task GetAccountAssetsAsyncEncodesFiltersAndDeserializesBalances()
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent($$"""
-                {
-                  "items": [
-                    {
-                      "asset": "rose#wonderland.paynet",
-                      "account_id": "{{CanonicalAccountId}}",
-                      "scope": "global",
-                      "asset_name": "rose",
-                      "asset_alias": null,
-                      "quantity": "10"
-                    }
-                  ],
-                  "total": 1
-                }
-                """),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var balances = await client.GetAccountAssetsAsync(CanonicalAccountId, limit: 10, offset: 1, asset: "rose#wonderland.paynet", scope: "global", cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Single(balances.Items);
-        Assert.Equal("rose#wonderland.paynet", balances.Items[0].Asset);
-        Assert.Equal("10", balances.Items[0].Quantity);
-        Assert.Contains("/v1/accounts/", handler.LastRequest!.RequestUri!.AbsoluteUri);
-        Assert.Contains("/assets", handler.LastRequest.RequestUri.AbsoluteUri);
-        Assert.Equal("limit=10&offset=1&asset=rose%23wonderland.paynet&scope=global", handler.LastRequest.RequestUri.Query.TrimStart('?'));
-    }
-
-    public static IEnumerable<object?[]> InvalidAccountAssetBalanceResponses()
-    {
-        yield return new object?[] { "items", AccountAssetsResponseJson("items", null), "must not be null" };
-        yield return new object?[] { "items[0]", AccountAssetsResponseJson("items[0]", null), "must not be null" };
-        yield return new object?[] { "items[0].asset", AccountAssetsResponseJson("items[0].asset", null), "must not be null" };
-        yield return new object?[]
-        {
-            "items[0].asset",
-            RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "asset"),
-            "must not be null",
-        };
-        yield return new object?[] { "items[0].asset", AccountAssetsResponseJson("items[0].asset", ""), "non-empty" };
-        yield return new object?[]
-        {
-            "items[0].account_id",
-            AccountAssetsResponseJson("items[0].account_id", null),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0].account_id",
-            RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "account_id"),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0].account_id",
-            AccountAssetsResponseJson("items[0].account_id", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
-            "surrounding whitespace",
-        };
-        yield return new object?[]
-        {
-            "items[0].account_id",
-            AccountAssetsResponseJson("items[0].account_id", "merchant@sora"),
-            "canonical I105",
-        };
-        yield return new object?[]
-        {
-            "items[0].account_id",
-            AccountAssetsResponseJson("items[0].account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"),
-            "canonical I105",
-        };
-        yield return new object?[]
-        {
-            "items[0].account_id",
-            AccountAssetsResponseJson("items[0].account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"),
-            "canonical I105",
-        };
-        yield return new object?[] { "items[0].scope", AccountAssetsResponseJson("items[0].scope", null), "must not be null" };
-        yield return new object?[]
-        {
-            "items[0].scope",
-            RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "scope"),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0].scope",
-            AccountAssetsResponseJson("items[0].scope", "glob\u0001al"),
-            "control characters",
-        };
-        yield return new object?[]
-        {
-            "items[0].asset_name",
-            AccountAssetsResponseJson("items[0].asset_name", null),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0].asset_name",
-            RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "asset_name"),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0].asset_name",
-            AccountAssetsResponseJson("items[0].asset_name", " rose"),
-            "surrounding whitespace",
-        };
-        yield return new object?[]
-        {
-            "items[0].asset_alias",
-            AccountAssetsResponseJson("items[0].asset_alias", ""),
-            "non-empty",
-        };
-        yield return new object?[]
-        {
-            "items[0].quantity",
-            AccountAssetsResponseJson("items[0].quantity", null),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0].quantity",
-            RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "quantity"),
-            "must not be null",
-        };
-        yield return new object?[] { "items[0].quantity", AccountAssetsResponseJson("items[0].quantity", ""), "non-empty" };
-        yield return new object?[]
-        {
-            "items[0].quantity",
-            AccountAssetsResponseJson("items[0].quantity", " 10"),
-            "surrounding whitespace",
-        };
-        yield return new object?[]
-        {
-            "items[0].quantity",
-            AccountAssetsResponseJson("items[0].quantity", "-1"),
-            "canonical non-negative numeric",
-        };
-        yield return new object?[]
-        {
-            "items[0].quantity",
-            AccountAssetsResponseJson("items[0].quantity", "+1"),
-            "canonical non-negative numeric",
-        };
-        yield return new object?[]
-        {
-            "items[0].quantity",
-            AccountAssetsResponseJson("items[0].quantity", "01"),
-            "canonical non-negative numeric",
-        };
-        yield return new object?[]
-        {
-            "items[0].quantity",
-            AccountAssetsResponseJson("items[0].quantity", "1."),
-            "canonical non-negative numeric",
-        };
-        yield return new object?[]
-        {
-            "items[0].quantity",
-            AccountAssetsResponseJson("items[0].quantity", "1.20"),
-            "canonical non-negative numeric",
-        };
-        yield return new object?[]
-        {
-            "items[0].quantity",
-            AccountAssetsResponseJson("items[0].quantity", "1.23456789012345678901234567890"),
-            "canonical non-negative numeric",
-        };
-        yield return new object?[] { "total", AccountAssetsResponseJson("total", -1L), "non-negative" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidAccountAssetBalanceResponses))]
-    public async Task GetAccountAssetsAsyncRejectsMalformedResponse(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAssetsAsync(CanonicalAccountId, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Contains("/v1/accounts/", handler.LastRequest!.RequestUri!.AbsoluteUri);
-        Assert.Contains("/assets", handler.LastRequest.RequestUri.AbsoluteUri);
-    }
-
-    public static IEnumerable<object[]> InvalidRawAccountAssetBalances()
-    {
-        yield return new object[] { "account asset balance", "null", "must not be null" };
-        yield return new object[] { "account asset balance", "[]", "object" };
-        yield return new object[]
-        {
-            "asset",
-            AccountAssetBalanceDuplicatePropertyJson("asset"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "account asset balance.audit.nonce", JsonWithIgnoredAuditDuplicate(AccountAssetBalanceJson("quantity", "10")), "must not appear more than once" };
-        yield return new object[] { "asset", AccountAssetBalanceJson("asset", null), "must not be null" };
-        yield return new object[] { "asset", RemoveTopLevelJsonField(AccountAssetBalanceJson("asset", "rose#wonderland.paynet"), "asset"), "must not be null" };
-        yield return new object[] { "account_id", AccountAssetBalanceJson("account_id", null), "must not be null" };
-        yield return new object[] { "account_id", RemoveTopLevelJsonField(AccountAssetBalanceJson("account_id", CanonicalAccountId), "account_id"), "must not be null" };
-        yield return new object[] { "account_id", AccountAssetBalanceJson("account_id", 1), "string" };
-        yield return new object[] { "account_id", AccountAssetBalanceJson("account_id", "merchant@sora"), "canonical I105" };
-        yield return new object[] { "account_id", AccountAssetBalanceJson("account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
-        yield return new object[] { "account_id", AccountAssetBalanceJson("account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-        yield return new object[] { "scope", AccountAssetBalanceJson("scope", null), "must not be null" };
-        yield return new object[] { "scope", RemoveTopLevelJsonField(AccountAssetBalanceJson("scope", "global"), "scope"), "must not be null" };
-        yield return new object[] { "scope", AccountAssetBalanceJson("scope", "glob\u0001al"), "control characters" };
-        yield return new object[] { "asset_name", AccountAssetBalanceJson("asset_name", null), "must not be null" };
-        yield return new object[] { "asset_name", RemoveTopLevelJsonField(AccountAssetBalanceJson("asset_name", "rose"), "asset_name"), "must not be null" };
-        yield return new object[] { "asset_alias", AccountAssetBalanceJson("asset_alias", ""), "non-empty" };
-        yield return new object[] { "quantity", AccountAssetBalanceJson("quantity", null), "must not be null" };
-        yield return new object[] { "quantity", RemoveTopLevelJsonField(AccountAssetBalanceJson("quantity", "10"), "quantity"), "must not be null" };
-        yield return new object[] { "quantity", AccountAssetBalanceJson("quantity", 10), "string" };
-        yield return new object[] { "quantity", AccountAssetBalanceJson("quantity", "+1"), "canonical non-negative numeric" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawAccountAssetBalances))]
-    public void RawAccountAssetBalanceRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiAssetBalance>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawAccountAssetBalancePages()
-    {
-        yield return new object[] { "account asset balances response", "null", "must not be null" };
-        yield return new object[] { "account asset balances response", "[]", "object" };
-        yield return new object[]
-        {
-            "items",
-            AccountAssetsResponseDuplicatePropertyJson("items"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "account asset balances response.audit.nonce", JsonWithIgnoredAuditDuplicate(AccountAssetsResponseJson("total", 1)), "must not appear more than once" };
-        yield return new object[] { "items", AccountAssetsResponseJson("items", null), "must not be null" };
-        yield return new object[] { "items", AccountAssetsResponseJson("items", 1), "array" };
-        yield return new object[] { "items[0]", AccountAssetsResponseJson("items[0]", null), "must not be null" };
-        yield return new object[]
-        {
-            "items[0].quantity",
-            AccountAssetsResponseDuplicateItemPropertyJson("quantity"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "items[0].audit.nonce", JsonWithFirstItemIgnoredAuditDuplicate(AccountAssetsResponseJson("total", 1)), "must not appear more than once" };
-        yield return new object[] { "items[0].asset", AccountAssetsResponseJson("items[0].asset", null), "must not be null" };
-        yield return new object[] { "items[0].asset", RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "asset"), "must not be null" };
-        yield return new object[] { "items[0].account_id", AccountAssetsResponseJson("items[0].account_id", null), "must not be null" };
-        yield return new object[] { "items[0].account_id", RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "account_id"), "must not be null" };
-        yield return new object[] { "items[0].scope", AccountAssetsResponseJson("items[0].scope", null), "must not be null" };
-        yield return new object[] { "items[0].scope", RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "scope"), "must not be null" };
-        yield return new object[] { "items[0].asset_name", AccountAssetsResponseJson("items[0].asset_name", null), "must not be null" };
-        yield return new object[] { "items[0].asset_name", RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "asset_name"), "must not be null" };
-        yield return new object[] { "items[0].quantity", AccountAssetsResponseJson("items[0].quantity", null), "must not be null" };
-        yield return new object[] { "items[0].quantity", RemoveFirstArrayItemObjectJsonField(AccountAssetsResponseJson("total", 1), "items", "quantity"), "must not be null" };
-        yield return new object[] { "total", RemoveTopLevelJsonField(AccountAssetsResponseJson("total", 1), "total"), "must not be null" };
-        yield return new object[] { "total", AccountAssetsResponseJson("total", "1"), "integer" };
-        yield return new object[] { "total", AccountAssetsResponseJson("total", -1L), "non-negative" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawAccountAssetBalancePages))]
-    public void RawAccountAssetBalancesPageRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiAssetBalancesPage>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public void RawAccountAssetBalanceWriteRejectsMalformedQuantity()
-    {
-        var response = new ToriiAssetBalance
-        {
-            Asset = "rose#wonderland.paynet",
-            AccountId = CanonicalAccountId,
-            Scope = "global",
-            AssetName = "rose",
-            Quantity = "10",
-        };
-        SetPrivateField(response, "quantity", "01");
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("quantity", error.Message);
-        Assert.Contains("canonical non-negative numeric", error.Message);
-    }
-
-    [Fact]
-    public async Task GetAccountTransactionsAsyncUsesServerAssetIdQueryParameter()
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent($$"""
-                {
-                  "items": [
-                    {
-                      "authority": "{{CanonicalAccountId}}",
-                      "timestamp_ms": 1,
-                      "entrypoint_hash": "{{ToriiTransactionHashHex}}",
-                      "result_ok": true
-                    }
-                  ],
-                  "total": 1
-                }
-                """),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var transactions = await client.GetAccountTransactionsAsync(CanonicalAccountId, limit: 50, offset: 3, assetId: "rose#wonderland.paynet", cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Single(transactions.Items);
-        Assert.Equal(ToriiTransactionHashHex, transactions.Items[0].EntrypointHash);
-        Assert.True(transactions.Items[0].ResultOk);
-        Assert.Contains("/v1/accounts/", handler.LastRequest!.RequestUri!.AbsoluteUri);
-        Assert.Contains("/transactions", handler.LastRequest.RequestUri.AbsoluteUri);
-        Assert.Equal("limit=50&offset=3&asset_id=rose%23wonderland.paynet", handler.LastRequest.RequestUri.Query.TrimStart('?'));
-    }
-
-    public static IEnumerable<object?[]> InvalidAccountTransactionSummaryResponses()
-    {
-        yield return new object?[]
-        {
-            "items",
-            AccountTransactionsResponseJson("items", null),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0]",
-            AccountTransactionsResponseJson("items[0]", null),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0].entrypoint_hash",
-            AccountTransactionsResponseJson("items[0].entrypoint_hash", null),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0].entrypoint_hash",
-            RemoveFirstArrayItemObjectJsonField(
-                AccountTransactionsResponseJson("total", 1),
-                "items",
-                "entrypoint_hash"),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "items[0].entrypoint_hash",
-            AccountTransactionsResponseJson("items[0].entrypoint_hash", "hash"),
-            "32-byte hex string",
-        };
-        yield return new object?[]
-        {
-            "items[0].entrypoint_hash",
-            AccountTransactionsResponseJson("items[0].entrypoint_hash", "0x" + ToriiTransactionHashHex),
-            "32-byte hex string",
-        };
-        yield return new object?[]
-        {
-            "items[0].entrypoint_hash",
-            AccountTransactionsResponseJson("items[0].entrypoint_hash", " " + ToriiTransactionHashHex),
-            "surrounding whitespace",
-        };
-        yield return new object?[]
-        {
-            "items[0].entrypoint_hash",
-            AccountTransactionsResponseJson(
-                "items[0].entrypoint_hash",
-                ToriiTransactionHashHex[..32] + " " + ToriiTransactionHashHex[32..]),
-            "whitespace",
-        };
-        yield return new object?[]
-        {
-            "items[0].entrypoint_hash",
-            AccountTransactionsResponseJson("items[0].entrypoint_hash", ToriiTransactionHashHex[..63] + "z"),
-            "32-byte hex string",
-        };
-        yield return new object?[]
-        {
-            "items[0].entrypoint_hash",
-            AccountTransactionsResponseJson("items[0].entrypoint_hash", ToriiTransactionHashHex[..32] + "\u0001" + ToriiTransactionHashHex[33..]),
-            "control characters",
-        };
-        yield return new object?[]
-        {
-            "items[0].authority",
-            AccountTransactionsResponseJson("items[0].authority", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
-            "surrounding whitespace",
-        };
-        yield return new object?[]
-        {
-            "items[0].authority",
-            AccountTransactionsResponseJson("items[0].authority", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001"),
-            "control characters",
-        };
-        yield return new object?[]
-        {
-            "items[0].authority",
-            AccountTransactionsResponseJson("items[0].authority", "merchant@sora"),
-            "canonical I105",
-        };
-        yield return new object?[]
-        {
-            "items[0].authority",
-            AccountTransactionsResponseJson("items[0].authority", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"),
-            "canonical I105",
-        };
-        yield return new object?[]
-        {
-            "items[0].authority",
-            AccountTransactionsResponseJson("items[0].authority", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"),
-            "canonical I105",
-        };
-        yield return new object?[]
-        {
-            "items[0].timestamp_ms",
-            AccountTransactionsResponseJson("items[0].timestamp_ms", -1L),
-            "positive",
-        };
-        yield return new object?[]
-        {
-            "items[0].timestamp_ms",
-            AccountTransactionsResponseJson("items[0].timestamp_ms", 0L),
-            "positive",
-        };
-        yield return new object?[]
-        {
-            "items[0].result_ok",
-            RemoveFirstArrayItemObjectJsonField(
-                AccountTransactionsResponseJson("total", 1),
-                "items",
-                "result_ok"),
-            "must not be null",
-        };
-        yield return new object?[]
-        {
-            "total",
-            AccountTransactionsResponseJson("total", -1L),
-            "non-negative",
-        };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidAccountTransactionSummaryResponses))]
-    public async Task GetAccountTransactionsAsyncRejectsMalformedResponse(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.GetAccountTransactionsAsync(CanonicalAccountId, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Contains("/v1/accounts/", handler.LastRequest!.RequestUri!.AbsoluteUri);
-        Assert.Contains("/transactions", handler.LastRequest.RequestUri.AbsoluteUri);
-    }
-
-    public static IEnumerable<object[]> InvalidRawAccountTransactionSummaries()
-    {
-        yield return new object[] { "account transaction summary", "null", "must not be null" };
-        yield return new object[] { "account transaction summary", "[]", "object" };
-        yield return new object[]
-        {
-            "entrypoint_hash",
-            AccountTransactionSummaryDuplicatePropertyJson("entrypoint_hash"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "account transaction summary.audit.nonce", JsonWithIgnoredAuditDuplicate(AccountTransactionSummaryJson("entrypoint_hash", ToriiTransactionHashHex)), "must not appear more than once" };
-        yield return new object[] { "entrypoint_hash", AccountTransactionSummaryJson("entrypoint_hash", null), "must not be null" };
-        yield return new object[] { "entrypoint_hash", RemoveTopLevelJsonField(AccountTransactionSummaryJson("entrypoint_hash", ToriiTransactionHashHex), "entrypoint_hash"), "must not be null" };
-        yield return new object[] { "entrypoint_hash", AccountTransactionSummaryJson("entrypoint_hash", 1), "string" };
-        yield return new object[] { "entrypoint_hash", AccountTransactionSummaryJson("entrypoint_hash", "hash"), "32-byte hex string" };
-        yield return new object[] { "authority", AccountTransactionSummaryJson("authority", " sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), "surrounding whitespace" };
-        yield return new object[] { "authority", AccountTransactionSummaryJson("authority", "merchant@sora"), "canonical I105" };
-        yield return new object[] { "authority", AccountTransactionSummaryJson("authority", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
-        yield return new object[] { "authority", AccountTransactionSummaryJson("authority", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-        yield return new object[] { "timestamp_ms", AccountTransactionSummaryJson("timestamp_ms", "1"), "integer" };
-        yield return new object[] { "timestamp_ms", AccountTransactionSummaryJson("timestamp_ms", -1L), "positive" };
-        yield return new object[] { "timestamp_ms", AccountTransactionSummaryJson("timestamp_ms", 0L), "positive" };
-        yield return new object[] { "result_ok", RemoveTopLevelJsonField(AccountTransactionSummaryJson("result_ok", true), "result_ok"), "must not be null" };
-        yield return new object[] { "result_ok", AccountTransactionSummaryJson("result_ok", "true"), "boolean" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawAccountTransactionSummaries))]
-    public void RawAccountTransactionSummaryRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiTransactionSummary>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawAccountTransactionPages()
-    {
-        yield return new object[] { "account transactions response", "null", "must not be null" };
-        yield return new object[] { "account transactions response", "[]", "object" };
-        yield return new object[]
-        {
-            "items",
-            AccountTransactionsResponseDuplicatePropertyJson("items"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "account transactions response.audit.nonce", JsonWithIgnoredAuditDuplicate(AccountTransactionsResponseJson("total", 1)), "must not appear more than once" };
-        yield return new object[] { "items", AccountTransactionsResponseJson("items", null), "must not be null" };
-        yield return new object[] { "items", AccountTransactionsResponseJson("items", 1), "array" };
-        yield return new object[] { "items[0]", AccountTransactionsResponseJson("items[0]", null), "must not be null" };
-        yield return new object[]
-        {
-            "items[0].result_ok",
-            AccountTransactionsResponseDuplicateItemPropertyJson("result_ok"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "items[0].audit.nonce", JsonWithFirstItemIgnoredAuditDuplicate(AccountTransactionsResponseJson("total", 1)), "must not appear more than once" };
-        yield return new object[] { "items[0].entrypoint_hash", AccountTransactionsResponseJson("items[0].entrypoint_hash", null), "must not be null" };
-        yield return new object[]
-        {
-            "items[0].entrypoint_hash",
-            RemoveFirstArrayItemObjectJsonField(AccountTransactionsResponseJson("total", 1), "items", "entrypoint_hash"),
-            "must not be null",
-        };
-        yield return new object[] { "items[0].result_ok", RemoveFirstArrayItemObjectJsonField(AccountTransactionsResponseJson("total", 1), "items", "result_ok"), "must not be null" };
-        yield return new object[] { "total", RemoveTopLevelJsonField(AccountTransactionsResponseJson("total", 1), "total"), "must not be null" };
-        yield return new object[] { "total", AccountTransactionsResponseJson("total", "1"), "integer" };
-        yield return new object[] { "total", AccountTransactionsResponseJson("total", -1L), "non-negative" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawAccountTransactionPages))]
-    public void RawAccountTransactionsPageRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiTransactionsPage>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public void RawAccountTransactionSummaryWriteRejectsMalformedHash()
-    {
-        var response = new ToriiTransactionSummary
-        {
-            Authority = CanonicalAccountId,
-            TimestampMilliseconds = 1,
-            EntrypointHash = ToriiTransactionHashHex,
-            ResultOk = true,
-        };
-        SetPrivateField(response, "entrypointHash", ToriiTransactionHashHex.ToUpperInvariant());
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("entrypoint_hash", error.Message);
-        Assert.Contains("lowercase", error.Message);
-    }
-
-    [Theory]
-    [InlineData(-1)]
-    [InlineData(0)]
-    public void RawAccountTransactionSummaryWriteRejectsNonPositiveTimestamp(long timestampMilliseconds)
-    {
-        var response = new ToriiTransactionSummary
-        {
-            Authority = CanonicalAccountId,
-            TimestampMilliseconds = 1,
-            EntrypointHash = ToriiTransactionHashHex,
-            ResultOk = true,
-        };
-        SetPrivateField(response, "timestampMilliseconds", timestampMilliseconds);
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("timestamp_ms", error.Message);
-        Assert.Contains("positive", error.Message);
-    }
-
-    [Fact]
     public async Task GetExplorerTransactionsAsyncAddsFiltersAndDeserializesPage()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -5531,8 +4653,6 @@ public sealed partial class ToriiClientTests
             ("explorer-transaction", "transactionHash"),
             ("explorer-instruction", "transactionHash"),
             ("explorer-instruction-contract-view", "transactionHash"),
-            ("account-assets", "accountId"),
-            ("account-transactions", "accountId"),
             ("account-permissions", "accountId"),
         };
         var invalidValues = new (string? Value, string ExpectedMessage)[]
@@ -5576,8 +4696,6 @@ public sealed partial class ToriiClientTests
     }
 
     [Theory]
-    [InlineData("account-assets")]
-    [InlineData("account-transactions")]
     [InlineData("account-permissions")]
     public async Task AccountRouteReadsRejectNonCanonicalAccountIdsBeforeDispatch(string operation)
     {
@@ -5606,9 +4724,6 @@ public sealed partial class ToriiClientTests
     {
         var operations = new (string Operation, string ParamName)[]
         {
-            ("account-assets-asset", "asset"),
-            ("account-assets-scope", "scope"),
-            ("account-transactions-asset-id", "assetId"),
             ("explorer-accounts-domain", "Domain"),
             ("explorer-accounts-with-asset", "WithAsset"),
             ("explorer-domains-owned-by", "OwnedBy"),
@@ -9758,6 +8873,7 @@ public sealed partial class ToriiClientTests
             Assert.Equal("/v1/query", request.RequestUri!.AbsolutePath);
             Assert.Equal("limit=1", request.RequestUri.Query.TrimStart('?'));
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
 
             using var stream = request.Content.ReadAsStream();
             using var buffer = new MemoryStream();
@@ -9846,10 +8962,13 @@ public sealed partial class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        using var response = await client.OpenEventSseAsync("scope=auto", cancellationToken: TestContext.Current.CancellationToken);
+        var filter = Filter.Field("tx_hash").Eq("abc") & Filter.Field("tx_status").In("Approved", "Rejected");
+        using var response = await client.OpenEventSseAsync(filter, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("/v1/events/sse", handler.LastRequest!.RequestUri!.AbsolutePath);
-        Assert.Equal("scope=auto", handler.LastRequest.RequestUri.Query.TrimStart('?'));
+        Assert.Equal(
+            "filter=" + Uri.EscapeDataString("tx_hash = \"abc\" and tx_status in [\"Approved\", \"Rejected\"]"),
+            handler.LastRequest.RequestUri.Query.TrimStart('?'));
         Assert.False(handler.LastRequest.Headers.Contains("Last-Event-ID"));
         Assert.Contains(handler.LastRequest.Headers.Accept, static value => value.MediaType == "text/event-stream");
         Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
@@ -9860,6 +8979,7 @@ public sealed partial class ToriiClientTests
     {
         foreach (var methodName in new[]
         {
+            nameof(ToriiClient.StreamServerSentEventsAsync),
             nameof(ToriiClient.StreamEventsAsync),
             nameof(ToriiClient.StreamPipelineEventsAsync),
             nameof(ToriiClient.StreamProofEventsAsync),
@@ -9876,7 +8996,7 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task StreamEventsAsyncParsesCommentAndJsonFrames()
+    public async Task StreamServerSentEventsAsyncParsesCommentAndJsonFrames()
     {
         using var handler = new RecordingHandler(_ =>
         {
@@ -9899,7 +9019,7 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var events = new List<ToriiServerSentEvent>();
 
-        await foreach (var sseEvent in client.StreamEventsAsync("scope=auto", cancellationToken: TestContext.Current.CancellationToken))
+        await foreach (var sseEvent in client.StreamServerSentEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
         {
             events.Add(sseEvent);
         }
@@ -9937,7 +9057,7 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task StreamEventsAsyncRejectsInvalidUtf8EventBytesBeforeReplacement()
+    public async Task StreamServerSentEventsAsyncRejectsInvalidUtf8EventBytesBeforeReplacement()
     {
         var invalidEventBytes = new List<byte>();
         invalidEventBytes.AddRange(Encoding.UTF8.GetBytes("data: {\"message\":\""));
@@ -9958,7 +9078,7 @@ public sealed partial class ToriiClientTests
 
         var error = await Assert.ThrowsAsync<JsonException>(async () =>
         {
-            await foreach (var _ in client.StreamEventsAsync("scope=auto", cancellationToken: TestContext.Current.CancellationToken))
+            await foreach (var _ in client.StreamServerSentEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
             {
             }
         });
@@ -9967,14 +9087,14 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task StreamEventsAsyncDoesNotExposeCollapsedDuplicateKeyJsonData()
+    public async Task StreamServerSentEventsAsyncDoesNotExposeCollapsedDuplicateKeyJsonData()
     {
         const string rawData = "{\"height\":1,\"height\":2}";
         using var handler = new RecordingHandler(_ =>
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(SseDataFrame(rawData, "block-1", "pipeline.block")),
+                Content = new StringContent($"id: block-1\nevent: pipeline.block\ndata: {rawData}\n\n"),
             };
             response.Content.Headers.ContentType = new("text/event-stream");
             return response;
@@ -9983,7 +9103,7 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var events = new List<ToriiServerSentEvent>();
 
-        await foreach (var sseEvent in client.StreamEventsAsync("scope=auto", cancellationToken: TestContext.Current.CancellationToken))
+        await foreach (var sseEvent in client.StreamServerSentEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
         {
             events.Add(sseEvent);
         }
@@ -10001,7 +9121,7 @@ public sealed partial class ToriiClientTests
     [InlineData("01500")]
     [InlineData("1.5")]
     [InlineData("2147483648")]
-    public async Task StreamEventsAsyncRejectsMalformedRetryMetadata(string retry)
+    public async Task StreamServerSentEventsAsyncRejectsMalformedRetryMetadata(string retry)
     {
         using var handler = new RecordingHandler(_ =>
         {
@@ -10018,395 +9138,11 @@ public sealed partial class ToriiClientTests
 
         var error = await Assert.ThrowsAsync<JsonException>(async () =>
         {
-            await foreach (var _ in client.StreamEventsAsync("scope=auto", cancellationToken: TestContext.Current.CancellationToken))
+            await foreach (var _ in client.StreamServerSentEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
             {
             }
         });
         Assert.Contains("SSE retry", error.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task OpenEventSseAsyncRejectsUnsupportedProductionBackendEventFiltersBeforeRequest()
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        foreach (var filterJson in new[]
-        {
-            """{"VerifyingKey":{"id_matcher":{"backend":"halo2/ipa/orchard","name":"vk"},"event_set":{"Registered":true}}}""",
-            """{"VerifyingKey":{"id_matcher":{"backend":" halo2/ipa","name":"vk"},"event_set":{"Registered":true}}}""",
-            """{"Proof":{"id_matcher":{"backend":"mock/dev","hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"event_set":{"Verified":true}}}""",
-            """{"Proof":{"id_matcher":{"backend":"groth16/bls12-377","hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"event_set":{"Verified":true}}}""",
-        })
-        {
-            var error = await Assert.ThrowsAsync<ArgumentException>(
-                () => client.OpenEventSseAsync(EventFilterQuery(filterJson), cancellationToken: TestContext.Current.CancellationToken));
-            var expected = filterJson.Contains("\"backend\":\" ")
-                ? "surrounding whitespace"
-                : "unsupported production verifier backend";
-            Assert.Contains(expected, error.Message);
-            Assert.Null(handler.LastRequest);
-        }
-    }
-
-    [Fact]
-    public async Task OpenEventSseAsyncRejectsMalformedVerifyingKeyEventNamesBeforeRequest()
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        foreach (var (nameJson, expectedMessage) in new (string NameJson, string ExpectedMessage)[]
-        {
-            ("\"\"", "non-empty string"),
-            ("\"   \"", "non-empty string"),
-            ("\"\\t\"", "non-empty string"),
-            ("\"\\n\"", "non-empty string"),
-            ("\" vk_main\"", "surrounding whitespace"),
-            ("\"vk_main \"", "surrounding whitespace"),
-            ("\"vk main\"", "whitespace"),
-            ("\"vk\\u0001main\"", "control characters"),
-            ("\"vk:main\"", "must not contain ':'"),
-            ("42", "must be a string"),
-        })
-        {
-            var filterJson =
-                "{\"VerifyingKey\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"name\":"
-                + nameJson
-                + "},\"event_set\":{\"Registered\":true}}}";
-            var error = await Assert.ThrowsAsync<ArgumentException>(
-                () => client.OpenEventSseAsync(EventFilterQuery(filterJson), cancellationToken: TestContext.Current.CancellationToken));
-            Assert.Contains(expectedMessage, error.Message, StringComparison.Ordinal);
-            Assert.Null(handler.LastRequest);
-        }
-    }
-
-    [Fact]
-    public async Task OpenEventSseAsyncRejectsPaddedProductionEventFilterJsonBeforeRequest()
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var filterJson =
-            " {\"VerifyingKey\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"name\":\"vk_main\"},"
-            + "\"event_set\":{\"Registered\":true}}}";
-
-        var error = await Assert.ThrowsAsync<ArgumentException>(
-            () => client.OpenEventSseAsync(EventFilterQuery(filterJson), cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("surrounding whitespace", error.Message, StringComparison.Ordinal);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Theory]
-    [InlineData("{")]
-    [InlineData("{\"Proof\":")]
-    [InlineData("{\"Proof\":{\"id_matcher\":]}}")]
-    [InlineData("[")]
-    public async Task OpenEventSseAsyncRejectsMalformedProductionEventFilterJsonBeforeRequest(string filterJson)
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<ArgumentException>(
-            () => client.OpenEventSseAsync(EventFilterQuery(filterJson), cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("eventFilter must be valid JSON", error.Message, StringComparison.Ordinal);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
-    public async Task OpenEventSseAsyncRejectsDuplicateProductionEventFilterKeysBeforeRequest()
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var lowerHashHex = new string('a', 64);
-        var alternateHashHex = new string('b', 64);
-
-        foreach (var (filterJson, expectedField) in new (string FilterJson, string ExpectedField)[]
-        {
-            (
-                "{\"Proof\":{\"id_matcher\":{\"backend\":\"mock/dev\",\"hash_hex\":\""
-                    + lowerHashHex
-                    + "\"},\"event_set\":{\"Verified\":true}},\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\","
-                    + "\"hash_hex\":\""
-                    + lowerHashHex
-                    + "\"},\"event_set\":{\"Verified\":true}}}",
-                "eventFilter.Proof"),
-            (
-                "{\"VerifyingKey\":{\"id_matcher\":{\"backend\":\"mock/dev\",\"backend\":\"halo2/ipa\","
-                    + "\"name\":\"vk_main\"},\"event_set\":{\"Registered\":true}}}",
-                "eventFilter.VerifyingKey.id_matcher.backend"),
-            (
-                "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"hash_hex\":\""
-                    + lowerHashHex
-                    + "\",\"hash_hex\":\""
-                    + alternateHashHex
-                    + "\"},\"event_set\":{\"Verified\":true}}}",
-                "eventFilter.Proof.id_matcher.hash_hex"),
-            (
-                "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"hash_hex\":\""
-                    + lowerHashHex
-                    + "\"},\"event_set\":{\"Verified\":true},\"audit\":[{\"backend\":\"mock/dev\","
-                    + "\"backend\":\"halo2/ipa\"}]}}",
-                "eventFilter.Proof.audit[0].backend"),
-        })
-        {
-            var error = await Assert.ThrowsAsync<ArgumentException>(
-                () => client.OpenEventSseAsync(EventFilterQuery(filterJson), cancellationToken: TestContext.Current.CancellationToken));
-
-            Assert.Contains(expectedField, error.Message, StringComparison.Ordinal);
-            Assert.Contains("must not appear more than once", error.Message, StringComparison.Ordinal);
-            Assert.Null(handler.LastRequest);
-        }
-    }
-
-    [Theory]
-    [InlineData("filter=%")]
-    [InlineData("filter=%2")]
-    [InlineData("filter=%GG")]
-    [InlineData("filter=%FF")]
-    [InlineData("filter=%C3%28")]
-    [InlineData("%GG=value")]
-    [InlineData("filter=%00")]
-    [InlineData("filter=%1F")]
-    [InlineData("filter=line%0Abreak")]
-    public async Task OpenEventSseAsyncRejectsMalformedOrControlFilterQueryEscapesBeforeRequest(string query)
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<ArgumentException>(
-            () => client.OpenEventSseAsync(query, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("event SSE query components", error.Message, StringComparison.Ordinal);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Theory]
-    [InlineData("?")]
-    [InlineData("&filter=%7B%22kind%22%3A%22Pipeline%22%7D")]
-    [InlineData("filter=%7B%22kind%22%3A%22Pipeline%22%7D&")]
-    [InlineData("filter=%7B%22kind%22%3A%22Pipeline%22%7D&&scope=auto")]
-    [InlineData("=value")]
-    [InlineData("%20=value")]
-    [InlineData("?=value")]
-    public async Task OpenEventSseAsyncRejectsAmbiguousFilterQuerySegmentsBeforeRequest(string query)
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<ArgumentException>(
-            () => client.OpenEventSseAsync(query, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal("query", error.ParamName);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
-    public async Task OpenEventSseAsyncSendsExactProductionEventFiltersWithoutMutation()
-    {
-        using var handler = new RecordingHandler(_ =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(": keepalive\n\n"),
-            };
-            response.Content.Headers.ContentType = new("text/event-stream");
-            return response;
-        });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var hashHex = new string('a', 64);
-        var proofHashHex = new string('b', 64);
-        var filterJson =
-            "{\"VerifyingKey\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"name\":\"vk_main\"},"
-            + "\"event_set\":{\"Registered\":true}},\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\","
-            + "\"hash_hex\":\""
-            + hashHex
-            + "\",\"proof_hash_hex\":\""
-            + proofHashHex
-            + "\"},\"event_set\":{\"Verified\":true}}}";
-
-        using var response = await client.OpenEventSseAsync(EventFilterQuery(filterJson), cancellationToken: TestContext.Current.CancellationToken);
-
-        var filter = QueryParameter(handler.LastRequest!.RequestUri!.Query, "filter");
-        Assert.Equal(filterJson, filter);
-    }
-
-    [Fact]
-    public async Task StreamEventsAsyncRejectsMalformedProofEventHashesBeforeRequest()
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        foreach (var hashJson in new[]
-        {
-            "\"\"",
-            "\"abc\"",
-            "\"" + new string('z', 64) + "\"",
-            "\"0x0x" + new string('a', 64) + "\"",
-            "42",
-        })
-        {
-            var filterJson =
-                "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"hash_hex\":"
-                + hashJson
-                + "},\"event_set\":{\"Verified\":true}}}";
-            var error = await Assert.ThrowsAsync<ArgumentException>(async () =>
-            {
-                await foreach (var _ in client.StreamEventsAsync(EventFilterQuery(filterJson), cancellationToken: TestContext.Current.CancellationToken))
-                {
-                }
-            });
-            Assert.True(
-                error.Message.Contains("32-byte hex string", StringComparison.Ordinal)
-                    || error.Message.Contains("must be a string", StringComparison.Ordinal),
-                $"unexpected error: {error.Message}");
-            Assert.Null(handler.LastRequest);
-        }
-    }
-
-    [Fact]
-    public async Task OpenEventSseAsyncRejectsNonExactProofHashEventFiltersBeforeRequest()
-    {
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var lowerHashHex = new string('a', 64);
-        foreach (var (propertyName, hashJson, expectedMessage) in new (string PropertyName, string HashJson, string ExpectedMessage)[]
-        {
-            ("hash_hex", "\"0x" + lowerHashHex + "\"", "lowercase 32-byte hex string without 0x prefix"),
-            ("hash_hex", "\"" + new string('A', 64) + "\"", "lowercase 32-byte hex string without 0x prefix"),
-            ("hash_hex", "\" " + lowerHashHex + "\"", "surrounding whitespace"),
-            ("proof_hash_hex", "\"" + new string('B', 64) + "\"", "lowercase 32-byte hex string without 0x prefix"),
-            ("proof_hash_hex", "\"" + lowerHashHex + " \"", "surrounding whitespace"),
-            ("proof_hash_hex", "\"" + lowerHashHex[..32] + "\\u0001" + lowerHashHex[32..] + "\"", "control characters"),
-        })
-        {
-            var otherPropertyName = propertyName == "hash_hex" ? "proof_hash_hex" : "hash_hex";
-            var filterJson =
-                "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\""
-                + propertyName
-                + "\":"
-                + hashJson
-                + ",\""
-                + otherPropertyName
-                + "\":\""
-                + lowerHashHex
-                + "\"},\"event_set\":{\"Verified\":true}}}";
-            var error = await Assert.ThrowsAsync<ArgumentException>(
-                () => client.OpenEventSseAsync(EventFilterQuery(filterJson), cancellationToken: TestContext.Current.CancellationToken));
-
-            Assert.Contains(expectedMessage, error.Message, StringComparison.Ordinal);
-            Assert.Null(handler.LastRequest);
-        }
-    }
-
-    [Fact]
-    public async Task StreamPipelineEventsAsyncDeserializesPipelinePayloadsAndSkipsNonPipelineEvents()
-    {
-        using var handler = new RecordingHandler(_ =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""
-                    : keepalive
-
-                    id: tx-1
-                    event: pipeline.transaction
-                    retry: 1500
-                    data: {"category":"Pipeline","event":"Transaction","hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","lane_id":3,"dataspace_id":7,"block_height":11,"status":"Approved"}
-
-                    data: {"category":"Data","event":"ProofVerified","backend":"groth16"}
-
-                    """),
-            };
-            response.Content.Headers.ContentType = new("text/event-stream");
-            return response;
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var events = new List<ToriiPipelineEvent>();
-
-        await foreach (var pipelineEvent in client.StreamPipelineEventsAsync("scope=auto", cancellationToken: TestContext.Current.CancellationToken))
-        {
-            events.Add(pipelineEvent);
-        }
-
-        var typed = Assert.Single(events);
-        Assert.Equal("Pipeline", typed.Category);
-        Assert.Equal("Transaction", typed.Event);
-        Assert.Equal("Approved", typed.Status);
-        Assert.Equal(ToriiTransactionHashHex, typed.Hash);
-        Assert.Equal((ulong)3, typed.LaneId);
-        Assert.Equal((ulong)7, typed.DataspaceId);
-        Assert.Equal((ulong)11, typed.BlockHeight);
-        Assert.Equal("tx-1", typed.LastEventId);
-        Assert.Equal("pipeline.transaction", typed.SseEventName);
-        Assert.Equal(1500, typed.RetryMilliseconds);
-    }
-
-    [Fact]
-    public async Task StreamProofEventsAsyncDeserializesProofPayloadsAndSkipsOtherEvents()
-    {
-        using var handler = new RecordingHandler(_ =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""
-                    : keepalive
-
-                    id: proof-1
-                    event: data.proof
-                    retry: 2500
-                    data: {"category":"Data","event":"ProofVerified","backend":"halo2/ipa","proof_hash":"3333333333333333333333333333333333333333333333333333333333333333","call_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","envelope_hash":"1010101010101010101010101010101010101010101010101010101010101010","vk_ref":"halo2/ipa::vk_name","vk_commitment":"5555555555555555555555555555555555555555555555555555555555555555"}
-
-                    data: {"category":"Pipeline","event":"Transaction","hash":"abc123"}
-
-                    data: {"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_count":1,"remaining":3,"cap":32,"grace_blocks":64,"prune_batch":8,"pruned_at_height":777,"pruned_by":"peer-1","origin":"Automatic","removed":[{"backend":"halo2/ipa","proof_hash":"4444444444444444444444444444444444444444444444444444444444444444"}]}
-
-                    """),
-            };
-            response.Content.Headers.ContentType = new("text/event-stream");
-            return response;
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var events = new List<ToriiProofEvent>();
-
-        await foreach (var proofEvent in client.StreamProofEventsAsync("scope=auto", cancellationToken: TestContext.Current.CancellationToken))
-        {
-            events.Add(proofEvent);
-        }
-
-        Assert.Equal(2, events.Count);
-
-        var verified = events[0];
-        Assert.Equal("Data", verified.Category);
-        Assert.Equal("ProofVerified", verified.Event);
-        Assert.Equal("halo2/ipa", verified.Backend);
-        Assert.Equal(new string('3', 64), verified.ProofHash);
-        Assert.Equal(new string('a', 64), verified.CallHash);
-        Assert.Equal(string.Concat(Enumerable.Repeat("10", 32)), verified.EnvelopeHash);
-        Assert.Equal("halo2/ipa::vk_name", verified.VerificationKeyReference);
-        Assert.Equal(new string('5', 64), verified.VerificationKeyCommitment);
-        Assert.Equal("proof-1", verified.LastEventId);
-        Assert.Equal("data.proof", verified.SseEventName);
-        Assert.Equal(2500, verified.RetryMilliseconds);
-
-        var pruned = events[1];
-        Assert.Equal("ProofPruned", pruned.Event);
-        Assert.Equal((ulong)1, pruned.RemovedCount);
-        Assert.Equal((ulong)3, pruned.Remaining);
-        Assert.Equal((ulong)32, pruned.Cap);
-        Assert.Equal((ulong)64, pruned.GraceBlocks);
-        Assert.Equal((ulong)8, pruned.PruneBatch);
-        Assert.Equal((ulong)777, pruned.PrunedAtHeight);
-        Assert.Equal("peer-1", pruned.PrunedBy);
-        Assert.Equal("Automatic", pruned.Origin);
-        var removed = Assert.Single(pruned.Removed!);
-        Assert.Equal("halo2/ipa", removed.Backend);
-        Assert.Equal(new string('4', 64), removed.ProofHash);
     }
 
     [Fact]
@@ -10516,7 +9252,7 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var events = new List<ToriiServerSentEvent>();
-        await foreach (var sseEvent in client.StreamEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
+        await foreach (var sseEvent in client.StreamServerSentEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
         {
             events.Add(sseEvent);
         }
@@ -10524,510 +9260,6 @@ public sealed partial class ToriiClientTests
         var terminal = Assert.Single(events);
         Assert.Equal("stream_error", terminal.Event);
         Assert.Equal("stream_lagged", terminal.JsonData!["code"]!.GetValue<string>());
-    }
-
-    public static IEnumerable<object?[]> InvalidPipelineSsePayloads()
-    {
-        yield return new object?[]
-        {
-            "category",
-            "{\"category\":\"Pipeline\",\"category\":\"Data\",\"event\":\"Transaction\",\"hash\":\"" + ToriiTransactionHashHex + "\"}",
-            "must not appear more than once",
-        };
-        yield return new object?[] { "event", PipelineEventJson("event", null), "must not be null" };
-        yield return new object?[] { "event", "{\"category\":\"Pipeline\",\"hash\":\"" + ToriiTransactionHashHex + "\"}", "must not be null" };
-        yield return new object?[] { "event", PipelineEventJson("event", ""), "non-empty" };
-        yield return new object?[] { "event", PipelineEventJson("event", "Transaction Applied"), "whitespace" };
-        yield return new object?[] { "hash", PipelineEventJson("hash", "abc123"), "32-byte hex string" };
-        yield return new object?[] { "status", PipelineEventJson("status", "Approved Now"), "whitespace" };
-        yield return new object?[] { "kind", PipelineEventJson("kind", "Proposal\u0001"), "control characters" };
-        yield return new object?[] { "details", PipelineEventJson("details", "\u0001bad"), "control characters" };
-        yield return new object?[] { "global_state_root", PipelineEventJson("global_state_root", "0x" + new string('a', 64)), "32-byte hex string" };
-        yield return new object?[] { "block_hash", PipelineEventJson("block_hash", new string('a', 63)), "32-byte hex string" };
-        yield return new object?[] { "last_event_id", PipelineEventJson(), "surrounding whitespace", " bad-id" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidPipelineSsePayloads))]
-    public async Task StreamPipelineEventsAsyncRejectsMalformedPipelinePayloads(
-        string expectedField,
-        string json,
-        string expectedMessage,
-        string? eventId = "tx-1")
-    {
-        using var handler = new RecordingHandler(_ =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(SseDataFrame(json, eventId, "pipeline.transaction")),
-            };
-            response.Content.Headers.ContentType = new("text/event-stream");
-            return response;
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(async () =>
-        {
-            await foreach (var _ in client.StreamPipelineEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
-            {
-            }
-        });
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Theory]
-    [InlineData("not-json")]
-    [InlineData("null")]
-    [InlineData("   ")]
-    public async Task StreamPipelineEventsAsyncRejectsMalformedJsonData(string rawData)
-    {
-        using var handler = new RecordingHandler(_ =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(SseDataFrame(rawData, "tx-1", "pipeline.transaction")),
-            };
-            response.Content.Headers.ContentType = new("text/event-stream");
-            return response;
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(async () =>
-        {
-            await foreach (var _ in client.StreamPipelineEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
-            {
-            }
-        });
-
-        Assert.Contains("pipeline SSE payload.data", error.Message);
-        Assert.Contains("valid non-null JSON", error.Message);
-    }
-
-    public static IEnumerable<object?[]> InvalidProofSsePayloads()
-    {
-        yield return new object?[]
-        {
-            "removed[0].backend",
-            "{\"category\":\"Data\",\"event\":\"ProofPruned\",\"backend\":\"halo2/ipa\",\"removed_count\":1,"
-                + "\"removed\":[{\"backend\":\"mock/dev\",\"backend\":\"halo2/ipa\",\"proof_hash\":\""
-                + new string('4', 64)
-                + "\"}]}",
-            "must not appear more than once",
-        };
-        yield return new object?[] { "event", ProofEventJson("event", null), "must not be null" };
-        yield return new object?[] { "event", """{"category":"Data","backend":"halo2/ipa"}""", "must not be null" };
-        yield return new object?[] { "backend", ProofEventJson("backend", null), "must not be null" };
-        yield return new object?[] { "backend", """{"category":"Data","event":"ProofPruned"}""", "must not be null" };
-        yield return new object?[] { "event", ProofEventJson("event", ""), "non-empty" };
-        yield return new object?[] { "event", ProofEventJson("event", "Proof Verified"), "whitespace" };
-        yield return new object?[] { "event", ProofEventJson("event", "Proof\u0001"), "control characters" };
-        yield return new object?[] { "backend", ProofEventJson("backend", ""), "non-empty" };
-        yield return new object?[] { "backend", ProofEventJson("backend", " halo2/ipa"), "surrounding whitespace" };
-        yield return new object?[] { "proof_hash", ProofEventJson("proof_hash", "33"), "32-byte hex string" };
-        yield return new object?[] { "call_hash", ProofEventJson("call_hash", new string('z', 64)), "32-byte hex string" };
-        yield return new object?[] { "envelope_hash", ProofEventJson("envelope_hash", "0x" + new string('1', 64)), "32-byte hex string" };
-        yield return new object?[] { "vk_ref", ProofEventJson("vk_ref", "halo2/ ipa::vk"), "whitespace" };
-        yield return new object?[] { "vk_commitment", ProofEventJson("vk_commitment", new string('5', 63)), "32-byte hex string" };
-        yield return new object?[] { "pruned_by", ProofEventJson("pruned_by", "peer 1"), "whitespace" };
-        yield return new object?[] { "remaining", ProofEventJson("remaining", 33), "less than or equal to cap" };
-        yield return new object?[] { "removed", ProofEventJson("removed", null), "must not be null" };
-        yield return new object?[] { "removed_count", ProofEventJson("removed_count", 2), "must match" };
-        yield return new object?[] { "removed[0]", ProofEventJson("removed[0]", null), "must not be null" };
-        yield return new object?[] { "removed[0].backend", ProofEventJson("removed[0].backend", null), "must not be null" };
-        yield return new object?[]
-        {
-            "removed[0].backend",
-            "{\"category\":\"Data\",\"event\":\"ProofPruned\",\"backend\":\"halo2/ipa\",\"removed_count\":1,"
-                + "\"removed\":[{\"proof_hash\":\""
-                + new string('4', 64)
-                + "\"}]}",
-            "must not be null",
-        };
-        yield return new object?[] { "removed[0].backend", ProofEventJson("removed[0].backend", "halo2/ipa "), "surrounding whitespace" };
-        yield return new object?[] { "removed[0].proof_hash", ProofEventJson("removed[0].proof_hash", null), "must not be null" };
-        yield return new object?[]
-        {
-            "removed[0].proof_hash",
-            "{\"category\":\"Data\",\"event\":\"ProofPruned\",\"backend\":\"halo2/ipa\",\"removed_count\":1,"
-                + "\"removed\":[{\"backend\":\"halo2/ipa\"}]}",
-            "must not be null",
-        };
-        yield return new object?[] { "removed[0].proof_hash", ProofEventJson("removed[0].proof_hash", "44"), "32-byte hex string" };
-        yield return new object?[] { "last_event_id", ProofEventJson(), "surrounding whitespace", " bad-proof" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidProofSsePayloads))]
-    public async Task StreamProofEventsAsyncRejectsMalformedProofPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage,
-        string? eventId = "proof-1")
-    {
-        using var handler = new RecordingHandler(_ =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(SseDataFrame(json, eventId, "data.proof")),
-            };
-            response.Content.Headers.ContentType = new("text/event-stream");
-            return response;
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(async () =>
-        {
-            await foreach (var _ in client.StreamProofEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
-            {
-            }
-        });
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Theory]
-    [InlineData("not-json")]
-    [InlineData("null")]
-    [InlineData("   ")]
-    public async Task StreamProofEventsAsyncRejectsMalformedJsonData(string rawData)
-    {
-        using var handler = new RecordingHandler(_ =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(SseDataFrame(rawData, "proof-1", "data.proof")),
-            };
-            response.Content.Headers.ContentType = new("text/event-stream");
-            return response;
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(async () =>
-        {
-            await foreach (var _ in client.StreamProofEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
-            {
-            }
-        });
-
-        Assert.Contains("proof SSE payload.data", error.Message);
-        Assert.Contains("valid non-null JSON", error.Message);
-    }
-
-    public static IEnumerable<object?[]> InvalidRawPipelineEventPayloads()
-    {
-        yield return new object?[] { "pipeline event", "null", "must not be null" };
-        yield return new object?[] { "category", PipelineEventJson("category", null), "must not be null" };
-        yield return new object?[] { "category", "{\"event\":\"Transaction\",\"hash\":\"" + ToriiTransactionHashHex + "\"}", "must not be null" };
-        yield return new object?[] { "category", PipelineEventJson("category", "Data"), "Pipeline" };
-        yield return new object?[] { "category", "{\"category\":\"Pipeline\",\"category\":\"Pipeline\",\"event\":\"Transaction\",\"hash\":\"" + ToriiTransactionHashHex + "\"}", "must not appear more than once" };
-        yield return new object?[] { "event", PipelineEventJson("event", null), "must not be null" };
-        yield return new object?[] { "event", "{\"category\":\"Pipeline\",\"hash\":\"" + ToriiTransactionHashHex + "\"}", "must not be null" };
-        yield return new object?[] { "event", PipelineEventJson("event", ""), "non-empty" };
-        yield return new object?[] { "event", PipelineEventJson("event", "Transaction Applied"), "whitespace" };
-        yield return new object?[] { "hash", PipelineEventJson("hash", "0x" + ToriiTransactionHashHex), "lowercase 32-byte hex string" };
-        yield return new object?[] { "hash", PipelineEventJson("hash", ToriiTransactionHashHex.ToUpperInvariant()), "lowercase 32-byte hex string" };
-        yield return new object?[] { "hash", PipelineEventJson("hash", new string('c', 63)), "lowercase 32-byte hex string" };
-        yield return new object?[] { "lane_id", PipelineEventJson("lane_id", -1), "unsigned integer" };
-        yield return new object?[] { "status", PipelineEventJson("status", "Approved Now"), "whitespace" };
-        yield return new object?[] { "kind", PipelineEventJson("kind", "Proposal\u0001"), "control characters" };
-        yield return new object?[] { "details", PipelineEventJson("details", "\u0001bad"), "control characters" };
-        yield return new object?[] { "global_state_root", PipelineEventJson("global_state_root", "0x" + new string('a', 64)), "lowercase 32-byte hex string" };
-        yield return new object?[] { "block_hash", PipelineEventJson("block_hash", new string('a', 63)), "lowercase 32-byte hex string" };
-        yield return new object?[]
-        {
-            "extension.observer",
-            "{\"category\":\"Pipeline\",\"event\":\"Transaction\",\"hash\":\""
-                + ToriiTransactionHashHex
-                + "\",\"extension\":{\"observer\":\"peer-1\",\"observer\":\"peer-2\"}}",
-            "must not appear more than once",
-        };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawPipelineEventPayloads))]
-    public void ToriiPipelineEventRejectsMalformedRawPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiPipelineEvent>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public void ToriiPipelineEventDeserializesRawPayloadWithExtensionData()
-    {
-        var pipelineEvent = JsonSerializer.Deserialize<ToriiPipelineEvent>(
-            PipelineEventJson("extension", JsonNode.Parse("""{"observer":"peer-1"}""")))!;
-
-        Assert.Equal("Pipeline", pipelineEvent.Category);
-        Assert.Equal(ToriiTransactionHashHex, pipelineEvent.Hash);
-        Assert.NotNull(pipelineEvent.AdditionalProperties);
-        Assert.True(pipelineEvent.AdditionalProperties!.ContainsKey("extension"));
-        Assert.Equal(JsonValueKind.Object, pipelineEvent.AdditionalProperties["extension"].ValueKind);
-
-        var extensionSnapshot = pipelineEvent.AdditionalProperties;
-        extensionSnapshot!["injected"] = JsonElementFrom("true");
-        extensionSnapshot["extension"] = JsonElementFrom("""{"observer":"peer-2"}""");
-
-        Assert.True(pipelineEvent.AdditionalProperties!.ContainsKey("extension"));
-        Assert.False(pipelineEvent.AdditionalProperties.ContainsKey("injected"));
-        var serialized = JsonSerializer.Serialize(pipelineEvent);
-        Assert.Contains("peer-1", serialized, StringComparison.Ordinal);
-        Assert.DoesNotContain("peer-2", serialized, StringComparison.Ordinal);
-        Assert.DoesNotContain("injected", serialized, StringComparison.Ordinal);
-    }
-
-    public static IEnumerable<object?[]> InvalidDirectPipelineEventMetadata()
-    {
-        yield return new object?[] { "Category", null };
-        yield return new object?[] { "Category", "Data" };
-        yield return new object?[] { "Category", " Pipeline" };
-        yield return new object?[] { "Event", null };
-        yield return new object?[] { "Event", "" };
-        yield return new object?[] { "Event", "Transaction Applied" };
-        yield return new object?[] { "Event", "Transaction\u0001" };
-        yield return new object?[] { "Status", "Approved Now" };
-        yield return new object?[] { "Hash", "0x" + ToriiTransactionHashHex };
-        yield return new object?[] { "Hash", ToriiTransactionHashHex.ToUpperInvariant() };
-        yield return new object?[] { "Kind", "Proposal\u0001" };
-        yield return new object?[] { "Details", "\u0001bad" };
-        yield return new object?[] { "GlobalStateRoot", "0x" + ContractCodeHashHex };
-        yield return new object?[] { "BlockHash", new string('8', 63) };
-        yield return new object?[] { "LastEventId", "" };
-        yield return new object?[] { "LastEventId", " bad-id" };
-        yield return new object?[] { "SseEventName", "pipeline.block\u0001" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDirectPipelineEventMetadata))]
-    public void ToriiPipelineEventRejectsMalformedDirectMetadata(string propertyName, string? value)
-    {
-        var pipelineEvent = new ToriiPipelineEvent();
-
-        var error = Assert.Throws<ArgumentException>(() =>
-            SetPipelineEventDirectMetadata(pipelineEvent, propertyName, value));
-
-        Assert.Equal(propertyName, error.ParamName);
-    }
-
-    [Fact]
-    public void ToriiPipelineEventRejectsNegativeDirectRetryMetadata()
-    {
-        var error = Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new ToriiPipelineEvent { RetryMilliseconds = -1 });
-
-        Assert.Equal("RetryMilliseconds", error.ParamName);
-    }
-
-    public static IEnumerable<object?[]> InvalidRawProofEventPayloads()
-    {
-        yield return new object?[] { "proof event", "null", "must not be null" };
-        yield return new object?[] { "category", ProofEventJson("category", null), "must not be null" };
-        yield return new object?[] { "category", """{"event":"ProofPruned","backend":"halo2/ipa"}""", "must not be null" };
-        yield return new object?[] { "category", ProofEventJson("category", "Pipeline"), "Data" };
-        yield return new object?[] { "category", "{\"category\":\"Data\",\"category\":\"Data\",\"event\":\"ProofPruned\",\"backend\":\"halo2/ipa\"}", "must not appear more than once" };
-        yield return new object?[] { "event", ProofEventJson("event", null), "must not be null" };
-        yield return new object?[] { "event", """{"category":"Data","backend":"halo2/ipa"}""", "must not be null" };
-        yield return new object?[] { "event", ProofEventJson("event", "Transaction"), "proof event" };
-        yield return new object?[] { "event", ProofEventJson("event", "Proof Verified"), "whitespace" };
-        yield return new object?[] { "backend", ProofEventJson("backend", null), "must not be null" };
-        yield return new object?[] { "backend", """{"category":"Data","event":"ProofPruned"}""", "must not be null" };
-        yield return new object?[] { "backend", ProofEventJson("backend", ""), "non-empty" };
-        yield return new object?[] { "backend", ProofEventJson("backend", " halo2/ipa"), "surrounding whitespace" };
-        yield return new object?[] { "proof_hash", ProofEventJson("proof_hash", "33"), "lowercase 32-byte hex string" };
-        yield return new object?[] { "call_hash", ProofEventJson("call_hash", new string('z', 64)), "lowercase 32-byte hex string" };
-        yield return new object?[] { "envelope_hash", ProofEventJson("envelope_hash", "0x" + new string('1', 64)), "lowercase 32-byte hex string" };
-        yield return new object?[] { "vk_ref", ProofEventJson("vk_ref", "halo2/ ipa::vk"), "whitespace" };
-        yield return new object?[] { "vk_commitment", ProofEventJson("vk_commitment", new string('5', 63)), "lowercase 32-byte hex string" };
-        yield return new object?[] { "removed_count", ProofEventJson("removed_count", -1), "unsigned integer" };
-        yield return new object?[] { "remaining", ProofEventJson("remaining", 33), "less than or equal to cap" };
-        yield return new object?[] { "removed", ProofEventJson("removed", null), "must not be null" };
-        yield return new object?[] { "removed_count", ProofEventJson("removed_count", 2), "must match" };
-        yield return new object?[] { "removed[0]", ProofEventJson("removed[0]", null), "must not be null" };
-        yield return new object?[] { "removed[0].backend", ProofEventJson("removed[0].backend", null), "must not be null" };
-        yield return new object?[]
-        {
-            "removed[0].backend",
-            "{\"category\":\"Data\",\"event\":\"ProofPruned\",\"backend\":\"halo2/ipa\",\"removed_count\":1,"
-                + "\"removed\":[{\"proof_hash\":\""
-                + new string('4', 64)
-                + "\"}]}",
-            "must not be null",
-        };
-        yield return new object?[] { "removed[0].backend", ProofEventJson("removed[0].backend", "halo2/ipa "), "surrounding whitespace" };
-        yield return new object?[] { "removed[0].proof_hash", ProofEventJson("removed[0].proof_hash", null), "must not be null" };
-        yield return new object?[]
-        {
-            "removed[0].proof_hash",
-            "{\"category\":\"Data\",\"event\":\"ProofPruned\",\"backend\":\"halo2/ipa\",\"removed_count\":1,"
-                + "\"removed\":[{\"backend\":\"halo2/ipa\"}]}",
-            "must not be null",
-        };
-        yield return new object?[] { "removed[0].proof_hash", ProofEventJson("removed[0].proof_hash", "44"), "lowercase 32-byte hex string" };
-        yield return new object?[]
-        {
-            "extension.origin_height",
-            "{\"category\":\"Data\",\"event\":\"ProofPruned\",\"backend\":\"halo2/ipa\","
-                + "\"extension\":{\"origin_height\":777,\"origin_height\":778}}",
-            "must not appear more than once",
-        };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawProofEventPayloads))]
-    public void ToriiProofEventRejectsMalformedRawPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiProofEvent>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public void ToriiProofEventDeserializesRawPayloadWithExtensionData()
-    {
-        var proofEvent = JsonSerializer.Deserialize<ToriiProofEvent>(
-            ProofEventJson("extension", JsonNode.Parse("""{"origin_height":777}""")))!;
-
-        Assert.Equal("Data", proofEvent.Category);
-        Assert.Equal("ProofPruned", proofEvent.Event);
-        Assert.NotNull(proofEvent.AdditionalProperties);
-        Assert.True(proofEvent.AdditionalProperties!.ContainsKey("extension"));
-        Assert.Equal(JsonValueKind.Object, proofEvent.AdditionalProperties["extension"].ValueKind);
-
-        var extensionSnapshot = proofEvent.AdditionalProperties;
-        extensionSnapshot!["injected"] = JsonElementFrom("true");
-        extensionSnapshot["extension"] = JsonElementFrom("""{"origin_height":778}""");
-        var removedSnapshot = proofEvent.Removed!;
-        removedSnapshot[0].Backend = "mutated";
-        removedSnapshot.Add(new ToriiProofRemovedRecord
-        {
-            Backend = "halo2/ipa",
-            ProofHash = new string('6', 64),
-        });
-
-        Assert.True(proofEvent.AdditionalProperties!.ContainsKey("extension"));
-        Assert.False(proofEvent.AdditionalProperties.ContainsKey("injected"));
-        var removed = Assert.Single(proofEvent.Removed!);
-        Assert.Equal("halo2/ipa", removed.Backend);
-        Assert.Equal(new string('4', 64), removed.ProofHash);
-        var serialized = JsonSerializer.Serialize(proofEvent);
-        Assert.Contains("777", serialized, StringComparison.Ordinal);
-        Assert.DoesNotContain("778", serialized, StringComparison.Ordinal);
-        Assert.DoesNotContain("mutated", serialized, StringComparison.Ordinal);
-        Assert.DoesNotContain(new string('6', 64), serialized, StringComparison.Ordinal);
-    }
-
-    public static IEnumerable<object?[]> InvalidDirectProofEventMetadata()
-    {
-        yield return new object?[] { "Category", null };
-        yield return new object?[] { "Category", "Pipeline" };
-        yield return new object?[] { "Category", " Data" };
-        yield return new object?[] { "Event", null };
-        yield return new object?[] { "Event", "" };
-        yield return new object?[] { "Event", "Transaction" };
-        yield return new object?[] { "Event", "Proof Verified" };
-        yield return new object?[] { "Backend", "" };
-        yield return new object?[] { "Backend", " halo2/ipa" };
-        yield return new object?[] { "ProofHash", "0x" + new string('3', 64) };
-        yield return new object?[] { "CallHash", new string('Z', 64) };
-        yield return new object?[] { "EnvelopeHash", string.Concat(Enumerable.Repeat("10", 31)) };
-        yield return new object?[] { "VerificationKeyReference", "halo2/ ipa::vk" };
-        yield return new object?[] { "VerificationKeyCommitment", new string('5', 63) };
-        yield return new object?[] { "PrunedBy", "peer 1" };
-        yield return new object?[] { "Origin", "Automatic\u0001" };
-        yield return new object?[] { "LastEventId", "" };
-        yield return new object?[] { "LastEventId", " bad-proof" };
-        yield return new object?[] { "SseEventName", "data.proof\u0001" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDirectProofEventMetadata))]
-    public void ToriiProofEventRejectsMalformedDirectMetadata(string propertyName, string? value)
-    {
-        var proofEvent = new ToriiProofEvent();
-
-        var error = Assert.Throws<ArgumentException>(() =>
-            SetProofEventDirectMetadata(proofEvent, propertyName, value));
-
-        Assert.Equal(propertyName, error.ParamName);
-    }
-
-    [Fact]
-    public void ToriiProofEventRejectsNegativeDirectRetryMetadata()
-    {
-        var error = Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new ToriiProofEvent { RetryMilliseconds = -1 });
-
-        Assert.Equal("RetryMilliseconds", error.ParamName);
-    }
-
-    [Theory]
-    [InlineData("Backend", " halo2/ipa")]
-    [InlineData("ProofHash", "44")]
-    public void ToriiProofRemovedRecordRejectsMalformedDirectMetadata(string propertyName, string value)
-    {
-        var record = new ToriiProofRemovedRecord();
-
-        var error = Assert.Throws<ArgumentException>(() =>
-            SetProofRemovedRecordDirectMetadata(record, propertyName, value));
-
-        Assert.Equal(propertyName, error.ParamName);
-    }
-
-    [Fact]
-    public void ToriiProofEventRejectsMalformedDirectRemovedRecordCopies()
-    {
-        var error = Assert.Throws<ArgumentException>(() =>
-            new ToriiProofEvent { Removed = [new ToriiProofRemovedRecord()] });
-
-        Assert.Equal("Backend", error.ParamName);
-    }
-
-    public static IEnumerable<object?[]> InvalidRawProofRemovedRecords()
-    {
-        yield return new object?[] { "proof removed record", "null", "must not be null" };
-        yield return new object?[] { "backend", """{"backend":null,"proof_hash":"4444444444444444444444444444444444444444444444444444444444444444"}""", "must not be null" };
-        yield return new object?[] { "backend", """{"proof_hash":"4444444444444444444444444444444444444444444444444444444444444444"}""", "must not be null" };
-        yield return new object?[] { "backend", """{"backend":"","proof_hash":"4444444444444444444444444444444444444444444444444444444444444444"}""", "non-empty" };
-        yield return new object?[] { "backend", """{"backend":"halo2/ipa ","proof_hash":"4444444444444444444444444444444444444444444444444444444444444444"}""", "surrounding whitespace" };
-        yield return new object?[] { "proof_hash", """{"backend":"halo2/ipa","proof_hash":null}""", "must not be null" };
-        yield return new object?[] { "proof_hash", """{"backend":"halo2/ipa"}""", "must not be null" };
-        yield return new object?[] { "proof_hash", """{"backend":"halo2/ipa","proof_hash":"44"}""", "lowercase 32-byte hex string" };
-        yield return new object?[] { "proof_hash", """{"backend":"halo2/ipa","proof_hash":"0x4444444444444444444444444444444444444444444444444444444444444444"}""", "lowercase 32-byte hex string" };
-        yield return new object?[] { "backend", """{"backend":"halo2/ipa","backend":"halo2/ipa","proof_hash":"4444444444444444444444444444444444444444444444444444444444444444"}""", "must not appear more than once" };
-        yield return new object?[]
-        {
-            "metadata.observer",
-            """{"backend":"halo2/ipa","proof_hash":"4444444444444444444444444444444444444444444444444444444444444444","metadata":{"observer":"peer-1","observer":"peer-2"}}""",
-            "must not appear more than once",
-        };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawProofRemovedRecords))]
-    public void ToriiProofRemovedRecordRejectsMalformedRawPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiProofRemovedRecord>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
     }
 
     [Fact]
@@ -13269,14 +11501,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal("/v1/pipeline/transactions/details", request.RequestUri!.AbsolutePath);
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
             Assert.Equal(
                 signedQuery.VersionedNoritoBytes,
                 request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
             return JsonResponse($$"""
                 {
                   "hash": "{{transactionHash}}",
-                  "transaction": {},
-                  "trigger_completions": []
+                  "transaction": {}
                 }
                 """);
         });
@@ -13293,7 +11525,31 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         Assert.Equal(transactionHash, details.RootElement.GetProperty("hash").GetString());
         Assert.Equal(JsonValueKind.Object, details.RootElement.GetProperty("transaction").ValueKind);
-        Assert.Empty(details.RootElement.GetProperty("trigger_completions").EnumerateArray());
+        Assert.False(details.RootElement.TryGetProperty("trigger_completions", out _));
+    }
+
+    [Fact]
+    public async Task GetPipelineTransactionDetailsAsyncRejectsRetiredTriggerCompletions()
+    {
+        var transactionHash = new string('1', 64);
+        var signedQuery = new SignedIterableQueryBuilder(
+            CanonicalAccountId,
+            NetworkId.Parse(CanonicalNetworkId))
+            .FindTransactionDetails(transactionHash)
+            .BuildSigned(CanonicalPrivateKeySeed);
+        using var handler = new RecordingHandler(_ => JsonResponse($$"""
+                {"hash": "{{transactionHash}}", "transaction": {}, "trigger_completions": []}
+                """));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.GetPipelineTransactionDetailsAsync(signedQuery, transactionHash, TestContext.Current.CancellationToken));
+
+        Assert.Contains("missing or unsupported fields", error.Message);
     }
 
     [Fact]
@@ -19749,10 +18005,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Aggregate = null!,
             },
-            ("query", "RowEnrichmentFields[0]") => ValidNodeQueryCapabilities() with
-            {
-                RowEnrichmentFields = [RequiredStringValue(value)],
-            },
             ("query", "Projection") => ValidNodeQueryCapabilities() with
             {
                 Projection = null!,
@@ -19873,49 +18125,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         object? constructed = (operation, propertyName) switch
         {
-            ("summary", "Id") => new ToriiAccountSummary
-            {
-                Id = RequiredStringValue(value),
-            },
-            ("asset-balance", "Asset") => ValidAccountAssetBalance() with
-            {
-                Asset = RequiredStringValue(value),
-            },
-            ("asset-balance", "AccountId") => ValidAccountAssetBalance() with
-            {
-                AccountId = RequiredStringValue(value),
-            },
-            ("asset-balance", "Scope") => ValidAccountAssetBalance() with
-            {
-                Scope = RequiredStringValue(value),
-            },
-            ("asset-balance", "AssetName") => ValidAccountAssetBalance() with
-            {
-                AssetName = RequiredStringValue(value),
-            },
-            ("asset-balance", "AssetAlias") => ValidAccountAssetBalance() with
-            {
-                AssetAlias = RequiredStringValue(value),
-            },
-            ("asset-balance", "Quantity") => ValidAccountAssetBalance() with
-            {
-                Quantity = RequiredStringValue(value),
-            },
             ("permission", "Name") => ValidAccountPermission() with
             {
                 Name = RequiredStringValue(value),
-            },
-            ("transaction", "Authority") => ValidAccountTransactionSummary() with
-            {
-                Authority = RequiredStringValue(value),
-            },
-            ("transaction", "TimestampMilliseconds") => ValidAccountTransactionSummary() with
-            {
-                TimestampMilliseconds = RequiredInt64Value(value),
-            },
-            ("transaction", "EntrypointHash") => ValidAccountTransactionSummary() with
-            {
-                EntrypointHash = RequiredStringValue(value),
             },
             _ => throw new ArgumentOutOfRangeException(
                 nameof(propertyName),
@@ -19925,36 +18137,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         GC.KeepAlive(constructed);
     }
 
-    private static ToriiAssetBalance ValidAccountAssetBalance()
-    {
-        return new ToriiAssetBalance
-        {
-            Asset = "rose#wonderland.paynet",
-            AccountId = CanonicalAccountId,
-            Scope = "global",
-            AssetName = "rose",
-            AssetAlias = "merchant-rose",
-            Quantity = "10",
-        };
-    }
-
     private static ToriiAccountPermission ValidAccountPermission()
     {
         return new ToriiAccountPermission
         {
             Name = "CanResolveAccountAlias",
             Payload = JsonNode.Parse("""{"dataspace":7}"""),
-        };
-    }
-
-    private static ToriiTransactionSummary ValidAccountTransactionSummary()
-    {
-        return new ToriiTransactionSummary
-        {
-            Authority = CanonicalAccountId,
-            TimestampMilliseconds = 1,
-            EntrypointHash = ToriiTransactionHashHex,
-            ResultOk = true,
         };
     }
 
@@ -22483,8 +20671,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "explorer-transaction" => client.GetExplorerTransactionAsync(value!),
             "explorer-instruction" => client.GetExplorerInstructionAsync(value!, 2),
             "explorer-instruction-contract-view" => client.GetExplorerInstructionContractViewAsync(value!, 2),
-            "account-assets" => client.GetAccountAssetsAsync(value!),
-            "account-transactions" => client.GetAccountTransactionsAsync(value!),
             "account-permissions" => client.GetAccountPermissionsAsync(value!),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown route segment read operation."),
         };
@@ -22495,13 +20681,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string operation,
         string value)
     {
-        var accountId = CanonicalAccountId;
-
         return operation switch
         {
-            "account-assets-asset" => client.GetAccountAssetsAsync(accountId, asset: value),
-            "account-assets-scope" => client.GetAccountAssetsAsync(accountId, scope: value),
-            "account-transactions-asset-id" => client.GetAccountTransactionsAsync(accountId, assetId: value),
             "explorer-accounts-domain" => client.GetExplorerAccountsAsync(new ToriiExplorerAccountsQuery { Domain = value }),
             "explorer-accounts-with-asset" => client.GetExplorerAccountsAsync(new ToriiExplorerAccountsQuery { WithAsset = value }),
             "explorer-domains-owned-by" => client.GetExplorerDomainsAsync(new ToriiExplorerDomainsQuery { OwnedBy = value }),
@@ -22722,12 +20903,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["supported_resources"] = aggregateSupportedResources,
             ["v1"] = true,
         };
-        var rowEnrichmentFields = new JsonArray(
-            "primary_alias",
-            "primary_alias_name",
-            "primary_alias_dataspace",
-            "primary_alias_domain",
-            "has_primary_alias");
         var projectionMetadataKeys = new JsonArray(
             "query_projection.locator",
             "query_projection.resource",
@@ -22761,9 +20936,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var query = new JsonObject
         {
             ["aggregate"] = aggregate,
-            ["indexed_snapshot_marker"] = true,
             ["projection"] = projection,
-            ["row_enrichment_fields"] = rowEnrichmentFields,
         };
         var response = new JsonObject
         {
@@ -22862,15 +21035,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 break;
             case "query.aggregate.supported_resources[0]":
                 aggregateSupportedResources[0] = JsonValueForMetadata(value);
-                break;
-            case "query.indexed_snapshot_marker":
-                query["indexed_snapshot_marker"] = JsonValueForMetadata(value);
-                break;
-            case "query.row_enrichment_fields":
-                query["row_enrichment_fields"] = JsonValueForMetadata(value);
-                break;
-            case "query.row_enrichment_fields[1]":
-                rowEnrichmentFields[1] = JsonValueForMetadata(value);
                 break;
             case "query.projection":
                 query["projection"] = JsonValueForMetadata(value);
@@ -22988,7 +21152,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return "crypto.sm.acceleration.neon_sm3";
         yield return "crypto.sm.acceleration.neon_sm4";
         yield return "crypto.curves.registry_version";
-        yield return "query.indexed_snapshot_marker";
         yield return "query.aggregate.v1";
         yield return "query.aggregate.exact_results";
         yield return "query.projection.checkpoint_contract_v1";
@@ -23016,7 +21179,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         yield return "crypto.sm.allowed_signing[0]";
         yield return "query.aggregate.supported_resources[0]";
-        yield return "query.row_enrichment_fields[1]";
         yield return "query.projection.metadata_keys[1]";
         yield return "query.projection.export_supported_resources[0]";
     }
@@ -23031,7 +21193,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return ("acceleration", "neon_sm3");
         yield return ("acceleration", "neon_sm4");
         yield return ("curves", "registry_version");
-        yield return ("query", "indexed_snapshot_marker");
         yield return ("aggregate", "v1");
         yield return ("aggregate", "exact_results");
         yield return ("projection", "checkpoint_contract_v1");
@@ -23059,7 +21220,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         yield return ("sm", "allowed_signing[0]");
         yield return ("aggregate", "supported_resources[0]");
-        yield return ("query", "row_enrichment_fields[1]");
         yield return ("projection", "metadata_keys[1]");
         yield return ("projection", "export_supported_resources[0]");
     }
@@ -23156,8 +21316,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var value = propertyName switch
         {
             "abi_version" or "registry_version" => "1",
-            "enabled" or "scalar" or "neon_sm3" or "indexed_snapshot_marker" or "v1" => "true",
-            "sm" or "curves" => "null",
+            "enabled" or "scalar" or "neon_sm3" or "v1" => "true",
+            "sm" or "curves" or "aggregate" => "null",
             _ => "\"duplicate\"",
         };
 
@@ -23325,61 +21485,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         }
     }
 
-    private static string AccountsPageResponseJson(string field, object? value)
-    {
-        var item = new JsonObject
-        {
-            ["id"] = CanonicalAccountId,
-        };
-        var items = new JsonArray(item);
-        var response = new JsonObject
-        {
-            ["items"] = items,
-            ["total"] = 1,
-        };
-
-        switch (field)
-        {
-            case "items":
-                response["items"] = JsonValueForAccountPage(value);
-                break;
-            case "items[0]":
-                items[0] = JsonValueForAccountPage(value);
-                break;
-            case "items[0].id":
-                item["id"] = JsonValueForAccountPage(value);
-                break;
-            case "total":
-                response["total"] = JsonValueForAccountPage(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown accounts response field.");
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static string AccountSummaryJson(string field, object? value)
-    {
-        var item = new JsonObject
-        {
-            ["id"] = CanonicalAccountId,
-        };
-
-        item[field] = JsonValueForAccountPage(value);
-        return item.ToJsonString();
-    }
-
-    private static string AccountSummaryDuplicatePropertyJson(string propertyName)
-    {
-        return $$"""
-            {
-              "{{propertyName}}": "{{CanonicalAccountId}}",
-              "{{propertyName}}": "{{CanonicalAccountId}}"
-            }
-            """;
-    }
-
     private static string AccountsPageDuplicatePropertyJson(string propertyName)
     {
         return $$"""
@@ -23406,91 +21511,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 }
               ],
               "total": 1
-            }
-            """;
-    }
-
-    private static string AccountAssetsResponseJson(string field, object? value)
-    {
-        var item = new JsonObject
-        {
-            ["asset"] = "rose#wonderland.paynet",
-            ["account_id"] = CanonicalAccountId,
-            ["scope"] = "global",
-            ["asset_name"] = "rose",
-            ["asset_alias"] = "merchant-rose",
-            ["quantity"] = "10",
-        };
-        var items = new JsonArray(item);
-        var response = new JsonObject
-        {
-            ["items"] = items,
-            ["total"] = 1,
-        };
-
-        switch (field)
-        {
-            case "items":
-                response["items"] = JsonValueForAccountPage(value);
-                break;
-            case "items[0]":
-                items[0] = JsonValueForAccountPage(value);
-                break;
-            case "items[0].asset":
-                item["asset"] = JsonValueForAccountPage(value);
-                break;
-            case "items[0].account_id":
-                item["account_id"] = JsonValueForAccountPage(value);
-                break;
-            case "items[0].scope":
-                item["scope"] = JsonValueForAccountPage(value);
-                break;
-            case "items[0].asset_name":
-                item["asset_name"] = JsonValueForAccountPage(value);
-                break;
-            case "items[0].asset_alias":
-                item["asset_alias"] = JsonValueForAccountPage(value);
-                break;
-            case "items[0].quantity":
-                item["quantity"] = JsonValueForAccountPage(value);
-                break;
-            case "total":
-                response["total"] = JsonValueForAccountPage(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown account assets response field.");
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static string AccountAssetBalanceJson(string field, object? value)
-    {
-        var item = new JsonObject
-        {
-            ["asset"] = "rose#wonderland.paynet",
-            ["account_id"] = CanonicalAccountId,
-            ["scope"] = "global",
-            ["asset_name"] = "rose",
-            ["asset_alias"] = "merchant-rose",
-            ["quantity"] = "10",
-        };
-
-        item[field] = JsonValueForAccountPage(value);
-        return item.ToJsonString();
-    }
-
-    private static string AccountAssetBalanceDuplicatePropertyJson(string propertyName)
-    {
-        return $$"""
-            {
-              "{{propertyName}}": "rose#wonderland.paynet",
-              "{{propertyName}}": "rose#wonderland.paynet",
-              "account_id": "{{CanonicalAccountId}}",
-              "scope": "global",
-              "asset_name": "rose",
-              "asset_alias": "merchant-rose",
-              "quantity": "10"
             }
             """;
     }
@@ -24135,79 +22155,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             int number => JsonValue.Create(number),
             _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unsupported account page JSON value."),
         };
-    }
-
-    private static string AccountTransactionsResponseJson(string field, object? value)
-    {
-        var item = new JsonObject
-        {
-            ["authority"] = CanonicalAccountId,
-            ["timestamp_ms"] = 1,
-            ["entrypoint_hash"] = ToriiTransactionHashHex,
-            ["result_ok"] = true,
-        };
-        var items = new JsonArray(item);
-        var response = new JsonObject
-        {
-            ["items"] = items,
-            ["total"] = 1,
-        };
-
-        switch (field)
-        {
-            case "items":
-                response["items"] = JsonValueForAccountTransactions(value);
-                break;
-            case "items[0]":
-                items[0] = JsonValueForAccountTransactions(value);
-                break;
-            case "items[0].authority":
-                item["authority"] = JsonValueForAccountTransactions(value);
-                break;
-            case "items[0].timestamp_ms":
-                item["timestamp_ms"] = JsonValueForAccountTransactions(value);
-                break;
-            case "items[0].entrypoint_hash":
-                item["entrypoint_hash"] = JsonValueForAccountTransactions(value);
-                break;
-            case "items[0].result_ok":
-                item["result_ok"] = JsonValueForAccountTransactions(value);
-                break;
-            case "total":
-                response["total"] = JsonValueForAccountTransactions(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown account transaction response field.");
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static string AccountTransactionSummaryJson(string field, object? value)
-    {
-        var item = new JsonObject
-        {
-            ["authority"] = CanonicalAccountId,
-            ["timestamp_ms"] = 1,
-            ["entrypoint_hash"] = ToriiTransactionHashHex,
-            ["result_ok"] = true,
-        };
-
-        item[field] = JsonValueForAccountTransactions(value);
-        return item.ToJsonString();
-    }
-
-    private static string AccountTransactionSummaryDuplicatePropertyJson(string propertyName)
-    {
-        return $$"""
-            {
-              "authority": "{{CanonicalAccountId}}",
-              "timestamp_ms": 1,
-              "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-              "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-              "result_ok": true
-            }
-            """;
     }
 
     private static string AccountTransactionsResponseDuplicatePropertyJson(string propertyName)
@@ -28452,7 +26399,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             builder.ReplaceMetadata(metadata);
         }
         var encoding = new TransactionEncodingContext(signerAccountId);
-        var payload = builder.BuildPayloadBytes(encoding);
+        var payload = builder.BuildPayloadBytes(encoding, creationTimeMilliseconds);
         return (
             Convert.ToBase64String(payload),
             Convert.ToBase64String(IrohaHash.Hash(payload)));
@@ -30065,269 +28012,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             long number => JsonValue.Create(number),
             int number => JsonValue.Create(number),
             _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unsupported verifying-key JSON value."),
-        };
-    }
-
-    private static string SseDataFrame(string json, string? eventId, string? eventName)
-    {
-        var builder = new StringBuilder();
-        if (eventId is not null)
-        {
-            builder.Append("id: ");
-            builder.Append(eventId);
-            builder.Append('\n');
-        }
-
-        if (eventName is not null)
-        {
-            builder.Append("event: ");
-            builder.Append(eventName);
-            builder.Append('\n');
-        }
-
-        builder.Append("data: ");
-        builder.Append(json);
-        builder.Append("\n\n");
-        return builder.ToString();
-    }
-
-    private static void SetPipelineEventDirectMetadata(
-        ToriiPipelineEvent pipelineEvent,
-        string propertyName,
-        string? value)
-    {
-        switch (propertyName)
-        {
-            case "Category":
-                pipelineEvent.Category = value!;
-                break;
-            case "Event":
-                pipelineEvent.Event = value!;
-                break;
-            case "Status":
-                pipelineEvent.Status = value;
-                break;
-            case "Hash":
-                pipelineEvent.Hash = value;
-                break;
-            case "Kind":
-                pipelineEvent.Kind = value;
-                break;
-            case "Details":
-                pipelineEvent.Details = value;
-                break;
-            case "GlobalStateRoot":
-                pipelineEvent.GlobalStateRoot = value;
-                break;
-            case "BlockHash":
-                pipelineEvent.BlockHash = value;
-                break;
-            case "LastEventId":
-                pipelineEvent.LastEventId = value;
-                break;
-            case "SseEventName":
-                pipelineEvent.SseEventName = value;
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(propertyName), propertyName, "Unknown pipeline event property.");
-        }
-    }
-
-    private static void SetProofEventDirectMetadata(
-        ToriiProofEvent proofEvent,
-        string propertyName,
-        string? value)
-    {
-        switch (propertyName)
-        {
-            case "Category":
-                proofEvent.Category = value!;
-                break;
-            case "Event":
-                proofEvent.Event = value!;
-                break;
-            case "Backend":
-                proofEvent.Backend = value;
-                break;
-            case "ProofHash":
-                proofEvent.ProofHash = value;
-                break;
-            case "CallHash":
-                proofEvent.CallHash = value;
-                break;
-            case "EnvelopeHash":
-                proofEvent.EnvelopeHash = value;
-                break;
-            case "VerificationKeyReference":
-                proofEvent.VerificationKeyReference = value;
-                break;
-            case "VerificationKeyCommitment":
-                proofEvent.VerificationKeyCommitment = value;
-                break;
-            case "PrunedBy":
-                proofEvent.PrunedBy = value;
-                break;
-            case "Origin":
-                proofEvent.Origin = value;
-                break;
-            case "LastEventId":
-                proofEvent.LastEventId = value;
-                break;
-            case "SseEventName":
-                proofEvent.SseEventName = value;
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(propertyName), propertyName, "Unknown proof event property.");
-        }
-    }
-
-    private static void SetProofRemovedRecordDirectMetadata(
-        ToriiProofRemovedRecord record,
-        string propertyName,
-        string value)
-    {
-        switch (propertyName)
-        {
-            case "Backend":
-                record.Backend = value;
-                break;
-            case "ProofHash":
-                record.ProofHash = value;
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(propertyName), propertyName, "Unknown removed record property.");
-        }
-    }
-
-    private static string PipelineEventJson(string? field = null, object? value = null)
-    {
-        var response = new JsonObject
-        {
-            ["category"] = "Pipeline",
-            ["event"] = "Transaction",
-            ["hash"] = ToriiTransactionHashHex,
-            ["lane_id"] = 3,
-            ["dataspace_id"] = 7,
-            ["block_height"] = 11,
-            ["status"] = "Approved",
-            ["kind"] = "Transaction",
-            ["details"] = "applied",
-            ["global_state_root"] = ContractCodeHashHex,
-            ["block_hash"] = ExplorerBlockHashHex,
-        };
-
-        switch (field)
-        {
-            case null:
-                break;
-            case "category":
-            case "event":
-            case "hash":
-            case "lane_id":
-            case "dataspace_id":
-            case "block_height":
-            case "status":
-            case "kind":
-            case "details":
-            case "height":
-            case "epoch_id":
-            case "global_state_root":
-            case "block_hash":
-            case "view":
-            case "epoch":
-            case "read_count":
-            case "write_count":
-            case "extension":
-                response[field] = JsonValueForToriiSse(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown pipeline event field.");
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static string ProofEventJson(string? field = null, object? value = null)
-    {
-        var removedRecord = new JsonObject
-        {
-            ["backend"] = "halo2/ipa",
-            ["proof_hash"] = new string('4', 64),
-        };
-        var removed = new JsonArray(removedRecord);
-        var response = new JsonObject
-        {
-            ["category"] = "Data",
-            ["event"] = "ProofPruned",
-            ["backend"] = "halo2/ipa",
-            ["proof_hash"] = new string('3', 64),
-            ["call_hash"] = ContractCodeHashHex,
-            ["envelope_hash"] = string.Concat(Enumerable.Repeat("10", 32)),
-            ["vk_ref"] = "halo2/ipa::vk_name",
-            ["vk_commitment"] = new string('5', 64),
-            ["removed_count"] = 1,
-            ["remaining"] = 3,
-            ["cap"] = 32,
-            ["grace_blocks"] = 64,
-            ["prune_batch"] = 8,
-            ["pruned_at_height"] = 777,
-            ["pruned_by"] = "peer-1",
-            ["origin"] = "Automatic",
-            ["removed"] = removed,
-        };
-
-        switch (field)
-        {
-            case null:
-                break;
-            case "category":
-            case "event":
-            case "backend":
-            case "proof_hash":
-            case "call_hash":
-            case "envelope_hash":
-            case "vk_ref":
-            case "vk_commitment":
-            case "removed_count":
-            case "remaining":
-            case "cap":
-            case "grace_blocks":
-            case "prune_batch":
-            case "pruned_at_height":
-            case "pruned_by":
-            case "origin":
-            case "removed":
-            case "extension":
-                response[field] = JsonValueForToriiSse(value);
-                break;
-            case "removed[0]":
-                removed[0] = JsonValueForToriiSse(value);
-                break;
-            case "removed[0].backend":
-                removedRecord["backend"] = JsonValueForToriiSse(value);
-                break;
-            case "removed[0].proof_hash":
-                removedRecord["proof_hash"] = JsonValueForToriiSse(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown proof event field.");
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static JsonNode? JsonValueForToriiSse(object? value)
-    {
-        return value switch
-        {
-            null => null,
-            JsonNode node => node,
-            string text => JsonValue.Create(text),
-            int number => JsonValue.Create(number),
-            long number => JsonValue.Create(number),
-            ulong number => JsonValue.Create(number),
-            bool boolean => JsonValue.Create(boolean),
-            _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unsupported SSE JSON value."),
         };
     }
 

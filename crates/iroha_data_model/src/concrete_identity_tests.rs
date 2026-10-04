@@ -470,9 +470,8 @@ fn block_message_send_identity_projection() -> Value {
     let budget = iroha_allocation::AllocationBudget::new(
         crate::block::SharedSignedBlock::allocation_layout().size(),
     );
-    let projection = BlockMessageSend(
-        crate::block::SharedSignedBlock::try_new(block, &budget).unwrap(),
-    );
+    let projection =
+        BlockMessageSend(crate::block::SharedSignedBlock::try_new(block, &budget).unwrap());
     projected_record(&projection, &owner)
 }
 

@@ -97,14 +97,14 @@ class AtomicPrivateSettlementToriiClientV1Test {
         val response = fixture.objectField("responses").objectField("phase_certificates")
         val executor = CapturingSettlementExecutor(jsonResponse(response))
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth(
+        fun auth() = ToriiCanonicalRequestAuth(
             "alice@universal",
             RequestSigner.ed25519(keyPair.private),
             1_700_000_000_000L,
             "settlement-phase-certificate-recovery-1",
         )
 
-        val received = client(executor).getPhaseCertificates(payload, auth).join()
+        val received = client(executor).getPhaseCertificates(payload, auth()).join()
 
         assertEquals(
             "/api/v1/nexus/private-settlements/legs/${payload.pathComponent()}/phase-certificates",
@@ -120,7 +120,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
         missingCertificate.remove("commit_certificate")
         assertFailsWith<java.util.concurrent.CompletionException> {
             client(CapturingSettlementExecutor(jsonResponse(missingCertificate)))
-                .getPhaseCertificates(payload, auth)
+                .getPhaseCertificates(payload, auth())
                 .join()
         }
 
@@ -128,7 +128,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
         nonObjectCertificate["prepare_certificate"] = emptyList<Any?>()
         assertFailsWith<java.util.concurrent.CompletionException> {
             client(CapturingSettlementExecutor(jsonResponse(nonObjectCertificate)))
-                .getPhaseCertificates(payload, auth)
+                .getPhaseCertificates(payload, auth())
                 .join()
         }
 
@@ -136,7 +136,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
         leakedField["plaintext"] = "LEAK_CANARY"
         val error = assertFailsWith<java.util.concurrent.CompletionException> {
             client(CapturingSettlementExecutor(jsonResponse(leakedField)))
-                .getPhaseCertificates(payload, auth)
+                .getPhaseCertificates(payload, auth())
                 .join()
         }
         assertFalse(error.cause?.message.orEmpty().contains("LEAK_CANARY"))

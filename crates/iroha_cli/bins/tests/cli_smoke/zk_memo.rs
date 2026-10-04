@@ -161,8 +161,8 @@ fn memo_is_credential_free_and_rejects_transaction_globals() {
         vec!["--operator-private-key-file", "missing-private-key"],
         vec!["--metadata", "missing-metadata.json"],
         vec!["--fee-payer", "authority"],
-        vec!["--input"],
-        vec!["--output"],
+        vec!["--stdin-instructions"],
+        vec!["--emit-instructions"],
         vec!["--verbose"],
     ] {
         let result = command()

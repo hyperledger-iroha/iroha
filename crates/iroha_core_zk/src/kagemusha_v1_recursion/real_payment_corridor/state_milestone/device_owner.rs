@@ -196,7 +196,7 @@ impl<'a> DiagnosticDeviceV1<'a> {
             machine.state() == &preview.state,
             "genuine admitted bootstrap must equal Core's exact original preview",
         )?;
-        Ok(Self {
+        let device = Self {
             context,
             device_index,
             material,
@@ -210,7 +210,25 @@ impl<'a> DiagnosticDeviceV1<'a> {
             coordinator,
             responses,
             _bootstrap_storage: bootstrap_storage,
-        })
+        };
+        let snapshot = device
+            .machine
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        ensure(
+            device
+                .coordinator
+                .recovery_prefix()
+                .map_err(|error| error.to_string())?
+                == snapshot.recovery_metadata.journals.coordinator
+                && device
+                    .responses
+                    .recovery_prefix()
+                    .map_err(|error| error.to_string())?
+                    == snapshot.recovery_metadata.journals.responses,
+            "returned diagnostic device must retain the exact published bootstrap journal owners",
+        )?;
+        Ok(device)
     }
 
     /// Apply the original device-zero finalized credit through actual reservation and MintFold.

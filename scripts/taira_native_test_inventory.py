@@ -24,6 +24,11 @@ NATIVE_CORE_TEST_OWNERS = (
     ('native beacon reporting control', 'sumeragi/epoch_beacon/producer.rs', 'sumeragi/epoch_beacon/producer/readiness.rs', 'readiness', 'sumeragi::epoch_beacon::producer::readiness::tests', (
         'reporting_shell_retains_original_pool_charge_until_last_reader_drops',
         'reporting_policy_refusal_and_duplicate_attach_preserve_original_owner',
+        'readiness_refresh_excludes_reader_until_validated_publication',
+        'readiness_failed_refresh_withdraws_old_positive_before_reader_returns',
+        'readiness_observation_requires_exact_even_generation_height_and_applied_cut',
+        'readiness_wait_expires_while_original_probe_guard_remains_held',
+        'readiness_poisoning_refuses_both_diagnostic_paths',
     )),
     ('native dynamic VM projection refusal', 'pipeline/access/dynamic_execution.rs', 'pipeline/access/dynamic_execution/tests.rs', 'tests', 'pipeline::access::dynamic_execution::tests', (
         'vm_stage_projection_keeps_original_capacity_release_and_completed_errors',
@@ -127,6 +132,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'payload_decode_refusal_retains_available_owner_without_negative_cache',
         'original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry',
         'original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_retry',
+        'replay_completion_retirement_keeps_exact_source_and_original_pool_retry',
     )),
     ('native completed replay identity', 'sumeragi/executor/replay.rs', 'sumeragi/executor/replay/tests.rs', 'tests', 'sumeragi::executor::replay::tests', (
         'completed_replay_rejects_altered_certificate_and_source_without_losing_exact_retry',
@@ -135,6 +141,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'historical_replay_retires_original_pools_and_reader_notices_after_state_fences',
         'historical_replay_archive_failure_retries_exact_owner_then_retires_after_state_fences',
         'historical_replay_post_visibility_unwind_retires_originals_after_state_fences',
+        'replay_completion_state_read_refusal_retains_original_receipt_and_retries_after_release',
+        'replay_committee_hash_streams_exact_counted_key_preimage',
     )),
     ('native preparation refusal identity', 'sumeragi/executor/preparation.rs', 'sumeragi/executor/preparation/tests.rs', 'tests', 'sumeragi::executor::preparation::tests', (
         'certificate_capacity_refusal_reaches_scheduler_with_original_release_and_execution',
@@ -206,6 +214,13 @@ NATIVE_CORE_TEST_OWNERS = (
         'warmed_epoch_shape_rejects_substituted_context_and_still_checks_each_qc',
         'warmed_reader_rechecks_durable_prefix_and_fresh_view_after_body_removal',
         'standalone_and_scoped_frame_reads_agree_without_skipping_shape_checks',
+        'staged_certificate_prefix_preserves_reset_target_first_order_and_original_receipts',
+        'staged_certificate_prefix_refusal_preserves_cursor_and_target_before_gap_errors',
+        'scoped_reverse_walk_reads_all_original_frames_and_rechecks_corrupt_ancestors',
+        'checked_prefix_finish_matches_original_complete_step_and_authority',
+        'checked_prefix_finish_preserves_refusal_rejection_and_same_source_retry',
+        'admitted_prefix_finish_matches_original_step_and_retains_original_slot_until_finish',
+        'admitted_prefix_finish_preserves_original_pool_refusal_and_certificate_error_order',
     )),
     ('native pending original execution', 'sumeragi/test_chain.rs', 'sumeragi/test_chain/pending_execution_tests.rs', 'pending_execution_tests', 'sumeragi::test_chain::tests::pending_execution_tests', (
         'pending_execution_retains_one_source_and_publishes_once',

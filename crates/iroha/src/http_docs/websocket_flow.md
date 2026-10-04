@@ -4,20 +4,8 @@ Public callers use account-owned capabilities. Each subscription signs one
 exact upgrade and sends one framed Norito subscription. The returned stream
 owns its connection and never reconnects automatically.
 
-```no_run
-# async fn example(account: &iroha::client::AccountClient) -> iroha::Result<()> {
-use futures_util::StreamExt;
-use iroha::data_model::events::pipeline::TransactionEventFilter;
-
-let mut events = account.events()
-    .subscribe([TransactionEventFilter::default()]).await?;
-if let Some(event) = events.next().await {
-    let _event = event?;
-}
-events.close().await?;
-# Ok(())
-# }
-```
+`iroha::client::streams::Events::subscribe` documents the public call; this
+private module owns its canonical upgrade and subscription frame.
 
 Custom connectors implement `iroha::stream::StreamTransport` and are installed
 with `ClientBuilder::stream_transport`. The SDK validates the upgrade response,

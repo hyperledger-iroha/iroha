@@ -35,7 +35,7 @@ const MAX_STAGE_RECORD_BYTES: u64 = STAGE_HEADER_BYTES as u64
 const STAGE_SUFFIX: &str = ".seed";
 
 /// Closed failure for the private seed-custody directory.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiSeedStagingErrorV1 {
     /// The configured root, its ancestry, or a resident record is unsafe or substituted.
     Invalid,

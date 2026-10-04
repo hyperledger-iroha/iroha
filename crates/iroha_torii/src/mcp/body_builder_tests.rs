@@ -5,39 +5,57 @@ fn materialize_borrowed_body(body: &BorrowedMcpJson<'_>) -> Value {
 }
 
 #[test]
-fn build_query_envelope_body_collects_shortcut_fields() {
+fn collection_query_arguments_form_the_canonical_post_body() {
     let args = norito::json!({
-        "filter": { "op": "eq", "args": ["authority", TEST_ACCOUNT_I105] },
+        "filter": { "op": "eq", "args": ["account_id", TEST_ACCOUNT_I105] },
         "aggregate": {
-            "group_by": ["primary_alias_domain"],
+            "group_by": ["scope"],
             "metrics": [
                 { "alias": "holder_count", "fn": "count" }
             ]
         },
+        "sort": "-holder_count",
         "limit": 25,
-        "offset": 5,
-        "fetch_size": 10
+        "path": { "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" },
+        "headers": {}
     });
-    let body = build_query_envelope_body(args.as_object().expect("object")).expect("body");
-    let body = materialize_borrowed_body(&body);
-    let body = body.as_object().expect("body object");
-    assert!(body.contains_key("filter"));
-    assert!(body.contains_key("aggregate"));
-    let pagination = body
-        .get("pagination")
-        .and_then(Value::as_object)
-        .expect("pagination");
-    assert_eq!(pagination.get("limit").and_then(Value::as_u64), Some(25));
-    assert_eq!(pagination.get("offset").and_then(Value::as_u64), Some(5));
-    assert_eq!(body.get("fetch_size").and_then(Value::as_u64), Some(10));
+    let query =
+        collection_query_tools::list_query_from_tool_arguments(args.as_object().expect("object"))
+            .expect("collection query");
+    let body = materialize_borrowed_body(&BorrowedMcpJson::Value(&query.to_json_value()));
+    let members = body.as_object().expect("body object");
+    assert_eq!(
+        members.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["aggregate", "filter", "limit", "sort"]
+    );
+    assert_eq!(
+        members["filter"],
+        norito::json!({ "op": "eq", "args": ["account_id", TEST_ACCOUNT_I105] })
+    );
+    assert_eq!(members["aggregate"]["group_by"], norito::json!(["scope"]));
+    assert_eq!(members["sort"], norito::json!(["-holder_count"]));
+    assert_eq!(members["limit"].as_u64(), Some(25));
+    assert_eq!(
+        iroha_torii_shared::list_query::ListQuery::from_json_value(body).expect("server decode"),
+        query
+    );
+    for retired in ["offset", "fetch_size", "pagination"] {
+        let mut args = args.as_object().expect("object").clone();
+        args.insert(retired.to_owned(), norito::json!(5));
+        let error = collection_query_tools::list_query_from_tool_arguments(&args)
+            .expect_err("retired paging argument");
+        assert!(error.contains("`cursor`"), "{retired}: {error}");
+    }
 }
 #[test]
-fn build_query_envelope_body_rejects_non_object_body() {
+fn collection_query_arguments_reject_non_object_body() {
     let args = norito::json!({
         "body": "invalid"
     });
-    let err = build_query_envelope_body(args.as_object().expect("object")).expect_err("error");
-    assert!(err.contains("`body` must be an object"));
+    let err =
+        collection_query_tools::list_query_from_tool_arguments(args.as_object().expect("object"))
+            .expect_err("error");
+    assert!(err.contains("`body` must be a query object"), "{err}");
 }
 #[test]
 fn build_accounts_onboard_plan_body_accepts_only_secret_free_intent() {

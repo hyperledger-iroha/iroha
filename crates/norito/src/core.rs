@@ -6233,6 +6233,45 @@ pub fn encoded_payload_len(value: &dyn SerializePayload) -> Result<usize, Error>
     drop(encode_guard);
     Ok(payload_len)
 }
+/// Count a payload while limiting the bytes visited by nested measurement writers.
+///
+/// Every leaf and framing byte consumes the shared allowance once. A measured
+/// child's length is incorporated without a second charge or traversal. The
+/// refusal remains sticky even if a serializer ignores a failed write.
+///
+/// # Errors
+/// Returns a serialization error or [`Error::LengthMismatch`] when the finite
+/// count allowance is exceeded. Arbitrary work performed before a serializer
+/// writes bytes still belongs to the source owner's separate work boundary.
+pub fn encoded_payload_len_bounded(
+    value: &dyn SerializePayload,
+    maximum: usize,
+) -> Result<usize, Error> {
+    let guard = encode_writers::CountBudgetGuard::enter(maximum);
+    let length = encoded_payload_len(value)?;
+    guard.check()?;
+    if length > maximum {
+        return Err(Error::LengthMismatch);
+    }
+    Ok(length)
+}
+/// Count a complete frame under a finite header, padding and payload allowance.
+///
+/// # Errors
+/// Returns [`Error::LengthMismatch`] if framing alone or the measured payload
+/// exceeds `maximum`, or the underlying serialization error.
+pub fn encoded_frame_len_bounded<T: NoritoSerialize>(
+    value: &T,
+    maximum: usize,
+) -> Result<usize, Error> {
+    let framing = Header::SIZE
+        .checked_add(payload_alignment_padding_for::<T>())
+        .ok_or(Error::LengthMismatch)?;
+    let payload_maximum = maximum.checked_sub(framing).ok_or(Error::LengthMismatch)?;
+    framing
+        .checked_add(encoded_payload_len_bounded(value, payload_maximum)?)
+        .ok_or(Error::LengthMismatch)
+}
 /// Return the exact framed length under the active layout without allocating an output buffer.
 ///
 /// Like [`encoded_payload_len`], this counts a real serialization pass instead
@@ -6243,10 +6282,13 @@ pub fn encoded_payload_len(value: &dyn SerializePayload) -> Result<usize, Error>
 /// Returns a serialization error or [`Error::LengthMismatch`] if the framed
 /// length cannot be represented by `usize`.
 pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
-    let payload_len = encoded_payload_len(value)?;
-    Header::SIZE
+    let framing = Header::SIZE
         .checked_add(payload_alignment_padding_for::<T>())
-        .and_then(|framing| framing.checked_add(payload_len))
+        .ok_or(Error::LengthMismatch)?;
+    // A framed child contributes header bytes even when its payload is empty.
+    encode_writers::charge_counted_bytes(framing)?;
+    framing
+        .checked_add(encoded_payload_len(value)?)
         .ok_or(Error::LengthMismatch)
 }
 include!("core/exact_byte_vec.rs");

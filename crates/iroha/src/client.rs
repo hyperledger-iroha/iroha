@@ -16,6 +16,9 @@ pub use ordinary_native::{
 pub(crate) mod bounded_async_response;
 #[cfg(test)]
 mod capability_test_support;
+mod collections;
+#[cfg(test)]
+mod collections_http_tests;
 pub mod configuration;
 #[cfg(test)]
 mod configuration_http_tests;
@@ -7073,7 +7076,7 @@ impl norito::json::JsonDeserialize for SumeragiEvidenceClass {
 /// Canonical raw lowercase 32-byte digest used by the evidence audit projection.
 ///
 /// This API representation intentionally differs from the tagged, checksummed
-/// JSON spelling of [`Hash`]: Torii's evidence audit contract uses exactly 64
+/// JSON spelling of [`struct@Hash`]: Torii's evidence audit contract uses exactly 64
 /// lowercase hexadecimal characters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SumeragiEvidenceHash([u8; Hash::LENGTH]);
@@ -14449,9 +14452,6 @@ pub enum AuthorityContextError {
     /// Query and fragment components do not belong in a reusable API base URL.
     #[error("Torii endpoint must not contain a query or fragment")]
     EndpointHasQueryOrFragment,
-    /// The request router requires a directory-form base path.
-    #[error("Torii endpoint path must end with `/`")]
-    EndpointPathMissingTrailingSlash,
     /// The configured signing key must control the configured account.
     #[error("account authority does not match the configured signing key")]
     AccountSigningKeyMismatch,
@@ -15522,7 +15522,7 @@ impl AccountClient {
     ) -> Result<RetailFeeStatusResponseV1> {
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("status");
@@ -15612,7 +15612,7 @@ impl AccountClient {
         }
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("receipts");
@@ -15651,7 +15651,7 @@ impl AccountClient {
     ) -> Result<RetailFeeCurrentHeadResponseV1> {
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("statement")
@@ -15683,7 +15683,7 @@ impl AccountClient {
         }
         let mut url = join_torii_url(&self.client().torii_url, "v1/validation-fee/accounts/");
         url.path_segments_mut()
-            .map_err(|_| eyre!("invalid fee endpoint"))?
+            .map_err(|()| eyre!("invalid fee endpoint"))?
             .pop_if_empty()
             .push(&account.to_string())
             .push("statement");
@@ -16187,7 +16187,9 @@ impl Client {
             Err(
                 error @ (QueryError::Http { .. }
                 | QueryError::Validation(_)
-                | QueryError::ResponseShape(_)),
+                | QueryError::ResponseShape(_)
+                | QueryError::UnexpectedOutput(_)
+                | QueryError::Truncated { .. }),
             ) => {
                 return Err(tx_confirmation_final_report(eyre::Report::new(error)));
             }
@@ -23925,16 +23927,16 @@ mod tests {
         };
 
         client.torii_url = "https://example.test/api".parse().expect("URL fixture");
-        {
-            let actual_error = client.clone().build().expect_err("directory-form base URL");
-            let SdkError::Context(actual_source) = &actual_error else {
-                panic!("unexpected SDK error: {actual_error:?}");
-            };
-            assert_eq!(
-                actual_source,
-                &(AuthorityContextError::EndpointPathMissingTrailingSlash)
-            );
-        };
+        assert_eq!(
+            client
+                .clone()
+                .build()
+                .expect("a base path is a directory")
+                .endpoint()
+                .as_str(),
+            "https://example.test/api/",
+            "the builder normalizes the base path exactly as configuration files do"
+        );
 
         client.torii_url = base_url();
         client.network_id = test_network_id();

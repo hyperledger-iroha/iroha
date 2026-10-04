@@ -418,6 +418,15 @@ diagnostic, but deliberately does not recreate private admission-scope provenanc
 preserve this category, so a scoped refusal is not reported as malformed evidence.
 This error representation changes no V1 frame, schema or signed bytes.
 
+Standard-library B-tree ownership uses the pinned toolchain's node geometry.
+A known tree of at most eleven entries charges one complete leaf, including a
+conservative bound for every possible field order and alignment. Larger trees
+and aggregate distributions retain the largest internal-node bound. The
+allocator census checks actual insertion requests through the split boundary,
+multiple insertion orders and over-aligned keys/values; outer allocation scopes
+still refuse before insertion when the full charge does not fit. This changes
+neither the query ceiling nor canonical wire bytes.
+
 Both `Ok` and `Err` branches of the result slice decoder enter the shared
 nesting guard before decoding their bounded child. The guard restores the
 previous depth on success, child error or consumed-length rejection, including
@@ -1230,3 +1239,14 @@ fields. The 64 KiB result-preimage/shared-witness limit is unchanged, including
 31-member boundaries with frozen preparations. The standalone `ScheduleOutcome`
 codec still represents its full owned graph; it is not the result frame's
 schedule codec. There is no decoder for the repeated-successor result layout.
+
+## Finite count-first source traversal
+
+`core::encoded_payload_len_bounded` and `encoded_frame_len_bounded` share a finite
+byte allowance across nested count writers. Real leaf and framing writes consume
+that allowance once; incorporating an already measured child neither repeats its
+traversal nor charges it twice. An exceeded allowance stays rejected even if the
+serializer ignores the write error. The framed helper includes the canonical
+header and alignment padding. Arbitrary work before a serializer emits bytes
+remains subject to the caller's source-specific work checks. Wire layouts and
+canonical comparisons are unchanged.

@@ -150,6 +150,7 @@ pub(crate) fn serialize(world: &World, out: &mut String) {
 
 /// Append `,"sccp":{..}` for the exact maps and cells that consuming this World overlay would
 /// publish.
+#[cfg(test)]
 pub(crate) fn serialize_block(world: &WorldBlock<'_>, out: &mut String) {
     out.push(',');
     json::write_json_string(SCCP_SNAPSHOT_MEMBER, out);
@@ -163,6 +164,7 @@ pub(crate) fn serialize_envelope(world: &World, out: &mut String) {
 }
 
 /// Write the bare envelope object of a World overlay.
+#[cfg(test)]
 pub(crate) fn serialize_block_envelope(world: &WorldBlock<'_>, out: &mut String) {
     serialize_sccp_fields!(world, out, serialize_block);
 }

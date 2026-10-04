@@ -233,18 +233,54 @@ fn transcript_proposal(
     let confidential =
         crate::state::compute_confidential_feature_digest(view.world(), view.zk(), height);
     let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(time);
-    crate::block::BlockBuilder::new_with_time_source(vec![transaction], time_source)
-        .chain(0, Some(parent))
-        .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
-            &state.nexus_snapshot(),
-            height,
-        )))
-        .with_confidential_features((!confidential.is_empty()).then_some(confidential))
-        .with_execution_context(Some(context))
-        .with_npos_consensus_effects(effects)
-        .with_network_input_time_floor(time)
-        .unwrap()
-        .into_unsigned_proposal()
+    let proposal =
+        crate::block::BlockBuilder::new_with_time_source(vec![transaction.clone()], time_source)
+            .chain(0, Some(parent))
+            .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
+                &state.nexus_snapshot(),
+                height,
+            )))
+            .with_confidential_features((!confidential.is_empty()).then_some(confidential))
+            .with_execution_context(Some(context))
+            .with_npos_consensus_effects(effects)
+            .with_network_input_time_floor(time)
+            .unwrap()
+            .into_unsigned_proposal();
+    assert_eq!(
+        crate::block::ValidBlock::sumeragi_block_time(
+            &proposal,
+            parent.header().creation_time(),
+            Duration::from_millis(1),
+        )
+        .unwrap(),
+        time,
+    );
+    if height <= 3 {
+        let assembled = payload::assemble(
+            state,
+            payload::Assembly {
+                parent,
+                view: 0,
+                cadence: Duration::from_millis(1),
+            },
+            &[transaction],
+        );
+        if height == 2 {
+            assert_eq!(
+                proposal.encode_wire().unwrap(),
+                assembled.unwrap().encode_wire().unwrap(),
+                "the first transcript proposal preserves every original assembly field"
+            );
+        } else {
+            assert!(
+                matches!(assembled, Err(payload::PayloadError::ParentService(message))
+                    if message.contains("Canonical history height 1")
+                        && message.contains("ending at `0`")),
+                "production assembly must refuse the absent committed parent history"
+            );
+        }
+    }
+    proposal
 }
 
 fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock> {

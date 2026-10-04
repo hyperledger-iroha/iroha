@@ -12,9 +12,11 @@ from unittest.mock import patch
 
 from iroha_app_attestation.attestation import (
     AttestationRejected, PREPARATION_DOMAIN, RawPlatformProof, Selection,
-    device_key_reference, encode_android_chain,
+    certificate_spki_extensions, device_key_reference, encode_android_chain,
 )
 from iroha_app_attestation.provider import (
+    APPLE_APP_ATTESTATION_ROOT_SHA256, APPLE_RECEIPT_ROOT_SHA256,
+    GOOGLE_ATTESTATION_ROOT_SHA256, INVENTED_REPOSITORY_ROOT_SHA256,
     AppleAppPolicy, GoogleKeyMintPolicy, OemKeyMintPolicy, GovernedEvidenceProvider,
     GovernedReleasePolicy,
 )
@@ -25,6 +27,8 @@ ROOT = b"synthetic root selected only for mocked raw-verifier tests"
 APPLE_ROOT = (Path(__file__).parent / "fixtures" / "apple_app_attestation_root.der").read_bytes()
 APPLE_RECEIPT_ROOT = (Path(__file__).parent / "fixtures" / "apple_root_ca_g3.der").read_bytes()
 GOOGLE_FACTORY_ROOT = (Path(__file__).parent / "fixtures" / "google_factory_root_2016.der").read_bytes()
+# Google's public 2022 RSA root (https://android.googleapis.com/attestation/root).
+GOOGLE_RSA_ROOT = (Path(__file__).parent / "fixtures" / "google_key_attestation_root_2022_rsa.der").read_bytes()
 POINT = b"\x04" + b"\x44" * 64
 # Google's public 2025 EC attestation root from its documented root list. Raw
 # chain signatures are mocked here; the policy pin is checked with real bytes.
@@ -124,6 +128,52 @@ class ProviderFixture:
         selected = self.selection(platform)
         return CertificateRequest("issue", "owner", self.token(selected),
                                   selected, platform, evidence)
+
+
+def invented_repository_roots() -> list[bytes]:
+    """Mock/demo roots copied from certs/ and fixtures/android/attestation/."""
+    text = (Path(__file__).parent / "fixtures" / "invented_repository_roots.pem").read_text("ascii")
+    blocks = text.split("-----BEGIN CERTIFICATE-----")[1:]
+    return [base64.b64decode("".join(block.split("-----END CERTIFICATE-----")[0].split()))
+            for block in blocks]
+
+
+class PublishedRootPinTests(unittest.TestCase):
+    def test_pins_are_exactly_the_published_vendor_root_originals(self) -> None:
+        self.assertEqual(GOOGLE_ATTESTATION_ROOT_SHA256, frozenset(
+            hashlib.sha256(root).digest() for root in (GOOGLE_ROOT, GOOGLE_RSA_ROOT, GOOGLE_FACTORY_ROOT)))
+        self.assertEqual(hashlib.sha256(APPLE_ROOT).digest(), APPLE_APP_ATTESTATION_ROOT_SHA256)
+        self.assertEqual(hashlib.sha256(APPLE_RECEIPT_ROOT).digest(), APPLE_RECEIPT_ROOT_SHA256)
+        # The 2016 factory and 2022 RSA certificates carry one RSA key, so a
+        # chain verifies to either original; admit both when either is admitted.
+        self.assertEqual(certificate_spki_extensions(GOOGLE_RSA_ROOT)[0].value,
+                         certificate_spki_extensions(GOOGLE_FACTORY_ROOT)[0].value)
+        self.assertNotEqual(certificate_spki_extensions(GOOGLE_RSA_ROOT)[0].value,
+                            certificate_spki_extensions(GOOGLE_ROOT)[0].value)
+        policy = GoogleKeyMintPolicy("org.example.app", 10, b"\x0e" * 32, GOOGLE_RSA_ROOT,
+                                     hashlib.sha256(GOOGLE_RSA_ROOT).digest(), frozenset({2}),
+                                     (GOOGLE_FACTORY_ROOT,))
+        policy.validate()
+        self.assertEqual(policy.root_for_chain(GOOGLE_FACTORY_ROOT), GOOGLE_FACTORY_ROOT)
+        self.assertEqual(policy.root_for_chain(GOOGLE_RSA_ROOT), GOOGLE_RSA_ROOT)
+        with self.assertRaises(AttestationRejected):
+            policy.root_for_chain(GOOGLE_ROOT)
+
+    def test_invented_repository_roots_cannot_become_oem_anchors(self) -> None:
+        roots = invented_repository_roots()
+        self.assertEqual({hashlib.sha256(root).digest() for root in roots},
+                         INVENTED_REPOSITORY_ROOT_SHA256)
+        self.assertFalse(INVENTED_REPOSITORY_ROOT_SHA256 & GOOGLE_ATTESTATION_ROOT_SHA256)
+        for root in roots:
+            certificate_spki_extensions(root)
+            policy = OemKeyMintPolicy("org.example.app", 10, b"\x0e" * 32, root,
+                                      hashlib.sha256(root).digest(), lambda chain, now: True,
+                                      frozenset({2}))
+            with self.subTest(root=hashlib.sha256(root).hexdigest()), \
+                    self.assertRaisesRegex(AttestationRejected, "invented repository root"):
+                policy.validate()
+        OemKeyMintPolicy("org.example.app", 10, b"\x0e" * 32, ROOT, hashlib.sha256(ROOT).digest(),
+                         lambda chain, now: True, frozenset({2})).validate()
 
 
 class GovernedEvidenceProviderTests(unittest.TestCase):

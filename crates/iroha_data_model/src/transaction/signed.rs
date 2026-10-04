@@ -1,6 +1,8 @@
 //! Transaction structures and related implementations.
 pub use self::model::*;
 mod ivm_proved_intent;
+/// Exact original-pool allocation custody for closed native pin/outbox transaction graphs.
+pub mod pin_allocation;
 mod wire_v1;
 mod wire_v1_api;
 use super::{

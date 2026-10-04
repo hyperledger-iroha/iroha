@@ -26,6 +26,8 @@ pub enum TryReadError {
     StateNativeSchedule(#[source] crate::sumeragi::schedule::ScheduleError),
     /// Local original-pool admission of restored beacon session custody failed: {0}
     StateBeaconSession(#[source] crate::beacon::GlobalThresholdBeaconSessionError),
+    /// Local original-pool admission of the restored native participant failed: {0}
+    StateNativeAmx(#[source] crate::sumeragi::amx::NativeAmxAdmissionError),
     /// Signed snapshot payload is not the single canonical first-release JSON encoding
     NonCanonicalSnapshotPayload,
     /// Snapshot exceeds a configured typed decode or transient resource boundary: {0}
@@ -173,6 +175,9 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
             }
             crate::state::deserialize::StateRestoreError::BeaconSession(error) => {
                 Self::StateBeaconSession(error)
+            }
+            crate::state::deserialize::StateRestoreError::NativeAmx(error) => {
+                Self::StateNativeAmx(error)
             }
         }
     }

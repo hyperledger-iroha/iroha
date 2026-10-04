@@ -14,15 +14,6 @@ public sealed partial class ToriiClient
     private const string QueryProjectionCompression = "zstd";
     private const int QueryProjectionDefaultPartitionCount = 4096;
 
-    private static readonly string[] QueryRowEnrichmentFields =
-    [
-        "primary_alias",
-        "primary_alias_name",
-        "primary_alias_dataspace",
-        "primary_alias_domain",
-        "has_primary_alias",
-    ];
-
     private static readonly string[] QueryProjectionMetadataKeys =
     [
         "query_projection.locator",
@@ -272,13 +263,6 @@ public sealed partial class ToriiClient
             throw new JsonException($"{context}.aggregate must not be null.");
         }
         ValidateNodeAggregateQueryCapabilities(response.Aggregate, $"{context}.aggregate");
-
-        if (!response.IndexedSnapshotMarker)
-        {
-            throw new JsonException($"{context}.indexed_snapshot_marker must be true.");
-        }
-
-        ValidateExactTokenSequence(response.RowEnrichmentFields, QueryRowEnrichmentFields, $"{context}.row_enrichment_fields");
 
         if (response.Projection is null)
         {

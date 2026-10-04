@@ -530,19 +530,6 @@ impl NativeAttestationPublisher {
         &self.mailbox.key
     }
 
-    /// Hold the actual mailbox lock while a regression exercises nonblocking publication.
-    /// This changes no outcome and injects no receipt; callers must retry after the guard drops.
-    #[cfg(test)]
-    pub(crate) fn with_locked_receipt_for_test<T>(&self, action: impl FnOnce() -> T) -> T {
-        let guard = self
-            .mailbox
-            .receipt
-            .lock()
-            .expect("fixture mailbox is not poisoned");
-        let _guard = self.mailbox.released.poisoning_guard(guard);
-        action()
-    }
-
     /// Publish the same original source, preserving the receipt on every typed refusal.
     pub(crate) fn publish(
         &self,

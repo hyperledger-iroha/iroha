@@ -276,7 +276,7 @@ impl<'state> StateBlock<'state> {
         let world_cut_capture = this.world_cut_capture.as_ref();
         let StateBlockFields {
             local_storage_refusal: _,
-            read_releases: _,
+            _read_releases: _,
             // Keep the linear finality/output and native-source owners alive
             // through publication of every original journal below.
             execution_output_plan: _publication_owner,
@@ -890,6 +890,17 @@ impl<'state> StateBlock<'state> {
 
         *published = true;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl StateBlock<'_> {
+    /// The original publisher has completed the deterministic World tail and frozen it.
+    /// Snapshot fixture projections must read that exact cut without replaying its writes.
+    pub(super) fn has_finalized_world_tail_for_snapshot(&self) -> bool {
+        self.publication
+            .as_ref()
+            .is_some_and(|publication| publication.fields_frozen)
     }
 }
 

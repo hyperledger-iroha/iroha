@@ -270,11 +270,8 @@ use iroha_core::{
         SignatureVerificationFail, external_entrypoint_hash_from_signed_hash as entrypoint_hash,
     },
 };
-#[cfg(all(test, feature = "connect"))]
-use iroha_crypto::Signature;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, blake2::digest::Digest};
 use iroha_data_model::NetworkId;
-#[cfg(feature = "app_api")]
 #[cfg(test)]
 use iroha_data_model::alias::AliasIndex;
 #[cfg(test)]
@@ -1200,13 +1197,15 @@ mod block;
 mod bounded_replay_cache;
 #[cfg(test)]
 mod build_identity_test_fixture;
+#[cfg(feature = "app_api")]
+pub(crate) mod collections;
 #[cfg(feature = "connect")]
 mod connect;
 #[cfg(feature = "connect")]
 mod connect_status;
 #[cfg(feature = "app_api")]
 mod contract_sources;
-#[cfg(feature = "app_api")]
+#[cfg(any(feature = "app_api", test, feature = "test-fixtures"))]
 mod data_dir;
 #[cfg(feature = "app_api")]
 mod deployment_state;
@@ -1218,18 +1217,15 @@ pub mod filter;
 #[cfg(test)]
 mod frame_test_support;
 #[cfg(feature = "app_api")]
-pub(crate) mod generic_query;
-#[cfg(feature = "app_api")]
 mod gov;
 mod iso20022_bridge;
 mod limits;
 mod mcp;
+#[cfg(feature = "app_api")]
 mod musubi;
 #[cfg(feature = "app_api")]
 mod offline_asset_registration;
 mod panic_recovery;
-#[cfg(feature = "app_api")]
-mod predicates;
 #[cfg(feature = "app_api")]
 mod private_settlement;
 #[cfg(feature = "test-network-private-settlement-route-control")]
@@ -1244,7 +1240,7 @@ mod soracloud;
 mod soranet_privacy_ingress;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 mod telemetry;
-#[cfg(all(feature = "app_api", any(test, feature = "test-fixtures")))]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_utils;
 #[cfg(feature = "app_api")]
 #[cfg(feature = "telemetry")]
@@ -1340,24 +1336,59 @@ pub use routing::{
     handle_v1_kaigi_relays_health, handle_v1_kaigi_relays_sse, handle_v1_sumeragi_diagnostics,
     handle_v1_sumeragi_params, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
 };
+/// Execute one collection query on `state` as a route does and apply its
+/// `select` (benchmarks only). `collection` is `accounts`, `account_assets`
+/// (with the account literal) or `asset_holders` (with the definition id).
+///
+/// # Errors
+/// Returns the collection-query rejection, or an internal error for an
+/// unknown collection.
 #[cfg(all(feature = "app_api", feature = "bench"))]
-pub use routing::{
-    handle_v1_account_assets_query as handle_v1_account_assets_query_for_bench,
-    handle_v1_accounts_query as handle_v1_accounts_query_for_bench,
-    handle_v1_asset_holders_query as handle_v1_asset_holders_query_for_bench,
-};
+pub async fn collection_query_for_bench(
+    state: Arc<CoreState>,
+    collection: &str,
+    path_arg: Option<String>,
+    body: norito::json::Value,
+    telemetry: routing::MaybeTelemetry,
+) -> Result<Response, Error> {
+    use routing::collection_sources::CollectionTarget;
+    let target = match (collection, path_arg) {
+        ("accounts", None) => CollectionTarget::Accounts,
+        ("account_assets", Some(account)) => CollectionTarget::AccountAssets(account),
+        ("asset_holders", Some(definition)) => CollectionTarget::AssetHolders(definition),
+        (other, _) => {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::InternalError(format!(
+                    "no benchmark collection `{other}`"
+                )),
+            ));
+        }
+    };
+    let query = list_query_from_json(body)?;
+    routing::collection_sources::execute_collection_response(
+        None,
+        &state,
+        &target,
+        query,
+        &telemetry,
+        &routing::DataspaceReadVisibility::new(std::collections::BTreeSet::new(), true),
+    )
+    .await
+}
 pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
     handle_runtime_upgrades_list,
 };
 // Shared app state for handlers to avoid large inline closures that break axum Handler bounds
 #[derive(Clone)]
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
 struct GatewayFixtureTelemetry {
     version: String,
     profile_version: String,
     fixtures_digest: String,
     released_at_unix: u64,
 }
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
 fn sorafs_gateway_fixture_telemetry() -> GatewayFixtureTelemetry {
     let metadata = sorafs_manifest::gateway_fixture_metadata();
     GatewayFixtureTelemetry {
@@ -1371,7 +1402,9 @@ fn sorafs_gateway_fixture_telemetry() -> GatewayFixtureTelemetry {
 const ALIAS_METRIC_LANE: &str = "torii";
 #[cfg(feature = "app_api")]
 const EXACT_ALIAS_READ_MAX_BODY_BYTES: usize = 4 * 1024;
+#[cfg(any(feature = "app_api", test))]
 const EXACT_ALIAS_LOOKUP_MAX_ITEMS: usize = 64;
+#[cfg(any(feature = "app_api", feature = "telemetry", test))]
 fn alias_json_response<T>(status: StatusCode, payload: T) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
@@ -1389,12 +1422,14 @@ where
     );
     Ok(resp)
 }
+#[cfg(any(feature = "app_api", feature = "telemetry", test))]
 fn json_ok<T>(payload: T) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
 {
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn alias_resolve_ok(
     alias: &str,
     account_id: &str,
@@ -1409,6 +1444,7 @@ fn alias_resolve_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn alias_resolve_index_ok(
     index: u64,
     alias: &str,
@@ -1423,6 +1459,7 @@ fn alias_resolve_index_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn alias_lookup_by_account_ok(
     account_id: &str,
     mut items: Vec<routing::AliasLookupByAccountItemDto>,
@@ -1453,6 +1490,7 @@ fn alias_lookup_by_account_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn asset_alias_resolve_ok(
     alias: &str,
     asset_definition_id: &str,
@@ -1473,6 +1511,7 @@ fn asset_alias_resolve_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(any(feature = "app_api", test))]
 fn contract_alias_resolve_ok(
     contract_alias: &str,
     contract_address: &str,
@@ -1560,6 +1599,7 @@ fn resolve_alias_via_service(
         Err(err) => Err(map_alias_error(err)),
     }
 }
+#[cfg(any(feature = "app_api", test))]
 fn parse_account_alias_label_with_catalog(
     alias_input: &str,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -1579,6 +1619,7 @@ fn parse_account_alias_label_with_catalog(
     Ok((canonical, alias_label))
 }
 #[derive(Clone, Debug)]
+#[cfg(any(feature = "app_api", test))]
 struct LiveResolvedAccountAlias {
     canonical: String,
     label: AccountAlias,
@@ -1611,6 +1652,7 @@ fn live_dataspace_resolution_error(error: iroha_core::sns::SnsError) -> Error {
         }
     }
 }
+#[cfg(any(feature = "app_api", test))]
 fn parse_account_alias_label_with_live_state(
     app: &SharedAppState,
     alias_input: &str,
@@ -1645,6 +1687,7 @@ fn parse_account_alias_label_with_live_state(
         resolved,
     })
 }
+#[cfg(any(feature = "app_api", test))]
 fn parse_exact_account_alias_label_with_live_state(
     app: &SharedAppState,
     alias_input: &str,
@@ -1797,6 +1840,7 @@ fn parse_exact_internal_asset_scope_query(
     let scope = parse_exact_asset_balance_scope_literal(&canonical)?;
     Ok((scope, canonical))
 }
+#[cfg(any(feature = "app_api", test))]
 fn validate_exact_alias_lookup_filters(
     app: &SharedAppState,
     request: &routing::AliasLookupByAccountRequestDto,
@@ -1846,6 +1890,7 @@ fn validate_exact_alias_lookup_filters(
     }
     Ok(dataspace_id)
 }
+#[cfg(any(feature = "app_api", test))]
 fn resolve_alias_label_on_chain(
     app: &SharedAppState,
     canonical: String,
@@ -1862,6 +1907,7 @@ fn resolve_alias_label_on_chain(
     .map_err(live_dataspace_resolution_error)?
     .map(|account_id| (canonical, account_id, "active_sns")))
 }
+#[cfg(any(feature = "app_api", test))]
 fn resolve_alias_on_route(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -1917,6 +1963,7 @@ fn resolve_alias_index_on_chain(
     }
     Ok(None)
 }
+#[cfg(any(feature = "app_api", test))]
 fn resolve_alias_index_on_route(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2058,6 +2105,7 @@ fn resolve_contract_alias_on_chain(
         dataspace_alias,
     )))
 }
+#[cfg(any(feature = "app_api", test))]
 fn lookup_aliases_by_account_on_chain(
     app: &SharedAppState,
     request: &routing::AliasLookupByAccountRequestDto,
@@ -2113,6 +2161,7 @@ fn lookup_aliases_by_account_on_chain(
     }
     Ok(Some((canonical_account_id, exact_items)))
 }
+#[cfg(any(feature = "app_api", test))]
 fn lookup_aliases_by_account_on_route(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2137,6 +2186,7 @@ fn lookup_aliases_by_account_on_route(
             .collect(),
     )))
 }
+#[cfg(any(feature = "app_api", test))]
 fn account_alias_not_found_response(alias: &str) -> AxResponse {
     let envelope = ErrorEnvelope::new(
         iroha_torii_shared::aliases::ACCOUNT_ALIAS_NOT_FOUND_CODE,
@@ -2150,6 +2200,7 @@ fn account_alias_not_found_response(alias: &str) -> AxResponse {
     });
     (StatusCode::NOT_FOUND, JsonBody(envelope)).into_response()
 }
+#[cfg(any(feature = "app_api", test))]
 fn account_aliases_by_account_not_found_response(
     request: &routing::AliasLookupByAccountRequestDto,
 ) -> AxResponse {
@@ -2169,6 +2220,7 @@ fn account_aliases_by_account_not_found_response(
     });
     (StatusCode::NOT_FOUND, JsonBody(envelope)).into_response()
 }
+#[cfg(any(feature = "app_api", test))]
 fn execute_alias_resolve_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2183,6 +2235,7 @@ fn execute_alias_resolve_local_read(
     }
     Ok(account_alias_not_found_response(&alias.canonical))
 }
+#[cfg(any(feature = "app_api", test))]
 fn execute_alias_resolve_unrouted_local_read(
     app: &SharedAppState,
     canonical: String,
@@ -2196,6 +2249,7 @@ fn execute_alias_resolve_unrouted_local_read(
     }
     Ok(account_alias_not_found_response(&canonical))
 }
+#[cfg(any(feature = "app_api", test))]
 fn execute_alias_resolve_index_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2209,6 +2263,7 @@ fn execute_alias_resolve_index_local_read(
     }
     Ok(StatusCode::NOT_FOUND.into_response())
 }
+#[cfg(any(feature = "app_api", test))]
 fn execute_alias_lookup_by_account_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -4978,6 +5033,36 @@ fn has_percent_encoded_separator(path: &str) -> bool {
                 || (window[1] == b'5' && matches!(window[2], b'c' | b'C')))
     })
 }
+fn is_canonical_proof_record_path(path: &str) -> bool {
+    let Some(encoded_id) = path.strip_prefix("/v1/proofs/") else {
+        return false;
+    };
+    if encoded_id.contains('/') {
+        return false;
+    }
+    let Ok(decoded_id) = urlencoding::decode(encoded_id) else {
+        return false;
+    };
+    let Ok(id) = decoded_id.parse::<iroha_data_model::proof::ProofId>() else {
+        return false;
+    };
+    // Slash-delimited backend labels are identifier data in this one route's
+    // single parameter. Admit their canonical spelling, never path traversal,
+    // backslashes, nested escaping, or an arbitrary encoded path separator.
+    if id.backend.split('/').any(|part| {
+        part.is_empty()
+            || matches!(part, "." | "..")
+            || !part.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    }) {
+        return false;
+    }
+    let canonical = id.to_string();
+    // URL path_segments and Torii's existing component encoder differ only in
+    // whether data colons are escaped. Both retain the same exact ProofId.
+    canonical.replace('/', "%2F") == encoded_id || urlencoding::encode(&canonical) == encoded_id
+}
 fn has_dot_segment(path: &str) -> bool {
     path.split('/').any(|segment| {
         segment == "."
@@ -5017,9 +5102,14 @@ async fn enforce_strict_request_target(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     let path = req.uri().path();
+    let encoded_path_invalid = if path.starts_with("/v1/proofs/") && path.contains('%') {
+        !is_canonical_proof_record_path(path)
+    } else {
+        has_percent_encoded_separator(path)
+    };
     let violation = if path.contains("//")
         || path.contains('\\')
-        || has_percent_encoded_separator(path)
+        || encoded_path_invalid
         || has_dot_segment(path)
         || has_percent_encoded_kagemusha_operation_id(path)
         || has_percent_encoded_operator_credential_id(path)
@@ -6479,7 +6569,7 @@ pub(crate) struct QueryAdmissionPermit {
     _body: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 impl QueryAdmissionPermit {
-    #[cfg(all(test, feature = "app_api"))]
+    #[cfg(test)]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         self._body = Some(permit);
         self
@@ -8362,66 +8452,87 @@ async fn handler_account_transactions_query(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let tel = app.telemetry.clone();
-    let key_hint = account_id.clone();
+    let query = list_query_from_json(body)?;
+    account_transactions_collection_read(
+        &app,
+        &headers,
+        remote.ip(),
+        caller.caller(),
+        account_id,
+        query,
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+    )
+    .await
+}
+/// Shared ingress for `GET`/`POST` account transaction history.
+#[cfg(feature = "app_api")]
+async fn account_transactions_collection_read(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    remote_ip: std::net::IpAddr,
+    caller: Option<&AccountId>,
+    account_literal: String,
+    query: iroha_torii_shared::list_query::ListQuery,
+    endpoint_label: &'static str,
+) -> Result<Response, Error> {
     let limits = crate::routing::app_query_limits();
-    let mut env = env;
-    let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
-    env.pagination.limit = Some(page_limit);
-    env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
-    let payload = crate::utils::extractors::NoritoJson(env);
-    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
-    if !rate_limit_bypassed {
+    if !limits::is_allowed_by_cidr(headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
-            .await?;
+        let cost = limits.rate_limit_cost(collection_page_limit(&query));
+        check_access_enforced_with_cost(
+            app,
+            headers,
+            Some(remote_ip),
+            &account_literal,
+            enforce,
+            cost,
+        )
+        .await?;
     }
+    // Fail fast on a misconfigured history asset policy before any fan-out.
+    resolve_tx_history_allowed_asset_definition_id(app)?;
+    let telemetry = app.telemetry_handle();
     let (parsed_account_id, canonical_account_id) =
         match routing::parse_account_path_segment_with_state(
             app.state.as_ref(),
-            &account_id,
-            &tel,
-            routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+            &account_literal,
+            &telemetry,
+            endpoint_label,
         ) {
             Ok(parsed) => parsed,
             Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
         };
-    let _ = allowed_asset_definition_id;
-    let body = norito::json::to_vec(&payload.0).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode routed account transactions query: {error}"
-        )))
-    })?;
+    let (_, body) = prepare_collection_forward(
+        app,
+        &routing::collection_sources::CollectionTarget::AccountTransactions(
+            canonical_account_id.to_string(),
+        ),
+        query,
+    )?;
     let use_target_account_routes =
-        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
-    let route_scope = torii_account_read_route_scope(
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    );
+        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller);
+    let route_scope =
+        torii_account_read_route_scope(&parsed_account_id, caller, use_target_account_routes);
     let routes = match torii_account_read_routes(
         app.as_ref(),
         &parsed_account_id,
-        caller.caller(),
+        caller,
         use_target_account_routes,
     ) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
     };
     if routes.is_empty() {
-        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+        return Ok(empty_collection_page_response(routed_by_for_routes(
+            app,
+            &[],
+        )));
     }
     Ok(execute_torii_list_read_for_routes(
-        &app,
+        app,
         routes,
         route_scope,
         ToriiReadEndpointV1::AccountTransactionsQuery,
@@ -8437,22 +8548,15 @@ async fn handler_transactions_query(
     Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
-) -> Result<impl IntoResponse, Error> {
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
+) -> Result<Response, Error> {
+    let query = list_query_from_json(body)?;
     let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
-    let mut env = env;
-    let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
-    env.pagination.limit = Some(page_limit);
-    env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
-    if !rate_limit_bypassed {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
+        let cost = limits.rate_limit_cost(collection_page_limit(&query));
         check_access_enforced_with_cost(
             &app,
             &headers,
@@ -8464,20 +8568,15 @@ async fn handler_transactions_query(
         .await?;
     }
     resolve_tx_history_allowed_asset_definition_id(&app)?;
-    let body = norito::json::to_vec(&env).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode routed transactions query: {error}"
-        )))
-    })?;
-    Ok(execute_torii_visible_fanout_list_read(
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
         ToriiReadEndpointV1::TransactionsQuery,
+        routing::collection_sources::CollectionTarget::Transactions,
         Vec::new(),
-        None,
-        body,
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_account_assets(
@@ -8487,7 +8586,6 @@ async fn handler_account_assets(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    AxQuery(p): AxQuery<crate::routing::AccountAssetsGetParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let rate_limit_bypassed =
@@ -8495,9 +8593,8 @@ async fn handler_account_assets(
     let tel = app.telemetry_handle();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
-    let page_limit = limits.clamp_page_limit(p.limit)?;
-    let mut p = p;
-    p.limit = Some(page_limit);
+    let query = list_query_from_query_string(uri.query())?;
+    let page_limit = collection_page_limit(&query);
     if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -8515,6 +8612,15 @@ async fn handler_account_assets(
             Ok(parsed) => parsed,
             Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
         };
+    // Reject an invalid query before routing: a read without a visible
+    // route must not answer it with an empty page.
+    let (_, body) = prepare_collection_forward(
+        &app,
+        &routing::collection_sources::CollectionTarget::AccountAssets(
+            canonical_account_id.to_string(),
+        ),
+        query,
+    )?;
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -8538,18 +8644,17 @@ async fn handler_account_assets(
                 "signed account-assets read has no authoritative target route",
             )
         } else {
-            torii_empty_list_response(routed_by_for_routes(&app, &[]))
+            empty_collection_page_response(routed_by_for_routes(&app, &[]))
         });
     }
-    let query_string = encode_torii_proxy_query(&p)?;
     Ok(execute_torii_list_read_for_routes(
         &app,
         routes,
         route_scope,
-        ToriiReadEndpointV1::AccountAssetsGet,
+        ToriiReadEndpointV1::AccountAssetsQuery,
         vec![canonical_account_id.to_string()],
-        query_string,
-        Vec::new(),
+        None,
+        body,
     )
     .await)
 }
@@ -8634,9 +8739,7 @@ async fn handler_account_assets_query(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let rate_limit_bypassed =
@@ -8644,11 +8747,8 @@ async fn handler_account_assets_query(
     let tel = app.telemetry_handle();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
-    let mut env = env;
-    let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
-    env.pagination.limit = Some(page_limit);
-    env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
-    let payload = crate::utils::extractors::NoritoJson(env);
+    let query = list_query_from_json(body)?;
+    let page_limit = collection_page_limit(&query);
     if !rate_limit_bypassed {
         let cost = limits.rate_limit_cost(page_limit);
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, true, cost)
@@ -8664,6 +8764,15 @@ async fn handler_account_assets_query(
             Ok(parsed) => parsed,
             Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
         };
+    // Reject an invalid query before routing: a read without a visible
+    // route must not answer it with an empty page.
+    let (_, body) = prepare_collection_forward(
+        &app,
+        &routing::collection_sources::CollectionTarget::AccountAssets(
+            canonical_account_id.to_string(),
+        ),
+        query,
+    )?;
     let route_scope =
         torii_account_read_route_scope(&parsed_account_id, caller.caller(), caller.is_signed());
     let routes =
@@ -8679,14 +8788,9 @@ async fn handler_account_assets_query(
                 "signed account-assets query has no authoritative target route",
             )
         } else {
-            torii_empty_list_response(routed_by_for_routes(&app, &[]))
+            empty_collection_page_response(routed_by_for_routes(&app, &[]))
         });
     }
-    let body = norito::json::to_vec(&payload.0).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode routed account assets query: {error}"
-        )))
-    })?;
     Ok(execute_torii_list_read_for_routes(
         &app,
         routes,
@@ -8706,35 +8810,8 @@ async fn handler_account_transactions_get(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let key_hint = account_id.clone();
-    let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
-    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
-    if !rate_limit_bypassed {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
-            .await?;
-    }
-    let telemetry = app.telemetry.clone();
-    let (parsed_account_id, canonical_account_id) =
-        match routing::parse_account_path_segment_with_state(
-            app.state.as_ref(),
-            &key_hint,
-            &telemetry,
-            routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
-        ) {
-            Ok(parsed) => parsed,
-            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
-        };
+    let query = list_query_from_query_string(uri.query())?;
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -8743,37 +8820,16 @@ async fn handler_account_transactions_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    let use_target_account_routes =
-        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
-    let route_scope = torii_account_read_route_scope(
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    );
-    let routes = match torii_account_read_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    ) {
-        Ok(routes) => routes,
-        Err(response) => return Ok(response),
-    };
-    if routes.is_empty() {
-        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
-    }
-    let query_string = encode_torii_proxy_query(&params)?;
-    let _ = allowed_asset_definition_id;
-    Ok(execute_torii_list_read_for_routes(
+    account_transactions_collection_read(
         &app,
-        routes,
-        route_scope,
-        ToriiReadEndpointV1::AccountTransactionsGet,
-        vec![canonical_account_id.to_string()],
-        query_string,
-        Vec::new(),
+        &headers,
+        remote.ip(),
+        caller.caller(),
+        account_id,
+        query,
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_account_history_get(
@@ -9548,7 +9604,6 @@ async fn handler_accounts_list(
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
@@ -9558,16 +9613,16 @@ async fn handler_accounts_list(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/accounts", enforce).await?;
     }
-    let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_query_string(uri.query())?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
-        ToriiReadEndpointV1::AccountsList,
+        ToriiReadEndpointV1::AccountsQuery,
+        routing::collection_sources::CollectionTarget::Accounts,
         Vec::new(),
-        query_string,
-        Vec::new(),
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -9576,28 +9631,22 @@ async fn handler_accounts_query(
     Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/accounts/query", true).await?;
     }
-    let body = norito::json::to_vec(&env).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode routed accounts query: {error}"
-        )))
-    })?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_json(body)?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
         ToriiReadEndpointV1::AccountsQuery,
+        routing::collection_sources::CollectionTarget::Accounts,
         Vec::new(),
-        None,
-        body,
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -10217,30 +10266,30 @@ async fn handler_space_directory_manifest_revoke(
 #[axum::debug_handler]
 async fn handler_repo_agreements(
     State(app): State<SharedAppState>,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_v1_repo_agreements(
-            app.state.clone(),
-            AxQuery(p),
-            app.telemetry.clone(),
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/repo/agreements",
+            enforce,
         )
-        .await;
+        .await?;
     }
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
+    let query = list_query_from_query_string(uri.query())?;
+    execute_direct_collection_read(
         &app,
-        &headers,
-        Some(remote_ip),
-        "v1/repo/agreements",
-        enforce,
+        routing::collection_sources::CollectionTarget::RepoAgreements,
+        query,
     )
-    .await?;
-    routing::handle_v1_repo_agreements(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
+    .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -10248,33 +10297,26 @@ async fn handler_repo_agreements_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
-) -> Result<impl IntoResponse, Error> {
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
+) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_v1_repo_agreements_query(
-            app.state.clone(),
-            crate::utils::extractors::NoritoJson(env),
-            app.telemetry.clone(),
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/repo/agreements/query",
+            enforce,
         )
-        .await;
+        .await?;
     }
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
+    let query = list_query_from_json(body)?;
+    execute_direct_collection_read(
         &app,
-        &headers,
-        Some(remote_ip),
-        "v1/repo/agreements/query",
-        enforce,
-    )
-    .await?;
-    routing::handle_v1_repo_agreements_query(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(env),
-        app.telemetry.clone(),
+        routing::collection_sources::CollectionTarget::RepoAgreements,
+        query,
     )
     .await
 }
@@ -12649,7 +12691,6 @@ async fn handler_assets_definitions_list(
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility = torii_visibility_account_from_headers(
@@ -12672,16 +12713,16 @@ async fn handler_assets_definitions_list(
         )
         .await?;
     }
-    let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_query_string(uri.query())?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
-        ToriiReadEndpointV1::AssetDefinitionsList,
+        ToriiReadEndpointV1::AssetDefinitionsQuery,
+        routing::collection_sources::CollectionTarget::AssetDefinitions,
         Vec::new(),
-        query_string,
-        Vec::new(),
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_assets_definitions_query(
@@ -12689,9 +12730,7 @@ async fn handler_assets_definitions_query(
     Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
@@ -12704,20 +12743,16 @@ async fn handler_assets_definitions_query(
         )
         .await?;
     }
-    let body = norito::json::to_vec(&env).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode routed asset definitions query: {error}"
-        )))
-    })?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_json(body)?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
         ToriiReadEndpointV1::AssetDefinitionsQuery,
+        routing::collection_sources::CollectionTarget::AssetDefinitions,
         Vec::new(),
-        None,
-        body,
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_asset_definition_get(
@@ -12767,7 +12802,6 @@ async fn handler_asset_holders(
     uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_id): AxPath<String>,
-    AxQuery(p): AxQuery<routing::AssetHolderGetParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility = torii_visibility_account_from_headers(
@@ -12779,11 +12813,8 @@ async fn handler_asset_holders(
         "v1/assets/{definition_id}/holders",
     )?;
     let limits = crate::routing::app_query_limits();
-    let page_limit = limits.clamp_page_limit(p.limit)?;
-    let mut p = p;
-    p.limit = Some(page_limit);
-    let query: AxQuery<routing::AssetHolderGetParams> = AxQuery(p.clone());
-    let _ = query;
+    let query = list_query_from_query_string(uri.query())?;
+    let page_limit = collection_page_limit(&query);
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -12791,16 +12822,15 @@ async fn handler_asset_holders(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &def_id, enforce, cost)
             .await?;
     }
-    let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_visible_fanout_list_read(
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
-        ToriiReadEndpointV1::AssetHoldersGet,
+        ToriiReadEndpointV1::AssetHoldersQuery,
+        routing::collection_sources::CollectionTarget::AssetHolders(def_id.clone()),
         vec![def_id],
-        query_string,
-        Vec::new(),
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_asset_holders_query(
@@ -12809,36 +12839,26 @@ async fn handler_asset_holders_query(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_id): AxPath<String>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let limits = crate::routing::app_query_limits();
-    let mut env = env;
-    let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
-    env.pagination.limit = Some(page_limit);
-    env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
-    let payload = crate::utils::extractors::NoritoJson(env);
+    let query = list_query_from_json(body)?;
+    let page_limit = collection_page_limit(&query);
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let cost = limits.rate_limit_cost(page_limit);
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &def_id, true, cost)
             .await?;
     }
-    let body = norito::json::to_vec(&payload.0).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode routed asset holders query: {error}"
-        )))
-    })?;
-    Ok(execute_torii_visible_fanout_list_read(
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
         ToriiReadEndpointV1::AssetHoldersQuery,
+        routing::collection_sources::CollectionTarget::AssetHolders(def_id.clone()),
         vec![def_id],
-        None,
-        body,
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_confidential_asset_transitions(
@@ -12865,7 +12885,6 @@ async fn handler_domains_list(
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<crate::filter::Pagination>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
@@ -12875,16 +12894,16 @@ async fn handler_domains_list(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains", enforce).await?;
     }
-    let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_query_string(uri.query())?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
-        ToriiReadEndpointV1::DomainsList,
+        ToriiReadEndpointV1::DomainsQuery,
+        routing::collection_sources::CollectionTarget::Domains,
         Vec::new(),
-        query_string,
-        Vec::new(),
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_domains_query(
@@ -12892,28 +12911,22 @@ async fn handler_domains_query(
     Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains/query", true).await?;
     }
-    let body = norito::json::to_vec(&env).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode routed domains query: {error}"
-        )))
-    })?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_json(body)?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
         ToriiReadEndpointV1::DomainsQuery,
+        routing::collection_sources::CollectionTarget::Domains,
         Vec::new(),
-        None,
-        body,
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_nfts_list(
@@ -12922,7 +12935,6 @@ async fn handler_nfts_list(
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
@@ -12932,16 +12944,16 @@ async fn handler_nfts_list(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts", enforce).await?;
     }
-    let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_query_string(uri.query())?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
-        ToriiReadEndpointV1::NftsList,
+        ToriiReadEndpointV1::NftsQuery,
+        routing::collection_sources::CollectionTarget::Nfts,
         Vec::new(),
-        query_string,
-        Vec::new(),
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -12950,28 +12962,22 @@ async fn handler_nfts_query(
     Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<axum::response::Response, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts/query", true).await?;
     }
-    let body = norito::json::to_vec(&env).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode routed nfts query: {error}"
-        )))
-    })?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_json(body)?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
         ToriiReadEndpointV1::NftsQuery,
+        routing::collection_sources::CollectionTarget::Nfts,
         Vec::new(),
-        None,
-        body,
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_rwas_list(
@@ -12980,7 +12986,6 @@ async fn handler_rwas_list(
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let visibility =
@@ -12990,16 +12995,16 @@ async fn handler_rwas_list(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas", enforce).await?;
     }
-    let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_query_string(uri.query())?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
-        ToriiReadEndpointV1::RwasList,
+        ToriiReadEndpointV1::RwasQuery,
+        routing::collection_sources::CollectionTarget::Rwas,
         Vec::new(),
-        query_string,
-        Vec::new(),
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -13008,28 +13013,22 @@ async fn handler_rwas_query(
     Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<axum::response::Response, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas/query", true).await?;
     }
-    let body = norito::json::to_vec(&env).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode routed rwas query: {error}"
-        )))
-    })?;
-    Ok(execute_torii_visible_fanout_list_read(
+    let query = list_query_from_json(body)?;
+    forward_visible_collection_read(
         &app,
         visibility.caller(),
         ToriiReadEndpointV1::RwasQuery,
+        routing::collection_sources::CollectionTarget::Rwas,
         Vec::new(),
-        None,
-        body,
+        query,
     )
-    .await)
+    .await
 }
 #[cfg(feature = "app_api")]
 include!("subscription_auth.rs");
@@ -13700,11 +13699,29 @@ async fn handler_health(
     check_access(&app, &headers, Some(remote.ip()), "v1/health").await?;
     Ok(routing::handle_health().await.into_response())
 }
+/// Await the native bounded diagnostic on a blocking worker under the same deadline.
+/// The operation must retain this deadline through its own blocking lock admission.
+async fn wait_for_consensus_readiness(
+    deadline: Instant,
+    observe: impl FnOnce(Instant) -> bool + Send + 'static,
+) -> bool {
+    if Instant::now() >= deadline {
+        return false;
+    }
+    // This request-owned observation fails closed without turning a probe panic
+    // into a shutdown signal; the consensus driver retains its ordinary tasks.
+    let observation = crate::panic_recovery::spawn_blocking_recoverable(move || observe(deadline));
+    matches!(
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), observation).await,
+        Ok(Ok(Ok(true)))
+    ) && Instant::now() < deadline
+}
+
 /// GET `/readyz` — ordinary node admission readiness.
 ///
 /// KAGEMUSHA wallet UI capability is universal and never participates in this
-/// probe. Consensus admission must be available. Beacon setup
-/// is installed through that admission path and does not gate this probe.
+/// probe. Consensus admission and the current authenticated beacon custody observation
+/// must be available. A refresh is awaited within the ordinary route execution budget.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
         return (
@@ -13713,10 +13730,15 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
         )
             .into_response();
     }
-    if app
-        .sumeragi
-        .as_ref()
-        .is_some_and(|sumeragi| !sumeragi.ready())
+    let Some(sumeragi) = app.sumeragi.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Consensus admission is unavailable",
+        )
+            .into_response();
+    };
+    let deadline = Instant::now() + DEFAULT_ROUTE_TIMEOUT;
+    if !wait_for_consensus_readiness(deadline, move |deadline| sumeragi.ready_until(deadline)).await
     {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -13737,6 +13759,74 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     }
     (StatusCode::OK, "Ready").into_response()
 }
+
+#[cfg(test)]
+mod consensus_readiness_wait_tests {
+    //! Verify that native readiness waiting releases the async worker and fails closed.
+
+    use super::*;
+
+    #[tokio::test]
+    async fn readiness_requires_a_consensus_handle() {
+        let app = mk_app_state_for_tests();
+        assert!(app.sumeragi.is_none());
+        let response = handler_readyz(State(app)).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .expect("bounded readiness response");
+        assert_eq!(&body[..], b"Consensus admission is unavailable");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_wait_keeps_async_runtime_responsive_during_native_probe() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let waiting = tokio::spawn(wait_for_consensus_readiness(deadline, move |deadline| {
+            entered_tx.send(()).unwrap();
+            release_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .is_ok()
+        }));
+        tokio::time::timeout(Duration::from_secs(1), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert!(!waiting.is_finished());
+        release_tx.send(()).unwrap();
+        assert!(waiting.await.unwrap());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_wait_preserves_native_negative_result_and_expired_deadline() {
+        assert!(
+            !wait_for_consensus_readiness(Instant::now() + Duration::from_secs(1), |_| false).await
+        );
+        assert!(
+            !wait_for_consensus_readiness(Instant::now(), |_| {
+                panic!("an expired request cannot start a readiness observation")
+            })
+            .await
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_wait_rejects_completion_after_original_deadline() {
+        let deadline = Instant::now() + Duration::from_millis(30);
+        assert!(
+            !wait_for_consensus_readiness(deadline, move |deadline| {
+                while Instant::now() < deadline {
+                    std::thread::park_timeout(deadline.saturating_duration_since(Instant::now()));
+                }
+                true
+            })
+            .await
+        );
+    }
+}
+
 /// GET `/livez` — process-only liveness; never claims protocol readiness.
 async fn handler_livez() -> impl IntoResponse {
     (StatusCode::OK, "Alive")
@@ -17286,7 +17376,7 @@ fn torii_proxy_remaining_budget(
 fn validate_torii_proxy_deadline(deadline_unix_ms: u64) -> Result<Duration, &'static str> {
     torii_proxy_remaining_budget(deadline_unix_ms, torii_proxy_now_unix_ms()?)
 }
-#[cfg(test)]
+#[cfg(all(test, feature = "connect"))]
 fn torii_proxy_test_deadline_unix_ms() -> u64 {
     torii_proxy_now_unix_ms()
         .expect("test clock must be representable as Unix milliseconds")
@@ -17309,13 +17399,7 @@ fn forwarded_torii_proxy_request_owned(
     request.hop_count = request.hop_count.saturating_add(1);
     request
 }
-#[cfg(test)]
-fn forwarded_torii_proxy_request(
-    request: &ToriiProxyRequestV1,
-    local_peer_id: &PeerId,
-) -> ToriiProxyRequestV1 {
-    forwarded_torii_proxy_request_owned(request.clone(), local_peer_id)
-}
+
 fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
     response.headers_mut().insert(
         HeaderName::from_static("x-iroha-routed-by"),
@@ -18779,8 +18863,30 @@ include!("torii_app_routed_read_collect.rs");
 include!("torii_app_routed_read_merge.rs");
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_route_collect.rs");
+#[cfg(any(feature = "app_api", all(test, feature = "connect")))]
+fn torii_read_fanout_request(
+    endpoint: ToriiReadEndpointV1,
+    route_scope: ToriiFanoutRouteScopeV1,
+    merge: ToriiReadFanoutMergeV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    body: Vec<u8>,
+    response_format: ToriiProxyResponseFormatV1,
+) -> ToriiReadFanoutProxyRequestV1 {
+    ToriiReadFanoutProxyRequestV1 {
+        endpoint,
+        route_scope,
+        merge,
+        path_args,
+        query_string,
+        body,
+        response_format,
+    }
+}
+
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_execute.rs");
+include!("torii_collection_routes.rs");
 #[cfg(test)]
 include!("tests/ordinary_query_memory.rs");
 include!("torii_proxy_signed_query_validation.rs");
@@ -18859,11 +18965,9 @@ async fn execute_incoming_torii_signed_query_route_scan(
             Err(response) => return hold_query_fanout_memory_in_response_body(response, permit),
         };
     let routing_decision: RoutingDecision = expected_route.into();
-    if let Err(response) =
-        validate_proxy_signed_query_route(&request.authority, &authorized_routes, routing_decision)
-    {
-        return hold_query_fanout_memory_in_response_body(response, permit);
-    }
+    // Scope authorization above remains mandatory. Diagnose a stale ingress hint
+    // before comparing it with the active route projection, which deliberately
+    // excludes retired and inactive lanes. An active unauthorized hint still refuses.
     let routing_decision = match validate_incoming_read_proxy_route(
         app,
         routing_decision,
@@ -18872,6 +18976,11 @@ async fn execute_incoming_torii_signed_query_route_scan(
         Ok(route) => route,
         Err(response) => return hold_query_fanout_memory_in_response_body(response, permit),
     };
+    if let Err(response) =
+        validate_proxy_signed_query_route(&request.authority, &authorized_routes, routing_decision)
+    {
+        return hold_query_fanout_memory_in_response_body(response, permit);
+    }
     let envelope = match exact_query_fanout_envelope(
         app.query_fanout_working_set_bytes,
         query_bytes.len(),
@@ -19560,20 +19669,6 @@ fn finish_torii_read_result<T: IntoResponse>(
     response
 }
 #[cfg(feature = "app_api")]
-fn finish_torii_read_result_with_format<T: IntoResponse>(
-    result: Result<T, Error>,
-    routing_decision: RoutingDecision,
-    routed_by: &'static str,
-    format: ResponseFormat,
-) -> Response {
-    let mut response = match result {
-        Ok(response) => response.into_response(),
-        Err(error) => error_response_with_format(error, format),
-    };
-    insert_routing_headers(&mut response, routing_decision, routed_by);
-    response
-}
-#[cfg(feature = "app_api")]
 enum BoundedContractViewWork {
     Single(routing::ContractViewDto),
     Batch(routing::ContractViewBatchDto),
@@ -19646,7 +19741,7 @@ fn contract_view_json_bytes_response(status: StatusCode, body: Vec<u8>) -> Respo
     );
     response
 }
-#[cfg(feature = "app_api")]
+#[cfg(any(feature = "app_api", test))]
 fn error_response_with_format(error: Error, format: ResponseFormat) -> Response {
     let status = error.status_code();
     let envelope = match error {
@@ -20195,23 +20290,7 @@ async fn execute_torii_proxy_request_via_peer(
         }
     }
 }
-#[cfg(test)]
-#[cfg(feature = "connect")]
-async fn execute_torii_proxy_request_via_http_bridge(
-    app: &SharedAppState,
-    target_peer_id: PeerId,
-    torii_url: String,
-    request: ToriiProxyRequestV1,
-) -> Result<ToriiProxyHttpResponseV1, ToriiProxyAttemptError> {
-    let request = SharedToriiProxyAttemptRequest::new(
-        request,
-        app.torii_proxy_http_ingress_envelope
-            .forwarding_transient_bytes,
-    )
-    .map_err(ToriiProxyAttemptError::before_dispatch)?;
-    execute_torii_proxy_request_via_http_bridge_shared(app, target_peer_id, torii_url, request)
-        .await
-}
+
 #[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_via_http_bridge_shared(
     app: &SharedAppState,
@@ -21468,72 +21547,53 @@ async fn execute_torii_read_request_locally(
                 routed_by,
             )
         }
-        ToriiReadEndpointV1::AccountAssetsGet => {
-            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
-                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
+        ToriiReadEndpointV1::DomainsList
+        | ToriiReadEndpointV1::DomainsQuery
+        | ToriiReadEndpointV1::AccountsList
+        | ToriiReadEndpointV1::AccountsQuery
+        | ToriiReadEndpointV1::AssetDefinitionsList
+        | ToriiReadEndpointV1::AssetDefinitionsQuery
+        | ToriiReadEndpointV1::NftsList
+        | ToriiReadEndpointV1::NftsQuery
+        | ToriiReadEndpointV1::RwasList
+        | ToriiReadEndpointV1::RwasQuery
+        | ToriiReadEndpointV1::AccountAssetsGet
+        | ToriiReadEndpointV1::AccountAssetsQuery
+        | ToriiReadEndpointV1::AssetHoldersGet
+        | ToriiReadEndpointV1::AssetHoldersQuery
+        | ToriiReadEndpointV1::AccountTransactionsGet
+        | ToriiReadEndpointV1::AccountTransactionsQuery
+        | ToriiReadEndpointV1::TransactionsQuery => {
+            let Some(target) = collection_target_for_read(request.endpoint, &request.path_args)
+            else {
+                return torii_internal_json_error("collection endpoint has no collection target");
             };
-            let visibility = match torii_account_assets_route_visibility(
-                app.as_ref(),
-                &request.route_scope,
-                &account_id,
-                routing_decision,
-            ) {
-                Ok(visibility) => visibility,
-                Err(response) => return response,
-            };
-            let params = match decode_torii_proxy_query::<routing::AccountAssetsGetParams>(
+            let visibility =
+                if let routing::collection_sources::CollectionTarget::AccountAssets(account) =
+                    &target
+                {
+                    match torii_account_assets_route_visibility(
+                        app.as_ref(),
+                        &request.route_scope,
+                        account,
+                        routing_decision,
+                    ) {
+                        Ok(visibility) => visibility,
+                        Err(response) => return response,
+                    }
+                } else {
+                    visibility.clone()
+                };
+            execute_routed_collection_read(
+                app,
+                &request,
                 request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_account_assets_with_visibility(
-                    app.state.clone(),
-                    AxPath(account_id),
-                    AxQuery(params),
-                    app.telemetry_handle(),
-                    visibility.clone(),
-                )
-                .await,
                 routing_decision,
                 routed_by,
+                target,
+                &visibility,
             )
-        }
-        ToriiReadEndpointV1::AccountAssetsQuery => {
-            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
-                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
-            };
-            let visibility = match torii_account_assets_route_visibility(
-                app.as_ref(),
-                &request.route_scope,
-                &account_id,
-                routing_decision,
-            ) {
-                Ok(visibility) => visibility,
-                Err(response) => return response,
-            };
-            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
-                request_decode_plan,
-                &request.body,
-                "account assets query body",
-            ) {
-                Ok(env) => env,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_account_assets_query_with_visibility(
-                    app.state.clone(),
-                    AxPath(account_id),
-                    crate::utils::extractors::NoritoJson(env),
-                    app.telemetry_handle(),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
+            .await
         }
         ToriiReadEndpointV1::AccountPermissionsGet => {
             let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
@@ -21552,36 +21612,6 @@ async fn execute_torii_read_request_locally(
                     AxPath(account_id),
                     crate::NoritoQuery(params),
                     app.telemetry_handle(),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::AccountTransactionsGet => {
-            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
-                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
-            };
-            let params = match decode_torii_proxy_query::<routing::AccountTransactionsGetParams>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            let allowed_asset_definition_id =
-                match resolve_tx_history_allowed_asset_definition_id(app) {
-                    Ok(value) => value,
-                    Err(error) => return error.into_response(),
-                };
-            finish_torii_read_result(
-                routing::handle_v1_account_transactions_get_with_visibility_policy(
-                    app.state.clone(),
-                    AxPath(account_id),
-                    crate::NoritoQuery(params),
-                    app.telemetry.clone(),
-                    allowed_asset_definition_id,
                     visibility.clone(),
                 )
                 .await,
@@ -21610,64 +21640,6 @@ async fn execute_torii_read_request_locally(
                     app.state.clone(),
                     AxPath(account_id),
                     crate::NoritoQuery(params),
-                    app.telemetry.clone(),
-                    allowed_asset_definition_id,
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::AccountTransactionsQuery => {
-            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
-                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
-            };
-            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
-                request_decode_plan,
-                &request.body,
-                "account transactions query body",
-            ) {
-                Ok(env) => env,
-                Err(response) => return response,
-            };
-            let allowed_asset_definition_id =
-                match resolve_tx_history_allowed_asset_definition_id(app) {
-                    Ok(value) => value,
-                    Err(error) => return error.into_response(),
-                };
-            finish_torii_read_result(
-                routing::handle_v1_account_transactions_with_visibility_policy(
-                    app.state.clone(),
-                    AxPath(account_id),
-                    crate::utils::extractors::NoritoJson(env),
-                    app.telemetry.clone(),
-                    allowed_asset_definition_id,
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::TransactionsQuery => {
-            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
-                request_decode_plan,
-                &request.body,
-                "transactions query body",
-            ) {
-                Ok(env) => env,
-                Err(response) => return response,
-            };
-            let allowed_asset_definition_id =
-                match resolve_tx_history_allowed_asset_definition_id(app) {
-                    Ok(value) => value,
-                    Err(error) => return error.into_response(),
-                };
-            finish_torii_read_result(
-                routing::handle_v1_transactions_query_with_visibility_policy(
-                    app.state.clone(),
-                    crate::utils::extractors::NoritoJson(env),
                     app.telemetry.clone(),
                     allowed_asset_definition_id,
                     visibility.clone(),
@@ -21711,49 +21683,6 @@ async fn execute_torii_read_request_locally(
                 routed_by,
             )
             .await
-        }
-        ToriiReadEndpointV1::AccountsList => {
-            let params = match decode_torii_proxy_query::<routing::ListFilterParams>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result_with_format(
-                routing::handle_v1_accounts_with_visibility(
-                    app.state.clone(),
-                    crate::NoritoQuery(params),
-                    app.telemetry.clone(),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-                response_format_from_torii_proxy(request.response_format),
-            )
-        }
-        ToriiReadEndpointV1::AccountsQuery => {
-            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
-                request_decode_plan,
-                &request.body,
-                "accounts query body",
-            ) {
-                Ok(env) => env,
-                Err(response) => return response,
-            };
-            finish_torii_read_result_with_format(
-                routing::handle_v1_accounts_query_with_visibility(
-                    app.state.clone(),
-                    crate::utils::extractors::NoritoJson(env),
-                    app.telemetry.clone(),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-                response_format_from_torii_proxy(request.response_format),
-            )
         }
         ToriiReadEndpointV1::AccountsPortfolio => {
             let Ok(uaid_literal) = torii_proxy_path_arg(&request, 0, "uaid") else {
@@ -21804,95 +21733,6 @@ async fn execute_torii_read_request_locally(
             insert_routing_headers(&mut response, routing_decision, routed_by);
             response
         }
-        ToriiReadEndpointV1::AssetDefinitionsList => {
-            let params = match decode_torii_proxy_query::<routing::ListFilterParams>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_assets_definitions_with_visibility(
-                    app.state.clone(),
-                    AxQuery(params),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::AssetDefinitionsQuery => {
-            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
-                request_decode_plan,
-                &request.body,
-                "asset definitions query body",
-            ) {
-                Ok(env) => env,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_assets_definitions_query_with_visibility(
-                    app.state.clone(),
-                    crate::utils::extractors::NoritoJson(env),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::AssetHoldersGet => {
-            let Ok(definition_id) = torii_proxy_path_arg(&request, 0, "definition_id") else {
-                return torii_proxy_path_arg(&request, 0, "definition_id").unwrap_err();
-            };
-            let params = match decode_torii_proxy_query::<routing::AssetHolderGetParams>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_asset_holders_with_visibility(
-                    app.state.clone(),
-                    AxPath(definition_id),
-                    AxQuery(params),
-                    app.telemetry.clone(),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::AssetHoldersQuery => {
-            let Ok(definition_id) = torii_proxy_path_arg(&request, 0, "definition_id") else {
-                return torii_proxy_path_arg(&request, 0, "definition_id").unwrap_err();
-            };
-            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
-                request_decode_plan,
-                &request.body,
-                "asset holders query body",
-            ) {
-                Ok(env) => env,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_asset_holders_query_with_app_visibility(
-                    Some(app.clone()),
-                    app.state.clone(),
-                    AxPath(definition_id),
-                    crate::utils::extractors::NoritoJson(env),
-                    app.telemetry.clone(),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
         ToriiReadEndpointV1::ExplorerAssetDefinitionDetail => {
             let Ok(definition_id) = torii_proxy_path_arg(&request, 0, "definition_id") else {
                 return torii_proxy_path_arg(&request, 0, "definition_id").unwrap_err();
@@ -21941,84 +21781,6 @@ async fn execute_torii_read_request_locally(
                     app.state.clone(),
                     visibility.clone(),
                     definition_id,
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::DomainsList => {
-            let params = match decode_torii_proxy_query::<routing::PaginationParams>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_domains_with_visibility(
-                    app.state.clone(),
-                    AxQuery(params),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::DomainsQuery => {
-            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
-                request_decode_plan,
-                &request.body,
-                "domains query body",
-            ) {
-                Ok(env) => env,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_domains_query_with_visibility(
-                    app.state.clone(),
-                    crate::utils::extractors::NoritoJson(env),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::NftsList => {
-            let params = match decode_torii_proxy_query::<routing::ListFilterParams>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_nfts_with_visibility(
-                    app.state.clone(),
-                    AxQuery(params),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::NftsQuery => {
-            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
-                request_decode_plan,
-                &request.body,
-                "nfts query body",
-            ) {
-                Ok(env) => env,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_nfts_query_with_visibility(
-                    app.state.clone(),
-                    crate::utils::extractors::NoritoJson(env),
-                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -22159,45 +21921,6 @@ async fn execute_torii_read_request_locally(
                     AxPath(uaid_literal),
                     crate::NoritoQuery(params),
                     app.telemetry.clone(),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::RwasList => {
-            let params = match decode_torii_proxy_query::<routing::ListFilterParams>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_rwas_with_visibility(
-                    app.state.clone(),
-                    AxQuery(params),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::RwasQuery => {
-            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
-                request_decode_plan,
-                &request.body,
-                "rwas query body",
-            ) {
-                Ok(env) => env,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_rwas_query_with_visibility(
-                    app.state.clone(),
-                    crate::utils::extractors::NoritoJson(env),
                     visibility.clone(),
                 )
                 .await,
@@ -31570,17 +31293,21 @@ fn parse_connect_ws_query(
     }
     Ok(routing::ConnectWsQuery { sid, role })
 }
+#[cfg(feature = "connect")]
 const CONNECT_PROTOCOL_TOKEN_PREFIX: &str = "iroha-connect.token.v1.";
+#[cfg(feature = "connect")]
 #[derive(Debug)]
 struct ConnectWsToken {
     token: String,
     protocol: Option<String>,
 }
+#[cfg(feature = "connect")]
 #[derive(Debug)]
 struct ProtocolToken {
     token: String,
     protocol: String,
 }
+#[cfg(feature = "connect")]
 #[allow(clippy::result_large_err)]
 fn resolve_connect_ws_token(
     headers: &axum::http::HeaderMap,
@@ -31619,6 +31346,7 @@ fn resolve_connect_ws_token(
     )
         .into_response())
 }
+#[cfg(feature = "connect")]
 #[allow(clippy::result_large_err)]
 fn parse_authorization_token(
     headers: &axum::http::HeaderMap,
@@ -31668,6 +31396,7 @@ fn parse_authorization_token(
     }
     Ok(Some(token.to_owned()))
 }
+#[cfg(feature = "connect")]
 #[allow(clippy::result_large_err)]
 fn parse_protocol_token(
     headers: &axum::http::HeaderMap,
@@ -31701,6 +31430,7 @@ fn parse_protocol_token(
     }
     Ok(None)
 }
+#[cfg(feature = "connect")]
 #[allow(clippy::result_large_err)]
 fn decode_protocol_token(encoded: &str) -> Result<String, axum::response::Response> {
     use axum::http::StatusCode;
@@ -34942,6 +34672,7 @@ fn onboarding_account_literal(account: &AccountId) -> Result<String, Error> {
         ))),
     })
 }
+#[cfg(feature = "app_api")]
 fn validate_account_onboarding_readiness(
     state: &CoreState,
     signer: &AccountOnboardingSigner,
@@ -37651,91 +37382,113 @@ where
     }
 }
 
-macro_rules! catalog_route_policy {
-    (canonical_account_delete($handler:path, $state:ident, $auth_limit:expr)) => {
+// Route-policy bodies compile with their actual route owners. Shared protocol
+// policies remain available in every build, including the disabled application API.
+macro_rules! define_catalog_route_policies {
+    ($( $(#[$guard:meta])* $policy:ident $pattern:tt => $body:tt; )*) => {
+        $($(#[$guard])* macro_rules! $policy { $pattern => $body; })*
+    };
+}
+
+define_catalog_route_policies! {
+    #[cfg(feature = "app_api")]
+    canonical_account_delete ($handler:path, $state:ident, $auth_limit:expr) => {
         catalog_delete($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (canonical_account_get($handler:path, $state:ident, $auth_limit:expr)) => {
+    canonical_account_get ($handler:path, $state:ident, $auth_limit:expr) => {
         catalog_get($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (canonical_account_proof_get($handler:path, $state:ident)) => {
+    #[cfg(feature = "app_api")]
+    canonical_account_proof_get ($handler:path, $state:ident) => {
         catalog_get($handler).authenticated_canonical_account_proof_body($state.clone(), 0)
     };
-    (canonical_account_post($handler:path, $state:ident, $auth_limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    canonical_account_post ($handler:path, $state:ident, $auth_limit:expr) => {
         catalog_post($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (canonical_account_proof_post($handler:path, $state:ident, $proof_limit:expr)) => {
+    canonical_account_proof_post ($handler:path, $state:ident, $proof_limit:expr) => {
         catalog_post($handler)
             .authenticated_canonical_account_proof_body($state.clone(), $proof_limit)
     };
-    (canonical_signature_delete($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    canonical_signature_delete ($handler:path) => {
         catalog_delete($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (canonical_signature_get($handler:path)) => {
+    canonical_signature_get ($handler:path) => {
         catalog_get($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (optional_canonical_signature_get($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    optional_canonical_signature_get ($handler:path) => {
         catalog_get($handler)
             .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
     };
-    (canonical_signature_post($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    canonical_signature_post ($handler:path) => {
         catalog_post($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (canonical_signed_post($handler:path)) => {
+    canonical_signed_post ($handler:path) => {
         catalog_post($handler).authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody)
     };
-    (layered_canonical_account_post($handler:path, $state:ident, $layer:ident, $auth_limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    layered_canonical_account_post ($handler:path, $state:ident, $layer:ident, $auth_limit:expr) => {
         catalog_post($handler)
             .layer($layer.clone())
             .authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (layered_canonical_signature_get($handler:path, $layer:ident)) => {
+    #[cfg(feature = "app_api")]
+    layered_canonical_signature_get ($handler:path, $layer:ident) => {
         catalog_get($handler)
             .layer($layer.clone())
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (layered_canonical_signature_post($handler:path, $layer:ident)) => {
+    #[cfg(feature = "app_api")]
+    layered_canonical_signature_post ($handler:path, $layer:ident) => {
         catalog_post($handler)
             .layer($layer.clone())
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (layered_canonical_signed_post($handler:path, $layer:ident)) => {
+    #[cfg(feature = "app_api")]
+    layered_canonical_signed_post ($handler:path, $layer:ident) => {
         catalog_post($handler)
             .layer($layer.clone())
             .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody)
     };
-    (layered_public_get($handler:path, $layer:ident)) => {
+    #[cfg(feature = "app_api")]
+    layered_public_get ($handler:path, $layer:ident) => {
         catalog_get($handler).layer($layer.clone())
     };
-    (limited_canonical_account_get($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_canonical_account_get ($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($body_limit))
             .authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (limited_canonical_account_post($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr)) => {
+    limited_canonical_account_post ($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($body_limit))
             .authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (limited_canonical_signature_post($handler:path, $limit:expr)) => {
+    limited_canonical_signature_post ($handler:path, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (limited_optional_canonical_signature_post($handler:path, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_optional_canonical_signature_post ($handler:path, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
     };
-    (limited_canonical_signed_post($handler:path, $limit:expr)) => {
+    limited_canonical_signed_post ($handler:path, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody)
     };
-    (limited_hardened_canonical_signature_get($handler:path, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_hardened_canonical_signature_get ($handler:path, $limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($limit))
             .layer(axum::middleware::from_fn(
@@ -37743,77 +37496,89 @@ macro_rules! catalog_route_policy {
             ))
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
-    (limited_operator_get($handler:path, $state:ident, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_operator_get ($handler:path, $state:ident, $limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_operator($state.clone())
     };
-    (limited_operator_post($handler:path, $state:ident, $limit:expr)) => {
+    limited_operator_post ($handler:path, $state:ident, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_operator($state.clone())
     };
-    (limited_protocol_handshake_get($handler:path, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_protocol_handshake_get ($handler:path, $limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };
-    (limited_protocol_handshake_post($handler:path, $limit:expr)) => {
+    limited_protocol_handshake_post ($handler:path, $limit:expr) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };
-    (limited_public_get($handler:path, $limit:expr)) => {
+    #[cfg(feature = "app_api")]
+    limited_public_get ($handler:path, $limit:expr) => {
         catalog_get($handler).layer(DefaultBodyLimit::max($limit))
     };
-    (limited_unauthenticated_get($handler:path, $limit:expr)) => {
+    limited_unauthenticated_get ($handler:path, $limit:expr) => {
         catalog_get($handler)
             .layer(DefaultBodyLimit::max($limit))
             .unauthenticated()
     };
-    (limited_public_post($handler:path, $limit:expr)) => {
+    limited_public_post ($handler:path, $limit:expr) => {
         catalog_post($handler).layer(DefaultBodyLimit::max($limit))
     };
-    (private_root_owner_get($handler:path)) => {
+    private_root_owner_get ($handler:path) => {
         catalog_get($handler).authenticated_in_handler(HandlerAuthentication::PrivateRootOwnerToken)
     };
-    (onboarding_get($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    onboarding_get ($handler:path) => {
         catalog_get($handler).authenticated_onboarding()
     };
-    (onboarding_post($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    onboarding_post ($handler:path) => {
         catalog_post($handler).authenticated_onboarding()
     };
-    (operator_credential_post($handler:path)) => {
+    operator_credential_post ($handler:path) => {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max(
                 operator_auth::CREDENTIAL_EXCHANGE_BODY_LIMIT,
             ))
             .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange)
     };
-    (operator_delete($handler:path, $state:ident)) => {
+    operator_delete ($handler:path, $state:ident) => {
         catalog_delete($handler).authenticated_operator($state.clone())
     };
-    (operator_get($handler:path, $state:ident)) => {
+    operator_get ($handler:path, $state:ident) => {
         catalog_get($handler).authenticated_operator($state.clone())
     };
-    (operator_post($handler:path, $state:ident)) => {
+    operator_post ($handler:path, $state:ident) => {
         catalog_post($handler).authenticated_operator($state.clone())
     };
-    (protocol_handshake_post($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    protocol_handshake_post ($handler:path) => {
         catalog_post($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };
-    (public_get($handler:path)) => {
+    public_get ($handler:path) => {
         catalog_get($handler)
     };
-    (public_post($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    public_post ($handler:path) => {
         catalog_post($handler)
     };
-    (unauthenticated_any($handler:path)) => {
+    #[cfg(feature = "app_api")]
+    unauthenticated_any ($handler:path) => {
         catalog_any($handler).unauthenticated()
     };
-    (unauthenticated_get($handler:path)) => {
+    unauthenticated_get ($handler:path) => {
         catalog_get($handler).unauthenticated()
     };
+}
+
+macro_rules! catalog_route_policy {
+    ($policy:ident $arguments:tt) => { $policy! $arguments };
 }
 
 macro_rules! mount_catalog_route_rows {
@@ -38969,10 +38734,6 @@ impl Torii {
                 ))
                 .authenticated_operator(app_state),
         );
-    }
-    #[cfg(not(feature = "connect"))]
-    fn add_connect_routes(&self, _builder: &mut RouterBuilder) {
-        let _ = self;
     }
     /// Mandatory KAGEMUSHA monetary and recovery routes in every Torii build.
     fn add_kagemusha_routes(&self, builder: &mut RouterBuilder) {
@@ -44336,6 +44097,9 @@ pub enum Error {
         /// Human-readable error message.
         message: String,
     },
+    /// Invalid collection query: {0}
+    #[cfg(feature = "app_api")]
+    CollectionQuery(Box<collections::CollectionError>),
     /// Account onboarding validation failed `{code}`: {message}; hint: {hint:?}
     #[cfg(feature = "app_api")]
     AccountOnboardingValidation {
@@ -44619,6 +44383,19 @@ impl IntoResponse for Error {
                 }
                 response
             }
+            #[cfg(feature = "app_api")]
+            Self::CollectionQuery(err) => {
+                let mut response = utils::respond_with_status_and_format(
+                    StatusCode::BAD_REQUEST,
+                    err.envelope(),
+                    format,
+                );
+                response.headers_mut().insert(
+                    HeaderName::from_static("x-iroha-reject-code"),
+                    HeaderValue::from_static(err.code),
+                );
+                response
+            }
             Self::AppQueryValidation { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
                 let status = if code == "type_mismatch" {
@@ -44832,7 +44609,7 @@ use iroha_crypto::SignatureOf;
 use iroha_data_model::account::AccountAddress;
 #[cfg(test)]
 use iroha_data_model::nexus::FeeSponsorProgram;
-#[cfg(all(test, feature = "app_api"))]
+#[cfg(test)]
 pub(crate) use tests_runtime_handlers::mk_app_state_for_tests;
 impl Error {
     fn into_envelope(self) -> ErrorEnvelope {
@@ -44891,6 +44668,8 @@ impl Error {
                 ErrorEnvelope::new("queue_error", "queue request rejected")
             }
             Self::AppQueryValidation { code, message } => ErrorEnvelope::new(code, message),
+            #[cfg(feature = "app_api")]
+            Self::CollectionQuery(err) => err.envelope(),
             #[cfg(feature = "app_api")]
             Self::AccountOnboardingValidation {
                 code,
@@ -44962,6 +44741,8 @@ impl Error {
             Query(e) => Self::query_status_code(e),
             AcceptTransaction(_) => StatusCode::BAD_REQUEST,
             AppQueryValidation { .. } => StatusCode::BAD_REQUEST,
+            #[cfg(feature = "app_api")]
+            CollectionQuery(_) => StatusCode::BAD_REQUEST,
             #[cfg(feature = "app_api")]
             AccountOnboardingValidation { .. } => StatusCode::BAD_REQUEST,
             AppUnauthorized { .. } => StatusCode::UNAUTHORIZED,

@@ -81,7 +81,7 @@ pub(crate) enum AttemptError {
     #[error(transparent)]
     Journal(#[from] iroha_core::sumeragi::native_journal::NativeJournalError),
     #[error(transparent)]
-    JournalDecode(#[from] iroha_data_model::sumeragi::finality::NativeFinalityDecodeError),
+    JournalSource(#[from] iroha_data_model::sumeragi::finality::PreparedNativeFinalityError),
     #[error("the original DKG attempt is in another phase")]
     Phase,
     #[error("the original DKG finality height is invalid or closed")]
@@ -94,9 +94,19 @@ pub(crate) enum AttemptError {
 impl AttemptError {
     fn terminal(&self) -> bool {
         use iroha_core::sumeragi::native_journal::NativeJournalError;
-        use iroha_data_model::sumeragi::finality::NativeFinalityDecodeError;
+        use iroha_data_model::sumeragi::finality::{
+            NativeFinalityDecodeError, PreparedNativeFinalityError,
+        };
         match self {
             Self::Phase | Self::Height | Self::Deadline | Self::Binding => true,
+            Self::JournalSource(
+                PreparedNativeFinalityError::Invalid(_)
+                | PreparedNativeFinalityError::SourceChanged
+                | PreparedNativeFinalityError::NotDecoded,
+            ) => true,
+            Self::JournalSource(PreparedNativeFinalityError::Decode(
+                norito::core::PreparedDecodeError::Codec(error),
+            )) => error.kind() == norito::core::DecodeAttemptErrorKind::Invalid,
             Self::Input(
                 GlobalThresholdBeaconInputErrorV1::Binding
                 | GlobalThresholdBeaconInputErrorV1::Phase
@@ -123,9 +133,11 @@ impl AttemptError {
                 true
             }
             Self::Session(GlobalThresholdBeaconSessionError::Invalid(_)) => true,
-            Self::Journal(NativeJournalError::Invalid(_))
-            | Self::JournalDecode(
-                NativeFinalityDecodeError::Invalid(_) | NativeFinalityDecodeError::Malformed(_),
+            Self::Journal(
+                NativeJournalError::Invalid(_)
+                | NativeJournalError::Decode(
+                    NativeFinalityDecodeError::Invalid(_) | NativeFinalityDecodeError::Malformed(_),
+                ),
             ) => true,
             _ => false,
         }
@@ -302,7 +314,7 @@ impl SeatDkgAttempt {
             export: None,
             rejected_components: None,
             public_input,
-            finality: FinalityInput::new(finality_input, clock, session.start_height),
+            finality: FinalityInput::new(finality_input, clock, session.start_height)?,
             claim,
             attempt_journal,
             publications: [

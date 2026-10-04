@@ -1,9 +1,6 @@
 //! Prepaid test observations using the single production registration engine.
 
-use iroha_allocation::{
-    release::ReleaseRegistration,
-    AllocationBudget,
-};
+use iroha_allocation::{release::ReleaseRegistration, AllocationBudget};
 
 /// Admit a control from the fixture's original budget before occupying it.
 pub(crate) fn registration(budget: &AllocationBudget) -> ReleaseRegistration {
@@ -15,4 +12,3 @@ pub(crate) fn registration(budget: &AllocationBudget) -> ReleaseRegistration {
     assert!(registration.belongs_to(budget));
     registration
 }
-

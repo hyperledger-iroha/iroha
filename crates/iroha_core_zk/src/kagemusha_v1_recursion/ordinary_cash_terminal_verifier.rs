@@ -241,24 +241,6 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryCashTerminalV1 {
     wrapper_history_fold_originals: [[u8; super::KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1]; 2],
 }
 impl KagemushaAuthenticatedOrdinaryCashTerminalV1 {
-    pub(crate) fn operation_id(&self) -> DigestV1 {
-        self.operation_id
-    }
-    pub(crate) fn predecessor_state(&self) -> &KagemushaStateV1 {
-        &self.predecessor
-    }
-    pub(crate) fn successor_state(&self) -> &KagemushaStateV1 {
-        &self.successor
-    }
-    pub(crate) fn terminal_record(&self) -> &KagemushaOrdinaryCashTerminalRecordV1 {
-        &self.record
-    }
-    pub(crate) fn candidate_envelope_digest(&self) -> DigestV1 {
-        self.candidate_digest
-    }
-    pub(crate) fn output_originals_digest(&self) -> DigestV1 {
-        self.output_originals_digest
-    }
     pub(crate) fn inner_terminal_original(&self) -> &[u8] {
         &self.inner_terminal_original
     }

@@ -197,7 +197,7 @@ async fn handle_v1_subscription_plans_filters_provider_alias() {
     };
     let state = state_with_plans_and_subscriptions(
         provider.clone(),
-        other,
+        other.clone(),
         vec![
             (plan_primary_id.clone(), plan_a),
             (plan_secondary_id, plan_b),
@@ -207,6 +207,26 @@ async fn handle_v1_subscription_plans_filters_provider_alias() {
     bind_account_alias_for_test(&state, &provider, "billing@universal");
     let params = SubscriptionPlanListParams {
         provider: Some("billing@universal".to_string()),
+        limit: None,
+        offset: 0,
+        count_mode: Some("exact".to_owned()),
+    };
+    let rejected = match handle_v1_subscription_plans(state.clone(), crate::NoritoQuery(params))
+        .await
+    {
+        Ok(_) => panic!("public provider filter must not perform unauthenticated alias resolution"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        rejected,
+        Error::Query(ValidationFail::QueryFailed(iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)))
+            if message.contains("canonical I105")
+    ));
+    let resolved =
+        resolve_account_alias_with_exact_permission_for_test(&state, &other, "billing@universal");
+    assert_eq!(resolved, provider);
+    let params = SubscriptionPlanListParams {
+        provider: Some(resolved.to_string()),
         limit: None,
         offset: 0,
         count_mode: Some("exact".to_owned()),
@@ -358,6 +378,55 @@ async fn handle_v1_subscriptions_filters_account_aliases() {
         owned_by: Some("member@universal".to_string()),
         provider: Some("billing@universal".to_string()),
         status: Some("paused".to_string()),
+        limit: None,
+        offset: 0,
+        count_mode: None,
+    };
+    let rejected = match handle_v1_subscriptions(state.clone(), crate::NoritoQuery(params)).await {
+        Ok(_) => {
+            panic!("public subscriber filter must not perform unauthenticated alias resolution")
+        }
+        Err(error) => error,
+    };
+    assert!(matches!(
+        rejected,
+        Error::Query(ValidationFail::QueryFailed(iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)))
+            if message.contains("canonical I105")
+    ));
+    let resolved_provider = resolve_account_alias_with_exact_permission_for_test(
+        &state,
+        &subscriber,
+        "billing@universal",
+    );
+    let resolved_subscriber =
+        resolve_account_alias_with_exact_permission_for_test(&state, &provider, "member@universal");
+    assert_eq!(resolved_provider, provider);
+    assert_eq!(resolved_subscriber, subscriber);
+    let provider_alias_only = SubscriptionListParams {
+        owned_by: Some(resolved_subscriber.to_string()),
+        provider: Some("billing@universal".to_owned()),
+        status: Some("paused".to_owned()),
+        limit: None,
+        offset: 0,
+        count_mode: None,
+    };
+    let rejected =
+        match handle_v1_subscriptions(state.clone(), crate::NoritoQuery(provider_alias_only)).await
+        {
+            Ok(_) => {
+                panic!("public provider filter must not perform unauthenticated alias resolution")
+            }
+            Err(error) => error,
+        };
+    assert!(matches!(
+        rejected,
+        Error::Query(ValidationFail::QueryFailed(iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)))
+            if message.contains("canonical I105")
+    ));
+    let params = SubscriptionListParams {
+        owned_by: Some(resolved_subscriber.to_string()),
+        provider: Some(resolved_provider.to_string()),
+        status: Some("paused".to_owned()),
         limit: None,
         offset: 0,
         count_mode: None,

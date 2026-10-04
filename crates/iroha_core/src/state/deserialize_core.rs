@@ -34,6 +34,9 @@ pub(crate) enum StateRestoreError {
     /// Original resources refused a fully authenticated retained beacon session.
     #[error("snapshot beacon session admission failed: {0}")]
     BeaconSession(#[source] crate::beacon::GlobalThresholdBeaconSessionError),
+    /// Original finite resources refused the complete native participant graph.
+    #[error("snapshot native AMX admission deferred: {0}")]
+    NativeAmx(#[source] crate::sumeragi::amx::NativeAmxAdmissionError),
     /// The local VM image could not be constructed before restoring State.
     #[error("snapshot State VM initialization deferred: {0}")]
     VmInitialization(#[source] ivm::VMError),
@@ -604,18 +607,6 @@ impl KuraSeed {
             value,
             allow_durable_recovery,
             None,
-        )
-    }
-    #[cfg(test)]
-    pub(crate) fn into_state_from_json_with_configured_nexus(
-        self,
-        value: json::Value,
-        configured_nexus: iroha_config::parameters::actual::Nexus,
-    ) -> Result<Box<State>, StateRestoreError> {
-        self.into_state_from_json_with_recovery_mode_and_configured_nexus(
-            value,
-            true,
-            Some(configured_nexus),
         )
     }
     #[cfg(test)]

@@ -537,7 +537,26 @@ mod tests {
             );
             assert!(columns.iter().flatten().all(|value| *value == F(91)));
         }
-        assert!(scratch_payload_bytes_v1() < 4096);
+        // This control invokes the scalar oracle above; retain its original bound.
+        assert!(scalar_scratch_payload_bytes_v1() < 4096);
+        // Production additionally owns the fixed 24-pair window, four work cells,
+        // two public cursors, one copied recurrence and one discarded field.
+        let window_owners = (3 * BATCH * 8 + 4) * core::mem::size_of::<F>()
+            + 2 * core::mem::size_of::<usize>()
+            + core::mem::size_of::<ColumnStateV1>()
+            + core::mem::size_of::<F>();
+        assert_eq!(
+            scratch_payload_bytes_v1(),
+            scalar_scratch_payload_bytes_v1() + window_owners
+        );
+        assert_eq!(
+            super::super::zk_x509_rfc_aux_replay_scratch_bytes_v1(),
+            scratch_payload_bytes_v1()
+        );
+        assert!(
+            scratch_payload_bytes_v1()
+                < super::super::super::allocation_payload::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
+        );
         assert_eq!(
             core::mem::size_of::<[ColumnStateV1; BATCH]>(),
             8 * 3 * core::mem::size_of::<F>()

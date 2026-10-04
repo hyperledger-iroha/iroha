@@ -462,3 +462,6 @@ impl SerializePayload for Acceptance {
         .serialize(writer)
     }
 }
+
+#[cfg(test)]
+mod tests;

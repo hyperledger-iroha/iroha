@@ -9,7 +9,6 @@ use crate::kagemusha_v1_recursion::real_handoff_qualification_tests::real_paymen
     run_ordinary_zero_bootstrap_qualification_worker,
 };
 use crate::kagemusha_v1_state::DigestV1;
-use ff::Field as _;
 
 #[test]
 #[ignore = "genuine Mint113 and neutral MintAuthority Bootstrap/finalized keys/proofs; owned direct-libtest CPU/RSS guard and exclusive maintained worker required"]

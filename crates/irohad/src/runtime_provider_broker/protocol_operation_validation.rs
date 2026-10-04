@@ -3072,15 +3072,15 @@ pub(super) fn resolve(
 /// Serve the exact stock catalog on one validated production endpoint.
 pub(super) fn serve(
     bindings: &IrohaRuntimeProviderBindingsV1,
-    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
-    platform::serve(bindings, endpoint_path, backends)
+    platform::serve(bindings, policy, backends)
 }
 /// Serve the stock catalog with a fallible readiness publication.
 pub(super) fn serve_with_fallible_readiness<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
-    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
     on_ready: R,
@@ -3088,5 +3088,5 @@ pub(super) fn serve_with_fallible_readiness<R>(
 where
     R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
 {
-    platform::serve_with_fallible_readiness(bindings, endpoint_path, backends, lifecycle, on_ready)
+    platform::serve_with_fallible_readiness(bindings, policy, backends, lifecycle, on_ready)
 }

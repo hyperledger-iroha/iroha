@@ -4,7 +4,7 @@
 //! They preserve actual native owners and modes, including prepaid storage, and
 //! derive the encoding pool from the original State. Raw row encoding does not
 //! validate a table's derived indexes, record invariants or cross-table relations.
-//! The verifier and proof-status adapters perform their existing bounded both-image relations.
+//! Verifier, proof-status and validation-fee adapters check their complete bounded relations.
 //!
 //! TODO: adapt every other structural group, trigger Set, Musubi semantic source
 //! and membership pair/frontier. Then retain every canonical cell and history
@@ -62,7 +62,7 @@ impl FrozenTableCaptureError {
 /// A missing structural/semantic adapter is a separate exact error, never an
 /// empty table. Native callbacks encode all current rows only; this does not
 /// establish complete source validation. `max_relation_work` is used by the
-/// existing verifier or proof-status relation only, and grants no new row or execution limits.
+/// checked relation only, and grants no new row or execution limits.
 /// Every local encoding refusal leaves the same StateBlock available for retry.
 #[cfg_attr(
     not(test),
@@ -94,6 +94,12 @@ pub(in crate::state) fn capture_original_table_once(
         TableMaterializer::Single {
             id: "world.proofs", ..
         } => super::super::frozen_proofs::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.governance_proposals",
+            ..
+        } => {
+            super::super::frozen_validation_fee_proposals::capture(block, limits, max_relation_work)
+        }
         // The two membership outputs must eventually come from one original
         // owner together with its frontier, never independent raw callbacks.
         // The same rule applies to all semantic/structural checked groups.

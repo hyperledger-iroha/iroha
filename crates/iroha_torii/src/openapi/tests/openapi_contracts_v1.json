@@ -368,13 +368,15 @@
       ]
     },
     {
-      "id": "repo.query.fields",
+      "id": "collection.query.fields",
       "values": [
         "filter",
+        "sort",
         "select",
         "aggregate",
-        "fetch_size",
-        "count_mode"
+        "limit",
+        "cursor",
+        "include_total"
       ]
     },
     {

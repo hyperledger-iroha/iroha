@@ -14,14 +14,19 @@
 //! Prover kernel work must keep every constant unchanged. A changed constant
 //! means a changed proof format, not a test to update.
 //!
-//! - `sigma_native_k11` (debug): a sigma-send-shaped two-level state transition.
-//!   It has 34 Poseidon permutations in two native Pasta lanes (degree 7), a
-//!   halo2-base column with range lookups, copy constraints between the two,
-//!   and two public instances.
-//! - `p256_k16` (ignored, release): one full-width low-S P-256 ECDSA verification.
-//! - `rec_*_w1_k16` (ignored, release): a synthetic one-column k = 16 inner proof
-//!   and the in-circuit scalar half of its succinct verification (snark-verifier
-//!   loader, deferred curve equations, deferred-audit Poseidon digest).
+//! - `sigma_native_k11` (debug, 3,296 B): a sigma-send-shaped two-level state
+//!   transition. It has 34 Poseidon permutations in two native Pasta lanes
+//!   (degree 7), a halo2-base column with range lookups, copy constraints
+//!   between the two, and two public instances.
+//! - `p256_k16` (ignored, release, 10,112 B): one full-width low-S P-256 ECDSA
+//!   verification.
+//! - `rec_*_w1_k16` (ignored, release, 2,272 B and 4,768 B): a synthetic one-column
+//!   k = 16 inner proof and the in-circuit scalar half of its succinct verification
+//!   (snark-verifier loader, deferred curve equations, deferred-audit Poseidon digest).
+//!
+//! Run `cargo test -p iroha_core_zk --lib prover_golden_tests` for the debug case and
+//! `cargo test --release -p iroha_core_zk --lib prover_golden_tests -- --include-ignored`
+//! for all cases. Debug and release builds must produce the same bytes.
 
 use std::{
     cell::Cell,
@@ -110,6 +115,30 @@ const GOLDEN_SHA256: &[(&str, &str)] = &[
     (
         "sigma_native_k11/ep",
         "1f795f96f8deda5e578f847ef0bfeeac9412ffea6a97cdf3085067c20e5f8a90",
+    ),
+    (
+        "p256_k16/eq",
+        "9e67d9164b86f06005fdde46356bd16883a4ea399582dad0924f456ad766a37c",
+    ),
+    (
+        "p256_k16/ep",
+        "e59e72fcb3280b3d3f05e82674981d2fd0f81e680a86fd882ecb08106988f817",
+    ),
+    (
+        "rec_inner_w1_k16/eq",
+        "b6fc7a0bd52e61c0e391159d9baaa55160aa5c5536f1ea5c8bb26fec05024e74",
+    ),
+    (
+        "rec_scalar_half_w1_k16/eq",
+        "aa0f10e0d00bdfaf29909526510d5fdd73f1bcbe147f94763ec29764df91cbd7",
+    ),
+    (
+        "rec_inner_w1_k16/ep",
+        "121aa6083eafe55ddf727aaac0ddde2a24fe2577a533e56f03d25d1e5aee577c",
+    ),
+    (
+        "rec_scalar_half_w1_k16/ep",
+        "850f41a1d817065712bf3bba88892df986ed5f63065b1bbbb3e264607641ca81",
     ),
 ];
 

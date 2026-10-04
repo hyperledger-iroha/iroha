@@ -304,7 +304,7 @@ mod completion_permission_tests {
     use super::*;
     use crate::state::World;
     use iroha_data_model::{
-        Registrable,
+        IntoKeyValue, Registrable,
         permission::{Permission, Permissions},
         role::{Role, RoleId, RoleIdWithOwner},
     };
@@ -320,10 +320,10 @@ mod completion_permission_tests {
         }
         .into();
         let mut world = World::default();
-        world.accounts.insert(
-            signer.clone(),
-            iroha_data_model::account::Account::new(signer.clone()).build(&signer),
-        );
+        let (account_id, account) = iroha_data_model::account::Account::new(signer.clone())
+            .build(&signer)
+            .into_key_value();
+        world.accounts.insert(account_id, account);
         for permission in [
             Permission::new(exact.name().to_owned(), Json::new(())),
             CanCompleteSorafsReplicationOrder { provider_id: other }.into(),
@@ -355,7 +355,9 @@ mod completion_permission_tests {
             &signer,
             ProviderId::new([0; 32])
         ));
-        world.account_permissions.remove(signer.clone());
+        let mut permissions = world.account_permissions.block();
+        assert!(permissions.remove(signer.clone()).is_some());
+        permissions.commit();
         let role: RoleId = "dedicated_provider_completion".parse().unwrap();
         world.roles.insert(
             role.clone(),

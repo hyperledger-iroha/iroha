@@ -1032,6 +1032,12 @@ impl std::error::Error for RuntimeProviderBrokerReadinessErrorV1 {}
 /// packaged standalone services share one supervised broker without weakening binding or operation
 /// isolation.
 ///
+/// The complete file-configured `policy` supplies the endpoint and the admitted
+/// observer-operation allowance. That original absolute deadline begins before
+/// provider dispatch and spans completed-reply encoding and publication; it never
+/// renews on local continuation. A synchronous provider already running cannot
+/// be cancelled, and a reply returned after expiry cannot be published.
+///
 /// # Errors
 ///
 /// Fails before accepting clients if the catalog/backend set is incomplete or any live public
@@ -1039,16 +1045,16 @@ impl std::error::Error for RuntimeProviderBrokerReadinessErrorV1 {}
 /// endpoint cannot be created with the required ownership and mode.
 pub fn serve_runtime_provider_broker_v1(
     bindings: &IrohaRuntimeProviderBindingsV1,
-    endpoint_path: &RuntimeProviderBrokerEndpointPath,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        protocol::serve(bindings, endpoint_path, backends)
+        protocol::serve(bindings, policy, backends)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (bindings, endpoint_path, backends);
+        let _ = (bindings, policy, backends);
         Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
     }
 }
@@ -1097,7 +1103,7 @@ pub fn serve_runtime_provider_broker_v1(
 /// [`RuntimeProviderBrokerReadinessErrorV1`].
 pub fn serve_runtime_provider_broker_with_fallible_readiness_v1<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
-    endpoint_path: &RuntimeProviderBrokerEndpointPath,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
     on_ready: R,
@@ -1107,18 +1113,12 @@ where
 {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        protocol::serve_with_fallible_readiness(
-            bindings,
-            endpoint_path,
-            backends,
-            lifecycle,
-            on_ready,
-        )
+        protocol::serve_with_fallible_readiness(bindings, policy, backends, lifecycle, on_ready)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         lifecycle.request_shutdown();
-        let _ = (bindings, endpoint_path, backends, on_ready);
+        let _ = (bindings, policy, backends, on_ready);
         Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
     }
 }
@@ -1133,7 +1133,7 @@ where
 /// Preserves every fail-closed server error from the fallible variant.
 pub fn serve_runtime_provider_broker_with_lifecycle_v1<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
-    endpoint_path: &RuntimeProviderBrokerEndpointPath,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
     on_ready: R,
@@ -1143,7 +1143,7 @@ where
 {
     serve_runtime_provider_broker_with_fallible_readiness_v1(
         bindings,
-        endpoint_path,
+        policy,
         backends,
         lifecycle,
         || {

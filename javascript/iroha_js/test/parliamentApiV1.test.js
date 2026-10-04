@@ -638,6 +638,7 @@ test("attempt drafts reject malformed nested fields and open proposal shapes", (
     (proposal) => { proposal.payload.authority_policy.future = null; },
     (proposal) => { proposal.payload.manifest.future = null; },
     (proposal) => { proposal.payload.expected_predecessor.future = null; },
+    (proposal) => { proposal.payload.expected_predecessor.future = null; },
   ];
   const fixtures = parliamentProposalFixtures();
   assert.equal(mutations.length, fixtures.length, "every proposal variant needs a malformed nested fixture");
@@ -884,8 +885,12 @@ test("attempt read rejects forged certificate cross-bindings and lifecycle field
       /governance_attempt_sequence differs/u,
     ],
     [
-      (response) => { response.certificate.risk_tier = { tier: "Emergency" }; },
+      (response) => { response.certificate.risk_tier = { tier: "Emergency", details: null }; },
       /risk_tier differs/u,
+    ],
+    [
+      (response) => { response.certificate.risk_tier = { tier: "Emergency" }; },
+      /certificate\.risk_tier contains unknown, aliased, or missing fields/u,
     ],
     [
       (response) => { response.certificate.policy_version = 2; },
@@ -1053,8 +1058,12 @@ test("attempt read rejects malformed hidden-ballot retry, corpus, tally, and out
       /tally/u,
     ],
     [
-      (response) => { response.certificate.body_bindings[0].ballot.outcome = { outcome: "Rejected" }; },
+      (response) => { response.certificate.body_bindings[0].ballot.outcome = { outcome: "Rejected", details: null }; },
       /approving aggregate outcome/u,
+    ],
+    [
+      (response) => { response.certificate.body_bindings[0].ballot.outcome = { outcome: "Rejected" }; },
+      /ballot\.outcome contains unknown, aliased, or missing fields/u,
     ],
   ];
   for (const [mutate, expected] of mutations) {

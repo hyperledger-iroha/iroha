@@ -251,20 +251,3 @@ fn component_commit_topology_preserves_scheduled_network_authority_on_consensus_
         }
     }
 }
-fn empty_global_block_after(previous: Option<&SignedBlock>) -> SignedBlock {
-    let_row! { creation_time_ms = previous.map_or(1_700_000_000_000, |block| { block.header().creation_time_ms.saturating_add(1) }) };
-    autoscale_signed_block_with_committed_fragments(previous, creation_time_ms, 0)
-}
-fn commit_block_metadata_to_state(state: &State, block: &SignedBlock) {
-    let mut state_block = state.block(block.header().clone());
-    // Structural history still owns an exact height/hash sample and its actual
-    // predecessor. Do not reconstruct earlier runtime policy at snapshot time.
-    state_block
-        .stage_autoscale_sample_record_for_count(block, 0)
-        .expect("empty metadata carrier retains its runtime sample");
-    state_block.block_hashes.push(block.hash());
-    insert_empty_transaction_block_for_state_commit(&mut state_block, block);
-    state_block
-        .commit()
-        .expect("test global block metadata must commit to State");
-}

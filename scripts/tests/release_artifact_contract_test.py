@@ -3,12 +3,38 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from scripts import release_artifact_contract as contract
+
+
+@pytest.fixture
+def tmp_path() -> Iterator[Path]:
+    """Keep custody fixtures below the checkout's owned test output directory.
+
+    These contracts reject every shared writable ancestor, so pytest's ambient
+    system temporary root cannot supply their positive and race fixtures.
+    TemporaryDirectory removes only this test's exclusively created directory.
+    Owned setup uses 077; test bodies use ordinary 022 so explicit safe 0755
+    anchors and 0644 artifacts retain their intended coverage. The caller mask
+    is restored after the test, including failures during creation or cleanup.
+    """
+    original_umask = os.umask(0o077)
+    try:
+        parent = Path(__file__).resolve().parents[2]
+        for component in ("target", "unit-tests", "script-tests"):
+            parent /= component
+            parent.mkdir(mode=0o700, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="release-artifact-contract-", dir=parent) as directory:
+            os.umask(0o022)
+            yield Path(directory).resolve()
+    finally:
+        os.umask(original_umask)
 
 
 @pytest.mark.parametrize(
@@ -32,6 +58,7 @@ def test_private_directory_tree_ignores_permissive_umask_and_reuses_exact_owner(
     anchor = tmp_path / "anchor"
     anchor.mkdir(mode=0o755)
     anchor_mode = stat.S_IMODE(anchor.stat().st_mode)
+    assert anchor_mode == 0o755
     leaf = anchor / "one" / "two" / "three"
     original_umask = os.umask(0o002)
     try:
@@ -352,3 +379,20 @@ def test_stable_open_keeps_metadata_and_path_checks_after_final_hash(
         with contract.stable_open_relative(tmp_path, artifact.name, expected=expected) as fd:
             assert os.read(fd, expected.size) == payload
     assert changed
+
+
+def test_directory_custody_rejects_sticky_shared_ancestor_without_repair(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o1777)
+    anchor = shared / "private-anchor"
+    anchor.mkdir(mode=0o700)
+    for create in (
+        lambda: contract.ensure_private_directory(anchor / "private-child", anchor=anchor),
+        lambda: contract.create_fresh_directory(anchor / "fresh-child"),
+    ):
+        with pytest.raises(contract.ReleaseArtifactError, match="group- or world-writable"):
+            create()
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o1777
+    assert stat.S_IMODE(anchor.stat().st_mode) == 0o700
+    assert list(anchor.iterdir()) == []

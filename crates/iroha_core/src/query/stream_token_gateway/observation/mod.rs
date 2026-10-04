@@ -401,10 +401,6 @@ pub fn begin_stream_token_gateway_check_v1(
 ///
 /// # Errors
 /// Rejects a missing/substituted original, malformed pins, unavailable finality or elapsed deadline.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "all native delivery identity pins remain explicit"
-)]
 pub fn begin_stream_token_reputation_delivery_v1(
     state: Arc<State>,
     network_id: NetworkId,

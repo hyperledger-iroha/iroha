@@ -379,16 +379,19 @@ async fn signed_query_token_rotation_cannot_escape_origin_and_authority_budgets(
     let key_pair =
         checked_torii_test_ed25519_keypair(0x73, "derive signed-query admission fixture authority");
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app =
+        native_ingress_app_with_world_at_time_for_test(world_with_account(&authority), 1_000);
     let app_mut = Arc::get_mut(&mut app).expect("unique signed-query admission fixture");
     app_mut.query_preauth_rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(2));
     app_mut.query_authority_rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(2));
+    let network_id = *app.state.network_id_ref();
     let signed_query = || {
-        authorize_query_for_test(
+        let mut request = authorize_query_for_test(
             QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion)),
             authority.clone(),
-        )
-        .sign(&key_pair)
+        );
+        request.network_id = network_id;
+        request.sign(&key_pair)
     };
     for token in ["attacker-token-1", "attacker-token-2"] {
         let mut headers = HeaderMap::new();
@@ -753,6 +756,7 @@ async fn finality_rate_weight_caps_to_burst_without_disabling_the_route() {
         .expect("weighted accounting remains isolated by caller key");
 }
 #[derive(Clone)]
+#[cfg(feature = "app_api")]
 struct TestLocalReadRuntime {
     snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
     state_dir: PathBuf,
@@ -763,6 +767,7 @@ struct TestLocalReadRuntime {
     >,
     captured_requests: Arc<std::sync::Mutex<Vec<SoracloudLocalReadRequest>>>,
 }
+#[cfg(feature = "app_api")]
 impl TestLocalReadRuntime {
     fn with_result(
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
@@ -818,6 +823,7 @@ impl TestLocalReadRuntime {
         self
     }
 }
+#[cfg(feature = "app_api")]
 impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestLocalReadRuntime {
     fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
         self.snapshot.clone()
@@ -829,6 +835,7 @@ impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestLocalRead
         self.local_peer_id.clone()
     }
 }
+#[cfg(feature = "app_api")]
 impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
     fn execute_local_read(
         &self,
@@ -883,14 +890,17 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
     }
 }
 #[derive(Clone)]
+#[cfg(feature = "app_api")]
 struct BlockingLocalReadRuntime {
     started: Arc<std::sync::atomic::AtomicBool>,
     finished: Arc<std::sync::atomic::AtomicBool>,
     release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
 }
+#[cfg(feature = "app_api")]
 struct BlockingLocalReadReleaseGuard {
     release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
 }
+#[cfg(feature = "app_api")]
 impl BlockingLocalReadReleaseGuard {
     fn new(release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>) -> Self {
         Self { release }
@@ -903,11 +913,13 @@ impl BlockingLocalReadReleaseGuard {
         released.notify_all();
     }
 }
+#[cfg(feature = "app_api")]
 impl Drop for BlockingLocalReadReleaseGuard {
     fn drop(&mut self) {
         self.release();
     }
 }
+#[cfg(feature = "app_api")]
 impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for BlockingLocalReadRuntime {
     fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
         iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default()
@@ -916,6 +928,7 @@ impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for BlockingLocal
         PathBuf::from("/tmp/soracloud/blocking-local-read-test")
     }
 }
+#[cfg(feature = "app_api")]
 impl iroha_core::soracloud_runtime::SoracloudRuntime for BlockingLocalReadRuntime {
     fn execute_local_read(
         &self,
@@ -960,6 +973,7 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for BlockingLocalReadRuntim
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "app_api")]
 async fn cancelled_soracloud_local_read_keeps_blocking_capacity_until_worker_stops() {
     let admission = Arc::new(tokio::sync::Semaphore::new(1));
     let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1027,6 +1041,7 @@ async fn cancelled_soracloud_local_read_keeps_blocking_capacity_until_worker_sto
     .expect("stopped blocking work must eventually release capacity");
 }
 #[derive(Clone)]
+#[cfg(feature = "app_api")]
 struct TestMailboxRuntime {
     snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
     state_dir: PathBuf,
@@ -1041,6 +1056,7 @@ struct TestMailboxRuntime {
         >,
     >,
 }
+#[cfg(feature = "app_api")]
 impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestMailboxRuntime {
     fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
         self.snapshot.clone()
@@ -1052,6 +1068,7 @@ impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestMailboxRu
         self.local_peer_id.clone()
     }
 }
+#[cfg(feature = "app_api")]
 impl iroha_core::soracloud_runtime::SoracloudRuntime for TestMailboxRuntime {
     fn execute_local_read(
         &self,
@@ -1095,6 +1112,7 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestMailboxRuntime {
         )
     }
 }
+#[cfg(feature = "app_api")]
 fn sample_soracloud_runtime_snapshot(
     health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
 ) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
@@ -1188,6 +1206,7 @@ fn sample_soracloud_runtime_snapshot(
         apartments,
     }
 }
+#[cfg(feature = "app_api")]
 fn seed_public_soracloud_world() -> World {
     let mut world = World::new();
     let service_name: iroha_model_base::name::Name = "web_portal".parse().expect("service");
@@ -1344,6 +1363,7 @@ fn seed_public_soracloud_world() -> World {
     world
 }
 
+#[cfg(feature = "app_api")]
 fn hosted_http_runtime_plan(
     materialization_dir: &Path,
     service_name: &str,
@@ -1412,6 +1432,7 @@ fn hosted_http_runtime_plan(
         artifacts: Vec::new(),
     }
 }
+#[cfg(feature = "app_api")]
 fn hosted_http_runtime_replica_plan(
     materialization_dir: &Path,
     replica_slot: u16,
@@ -1438,6 +1459,7 @@ fn hosted_http_runtime_replica_plan(
         last_error: None,
     }
 }
+#[cfg(feature = "app_api")]
 fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
     iroha_data_model::soracloud::SoraInrouManifestV1 {
         schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
@@ -1475,6 +1497,7 @@ fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
         ]),
     }
 }
+#[cfg(feature = "app_api")]
 fn seed_authoritative_hosted_http_revision(
     world: &mut World,
     bundle: &iroha_data_model::soracloud::SoraDeploymentBundleV1,
@@ -1671,6 +1694,7 @@ fn seed_authoritative_hosted_http_revision(
             );
     }
 }
+#[cfg(feature = "app_api")]
 fn seed_public_hosted_http_current_app(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -1687,6 +1711,7 @@ fn seed_public_hosted_http_current_app(
         )),
     )
 }
+#[cfg(feature = "app_api")]
 fn seed_public_hosted_http_current_app_with_service_lease(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -1715,6 +1740,7 @@ fn seed_public_hosted_http_current_app_with_service_lease(
         service_lease,
     )
 }
+#[cfg(feature = "app_api")]
 fn seed_public_hosted_http_current_app_with_replica_plans(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -1736,6 +1762,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans(
         )),
     )
 }
+#[cfg(feature = "app_api")]
 fn hosted_http_service_lease_state(
     status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1,
     prepaid_runtime_balance: Quantity,
@@ -1761,6 +1788,7 @@ fn hosted_http_service_lease_state(
         last_status_reason: None,
     }
 }
+#[cfg(feature = "app_api")]
 fn checked_torii_test_inrou_host_identity(seed: u8, context: &'static str) -> (AccountId, PeerId) {
     let account_key = checked_torii_test_ed25519_keypair(seed, context);
     let peer_key = checked_torii_test_bls_keypair(seed, context);
@@ -1769,6 +1797,7 @@ fn checked_torii_test_inrou_host_identity(seed: u8, context: &'static str) -> (A
         PeerId::from(peer_key.public_key().clone()),
     )
 }
+#[cfg(feature = "app_api")]
 fn seed_hosted_http_public_lane_validator(
     app: &SharedAppState,
     validator: &AccountId,
@@ -1831,6 +1860,7 @@ fn seed_hosted_http_public_lane_validator(
         .commit_world_overlay_for_testing()
         .expect("commit hosted-http public-lane validator fixture");
 }
+#[cfg(feature = "app_api")]
 fn hosted_http_lease_volume_states(
     bundle: &iroha_data_model::soracloud::SoraDeploymentBundleV1,
     service_lease: Option<&iroha_data_model::soracloud::SoraServiceLeaseStateV1>,
@@ -1859,17 +1889,20 @@ fn hosted_http_lease_volume_states(
         )
         .collect()
 }
+#[cfg(feature = "app_api")]
 fn hosted_http_local_identity() -> (AccountId, PeerId) {
     checked_torii_test_inrou_host_identity(
         0x3d,
         "derive canonical hosted-http routing local host fixture key",
     )
 }
+#[cfg(feature = "app_api")]
 fn hosted_http_local_peer_id() -> PeerId {
     hosted_http_local_identity().1
 }
 /// Bind admitted release targets to the exact fixture assignments, retaining two declared
 /// stores even when the test intentionally models unavailable or unassigned replicas.
+#[cfg(feature = "app_api")]
 fn hosted_http_placement_targets(
     assignments: &[(
         u16,
@@ -1908,6 +1941,7 @@ fn hosted_http_placement_targets(
     targets
 }
 #[test]
+#[cfg(feature = "app_api")]
 fn hosted_http_placement_targets_bind_assignments_and_keep_unavailable_stores() {
     use iroha_data_model::soracloud::SoraServiceHealthStatusV1;
     let (validator, peer) = hosted_http_local_identity();
@@ -1960,6 +1994,7 @@ fn hosted_http_placement_targets_bind_assignments_and_keep_unavailable_stores() 
     }
 }
 /// Execute signed genesis before testing height-active validator and lane authority.
+#[cfg(feature = "app_api")]
 fn mk_hosted_http_app_with_world(world: World) -> SharedAppState {
     use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     let prepared = CertifiedTestChain::prepare(TestChainConfig::new(world, 1_000))
@@ -1985,6 +2020,7 @@ fn mk_hosted_http_app_with_world(world: World) -> SharedAppState {
     drop(view);
     app
 }
+#[cfg(feature = "app_api")]
 fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -2238,6 +2274,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
     app_mut.soracloud_runtime = Some(Arc::new(runtime));
     app
 }
+#[cfg(feature = "app_api")]
 fn hosted_http_replica_test_ip<P>(
     service_name: &str,
     service_version: &str,
@@ -2266,10 +2303,12 @@ where
     panic!("failed to find a replica bucket match for hosted-http routing test");
 }
 #[derive(Clone, Copy)]
+#[cfg(feature = "app_api")]
 enum PublicLocalReadRouteCase {
     Direct,
     TairaMonHost,
 }
+#[cfg(feature = "app_api")]
 struct PublicLocalReadRouteSpec {
     state_dir: &'static str,
     response_bytes: &'static [u8],
@@ -2282,6 +2321,7 @@ struct PublicLocalReadRouteSpec {
     request_uri: &'static str,
     request_host: &'static str,
 }
+#[cfg(feature = "app_api")]
 fn public_local_read_route_spec(case: PublicLocalReadRouteCase) -> PublicLocalReadRouteSpec {
     use iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1;
     let mut spec = PublicLocalReadRouteSpec {
@@ -2316,6 +2356,7 @@ fn public_local_read_route_spec(case: PublicLocalReadRouteCase) -> PublicLocalRe
     spec
 }
 #[test]
+#[cfg(feature = "app_api")]
 fn soracloud_public_runtime_headers_remove_platform_and_hop_by_hop_metadata() {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -2467,6 +2508,7 @@ fn soracloud_public_runtime_headers_remove_platform_and_hop_by_hop_metadata() {
     assert_eq!(proxy_headers, sanitized);
 }
 #[test]
+#[cfg(feature = "app_api")]
 fn soracloud_public_runtime_headers_reject_invalid_connection_options() {
     for value in [", x-hop", "x-hop,", "not a field name"] {
         let mut headers = HeaderMap::new();
@@ -2486,6 +2528,7 @@ fn soracloud_public_runtime_headers_reject_invalid_connection_options() {
         );
     }
 }
+#[cfg(feature = "app_api")]
 async fn run_public_local_read_route_case(case: PublicLocalReadRouteCase) {
     use tower::ServiceExt as _;
     let spec = public_local_read_route_spec(case);
@@ -2609,14 +2652,17 @@ async fn run_public_local_read_route_case(case: PublicLocalReadRouteCase) {
     }
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_public_local_read_route_invokes_runtime_with_authoritative_context() {
     run_public_local_read_route_case(PublicLocalReadRouteCase::Direct).await;
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn taira_mon_gateway_host_routes_local_read_requests() {
     run_public_local_read_route_case(PublicLocalReadRouteCase::TairaMonHost).await;
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn path_encoded_soradns_alias_is_not_routed() {
     use tower::ServiceExt as _;
     let app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
@@ -2638,10 +2684,12 @@ async fn path_encoded_soradns_alias_is_not_routed() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 #[derive(Clone, Copy)]
+#[cfg(feature = "app_api")]
 enum TravelSplitVaultMode {
     LocalRead,
     OrderedMailbox,
 }
+#[cfg(feature = "app_api")]
 struct TravelSplitTopologyFixture {
     world: World,
     snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
@@ -2649,6 +2697,7 @@ struct TravelSplitTopologyFixture {
     live_peer_id: PeerId,
     upstream_task: tokio::task::JoinHandle<()>,
 }
+#[cfg(feature = "app_api")]
 async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSplitTopologyFixture {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -2893,6 +2942,7 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
     }
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_node() {
     use tower::ServiceExt as _;
     let TravelSplitTopologyFixture {

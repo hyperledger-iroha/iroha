@@ -319,6 +319,11 @@ impl<'a> CanonicalHistorySource<'a> {
             u64::try_from(first.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
         let selected_last =
             u64::try_from(last.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        // This scope retains at most two fully validated exact context values.
+        // It owns no source, certificate, freshness or ancestry verdict and dies
+        // with this walk. Every durable frame and parent binding is still read
+        // and checked below, including on a warmed or subsequent State view.
+        let mut validation = iroha_data_model::sumeragi_finality::EpochValidationScope::new();
         for source_height in (target..=tip.height()).rev() {
             let index = usize::try_from(source_height)
                 .ok()
@@ -333,10 +338,14 @@ impl<'a> CanonicalHistorySource<'a> {
                 )));
             }
             let block = self.block_with_admission(index, &mut before_read)?;
-            let receipt = crate::sumeragi::certified_chain::read_frame(block, source_height)
-                .map_err(|error| {
-                    error.map_rejection(|error| QueryExecutionFail::Conversion(error.to_string()))
-                })?;
+            let receipt = crate::sumeragi::certified_chain::read_frame_with_validation(
+                block,
+                source_height,
+                &mut validation,
+            )
+            .map_err(|error| {
+                error.map_rejection(|error| QueryExecutionFail::Conversion(error.to_string()))
+            })?;
             if receipt.core_hash() != expected_core || receipt.result() != expected_result {
                 return Err(invalid(format!(
                     "native header or R differs from authenticated execution ancestry at {source_height}"

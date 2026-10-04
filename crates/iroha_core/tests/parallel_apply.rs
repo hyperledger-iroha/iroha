@@ -8,7 +8,6 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
-use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 use snapshots::assert_events;
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
@@ -35,10 +34,6 @@ fn tx_builder(network_id: &NetworkId, authority: &AccountId) -> TransactionBuild
     );
     builder.set_creation_time(FIXTURE_TIME);
     builder
-}
-fn block_time_source() -> TimeSource {
-    let (_, source) = TimeSource::new_mock(FIXTURE_TIME);
-    source
 }
 #[allow(clippy::too_many_lines)]
 #[test]

@@ -2062,7 +2062,7 @@ fn make_operation_response(
 fn make_operation_response_scrubbed(
     request: &OperationRequestV1,
     status: u8,
-    mut result: ScrubbedBytes,
+    result: ScrubbedBytes,
     session_network_id: &NetworkId,
 ) -> Result<OperationResponseV1, BrokerError> {
     let result_digest = operation_result_digest(&result);
@@ -2080,21 +2080,29 @@ fn make_operation_response_scrubbed(
     };
     let response_digest =
         operation_response_digest(&fields).map_err(|error| error.service_error())?;
-    let response = OperationResponseV1 {
-        session_id: request.session_id,
-        request_id: request.request_id,
-        request_digest: request.request_digest,
-        observed_binding: request.binding.clone(),
-        provider_metadata_digest: request.provider_metadata_digest,
-        operation: request.operation,
-        payload_digest: request.payload_digest,
-        status,
-        result_digest,
-        result: result.take(),
-        response_digest,
-    };
+    let response = operation_response_from_fields(fields, response_digest, result);
     validate_operation_response(request, &response, session_network_id)?;
     Ok(response)
+}
+/// Move the exact admitted fields and result into the sole response wire owner.
+fn operation_response_from_fields(
+    fields: OperationResponseFieldsV1,
+    response_digest: [u8; 32],
+    mut result: ScrubbedBytes,
+) -> OperationResponseV1 {
+    OperationResponseV1 {
+        session_id: fields.session_id,
+        request_id: fields.request_id,
+        request_digest: fields.request_digest,
+        observed_binding: fields.observed_binding,
+        provider_metadata_digest: fields.provider_metadata_digest,
+        operation: fields.operation,
+        payload_digest: fields.payload_digest,
+        status: fields.status,
+        result_digest: fields.result_digest,
+        result: result.take(),
+        response_digest,
+    }
 }
 fn validate_signing_payload_len(length: usize) -> Result<(), BrokerError> {
     if length == 0 || length > MAX_SIGNING_PAYLOAD_BYTES_V1 {

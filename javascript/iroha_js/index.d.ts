@@ -1044,11 +1044,6 @@ export interface BlockListOptions {
   signal?: AbortSignal;
 }
 
-export interface EventStreamOptions {
-  filter?: string | Record<string, unknown>;
-  signal?: AbortSignal;
-}
-
 export interface ContractEventStreamOptions {
   authority?: string;
   contractAddress?: string;
@@ -1154,14 +1149,6 @@ export interface IterableListOptions extends PermissionedIterableOptions {
   signal?: AbortSignal;
 }
 
-export interface AccountAssetListOptions extends IterableListOptions {
-  assetId?: string;
-}
-
-export interface AccountTransactionListOptions extends IterableListOptions {
-  assetId?: string;
-}
-
 export interface ContractActivityListOptions extends IterableListOptions {
   authority?: string;
   contractAddress?: string;
@@ -1186,10 +1173,6 @@ export interface ContractEventListOptions extends IterableListOptions {
   resultOk?: boolean;
 }
 
-export interface AssetHolderListOptions extends IterableListOptions {
-  assetId?: string;
-}
-
 export interface IterableQueryOptions extends IterableListOptions {
   fetch_size?: NumericLike;
   queryName?: string;
@@ -1197,38 +1180,9 @@ export interface IterableQueryOptions extends IterableListOptions {
   select?: ReadonlyArray<string | Record<string, unknown>>;
 }
 
-export interface TransactionQueryOptions extends IterableQueryOptions {
-  assetId?: string;
-  authority?: string;
-  resultOk?: boolean;
-  sinceTimestampMs?: NumericLike;
-  untilTimestampMs?: NumericLike;
-}
-
 export interface PaginationIteratorOptions extends IterableListOptions {
   pageSize?: NumericLike;
   maxItems?: NumericLike;
-}
-
-export interface AccountAssetIteratorOptions extends PaginationIteratorOptions {
-  assetId?: string;
-}
-
-export interface AccountTransactionIteratorOptions
-  extends PaginationIteratorOptions {
-  assetId?: string;
-}
-
-export interface TransactionIteratorOptions extends PaginationIteratorOptions {
-  assetId?: string;
-  authority?: string;
-  resultOk?: boolean;
-  sinceTimestampMs?: NumericLike;
-  untilTimestampMs?: NumericLike;
-}
-
-export interface AssetHolderIteratorOptions extends PaginationIteratorOptions {
-  assetId?: string;
 }
 
 export interface ExplorerNftListOptions {
@@ -1289,11 +1243,6 @@ export interface ToriiRepoAgreement extends RepoAgreementLifecycleFields {
   initiatedTimestampMs: number;
   lastMarginCheckTimestampMs: number;
   governance: RepoGovernanceDto;
-}
-
-export interface RepoAgreementListResponse {
-  items: ReadonlyArray<ToriiRepoAgreement>;
-  total: number;
 }
 
 export interface TriggerListOptions {
@@ -1742,11 +1691,6 @@ export interface IdentifierClaimLookupResponse {
   expires_at_ms: number | null;
 }
 
-export interface ToriiAccountListItem {
-  id: string;
-}
-
-export type ToriiDomainListItem = ToriiAccountListItem;
 export interface ToriiAssetDefinitionAliasBinding {
   alias: string;
   status:
@@ -1757,43 +1701,6 @@ export interface ToriiAssetDefinitionAliasBinding {
   lease_expiry_ms?: number | null;
   grace_until_ms?: number | null;
   bound_at_ms: number;
-}
-export interface ToriiAssetDefinitionListItem {
-  id: string;
-  name?: string;
-  alias?: string | null;
-  alias_binding?: ToriiAssetDefinitionAliasBinding | null;
-  description?: string | null;
-  mintable?: unknown;
-  spec?: unknown;
-  logo?: string | null;
-  metadata?: unknown;
-  owned_by?: string;
-  total_quantity?: string;
-  balance_scope_policy?: unknown;
-  confidential_policy?: unknown;
-}
-export interface ToriiNftListItem {
-  id: string;
-}
-export interface ToriiRwaListItem {
-  id: string;
-}
-export interface ToriiAccountAssetItem {
-  asset: string;
-  asset_id: string;
-  quantity: string;
-}
-export interface ToriiAssetHolderItem {
-  account_id: string;
-  quantity: string;
-}
-export interface ToriiAccountTransactionItem {
-  authority?: string;
-  timestamp_ms?: number;
-  entrypoint_hash: string;
-  result_ok: boolean;
-  asset_id?: string | string[];
 }
 
 export interface ToriiAccountHistoryItem {
@@ -2375,53 +2282,93 @@ export interface SnsAuction {
   settlementTx: unknown;
 }
 
-export interface ToriiPipelineTransactionEvent {
-  category: "Pipeline";
-  event: "Transaction";
-  hash: string;
-  lane_id: number;
-  dataspace_id: number;
-  block_height: number | null;
-  status: string;
+/** `category` of a `/v1/events/sse` payload. */
+export type ToriiEventCategory = "Pipeline" | "Data" | "Other";
+
+/** Stable `rejection_code` of a rejected transaction event. */
+export type ToriiTransactionRejectionCode =
+  | "account_does_not_exist"
+  | "limit_check"
+  | "validation"
+  | "instruction_execution"
+  | "ivm_execution"
+  | "trigger_execution";
+
+/** Fields shared by every transaction event. */
+export interface ToriiPipelineTransactionEventFields {
+  readonly category: "Pipeline";
+  readonly event: "Transaction";
+  /** Transaction hash. */
+  readonly hash: string;
+  readonly lane_id: number;
+  readonly dataspace_id: ToriiU64;
+  /** Height of the block that holds the transaction, once there is one. */
+  readonly block_height: ToriiU64 | null;
 }
 
-export interface ToriiPipelineBlockEvent {
-  category: "Pipeline";
-  event: "Block";
-  status: string;
+/** A transaction status change other than a rejection. */
+export interface ToriiPipelineTransactionStatusEvent
+  extends ToriiPipelineTransactionEventFields {
+  readonly status: "Queued" | "Expired" | "Approved";
 }
+
+/** A rejected transaction. */
+export interface ToriiPipelineTransactionRejectedEvent
+  extends ToriiPipelineTransactionEventFields {
+  readonly status: "Rejected";
+  readonly rejection_code: ToriiTransactionRejectionCode;
+  /** Fixed public text for `rejection_code`. */
+  readonly rejection_reason: string;
+}
+
+export type ToriiPipelineTransactionEvent =
+  | ToriiPipelineTransactionStatusEvent
+  | ToriiPipelineTransactionRejectedEvent;
+
+/** A block status change other than a rejection. */
+export interface ToriiPipelineBlockStatusEvent {
+  readonly category: "Pipeline";
+  readonly event: "Block";
+  readonly status: "Created" | "Approved" | "Committed" | "Applied";
+}
+
+/** A rejected block. */
+export interface ToriiPipelineBlockRejectedEvent {
+  readonly category: "Pipeline";
+  readonly event: "Block";
+  readonly status: "Rejected";
+  /** The block rejection variant, for example `EmptyBlock`. */
+  readonly rejection_code: string;
+}
+
+export type ToriiPipelineBlockEvent =
+  | ToriiPipelineBlockStatusEvent
+  | ToriiPipelineBlockRejectedEvent;
 
 export interface ToriiPipelineWarningEvent {
-  category: "Pipeline";
-  event: "Warning";
-  kind: string;
-  details: string;
-  height: number;
-}
-
-export interface ToriiPipelineMergeLedgerEvent {
-  category: "Pipeline";
-  event: "MergeLedger";
-  epoch_id: number;
-  global_state_root: string;
+  readonly category: "Pipeline";
+  readonly event: "Warning";
+  readonly kind: string;
+  readonly details: string;
+  /** Height of the block the warning concerns. */
+  readonly height: ToriiU64;
 }
 
 export interface ToriiPipelineWitnessEvent {
-  category: "Pipeline";
-  event: "Witness";
-  block_hash: string;
-  height: number;
-  view: number;
-  epoch: number;
-  read_count: number;
-  write_count: number;
+  readonly category: "Pipeline";
+  readonly event: "Witness";
+  readonly block_hash: string;
+  readonly height: ToriiU64;
+  readonly view: ToriiU64;
+  readonly epoch: ToriiU64;
+  readonly read_count: number;
+  readonly write_count: number;
 }
 
 export type ToriiPipelineEvent =
   | ToriiPipelineTransactionEvent
   | ToriiPipelineBlockEvent
   | ToriiPipelineWarningEvent
-  | ToriiPipelineMergeLedgerEvent
   | ToriiPipelineWitnessEvent;
 
 export interface ToriiPipelineTransactionStatusStatus {
@@ -2448,40 +2395,121 @@ export interface ToriiAppliedTransactionStatus
 }
 
 export interface ToriiProofEventBase {
-  category: "Data";
-  backend: string;
-  proof_hash: string;
-  call_hash: string | null;
-  envelope_hash: string | null;
-  vk_ref: string | null;
-  vk_commitment: string | null;
+  readonly category: "Data";
+  readonly backend: string;
+  /** Hex-encoded proof hash. */
+  readonly proof_hash: string;
+  readonly call_hash: string | null;
+  readonly envelope_hash: string | null;
+  /** `backend::name` of the verifying key. */
+  readonly vk_ref: string | null;
+  readonly vk_commitment: string | null;
 }
 
 export interface ToriiProofVerifiedEvent extends ToriiProofEventBase {
-  event: "ProofVerified";
+  readonly event: "ProofVerified";
 }
 
 export interface ToriiProofRejectedEvent extends ToriiProofEventBase {
-  event: "ProofRejected";
+  readonly event: "ProofRejected";
+}
+
+/** A pruning pass over a backend's proof registry. */
+export interface ToriiProofPrunedEvent {
+  readonly category: "Data";
+  readonly event: "ProofPruned";
+  readonly backend: string;
+  readonly removed_count: number;
+  readonly remaining: ToriiU64;
+  readonly cap: ToriiU64;
+  readonly grace_blocks: ToriiU64;
+  readonly prune_batch: ToriiU64;
+  readonly pruned_at_height: ToriiU64;
+  /** Account that issued the pruning instruction, or the insert that pruned. */
+  readonly pruned_by: string;
+  readonly origin: "Insert" | "Manual";
+  readonly removed: ReadonlyArray<{ readonly backend: string; readonly proof_hash: string }>;
+}
+
+/** Data-event kinds that Torii reports with a diagnostic `summary`. */
+export type ToriiDataEventKind =
+  | "Peer"
+  | "Domain"
+  | "Account"
+  | "Asset"
+  | "AssetDefinition"
+  | "Trigger"
+  | "Role"
+  | "Configuration"
+  | "Executor"
+  | "VerifyingKey"
+  | "RuntimeUpgrade"
+  | "SmartContract"
+  | "Soradns"
+  | "Sorafs"
+  | "Musubi"
+  | "SpaceDirectory"
+  | "Escrow"
+  | "Oracle"
+  | "Governance"
+  | "Social"
+  | "Bridge"
+  | "GameSession"
+  | "Sccp";
+
+/** Any other data event: its kind and a `summary` without a stable format. */
+export interface ToriiDataSummaryEvent {
+  readonly category: "Data";
+  readonly event: ToriiDataEventKind;
+  readonly summary: string;
 }
 
 export type ToriiDataEvent =
   | ToriiProofVerifiedEvent
   | ToriiProofRejectedEvent
-  | {
-      category: "Data";
-      summary: string;
-    };
+  | ToriiProofPrunedEvent
+  | ToriiDataSummaryEvent;
 
+/** A non-data event with a `summary` without a stable format. */
 export interface ToriiOtherEvent {
-  category: "Other";
-  summary: string;
+  readonly category: "Other";
+  readonly event: "Time" | "ExecuteTrigger" | "TriggerCompleted" | "Other";
+  readonly summary: string;
 }
 
+/**
+ * One `/v1/events/sse` payload, discriminated on `category` and `event`
+ * (and on `status` for transactions and blocks). Torii may add `event` kinds;
+ * the SDK delivers unrecognized payloads unchanged, so keep a `default`
+ * branch when switching over `event`.
+ */
 export type ToriiEventPayload =
   | ToriiPipelineEvent
   | ToriiDataEvent
   | ToriiOtherEvent;
+
+/** A payload frame of `streamEvents()`; `data` is always a JSON object. */
+export interface ToriiEventFrame<T = ToriiEventPayload> {
+  /** Payload frames carry no SSE event name. */
+  event: null;
+  data: T;
+  id: string | null;
+  retry?: number | null;
+  raw: string | null;
+}
+
+/**
+ * The terminal `event: stream_error` frame that `ToriiClient.streamEvents()`
+ * yields before the stream ends (`ToriiBrowserClient` raises
+ * `ToriiStreamGapError` instead).
+ */
+export interface ToriiStreamErrorFrame {
+  event: "stream_error";
+  data: ToriiContractEventStreamErrorPayload;
+  id: string | null;
+  retry?: number | null;
+  raw: string | null;
+}
 
 export interface ToriiSseEvent<T = ToriiEventPayload> {
   event: string | null;
@@ -3414,7 +3442,35 @@ type ToriiRuntimeNamespaceExport =
   | "TransactionBatchAdmissionAmbiguousError"
   | "SorafsOrderbookSubmissionAmbiguousError"
   | "ToriiDataModelMismatchError"
+  | "ToriiError"
   | "ToriiHttpError"
+  | "ToriiStreamGapError"
+  | "ListQueryError"
+  | "FilterSyntaxError"
+  | "AGGREGATE_FUNCTIONS"
+  | "CURSOR_MAX_BYTES"
+  | "FIELD_PATH_MAX_BYTES"
+  | "FILTER_MAX_DEPTH"
+  | "FILTER_MAX_MEMBERSHIP_VALUES"
+  | "FILTER_MAX_NODES"
+  | "FILTER_MAX_TOTAL_MEMBERSHIP_VALUES"
+  | "FILTER_TEXT_MAX_BYTES"
+  | "LIST_QUERY_MEMBERS"
+  | "LIST_QUERY_PARAMETERS"
+  | "SELECT_MAX_FIELDS"
+  | "SORT_MAX_KEYS"
+  | "TORII_COLLECTION_PATHS"
+  | "FieldRef"
+  | "Filter"
+  | "ListQuery"
+  | "SortKey"
+  | "ToriiCollection"
+  | "decodePage"
+  | "field"
+  | "isDecimalText"
+  | "parseSort"
+  | "renderFieldPath"
+  | "sortToString"
   | "TransactionStatusError"
   | "TransactionTimeoutError"
   | "buildConnectWebSocketUrl"
@@ -9594,10 +9650,95 @@ export interface RemoveSmartContractBytesTransactionInput {
 
 export interface SubmitTransactionAndWaitOptions
   extends TransactionStatusPollOptions {
-  hashHex: string;
+  /** Optional assertion; it must equal the hash derived from the signed bytes. */
+  hashHex?: string;
 }
 
-export declare class ToriiHttpError extends Error {
+// ---------------------------------------------------------------------------
+// Errors shared by every Torii client
+// ---------------------------------------------------------------------------
+
+/** `details` of Torii's `{"code", "message", "details"}` error envelope. */
+export interface ToriiErrorDetails {
+  /** The request control at fault (`filter`, `sort`, `select`, ...). */
+  readonly field?: string;
+  /** The data field at fault, when there is one. */
+  readonly actual?: string;
+  /** The accepted fields, as a comma-separated string. */
+  readonly expected?: string;
+  /** A suggested fix, such as the closest field name. */
+  readonly hint?: string;
+  readonly [key: string]: unknown;
+}
+
+/** Base class of every error raised for a Torii request or response. */
+export declare class ToriiError extends Error {
+  constructor(
+    message: string,
+    options?: {
+      code?: string | null;
+      details?: ToriiErrorDetails | null;
+      cause?: unknown;
+    },
+  );
+  /** Stable machine-readable code such as `invalid_filter`, or `null`. */
+  readonly code: string | null;
+  /** Structured details from the error envelope, or `null`. */
+  readonly details: ToriiErrorDetails | null;
+}
+
+/** Collection-query error codes; identical on the client and in Torii responses. */
+export type ListQueryErrorCode =
+  | "invalid_query"
+  | "invalid_filter"
+  | "invalid_sort"
+  | "invalid_select"
+  | "invalid_aggregate"
+  | "invalid_limit"
+  | "invalid_cursor"
+  | "invalid_include_total";
+
+/** The control a collection-query error names; `query` means the request as a whole. */
+export type ListQueryParameter =
+  | "query"
+  | "filter"
+  | "sort"
+  | "select"
+  | "aggregate"
+  | "limit"
+  | "cursor"
+  | "include_total";
+
+/** A collection query rejected before it was sent. */
+export declare class ListQueryError extends ToriiError {
+  constructor(parameter: ListQueryParameter, reason: string, options?: { cause?: unknown });
+  readonly code: ListQueryErrorCode;
+  readonly parameter: ListQueryParameter;
+  /** The description without the `invalid \`parameter\`:` prefix. */
+  readonly reason: string;
+}
+
+/** Syntax error in a text filter (`invalid_filter`) or sort specification (`invalid_sort`). */
+export declare class FilterSyntaxError extends ListQueryError {
+  constructor(
+    parameter: "filter" | "sort",
+    reason: string,
+    position: { offset: number; line: number; column: number; multiline?: boolean },
+  );
+  /** 1-based line of the offending token. */
+  readonly line: number;
+  /** 1-based column (in Unicode scalar values) of the offending token. */
+  readonly column: number;
+  /** UTF-8 byte offset of the offending token. */
+  readonly offset: number;
+}
+
+/**
+ * A non-success HTTP response. `code`, `errorMessage` and `details` come from
+ * Torii's `{"code", "message", "details"}` error envelope; `rejectCode` from
+ * `x-iroha-reject-code` (which also becomes `code` when present).
+ */
+export declare class ToriiHttpError extends ToriiError {
   constructor(details: {
     status: number;
     statusText?: string | null;
@@ -9607,17 +9748,554 @@ export declare class ToriiHttpError extends Error {
     errorMessage?: string | null;
     bodyText?: string | null;
     bodyJson?: unknown;
-    details?: Record<string, unknown> | null;
+    details?: ToriiErrorDetails | null;
   });
   readonly status: number;
   readonly statusText: string | null;
   readonly expected: ReadonlyArray<number>;
-  readonly code: string | null;
   readonly rejectCode: string | null;
+  /** The envelope `message`, or a compact rendering of the body. */
   readonly errorMessage: string | null;
   readonly bodyText: string | null;
   readonly bodyJson: unknown;
-  readonly details: Record<string, unknown> | null;
+}
+
+/** Terminal non-replayable loss reported by, or inferred for, a live Torii stream. */
+export declare class ToriiStreamGapError extends ToriiError {
+  constructor(
+    message: string,
+    options?: {
+      code?: string;
+      droppedMessages?: number | null;
+      replayAvailable?: boolean;
+      payload?: ToriiContractEventStreamErrorPayload | null;
+    },
+  );
+  readonly code: string;
+  readonly droppedMessages: number | null;
+  readonly replayAvailable: boolean;
+  readonly payload: ToriiContractEventStreamErrorPayload | null;
+}
+
+// ---------------------------------------------------------------------------
+// Collection-query language (`specs/torii/collection_queries.md`)
+// ---------------------------------------------------------------------------
+
+/** A JSON value as decoded by the SDK; integers beyond 2^53 are `bigint`. */
+export type ToriiJsonValue =
+  | null
+  | boolean
+  | number
+  | bigint
+  | string
+  | ToriiJsonValue[]
+  | { [key: string]: ToriiJsonValue };
+export type ToriiJsonObject = { [key: string]: ToriiJsonValue };
+
+/** An exact decimal such as `KotodamaQuantity` or `KotodamaDecimal`. */
+export interface ExactDecimalLike {
+  readonly mantissa: bigint;
+  readonly scale: number;
+}
+
+/**
+ * Values accepted as filter literals. Integers that fit `u64`/`i64` become JSON
+ * numbers; decimals are exact decimal strings (`"10.5"`) or `ExactDecimalLike`
+ * values. Floating-point numbers are rejected. Arrays and objects are allowed
+ * only when comparing `metadata.*` fields.
+ */
+export type FilterLiteralInput =
+  | string
+  | number
+  | bigint
+  | boolean
+  | null
+  | ExactDecimalLike
+  | ReadonlyArray<FilterLiteralInput>
+  | { readonly [key: string]: FilterLiteralInput };
+
+/** A literal stored in a filter tree. */
+export type FilterLiteral =
+  | string
+  | number
+  | bigint
+  | boolean
+  | null
+  | ReadonlyArray<FilterLiteral>
+  | { readonly [key: string]: FilterLiteral };
+
+export type FilterOperator =
+  | "and"
+  | "or"
+  | "not"
+  | "eq"
+  | "ne"
+  | "lt"
+  | "lte"
+  | "gt"
+  | "gte"
+  | "in"
+  | "nin"
+  | "exists"
+  | "is_null";
+
+/** Canonical JSON form of a filter (`{"op": ..., "args": [...]}`). */
+export type FilterJson =
+  | { op: "and" | "or"; args: FilterJson[] }
+  | { op: "not"; args: [FilterJson] }
+  | { op: "eq" | "ne" | "lt" | "lte" | "gt" | "gte"; args: [string, FilterLiteral] }
+  | { op: "in" | "nin"; args: [string, FilterLiteral[]] }
+  | { op: "exists" | "is_null"; args: [string] };
+
+/**
+ * An immutable filter tree. Build one with `field()`, parse the text form with
+ * `Filter.parse()` or decode the JSON form with `Filter.fromJSON()`.
+ */
+export declare class Filter {
+  private constructor();
+  readonly op: FilterOperator;
+  readonly args: ReadonlyArray<Filter | string | FilterLiteral>;
+  /** `this and other and ...`, flattening chains of `and`. */
+  and(...others: Filter[]): Filter;
+  /** `this or other or ...`, flattening chains of `or`. */
+  or(...others: Filter[]): Filter;
+  /** `not this` */
+  not(): Filter;
+  /** Canonical JSON form. */
+  toJSON(): FilterJson;
+  /** Canonical text form, exactly as Torii renders it. */
+  toString(): string;
+  /** Check depth, node and membership limits. */
+  validate(): this;
+  static and(first: Filter, ...rest: Filter[]): Filter;
+  static or(first: Filter, ...rest: Filter[]): Filter;
+  static not(filter: Filter): Filter;
+  /** Parse the text form, e.g. `owned_by = "alice" and quantity >= 10.5`. */
+  static parse(text: string): Filter;
+  /** Decode the JSON form. */
+  static fromJSON(value: FilterJson | Record<string, unknown>): Filter;
+}
+
+/** A field awaiting an operator; see `field()`. */
+export declare class FieldRef {
+  constructor(path: string);
+  readonly path: string;
+  eq(value: FilterLiteralInput): Filter;
+  ne(value: FilterLiteralInput): Filter;
+  lt(value: FilterLiteralInput): Filter;
+  lte(value: FilterLiteralInput): Filter;
+  gt(value: FilterLiteralInput): Filter;
+  gte(value: FilterLiteralInput): Filter;
+  in(values: Iterable<FilterLiteralInput>): Filter;
+  notIn(values: Iterable<FilterLiteralInput>): Filter;
+  exists(): Filter;
+  isNull(): Filter;
+  isNotNull(): Filter;
+  asc(): SortKey;
+  desc(): SortKey;
+}
+
+/** Start a predicate or sort key on a dotted field path such as `metadata.tier`. */
+export declare function field(path: string): FieldRef;
+
+/** One sort key: `field` sorts ascending, `-field` descending. */
+export declare class SortKey {
+  constructor(path: string, descending?: boolean);
+  readonly field: string;
+  readonly descending: boolean;
+  readonly order: "asc" | "desc";
+  static asc(path: string): SortKey;
+  static desc(path: string): SortKey;
+  static parse(text: string): SortKey;
+  toString(): string;
+  toJSON(): string;
+}
+
+/** Parse a sort specification such as `-quantity,id`. */
+export declare function parseSort(text: string): SortKey[];
+/** Render sort keys as `-quantity,id`. */
+export declare function sortToString(keys: ReadonlyArray<SortKey>): string;
+/** Render a dotted field path with backtick quoting where the grammar needs it. */
+export declare function renderFieldPath(path: string): string;
+/** Whether `text` is a canonical decimal literal (`-?(0|[1-9][0-9]*)(\.[0-9]+)?`). */
+export declare function isDecimalText(text: unknown): boolean;
+
+export const FILTER_MAX_DEPTH: 10;
+export const FILTER_MAX_NODES: 1024;
+export const FILTER_MAX_MEMBERSHIP_VALUES: 1024;
+export const FILTER_MAX_TOTAL_MEMBERSHIP_VALUES: 4096;
+export const FIELD_PATH_MAX_BYTES: 256;
+export const FILTER_TEXT_MAX_BYTES: 32768;
+export const SORT_MAX_KEYS: 8;
+export const SELECT_MAX_FIELDS: 64;
+export const CURSOR_MAX_BYTES: 4096;
+export const LIST_QUERY_MEMBERS: readonly [
+  "filter",
+  "sort",
+  "select",
+  "aggregate",
+  "limit",
+  "cursor",
+  "include_total",
+];
+export const LIST_QUERY_PARAMETERS: readonly [
+  "filter",
+  "sort",
+  "select",
+  "limit",
+  "cursor",
+  "include_total",
+];
+
+export type AggregateFunction = "count" | "sum" | "min" | "max" | "avg" | "distinct_count";
+export const AGGREGATE_FUNCTIONS: readonly AggregateFunction[];
+
+export interface AggregateMetricInput {
+  /** Output column, also usable in `having` and `sort`. */
+  alias: string;
+  fn: AggregateFunction;
+  /** Field consumed by the function (absent for `count`). */
+  field?: string;
+}
+
+export interface AggregateInput {
+  groupBy?: ReadonlyArray<string>;
+  metrics: ReadonlyArray<AggregateMetricInput>;
+  having?: Filter | string | FilterJson;
+}
+
+/** Controls of one collection read. */
+export interface ListQueryInput {
+  /** A `Filter`, a text filter (sent as-is) or the JSON form. */
+  filter?: Filter | string | FilterJson;
+  /** `"-quantity,id"`, an array of keys, or `SortKey`s; at most 8 keys. */
+  sort?: string | SortKey | ReadonlyArray<string | SortKey>;
+  /** Fields per item (at most 64); cannot be combined with `aggregate`. */
+  select?: ReadonlyArray<string>;
+  /** Grouped metrics instead of items. */
+  aggregate?: AggregateInput;
+  /** Rows per page; the server default applies when absent. */
+  limit?: number | bigint;
+  /** The previous page's `nextCursor`. */
+  cursor?: string;
+  /** Ask for the exact match count (a full scan). */
+  includeTotal?: boolean;
+}
+
+/** Canonical JSON body of `POST /v1/<collection>/query`. */
+export interface ListQueryBody {
+  filter?: string | FilterJson;
+  sort?: string[];
+  select?: string[];
+  aggregate?: {
+    group_by?: string[];
+    metrics: Array<{ alias: string; fn: AggregateFunction; field?: string }>;
+    having?: string | FilterJson;
+  };
+  limit?: number;
+  cursor?: string;
+  include_total?: true;
+}
+
+/** A validated collection query. */
+export declare class ListQuery {
+  private constructor();
+  readonly filter: Filter | string | undefined;
+  readonly sort: ReadonlyArray<SortKey>;
+  readonly select: ReadonlyArray<string> | undefined;
+  readonly aggregate:
+    | {
+        readonly groupBy: ReadonlyArray<string>;
+        readonly metrics: ReadonlyArray<Readonly<AggregateMetricInput>>;
+        readonly having: Filter | string | undefined;
+      }
+    | undefined;
+  readonly limit: number | undefined;
+  readonly cursor: string | undefined;
+  readonly includeTotal: boolean;
+  /** Validate a plain query object (an existing `ListQuery` is returned as-is). */
+  static from(input?: ListQueryInput | ListQuery): ListQuery;
+  /** Decode a `POST /query` body exactly as Torii does. */
+  static fromJSON(body: unknown): ListQuery;
+  /** Decode percent-decoded `GET` parameters exactly as Torii does. */
+  static fromQueryPairs(pairs: Iterable<readonly [string, string]>): ListQuery;
+  /** The same query continued after a page's `nextCursor`. */
+  withCursor(cursor: string): ListQuery;
+  /** Canonical `POST /query` body. */
+  toJSON(): ListQueryBody;
+  /** `GET` parameters (not yet percent-encoded) in canonical order. */
+  toQueryPairs(): Array<[string, string]>;
+}
+
+/** One page of a collection read. */
+export interface Page<T> {
+  /** Items on this page, in the requested order. */
+  readonly items: T[];
+  /** Pass as `cursor` to continue; `null` on the last page. */
+  readonly nextCursor: string | null;
+  /**
+   * Exact number of matching rows (a `bigint` beyond `Number.MAX_SAFE_INTEGER`);
+   * present only when `includeTotal` was requested.
+   */
+  readonly total?: number | bigint;
+}
+
+/** Decode a `{"items", "next_cursor", "total"}` page envelope. */
+export declare function decodePage<T = ToriiJsonValue>(value: unknown, context?: string): Page<T>;
+
+export interface CollectionRequestOptions {
+  /** Abort the request (and, for `pages()`/`iterate()`, further paging). */
+  signal?: AbortSignal;
+}
+
+export interface ToriiCollectionRequestOptions extends CollectionRequestOptions {
+  /** Sign with these credentials instead of the client's; `null` sends unsigned. */
+  canonicalAuth?: CanonicalRequestAuth | null;
+}
+
+export interface ToriiBrowserCollectionRequestOptions extends CollectionRequestOptions {
+  headers?: Record<string, string>;
+}
+
+/** Top-level member of a selected field path (`alias_binding` for `alias_binding.status`). */
+export type SelectedMember<P extends string> = P extends `${infer Head}.${string}` ? Head : P;
+
+/**
+ * Item shape of a `select` projection: each selected field at its row path,
+ * `null` where a row lacks it. Members reached through a nested path (such
+ * as `alias_binding` for `alias_binding.status`) are typed `unknown`.
+ */
+export type SelectedRow<T, K extends string> = {
+  readonly [M in SelectedMember<K>]: M extends K
+    ? (M extends keyof T ? Exclude<T[M], undefined> : unknown) | null
+    : unknown;
+};
+
+/**
+ * A Torii collection. `list()` fetches one page, `pages()` iterates pages and
+ * `iterate()` every item, following `nextCursor` until it is `null`.
+ */
+export declare class ToriiCollection<
+  T,
+  O extends CollectionRequestOptions = CollectionRequestOptions,
+> {
+  constructor(
+    path: string,
+    execute: (path: string, query: ListQuery, options?: O) => Promise<Page<unknown>>,
+    options?: { history?: boolean },
+  );
+  /** The collection path, e.g. `/v1/assets/definitions`. */
+  readonly path: string;
+  /** Whether this is a transaction history collection (see `ToriiHistoryCollection`). */
+  readonly history: boolean;
+  list<K extends string>(
+    query: ListQueryInput & { select: ReadonlyArray<K>; aggregate?: undefined },
+    options?: O,
+  ): Promise<Page<SelectedRow<T, K>>>;
+  list(
+    query: ListQueryInput & { aggregate: AggregateInput },
+    options?: O,
+  ): Promise<Page<ToriiJsonObject>>;
+  list(query?: ListQueryInput | ListQuery, options?: O): Promise<Page<T>>;
+  pages<K extends string>(
+    query: ListQueryInput & { select: ReadonlyArray<K>; aggregate?: undefined },
+    options?: O,
+  ): AsyncGenerator<Page<SelectedRow<T, K>>, void, undefined>;
+  pages(
+    query: ListQueryInput & { aggregate: AggregateInput },
+    options?: O,
+  ): AsyncGenerator<Page<ToriiJsonObject>, void, undefined>;
+  pages(query?: ListQueryInput | ListQuery, options?: O): AsyncGenerator<Page<T>, void, undefined>;
+  iterate<K extends string>(
+    query: ListQueryInput & { select: ReadonlyArray<K>; aggregate?: undefined },
+    options?: O,
+  ): AsyncGenerator<SelectedRow<T, K>, void, undefined>;
+  iterate(
+    query: ListQueryInput & { aggregate: AggregateInput },
+    options?: O,
+  ): AsyncGenerator<ToriiJsonObject, void, undefined>;
+  iterate(query?: ListQueryInput | ListQuery, options?: O): AsyncGenerator<T, void, undefined>;
+}
+
+/** Controls of a history collection: no `sort`, `includeTotal` or `aggregate`. */
+export type HistoryQueryInput = Omit<ListQueryInput, "sort" | "includeTotal" | "aggregate">;
+
+/**
+ * A transaction history collection: rows come newest first (by block height,
+ * then position in the block) and `sort`, `includeTotal` and `aggregate` are
+ * rejected. Each page has a bounded scan budget, so a page may hold fewer
+ * than `limit` items, even none, together with a `nextCursor`; `pages()` and
+ * `iterate()` keep following it until it is `null`.
+ */
+export interface ToriiHistoryCollection<
+  T,
+  O extends CollectionRequestOptions = CollectionRequestOptions,
+> {
+  readonly path: string;
+  readonly history: true;
+  list<K extends string>(
+    query: HistoryQueryInput & { select: ReadonlyArray<K> },
+    options?: O,
+  ): Promise<Page<SelectedRow<T, K>>>;
+  list(query?: HistoryQueryInput | ListQuery, options?: O): Promise<Page<T>>;
+  pages<K extends string>(
+    query: HistoryQueryInput & { select: ReadonlyArray<K> },
+    options?: O,
+  ): AsyncGenerator<Page<SelectedRow<T, K>>, void, undefined>;
+  pages(query?: HistoryQueryInput | ListQuery, options?: O): AsyncGenerator<Page<T>, void, undefined>;
+  iterate<K extends string>(
+    query: HistoryQueryInput & { select: ReadonlyArray<K> },
+    options?: O,
+  ): AsyncGenerator<SelectedRow<T, K>, void, undefined>;
+  iterate(query?: HistoryQueryInput | ListQuery, options?: O): AsyncGenerator<T, void, undefined>;
+}
+
+/** Paths of the collections that take no path parameter. */
+export const TORII_COLLECTION_PATHS: {
+  readonly domains: "/v1/domains";
+  readonly accounts: "/v1/accounts";
+  readonly assetDefinitions: "/v1/assets/definitions";
+  readonly nfts: "/v1/nfts";
+  readonly rwas: "/v1/rwas";
+  readonly repoAgreements: "/v1/repo/agreements";
+  readonly transactions: "/v1/transactions";
+};
+
+/**
+ * Rows may gain fields, typed `unknown`. Only the fields that identify a row
+ * are always present; every other field may be `null` or absent.
+ */
+export interface ToriiCollectionRowExtras {
+  readonly [field: string]: unknown;
+}
+
+/** `/v1/domains` row. */
+export interface ToriiDomainRow extends ToriiCollectionRowExtras {
+  readonly id: string;
+  readonly owned_by?: string | null;
+  readonly logo?: string | null;
+  readonly metadata?: ToriiJsonObject | null;
+}
+
+/** `/v1/accounts` row. */
+export interface ToriiAccountRow extends ToriiCollectionRowExtras {
+  readonly id: string;
+  readonly label?: string | null;
+  readonly uaid?: string | null;
+  readonly metadata?: ToriiJsonObject | null;
+}
+
+/** `/v1/assets/definitions` row: the complete definition record. */
+export interface ToriiAssetDefinitionRow extends ToriiCollectionRowExtras {
+  readonly id: string;
+  readonly name?: string | null;
+  readonly alias?: string | null;
+  readonly owned_by?: string | null;
+  readonly owning_domain?: string | null;
+  readonly mintable?: string | null;
+  readonly description?: string | null;
+  readonly logo?: string | null;
+  readonly spec?: ToriiJsonValue;
+  readonly balance_scope_policy?: ToriiJsonValue;
+  /** Present when an alias is bound. */
+  readonly alias_binding?: ToriiAssetDefinitionAliasBinding | null;
+  readonly metadata?: ToriiJsonObject | null;
+}
+
+/** `/v1/nfts` row; `metadata` is the NFT content. */
+export interface ToriiNftRow extends ToriiCollectionRowExtras {
+  readonly id: string;
+  readonly owned_by?: string | null;
+  readonly metadata?: ToriiJsonObject | null;
+}
+
+/** `/v1/rwas` row. Quantities are exact decimal strings. */
+export interface ToriiRwaRow extends ToriiCollectionRowExtras {
+  readonly id: string;
+  readonly owned_by?: string | null;
+  readonly primary_reference?: string | null;
+  readonly status?: string | null;
+  readonly quantity?: string | null;
+  readonly is_frozen?: boolean | null;
+  readonly metadata?: ToriiJsonObject | null;
+}
+
+/** `/v1/accounts/{account_id}/assets` row. */
+export interface ToriiAccountAssetRow extends ToriiCollectionRowExtras {
+  readonly account_id: string;
+  /** Asset definition id. */
+  readonly asset: string;
+  readonly scope: string;
+  /** Exact decimal string. */
+  readonly quantity: string;
+  readonly asset_name?: string | null;
+  readonly asset_alias?: string | null;
+}
+
+/** `/v1/assets/{definition_id}/holders` row. */
+export interface ToriiAssetHolderRow extends ToriiCollectionRowExtras {
+  readonly account_id: string;
+  readonly asset: string;
+  readonly scope: string;
+  /** Exact decimal string. */
+  readonly quantity: string;
+  readonly asset_alias?: string | null;
+}
+
+/**
+ * `/v1/transactions` and `/v1/accounts/{account_id}/transactions` row. Rows
+ * come newest first by (`block_height`, `block_index`). Filters on the list
+ * fields match element-wise: `asset_ids = "..."` and `in` select rows where
+ * any element matches; `!=` and `not in` select rows where none does.
+ */
+export interface ToriiTransactionRow extends ToriiCollectionRowExtras {
+  readonly entrypoint_hash: string;
+  readonly block_height: ToriiU64;
+  /** Position of the transaction within its block. */
+  readonly block_index: ToriiU64;
+  readonly block_hash?: string | null;
+  readonly authority?: string | null;
+  readonly timestamp_ms?: ToriiU64 | null;
+  readonly entrypoint_kind?: string | null;
+  readonly result_ok?: boolean | null;
+  readonly asset_ids?: ReadonlyArray<string> | null;
+  readonly asset_definition_ids?: ReadonlyArray<string> | null;
+  readonly metadata?: ToriiJsonObject | null;
+}
+
+/** One leg of a repo agreement row. */
+export interface ToriiRepoLegRow extends ToriiCollectionRowExtras {
+  readonly asset_definition_id?: string | null;
+  /** Exact decimal string. */
+  readonly quantity?: string | null;
+}
+
+/** `/v1/repo/agreements` row. */
+export interface ToriiRepoAgreementRow extends ToriiCollectionRowExtras {
+  readonly id: string;
+  readonly initiator?: string | null;
+  readonly counterparty?: string | null;
+  readonly custodian?: string | null;
+  readonly status?: string | null;
+  readonly cash_source?: string | null;
+  readonly cash_leg?: ToriiRepoLegRow | null;
+  readonly collateral_leg?: ToriiRepoLegRow | null;
+  readonly collateral_custody_asset?: string | null;
+  readonly rate_bps?: number | null;
+  readonly maturity_timestamp_ms?: ToriiU64 | null;
+  readonly initiated_timestamp_ms?: ToriiU64 | null;
+  readonly last_margin_check_timestamp_ms?: ToriiU64 | null;
+  readonly settlement_timestamp_ms?: ToriiU64 | null;
+  readonly governance?: {
+    readonly haircut_bps?: number | null;
+    readonly margin_frequency_secs?: ToriiU64 | null;
+  } | null;
+}
+
+/** Event-stream options: `filter` uses the collection-query text grammar over event fields. */
+export interface EventStreamOptions {
+  filter?: Filter | string | FilterJson;
+  signal?: AbortSignal;
 }
 
 export declare class TransactionStatusError extends Error {
@@ -9833,33 +10511,30 @@ export interface ToriiBrowserCanonicalRequestOptions
   nonce?: string;
 }
 
-export declare class ToriiBrowserHttpError extends Error {
-  readonly response: Response;
-  readonly status: number;
-  readonly bodyText: string;
-}
-
-/** Terminal non-replayable loss reported by, or inferred for, a live Torii stream. */
-export declare class ToriiBrowserStreamGapError extends Error {
-  readonly code: string;
-  readonly droppedMessages: number | null;
-  readonly replayAvailable: boolean;
-  readonly payload: ToriiContractEventStreamErrorPayload | null;
-  constructor(
-    message: string,
-    options?: {
-      code?: string;
-      droppedMessages?: number | null;
-      replayAvailable?: boolean;
-      payload?: ToriiContractEventStreamErrorPayload | null;
-    },
-  );
-}
-
 export declare class ToriiBrowserClient {
   readonly baseUrl: string;
   readonly networkId: NetworkId | null;
   constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
+  /** Domains (`POST /v1/domains/query`). */
+  readonly domains: ToriiCollection<ToriiDomainRow, ToriiBrowserCollectionRequestOptions>;
+  /** Accounts (`POST /v1/accounts/query`). */
+  readonly accounts: ToriiCollection<ToriiAccountRow, ToriiBrowserCollectionRequestOptions>;
+  /** Asset definitions (`POST /v1/assets/definitions/query`). */
+  readonly assetDefinitions: ToriiCollection<ToriiAssetDefinitionRow, ToriiBrowserCollectionRequestOptions>;
+  /** NFTs (`POST /v1/nfts/query`). */
+  readonly nfts: ToriiCollection<ToriiNftRow, ToriiBrowserCollectionRequestOptions>;
+  /** RWA lots (`POST /v1/rwas/query`). */
+  readonly rwas: ToriiCollection<ToriiRwaRow, ToriiBrowserCollectionRequestOptions>;
+  /** Repo agreements (`POST /v1/repo/agreements/query`). */
+  readonly repoAgreements: ToriiCollection<ToriiRepoAgreementRow, ToriiBrowserCollectionRequestOptions>;
+  /** Asset balances of one account (`POST /v1/accounts/{account_id}/assets/query`). */
+  accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiBrowserCollectionRequestOptions>;
+  /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
+  assetHolders(assetDefinitionId: string): ToriiCollection<ToriiAssetHolderRow, ToriiBrowserCollectionRequestOptions>;
+  /** Committed transactions, newest first (`POST /v1/transactions/query`). */
+  readonly transactions: ToriiHistoryCollection<ToriiTransactionRow, ToriiBrowserCollectionRequestOptions>;
+  /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`). */
+  accountTransactions(accountId: string): ToriiHistoryCollection<ToriiTransactionRow, ToriiBrowserCollectionRequestOptions>;
   submitTransaction(
     signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
     options?: ToriiBrowserRequestOptions,
@@ -9872,13 +10547,13 @@ export declare class ToriiBrowserClient {
     hashHex: string,
     options?: ToriiBrowserTransactionStatusPollOptions,
   ): Promise<ToriiAppliedTransactionStatus>;
+  /** Submit and wait; the transaction hash is derived from the signed bytes. */
   submitTransactionAndWait(
     signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
-    options: ToriiBrowserSubmitTransactionAndWaitOptions,
+    options?: ToriiBrowserSubmitTransactionAndWaitOptions,
   ): Promise<ToriiAppliedTransactionStatus>;
-  getNodeCapabilities(
-    options: ToriiBrowserCanonicalRequestOptions,
-  ): Promise<ToriiBrowserNodeCapabilities>;
+  /** Public capability advert (`GET /v1/node/capabilities`); no credentials are sent. */
+  getNodeCapabilities(options?: { signal?: AbortSignal }): Promise<ToriiBrowserNodeCapabilities>;
   getAccountCapabilities(options?: { signal?: AbortSignal }): Promise<AccountCapabilitiesV1>;
   getContractDeploymentState(
     request: ToriiBrowserContractDeploymentStateRequest,
@@ -9929,10 +10604,6 @@ export declare class ToriiBrowserClient {
     assetId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listAccountAssets(
-    accountId: string,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
   /** List effective direct and role-inherited permissions for an account. */
   listAccountPermissions<T = ToriiAccountPermissionItem>(
     accountId: string,
@@ -9942,13 +10613,6 @@ export declare class ToriiBrowserClient {
     accountId: string,
     options?: ToriiBrowserAccountHistoryListOptions,
   ): Promise<ToriiBrowserAccountHistoryListResponse<T>>;
-  queryAccountTransactions<T = ToriiAccountTransactionItem>(
-    accountId: string,
-    options: TransactionQueryOptions & ToriiBrowserCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  queryTransactions<T = ToriiAccountTransactionItem>(
-    options: TransactionQueryOptions & ToriiBrowserCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
   listContractActivity<T = ToriiContractActivityItem>(
     options?: ToriiBrowserContractActivityListOptions,
   ): Promise<ToriiBrowserContractActivityListResponse<T>>;
@@ -9958,11 +10622,13 @@ export declare class ToriiBrowserClient {
   streamContractEvents<T = ToriiContractEventItem>(
     options?: ToriiBrowserContractEventStreamOptions,
   ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
-  listAssetHolders(
-    assetDefinitionId: string,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  listAssetDefinitions(options?: Record<string, unknown>): Promise<unknown>;
+  /**
+   * Stream `/v1/events/sse`; `options.filter` uses the collection-query text
+   * grammar over event fields. A `stream_error` event raises `ToriiStreamGapError`.
+   */
+  streamEvents<T = ToriiEventPayload>(
+    options?: EventStreamOptions,
+  ): AsyncGenerator<ToriiEventFrame<T>, void, unknown>;
   getAssetDefinition(
     assetDefinitionId: string,
     options?: Record<string, unknown>,
@@ -10181,6 +10847,26 @@ export interface ValidationFeePolicyProofCatchUpV1
 
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
+  /** Domains (`POST /v1/domains/query`). */
+  readonly domains: ToriiCollection<ToriiDomainRow, ToriiCollectionRequestOptions>;
+  /** Accounts (`POST /v1/accounts/query`). */
+  readonly accounts: ToriiCollection<ToriiAccountRow, ToriiCollectionRequestOptions>;
+  /** Asset definitions (`POST /v1/assets/definitions/query`). */
+  readonly assetDefinitions: ToriiCollection<ToriiAssetDefinitionRow, ToriiCollectionRequestOptions>;
+  /** NFTs (`POST /v1/nfts/query`). */
+  readonly nfts: ToriiCollection<ToriiNftRow, ToriiCollectionRequestOptions>;
+  /** RWA lots (`POST /v1/rwas/query`). */
+  readonly rwas: ToriiCollection<ToriiRwaRow, ToriiCollectionRequestOptions>;
+  /** Repo agreements (`POST /v1/repo/agreements/query`). */
+  readonly repoAgreements: ToriiCollection<ToriiRepoAgreementRow, ToriiCollectionRequestOptions>;
+  /** Asset balances of one account (`POST /v1/accounts/{account_id}/assets/query`). */
+  accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiCollectionRequestOptions>;
+  /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
+  assetHolders(assetDefinitionId: string): ToriiCollection<ToriiAssetHolderRow, ToriiCollectionRequestOptions>;
+  /** Committed transactions, newest first (`POST /v1/transactions/query`). */
+  readonly transactions: ToriiHistoryCollection<ToriiTransactionRow, ToriiCollectionRequestOptions>;
+  /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`). */
+  accountTransactions(accountId: string): ToriiHistoryCollection<ToriiTransactionRow, ToriiCollectionRequestOptions>;
   getAccountCapabilities(options?: { signal?: AbortSignal }): Promise<AccountCapabilitiesV1>;
   getKagemushaReadiness(
     options?: { signal?: AbortSignal },
@@ -10198,78 +10884,6 @@ export declare class ToriiClient {
     operationId: string | ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
   ): Promise<UnverifiedKagemushaOperationStatusV1>;
-  listAccounts<T = ToriiAccountListItem>(
-    options?: IterableListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  queryAccounts<T = ToriiAccountListItem>(
-    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  iterateAccounts<T = ToriiAccountListItem>(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateAccountsQuery<T = ToriiAccountListItem>(
-    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listDomains<T = ToriiDomainListItem>(
-    options?: IterableListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  queryDomains<T = ToriiDomainListItem>(
-    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  iterateDomains<T = ToriiDomainListItem>(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateDomainsQuery<T = ToriiDomainListItem>(
-    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listAssetDefinitions<T = ToriiAssetDefinitionListItem>(
-    options?: IterableListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  queryAssetDefinitions<T = ToriiAssetDefinitionListItem>(
-    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  iterateAssetDefinitions<T = ToriiAssetDefinitionListItem>(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateAssetDefinitionsQuery<T = ToriiAssetDefinitionListItem>(
-    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listRepoAgreements(
-    options?: IterableListOptions,
-  ): Promise<RepoAgreementListResponse>;
-  queryRepoAgreements(
-    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<RepoAgreementListResponse>;
-  iterateRepoAgreements(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiRepoAgreement, void, unknown>;
-  iterateRepoAgreementsQuery(
-    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<ToriiRepoAgreement, void, unknown>;
-  listNfts<T = ToriiNftListItem>(
-    options?: IterableListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  queryNfts<T = ToriiNftListItem>(
-    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  iterateNfts<T = ToriiNftListItem>(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateNftsQuery<T = ToriiNftListItem>(
-    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listRwas<T = ToriiRwaListItem>(
-    options?: IterableListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  queryRwas<T = ToriiRwaListItem>(
-    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  iterateRwas<T = ToriiRwaListItem>(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateRwasQuery<T = ToriiRwaListItem>(
-    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
   listExplorerRwas<T = ToriiExplorerRwa>(
     options?: ExplorerRwaListOptions,
   ): Promise<ToriiExplorerRwasPage>;
@@ -10302,66 +10916,12 @@ export declare class ToriiClient {
     accountId: string,
     options?: ExplorerNftIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
-  listAccountAssets<T = ToriiAccountAssetItem>(
-    accountId: string,
-    options?: AccountAssetListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  queryAccountAssets<T = ToriiAccountAssetItem>(
-    accountId: string,
-    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  iterateAccountAssets<T = ToriiAccountAssetItem>(
-    accountId: string,
-    options?: AccountAssetIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateAccountAssetsQuery<T = ToriiAccountAssetItem>(
-    accountId: string,
-    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listAccountTransactions<T = ToriiAccountTransactionItem>(
-    accountId: string,
-    options?: AccountTransactionListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
   listContractActivity<T = ToriiContractActivityItem>(
     options?: ContractActivityListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   listContractEvents<T = ToriiContractEventItem>(
     options?: ContractEventListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
-  queryAccountTransactions<T = ToriiAccountTransactionItem>(
-    accountId: string,
-    options: TransactionQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  queryTransactions<T = ToriiAccountTransactionItem>(
-    options: TransactionQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  iterateAccountTransactions<T = ToriiAccountTransactionItem>(
-    accountId: string,
-    options?: AccountTransactionIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateAccountTransactionsQuery<T = ToriiAccountTransactionItem>(
-    accountId: string,
-    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateTransactionsQuery<T = ToriiAccountTransactionItem>(
-    options: TransactionIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listAssetHolders<T = ToriiAssetHolderItem>(
-    assetDefinitionId: string,
-    options?: AssetHolderListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  queryAssetHolders<T = ToriiAssetHolderItem>(
-    assetDefinitionId: string,
-    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  iterateAssetHolders<T = ToriiAssetHolderItem>(
-    assetDefinitionId: string,
-    options?: AssetHolderIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateAssetHoldersQuery<T = ToriiAssetHolderItem>(
-    assetDefinitionId: string,
-    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
   listAccountPermissions<T = ToriiAccountPermissionItem>(
     accountId: string,
     options?: AccountPermissionsListOptions,
@@ -10698,21 +11258,10 @@ export declare class ToriiClient {
     hashHex: string,
     options?: TransactionStatusPollOptions,
   ): Promise<ToriiAppliedTransactionStatus>;
+  /** Submit and wait; the transaction hash is derived from the signed bytes. */
   submitTransactionAndWait(
     payload: VersionedSignedTransactionV1,
-    options: SubmitTransactionAndWaitOptions,
-  ): Promise<ToriiAppliedTransactionStatus>;
-  getTransactionStatusTyped(
-    hashHex: string,
-    options?: TransactionStatusReadOptions,
-  ): Promise<ToriiPipelineTransactionStatus | null>;
-  waitForTransactionStatusTyped(
-    hashHex: string,
-    options?: TransactionStatusPollOptions,
-  ): Promise<ToriiAppliedTransactionStatus>;
-  submitTransactionAndWaitTyped(
-    payload: VersionedSignedTransactionV1,
-    options: SubmitTransactionAndWaitOptions,
+    options?: SubmitTransactionAndWaitOptions,
   ): Promise<ToriiAppliedTransactionStatus>;
   getPipelineRecovery(
     height: number | string | bigint,
@@ -10731,7 +11280,8 @@ export declare class ToriiClient {
     height: number | string | bigint,
     options?: AbortSignalOptions,
   ): Promise<ToriiPipelineRecoveryFastpqProofs | null>;
-  getHealth(options?: AbortSignalOptions): Promise<ToriiHealthStatus | null>;
+  /** `GET /health` liveness probe. */
+  getHealth(options?: AbortSignalOptions): Promise<ToriiHealthStatus>;
   getConfiguration(): Promise<unknown | null>;
   getConfigurationTyped(): Promise<ToriiConfigurationSnapshot | null>;
   getConfidentialGasSchedule(): Promise<ConfidentialGasSchedule | null>;
@@ -10752,7 +11302,8 @@ export declare class ToriiClient {
   getNetworkTimeStatus(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiNetworkTimeStatus>;
-  getNodeCapabilities(options: RequiredCanonicalRequestOptions): Promise<ToriiNodeCapabilities>;
+  /** Public capability advert (`GET /v1/node/capabilities`); no credentials are sent. */
+  getNodeCapabilities(options?: AbortSignalOptions): Promise<ToriiNodeCapabilities>;
   getRuntimeAbiActive(options: RequiredCanonicalRequestOptions): Promise<ToriiRuntimeAbiActiveResponse>;
   getRuntimeAbiHash(options?: {
     signal?: AbortSignal;
@@ -10964,11 +11515,8 @@ export declare class ToriiClient {
     options?: SumeragiEvidenceListOptions,
   ): Promise<SumeragiEvidenceListResponse>;
   getSumeragiEvidenceCount(): Promise<SumeragiEvidenceCountResponse>;
-  getMetrics(options: { asText: true; signal?: AbortSignal }): Promise<string>;
-  getMetrics(options?: {
-    asText?: boolean;
-    signal?: AbortSignal;
-  }): Promise<unknown>;
+  /** Prometheus metrics (`GET /metrics`) in the text exposition format. */
+  getMetrics(options?: AbortSignalOptions): Promise<string>;
   /** Exact canonical result-bearing SignedBlockWire at a finalized height. */
   getLedgerExecutedBlockWire(
     height: number | string | bigint,
@@ -10979,9 +11527,13 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<ToriiExplorerBlock | null>;
   listBlocks(options?: BlockListOptions): Promise<ToriiExplorerBlocksPage>;
+  /**
+   * Stream `/v1/events/sse`; `options.filter` uses the collection-query text
+   * grammar over event fields. Abort with `options.signal` or by leaving the loop.
+   */
   streamEvents<T = ToriiEventPayload>(
     options?: EventStreamOptions,
-  ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
+  ): AsyncGenerator<ToriiEventFrame<T> | ToriiStreamErrorFrame, void, unknown>;
   streamContractEvents<T = ToriiContractEventItem>(
     options?: ContractEventStreamOptions,
   ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;

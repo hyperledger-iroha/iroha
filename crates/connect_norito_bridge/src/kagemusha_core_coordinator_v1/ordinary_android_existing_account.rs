@@ -123,8 +123,13 @@ mod android {
         let root = PathBuf::from(String::from(
             env.get_string(&raw).map_err(|_| Error::Rejected)?,
         ));
-        let parent = directory(&root, false)?;
-        let path = root.join("offline-native-core-v1");
+        open_local_storage(&root)
+    }
+
+    /// Open the single protected KAGEMUSHA core directory under Android's no-backup root.
+    fn open_local_storage(root: &Path) -> Result<(PathBuf, File), Error> {
+        let parent = directory(root, false)?;
+        let path = root.join("kagemusha-core-v1");
         match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 use std::os::unix::fs::DirBuilderExt;
@@ -137,7 +142,7 @@ mod android {
             Ok(_) => (),
             Err(_) => return Err(Error::Rejected),
         }
-        named_same(&parent, &root)?;
+        named_same(&parent, root)?;
         let held = directory(&path, true)?;
         Ok((path, held))
     }
@@ -606,6 +611,63 @@ mod android {
             .ok()
             .and_then(Result::ok)
             .unwrap_or(std::ptr::null_mut())
+    }
+    #[cfg(test)]
+    mod storage_tests {
+        //! Exercise the actual protected-directory opener without a JNI or runtime owner.
+        use super::*;
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        #[test]
+        fn canonical_storage_reopens_the_same_protected_directory_and_preserves_originals() {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let (path, held) = open_local_storage(&root).unwrap();
+            assert_eq!(path, root.join("kagemusha-core-v1"));
+            let first = held.metadata().unwrap();
+            assert_eq!(first.mode() & 0o777, 0o700);
+            assert_eq!(first.uid(), unsafe { libc::geteuid() });
+            let original = path.join("retained-original.norito.wal");
+            std::fs::write(&original, b"inert original storage bytes").unwrap();
+            let (reopened_path, reopened) = open_local_storage(&root).unwrap();
+            let second = reopened.metadata().unwrap();
+            assert_eq!(reopened_path, path);
+            assert_eq!((second.dev(), second.ino()), (first.dev(), first.ino()));
+            assert_eq!(
+                std::fs::read(original).unwrap(),
+                b"inert original storage bytes"
+            );
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        }
+
+        #[test]
+        fn canonical_storage_refuses_aliases_and_open_permissions_without_repair() {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let outside_original = outside.path().join("preserved-original");
+            std::fs::write(&outside_original, b"outside original").unwrap();
+            let path = root.join("kagemusha-core-v1");
+            symlink(outside.path(), &path).unwrap();
+            assert!(matches!(open_local_storage(&root), Err(Error::Rejected)));
+            assert!(
+                std::fs::symlink_metadata(&path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                std::fs::read(&outside_original).unwrap(),
+                b"outside original"
+            );
+            assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
+            std::fs::remove_file(&path).unwrap();
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(matches!(open_local_storage(&root), Err(Error::Rejected)));
+            assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o755);
+            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+        }
     }
 }
 

@@ -138,11 +138,6 @@ use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
-#[cfg(all(
-    feature = "test-network-disposable-broker",
-    any(target_os = "linux", target_os = "macos")
-))]
-pub use runtime_provider_broker::load_owner_private_runtime_provider_broker_catalog_file_v1;
 pub use runtime_provider_broker::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
@@ -154,9 +149,17 @@ pub use runtime_provider_broker::{
     RuntimeProviderBrokerExecutableV1, RuntimeProviderBrokerLauncherErrorV1,
     RuntimeProviderBrokerLifecycleV1, RuntimeProviderBrokerReadinessErrorV1,
     RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
-    load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
-    serve_runtime_provider_broker_with_fallible_readiness_v1,
+    load_runtime_provider_broker_catalog_file_v1, load_runtime_provider_broker_policy_file_v1,
+    serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_fallible_readiness_v1,
     serve_runtime_provider_broker_with_lifecycle_v1,
+};
+#[cfg(all(
+    feature = "test-network-disposable-broker",
+    any(target_os = "linux", target_os = "macos")
+))]
+pub use runtime_provider_broker::{
+    load_owner_private_runtime_provider_broker_catalog_file_v1,
+    load_owner_private_runtime_provider_broker_policy_file_v1,
 };
 pub use runtime_provider_registry::{
     IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
@@ -11396,7 +11399,7 @@ mod tests {
         use super::*;
         use iroha_config::base::toml::TomlSource;
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
-        use iroha_model_base::{chain::ChainId, domain::DomainId};
+        use iroha_model_base::chain::ChainId;
         fn sample_manifest() -> RawGenesisTransaction {
             complete_test_genesis_builder(GenesisBuilder::new_without_executor(
                 ChainId::from("test-chain"),

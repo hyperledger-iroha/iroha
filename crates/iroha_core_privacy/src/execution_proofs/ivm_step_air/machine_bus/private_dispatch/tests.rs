@@ -6,11 +6,30 @@ use packet::{Event, Space};
 use std::sync::Arc;
 
 fn contract_artifact(body: &[u32], max_cycles: u64, mode: u8) -> Arc<[u8]> {
+    contract_artifact_with_frame(body, max_cycles, mode, 0)
+}
+
+fn contract_artifact_with_frame(
+    body: &[u32],
+    max_cycles: u64,
+    mode: u8,
+    frame_bytes: u32,
+) -> Arc<[u8]> {
+    contract_artifact_with_frame_at(body, max_cycles, mode, frame_bytes, 0)
+}
+
+fn contract_artifact_with_frame_at(
+    body: &[u32],
+    max_cycles: u64,
+    mode: u8,
+    frame_bytes: u32,
+    entry_pc: u64,
+) -> Arc<[u8]> {
     use iroha_data_model::smart_contract::{
         entrypoint::{EntrypointValueTypeNodeV1, EntrypointValueTypeV1},
         manifest::EntryPointKind,
     };
-    let mut roots = std::collections::BTreeSet::from([0_u64]);
+    let mut roots = std::collections::BTreeSet::from([entry_pc]);
     for (index, &instruction) in body.iter().enumerate() {
         let offset = match wide::opcode(instruction) {
             wide::control::JAL if wide::rd(instruction) == 1 => i64::from(wide::imm16(instruction)),
@@ -23,7 +42,11 @@ fn contract_artifact(body: &[u32], max_cycles: u64, mode: u8) -> Arc<[u8]> {
     let interface = ivm::EmbeddedContractInterfaceV1 {
         callables: roots
             .into_iter()
-            .map(crate::ivm_test_support::unit_callable)
+            .map(|pc| {
+                let mut callable = crate::ivm_test_support::unit_callable(pc);
+                callable.frame_bytes = frame_bytes;
+                callable
+            })
             .collect(),
         seiyaku_name: "PrivateDispatchFixture".into(),
         compiler_fingerprint: "private-dispatch-test".into(),
@@ -53,7 +76,7 @@ fn contract_artifact(body: &[u32], max_cycles: u64, mode: u8) -> Arc<[u8]> {
             access_hints_complete: Some(true),
             access_hints_skipped: Vec::new(),
             triggers: Vec::new(),
-            entry_pc: 0,
+            entry_pc,
         }],
     };
     let mut program = ProgramMetadata {
@@ -75,6 +98,39 @@ pub(in crate::execution_proofs::ivm_step_air::machine_bus) fn contract(
 ) -> PreparedContract {
     ivm::prepare_contract(contract_artifact(body, max_cycles, mode))
         .expect("admitted V1 scalar fixture")
+}
+
+pub(super) fn contract_with_frame(
+    body: &[u32],
+    max_cycles: u64,
+    mode: u8,
+    frame_bytes: u32,
+) -> PreparedContract {
+    ivm::prepare_contract(contract_artifact_with_frame(
+        body,
+        max_cycles,
+        mode,
+        frame_bytes,
+    ))
+    .expect("admitted V1 fixture with its original declared frame")
+}
+
+/// Admit an explicit original entrypoint while retaining every direct-call root.
+pub(super) fn contract_with_frame_at(
+    body: &[u32],
+    max_cycles: u64,
+    mode: u8,
+    frame_bytes: u32,
+    entry_pc: u64,
+) -> PreparedContract {
+    ivm::prepare_contract(contract_artifact_with_frame_at(
+        body,
+        max_cycles,
+        mode,
+        frame_bytes,
+        entry_pc,
+    ))
+    .expect("admitted V1 fixture with its original entrypoint and declared frame")
 }
 
 pub(super) fn bits(row: &mut [F], value: u64) {
@@ -131,6 +187,16 @@ pub(super) struct Fixture {
 }
 impl Fixture {
     pub(super) fn new(program: &Program, slot: usize, root: bool, return_delta: u64) -> Self {
+        Self::with_controls(program, slot, root, return_delta, 13, 100)
+    }
+    pub(super) fn with_controls(
+        program: &Program,
+        slot: usize,
+        root: bool,
+        return_delta: u64,
+        gas: u64,
+        cycles: u64,
+    ) -> Self {
         let clocks = core::array::from_fn(|i| 100 + i as u32 * 10);
         let schedule = Schedule::new(7, clocks).unwrap();
         let mut row = [F::ZERO; WIDTH];
@@ -154,8 +220,6 @@ impl Fixture {
         let memory = store || load;
         let pc = u64::from(program.first_pc) + slot as u64 * 4;
         let cost = if memory { 3 } else { 2 };
-        let gas = 13;
-        let cycles = 100;
         let target = if returning {
             if root {
                 program.code_end()
@@ -230,13 +294,15 @@ impl Fixture {
             );
         }
         let mut after_pc = pc + 4;
-        if child {
-            let delta = if wide::opcode(w) == wide::control::JALS {
-                i64::from(wide::imm24(w))
-            } else {
+        if child || role == Role::Jump {
+            let delta = if wide::opcode(w) == wide::control::JAL {
                 i64::from(wide::imm16(w))
+            } else {
+                i64::from(wide::imm24(w))
             };
             after_pc = pc.wrapping_add_signed(delta * 4);
+        }
+        if child {
             row[CHILD_INVERSE] = F(3).inv().unwrap();
             for (slot, generation, index, before, after) in [
                 (CHILD_COUNTER, 0, 1, 10, 11),

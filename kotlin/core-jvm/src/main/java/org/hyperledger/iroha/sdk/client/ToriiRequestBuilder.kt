@@ -12,6 +12,7 @@ internal object ToriiRequestBuilder {
     private const val SUBMIT_PATH = "/v1/pipeline/transactions"
     private const val SUBMIT_ENTRYPOINT_PATH = "/v1/pipeline/transaction-entrypoints"
     private const val STATUS_PATH = "/v1/pipeline/transactions/status"
+    private val TRANSACTION_HASH = Regex("[0-9a-f]{63}[13579bdf]")
 
     @JvmStatic
     fun buildSubmitRequest(
@@ -19,7 +20,8 @@ internal object ToriiRequestBuilder {
         transaction: SignedTransaction,
         timeout: Duration?,
         extraHeaders: Map<String, String>?,
-        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader(),
+        allowPlaintextLoopback: Boolean = false,
     ): TransportRequest {
         val target = resolve(baseUri, SUBMIT_PATH)
         val norito: ByteArray
@@ -34,6 +36,7 @@ internal object ToriiRequestBuilder {
             target,
             extraHeaders,
             norito,
+            allowPlaintextLoopback,
         )
         val builder = TransportRequest.builder()
             .setUri(target)
@@ -52,7 +55,8 @@ internal object ToriiRequestBuilder {
         encodedVersionedTransactionJson: ByteArray,
         timeout: Duration?,
         extraHeaders: Map<String, String>?,
-        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader(),
+        allowPlaintextLoopback: Boolean = false,
     ): TransportRequest =
         buildJsonIngressRequest(
             baseUri,
@@ -62,6 +66,7 @@ internal object ToriiRequestBuilder {
             extraHeaders,
             acceptHeader,
             "encodedVersionedTransactionJson",
+            allowPlaintextLoopback,
         )
 
     @JvmStatic
@@ -70,7 +75,8 @@ internal object ToriiRequestBuilder {
         encodedVersionedEntrypoint: ByteArray,
         timeout: Duration?,
         extraHeaders: Map<String, String>?,
-        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader(),
+        allowPlaintextLoopback: Boolean = false,
     ): TransportRequest {
         require(encodedVersionedEntrypoint.isNotEmpty()) {
             "encodedVersionedEntrypoint must not be empty"
@@ -83,6 +89,7 @@ internal object ToriiRequestBuilder {
             target,
             extraHeaders,
             body,
+            allowPlaintextLoopback,
         )
         val builder = TransportRequest.builder()
             .setUri(target)
@@ -101,7 +108,8 @@ internal object ToriiRequestBuilder {
         encodedVersionedEntrypointJson: ByteArray,
         timeout: Duration?,
         extraHeaders: Map<String, String>?,
-        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader(),
+        allowPlaintextLoopback: Boolean = false,
     ): TransportRequest =
         buildJsonIngressRequest(
             baseUri,
@@ -111,6 +119,7 @@ internal object ToriiRequestBuilder {
             extraHeaders,
             acceptHeader,
             "encodedVersionedEntrypointJson",
+            allowPlaintextLoopback,
         )
 
     @JvmStatic
@@ -118,11 +127,10 @@ internal object ToriiRequestBuilder {
         baseUri: URI,
         hashHex: String,
         timeout: Duration?,
-        extraHeaders: Map<String, String>?
+        extraHeaders: Map<String, String>?,
+        allowPlaintextLoopback: Boolean = false,
     ): TransportRequest {
-        require(hashHex.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
-            "hashHex must be a canonical lowercase marked 32-byte transaction hash"
-        }
+        requireTransactionHash(hashHex)
         val target = resolve(baseUri, "$STATUS_PATH?hash=$hashHex&scope=global")
         TransportSecurity.requireHttpRequestAllowed(
             "HttpClientTransport",
@@ -130,6 +138,7 @@ internal object ToriiRequestBuilder {
             target,
             extraHeaders,
             null,
+            allowPlaintextLoopback,
         )
         val builder = TransportRequest.builder()
             .setUri(target)
@@ -148,6 +157,7 @@ internal object ToriiRequestBuilder {
         extraHeaders: Map<String, String>?,
         acceptHeader: String,
         bodyName: String,
+        allowPlaintextLoopback: Boolean,
     ): TransportRequest {
         require(bodyBytes.isNotEmpty()) { "$bodyName must not be empty" }
         val target = resolve(baseUri, path)
@@ -158,6 +168,7 @@ internal object ToriiRequestBuilder {
             target,
             extraHeaders,
             body,
+            allowPlaintextLoopback,
         )
         val builder = TransportRequest.builder()
             .setUri(target)
@@ -168,6 +179,13 @@ internal object ToriiRequestBuilder {
         applyHeaders(builder, extraHeaders)
         applyTimeout(builder, timeout)
         return builder.build()
+    }
+
+    /** Reject anything but a canonical lowercase marked 32-byte transaction hash. */
+    fun requireTransactionHash(hashHex: String) {
+        require(TRANSACTION_HASH.matches(hashHex)) {
+            "hashHex must be a canonical lowercase marked 32-byte transaction hash"
+        }
     }
 
     private fun resolve(baseUri: URI, path: String): URI {

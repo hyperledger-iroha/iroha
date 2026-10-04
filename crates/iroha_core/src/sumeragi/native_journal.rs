@@ -10,7 +10,10 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
     block::{BlockHeader, SharedSignedBlock, SignedBlock},
-    sumeragi::finality::{NativeFinalityDecodeError, NativeFinalityJournal, NativeFinalityLimits},
+    sumeragi::finality::{
+        NativeFinalityDecodeError, NativeFinalityLimits, NativeFinalitySource,
+        decode_native_finality_block,
+    },
 };
 use iroha_model_base::chain::ChainId;
 use iroha_sumeragi::crypto::AttestationVerifier;
@@ -84,8 +87,8 @@ impl NativeJournalIndex {
 /// # Errors
 /// Rejects malformed bounds, excessive source/decoded size, noncanonical frames, noncontiguous
 /// heights, wrong network/instance, altered execution results, quorum or attestation failures.
-pub fn with_verified_native_journal<T>(
-    journal: &NativeFinalityJournal,
+pub fn with_verified_native_journal<'source, T>(
+    journal: impl Into<NativeFinalitySource<'source>>,
     chain_id: &ChainId,
     network: &NetworkId,
     limits: NativeFinalityLimits,
@@ -93,15 +96,18 @@ pub fn with_verified_native_journal<T>(
     budget: &AllocationBudget,
     read: impl FnOnce(&CertifiedChain<'_, StateView<'_>>) -> Result<T, NativeJournalError>,
 ) -> Result<T, NativeJournalError> {
-    journal.validate_source(limits)?;
+    let journal = journal.into();
+    journal.validate(limits)?;
     // The caller owns one operation pool; shared controls and both actual index backings
     // retain their original charges for their entire physical lifetime.
-    // TODO: source/DTO graphs and decoded block/result graphs are still bounded by source
-    // limits and cumulative decoder counters, not full retained pool ledgers.
+    // Prepared sources borrow original funded bytes and range backing. An owning DTO's
+    // source allocations remain its caller's obligation.
+    // TODO: decoded nested block/result graphs still use source limits and cumulative
+    // decoder counters, not full retained pool ledgers.
     norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
         // Admission precedes each concrete side allocation; canonical blocks themselves use
         // the same active Norito counters. No per-block scope resets the aggregate counter.
-        let count = journal.blocks.len();
+        let count = journal.len();
         let side_bytes = count
             .checked_mul(
                 core::mem::size_of::<iroha_data_model::block::SharedSignedBlock>()
@@ -123,12 +129,12 @@ pub fn with_verified_native_journal<T>(
         // index admission, preserving original control refusal precedence under saturation.
         let mut first_shell = Some(reserve_shell()?);
         let mut index = NativeJournalIndex::new(count, budget)?;
-        for (offset, artifact) in journal.blocks.iter().enumerate() {
+        for (offset, wire) in journal.blocks().enumerate() {
             let shell = match first_shell.take() {
                 Some(shell) => shell,
                 None => reserve_shell()?,
             };
-            let block = artifact.decode_block(limits)?;
+            let block = decode_native_finality_block(wire, limits)?;
             let expected = u64::try_from(offset)
                 .ok()
                 .and_then(|value| value.checked_add(1))
@@ -217,12 +223,12 @@ impl NativeJournalCursor {
     }
 
     /// Authenticate a strictly advancing complete prefix and retain its exact native tip.
-    pub fn advance(
+    pub fn advance<'source>(
         &mut self,
-        journal: &NativeFinalityJournal,
+        journal: impl Into<NativeFinalitySource<'source>>,
     ) -> Result<&super::certified_chain::CommittedBlock, NativeJournalError> {
-        let height =
-            u64::try_from(journal.blocks.len()).map_err(|_| "native phase height overflow")?;
+        let journal = journal.into();
+        let height = u64::try_from(journal.len()).map_err(|_| "native phase height overflow")?;
         if height < 2 || self.tip.as_ref().is_some_and(|tip| height <= tip.height()) {
             return Err("native phase journal does not advance a certified ordinary height".into());
         }
@@ -287,6 +293,7 @@ pub fn authenticate_signed_genesis(
 mod tests {
     use super::*;
     mod index_tests;
+    mod source_tests;
     use crate::{
         state::World,
         sumeragi::{
@@ -294,7 +301,7 @@ mod tests {
             test_chain::{CertifiedTestChain, TestChainConfig},
         },
     };
-    use iroha_data_model::sumeragi::finality::NativeFinalityArtifact;
+    use iroha_data_model::sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal};
     use iroha_sumeragi::crypto::NoAttestation;
 
     fn limits() -> NativeFinalityLimits {

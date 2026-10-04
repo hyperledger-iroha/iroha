@@ -45,6 +45,10 @@ fn frozen_cell_reads_original_payloads_with_free_writers_and_after_busy_retry() 
         assert_eq!(journal.get().value.as_ptr(), after);
         assert_eq!(journal.get_before_block().value, "before");
         assert_eq!(journal.get_before_block().value.as_ptr(), before);
+        assert_eq!(
+            journal.original_undo().as_ref().unwrap().value.as_ptr(),
+            before
+        );
     };
     assert_original(&original);
     {
@@ -101,6 +105,7 @@ fn frozen_cell_keeps_original_reads_when_equal_source_or_new_generation_is_refus
     let foreign = Cell::new(10_u64);
     let original = target.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
     let identity = original.publication_identity();
+    assert!(original.original_undo().is_none());
     assert_eq!(*original.get_before_block(), 10);
     assert!(std::ptr::eq(original.get(), original.get_before_block()));
     let (original, refusal, cleanup) = original
@@ -132,6 +137,28 @@ fn frozen_cell_keeps_original_reads_when_equal_source_or_new_generation_is_refus
     drop(cleanup);
     assert_eq!(*original.get(), 10);
     assert_eq!(original.publication_identity(), identity);
+}
+
+#[test]
+fn frozen_cell_undo_preserves_untouched_and_original_optional_absence() {
+    for initial in [None, Some(7_u64)] {
+        let target = Cell::new(initial);
+        let untouched = target.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
+        assert_eq!(untouched.original_undo(), &None);
+        assert_eq!(untouched.get(), &initial);
+        let mut block = target.block();
+        *block.get_mut() = Some(8);
+        let original = block.try_detach(|_| Ok::<_, ()>(())).unwrap();
+        assert_eq!(original.original_undo(), &Some(initial));
+        assert_eq!(original.get_before_block(), &initial);
+        assert_eq!(original.get(), &Some(8));
+        let mut later = target.block();
+        *later.get_mut() = Some(9);
+        later.commit();
+        assert_eq!(original.original_undo(), &Some(initial));
+        assert_eq!(untouched.original_undo(), &None);
+        assert_eq!(original.get(), &Some(8));
+    }
 }
 
 #[test]

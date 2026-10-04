@@ -42,17 +42,20 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
     public let defaultHeaders: [String: String]
     public let localSigningContext: ToriiLocalSigningContext
     private let session: URLSession
+    private let canonicalRequestFreshness: ToriiCanonicalRequestFreshness
 
     public init(
         baseURL: URL,
         localSigningContext: ToriiLocalSigningContext,
         session: URLSession = .shared,
-        defaultHeaders: [String: String] = [:]
+        defaultHeaders: [String: String] = [:],
+        canonicalRequestFreshness: ToriiCanonicalRequestFreshness = .system
     ) {
         self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
         self.localSigningContext = localSigningContext
         self.session = session
         self.defaultHeaders = defaultHeaders
+        self.canonicalRequestFreshness = canonicalRequestFreshness
     }
 
     /// Fetches one exact structural package record.
@@ -262,22 +265,13 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
                 "Canonical request headers must be supplied only through canonicalAuth."
             )
         }
-        guard (canonicalAuth.timestampMs == nil) == (canonicalAuth.nonce == nil) else {
-            throw ToriiClientError.invalidPayload(
-                "timestampMs and nonce must be provided together."
-            )
-        }
         for (name, value) in defaultHeaders { request.setValue(value, forHTTPHeaderField: name) }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
-        let timestampMs =
-            canonicalAuth.timestampMs
-            ?? UInt64(Date().timeIntervalSince1970 * 1_000)
-        let nonce =
-            canonicalAuth.nonce
-            ?? UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let timestampMs = canonicalRequestFreshness.timestampMs()
+        let nonce = canonicalRequestFreshness.nonce()
         let authHeaders = try ToriiCanonicalRequest.buildHeaders(
             method: "POST",
             url: target,
@@ -330,11 +324,15 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
                 if error is CancellationError { throw CancellationError() }
                 throw ToriiClientError.transport(error)
             }
-            let message = String(data: data.prefix(4 * 1024), encoding: .utf8)
-            throw ToriiClientError.httpStatus(
-                code: http.statusCode,
-                message: message,
-                rejectCode: http.value(forHTTPHeaderField: "x-iroha-reject-code")
+            throw ToriiClientError.api(
+                ToriiAPIError.parse(
+                    status: http.statusCode,
+                    body: data,
+                    rejectCode: http.value(forHTTPHeaderField: "x-iroha-reject-code")
+                ) {
+                    String(data: data.prefix(4 * 1024), encoding: .utf8)
+                        ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
+                }
             )
         }
         let data: Data

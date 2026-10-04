@@ -38,6 +38,10 @@ public struct PetalScanStats: Equatable, Sendable {
     public internal(set) var laneK: UInt32 = 0
     /// Lane `D` successes.
     public internal(set) var laneD: UInt32 = 0
+    /// Frames read by tracking the previous pose instead of a full search.
+    public internal(set) var tracked: UInt32 = 0
+    /// Frames read with one corner finder hidden and inferred.
+    public internal(set) var inferred: UInt32 = 0
 
     public init() {}
 }
@@ -58,10 +62,17 @@ public struct PetalScanOutcome: Equatable, Sendable {
 /// camera frames and reassembles the stream they carry (port of
 /// `crates/iroha_petal/src/session.rs`).
 ///
-/// A half-received stream is forgotten after
+/// After a frame decodes, the next frames are first read by tracking the code
+/// from its last pose (``PetalDecoder/track(_:previous:options:)``), which
+/// skips the finder search; a full ``PetalDecoder/decode(_:options:)`` runs
+/// when tracking fails or the last pose is older than
+/// ``trackWindowMilliseconds``. A half-received stream is forgotten after
 /// ``PetalScanLimits/idleTimeoutMilliseconds`` without progress or
 /// ``PetalScanLimits/absoluteTimeoutMilliseconds`` after it started.
 public struct PetalScanSession: Sendable {
+    /// How long a decoded pose stays usable for tracking the next frames.
+    public static let trackWindowMilliseconds: UInt64 = 500
+
     /// The session limits.
     public let limits: PetalScanLimits
     private var assembler: PetalStreamAssembler
@@ -70,6 +81,8 @@ public struct PetalScanSession: Sendable {
     private var startedMilliseconds: UInt64?
     private var progressMilliseconds: UInt64 = 0
     private var lastRank = 0
+    /// The last frame that decoded and when it was captured.
+    private var lastPose: (frame: PetalDecodedFrame, at: UInt64)?
 
     /// Creates a session.
     public init(limits: PetalScanLimits = PetalScanLimits()) {
@@ -85,6 +98,7 @@ public struct PetalScanSession: Sendable {
         assembler.reset()
         startedMilliseconds = nil
         lastRank = 0
+        lastPose = nil
     }
 
     /// Offers one camera luma plane captured at monotonic time `nowMilliseconds`.
@@ -95,11 +109,19 @@ public struct PetalScanSession: Sendable {
             reset()
         }
         stats.frames &+= 1
+        var tracked: PetalDecodedFrame?
+        if let pose = lastPose, Self.elapsed(now, since: pose.at) <= Self.trackWindowMilliseconds {
+            tracked = PetalDecoder.track(image, previous: pose.frame, options: limits.decode)
+        }
+        if tracked != nil { stats.tracked &+= 1 }
+        let result = tracked.map { Result.success($0) } ?? PetalDecoder.decodeResult(image, options: limits.decode)
         let error: PetalDecodeError?
         let lanes: String
-        switch PetalDecoder.decodeResult(image, options: limits.decode) {
+        switch result {
         case .success(let frame):
             error = nil
+            if frame.inferredCorner != nil { stats.inferred &+= 1 }
+            lastPose = (frame, now)
             lanes = absorb(frame)
         case .failure(let failure):
             error = failure

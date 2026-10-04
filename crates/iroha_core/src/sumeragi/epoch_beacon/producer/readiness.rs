@@ -3,7 +3,10 @@
 use super::*;
 use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedShared, PrepaidSharedError};
 use iroha_data_model::{governance::types::BeaconSessionId, sumeragi::BeaconHorizonStatusV1};
-use std::sync::Mutex;
+use std::{
+    sync::{Mutex, MutexGuard, TryLockError},
+    time::{Duration, Instant},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Observation {
@@ -40,6 +43,18 @@ impl NativeBeaconReadiness {
             .map_err(|(_, error)| NativeBeaconReadinessError::Allocator(error))
     }
 
+    /// Withdraw the previous result and exclude readers until this same probe finishes.
+    /// Dropping the guard before publishing a validated observation leaves readiness absent.
+    fn begin_refresh(&self) -> Result<MutexGuard<'_, Option<Observation>>, NativeBeaconError> {
+        let mut observation = self
+            .0
+            .lock()
+            .map_err(|_| NativeBeaconError::Source("readiness lock poisoned".into()))?;
+        *observation = None;
+        Ok(observation)
+    }
+
+    /// Read only an immediately available observation; a refresh never blocks this diagnostic.
     /// A concurrent publication or a different core height invalidates the entire observation.
     pub(crate) fn read(
         &self,
@@ -47,7 +62,51 @@ impl NativeBeaconReadiness {
         height: u64,
         applied: u64,
     ) -> Option<(BeaconHorizonStatusV1, bool)> {
-        let observed = *self.0.lock().ok()?;
+        let observed = *self.0.try_lock().ok()?;
+        Self::at_cut(observed, generation, height, applied)
+    }
+
+    /// Wait for one validated observation under the caller's original monotonic deadline.
+    /// Expiry or poisoning returns no observation and never cancels the authentic probe.
+    /// Call this bounded blocking path only from a blocking worker.
+    pub(crate) fn read_until(
+        &self,
+        generation: u64,
+        height: u64,
+        applied: u64,
+        deadline: Instant,
+    ) -> Option<(BeaconHorizonStatusV1, bool)> {
+        let observed = loop {
+            if Instant::now() >= deadline {
+                return None;
+            }
+            match self.0.try_lock() {
+                Ok(observation) => {
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    break *observation;
+                }
+                Err(TryLockError::Poisoned(_)) => return None,
+                Err(TryLockError::WouldBlock) => {
+                    let remaining = deadline.checked_duration_since(Instant::now())?;
+                    std::thread::park_timeout(remaining.min(Duration::from_millis(1)));
+                }
+            }
+        };
+        if Instant::now() >= deadline {
+            return None;
+        }
+        Self::at_cut(observed, generation, height, applied)
+    }
+
+    /// Both diagnostic paths accept only the exact stable publication cut.
+    fn at_cut(
+        observed: Option<Observation>,
+        generation: u64,
+        height: u64,
+        applied: u64,
+    ) -> Option<(BeaconHorizonStatusV1, bool)> {
         observed
             .filter(|value| {
                 generation % 2 == 0
@@ -75,6 +134,7 @@ impl NativeBeaconProducer {
 
     /// Re-probe the same installed provider on every drive retry, including ordinary heights.
     /// The immutable source view remains held during the probe; this produces no partial.
+    /// Readers wait for the complete probe, and every failed probe withdraws readiness.
     pub(crate) fn refresh_readiness(
         &self,
         state: &impl StateReadOnly,
@@ -85,11 +145,7 @@ impl NativeBeaconProducer {
         let Some(reporting) = &self.readiness else {
             return Ok(());
         };
-        // Withdraw the old positive result before any fallible observation/probe.
-        *reporting
-            .0
-            .lock()
-            .map_err(|_| NativeBeaconError::Source("readiness lock poisoned".into()))? = None;
+        let mut observation = reporting.begin_refresh()?;
         if generation % 2 != 0 {
             return Err(NativeBeaconError::Context);
         }
@@ -115,23 +171,19 @@ impl NativeBeaconProducer {
         if !super::super::owns_global_control(root_scope, world, current)
             .map_err(NativeBeaconError::Source)?
         {
-            *reporting
-                .0
-                .lock()
-                .map_err(|_| NativeBeaconError::Source("readiness lock poisoned".into()))? =
-                Some(Observation {
-                    generation,
-                    height: context.height,
-                    applied: applied.0,
-                    horizon: BeaconHorizonStatusV1 {
-                        epoch_length_blocks: 0,
-                        next_required_pulse_height: None,
-                        active_session_id: None,
-                        session_covers_next_pulse: false,
-                        local_provider_ready: false,
-                    },
-                    ready: true,
-                });
+            *observation = Some(Observation {
+                generation,
+                height: context.height,
+                applied: applied.0,
+                horizon: BeaconHorizonStatusV1 {
+                    epoch_length_blocks: 0,
+                    next_required_pulse_height: None,
+                    active_session_id: None,
+                    session_covers_next_pulse: false,
+                    local_provider_ready: false,
+                },
+                ready: true,
+            });
             return Ok(());
         }
         let boundary_pulse = (current.mode == ConsensusMode::Npos)
@@ -181,6 +233,8 @@ impl NativeBeaconProducer {
             let record = world.global_beacon_key_sessions().get(&id).ok_or_else(|| {
                 NativeBeaconError::Source("active readiness session is absent".into())
             })?;
+            // Check the installed sealed record within this probe. Every retry still
+            // reacquires its original State view and re-probes the installed custodian.
             record
                 .validate()
                 .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
@@ -227,17 +281,13 @@ impl NativeBeaconProducer {
         let ready = local.is_none()
             || next.is_none()
             || (horizon.session_covers_next_pulse && horizon.local_provider_ready);
-        *reporting
-            .0
-            .lock()
-            .map_err(|_| NativeBeaconError::Source("readiness lock poisoned".into()))? =
-            Some(Observation {
-                generation,
-                height: context.height,
-                applied: applied.0,
-                horizon,
-                ready,
-            });
+        *observation = Some(Observation {
+            generation,
+            height: context.height,
+            applied: applied.0,
+            horizon,
+            ready,
+        });
         Ok(())
     }
 }
@@ -245,6 +295,159 @@ impl NativeBeaconProducer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{sync::mpsc, thread, time::Duration};
+
+    /// A fixed public observation makes publication races independent of provider timing.
+    fn observation(ready: bool) -> Observation {
+        Observation {
+            generation: 8,
+            height: 6,
+            applied: 5,
+            horizon: BeaconHorizonStatusV1 {
+                epoch_length_blocks: 3600,
+                next_required_pulse_height: Some(3599),
+                active_session_id: Some([1; 32]),
+                session_covers_next_pulse: true,
+                local_provider_ready: ready,
+            },
+            ready,
+        }
+    }
+
+    /// One reporting allocation retains the same production budget through each assertion.
+    fn report() -> (AllocationBudget, NativeBeaconReadiness) {
+        let bytes = ChargedShared::<Mutex<Option<Observation>>>::allocation_layout().size();
+        let budget = AllocationBudget::new(bytes);
+        let report = NativeBeaconReadiness::new(&budget).unwrap();
+        (budget, report)
+    }
+
+    #[test]
+    fn readiness_refresh_excludes_reader_until_validated_publication() {
+        let (_budget, report) = report();
+        *report.0.lock().unwrap() = Some(observation(true));
+        let mut refresh = report.begin_refresh().unwrap();
+        assert_eq!(*refresh, None);
+        assert!(matches!(report.0.try_lock(), Err(TryLockError::WouldBlock)));
+        assert_eq!(report.read(8, 6, 5), None);
+
+        let reader = report.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            entered_tx.send(()).unwrap();
+            result_tx
+                .send(reader.read_until(8, 6, 5, Instant::now() + Duration::from_secs(5)))
+                .unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            result_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        // A real negative outcome must replace the old positive result as one publication.
+        let validated = observation(false);
+        *refresh = Some(validated);
+        drop(refresh);
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Some((validated.horizon, false))
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn readiness_failed_refresh_withdraws_old_positive_before_reader_returns() {
+        let (_budget, report) = report();
+        *report.0.lock().unwrap() = Some(observation(true));
+        let refresh = report.begin_refresh().unwrap();
+        assert_eq!(*refresh, None);
+        assert_eq!(report.read(8, 6, 5), None);
+        let reader = report.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            entered_tx.send(()).unwrap();
+            result_tx
+                .send(reader.read_until(8, 6, 5, Instant::now() + Duration::from_secs(5)))
+                .unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            result_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        // Every fallible production exit drops this guard without publishing a replacement.
+        drop(refresh);
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            None
+        );
+        handle.join().unwrap();
+        assert_eq!(report.read(8, 6, 5), None);
+    }
+
+    #[test]
+    fn readiness_observation_requires_exact_even_generation_height_and_applied_cut() {
+        let (_budget, report) = report();
+        let validated = observation(true);
+        let mut refresh = report.begin_refresh().unwrap();
+        *refresh = Some(validated);
+        drop(refresh);
+        assert_eq!(report.read(8, 6, 5), Some((validated.horizon, true)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        assert_eq!(
+            report.read_until(8, 6, 5, deadline),
+            Some((validated.horizon, true))
+        );
+        for (generation, height, applied) in [(9, 6, 5), (10, 6, 5), (8, 7, 5), (8, 6, 4)] {
+            assert_eq!(report.read(generation, height, applied), None);
+            assert_eq!(
+                report.read_until(generation, height, applied, deadline),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn readiness_wait_expires_while_original_probe_guard_remains_held() {
+        let (_budget, report) = report();
+        *report.0.lock().unwrap() = Some(observation(true));
+        let mut refresh = report.begin_refresh().unwrap();
+        let deadline = Instant::now() + Duration::from_millis(30);
+        assert_eq!(report.read_until(8, 6, 5, deadline), None);
+        assert!(Instant::now() >= deadline);
+        assert_eq!(*refresh, None, "the timeout cannot restore an old positive");
+        assert!(matches!(report.0.try_lock(), Err(TryLockError::WouldBlock)));
+
+        let validated = observation(true);
+        *refresh = Some(validated);
+        drop(refresh);
+        assert_eq!(report.read_until(8, 6, 5, deadline), None);
+        assert_eq!(report.read(8, 6, 5), Some((validated.horizon, true)));
+    }
+
+    #[test]
+    fn readiness_poisoning_refuses_both_diagnostic_paths() {
+        let (_budget, report) = report();
+        let probe = report.clone();
+        assert!(
+            thread::spawn(move || {
+                let _refresh = probe.begin_refresh().unwrap();
+                panic!("failed authentic probe");
+            })
+            .join()
+            .is_err()
+        );
+        assert_eq!(report.read(8, 6, 5), None);
+        assert_eq!(
+            report.read_until(8, 6, 5, Instant::now() + Duration::from_secs(5)),
+            None
+        );
+        assert!(report.begin_refresh().is_err());
+    }
 
     #[test]
     fn reporting_shell_retains_original_pool_charge_until_last_reader_drops() {

@@ -7,7 +7,7 @@ use iroha_core::{
     beacon::{
         AdaptiveGlobalThresholdBeaconDkgCryptoV1, GlobalThresholdBeaconDkgSnapshotV1,
         GlobalThresholdBeaconDkgStateV1, RetainedGlobalThresholdBeaconDkgFinalizationV1,
-        global_threshold_beacon_roster_hash_v1,
+        RetainedGlobalThresholdBeaconDkgSnapshotV1, global_threshold_beacon_roster_hash_v1,
     },
     validator_committee_evidence::{
         ValidatorCommitteeProvisioningEvidenceV1, ValidatorCommitteeSelectionEvidenceV1,
@@ -1461,7 +1461,8 @@ pub async fn prepare_disposable_pending_custody(
 ///
 /// The retained signed genesis supplies body authority; the caller supplies a live native finality
 /// source with explicit bounded admission. This function requests h2, h3, and h4 only after each preceding
-/// public phase is ready. Every seat owns its private DKG share and signing
+/// public phase is ready, supplying its authenticated public-only snapshot to the caller.
+/// Every seat owns its private DKG share and signing
 /// descriptor; only signed public artifacts cross the coordinator.
 ///
 /// # Errors
@@ -1475,7 +1476,7 @@ pub async fn run_disposable_genesis_dkg<F, Fut>(
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
-    F: FnMut(u64) -> Fut,
+    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
     let (bundle, session, roster, verifier) = verify_genesis_input(network, limits)?;
@@ -1519,7 +1520,9 @@ where
 /// This accepts the exact signed manifest and four direct owner-private
 /// validator configs from an external disposable localnet generator. The
 /// signed voter order, h1 authority and every phase finality proof are
-/// revalidated before any credential is returned. No signer key is read into
+/// revalidated before any credential is returned. The phase callback receives
+/// the merged signed public snapshot; plaintext shares remain in their seat.
+/// No signer key is read into
 /// an argument or environment value.
 ///
 /// # Errors
@@ -1537,7 +1540,7 @@ pub async fn run_disposable_genesis_dkg_from_configs<F, Fut>(
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
-    F: FnMut(u64) -> Fut,
+    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
     ensure!(
@@ -1623,7 +1626,7 @@ async fn run_genesis_dkg_with_seats<F, Fut, S>(
     mut spawn_seat: S,
 ) -> Result<DisposableGenesisDkgOutput>
 where
-    F: FnMut(u64) -> Fut,
+    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
     S: FnMut(
         &Path,
@@ -1694,26 +1697,30 @@ where
         &crypto,
         verifier.allocation_budget(),
     )?;
-    broadcast_public(&mut processes, public.public_snapshot()?.record(), deadline)?;
-    let proof = next_finality(2).await?;
+    let commitments = public.public_snapshot()?;
+    broadcast_public(&mut processes, commitments.record(), deadline)?;
+    let proof = next_finality(2, commitments).await?;
     advance_native_phase(&mut verifier, &proof, 2)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
 
     let deliveries = wait_for_snapshots(&mut processes, "deliveries.norito", deadline).await?;
     merge_deliveries(&mut public, &deliveries, &crypto)?;
-    broadcast_public(&mut processes, public.public_snapshot()?.record(), deadline)?;
-    let proof = next_finality(3).await?;
+    let delivered = public.public_snapshot()?;
+    broadcast_public(&mut processes, delivered.record(), deadline)?;
+    let proof = next_finality(3, delivered).await?;
     advance_native_phase(&mut verifier, &proof, 3)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
 
     let acceptances = wait_for_snapshots(&mut processes, "acceptances.norito", deadline).await?;
     merge_acceptances(&mut public, &acceptances, &crypto)?;
+    // The callback keeps the original funded acceptance graph across finalization.
+    let accepted = public.public_snapshot()?;
     public.finalize(session.acceptances_end_height, &crypto)?;
     let assembled = public.into_finalized()?;
     broadcast_public(&mut processes, assembled.record(), deadline)?;
-    let proof = next_finality(4).await?;
+    let proof = next_finality(4, accepted).await?;
     advance_native_phase(&mut verifier, &proof, 4)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);

@@ -203,6 +203,11 @@ pub struct Root {
 /// Public endpoint of the authenticated local runtime-provider broker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeProviderBroker {
+    /// Absolute server observer-operation allowance; nonzero and at most 15 seconds.
+    ///
+    /// It starts before provider dispatch and bounds reply publication. A synchronous
+    /// provider already running cannot be forcibly cancelled by this allowance.
+    pub observer_operation_timeout: Duration,
     /// Aggregate memory retained by one local consensus credential registry.
     pub credential_max_memory_bytes: NonZeroUsize,
     /// Lexically validated absolute Unix socket path.
@@ -218,7 +223,8 @@ impl RuntimeProviderBroker {
     ///
     /// # Errors
     ///
-    /// Rejects unknown fields, a zero memory bound, or an invalid endpoint.
+    /// Rejects unknown fields, a zero memory bound, an invalid endpoint, or an
+    /// observer-operation duration outside 1..=15_000 milliseconds.
     pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
         ConfigReader::new()
             .without_env()

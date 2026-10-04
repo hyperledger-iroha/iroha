@@ -160,14 +160,13 @@ class SorafsReputationClientTest {
                 client.listEvents(canonicalAuth, "0", limit)
             }
         }
-        val partialAuth = ToriiCanonicalRequestAuth(
-            "reputation-reader@sora",
-            RequestSigner.ed25519(keyPair.private),
-            TIMESTAMP_MS,
-            null,
-        )
-        assertFailsWith<IllegalArgumentException> {
-            client.getWeights(partialAuth)
+        assertFailsWith<IllegalArgumentException>("a timestamp without a nonce is rejected") {
+            ToriiCanonicalRequestAuth(
+                "reputation-reader@sora",
+                RequestSigner.ed25519(keyPair.private),
+                TIMESTAMP_MS,
+                null,
+            )
         }
         assertTrue(executor.requests.isEmpty())
     }
@@ -187,7 +186,7 @@ class SorafsReputationClientTest {
             event: lagged
             data: 2
 
-            """.trimIndent(),
+            """.trimIndent() + "\n",
         )
         val snapshots = ArrayList<SorafsReputationSnapshotEventV1>()
         val lagged = ArrayList<String>()

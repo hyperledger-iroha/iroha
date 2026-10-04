@@ -608,7 +608,7 @@ fn genuine_native_call_runtime_entries_match_original_operands_and_installed_des
     }
 }
 
-/// Local descriptor witness used by the original-artifact composition tests.
+/// Local descriptor candidate, including deliberately invalid adversarial shapes.
 pub(in crate::execution_proofs::ivm_step_air::machine_bus) fn callable_lookup_witness(
     entry: u64,
     frame: u64,

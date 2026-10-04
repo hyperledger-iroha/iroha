@@ -7,6 +7,13 @@
 use super::*;
 
 impl<K: Key, V: Value, A, M: StorageMode<K, V>> Detached<K, V, A, M> {
+    /// Borrow every original undo entry in semantic key order, including absent preimages.
+    /// The iterator retains no new allocation or current reader and grants no
+    /// execution or publication authority.
+    pub fn original_undo_entries(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
+        self.revert.iter()
+    }
+
     /// Borrow the value before the original block's first mutation of `key`.
     ///
     /// A retained absent preimage stays absent; an untouched key comes from the

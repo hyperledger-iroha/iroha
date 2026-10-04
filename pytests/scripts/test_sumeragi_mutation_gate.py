@@ -842,6 +842,40 @@ def test_beacon_generation_binding_has_genuine_dkg_kill_controls():
     assert not gate.has_switch("HC54")
 
 
+def test_stake_index_quantities_have_a_distinct_original_pool_kill_control():
+    rules = gate.index_mutations(gate.CORE_MUTATIONS)
+    rule = rules["HC87"]
+    assert rule.tests == (
+        "smartcontracts::isi::staking::tests::stake_index_quantities_prepaid_and_borrowed_from_original_pool",
+    )
+    assert not rule.scenarios
+    assert rule.id != rules["HC55"].id
+    assert gate.has_switch("HC87", core=True)
+    assert not gate.has_switch("HC87")
+
+
+def test_replay_configuration_has_a_distinct_original_source_kill_control():
+    rules = gate.index_mutations(gate.CORE_MUTATIONS)
+    rule = rules["HC94"]
+    assert rule.tests == (
+        "sumeragi::executor::publication_tests::replay_completion_retirement_keeps_exact_source_and_original_pool_retry",
+    )
+    assert not rule.scenarios
+    assert rule.id != rules["HC56"].id
+    assert gate.has_switch("HC94", core=True)
+    assert not gate.has_switch("HC94")
+
+
+def test_native_amx_binding_has_a_distinct_original_paid_restart_kill_control():
+    rules = gate.index_mutations(gate.CORE_MUTATIONS)
+    rule = rules["HC95"]
+    assert rule.tests == (
+        "sumeragi::amx::native::tests::native_amx_paid_commit_survives_certified_restart_and_rejects_bypass",
+    )
+    assert not rule.scenarios
+    assert rule.id != rules["HC54"].id
+    assert gate.has_switch("HC95", core=True)
+    assert not gate.has_switch("HC95")
 def test_fee_reward_claim_has_exact_signed_entitlement_kill_control():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC55"]
     assert rule.tests == (

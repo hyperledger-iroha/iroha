@@ -120,11 +120,12 @@ maintenance = { status = "actively-developed" }
 
 [dependencies]
 iroha_fs = { workspace = true }
-iroha_core_privacy = { workspace = true }
+iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }
 iroha_musubi_service = { workspace = true }
+iroha_wallet = { workspace = true }
 iroha_storage_client = { workspace = true }
 iroha_core = { workspace = true, default-features = false }
 iroha_core_zk = { workspace = true, default-features = false }

@@ -8,6 +8,7 @@ import java.math.BigInteger
 import java.security.AlgorithmParameters
 import java.security.GeneralSecurityException
 import java.security.KeyFactory
+import java.security.PublicKey
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
@@ -104,6 +105,36 @@ object KagemushaP256Codec {
         } catch (rejected: GeneralSecurityException) {
             false
         }
+    }
+
+    /**
+     * Encode one JCA public key, such as the certificate key of an Android Keystore entry, as the
+     * canonical 65-byte uncompressed SEC1 point.
+     *
+     * The key must be an [ECPublicKey] on exactly the secp256r1 domain (curve, generator, order
+     * and cofactor); the encoded point is then checked by [requireUncompressedPublicKey]. Only
+     * JDK 8 APIs are used.
+     *
+     * @throws IllegalArgumentException when the key is not a canonical P-256 point.
+     */
+    @JvmStatic
+    fun uncompressedFromPublicKey(publicKey: PublicKey): ByteArray {
+        val key = publicKey as? ECPublicKey
+            ?: throw IllegalArgumentException("KAGEMUSHA V1 device public key must be an EC key")
+        val domain = key.params
+        require(
+            domain.curve == P256_PARAMETERS.curve &&
+                domain.generator == P256_PARAMETERS.generator &&
+                domain.order == P256_PARAMETERS.order &&
+                domain.cofactor == P256_PARAMETERS.cofactor,
+        ) { "KAGEMUSHA V1 device public key is not on the P-256 domain" }
+        val point = key.w
+        require(point != ECPoint.POINT_INFINITY) {
+            "KAGEMUSHA V1 device public key is the point at infinity"
+        }
+        return requireUncompressedPublicKey(
+            byteArrayOf(0x04) + fixedCoordinate(point.affineX) + fixedCoordinate(point.affineY),
+        )
     }
 
     /** Validate and defensively copy one canonical uncompressed P-256 public key. */
@@ -252,6 +283,17 @@ object KagemushaP256Codec {
             signed
         }
         check(unsigned.size <= SCALAR_BYTES)
+        return ByteArray(SCALAR_BYTES).also {
+            unsigned.copyInto(it, SCALAR_BYTES - unsigned.size)
+        }
+    }
+
+    private fun fixedCoordinate(value: BigInteger): ByteArray {
+        require(value.signum() >= 0 && value.bitLength() <= SCALAR_BYTES * 8) {
+            "KAGEMUSHA V1 device public key coordinate exceeds 32 bytes"
+        }
+        val signed = value.toByteArray()
+        val unsigned = if (signed.size == SCALAR_BYTES + 1) signed.copyOfRange(1, signed.size) else signed
         return ByteArray(SCALAR_BYTES).also {
             unsigned.copyInto(it, SCALAR_BYTES - unsigned.size)
         }

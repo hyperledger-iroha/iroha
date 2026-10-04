@@ -301,7 +301,10 @@ mod tests {
             evaluator.device_columns,
             select_device_columns_v1(
                 layout.common_lde_size(),
-                596_974_144 - 288_345_698,
+                596_974_144
+                    - core::mem::size_of::<E>()
+                    - 288_345_698
+                    - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
                 fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
             )
         );
@@ -318,7 +321,10 @@ mod tests {
         assert_eq!(
             select_device_columns_v1(
                 layout.common_lde_size(),
-                596_974_144 - 288_345_698,
+                596_974_144
+                    - core::mem::size_of::<E>()
+                    - 288_345_698
+                    - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
                 Some(Backend::Metal),
             ),
             2
@@ -349,9 +355,17 @@ mod tests {
         // of source scratch and 1 GiB of runtime beyond the live transforms.
         assert_eq!(
             assembly_limit,
-            (12_usize << 30) - (3_697_993_152 + core::mem::size_of::<E>()) - (8 << 30)
+            (12_usize << 30)
+                - (3_697_993_152 + core::mem::size_of::<E>())
+                - (8 << 30)
+                - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
         );
-        assert_eq!(assembly_limit, 596_974_144 - core::mem::size_of::<E>());
+        assert_eq!(
+            assembly_limit,
+            596_974_144
+                - core::mem::size_of::<E>()
+                - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+        );
         assert_eq!(
             select_metal_columns_v1(layout.common_lde_size(), assembly_limit - 288_345_698),
             2

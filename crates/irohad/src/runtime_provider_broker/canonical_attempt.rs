@@ -9,6 +9,7 @@ pub(super) enum CanonicalAttemptErrorV1 {
     Rejected(BrokerError),
     Decode(norito::core::DecodeAttemptError),
     Encode(norito::core::BoundedEncodeError),
+    Allocation(std::collections::TryReserveError),
 }
 impl CanonicalAttemptErrorV1 {
     pub(super) fn retryable(&self) -> bool {
@@ -24,6 +25,10 @@ impl CanonicalAttemptErrorV1 {
                     ..
                 }),
             ) => true,
+            Self::Allocation(error) => {
+                let _original = error;
+                true
+            }
             Self::Rejected(_) | Self::Encode(_) => false,
         }
     }
@@ -34,7 +39,7 @@ impl CanonicalAttemptErrorV1 {
         match self {
             Self::Rejected(error) => *error,
             _ if self.retryable() => BrokerError::Unavailable,
-            Self::Decode(_) | Self::Encode(_) => BrokerError::Protocol,
+            Self::Decode(_) | Self::Encode(_) | Self::Allocation(_) => BrokerError::Protocol,
         }
     }
 }
@@ -70,4 +75,34 @@ pub(super) fn encode<T: NoritoSerialize>(
         return Err(BrokerError::Protocol.into());
     }
     Ok(bytes.take())
+}
+
+/// Preserve the actual bounded leaf-allocation failure; fixed work caps remain terminal.
+pub(super) fn copy(bytes: &[u8], limit: usize) -> Result<ScrubbedBytes, CanonicalAttemptErrorV1> {
+    if bytes.len() > limit {
+        return Err(BrokerError::Rejected.into());
+    }
+    if let Some(admission) = current_decode_resource_admission() {
+        admission.reserve_retained_bytes(bytes.len(), limit)?;
+    }
+    let mut copy = Vec::new();
+    copy.try_reserve_exact(bytes.len())
+        .map_err(CanonicalAttemptErrorV1::Allocation)?;
+    copy.extend_from_slice(bytes);
+    Ok(ScrubbedBytes::new(copy))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copied_reply_leaves_preserve_exact_bytes_and_fixed_caps_are_terminal() {
+        let original = [0x12, 0x34, 0x56];
+        let copy = copy(&original, original.len()).unwrap();
+        assert_eq!(copy.as_slice(), original);
+        let error = super::copy(&original, original.len() - 1).err().unwrap();
+        assert!(!error.retryable());
+        assert_eq!(error.service_error(), BrokerError::Rejected);
+    }
 }

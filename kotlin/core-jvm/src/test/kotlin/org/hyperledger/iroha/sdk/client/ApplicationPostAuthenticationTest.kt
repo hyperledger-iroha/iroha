@@ -17,7 +17,7 @@ class ApplicationPostAuthenticationTest {
         val foreign = NetworkId.parse(
             "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
         )
-        val auth = applicationAuth()
+        fun auth() = applicationAuth()
         val requests = mutableListOf<TransportRequest>()
         val executor = object : HttpTransportExecutor {
             override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
@@ -34,7 +34,7 @@ class ApplicationPostAuthenticationTest {
                 .setLocalSigningContext(LocalSigningContext(networkId))
                 .build()
             HttpClientTransport(executor, config)
-                .executeRamLfeProgram("lookup", RamLfeExecuteRequest.encrypted("ABCD"), auth)
+                .executeRamLfeProgram("lookup", RamLfeExecuteRequest.encrypted("ABCD"), auth())
                 .join()
         }
 

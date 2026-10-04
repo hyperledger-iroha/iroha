@@ -208,6 +208,7 @@ pub(crate) fn routing_plan_from_execution_context(
 ///
 /// Roles, multiplicity, and plan variants remain significant.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn routing_plans_have_same_dataspace_role_topology(
     left: &RoutingPlan,
     right: &RoutingPlan,
@@ -231,6 +232,7 @@ pub(crate) fn routing_plans_have_same_dataspace_role_topology(
 }
 /// Convert a queue routing plan into one durable external block execution context.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn execution_context_for_routing_plan(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     plan: &RoutingPlan,
@@ -243,9 +245,6 @@ pub(crate) fn execution_context_for_routing_plan(
         plan.digest(),
         execution_context_legs_for_routing_plan(plan),
     )
-}
-fn hash_is_zero(hash: Hash) -> bool {
-    hash == Hash::prehashed([0; Hash::LENGTH])
 }
 
 /// Resolve every coordinator and participant leg in a full routing plan against active catalogs.
@@ -534,10 +533,12 @@ impl PendingKagemushaOperationIndex {
         Ok(())
     }
 
+    #[cfg(test)]
     fn binding(&self, operation_id: [u8; 32]) -> Option<&PendingKagemushaOperationBinding> {
         self.by_key.get(&operation_id)
     }
 
+    #[cfg(test)]
     fn entrypoint_for(&self, operation_id: [u8; 32]) -> Option<EntrypointHash> {
         self.binding(operation_id)
             .map(|binding| binding.entrypoint_hash)
@@ -635,6 +636,7 @@ impl PendingKagemushaOperationIndex {
     /// inductively with cardinality plus exact reciprocal-owner checks. Scanning
     /// every unrelated owner while holding Queue's mutation lock would make a
     /// public status miss linear in the global pending-operation population.
+    #[cfg(test)]
     fn validate_bijection(&self) -> Result<(), PendingKagemushaOperationIndexError> {
         self.validate_cardinality()?;
         for (key, binding) in &self.by_key {
@@ -714,15 +716,6 @@ impl PendingKagemushaOperationIndex {
         self.key_by_entrypoint.remove(hash);
         self.by_key.remove(&key);
         Ok(())
-    }
-
-    fn clear(&mut self) {
-        self.by_key.clear();
-        self.key_by_entrypoint.clear();
-    }
-
-    fn is_empty(&self) -> bool {
-        self.by_key.is_empty() && self.key_by_entrypoint.is_empty()
     }
 }
 
@@ -1308,23 +1301,6 @@ impl FeeAdmissionReservationStore {
     }
     fn release(&mut self, hash: &EntrypointHash) {
         self.live_by_entrypoint.remove(hash);
-    }
-    fn refresh(
-        &mut self,
-        hash: EntrypointHash,
-        reservation: Option<FeeAdmissionReservation>,
-    ) -> Result<(), Error> {
-        let previous = self.live_by_entrypoint.remove(&hash);
-        let Some(reservation) = reservation else {
-            return Ok(());
-        };
-        if let Err(err) = self.reserve(hash, reservation) {
-            if let Some(previous) = previous {
-                self.live_by_entrypoint.insert(hash, previous);
-            }
-            return Err(err);
-        }
-        Ok(())
     }
 }
 
@@ -3028,24 +3004,9 @@ impl Queue {
         queue.publish_backpressure_state(0, None);
         queue
     }
+    #[cfg(test)]
     pub(crate) fn set_sumeragi_wake(&self, wake: mpsc::SyncSender<()>) {
         let _ = self.sumeragi_wake.set(wake);
-    }
-    /// Notify the existing consensus runner after an actual local dependency
-    /// releases. The weak destination adds neither a worker nor a retry owner.
-    pub(crate) fn sumeragi_waker(self: &Arc<Self>) -> std::task::Waker {
-        struct QueueWake(std::sync::Weak<Queue>);
-        impl std::task::Wake for QueueWake {
-            fn wake(self: Arc<Self>) {
-                self.wake_by_ref();
-            }
-            fn wake_by_ref(self: &Arc<Self>) {
-                if let Some(queue) = self.0.upgrade() {
-                    queue.wake_sumeragi();
-                }
-            }
-        }
-        std::task::Waker::from(Arc::new(QueueWake(Arc::downgrade(self))))
     }
     pub(crate) fn wake_sumeragi(&self) {
         if let Some(wake) = self.sumeragi_wake.get() {
@@ -3783,15 +3744,6 @@ impl Queue {
         })?;
         Ok(fresh)
     }
-    /// Return whether an entrypoint is local signed input whose
-    /// single-route admission hint may be replaced at proposal selection.
-    pub(crate) fn ordinary_single_route_is_reassignable(
-        entrypoint: &TransactionEntrypoint,
-        plan: &RoutingPlan,
-    ) -> bool {
-        matches!(plan, RoutingPlan::Single(_))
-            && matches!(entrypoint, TransactionEntrypoint::External(_))
-    }
     fn immutable_queued_routing_plan_if_available_in_view(
         &self,
         hash: EntrypointHash,
@@ -3967,15 +3919,6 @@ impl Queue {
                 );
                 break;
             }
-        }
-    }
-    fn check_tx(&self, tx: &CheckedTransaction<'static>, in_blockchain: bool) -> Result<(), Error> {
-        if in_blockchain {
-            Err(Error::InBlockchain)
-        } else if self.is_expired(tx.as_accepted()) {
-            Err(Error::Expired)
-        } else {
-            Ok(())
         }
     }
     fn check_startup_admission(&self) -> Result<(), Error> {
@@ -4900,9 +4843,6 @@ impl Queue {
         state_view: &StateView<'_>,
     ) -> Result<(), Failure> {
         self.push_with_lane_in_view(tx, state_view).map(|_| ())
-    }
-    fn materialized_active_len(&self) -> usize {
-        self.active_count.load(Ordering::Relaxed)
     }
     /// Return the number of transactions still awaiting selection from the queue.
     pub fn queued_len(&self) -> usize {
@@ -6317,20 +6257,9 @@ pub mod tests {
             .collect::<Vec<_>>();
         exact_lane_authority_for_queue_test(state, &validator_keys)
     }
-    fn install_exact_lane_authority_for_queue_test(
-        state: &mut State,
-        validator_keys: &[iroha_crypto::KeyPair],
-    ) {
-        let manifests = exact_lane_authority_for_queue_test(state, validator_keys);
-        state.install_lane_manifests_for_testing(&manifests);
-    }
     fn install_single_validator_topology_for_queue_test(state: &mut State, seed: u8) {
         let manifests = exact_f1_lane_authority_for_queue_test(state, seed);
         state.install_lane_manifests_for_testing(&manifests);
-    }
-    fn install_manifest_lane_authority_for_queue_test(state: &mut State, queue: &Queue, seed: u8) {
-        let manifests = exact_f1_lane_authority_for_queue_test(state, seed);
-        queue.install_lane_manifests_with_state_for_testing(&manifests, state);
     }
     fn seed_committed_height_for_queue_test(state: &State, height: u64) {
         let mut block_hashes = state.block_hashes.block();
@@ -6345,21 +6274,6 @@ pub mod tests {
             );
         }
         block_hashes.commit_for_tests();
-    }
-    fn install_active_single_lane_nexus(state: &State) {
-        let lane_catalog =
-            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
-        let mut nexus = state.nexus.write();
-        nexus.autoscale.enabled = false;
-        nexus.lane_catalog = lane_catalog;
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        nexus.dataspace_catalog = DataSpaceCatalog::default();
-        nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy::default();
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
     }
     fn state_with_future_created_autoscale_lane(
         created_height: u64,
@@ -6454,40 +6368,6 @@ pub mod tests {
         }
         seed_committed_height_for_queue_test(&state, committed_height);
         state
-    }
-    struct FutureCreatedNoStateRouter;
-    impl LaneRouter for FutureCreatedNoStateRouter {
-        fn try_route(
-            &self,
-            _tx: &dyn TransactionRoutingView,
-        ) -> Result<RoutingDecision, RoutingResolveError> {
-            Ok(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL))
-        }
-        fn try_route_without_state(
-            &self,
-            _tx: &dyn TransactionRoutingView,
-        ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
-            Ok(Some(RoutingDecision::new(
-                LaneId::new(1),
-                DataSpaceId::UNIVERSAL,
-            )))
-        }
-    }
-    fn queue_with_state_free_future_created_router(
-        state: &State,
-        time_source: &TimeSource,
-    ) -> Queue {
-        let queue = Queue::test_with_router(
-            config_factory(),
-            time_source,
-            Arc::new(FutureCreatedNoStateRouter),
-        );
-        let nexus = state.nexus_snapshot();
-        *queue.routing_policy.write() = nexus.routing_policy.clone();
-        *queue.lane_catalog.write() = Arc::new(nexus.lane_catalog.clone());
-        *queue.dataspace_catalog.write() = Arc::new(nexus.dataspace_catalog.clone());
-        *queue.nexus_limits.write() = QueueLimits::from_nexus(&nexus);
-        queue
     }
     fn unique_test_domain_name(prefix: &str) -> String {
         let suffix = NEXT_TEST_DOMAIN_SUFFIX.fetch_add(1, Ordering::Relaxed);
@@ -9309,105 +9189,6 @@ pub mod tests {
             1
         );
     }
-    /// Latch the real accepted-work invariant failure for the carrier-cut control.
-    pub(crate) fn fault_carrier_retirement_queue_fixture(queue: &Queue) {
-        queue.mark_accepted_work_validation_fault(
-            HashOf::from_untyped_unchecked(Hash::new(b"carrier cut fixture")),
-            "carrier_retirement_fixture",
-            &"carrier cut fixture fault",
-            None,
-        );
-    }
-
-    /// Enqueue actual lane-one work for the carrier retirement integration controls.
-    pub(crate) fn carrier_retirement_queue_fixture(
-        state: &mut State,
-    ) -> (Queue, iroha_primitives::time::MockTimeHandle) {
-        use iroha_data_model::IntoKeyValue;
-
-        let (clock, time) = TimeSource::new_mock(Duration::from_secs(1));
-        let queue = queue_with_state_free_future_created_router(state, &time);
-        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
-        let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
-        register_test_authority(state, &authority);
-        let nexus = state.nexus_snapshot();
-        let fee_asset: AssetDefinitionId = nexus
-            .fees
-            .fee_asset_id
-            .parse()
-            .expect("configured retirement fixture fee asset");
-        {
-            let mut block = state.world.block();
-            let mut world = block.transaction_without_telemetry(nexus.lane_config.clone(), 0);
-            world.insert_asset_definition_entry(
-                fee_asset.clone(),
-                AssetDefinition::numeric(
-                    fee_asset.clone(),
-                    "retirement fixture XOR".to_owned(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&authority),
-            );
-            let (asset_id, value) = Asset::new(
-                AssetId::new(fee_asset.clone(), authority.clone()),
-                Quantity::from(10_u32),
-            )
-            .into_key_value();
-            world.assets.insert(asset_id.clone(), value);
-            world.track_asset_holder(&asset_id);
-            world.track_nonzero_asset_holder(&asset_id);
-            world
-                .increase_asset_total_amount(&fee_asset, &Quantity::from(10_u32))
-                .expect("fund configured fee asset with matching total");
-            world.apply();
-            block.commit();
-        }
-        let draft = TransactionBuilder::new_with_time_source(
-            state.network_id,
-            authority,
-            &time,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([sample_unregister_instruction()]);
-        let fee_intent = {
-            let view = state.view();
-            let quote = crate::executor::quote_nexus_fee_admission_draft(
-                view.world(),
-                &nexus,
-                &view.pipeline,
-                draft.payload(),
-                1_000,
-                1,
-                Some(DataSpaceId::UNIVERSAL),
-            )
-            .expect("quote actual retirement fixture fee policy");
-            assert!(!quote.quote.charges.is_empty(), "fixture pays its real fee");
-            quote.recommended_intent
-        };
-        let signed = draft
-            .with_fee_payment_intent(fee_intent)
-            .sign(ALICE_KEYPAIR.private_key());
-        let transaction = AcceptedTransaction::accept_with_time_source(
-            signed,
-            state.network_id_ref(),
-            Duration::from_millis(10),
-            TransactionParameters::default(),
-            &iroha_config::parameters::actual::Crypto::default(),
-            &time,
-        )
-        .expect("accept funded retirement fixture transaction");
-        let route = queue
-            .route_plan_with_state(&transaction, state)
-            .expect("fixture route");
-
-        assert_eq!(route.coordinator_route().lane_id, LaneId::new(1));
-        queue
-            .push_with_lane_with_state_and_routing_plan(transaction, state, route)
-            .expect("enqueue actual retirement fixture work");
-        (queue, clock)
-    }
-
     fn accepted_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
         accepted_tx_by(
             AccountId::new(ALICE_KEYPAIR.public_key().clone()),

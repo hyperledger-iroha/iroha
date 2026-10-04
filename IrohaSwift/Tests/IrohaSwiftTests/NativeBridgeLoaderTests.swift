@@ -505,7 +505,7 @@ final class BridgePolicyHintTests: XCTestCase {
 final class BridgeAvailabilitySurfaceTests: XCTestCase {
     func testTransferEncodingFailsWhenBridgeUnavailable() throws {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 7, count: 32))
-        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let authority = try AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(networkId: TestNetworkIds.canonical,
                                       authority: authority,
                                       assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",

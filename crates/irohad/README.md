@@ -244,12 +244,18 @@ The source tree provides `RuntimeProviderBrokerDeploymentV1` as the standard
 deployment assembly around the injected `serve_runtime_provider_broker_v1`
 server boundary. `RuntimeProviderBrokerExecutableV1` adds the common process
 shell: a two-public-argument `RuntimeProviderBrokerExecutableArgsV1` CLI
-(`--catalog` and required `--broker-endpoint`), secure
-bounded canonical-catalog loading, redacted failures, supervisor-owned
+(`--catalog` and required `--broker-policy`), secure
+bounded canonical-catalog and TOML-policy loading, redacted failures, supervisor-owned
 readiness/lifecycle hooks, and SIGINT/SIGTERM shutdown. Its
 `RuntimeProviderBrokerBackendRegistryV1` receives only the sanitized non-empty
 public catalog, and the assembled launch performs exact live server
-qualification before readiness.
+qualification before readiness. Deployment and server APIs receive the complete
+parsed `actual::RuntimeProviderBroker` policy. The standalone public TOML file
+contains that table's fields directly; it is root-owned, read-only, single-link,
+and bounded to 16 KiB. Its `observer_operation_timeout_ms` defaults to 15000
+and accepts 1..=15000 with no environment override. The original deadline
+starts before admitted observer dispatch and spans reply publication. A
+synchronous provider cannot be cancelled in flight, and late output is rejected.
 The server accepts canonical non-empty client subsets of that catalog so the
 stock daemon and packaged standalone services can share one configured endpoint;
 the handshake requires the same exact genesis-derived `NetworkId` and every
@@ -667,3 +673,14 @@ docker compose -f defaults/docker-compose.yml up --build -d
     ```bash
     docker compose -f defaults/docker-compose.yml down
     ```
+
+### Native publication pin custody
+
+`NativeMusubiPinCoordinatorV1` uses the portable wallet journal for exact source,
+unsigned payload, signed envelope and permanent exposure custody. Each effect
+follows an actual signed native Check round; ordinary Queue admission and native
+Advance CAS remain authoritative. Reopen never creates a session or renews the
+original UTC, Nexus fee or round authorization. Cancellation preserves originals
+for read-only recovery. Native pin pricing is separate from those Nexus ceilings.
+The concrete storage backend, complete three-provider publication and physical
+Queue allocation qualification remain required before activating this path.

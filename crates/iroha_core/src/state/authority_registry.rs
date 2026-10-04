@@ -22,31 +22,10 @@ use norito::{NoritoSchema, codec::Encode};
 // Borrow concrete original current/undo owners without admitting arbitrary row suppliers.
 pub(super) mod original_images;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: consume checked native alias ownership in complete State/Kura publication"
-    )
-)]
 mod account_alias_ownership;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: consume checked native account identities in complete State/Kura publication"
-    )
-)]
 mod account_identity_ownership;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: consume checked native NFT, RWA and escrow groups in complete State/Kura publication"
-    )
-)]
 mod grouped_ownership;
 
 /// Fixed bare payload layout for a canonical V1 State leaf.
@@ -251,13 +230,6 @@ mod content_policy;
     )
 )]
 mod crypto_policy;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: consume checked native domain ownership in complete State/Kura publication"
-    )
-)]
 mod domain_ownership;
 #[cfg_attr(
     not(test),

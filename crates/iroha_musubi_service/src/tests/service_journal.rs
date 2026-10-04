@@ -856,6 +856,7 @@ fn control_service_fixture(
     };
     let storage_response = MusubiStorageCoordinationResponseV1 {
         version: 1,
+        request_digest: storage_request.canonical_request_digest().unwrap(),
         archive,
         location_id,
         pin_manifest,
@@ -863,7 +864,10 @@ fn control_service_fixture(
         renew_after_epoch: 10,
         expires_at_epoch: 20,
         disposition: MusubiStorageLocationDispositionV1::NeedsRegistration {
-            provider_attestations: provider_attestations.clone(),
+            completed_providers: provider_attestations
+                .iter()
+                .map(|a| a.key().provider_id)
+                .collect(),
             expected_location_revision: 1,
         },
     };

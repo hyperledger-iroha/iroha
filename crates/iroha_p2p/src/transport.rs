@@ -2084,7 +2084,7 @@ mod tests {
         let debug = format!("{opts:?}");
         assert_eq!(
             debug,
-            "TcpConnectOptions { proxy: ProxyPolicy { proxy: Some(Proxy { kind: HttpConnectTls, host: \"proxy.example\", port: 8443, auth_present: true }), no_proxy_count: 2 }, proxy_tls_verify: true, proxy_tls_pin_present: true, proxy_tls_pin_len: 25, tcp_nodelay: true, tcp_keepalive: None }"
+            "TcpConnectOptions { proxy: ProxyPolicy { proxy: Some(Proxy { kind: HttpConnectTls, host: \"proxy.example\", port: 8443, auth_present: true }), no_proxy_count: 2 }, proxy_tls_verify: true, proxy_tls_pin_present: true, proxy_tls_pin_len: 25, tcp_nodelay: true, tcp_keepalive: None, .. }"
         );
         for secret in [
             "UNIQUE_PROXY_USER",

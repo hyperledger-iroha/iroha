@@ -14,7 +14,8 @@ function trust() {
 function projection() {
   return { schema: "iroha.validation_fee.verified_policy_projection.v1", version: 1,
     network_id: network.toString(), policy_chain_genesis_hash: "35".repeat(32),
-    registry_hash: "79".repeat(32), head_policy_version: 1, head_policy_hash: "ab".repeat(32), current_policy: null,
+    registry_hash: "79".repeat(32), head_policy_version: 1, head_policy_hash: "ab".repeat(32),
+    current_policy: null, conversion_policy: null,
     trusted_checkpoint_height: 100, trusted_checkpoint_context_id: "57".repeat(32),
     evaluated_block_height: 127, evaluated_context_id: "bd".repeat(32), evaluated_block_hash: "df".repeat(32),
     observed_ledger_tip_height: 127, more_available: false };

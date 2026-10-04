@@ -746,10 +746,12 @@ async fn advance_exact_rotation_phase(
     );
     let client = peers[0].client();
     read_on_dedicated_thread(move || {
-        client.submit(
-            Log::new(Level::INFO, format!("rotation DKG exact phase h{height}")),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
+        committee_status::submit_until(client, deadline, |bounded| {
+            bounded.submit(
+                Log::new(Level::INFO, format!("rotation DKG exact phase h{height}")),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+        })
     })
     .await
     .wrap_err("rotation DKG phase submit worker failed")?;
@@ -792,10 +794,12 @@ async fn advance_exact_genesis_phase(
     );
     let client = network.validators()[0].client();
     read_on_dedicated_thread(move || {
-        client.submit(
-            Log::new(Level::INFO, format!("genesis DKG exact phase h{height}")),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
+        committee_status::submit_until(client, deadline, |bounded| {
+            bounded.submit(
+                Log::new(Level::INFO, format!("genesis DKG exact phase h{height}")),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+        })
     })
     .await
     .wrap_err("genesis DKG phase submit worker failed")?;
@@ -1994,6 +1998,9 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             // Admission may retain a larger candidate pool than the seven-seat
             // consensus ceiling; the authenticated election selects exactly 3f+1.
             layer.write(["nexus", "staking", "max_validators"], registry_capacity);
+            // Retain durable vote and driver evidence across each paid rotation
+            // and all-seat restart so a stalled readiness submission is diagnosable.
+            layer.write(["logger", "filter"], "info,iroha_core::sumeragi=debug");
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos.into_custom_parameter(),
@@ -2024,7 +2031,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             &network,
             finality_limits(),
             5,
-            |height| {
+            |height, _public_snapshot| {
                 let admin = admin.clone();
                 async move {
                     advance_exact_genesis_phase(network_ref, height).await?;

@@ -214,6 +214,10 @@ public struct TransferRequest: Sendable {
     public let assetDefinitionId: String // e.g., "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
     public let quantity: String         // decimal string
     public let destination: String      // i105 account id
+    /// Transfer memo. Not encoded by the native bridge yet: building a transfer
+    /// with a non-empty description throws
+    /// `TransactionInputError.transferDescriptionUnsupported` instead of
+    /// silently signing a transaction without it.
     public let description: String?
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
@@ -224,7 +228,7 @@ public struct TransferRequest: Sendable {
                 assetDefinitionId: String,
                 quantity: String,
                 destination: String,
-                description: String?,
+                description: String? = nil,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000,
                 nonce: UInt32? = nil) {
@@ -2268,18 +2272,6 @@ public final class IrohaSDK: @unchecked Sendable {
         NoritoNativeBridge.shared.decodeSignedTransaction(envelope.norito)
     }
 
-    public func getAssets(accountId: String,
-                          limit: Int = 100,
-                          asset: String? = nil,
-                          scope: String? = nil,
-                          completion: @Sendable @escaping (Result<[ToriiAssetBalance], Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
-        toriiRestClient.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope, completion: completion)
-    }
-
     @available(iOS 15.0, macOS 12.0, *)
     public func getExplorerInstructions(params: ToriiExplorerInstructionsParams? = nil,
                                          completion: @Sendable @escaping (Result<ToriiExplorerInstructionsPage, Error>) -> Void) {
@@ -2533,16 +2525,6 @@ extension IrohaSDK {
 
 @available(iOS 15.0, macOS 12.0, *)
 public extension IrohaSDK {
-    func getAssets(accountId: String,
-                   limit: Int = 100,
-                   asset: String? = nil,
-                   scope: String? = nil) async throws -> [ToriiAssetBalance] {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await toriiRestClient.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope)
-    }
-
     func prepareDetachedAssetTransfer(
         _ request: ToriiAssetTransferRequest
     ) async throws -> ToriiAssetTransferDraft {

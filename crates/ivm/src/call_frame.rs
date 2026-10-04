@@ -666,21 +666,34 @@ impl CallFrameMemory {
 
     /// Borrow actual active descriptor values for the sealed native packet owner.
     pub(crate) fn native_packet_descriptor(&self) -> Option<[u64; 8]> {
-        self.frames.last().map(|frame| [
-            frame.stack.region.start, frame.stack.region.end,
-            frame.arguments.start, frame.arguments.end,
-            frame.results.region.start, frame.results.region.end,
-            frame.entry_stack_pointer, frame.entry_pc,
-        ])
+        self.frames.last().map(|frame| {
+            [
+                frame.stack.region.start,
+                frame.stack.region.end,
+                frame.arguments.start,
+                frame.arguments.end,
+                frame.results.region.start,
+                frame.results.region.end,
+                frame.entry_stack_pointer,
+                frame.entry_pc,
+            ]
+        })
     }
 
     /// Actual initialized bits for an absolute aligned cell, without allocating.
     pub(crate) fn native_packet_initialized(&self, address: u64) -> u16 {
-        let Some(frame) = self.frames.last() else { return 0; };
+        let Some(frame) = self.frames.last() else {
+            return 0;
+        };
         (0..16).fold(0, |mask, byte| {
-            let Some(start) = address.checked_add(byte) else { return mask; };
-            let Ok(one) = Region::new(start, 1) else { return mask; };
-            mask | (u16::from(frame.stack.initialized(one) || frame.results.initialized(one)) << byte)
+            let Some(start) = address.checked_add(byte) else {
+                return mask;
+            };
+            let Ok(one) = Region::new(start, 1) else {
+                return mask;
+            };
+            mask | (u16::from(frame.stack.initialized(one) || frame.results.initialized(one))
+                << byte)
         })
     }
 

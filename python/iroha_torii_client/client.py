@@ -137,7 +137,9 @@ from .client_status_models import (
     SumeragiEvidenceOffender,
     parse_sumeragi_json_object,
 )
+from .collection import CollectionsMixin
 from .election_tally import ElectionTally
+from .errors import error_for_response
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .governance_proposals import _contract_address as _canonical_contract_address
@@ -1045,6 +1047,67 @@ def _read_bounded_response_body(
         return bytes(body)
     finally:
         response.close()
+
+
+#: Upper bound for one collection page (500 full rows of the largest collection).
+_COLLECTION_PAGE_MAX_BYTES = 32 * 1024 * 1024
+
+
+def _release_response(response: requests.Response) -> None:
+    # A response without a transport (``raw is None``) holds no connection.
+    if getattr(response, "raw", None) is not None:
+        response.close()
+
+
+def _read_collection_page(response: requests.Response, context: str) -> bytes:
+    content_type = response.headers.get("Content-Type")
+    if (
+        not isinstance(content_type, str)
+        or content_type.split(";", 1)[0].strip().lower() != "application/json"
+    ):
+        _release_response(response)
+        raise ValueError(f"{context} response must be application/json")
+    buffered = getattr(response, "_content", False)
+    if isinstance(buffered, (bytes, bytearray)):
+        _release_response(response)
+        if len(buffered) > _COLLECTION_PAGE_MAX_BYTES:
+            raise ValueError(
+                f"{context} response exceeds its {_COLLECTION_PAGE_MAX_BYTES}-byte size bound"
+            )
+        return bytes(buffered)
+    return _read_bounded_response_body(response, _COLLECTION_PAGE_MAX_BYTES, context)
+
+
+def _decode_collection_json(raw: bytes, context: str) -> Any:
+    """Decode exact JSON: decimals stay ``Decimal``, duplicate keys and NaN are rejected."""
+
+    if not raw:
+        raise ValueError(f"{context} returned an empty body")
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{context} response must be strict UTF-8") from exc
+
+    def unique_object(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+        decoded: Dict[str, Any] = {}
+        for key, value in pairs:
+            if key in decoded:
+                raise ValueError(f"{context} response repeats the JSON key {key!r}")
+            decoded[key] = value
+        return decoded
+
+    def reject_constant(name: str) -> Any:
+        raise ValueError(f"{context} response contains the non-finite number {name}")
+
+    try:
+        return json.loads(
+            text,
+            parse_float=Decimal,
+            parse_constant=reject_constant,
+            object_pairs_hook=unique_object,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{context} response is not valid JSON: {exc}") from exc
 
 
 def canonical_request_message(
@@ -3991,8 +4054,21 @@ class ToriiClient(
     _ToriiClientGovernanceBallotMixin,
     ParliamentApiV1Mixin,
     RuntimeGovernanceAuthMixin,
+    CollectionsMixin,
 ):
-    """HTTP helper for Torii attachments, prover, and governance endpoints."""
+    """HTTP client for Torii collections, attachments, prover and governance endpoints.
+
+    Collections (``client.domains``, ``client.accounts``, ``client.asset_definitions``,
+    ``client.nfts``, ``client.rwas``, ``client.transactions``,
+    ``client.repo_agreements`` and their nested ``accounts.assets(id)``,
+    ``accounts.transactions(id)`` and ``asset_definitions.holders(id)``) sign with
+    ``canonical_request_auth`` when it is
+    configured and are anonymous otherwise. ``timeout`` (seconds) applies to every
+    request that does not pass its own. Use the client as a context manager (or call
+    :meth:`close`) to release the HTTP session it creates; a caller-supplied
+    ``session`` stays caller-owned.
+    """
+
     def __init__(
         self,
         base_url: str,
@@ -4000,6 +4076,8 @@ class ToriiClient(
         *,
         local_signing_context: Optional[ToriiLocalSigningContext] = None,
         operator_signing_context: Optional[ToriiOperatorSigningContext] = None,
+        canonical_request_auth: Optional["ToriiCanonicalRequestAuth"] = None,
+        timeout: float = 30.0,
         orderbook_native_verifier: Any = None,
         orderbook_chain_discriminant: Optional[int] = None,
         private_settlement_native_verifier: Any = None,
@@ -4011,8 +4089,26 @@ class ToriiClient(
             raise TypeError(
                 "operator_signing_context must be ToriiOperatorSigningContext"
             )
+        if canonical_request_auth is not None and not isinstance(
+            canonical_request_auth,
+            ToriiCanonicalRequestAuth,
+        ):
+            raise TypeError("canonical_request_auth must be ToriiCanonicalRequestAuth")
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValueError("timeout must be a positive finite number of seconds")
         self._base_url = base_url.rstrip("/")
-        self._session = session if session is not None else requests.Session()
+        self._owns_session = session is None
+        if session is None:
+            session = requests.Session()
+            session.trust_env = False
+        self._session = session
+        self._timeout = float(timeout)
+        self._canonical_request_auth = canonical_request_auth
         self._status_state = _StatusMetricsState()
         self._local_signing_context = local_signing_context
         self._operator_signing_context = operator_signing_context
@@ -4021,6 +4117,18 @@ class ToriiClient(
         self._configure_private_settlement_native_verifier(
             private_settlement_native_verifier
         )
+
+    def close(self) -> None:
+        """Close the HTTP session this client created; a caller-supplied session stays open."""
+
+        if self._owns_session:
+            self._session.close()
+
+    def __enter__(self) -> "ToriiClient":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
+        self.close()
 
     def _sorafs_orderbook_expected_chain_discriminant(self, context: str) -> int:
         return require_orderbook_chain_discriminant(self._orderbook_chain_discriminant, context)
@@ -7518,7 +7626,7 @@ class ToriiClient(
         data: Optional[bytes] = None,
         stream: bool = False,
         allow_retry: bool = True,
-        allow_redirects: bool = True,
+        allow_redirects: bool = False,
         timeout: Optional[float] = None,
     ) -> requests.Response:
         return _send_request(
@@ -7532,7 +7640,7 @@ class ToriiClient(
             stream=stream,
             allow_retry=allow_retry,
             allow_redirects=allow_redirects,
-            timeout=timeout,
+            timeout=self._timeout if timeout is None else timeout,
             build_headers=build_canonical_request_headers,
             build_operator_headers=build_operator_request_headers,
         )
@@ -7545,23 +7653,66 @@ class ToriiClient(
         maximum_body_bytes: Optional[int] = None,
         context: str = "Torii",
     ) -> None:
+        """Raise the typed :class:`~iroha_torii_client.errors.ToriiError` for unexpected statuses.
+
+        ``maximum_body_bytes`` makes the error-body read strict (oversized or
+        non-UTF-8 bodies raise ``ValueError``); otherwise a bounded preview is read.
+        """
+
         expected_set = set(expected)
         if response.status_code in expected_set:
             return
+        label = None if context == "Torii" else context
         if maximum_body_bytes is None:
-            message = _format_error_body(response.text)
-        else:
-            body = _read_bounded_response_body(
-                response, maximum_body_bytes, f"{context} error"
-            )
-            try:
-                text = body.decode("utf-8", "strict")
-            except UnicodeDecodeError as exc:
-                raise ValueError(f"{context} error response body must be strict UTF-8") from exc
-            message = _format_error_body(text)
-        raise RuntimeError(
-            f"unexpected status {response.status_code}; expected {sorted(expected_set)}; body={message}"
+            raise error_for_response(response, expected=expected_set, context=label)
+        body = _read_bounded_response_body(
+            response, maximum_body_bytes, f"{context} error"
         )
+        try:
+            body.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{context} error response body must be strict UTF-8") from exc
+        raise error_for_response(response, expected=expected_set, context=label, body=body)
+
+    def _query_collection(
+        self,
+        path: str,
+        body: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> Any:
+        """``POST`` a collection query and decode the JSON page (exact decimals, no floats).
+
+        The request is signed with ``canonical_request_auth`` when configured
+        (signed requests are sent once, without redirects); otherwise it is
+        anonymous. Errors raise :class:`~iroha_torii_client.errors.ToriiError`.
+        """
+
+        payload = json.dumps(
+            body, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        canonical_auth = self._canonical_request_auth
+        headers = self._canonical_request_headers(
+            "POST",
+            path,
+            payload,
+            canonical_auth=canonical_auth,
+            headers={"Accept": "application/json"},
+            has_body=True,
+        )
+        response = self._request(
+            "POST",
+            path,
+            headers=headers,
+            data=payload,
+            stream=True,
+            allow_retry=canonical_auth is None,
+            allow_redirects=False,
+        )
+        if response.status_code != 200:
+            raise error_for_response(response, expected=(200,), context=context)
+        raw = _read_collection_page(response, context)
+        return _decode_collection_json(raw, context)
 
     @staticmethod
     def _clean_params(params: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:

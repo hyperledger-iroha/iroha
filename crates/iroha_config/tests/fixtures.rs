@@ -2543,3 +2543,118 @@ fn standalone_credential_registry_policy_matches_root_and_is_strict() {
         );
     }
 }
+
+/// Node and standalone broker policies share one finite file-configured operation bound.
+#[test]
+fn broker_observer_operation_timeout_is_finite_and_shared_with_standalone_policy() {
+    use iroha_config::parameters::actual::RuntimeProviderBroker;
+
+    let parse = |milliseconds: Option<u64>| {
+        let fields = milliseconds.map_or_else(String::new, |value| {
+            format!("observer_operation_timeout_ms = {value}\n")
+        });
+        RuntimeProviderBroker::from_toml_source(TomlSource::inline(
+            fields.parse().expect("broker policy TOML"),
+        ))
+    };
+    assert_eq!(
+        parse(None).unwrap().observer_operation_timeout,
+        defaults::runtime_provider_broker::OBSERVER_OPERATION_TIMEOUT
+    );
+    for milliseconds in [1, 4_000, 15_000] {
+        let standalone = parse(Some(milliseconds)).unwrap();
+        let root = ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(
+                format!(
+                    "[runtime_provider_broker]\nobserver_operation_timeout_ms = {milliseconds}\n"
+                )
+                .parse()
+                .unwrap(),
+            ))
+            .read_and_complete::<UserConfig>()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(standalone, root.runtime_provider_broker);
+        assert_eq!(
+            standalone.observer_operation_timeout,
+            Duration::from_millis(milliseconds)
+        );
+    }
+    for milliseconds in [0, 15_001, 9_223_372_036_854_775_807] {
+        assert!(parse(Some(milliseconds)).is_err());
+        let parsed = ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(
+                format!(
+                    "[runtime_provider_broker]\nobserver_operation_timeout_ms = {milliseconds}\n"
+                )
+                .parse()
+                .unwrap(),
+            ))
+            .read_and_complete::<UserConfig>()
+            .unwrap()
+            .parse();
+        assert!(
+            parsed.is_err(),
+            "node policy accepted invalid operation bound {milliseconds}"
+        );
+    }
+    assert!(
+        RuntimeProviderBroker::from_toml_source(TomlSource::inline(
+            "observer_operation_timeout = 1".parse().unwrap(),
+        ))
+        .is_err()
+    );
+}
+
+/// Runtime broker policy values have no environment selector or override.
+#[test]
+fn broker_observer_operation_timeout_ignores_environment_overrides() {
+    let env = MockEnv::new()
+        .set("RUNTIME_PROVIDER_BROKER_OBSERVER_OPERATION_TIMEOUT_MS", "1")
+        .set("RUNTIME_PROVIDER_BROKER_ENDPOINT_PATH", "/tmp/wrong.sock")
+        .set("RUNTIME_PROVIDER_BROKER_CREDENTIAL_MAX_MEMORY_BYTES", "0");
+    for (table, expected) in [
+        ("", 15_000),
+        (
+            "[runtime_provider_broker]\nobserver_operation_timeout_ms = 4000\n",
+            4_000,
+        ),
+    ] {
+        let root = ConfigReader::new()
+            .with_env(env.clone())
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(table.parse().unwrap()))
+            .read_and_complete::<UserConfig>()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            root.runtime_provider_broker.observer_operation_timeout,
+            Duration::from_millis(expected)
+        );
+        assert_eq!(
+            root.runtime_provider_broker.endpoint_path.as_path(),
+            defaults::runtime_provider_broker::endpoint_path()
+        );
+        assert_eq!(
+            root.runtime_provider_broker.credential_max_memory_bytes,
+            defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+        );
+    }
+    assert_eq!(
+        env.unvisited(),
+        std::collections::HashSet::from([
+            "RUNTIME_PROVIDER_BROKER_OBSERVER_OPERATION_TIMEOUT_MS".to_owned(),
+            "RUNTIME_PROVIDER_BROKER_ENDPOINT_PATH".to_owned(),
+            "RUNTIME_PROVIDER_BROKER_CREDENTIAL_MAX_MEMORY_BYTES".to_owned(),
+        ])
+    );
+}

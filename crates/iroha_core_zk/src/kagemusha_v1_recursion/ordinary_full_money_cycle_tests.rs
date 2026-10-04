@@ -108,6 +108,8 @@ fn qualify_full_cycle() {
             sender.wrapper.keys.ep_verifying_key.as_ref(),
             wrapper_vk[1].as_ref()
         );
+        let wrapper_original: super::super::ordinary_cash_terminal_verifier::OrdinaryCashProofPairWireV1 =
+            norito::decode_canonical(&sender.wrapper.generated.original).unwrap();
         // Full final exact identities, not just compatible descriptors, must match every State
         // public incoming root and the actually generated Wrapper current/history proofs.
         for (held, actual, parity) in [(
@@ -131,15 +133,15 @@ fn qualify_full_cycle() {
         );
         assert_eq!(
             native_parent_protocol_digest_v1(&wrapper_ep, KagemushaPastaParityV1::Ep).unwrap(),
-            sender.wrapper.generated.public.ep_protocol_digest
+            wrapper_original.ep_protocol_digest
         );
         assert_eq!(
             sender.send.state_relation.commit_wrapper_eq_protocol_digest,
-            sender.wrapper.generated.public.eq_protocol_digest
+            wrapper_original.eq_protocol_digest
         );
         assert_eq!(
             sender.send.state_relation.commit_wrapper_ep_protocol_digest,
-            sender.wrapper.generated.public.ep_protocol_digest
+            wrapper_original.ep_protocol_digest
         );
         assert_eq!(sender.send.funded.state.balance, 177);
         assert_eq!(sender.send.state.balance, 160);

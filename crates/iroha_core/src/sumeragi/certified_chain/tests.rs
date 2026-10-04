@@ -41,6 +41,15 @@ fn chain() -> (CertifiedTestChain, HashOf<TransactionEntrypoint>) {
     (chain, entry)
 }
 
+// Construct and retain the genuine chain before entering assertion-heavy frames.
+// Native parent-service decoding still uses the original unchanged default stack.
+#[inline(never)]
+fn with_native_chain(assert_original: fn(&CertifiedTestChain, HashOf<TransactionEntrypoint>)) {
+    let (chain, entry) = chain();
+    let chain = Box::new(chain);
+    assert_original(&chain, entry);
+}
+
 fn frame(chain: &CertifiedTestChain, height: u64) -> iroha_data_model::block::SharedSignedBlock {
     chain
         .kura()
@@ -373,10 +382,17 @@ fn certified_reader_rejects_missing_foreign_and_corrupt_signed_availability() {
 /// the same consensus-visible receipt, and both certificates verify.
 #[test]
 fn two_valid_certificates_of_one_block_give_one_consensus_receipt() {
-    let (chain, entry) = chain();
+    with_native_chain(assert_two_valid_certificates_of_one_block_give_one_consensus_receipt);
+}
+
+#[inline(never)]
+fn assert_two_valid_certificates_of_one_block_give_one_consensus_receipt(
+    chain: &CertifiedTestChain,
+    entry: HashOf<TransactionEntrypoint>,
+) {
     let view = chain.state().view();
     let reader = CertifiedChain::new(&view).expect("reader");
-    let original = frame(&chain, 3);
+    let original = frame(chain, 3);
     let (_, qc) = decode_certificate(original.commit_certificate().unwrap()).unwrap();
     let other_qc = chain.commit_qc(3, qc.block_hash, qc.result, qc.attest, Signers::LastThree);
     assert_ne!(other_qc.signers, qc.signers);
@@ -591,11 +607,20 @@ fn genesis_payload_is_bound_to_its_signed_header_before_authority_is_read() {
 
 #[test]
 fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() {
-    let (chain, _) = chain();
-    let mut history = vec![frame(&chain, 1)];
-    let mut parent = read_frame(Clone::clone(&history[0]), 1).unwrap();
+    with_native_chain(
+        assert_installing_an_attestation_verifier_rechecks_the_previously_verified_prefix,
+    );
+}
+
+#[inline(never)]
+fn assert_installing_an_attestation_verifier_rechecks_the_previously_verified_prefix(
+    chain: &CertifiedTestChain,
+    _entry: HashOf<TransactionEntrypoint>,
+) {
+    let mut history = vec![frame(chain, 1)];
+    let mut parent = read_frame(history[0].clone(), 1).unwrap();
     for height in 2..=3 {
-        let original = frame(&chain, height);
+        let original = frame(chain, height);
         let certificate = original.commit_certificate().unwrap();
         let (mut header, _) = decode_certificate(certificate).unwrap();
         header.parent_hash = parent.core_hash();
@@ -928,6 +953,32 @@ fn portable_committee_uses_the_authenticated_original_epoch_members() {
     }
 }
 
+// Keep large reader/receipt values out of the assertion frame and the nested
+// Result<Vec<_>> collector. Verification still walks the same original frames
+// under the unchanged default test stack and production allocation limits.
+#[inline(never)]
+fn retain_native_frame_reader<'a>(
+    chain_id: &'a ChainId,
+    network: &'a NetworkId,
+    hashes: &'a [HashOf<IrohaHeader>],
+    frames: &'a [iroha_data_model::block::SharedSignedBlock],
+) -> Result<Box<CertifiedChain<'a, StateView<'a>>>, ExecutionAttemptError<ChainReadError>> {
+    CertifiedChain::from_frames(chain_id, network, hashes, frames).map(Box::new)
+}
+
+#[inline(never)]
+fn retain_native_walk<V: StateReadOnly + ?Sized>(
+    reader: &CertifiedChain<'_, V>,
+    first: u64,
+    last: u64,
+) -> Result<Vec<Box<CertifiedBlock>>, ExecutionAttemptError<ChainReadError>> {
+    let mut receipts = Vec::new();
+    for receipt in reader.walk(first, last) {
+        receipts.push(Box::new(receipt?));
+    }
+    Ok(receipts)
+}
+
 #[test]
 fn borrowed_native_frames_use_the_same_verifier_and_exact_cut() {
     let (chain, _) = chain();
@@ -937,8 +988,8 @@ fn borrowed_native_frames_use_the_same_verifier_and_exact_cut() {
         .map(|height| frame(&chain, height))
         .collect::<Vec<_>>();
     let hashes = frames.iter().map(|block| block.hash()).collect::<Vec<_>>();
-    let reader = CertifiedChain::from_frames(&chain_id, &network, &hashes, &frames).unwrap();
-    let reads = reader.walk(1, 3).collect::<Result<Vec<_>, _>>().unwrap();
+    let reader = retain_native_frame_reader(&chain_id, &network, &hashes, &frames).unwrap();
+    let reads = retain_native_walk(&reader, 1, 3).unwrap();
     assert_eq!(reads[0].verification(), QcVerification::Genesis);
     assert_eq!(reads[2].verification(), QcVerification::Verified);
     assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
@@ -952,27 +1003,33 @@ fn borrowed_native_frames_use_the_same_verifier_and_exact_cut() {
             ChainReadError::NotCommitted { height: 4 }
         ))
     );
-    assert!(CertifiedChain::from_frames(&chain_id, &network, &hashes[..2], &frames).is_err());
-    assert!(CertifiedChain::from_frames(&chain_id, &network, &[], &[]).is_err());
+    assert!(retain_native_frame_reader(&chain_id, &network, &hashes[..2], &frames).is_err());
+    assert!(retain_native_frame_reader(&chain_id, &network, &[], &[]).is_err());
     let foreign =
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign")));
     assert_eq!(
-        CertifiedChain::from_frames(&chain_id, &foreign, &hashes, &frames).err(),
+        retain_native_frame_reader(&chain_id, &foreign, &hashes, &frames).err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
             ChainReadError::ForeignGenesis
         ))
     );
     let other_chain = ChainId::from("foreign-instance");
-    let reader = CertifiedChain::from_frames(&other_chain, &network, &hashes, &frames).unwrap();
+    let reader = retain_native_frame_reader(&other_chain, &network, &hashes, &frames).unwrap();
     assert_eq!(
         reader.certified(3).err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
             ChainReadError::WrongInstance { height: 2 }
         ))
     );
+    assert_eq!(
+        retain_native_walk(&reader, 1, 3).err(),
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::WrongInstance { height: 2 }
+        ))
+    );
     let mut reordered = frames.clone();
     reordered.swap(1, 2);
-    let reader = CertifiedChain::from_frames(&chain_id, &network, &hashes, &reordered).unwrap();
+    let reader = retain_native_frame_reader(&chain_id, &network, &hashes, &reordered).unwrap();
     assert_eq!(
         reader.certified(2).err(),
         Some(crate::execution_attempt::ExecutionAttemptError::Rejected(

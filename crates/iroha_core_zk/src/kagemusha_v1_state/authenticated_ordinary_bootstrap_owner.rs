@@ -4,10 +4,7 @@
 //! intake; the genuine issuer, Guard and State relations remain separate mandatory checks.
 
 use super::*;
-use crate::kagemusha_v1_recursion::{
-    KagemushaArtifactByteResolverV1, KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1,
-    KagemushaProductionProverV1,
-};
+use crate::kagemusha_v1_recursion::{KagemushaArtifactByteResolverV1, KagemushaProductionProverV1};
 use std::path::PathBuf;
 #[path = "ordinary_bootstrap_platform_attempt.rs"]
 mod platform_attempt;

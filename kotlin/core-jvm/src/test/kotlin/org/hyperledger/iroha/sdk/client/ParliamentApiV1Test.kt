@@ -221,7 +221,7 @@ class ParliamentApiV1Test {
     }
 
     @Test
-    fun attemptBuilderAdmitsExactlyTheThirteenFirstReleaseProposalKinds() {
+    fun attemptBuilderAdmitsExactlyTheFourteenFirstReleaseProposalKinds() {
         ParliamentApiV1.PROPOSAL_KINDS.forEach { kind ->
             val request = objectValue(
                 ParliamentApiV1.attemptDraftRequestJson(
@@ -231,7 +231,7 @@ class ParliamentApiV1Test {
             )
             assertEquals(kind, (request["proposal"] as Map<*, *>)["kind"])
         }
-        assertEquals(13, ParliamentApiV1.PROPOSAL_KINDS.size)
+        assertEquals(14, ParliamentApiV1.PROPOSAL_KINDS.size)
 
         val fullU64Policy = validProposal("ValidationFeePolicy")
         @Suppress("UNCHECKED_CAST")

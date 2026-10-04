@@ -81,11 +81,16 @@ pub(crate) fn serialize<K: mv::Key + Encode, V: mv::Value + Encode>(
 }
 
 /// Encode the exact staged post-commit maps without losing their original undo.
-pub(crate) fn serialize_block<K: mv::Key + Encode, V: mv::Value + Encode>(
-    store: &mv::storage::Block<'_, K, V>,
+#[cfg(test)]
+pub(crate) fn serialize_block<
+    K: mv::Key + Encode,
+    V: mv::Value + Encode,
+    M: mv::storage::StorageMode<K, V>,
+>(
+    store: &block_field::StorageField<'_, K, V, M>,
     out: &mut String,
 ) {
-    serialize_maps(store.revert_map().iter(), store.iter(), out);
+    serialize_maps(store.original_undo_entries(), store.iter(), out);
 }
 
 pub(super) fn decode_blob<T: DecodeAll + Encode>(

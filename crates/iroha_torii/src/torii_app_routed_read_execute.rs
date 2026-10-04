@@ -10,26 +10,6 @@ where
     }
 }
 #[cfg(feature = "app_api")]
-fn torii_read_fanout_request(
-    endpoint: ToriiReadEndpointV1,
-    route_scope: ToriiFanoutRouteScopeV1,
-    merge: ToriiReadFanoutMergeV1,
-    path_args: Vec<String>,
-    query_string: Option<String>,
-    body: Vec<u8>,
-    response_format: ToriiProxyResponseFormatV1,
-) -> ToriiReadFanoutProxyRequestV1 {
-    ToriiReadFanoutProxyRequestV1 {
-        endpoint,
-        route_scope,
-        merge,
-        path_args,
-        query_string,
-        body,
-        response_format,
-    }
-}
-#[cfg(feature = "app_api")]
 fn bounded_space_directory_manifest_shard_query(
     mut query: routing::SpaceDirectoryManifestQuery,
     page_offset: u64,
@@ -116,20 +96,18 @@ async fn resolve_torii_proof_record_for_supported_routes(
     }
     for route in &routes {
         diagnostics.record_attempt();
-        let response = execute_torii_read_for_route(
-            app,
+        let mut request = torii_read_request(
+            ToriiReadEndpointV1::ProofRecordGet,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             *route,
-            torii_read_request(
-                ToriiReadEndpointV1::ProofRecordGet,
-                ToriiFanoutRouteScopeV1::AllDataspaces,
-                *route,
-                vec![proof_id.clone()],
-                None,
-                Vec::new(),
-            ),
+            vec![proof_id.clone()],
             None,
-        )
-        .await;
+            Vec::new(),
+        );
+        // The bounded merge decodes a canonical ProofRecord archive. Request
+        // that same representation from both local and remote route producers.
+        request.response_format = ToriiProxyResponseFormatV1::Norito;
+        let response = execute_torii_read_for_route(app, *route, request, None).await;
         if response.status() == StatusCode::NOT_FOUND {
             diagnostics.record_skipped_response(&response);
             last_not_found = Some(summarize_skipped_torii_route_response(response));
@@ -993,6 +971,20 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
 ) -> Response {
     match merge {
         ToriiReadFanoutMergeV1::List => {
+            if let Some(target) = collection_target_for_read(endpoint, &path_args) {
+                return execute_collection_fanout(
+                    app,
+                    routes,
+                    route_scope,
+                    endpoint,
+                    target,
+                    path_args,
+                    query_string,
+                    body,
+                    proxy_memory,
+                )
+                .await;
+            }
             if endpoint == ToriiReadEndpointV1::AccountAssetsGet
                 && matches!(&route_scope, ToriiFanoutRouteScopeV1::TargetAccount { .. })
             {

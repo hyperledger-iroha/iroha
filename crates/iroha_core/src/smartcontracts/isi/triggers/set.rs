@@ -65,6 +65,119 @@ use std::{
     num::NonZeroU64,
 };
 use thiserror::Error;
+/// Typed stored filter used to project its canonical enum and allocation-free variants.
+#[derive(Clone, Copy)]
+pub(crate) enum BorrowedTriggerFilter<'a> {
+    /// Original pipeline selector.
+    Pipeline(&'a PipelineEventFilterBox),
+    /// Original data selector and its separate stored authorization metadata.
+    Data(&'a DataEventFilter),
+    /// Original fixed-size time selector.
+    Time(&'a TimeEventFilter),
+    /// Original invocation selector, including its bound authority.
+    ExecuteTrigger(&'a ExecuteTriggerEventFilter),
+}
+impl BorrowedTriggerFilter<'_> {
+    fn projection(&self) -> BorrowedEnumVariant<'_> {
+        let (discriminant, value): (u32, &dyn norito::core::SerializePayload) = match self {
+            Self::Pipeline(value) => (0, *value),
+            Self::Data(value) => (1, *value),
+            Self::Time(value) => (2, *value),
+            Self::ExecuteTrigger(value) => (3, *value),
+        };
+        BorrowedEnumVariant::new(discriminant, value)
+    }
+    fn try_own_without_staging(&self) -> Result<Option<EventFilterBox>, norito::Error> {
+        let owned = match self {
+            Self::Data(DataEventFilter::Any) => Some(DataEventFilter::Any.into()),
+            Self::Time(value) => Some((**value).into()),
+            Self::ExecuteTrigger(source) => {
+                let mut filter = ExecuteTriggerEventFilter::new();
+                if let Some(id) = source.trigger_id() {
+                    filter =
+                        filter.for_trigger(TriggerId::new(id.name().try_clone_for_admission()?));
+                }
+                if let Some(authority) = source.authority() {
+                    filter = filter.under_authority(authority.try_clone_for_admission()?);
+                }
+                Some(filter.into())
+            }
+            _ => None,
+        };
+        Ok(owned)
+    }
+}
+/// Borrowed original trigger and its validated fields for bounded ownership.
+/// The complete source remains the wire oracle and response identity.
+pub(crate) struct BorrowedTriggerSource<'a> {
+    full: &'a dyn norito::core::SerializePayload,
+    id: &'a TriggerId,
+    executable: &'a dyn norito::core::SerializePayload,
+    executable_source: &'a ExecutableRef,
+    repeats: Repeats,
+    authority: &'a AccountId,
+    filter: &'a dyn norito::core::SerializePayload,
+    filter_source: BorrowedTriggerFilter<'a>,
+    retry_policy: Option<TimeTriggerRetryPolicy>,
+    metadata: &'a Metadata,
+}
+impl BorrowedTriggerSource<'_> {
+    /// Original validated trigger name.
+    pub(crate) fn id(&self) -> &TriggerId {
+        self.id
+    }
+    /// Canonical executable enum projection, without an owned staging value.
+    pub(crate) fn executable(&self) -> &dyn norito::core::SerializePayload {
+        self.executable
+    }
+    /// Own an empty original instruction or batch vector without decoder staging.
+    pub(crate) fn allocation_free_executable(&self) -> Option<Executable> {
+        match self.executable_source {
+            ExecutableRef::Instructions(instructions) if instructions.is_empty() => {
+                Some(Executable::Instructions(ConstVec::new_empty()))
+            }
+            ExecutableRef::Batch(items) if items.is_empty() => {
+                Some(Executable::Batch(ConstVec::new_empty()))
+            }
+            _ => None,
+        }
+    }
+    /// Own supported typed selectors without decoder staging.
+    /// Variable-sized invocation identities retain their full fallible charges.
+    pub(crate) fn try_own_filter_without_staging(
+        &self,
+    ) -> Result<Option<EventFilterBox>, norito::Error> {
+        self.filter_source.try_own_without_staging()
+    }
+    /// Original repetition policy, containing no variable-size owner.
+    pub(crate) fn repeats(&self) -> Repeats {
+        self.repeats
+    }
+    /// Original canonical account identity.
+    pub(crate) fn authority(&self) -> &AccountId {
+        self.authority
+    }
+    /// Canonical filter enum projection, without an owned staging value.
+    pub(crate) fn filter(&self) -> &dyn norito::core::SerializePayload {
+        self.filter
+    }
+    /// Original retry policy, containing no variable-size owner.
+    pub(crate) fn retry_policy(&self) -> Option<TimeTriggerRetryPolicy> {
+        self.retry_policy
+    }
+    /// Original canonical metadata from the stored action.
+    pub(crate) fn metadata(&self) -> &Metadata {
+        self.metadata
+    }
+}
+impl norito::core::SerializePayload for BorrowedTriggerSource<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        self.full.serialize(writer)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.full.encoded_len_exact()
+    }
+}
 /// Error type for [`Set`] operations.
 #[derive(Debug, Error, displaydoc::Display)]
 pub enum Error {
@@ -1658,57 +1771,6 @@ pub trait SetReadOnly {
                     }),
             )
     }
-    /// Project one stored trigger through the active bounded singular-query corridor.
-    fn bounded_trigger<F>(
-        &self,
-        id: &TriggerId,
-        event_type: TriggeringEventType,
-        action: &LoadedAction<F>,
-    ) -> core::result::Result<Option<Trigger>, iroha_data_model::query::error::QueryExecutionFail>
-    where
-        F: norito::core::NoritoSerialize,
-    {
-        let (executable_discriminant, executable): (u32, &dyn norito::core::SerializePayload) =
-            match &action.executable {
-                ExecutableRef::Instructions(instructions) => (0, instructions),
-                ExecutableRef::ContractCall(invocation) => (1, invocation),
-                ExecutableRef::Ivm(blob_hash) => {
-                    let Some(contract) = self.get_original_contract(blob_hash) else {
-                        warn!(
-                            ?blob_hash,
-                            "missing original trigger bytecode; skipping trigger action"
-                        );
-                        return Ok(None);
-                    };
-                    (2, contract)
-                }
-                ExecutableRef::Batch(items) => (4, items),
-            };
-        let executable = BorrowedEnumVariant::new(executable_discriminant, executable);
-        let filter_discriminant = match event_type {
-            TriggeringEventType::Pipeline => 0,
-            TriggeringEventType::Data => 1,
-            TriggeringEventType::Time => 2,
-            TriggeringEventType::ExecuteTrigger => 3,
-        };
-        let filter = BorrowedEnumVariant::new(filter_discriminant, &action.filter);
-        let retry_policy = crate::smartcontracts::isi::query::BorrowedSingularOption::new(
-            action.retry_policy.as_ref(),
-        );
-        let action = crate::smartcontracts::isi::query::BorrowedSingularStruct::<6>::new([
-            &executable,
-            &action.repeats,
-            &action.authority,
-            &filter,
-            &retry_policy,
-            &action.metadata,
-        ]);
-        crate::smartcontracts::isi::query::own_singular_query_struct::<Trigger, 2>(
-            [id, &action],
-            || unreachable!("bounded trigger projection requires active singular limits"),
-        )
-        .map(Some)
-    }
     /// Resolve one trigger without cloning its variable-size action before the
     /// active singular-query corridor has admitted it.
     fn trigger_by_id_bounded(
@@ -1726,25 +1788,41 @@ pub trait SetReadOnly {
             TriggeringEventType::Data => self
                 .data_triggers()
                 .get(id)
-                .map(|action| self.bounded_trigger(id, event_type, action))
+                .map(|action| {
+                    self.bounded_trigger(id, BorrowedTriggerFilter::Data(&action.filter), action)
+                })
                 .transpose()?
                 .flatten(),
             TriggeringEventType::Pipeline => self
                 .pipeline_triggers()
                 .get(id)
-                .map(|action| self.bounded_trigger(id, event_type, action))
+                .map(|action| {
+                    self.bounded_trigger(
+                        id,
+                        BorrowedTriggerFilter::Pipeline(&action.filter),
+                        action,
+                    )
+                })
                 .transpose()?
                 .flatten(),
             TriggeringEventType::Time => self
                 .time_triggers()
                 .get(id)
-                .map(|action| self.bounded_trigger(id, event_type, action))
+                .map(|action| {
+                    self.bounded_trigger(id, BorrowedTriggerFilter::Time(&action.filter), action)
+                })
                 .transpose()?
                 .flatten(),
             TriggeringEventType::ExecuteTrigger => self
                 .by_call_triggers()
                 .get(id)
-                .map(|action| self.bounded_trigger(id, event_type, action))
+                .map(|action| {
+                    self.bounded_trigger(
+                        id,
+                        BorrowedTriggerFilter::ExecuteTrigger(&action.filter),
+                        action,
+                    )
+                })
                 .transpose()?
                 .flatten(),
         };
@@ -1953,6 +2031,132 @@ pub trait SetReadOnly {
         result
     }
 }
+/// Crate-owned projections of original stored triggers for bounded query admission.
+/// The public read-only store interface does not expose these source-owner types.
+pub(crate) trait BorrowedTriggerSourceReadOnly: SetReadOnly {
+    /// Visit original trigger rows in the same typed-store order as `triggers_iter`.
+    ///
+    /// Each row is a stack-only borrowed wire projection: its action and original
+    /// contract are never cloned. A missing original contract is reported as
+    /// `None`, so the caller can charge source work before continuing the scan.
+    /// Returning `Break` stops before any later action is inspected.
+    fn visit_borrowed_trigger_sources(
+        &self,
+        mut visitor: impl FnMut(
+            Option<&BorrowedTriggerSource<'_>>,
+        ) -> core::result::Result<
+            core::ops::ControlFlow<()>,
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
+    ) -> core::result::Result<(), iroha_data_model::query::error::QueryExecutionFail> {
+        macro_rules! visit_store {
+            ($store:expr, $kind:ident) => {
+                for (id, action) in $store.iter() {
+                    if self
+                        .with_borrowed_trigger_source(
+                            id,
+                            BorrowedTriggerFilter::$kind(&action.filter),
+                            action,
+                            &mut visitor,
+                        )?
+                        .is_break()
+                    {
+                        return Ok(());
+                    }
+                }
+            };
+        }
+        visit_store!(self.data_triggers(), Data);
+        visit_store!(self.pipeline_triggers(), Pipeline);
+        visit_store!(self.time_triggers(), Time);
+        visit_store!(self.by_call_triggers(), ExecuteTrigger);
+        Ok(())
+    }
+    /// Borrow one wire-equivalent trigger without owning any variable-size field.
+    fn with_borrowed_trigger_source<F, R>(
+        &self,
+        id: &TriggerId,
+        filter_source: BorrowedTriggerFilter<'_>,
+        action: &LoadedAction<F>,
+        visitor: impl FnOnce(
+            Option<&BorrowedTriggerSource<'_>>,
+        ) -> core::result::Result<
+            R,
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
+    ) -> core::result::Result<R, iroha_data_model::query::error::QueryExecutionFail>
+    where
+        F: norito::core::NoritoSerialize,
+    {
+        let (executable_discriminant, executable): (u32, &dyn norito::core::SerializePayload) =
+            match &action.executable {
+                ExecutableRef::Instructions(instructions) => (0, instructions),
+                ExecutableRef::ContractCall(invocation) => (1, invocation),
+                ExecutableRef::Ivm(blob_hash) => {
+                    let Some(contract) = self.get_original_contract(blob_hash) else {
+                        warn!(
+                            ?blob_hash,
+                            "missing original trigger bytecode; skipping trigger action"
+                        );
+                        return visitor(None);
+                    };
+                    (2, contract)
+                }
+                ExecutableRef::Batch(items) => (4, items),
+            };
+        let executable = BorrowedEnumVariant::new(executable_discriminant, executable);
+        let filter = filter_source.projection();
+        let retry_policy = crate::smartcontracts::isi::query::BorrowedSingularOption::new(
+            action.retry_policy.as_ref(),
+        );
+        let metadata = &action.metadata;
+        let full_action = crate::smartcontracts::isi::query::BorrowedSingularStruct::<6>::new([
+            &executable,
+            &action.repeats,
+            &action.authority,
+            &filter,
+            &retry_policy,
+            metadata,
+        ]);
+        let full_trigger =
+            crate::smartcontracts::isi::query::BorrowedSingularStruct::<2>::new([id, &full_action]);
+        visitor(Some(&BorrowedTriggerSource {
+            full: &full_trigger,
+            id,
+            executable: &executable,
+            executable_source: &action.executable,
+            repeats: action.repeats,
+            authority: &action.authority,
+            filter: &filter,
+            filter_source,
+            retry_policy: action.retry_policy,
+            metadata,
+        }))
+    }
+    /// Project one stored trigger through the active bounded singular-query corridor.
+    fn bounded_trigger<F>(
+        &self,
+        id: &TriggerId,
+        filter: BorrowedTriggerFilter<'_>,
+        action: &LoadedAction<F>,
+    ) -> core::result::Result<Option<Trigger>, iroha_data_model::query::error::QueryExecutionFail>
+    where
+        F: norito::core::NoritoSerialize,
+    {
+        self.with_borrowed_trigger_source(id, filter, action, |source| {
+            source
+                .map(|source| {
+                    crate::smartcontracts::isi::query::own_singular_query_serialized_source::<
+                        _,
+                        Trigger,
+                    >(WorldDeltaFieldRef(source))
+                })
+                .transpose()
+        })
+    }
+}
+impl<T: SetReadOnly + ?Sized> BorrowedTriggerSourceReadOnly for T {}
+
 macro_rules! impl_set_ro {
     ($($ident:ty),*) => {$(
         impl SetReadOnly for $ident {
@@ -4013,6 +4217,96 @@ impl TryFrom<SetDto> for Set {
 }
 #[cfg(test)]
 mod dto_tests {
+    #[test]
+    fn typed_invocation_filter_owns_exact_original_identities_and_outer_budget() {
+        use super::*;
+        use norito::core::with_decode_limits_measured;
+        let source = ExecuteTriggerEventFilter::new()
+            .for_trigger("original_long_invocation_trigger_id".parse().unwrap())
+            .under_authority(iroha_test_samples::ALICE_ID.clone());
+        let original =
+            norito::encode_canonical(&EventFilterBox::ExecuteTrigger(source.clone())).unwrap();
+        let limits = |allocation| norito::DecodeLimits::new(0, 0, 0, allocation, 1);
+        let (copied, usage) = with_decode_limits_measured(limits(1024), || {
+            BorrowedTriggerFilter::ExecuteTrigger(&source).try_own_without_staging()
+        });
+        let copied = copied.unwrap().unwrap();
+        let exact = usage.total_allocated_bytes();
+        assert!(exact > source.trigger_id().unwrap().name().as_ref().len());
+        assert_eq!(norito::encode_canonical(&copied).unwrap(), original);
+        let exact_copy = with_decode_limits_measured(limits(exact), || {
+            BorrowedTriggerFilter::ExecuteTrigger(&source).try_own_without_staging()
+        })
+        .0
+        .unwrap()
+        .unwrap();
+        assert_eq!(norito::encode_canonical(&exact_copy).unwrap(), original);
+        let ((refused, _), outer_usage) = with_decode_limits_measured(limits(exact - 1), || {
+            with_decode_limits_measured(limits(exact), || {
+                BorrowedTriggerFilter::ExecuteTrigger(&source).try_own_without_staging()
+            })
+        });
+        assert!(refused.unwrap_err().is_decode_resource_limit());
+        assert!(outer_usage.total_allocated_bytes() < exact);
+        // Missing authority is preserved; this helper cannot create a grant.
+        let unbound = ExecuteTriggerEventFilter::new().for_trigger("unbound".parse().unwrap());
+        let unbound_copy = BorrowedTriggerFilter::ExecuteTrigger(&unbound)
+            .try_own_without_staging()
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(unbound_copy, EventFilterBox::ExecuteTrigger(filter) if filter.authority().is_none())
+        );
+        drop(source);
+        assert_eq!(norito::encode_canonical(&copied).unwrap(), original);
+    }
+    #[test]
+    fn typed_allocation_free_filter_projection_preserves_original_bytes() {
+        use super::*;
+        use iroha_data_model::events::time::{ExecutionTime, Schedule};
+        let any = DataEventFilter::Any;
+        let game = DataEventFilter::GameSession(Some(Hash::prehashed([7; 32])));
+        let time = TimeEventFilter(ExecutionTime::PreCommit);
+        let scheduled = TimeEventFilter(ExecutionTime::Schedule(Schedule {
+            start_ms: 17,
+            period_ms: Some(23),
+        }));
+        for filter in [
+            BorrowedTriggerFilter::Data(&any),
+            BorrowedTriggerFilter::Time(&time),
+            BorrowedTriggerFilter::Time(&scheduled),
+        ] {
+            let owned = filter.try_own_without_staging().unwrap().unwrap();
+            let _flags =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let mut projected = Vec::new();
+            let mut original = Vec::new();
+            norito::core::serialize_to_buffer(&filter.projection(), &mut projected).unwrap();
+            norito::core::serialize_to_buffer(&owned, &mut original).unwrap();
+            assert_eq!(projected, original);
+        }
+        assert!(
+            BorrowedTriggerFilter::Data(&game)
+                .try_own_without_staging()
+                .unwrap()
+                .is_none()
+        );
+        let pipeline = PipelineEventFilterBox::from(
+            iroha_data_model::events::pipeline::BlockEventFilter::new(),
+        );
+        assert!(
+            BorrowedTriggerFilter::Pipeline(&pipeline)
+                .try_own_without_staging()
+                .unwrap()
+                .is_none()
+        );
+        let by_call = ExecuteTriggerEventFilter::new();
+        let copied = BorrowedTriggerFilter::ExecuteTrigger(&by_call)
+            .try_own_without_staging()
+            .unwrap()
+            .unwrap();
+        assert_eq!(copied, EventFilterBox::ExecuteTrigger(by_call));
+    }
     use super::*;
     use crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing;
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
@@ -4118,6 +4412,57 @@ mod dto_tests {
             block.commit();
         }
         set
+    }
+    #[test]
+    fn borrowed_trigger_inventory_matches_every_original_typed_action_frame() {
+        let set = sample_set();
+        let view = set.view();
+        let expected = view.triggers_iter().collect::<Vec<_>>();
+        let mut frames = Vec::new();
+        view.visit_borrowed_trigger_sources(|source| {
+            let source = source.expect("every sample contract exists");
+            frames.push(
+                crate::smartcontracts::isi::query::encode_singular_query_source_for_test::<
+                    _,
+                    dm::Trigger,
+                >(&WorldDeltaFieldRef(source)),
+            );
+            Ok(core::ops::ControlFlow::Continue(()))
+        })
+        .unwrap();
+        assert_eq!(frames.len(), 4);
+        for (frame, expected) in frames.iter().zip(&expected) {
+            assert_eq!(frame, &norito::encode_canonical(expected).unwrap());
+            assert_eq!(
+                norito::decode_canonical::<dm::Trigger>(frame).unwrap(),
+                *expected
+            );
+        }
+    }
+    #[test]
+    fn borrowed_trigger_inventory_reports_missing_contract_and_stops_at_exact_prefix() {
+        let mut set = sample_set();
+        let hash = HashOf::new(&IvmBytecode::from_compiled(vec![0xAA, 0xBB]));
+        assert!(set.remove_contract_for_test(hash));
+        let view = set.view();
+        let mut examined = 0;
+        let mut missing = 0;
+        view.visit_borrowed_trigger_sources(|source| {
+            examined += 1;
+            missing += usize::from(source.is_none());
+            Ok(core::ops::ControlFlow::Continue(()))
+        })
+        .unwrap();
+        assert_eq!((examined, missing), (4, 1));
+        assert_eq!(view.triggers_iter().count(), 3);
+        examined = 0;
+        view.visit_borrowed_trigger_sources(|source| {
+            assert!(source.is_some());
+            examined += 1;
+            Ok(core::ops::ControlFlow::Break(()))
+        })
+        .unwrap();
+        assert_eq!(examined, 1, "later action or contract is never inspected");
     }
     fn active_trigger_ids(set: &Set) -> Vec<dm::TriggerId> {
         let mut ids: Vec<_> = set.view().active_trigger_ids_iter().cloned().collect();

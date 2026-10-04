@@ -64,7 +64,7 @@ pub struct SubscriptionPlanCreateResponse {
     frame = "iroha_torii::routing::SubscriptionPlanListParams"
 )]
 pub struct SubscriptionPlanListParams {
-    /// Optional plan provider filter using a canonical I105 id or on-chain alias.
+    /// Optional plan provider filter using a canonical I105 id.
     pub provider: Option<String>,
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -179,9 +179,9 @@ pub struct SubscriptionCreateResponse {
     frame = "iroha_torii::routing::SubscriptionListParams"
 )]
 pub struct SubscriptionListParams {
-    /// Optional subscriber filter using a canonical I105 id or on-chain alias.
+    /// Optional subscriber filter using a canonical I105 id.
     pub owned_by: Option<String>,
-    /// Optional provider filter using a canonical I105 id or on-chain alias.
+    /// Optional provider filter using a canonical I105 id.
     pub provider: Option<String>,
     /// Optional status filter (`active`, `paused`, `past_due`, `canceled`, `suspended`).
     pub status: Option<String>,

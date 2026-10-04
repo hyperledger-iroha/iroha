@@ -2866,6 +2866,22 @@ pub mod json {
             assert_eq!(rendered, format!("\"{sample}\""));
         }
         #[test]
+        fn string_writer_escapes_identically_on_every_path() {
+            // Short strings take the scalar path; long ASCII strings take the
+            // SIMD paths where the build enables them. All must agree.
+            for padding in [0usize, 7, 15, 16, 31, 32, 63, 64] {
+                let pad = "x".repeat(padding);
+                let input = format!("{pad}a\u{08}b\u{0C}c\u{0B}\"\\\n{pad}\u{08}\u{0C}");
+                let expected = format!("\"{pad}a\\bb\\fc\\u000b\\\"\\\\\\n{pad}\\b\\f\"");
+                let mut rendered = String::new();
+                write_json_string(&input, &mut rendered);
+                assert_eq!(rendered, expected, "padding {padding}");
+                let mut charwise = String::new();
+                write_json_string_charwise(&input, &mut charwise);
+                assert_eq!(charwise, expected, "charwise padding {padding}");
+            }
+        }
+        #[test]
         fn string_writer_uses_lowercase_hex_for_control_escapes() {
             let mut rendered = String::new();
             write_json_string("a\u{000b}b", &mut rendered);
@@ -3062,6 +3078,8 @@ pub mod json {
                             b'\n' => out.push_str("\\n"),
                             b'\r' => out.push_str("\\r"),
                             b'\t' => out.push_str("\\t"),
+                            0x08 => out.push_str("\\b"),
+                            0x0C => out.push_str("\\f"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
                                 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -3123,6 +3141,8 @@ pub mod json {
                             b'\n' => out.push_str("\\n"),
                             b'\r' => out.push_str("\\r"),
                             b'\t' => out.push_str("\\t"),
+                            0x08 => out.push_str("\\b"),
+                            0x0C => out.push_str("\\f"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
                                 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -3190,6 +3210,8 @@ pub mod json {
                                 b'\n' => out.push_str("\\n"),
                                 b'\r' => out.push_str("\\r"),
                                 b'\t' => out.push_str("\\t"),
+                                0x08 => out.push_str("\\b"),
+                                0x0C => out.push_str("\\f"),
                                 c if c < 0x20 => {
                                     out.push_str("\\u00");
                                     const HEX: &[u8; 16] = b"0123456789abcdef";

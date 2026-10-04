@@ -7,7 +7,7 @@ use crate::{
         isi::triggers::set::SetReadOnly as _,
         ivm::{cache::IvmCache, host::QueuedInstruction},
     },
-    state::{StateBlock, StateReadOnly as _, StateTransaction, WorldReadOnly as _},
+    state::{StateBlock, StateTransaction, WorldReadOnly as _},
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{

@@ -1548,13 +1548,15 @@ class CoreScopeTests(unittest.TestCase):
     def test_scope_steps_match_native_preseed_and_seal_boundaries(self):
         core = retry.qualification_steps("core_testnet")
         full = retry.qualification_steps("full_inrou")
-        self.assertEqual((len(core), len(full)), (14, 15))
+        self.assertEqual((len(core), len(full)), (13, 14))
         self.assertEqual(core, tuple(step for step in full if step != "preseed"))
         self.assertEqual((core[2], full[2]), ("stop", "stop"))
         self.assertEqual((core[5], full[5], full[6]), ("start", "preseed", "start"))
-        self.assertEqual((core[12], full[13]), ("seal", "seal"))
-        self.assertEqual(core[6:9], ("canary", "convergence", "restart_proof"))
+        self.assertEqual((core[11], full[12]), ("seal", "seal"))
+        self.assertEqual(core[6:9], ("canary", "convergence", "edge_stage"))
         self.assertEqual(full[7:10], core[6:9])
+        self.assertNotIn("restart_proof", core)
+        self.assertNotIn("restart_proof", full)
         for scope in (None, "inrou", "basic", "full", ""):
             with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
                 retry.qualification_steps(scope)
@@ -1637,10 +1639,10 @@ class CoreScopeTests(unittest.TestCase):
     def test_core_rollback_cursor_cannot_cross_seal_or_change_scope(self):
         inventory = {"qualification_scope": "core_testnet", "revision": {"commit": "a" * 40}, "deployment_id": "core"}
         value = {"qualification_scope": "core_testnet", "deployment_id": "core", "status": "rolled_back", "phase": "rolled_back",
-                 "next_step": 11, "touched_validators": list(retry.RETIRE_SLUGS[:-1]), "edge_touched": True,
+                 "next_step": 10, "touched_validators": list(retry.RETIRE_SLUGS[:-1]), "edge_touched": True,
                  "edge_rollback_complete": True, "rollback_next_validator": 4, "rollback_failures": [], "recovery_intent": None}
         retry._retire_validate_terminal(inventory, value, expected_commit="a" * 40, expected_deployment="core")
-        for field, wrong in (("next_step", 12), ("qualification_scope", "full_inrou"), ("qualification_scope", "inrou")):
+        for field, wrong in (("next_step", 11), ("qualification_scope", "full_inrou"), ("qualification_scope", "inrou")):
             with self.subTest(field=field, wrong=wrong), self.assertRaises(retry._retire_RebindError):
                 retry._retire_validate_terminal(inventory, dict(value, **{field: wrong}), expected_commit="a" * 40, expected_deployment="core")
 

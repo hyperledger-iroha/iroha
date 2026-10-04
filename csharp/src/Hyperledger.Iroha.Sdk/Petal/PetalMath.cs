@@ -65,6 +65,42 @@ internal static class PetalMath
     internal static int ToIndex(double value) => value > 0.0 ? (int)value : 0;
 
     /// <summary>
+    /// Rust <c>value as isize</c> on a 64-bit target: NaN becomes zero and out-of-range values
+    /// saturate (the .NET conversion of an out-of-range value is not specified the same way on
+    /// every platform).
+    /// </summary>
+    internal static long ToIsize(double value)
+    {
+        if (double.IsNaN(value))
+            return 0;
+        if (value >= 9_223_372_036_854_775_808.0)
+            return long.MaxValue;
+        if (value <= -9_223_372_036_854_775_808.0)
+            return long.MinValue;
+        return (long)value;
+    }
+
+    /// <summary>Rust <c>isize::saturating_add</c> on a 64-bit target.</summary>
+    internal static long SaturatingAdd(long a, long b)
+    {
+        var sum = unchecked(a + b);
+        // overflow when both operands have the same sign and the sum has the other one
+        if (((a ^ sum) & (b ^ sum)) < 0)
+            return a < 0 ? long.MinValue : long.MaxValue;
+        return sum;
+    }
+
+    /// <summary>Rust <c>isize::saturating_sub</c> on a 64-bit target.</summary>
+    internal static long SaturatingSubtract(long a, long b)
+    {
+        var difference = unchecked(a - b);
+        // overflow when the operands have different signs and the result has the sign of b
+        if (((a ^ b) & (a ^ difference)) < 0)
+            return a < 0 ? long.MinValue : long.MaxValue;
+        return difference;
+    }
+
+    /// <summary>
     /// Sorts <paramref name="values"/> ascending under <see cref="TotalCompare"/> (Rust
     /// <c>sort_by(f64::total_cmp)</c>) in place, without allocating.
     /// </summary>

@@ -673,23 +673,9 @@ impl Kura {
         sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
         Ok(true)
     }
-    #[cfg(test)]
-    fn fail_next_atomic_write_after_temporary_sync_for_test(&self) {
-        self.fail_next_atomic_write_after_temporary_sync
-            .store(true, Ordering::Relaxed);
-    }
 }
 
 #[cfg(test)]
 thread_local! {
     static FAIL_ATOMIC_WRITE_AFTER_RENAME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-impl Kura {
-    fn fail_next_atomic_write_after_rename_for_test(&self, path: &Path) {
-        FAIL_ATOMIC_WRITE_AFTER_RENAME.with(|slot| {
-            assert!(slot.borrow_mut().replace(path.to_path_buf()).is_none());
-        });
-    }
 }

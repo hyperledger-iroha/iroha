@@ -352,7 +352,7 @@ pub(crate) struct BoundNativeCheckV1 {
     started: Instant,
     max_elapsed: Duration,
     challenge: [u8; 32],
-    signed: SignedTransaction,
+    entry: binding::SignedCheckOwner,
     entry_bytes: iroha_allocation::ChargedBuffer<u8>,
 }
 impl BoundNativeCheckV1 {
@@ -360,8 +360,8 @@ impl BoundNativeCheckV1 {
         self.entry_bytes.as_slice()
     }
 
-    pub(crate) const fn signed_transaction(&self) -> &SignedTransaction {
-        &self.signed
+    pub(crate) fn signed_transaction(&self) -> &SignedTransaction {
+        self.entry.signed_transaction()
     }
 }
 

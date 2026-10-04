@@ -14,14 +14,7 @@
 mod finality;
 mod local_custody;
 mod local_factory;
-#[cfg(unix)]
-mod pin_intent_outbox;
-#[cfg(unix)]
-mod pin_outbox_checked;
-#[cfg(unix)]
-mod pin_outbox_finality;
-#[cfg(unix)]
-mod pin_recovery;
+mod native_pin;
 mod pin_registration;
 mod pin_signer;
 mod private_tls_ingress;
@@ -44,25 +37,9 @@ pub use local_factory::{
     MusubiPublicationPrivateIngressBuilderV1, MusubiPublicationPrivateLocalFactorySettingsV1,
     MusubiPublicationPrivateLocalFactoryV1, MusubiPublicationPrivateStorageBuilderV1,
 };
-#[cfg(unix)]
-pub use pin_intent_outbox::{
-    DurableMusubiPinIntentOutboxV1, MusubiPinIntentOutboxErrorV1, MusubiPinIntentOutboxLimitsV1,
-    MusubiPinIntentOutboxLocalAuditV1, MusubiRecoveredSignedPinIntentV1,
-};
-#[cfg(unix)]
-pub use pin_outbox_checked::{
-    MusubiPinOutboxCheckedRecoveryV1, MusubiPinOutboxCheckedStageV1,
-    MusubiPublicationPinOutboxCheckedCoordinatorV1,
-};
-#[cfg(unix)]
-pub use pin_outbox_finality::{
-    MusubiPublicationPinOutboxHighWaterReadErrorV1, MusubiPublicationPinOutboxHighWaterReaderV1,
-    MusubiPublicationPinOutboxLocalAnchorV1,
-};
-#[cfg(unix)]
-pub use pin_recovery::{
-    MusubiPublicationPinRecoveryErrorV1, MusubiPublicationPinRecoveryV1,
-    MusubiPublicationRecoveredFinalizedPinV1,
+pub use native_pin::{
+    NativeMusubiFinalizedPinV1, NativeMusubiPinCheckRefusalV1, NativeMusubiPinCoordinatorV1,
+    NativeMusubiPinPhaseV1, NativeMusubiPinProgressV1, NativePinAuthorizationV1,
 };
 pub use pin_registration::{
     MusubiPublicationFinalizedPinRegistrationQueryV1,
@@ -98,9 +75,10 @@ pub use shared_seed_staging::{
 //    separate portable native owner is daemon-wired with a durable host-clock floor and the same
 //    locally retained inventory reader. This software custody makes no external rollback-seal
 //    claim. Fault/platform qualification remains;
-// 3. the authenticated provider-attestation inventory/coordinator handoff needs production SoraFS
-//    pin/replication mutation APIs and must consume the implemented daemon-owned finalized archive
-//    registration reader before submitting or reconciling those mutations;
+// 3. the portable native pin coordinator retains exact payload/signature/exposure custody,
+//    fresh signed Check rounds and ordinary Queue admission. It consumes the original archive
+//    reader; the concrete storage backend must still join native pin success, provider ingestion,
+//    all-three authenticated inventories and their actual manager-side registry inclusion;
 // 4. the authenticated readback transport verifies the full plan/CAR/bundle and rechecks one
 //    coherent current State archive/location/provider cut and council-admitted exact HTTPS advert
 //    on both sides of the fetch. Complete State-root witness publication, live council-admission
@@ -394,8 +372,6 @@ mod tests {
     };
     use iroha_musubi_service::{MusubiSeedStagingBackendV1, MusubiSeedStagingErrorV1};
     use sorafs_node::config::StorageConfig;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt as _;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -462,120 +438,6 @@ mod tests {
             ),
             temp,
         )
-    }
-    #[cfg(unix)]
-    #[test]
-    fn daemon_outbox_open_rejects_locally_valid_inventory_without_finalized_anchor() {
-        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
-
-        let (context, temp) = factory_context();
-        let root = temp.path().join("signed-pin-outbox");
-        fs::create_dir(&root).expect("create owner-only outbox");
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-            .expect("owner-only permissions");
-        let root = root.canonicalize().expect("canonical outbox root");
-        let authority =
-            KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519).expect("pin authority");
-        let policy = iroha_config::parameters::actual::MusubiPublicationPaidPinPolicy {
-            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
-            retention_horizon_secs: 30 * 24 * 60 * 60,
-            transaction_authority: AccountId::new(authority.public_key().clone()),
-        };
-        let limits = MusubiPinIntentOutboxLimitsV1 {
-            max_records: 1,
-            max_total_bytes: 16 * 1024 * 1024,
-        };
-        DurableMusubiPinIntentOutboxV1::initialize(
-            &root,
-            context.network_id(),
-            [0xa1; 32],
-            policy.clone(),
-            limits,
-        )
-        .expect("locally valid immutable outbox marker");
-        // An empty local State cannot authenticate absence of the publisher's high-water.
-        // Keep its typed local deferral distinct from a finalized view with no such row.
-        assert_eq!(
-            context.audit_local_pin_intent_outbox(&root, policy.clone(), limits),
-            Err(MusubiPinIntentOutboxErrorV1::LocallyAhead)
-        );
-        let opened = context.open_pin_intent_outbox(&root, policy.clone(), limits);
-        assert!(
-            matches!(
-                opened,
-                Err(MusubiPinIntentOutboxErrorV1::MissingFinalizedAnchor)
-            ),
-            "stock open stays closed before local finality: {opened:?}",
-        );
-
-        let mut config = TestChainConfig::new(World::new(), 100);
-        config.genesis_key = authority.clone();
-        let mut chain = CertifiedTestChain::start(config).expect("original native signed genesis");
-        let tick = chain.sign(
-            &authority,
-            [iroha_data_model::isi::Log::new(
-                iroha_logger::Level::INFO,
-                "authenticate absent pin-outbox high-water".to_owned(),
-            )
-            .into()],
-            chain.committed(chain.height()).block_time_ms() + 1,
-        );
-        assert_eq!(
-            chain.commit(vec![tick]),
-            [true],
-            "actual successor execution"
-        );
-        let finalized_context = MusubiPublicationPrivateServiceContextV1::new(
-            chain.network_id(),
-            Arc::clone(chain.state()),
-            context.queue,
-            context.sorafs_node,
-        );
-        assert!(Arc::ptr_eq(&finalized_context.state(), chain.state()));
-        let reader = finalized_context.finalized_pin_outbox_high_water_reader();
-        let anchor = reader
-            .read_current_anchor(&policy.transaction_authority)
-            .expect("authenticate the original finalized State/Kura tip");
-        assert_eq!(anchor.network_id, chain.network_id());
-        assert_eq!(anchor.tip_height, chain.height());
-        assert_eq!(
-            anchor.tip_block_hash,
-            *chain.committed(chain.height()).block_hash().as_ref(),
-        );
-        assert_eq!(anchor.high_water, None);
-        assert_eq!(reader.read_current(&policy.transaction_authority), Ok(None));
-
-        let finalized_root = temp.path().join("signed-pin-outbox-finalized-tip");
-        fs::create_dir(&finalized_root).expect("create original finalized-network outbox");
-        fs::set_permissions(&finalized_root, fs::Permissions::from_mode(0o700))
-            .expect("owner-only finalized-network outbox");
-        let finalized_root = finalized_root
-            .canonicalize()
-            .expect("canonical finalized outbox");
-        DurableMusubiPinIntentOutboxV1::initialize(
-            &finalized_root,
-            finalized_context.network_id(),
-            [0xa1; 32],
-            policy.clone(),
-            limits,
-        )
-        .expect("local marker bound to the actual finalized network");
-        assert_eq!(
-            finalized_context.audit_local_pin_intent_outbox(
-                &finalized_root,
-                policy.clone(),
-                limits,
-            ),
-            Err(MusubiPinIntentOutboxErrorV1::MissingFinalizedAnchor)
-        );
-        let opened = finalized_context.open_pin_intent_outbox(&finalized_root, policy, limits);
-        assert!(
-            matches!(
-                opened,
-                Err(MusubiPinIntentOutboxErrorV1::MissingFinalizedAnchor)
-            ),
-            "authenticated absence cannot activate stock custody: {opened:?}",
-        );
     }
     #[test]
     fn local_custody_reopens_only_matching_initialized_journal_and_seed_owner() {

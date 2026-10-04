@@ -34,6 +34,7 @@ tls-rustls-webpki-roots = [
 [dependencies]
 base64 = { workspace = true }
 blake3 = { workspace = true }
+eyre = { workspace = true }
 hex = { workspace = true }
 iroha = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
@@ -41,6 +42,7 @@ iroha_data_model = { workspace = true, default-features = false, features = ["ap
 iroha_fs = { workspace = true }
 iroha_model_base = { workspace = true, optional = true }
 iroha_telemetry = { workspace = true }
+iroha_wallet = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 reqwest = { workspace = true, features = ["blocking"] }
 sorafs_car = { workspace = true, features = ["manifest"] }

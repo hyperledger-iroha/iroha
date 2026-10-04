@@ -109,6 +109,45 @@ impl<'a> norito::core::DeserializePayload<'a> for Json {
     }
 }
 impl Json {
+    /// Retain validated immutable JSON under the active ownership allowance.
+    ///
+    /// An exact source allocation remains shared. Spare source capacity is
+    /// discarded with a fallible exact copy of the already canonical text.
+    /// Both paths charge the complete retained string and Arc backing before
+    /// ownership; no parser graph is reconstructed.
+    ///
+    /// # Errors
+    /// Returns an allocation refusal before the corresponding owner is created.
+    #[doc(hidden)]
+    pub fn try_clone_for_admission(&self) -> Result<Self, norito::Error> {
+        if self.0.capacity() != self.0.len() {
+            let bytes = self.0.len();
+            let allocation_bytes =
+                u64::try_from(bytes).map_err(|_| norito::Error::LengthMismatch)?;
+            norito::core::reserve_decode_allocation(bytes)?;
+            let mut value = String::new();
+            value
+                .try_reserve_exact(bytes)
+                .map_err(|_| norito::Error::AllocationFailed {
+                    bytes: allocation_bytes,
+                })?;
+            if value.capacity() != bytes {
+                return Err(norito::Error::AllocationFailed {
+                    bytes: allocation_bytes,
+                });
+            }
+            value.push_str(self.0.as_str());
+            return Self::try_from_canonical_string(value);
+        }
+        let bytes = self
+            .0
+            .capacity()
+            .checked_add(norito::core::owned_arc_allocation_bytes::<String>()?)
+            .ok_or(norito::Error::LengthMismatch)?;
+        norito::core::reserve_decode_allocation(bytes)?;
+        Ok(self.clone())
+    }
+
     fn ensure_size(value: &str) -> Result<(), norito::Error> {
         if value.len() > MAX_JSON_BYTES {
             return Err(norito::Error::from(format!(
@@ -418,6 +457,59 @@ mod tests {
     )]
     struct JsonHolder {
         payload: Json,
+    }
+    #[test]
+    fn admitted_clone_charges_retained_backing_at_exact_boundary() {
+        let source = Json::new("original validated canonical value");
+        let exact = source.0.len() + norito::core::owned_arc_allocation_bytes::<String>().unwrap();
+        let limits = |allocated| norito::DecodeLimits::new(0, 0, 0, allocated, 0);
+        let (copy, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
+            source.try_clone_for_admission()
+        });
+        let copy = copy.unwrap();
+        assert_eq!(copy.ptr_eq(&source), source.0.capacity() == source.0.len());
+        assert_eq!(copy.0.capacity(), copy.0.len());
+        assert_eq!(usage.total_allocated_bytes(), exact);
+        assert!(
+            norito::core::with_decode_limits_measured(limits(exact - 1), || source
+                .try_clone_for_admission())
+            .0
+            .unwrap_err()
+            .is_decode_resource_limit()
+        );
+        drop(source);
+        assert_eq!(copy, Json::new("original validated canonical value"));
+    }
+    #[test]
+    fn admitted_clone_discards_spare_capacity_without_reparsing_canonical_text() {
+        let mut text = String::with_capacity(4096);
+        text.push_str("{\"a\":[1,2,3]}");
+        let source = Json(Arc::new(text));
+        let exact = source.0.len() + norito::core::owned_arc_allocation_bytes::<String>().unwrap();
+        let limits = |allocated| norito::DecodeLimits::new(0, 0, 0, allocated, 0);
+        let (copy, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
+            source.try_clone_for_admission()
+        });
+        let copy = copy.unwrap();
+        assert!(!copy.ptr_eq(&source));
+        assert_eq!(copy.0.capacity(), source.0.len());
+        assert_eq!(usage.total_allocated_bytes(), exact);
+        assert_eq!(
+            norito::to_bytes(&copy).unwrap(),
+            norito::to_bytes(&source).unwrap()
+        );
+        assert!(
+            norito::core::with_decode_limits_measured(limits(exact - 1), || source
+                .try_clone_for_admission())
+            .0
+            .unwrap_err()
+            .is_decode_resource_limit()
+        );
+        drop(source);
+        assert_eq!(
+            copy,
+            Json::from_raw_json("{\"a\":[1,2,3]}".to_owned()).unwrap()
+        );
     }
     #[test]
     fn clones_share_immutable_backing() {

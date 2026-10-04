@@ -4,7 +4,7 @@ use super::super::grouped_ownership::{
     CheckedAccountRekeys, CheckedAssetDefinitions, CheckedAssets, CheckedContractAliases,
     CheckedContractSubjects, CheckedEscrows, CheckedNfts, CheckedProofRecords,
     CheckedRepoAgreements, CheckedRwas, CheckedValidationFeeProposals, CheckedVerifyingKeys,
-    GroupedOwnershipError,
+    GroupedOwnershipError, VALIDATION_FEE_PROPOSAL_WORK_PER_ROW,
 };
 use super::*;
 use mv::{PublicationPreparationError, storage::StorageReadOnly};
@@ -16,7 +16,7 @@ macro_rules! grouped_capture {
     ($function:ident, $checker:ident, $table:literal) => {
         grouped_capture!($function, $checker, $table, 32);
     };
-    ($function:ident, $checker:ident, $table:literal, $work_per_row:literal) => {
+    ($function:ident, $checker:ident, $table:literal, $work_per_row:expr) => {
         /// Capture exact canonical rows after checking every retained grouped index.
         pub(crate) fn $function(
             state: &State,
@@ -85,7 +85,7 @@ grouped_capture!(
     capture_governance_proposals_once,
     CheckedValidationFeeProposals,
     "world.governance_proposals",
-    8
+    VALIDATION_FEE_PROPOSAL_WORK_PER_ROW
 );
 grouped_capture!(
     capture_account_rekey_records_once,

@@ -7,7 +7,7 @@ use irohad::{
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerDeploymentV1,
     RuntimeProviderBrokerExecutableArgsV1, RuntimeProviderBrokerExecutableErrorV1,
     RuntimeProviderBrokerExecutableV1, RuntimeProviderBrokerReadinessErrorV1,
-    load_runtime_provider_broker_catalog_file_v1,
+    load_runtime_provider_broker_catalog_file_v1, load_runtime_provider_broker_policy_file_v1,
     musubi_publication_service::{
         MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateIngressFutureV1,
         MusubiPublicationPrivateServiceContextV1, MusubiPublicationPrivateServiceFactoryErrorV1,
@@ -169,6 +169,12 @@ fn external_crate_can_name_standard_broker_executable_shell() {
     )
         -> Result<IrohaRuntimeProviderBindingsV1, RuntimeProviderBrokerExecutableErrorV1> =
         load_runtime_provider_broker_catalog_file_v1;
+    let load_policy: fn(
+        &std::path::Path,
+    ) -> Result<
+        iroha_config::parameters::actual::RuntimeProviderBroker,
+        RuntimeProviderBrokerExecutableErrorV1,
+    > = load_runtime_provider_broker_policy_file_v1;
     let assemble = RuntimeProviderBrokerExecutableV1::try_from_args;
     let assemble_file = RuntimeProviderBrokerExecutableV1::try_from_catalog_file;
     let serve = RuntimeProviderBrokerExecutableV1::serve::<fn()>;
@@ -182,8 +188,10 @@ fn external_crate_can_name_standard_broker_executable_shell() {
     let serve_systemd =
         RuntimeProviderBrokerExecutableV1::serve_until_shutdown_signal_with_systemd_notify;
     let catalog_path = RuntimeProviderBrokerExecutableArgsV1::catalog_path;
+    let policy_path = RuntimeProviderBrokerExecutableArgsV1::broker_policy_path;
     let _ = (
         load,
+        load_policy,
         assemble,
         assemble_file,
         serve,
@@ -192,6 +200,7 @@ fn external_crate_can_name_standard_broker_executable_shell() {
         serve_fallible_boundary,
         serve_systemd,
         catalog_path,
+        policy_path,
     );
 }
 #[test]

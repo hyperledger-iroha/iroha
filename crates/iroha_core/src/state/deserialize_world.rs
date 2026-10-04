@@ -7763,6 +7763,58 @@ fn take_native_beacon_sessions(
     Ok(Storage::from_snapshot_parts(current, undo))
 }
 
+/// Decode explicit current/undo claims, then admit both original graph and Cell generations.
+fn take_native_amx_participant(
+    map: &mut SnapshotJsonMap<'_>,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<
+    Cell<crate::sumeragi::amx::RetainedNativeAmx, iroha_allocation::AllocationCharge>,
+    StateRestoreError,
+> {
+    #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct Snapshot {
+        // Preserve the original Cell encoder's declaration order during the
+        // canonical comparison; both current and explicit undo remain required.
+        #[norito(required)]
+        revert: Option<Undo>,
+        blocks: Undo,
+    }
+    #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct Undo {
+        #[norito(required)]
+        value: Option<iroha_data_model::sumeragi_amx::NativeAmxParticipantStateV1>,
+    }
+    let snapshot: Snapshot = take_required(map, "sumeragi_amx_participant")?;
+    let admit = |source: Option<&iroha_data_model::sumeragi_amx::NativeAmxParticipantStateV1>| {
+        source
+            .map(|source| crate::sumeragi::amx::RetainedNativeAmx::admit(source, budget))
+            .transpose()
+            .map(|value| value.unwrap_or_default())
+            .map_err(|error| match error {
+                local @ (crate::sumeragi::amx::NativeAmxAdmissionError::Admission(_)
+                | crate::sumeragi::amx::NativeAmxAdmissionError::Allocator { .. }
+                | crate::sumeragi::amx::NativeAmxAdmissionError::Codec(_)) => {
+                    StateRestoreError::NativeAmx(local)
+                }
+                invalid => StateRestoreError::Serialization(json::Error::InvalidField {
+                    field: "world.sumeragi_amx_participant".into(),
+                    message: invalid.to_string(),
+                }),
+            })
+    };
+    let current = admit(snapshot.blocks.value.as_ref())?;
+    let previous = snapshot
+        .revert
+        .as_ref()
+        .map(|undo| admit(undo.value.as_ref()))
+        .transpose()?;
+    let initial = mv::cell::CellInitialization::try_reserve(budget)
+        .map_err(crate::state::scalar_cell_custody::admission_error)?;
+    Ok(initial.initialize(current, previous))
+}
+
 fn take_native_consensus_schedule(
     map: &mut SnapshotJsonMap<'_>,
     budget: &iroha_allocation::AllocationBudget,
@@ -8178,6 +8230,7 @@ fn decode_world_fields(
             field: "world.sumeragi_amx".to_owned(),
             message: error.to_string(),
         })?;
+    let sumeragi_amx_participant = take_native_amx_participant(&mut map, execution_budget)?;
     let private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry> =
         take_required(&mut map, "private_dataspaces")?;
     private_dataspaces
@@ -8689,6 +8742,7 @@ fn decode_world_fields(
         consensus_keys_by_pk,
         sumeragi_lanes,
         sumeragi_amx,
+        sumeragi_amx_participant,
         private_dataspaces,
         pedersen_params,
         poseidon_params,

@@ -576,6 +576,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_lanes::SumeragiLaneState>())));
     sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState> => ("world.sumeragi_amx",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_amx::SumeragiAmxState>())));
+    sumeragi_amx_participant: Cell<crate::sumeragi::amx::RetainedNativeAmx, iroha_allocation::AllocationCharge> => ("world.sumeragi_amx_participant",
+        Role::Canonical(Canonical::Cell(schema::<crate::sumeragi::amx::RetainedNativeAmx>())));
     private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry> => ("world.private_dataspaces",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>())));
     sccp_parameters: Cell<Option<iroha_data_model::sccp::params::SccpParametersV1>> => ("world.sccp_parameters",

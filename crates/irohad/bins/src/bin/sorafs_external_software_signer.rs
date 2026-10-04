@@ -24,6 +24,7 @@ mod unix_main {
     use irohad::{
         IrohaRuntimeProviderSlotV1, RuntimeProviderBrokerExecutableArgsV1,
         RuntimeProviderBrokerExecutableV1, load_runtime_provider_broker_catalog_file_v1,
+        load_runtime_provider_broker_policy_file_v1,
     };
     use norito::{NoritoDeserialize, NoritoSerialize};
     use std::{
@@ -639,6 +640,8 @@ mod unix_main {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn run_standard_runtime_provider_broker() -> Result<(), LauncherError> {
         let args = RuntimeProviderBrokerExecutableArgsV1::parse();
+        let broker_policy = load_runtime_provider_broker_policy_file_v1(args.broker_policy_path())
+            .map_err(|_| CliError::Binding)?;
         let catalog = load_runtime_provider_broker_catalog_file_v1(args.catalog_path())
             .map_err(|_| CliError::Binding)?;
         let credential_budget = catalog.new_credential_registry_budget_v1();
@@ -757,8 +760,12 @@ mod unix_main {
             }
             .map_err(|_| CliError::Binding)?;
         }
-        let executable = RuntimeProviderBrokerExecutableV1::try_from_args(&args, &signers)
-            .map_err(|_| CliError::Binding)?;
+        let executable = RuntimeProviderBrokerExecutableV1::try_from_catalog_file(
+            args.catalog_path(),
+            broker_policy,
+            &signers,
+        )
+        .map_err(|_| CliError::Binding)?;
         #[cfg(target_os = "linux")]
         {
             executable

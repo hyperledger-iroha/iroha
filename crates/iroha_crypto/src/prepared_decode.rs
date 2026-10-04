@@ -218,8 +218,9 @@ impl PreparedPublicKeyDecode {
         public_key_decode::with_decoded_compact(bytes, true, |algorithm, payload| {
             self.0.check_length(payload.len() + 1)?;
             // Prepaid physical storage does not relax canonical logical work
-            // ceilings. Preserve the ordinary compact owner's second charge
-            // after identical tag/point validation and before any copied byte.
+            // ceilings. Preserve the ordinary compact owner's retained-storage
+            // charge after the common sequence-count/element charges and
+            // identical tag/point validation, before any copied byte.
             public_key_decode::reserve_compact_decode_backing(payload.len())?;
             let destination = self.0.bytes.as_mut_slice();
             destination[0] = PublicKeyCompact::algorithm_tag(algorithm);

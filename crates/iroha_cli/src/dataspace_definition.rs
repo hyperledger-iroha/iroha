@@ -10,7 +10,7 @@ use iroha_deploy::definition::{CommitteeSource, DataspaceDefinition, NetworkRef}
 
 use crate::{
     Args, ChainDiscriminantGuard, Command, FeePayerArg, FeePaymentArgs, Localizer,
-    PrintJsonContext, client_config, client_config_with_defaults, effective_output_format,
+    PrintJsonContext, client_config, client_config_with_defaults, effective_output,
     load_runtime_operator_key, operator_key,
     taira_dataspace_deploy::{self, DeploymentTrustV1},
 };
@@ -76,11 +76,13 @@ pub(crate) fn run(
         trust.account_chain_discriminant,
         endpoint,
     );
+    let selection = effective_output(args);
     let mut context = PrintJsonContext {
         write: output,
         err_write: errors,
         config,
         filesystem_config: client_config::FilesystemConfig::default(),
+        offline_fallback: false,
         operator_key_pair,
         transaction_metadata: None,
         fee_payment: FeePaymentArgs {
@@ -89,7 +91,8 @@ pub(crate) fn run(
         },
         input_instructions: false,
         output_instructions: false,
-        output_format: effective_output_format(args),
+        output_format: selection.format,
+        json_lines: selection.json_lines,
         i18n,
     };
     definition_input.revalidate()?;
@@ -109,14 +112,14 @@ fn reject_runtime_globals(args: &Args) -> Result<()> {
         || args.config_source_path.is_some()
         || args.verbose
         || args.metadata.is_some()
-        || args.input
-        || args.output
+        || args.stdin_instructions
+        || args.emit_instructions
         || args.fee_payment.fee_payer.is_some()
         || args.fee_payment.fee_program.is_some()
         || args.fee_payment.fee_program_revision.is_some()
     {
         bail!(
-            "dataspace definitions supply the owner, network, and fee budget; config, verbose, metadata, input/output-instruction, and fee-selection globals are not accepted"
+            "dataspace definitions supply the owner, network, and fee budget; config, verbose, metadata, stdin/emit-instruction, and fee-selection globals are not accepted"
         );
     }
     Ok(())
@@ -263,8 +266,8 @@ mod tests {
                 "/must-not-read",
             ],
             vec!["--metadata", "/must-not-read"],
-            vec!["--input"],
-            vec!["--output"],
+            vec!["--stdin-instructions"],
+            vec!["--emit-instructions"],
             vec!["--verbose"],
             vec!["--fee-payer", "authority"],
         ] {

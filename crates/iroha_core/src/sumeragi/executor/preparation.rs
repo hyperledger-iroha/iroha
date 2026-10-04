@@ -95,6 +95,13 @@ pub(super) fn validation_failure(error: &BlockValidationError) -> Option<Publica
     };
     use mv::storage::AdmittedStorageError;
     let source = match error {
+        BlockValidationError::NativeSourceChanged { .. } => {
+            return Some(if cfg!(all(test, sumeragi_core_mutation = "HC98")) {
+                PublicationError::RecoveryRequired(error.to_string())
+            } else {
+                PublicationError::Retryable(error.to_string())
+            });
+        }
         BlockValidationError::StateView(original) => match original {
             StateViewError::Busy(wait) => PublicationDeferral::StateViewBusy(wait.clone()),
             StateViewError::Runtime(crate::state::LaneLifecycleError::NposPolicy(
@@ -124,12 +131,20 @@ pub(super) fn validation_failure(error: &BlockValidationError) -> Option<Publica
                 | AdmittedStorageError::ScopeIdentity
                 | AdmittedStorageError::PolicyIdentity
                 | AdmittedStorageError::PolicyDemand { .. },
+            )
+            | StateStorageAdmissionError::NativeAmx(
+                super::super::amx::NativeAmxAdmissionError::Invalid(_),
             ) => return Some(PublicationError::RecoveryRequired(original.to_string())),
             StateStorageAdmissionError::World(
                 AdmittedStorageError::Busy { .. }
                 | AdmittedStorageError::Changed
                 | AdmittedStorageError::Allocation(_)
                 | AdmittedStorageError::Allocator { .. },
+            )
+            | StateStorageAdmissionError::NativeAmx(
+                super::super::amx::NativeAmxAdmissionError::Admission(_)
+                | super::super::amx::NativeAmxAdmissionError::Allocator { .. }
+                | super::super::amx::NativeAmxAdmissionError::Codec(_),
             )
             | StateStorageAdmissionError::AmxDecode(_)
             | StateStorageAdmissionError::RootScopeDecode(_) => {

@@ -257,7 +257,6 @@ test("validation-fee proposal fingerprints require an explicit canonical operato
           computePolicy(
             invalid,
             { schema_version: 1 },
-            null,
           ),
         /proposalOperator must be one canonical domainless AccountId/u,
       );
@@ -284,7 +283,6 @@ test("validation-fee proposal fingerprints require exact native digest lengths",
           computePolicy(
             proposalOperator,
             { schema_version: 1 },
-            null,
           ),
         /policy proposal fingerprint must contain exactly 32 bytes/u,
       );

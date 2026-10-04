@@ -18,10 +18,14 @@ fn main() {
     use irohad::{
         RuntimeProviderBrokerExecutableArgsV1, RuntimeProviderBrokerExecutableV1,
         load_owner_private_runtime_provider_broker_catalog_file_v1,
+        load_owner_private_runtime_provider_broker_policy_file_v1,
     };
     use std::io::Write as _;
 
     let args = RuntimeProviderBrokerExecutableArgsV1::parse();
+    let policy =
+        load_owner_private_runtime_provider_broker_policy_file_v1(args.broker_policy_path())
+            .expect("load exact owner-private public policy");
     let catalog = load_owner_private_runtime_provider_broker_catalog_file_v1(args.catalog_path())
         .expect("load exact owner-private public catalog");
     let backends =
@@ -29,7 +33,7 @@ fn main() {
             .expect("load exact inherited runtime provider credentials");
     let executable = RuntimeProviderBrokerExecutableV1::try_from_owner_private_catalog_v1(
         catalog,
-        args.broker_endpoint().clone(),
+        policy,
         backends.as_ref(),
     )
     .expect("qualify disposable broker catalog");

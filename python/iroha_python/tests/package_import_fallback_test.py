@@ -6,6 +6,29 @@ import sys
 from pathlib import Path
 
 
+def test_validation_fee_exports_match_current_governance_types() -> None:
+    from iroha_torii_client import governance_proposals
+
+    import iroha_python
+    from iroha_python import client
+
+    for module in (iroha_python, client):
+        for name in (
+            "GovernanceValidationFeeChargingMode",
+            "GovernanceValidationFeePayoutBinding",
+            "GovernanceValidationFeeRewardCustody",
+            "GovernanceValidationFeePolicy",
+            "GovernanceProposalValidationFeePayoutLifecycle",
+            "GovernanceProposalValidationFeePolicy",
+        ):
+            assert name in module.__all__
+            assert getattr(module, name) is getattr(governance_proposals, name)
+
+        retired = "GovernanceValidationFeePayoutRecipient"
+        assert retired not in module.__all__
+        assert not hasattr(module, retired)
+
+
 def test_privacy_wallet_worker_contract_is_a_base_export() -> None:
     import iroha_python
     from iroha_python import privacy_wallet_worker
@@ -85,7 +108,10 @@ else:
         env.get("PYTHONPATH", ""),
     ]
     if env.get("IROHA_PYTHON_TEST_INSTALLED_PACKAGE") != "1":
-        python_paths.insert(0, str(root / "python" / "iroha_python" / "src"))
+        python_paths[:0] = [
+            str(root / "python" / "iroha_python" / "src"),
+            str(root / "python" / "iroha_native" / "src"),
+        ]
     pythonpath = os.pathsep.join(python_paths)
     env["PYTHONPATH"] = pythonpath
     env["PYTHONDONTWRITEBYTECODE"] = "1"

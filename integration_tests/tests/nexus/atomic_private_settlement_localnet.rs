@@ -3423,447 +3423,571 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
     else {
         return Err(eyre!("required sixteen-process smoke network was skipped"));
     };
-    verify_controller_readiness(&network, &runtime)?;
-    let startup_deadline = startup_started
-        .checked_add(network.peer_startup_timeout())
-        .ok_or_else(|| eyre!("smoke startup deadline exceeds the monotonic clock range"))?;
-    let initial_inventory = smoke_process_inventory(
-        &network,
-        &runtime,
-        shape,
-        SmokeInventoryReadinessV1::StartupUntil(startup_deadline),
-    )?;
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "processes-before.json",
-        &initial_inventory,
-    )?);
-    startup_timing.complete();
-    let sponsor = network.client();
-    prepare_participant_assets(&network, shape)?;
-    let privacy_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrivacyActivation, None);
-    let activated_height = require_genesis_private_note_active(&sponsor)?;
-    privacy_timing.complete();
-    let expiry_height = activated_height + 1_000;
-    let routes = routes_from_network(&network, shape)?;
-    ensure!(
-        routes.len() == 3,
-        "exactly three mixed-visibility participant dataspaces are required"
-    );
-    let committees = committees_from_network(&network, shape, &routes)?;
-    let governed = governed_legs(&routes, activated_height, expiry_height)?;
-    let private_data = (0..routes.len())
-        .map(default_private_settlement_leg_data)
-        .collect::<Vec<_>>();
-    let pool_timing = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PoolActivation, None);
-    let authority_context_height = activate_governed_private_pools(
-        &sponsor,
-        network.network_id(),
-        &governed,
-        &private_data,
-        expiry_height,
-    )?;
-    pool_timing.complete();
-    let manifest = proof_manifest(
-        network.network_id(),
-        authority_context_height,
-        expiry_height,
-        &governed,
-    )?;
-    // Establish the measurement baseline and continuous observer before client
-    // work begins. Proof construction, self-verification, material preparation
-    // and settlement remain inside the measured workflow.
-    let before = wait_for_converged_fault_state_snapshot(&network, "smoke-before")?;
-    ensure!(
-        before.validators.len() == shape.process_count(),
-        "positive smoke omitted a global or participant validator"
-    );
-
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "state-before.json",
-        &before,
-    )?);
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "authorities.json",
-        &committees
-            .iter()
-            .map(|committee| &committee.authority)
-            .collect::<Vec<_>>(),
-    )?);
-    let mut observer = FaultContinuousObserverV1::start_retaining_evidence(
-        &network,
-        &before,
-        shape.participants,
-        &manifest.bundle_id,
-        false,
-    )?;
-
-    let workflow_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
-    ensure!(
-        governed.len() == 3 && committees.len() == 3,
-        "exactly three proof jobs are required"
-    );
-    // Authenticate all committee digests before launching any proof worker.
-    let jobs: [(GovernedLeg, Hash); 3] = governed
-        .into_iter()
-        .zip(&committees)
-        .map(|(leg, committee)| Ok((leg, committee.authority.digest()?)))
-        .collect::<Result<Vec<_>>>()?
-        .try_into()
-        .map_err(|_| eyre!("exactly three proof jobs are required"))?;
-    let prepared = collect_three_smoke_phase_jobs_v1(
-        SmokeLegJobPhaseV1::Proof,
-        jobs,
-        |ordinal, (leg, authority_digest)| {
-            let leg_timing = SmokeDiagnosticSpanV1::start(
-                SmokeDiagnosticPhaseV1::ClientLegConstruction,
-                Some(ordinal),
-            );
-            let prepared = prepare_leg(ordinal, leg, &manifest, authority_digest)?;
-            leg_timing.complete();
-            Ok(prepared)
-        },
-    )?;
-    let materials = provisional_materials(manifest, &prepared, &committees)?;
-    let availability_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AvailabilityCertification, None);
-    // Borrow the immutable SDK context, without capturing the blocking runtime
-    // or rebuilding its transport/signing configuration for individual legs.
-    let client = sponsor.client();
-    let certification_jobs =
-        std::array::from_fn(|ordinal| (&materials[ordinal], &committees[ordinal]));
-    let certificates = collect_three_smoke_phase_jobs_v1(
-        SmokeLegJobPhaseV1::AvailabilityCertification,
-        certification_jobs,
-        |_, (material, committee)| {
-            client.certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
-        },
-    )?;
-    availability_timing.complete();
-    let mut final_manifest = materials[0].manifest.clone();
-    for (ordinal, certificate) in certificates.iter().enumerate() {
-        final_manifest.legs[ordinal].availability_certificate_digest = certificate.digest()?;
-    }
-    final_manifest.validate()?;
-    let upload_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::RestrictedUpload, None);
-    let upload_jobs = std::array::from_fn(|ordinal| {
-        (
-            &materials[ordinal],
-            &certificates[ordinal],
-            &committees[ordinal],
-        )
-    });
-    collect_three_smoke_phase_jobs_v1(
-        SmokeLegJobPhaseV1::RestrictedUpload,
-        upload_jobs,
-        |ordinal, (material, certificate, committee)| {
-            let request = PrivateSettlementLegUploadRequestV1 {
-                manifest: final_manifest.clone(),
-                audit_policy: material.audit_policy.clone(),
-                committee_authority: material.committee_authority.clone(),
-                payload: material.payload_with_certificate(certificate.clone()),
-            };
-            for endpoint in &committee.endpoints {
-                let response = client.upload_private_settlement_leg_to_v1(endpoint, &request)?;
-                ensure!(
-                    usize::from(response.leg_ordinal) == ordinal,
-                    "upload ordinal substitution"
-                );
-            }
-            Ok(())
-        },
-    )?;
-    upload_timing.complete();
-    assert_no_partial_visibility(&network, final_manifest.bundle_id, "collecting")?;
-    let state = capture_fault_state_snapshot(&network, "smoke-collecting")?;
-    ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "state-collecting.json",
-        &state,
-    )?);
-
-    let audit_timing = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AuditorApproval, None);
-    for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
-        let auditor_transport_signer =
-            BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
-        let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
-            audit_policy: leg.governed.policy.clone(),
-        };
-        let fetched = sponsor
-            .client()
-            .private_settlement_auditor_capsule_quorum_for_authority_v1(
-                &committee.endpoints,
-                &materials[ordinal].committee_authority,
-                final_manifest.legs[ordinal].payload_digest,
-                &capsule_request,
-                &auditor_transport_signer,
-            )?;
-        ensure!(
-            fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
-            "unexpected audit lifecycle"
-        );
-        let authoritative_height = fetched.authoritative_height;
-        let view = PrivateSettlementAuditorSidecarViewV1 {
-            manifest: fetched.manifest,
-            policy: fetched.audit_policy,
-            authority: fetched.committee_authority,
-            statement: fetched.statement,
-            delta: fetched.delta,
-            audit_capsule: fetched.audit_capsule,
-            availability: fetched.availability,
-            lifecycle: PrivateSettlementSidecarLifecycleV1::Collecting,
-        };
-        let auditor_id = AccountId::new(leg.governed.auditor_signing.public_key().clone());
-        let approval = approve_private_settlement_leg_v1(
-            &view,
-            &leg.governed.governance,
-            authoritative_height,
-            &auditor_id,
-            leg.governed.auditor_encryption.secret(),
-            &leg.governed.auditor_signing,
-            &approve_all_audit_material,
+    // Finish peer monitors while their runtime is still alive, including error paths.
+    // Network's background Drop cleanup cannot retain exits after this runtime drops.
+    let result = (|| {
+        verify_controller_readiness(&network, &runtime)?;
+        let startup_deadline = startup_started
+            .checked_add(network.peer_startup_timeout())
+            .ok_or_else(|| eyre!("smoke startup deadline exceeds the monotonic clock range"))?;
+        let initial_inventory = smoke_process_inventory(
+            &network,
+            &runtime,
+            shape,
+            SmokeInventoryReadinessV1::StartupUntil(startup_deadline),
         )?;
-        let response = sponsor
-            .client()
-            .submit_private_settlement_audit_approval_quorum_for_authority_v1(
-                &committee.endpoints,
-                &materials[ordinal].committee_authority,
-                final_manifest.legs[ordinal].payload_digest,
-                &auditor_transport_signer,
-                &PrivateSettlementAuditApprovalRequestV1 {
-                    audit_policy: capsule_request.audit_policy,
-                    approval,
-                },
-            )?;
-        ensure!(
-            response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
-            "approval quorum was not durable"
-        );
-    }
-    audit_timing.complete();
-    assert_no_partial_visibility(&network, final_manifest.bundle_id, "audited")?;
-    let state = capture_fault_state_snapshot(&network, "smoke-audited")?;
-    ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "state-audited.json",
-        &state,
-    )?);
-
-    let endpoint_matrix = committees
-        .iter()
-        .map(|committee| committee.endpoints.clone())
-        .collect::<Vec<_>>();
-    let authorities = committees
-        .iter()
-        .map(|committee| committee.authority.clone())
-        .collect::<Vec<_>>();
-    let deltas = prepared
-        .iter()
-        .map(|leg| leg.prepared.delta.clone())
-        .collect::<Vec<_>>();
-    let prepare_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrepareCertification, None);
-    let barrier = sponsor.client().prepare_private_settlement_bundle_v1(
-        &endpoint_matrix,
-        &final_manifest,
-        &authorities,
-        &deltas,
-    )?;
-    prepare_timing.complete();
-    assert_no_partial_visibility(&network, final_manifest.bundle_id, "prepared")?;
-    let state = capture_fault_state_snapshot(&network, "smoke-prepared")?;
-    ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "state-prepared.json",
-        &state,
-    )?);
-    let registration_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrepareRegistration, None);
-    let fee_before_registration = sponsor_nexus_fee_balance(&sponsor)?;
-    sponsor
-        .client()
-        .register_private_settlement_prepare_and_wait_v1(
-            &barrier,
-            u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
-                .expect("V1 carrier ceiling fits u64"),
-            iroha::client::TransactionWaitOptions {
-                timeout: FINALITY_TIMEOUT,
-                poll_interval: POLL_INTERVAL,
-            },
-        )?;
-    let fee_after_registration = sponsor_nexus_fee_balance(&sponsor)?;
-    ensure_exact_private_settlement_carrier_fee(
-        &fee_before_registration,
-        &fee_after_registration,
-        "Prepare registration",
-    )?;
-    // Sponsor Applied is local: wait for its exact replicated registration map
-    // before one-shot Commit vote collection across the disjoint committees.
-    let registered = wait_for_smoke_prepare_registration(&network, &before, routes.len())?;
-    ensure_fault_ledger_unchanged_before_finality(&before, &registered)?;
-    registration_timing.complete();
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "state-registered.json",
-        &registered,
-    )?);
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "prepare-barrier.json",
-        &barrier,
-    )?);
-    let commit_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::CommitCertification, None);
-    let commits = sponsor
-        .client()
-        .recover_or_commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
-    commit_timing.complete();
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "commit-certificates.json",
-        &commits,
-    )?);
-    assert_no_partial_visibility(&network, final_manifest.bundle_id, "commit-certified")?;
-    let state = capture_fault_state_snapshot(&network, "smoke-commit-certified")?;
-    ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "state-commit-certified.json",
-        &state,
-    )?);
-
-    let request = sponsor
-        .client()
-        .build_private_settlement_finalization_request_v1(
-            &barrier,
-            &commits,
-            u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
-                .expect("V1 carrier ceiling fits u64"),
-        )?;
-    let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
-    observer.begin_phase("finalization", &[], true)?;
-    observer.checkpoint_active_phase(&[])?;
-    let finality_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::FinalityWorkflow, None);
-    let submission_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::FinalizationSubmission, None);
-    sponsor
-        .client()
-        .submit_private_settlement_bundle_v1(&request)?;
-    submission_timing.complete();
-    let receipt_timing = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AllPeerReceipt, None);
-    let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
-    receipt_timing.complete();
-    let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
-    ensure_exact_private_settlement_carrier_fee(
-        &fee_before_finalization,
-        &fee_after_finalization,
-        "financial finalization",
-    )?;
-    ensure!(
-        receipt.legs.len() == PARTICIPANT_COUNT,
-        "receipt does not contain exactly three legs"
-    );
-    for (ordinal, leg) in receipt.legs.iter().enumerate() {
-        ensure!(
-            usize::from(leg.delta.leg_ordinal) == ordinal,
-            "receipt reordered a leg"
-        );
-        ensure!(
-            receipt
-                .legs
-                .iter()
-                .filter(|candidate| candidate.delta.route == leg.delta.route)
-                .count()
-                == 1,
-            "a private leg became visible more than once"
-        );
-    }
-    let after = wait_for_converged_fault_state_snapshot(&network, "smoke-finalized")?;
-    ensure_fault_state_finalized_once(&before, &after, shape.participants)?;
-    observe_smoke_diagnostic_milestone_v1(
-        SmokeDiagnosticPhaseV1::FinancialApplicationVerified,
-        receipt.finalized_height,
-    );
-    finality_timing.complete();
-    workflow_timing.complete();
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "state-finalized.json",
-        &after,
-    )?);
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "receipt.json",
-        &receipt,
-    )?);
-    observer.complete_phase()?;
-    let signed_finality_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::SignedFinalityEvidence, None);
-    let (finality, files) = collect_signed_rs16_finality(
-        &network,
-        &runtime,
-        receipt.finalized_height,
-        FinalityObservationV1::LiveTransport,
-        Some((&evidence_root, "finality-before")),
-    )?;
-    evidence_files.extend(files);
-    ensure!(
-        finality.observations == u64::try_from(shape.process_count())?,
-        "positive smoke lacks a signed RS16 finality observation from every process"
-    );
-    signed_finality_timing.complete();
-    let replay_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ReplayValidation, None);
-    // Replay the original signed carrier while it is live. The acknowledgment must
-    // retain its finalized identity without creating another financial effect.
-    let replayed = observe_idempotent_finalized_retry(
-        &sponsor,
-        &network,
-        &final_manifest,
-        &request,
-        &receipt,
-    )?;
-    ensure!(
-        sponsor_nexus_fee_balance(&sponsor)? == fee_after_finalization,
-        "acknowledged finalization retry charged a third carrier fee"
-    );
-    ensure_fault_state_reverted(&after, &replayed)?;
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "state-replay.json",
-        &replayed,
-    )?);
-    let (summaries, observations) = observer.finish_with_evidence(&replayed)?;
-    ensure!(
-        summaries.len() == shape.process_count()
-            && observations.len() == shape.process_count()
-            && summaries.iter().all(|row| row.check_count >= 3
-                && row.finalized_observations > 0
-                && row.poll_failure_count == 0),
-        "smoke continuous observer omitted validators, finality or successful polling"
-    );
-    for (index, (summary, observations)) in summaries.iter().zip(&observations).enumerate() {
         evidence_files.push(write_smoke_evidence(
             &evidence_root,
-            &format!("continuous-{index:02}.json"),
-            &SmokeContinuousEvidenceV1 {
-                summary: summary.clone(),
-                observations: observations.clone(),
-            },
+            "processes-before.json",
+            &initial_inventory,
         )?);
-    }
-    replay_timing.complete();
-    if experiment == N3SettlementExperimentV1::HappyDay {
-        let final_inventory = smoke_process_inventory(
+        startup_timing.complete();
+        let sponsor = network.client();
+        prepare_participant_assets(&network, shape)?;
+        let privacy_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrivacyActivation, None);
+        let activated_height = require_genesis_private_note_active(&sponsor)?;
+        privacy_timing.complete();
+        let expiry_height = activated_height + 1_000;
+        let routes = routes_from_network(&network, shape)?;
+        ensure!(
+            routes.len() == 3,
+            "exactly three mixed-visibility participant dataspaces are required"
+        );
+        let committees = committees_from_network(&network, shape, &routes)?;
+        let governed = governed_legs(&routes, activated_height, expiry_height)?;
+        let private_data = (0..routes.len())
+            .map(default_private_settlement_leg_data)
+            .collect::<Vec<_>>();
+        let pool_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PoolActivation, None);
+        let authority_context_height = activate_governed_private_pools(
+            &sponsor,
+            network.network_id(),
+            &governed,
+            &private_data,
+            expiry_height,
+        )?;
+        pool_timing.complete();
+        let manifest = proof_manifest(
+            network.network_id(),
+            authority_context_height,
+            expiry_height,
+            &governed,
+        )?;
+        // Establish the measurement baseline and continuous observer before client
+        // work begins. Proof construction, self-verification, material preparation
+        // and settlement remain inside the measured workflow.
+        let before = wait_for_converged_fault_state_snapshot(&network, "smoke-before")?;
+        ensure!(
+            before.validators.len() == shape.process_count(),
+            "positive smoke omitted a global or participant validator"
+        );
+
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "state-before.json",
+            &before,
+        )?);
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "authorities.json",
+            &committees
+                .iter()
+                .map(|committee| &committee.authority)
+                .collect::<Vec<_>>(),
+        )?);
+        let mut observer = FaultContinuousObserverV1::start_retaining_evidence(
+            &network,
+            &before,
+            shape.participants,
+            &manifest.bundle_id,
+            false,
+        )?;
+
+        let workflow_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
+        ensure!(
+            governed.len() == 3 && committees.len() == 3,
+            "exactly three proof jobs are required"
+        );
+        // Authenticate all committee digests before launching any proof worker.
+        let jobs: [(GovernedLeg, Hash); 3] = governed
+            .into_iter()
+            .zip(&committees)
+            .map(|(leg, committee)| Ok((leg, committee.authority.digest()?)))
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .map_err(|_| eyre!("exactly three proof jobs are required"))?;
+        let prepared = collect_three_smoke_phase_jobs_v1(
+            SmokeLegJobPhaseV1::Proof,
+            jobs,
+            |ordinal, (leg, authority_digest)| {
+                let leg_timing = SmokeDiagnosticSpanV1::start(
+                    SmokeDiagnosticPhaseV1::ClientLegConstruction,
+                    Some(ordinal),
+                );
+                let prepared = prepare_leg(ordinal, leg, &manifest, authority_digest)?;
+                leg_timing.complete();
+                Ok(prepared)
+            },
+        )?;
+        let materials = provisional_materials(manifest, &prepared, &committees)?;
+        let availability_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AvailabilityCertification, None);
+        // Borrow the immutable SDK context, without capturing the blocking runtime
+        // or rebuilding its transport/signing configuration for individual legs.
+        let client = sponsor.client();
+        let certification_jobs =
+            std::array::from_fn(|ordinal| (&materials[ordinal], &committees[ordinal]));
+        let certificates = collect_three_smoke_phase_jobs_v1(
+            SmokeLegJobPhaseV1::AvailabilityCertification,
+            certification_jobs,
+            |_, (material, committee)| {
+                client
+                    .certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
+            },
+        )?;
+        availability_timing.complete();
+        let mut final_manifest = materials[0].manifest.clone();
+        for (ordinal, certificate) in certificates.iter().enumerate() {
+            final_manifest.legs[ordinal].availability_certificate_digest = certificate.digest()?;
+        }
+        final_manifest.validate()?;
+        let upload_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::RestrictedUpload, None);
+        let upload_jobs = std::array::from_fn(|ordinal| {
+            (
+                &materials[ordinal],
+                &certificates[ordinal],
+                &committees[ordinal],
+            )
+        });
+        collect_three_smoke_phase_jobs_v1(
+            SmokeLegJobPhaseV1::RestrictedUpload,
+            upload_jobs,
+            |ordinal, (material, certificate, committee)| {
+                let request = PrivateSettlementLegUploadRequestV1 {
+                    manifest: final_manifest.clone(),
+                    audit_policy: material.audit_policy.clone(),
+                    committee_authority: material.committee_authority.clone(),
+                    payload: material.payload_with_certificate(certificate.clone()),
+                };
+                for endpoint in &committee.endpoints {
+                    let response =
+                        client.upload_private_settlement_leg_to_v1(endpoint, &request)?;
+                    ensure!(
+                        usize::from(response.leg_ordinal) == ordinal,
+                        "upload ordinal substitution"
+                    );
+                }
+                Ok(())
+            },
+        )?;
+        upload_timing.complete();
+        assert_no_partial_visibility(&network, final_manifest.bundle_id, "collecting")?;
+        let state = capture_fault_state_snapshot(&network, "smoke-collecting")?;
+        ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "state-collecting.json",
+            &state,
+        )?);
+
+        let audit_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AuditorApproval, None);
+        for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
+            let auditor_transport_signer =
+                BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
+            let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
+                audit_policy: leg.governed.policy.clone(),
+            };
+            let fetched = sponsor
+                .client()
+                .private_settlement_auditor_capsule_quorum_for_authority_v1(
+                    &committee.endpoints,
+                    &materials[ordinal].committee_authority,
+                    final_manifest.legs[ordinal].payload_digest,
+                    &capsule_request,
+                    &auditor_transport_signer,
+                )?;
+            ensure!(
+                fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
+                "unexpected audit lifecycle"
+            );
+            let authoritative_height = fetched.authoritative_height;
+            let view = PrivateSettlementAuditorSidecarViewV1 {
+                manifest: fetched.manifest,
+                policy: fetched.audit_policy,
+                authority: fetched.committee_authority,
+                statement: fetched.statement,
+                delta: fetched.delta,
+                audit_capsule: fetched.audit_capsule,
+                availability: fetched.availability,
+                lifecycle: PrivateSettlementSidecarLifecycleV1::Collecting,
+            };
+            let auditor_id = AccountId::new(leg.governed.auditor_signing.public_key().clone());
+            let approval = approve_private_settlement_leg_v1(
+                &view,
+                &leg.governed.governance,
+                authoritative_height,
+                &auditor_id,
+                leg.governed.auditor_encryption.secret(),
+                &leg.governed.auditor_signing,
+                &approve_all_audit_material,
+            )?;
+            let response = sponsor
+                .client()
+                .submit_private_settlement_audit_approval_quorum_for_authority_v1(
+                    &committee.endpoints,
+                    &materials[ordinal].committee_authority,
+                    final_manifest.legs[ordinal].payload_digest,
+                    &auditor_transport_signer,
+                    &PrivateSettlementAuditApprovalRequestV1 {
+                        audit_policy: capsule_request.audit_policy,
+                        approval,
+                    },
+                )?;
+            ensure!(
+                response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
+                "approval quorum was not durable"
+            );
+        }
+        audit_timing.complete();
+        assert_no_partial_visibility(&network, final_manifest.bundle_id, "audited")?;
+        let state = capture_fault_state_snapshot(&network, "smoke-audited")?;
+        ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "state-audited.json",
+            &state,
+        )?);
+
+        let endpoint_matrix = committees
+            .iter()
+            .map(|committee| committee.endpoints.clone())
+            .collect::<Vec<_>>();
+        let authorities = committees
+            .iter()
+            .map(|committee| committee.authority.clone())
+            .collect::<Vec<_>>();
+        let deltas = prepared
+            .iter()
+            .map(|leg| leg.prepared.delta.clone())
+            .collect::<Vec<_>>();
+        let prepare_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrepareCertification, None);
+        let barrier = sponsor.client().prepare_private_settlement_bundle_v1(
+            &endpoint_matrix,
+            &final_manifest,
+            &authorities,
+            &deltas,
+        )?;
+        prepare_timing.complete();
+        assert_no_partial_visibility(&network, final_manifest.bundle_id, "prepared")?;
+        let state = capture_fault_state_snapshot(&network, "smoke-prepared")?;
+        ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "state-prepared.json",
+            &state,
+        )?);
+        let registration_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrepareRegistration, None);
+        let fee_before_registration = sponsor_nexus_fee_balance(&sponsor)?;
+        sponsor
+            .client()
+            .register_private_settlement_prepare_and_wait_v1(
+                &barrier,
+                u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                    .expect("V1 carrier ceiling fits u64"),
+                iroha::client::TransactionWaitOptions {
+                    timeout: FINALITY_TIMEOUT,
+                    poll_interval: POLL_INTERVAL,
+                },
+            )?;
+        let fee_after_registration = sponsor_nexus_fee_balance(&sponsor)?;
+        ensure_exact_private_settlement_carrier_fee(
+            &fee_before_registration,
+            &fee_after_registration,
+            "Prepare registration",
+        )?;
+        // Sponsor Applied is local: wait for its exact replicated registration map
+        // before one-shot Commit vote collection across the disjoint committees.
+        let registered = wait_for_smoke_prepare_registration(&network, &before, routes.len())?;
+        ensure_fault_ledger_unchanged_before_finality(&before, &registered)?;
+        registration_timing.complete();
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "state-registered.json",
+            &registered,
+        )?);
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "prepare-barrier.json",
+            &barrier,
+        )?);
+        let commit_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::CommitCertification, None);
+        let commits = sponsor
+            .client()
+            .recover_or_commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+        commit_timing.complete();
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "commit-certificates.json",
+            &commits,
+        )?);
+        assert_no_partial_visibility(&network, final_manifest.bundle_id, "commit-certified")?;
+        let state = capture_fault_state_snapshot(&network, "smoke-commit-certified")?;
+        ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "state-commit-certified.json",
+            &state,
+        )?);
+
+        let request = sponsor
+            .client()
+            .build_private_settlement_finalization_request_v1(
+                &barrier,
+                &commits,
+                u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                    .expect("V1 carrier ceiling fits u64"),
+            )?;
+        let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
+        observer.begin_phase("finalization", &[], true)?;
+        observer.checkpoint_active_phase(&[])?;
+        let finality_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::FinalityWorkflow, None);
+        let submission_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::FinalizationSubmission, None);
+        sponsor
+            .client()
+            .submit_private_settlement_bundle_v1(&request)?;
+        submission_timing.complete();
+        let receipt_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AllPeerReceipt, None);
+        let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
+        receipt_timing.complete();
+        let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
+        ensure_exact_private_settlement_carrier_fee(
+            &fee_before_finalization,
+            &fee_after_finalization,
+            "financial finalization",
+        )?;
+        ensure!(
+            receipt.legs.len() == PARTICIPANT_COUNT,
+            "receipt does not contain exactly three legs"
+        );
+        for (ordinal, leg) in receipt.legs.iter().enumerate() {
+            ensure!(
+                usize::from(leg.delta.leg_ordinal) == ordinal,
+                "receipt reordered a leg"
+            );
+            ensure!(
+                receipt
+                    .legs
+                    .iter()
+                    .filter(|candidate| candidate.delta.route == leg.delta.route)
+                    .count()
+                    == 1,
+                "a private leg became visible more than once"
+            );
+        }
+        let after = wait_for_converged_fault_state_snapshot(&network, "smoke-finalized")?;
+        ensure_fault_state_finalized_once(&before, &after, shape.participants)?;
+        observe_smoke_diagnostic_milestone_v1(
+            SmokeDiagnosticPhaseV1::FinancialApplicationVerified,
+            receipt.finalized_height,
+        );
+        finality_timing.complete();
+        workflow_timing.complete();
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "state-finalized.json",
+            &after,
+        )?);
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "receipt.json",
+            &receipt,
+        )?);
+        observer.complete_phase()?;
+        let signed_finality_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::SignedFinalityEvidence, None);
+        let (finality, files) = collect_signed_rs16_finality(
+            &network,
+            &runtime,
+            receipt.finalized_height,
+            FinalityObservationV1::LiveTransport,
+            Some((&evidence_root, "finality-before")),
+        )?;
+        evidence_files.extend(files);
+        ensure!(
+            finality.observations == u64::try_from(shape.process_count())?,
+            "positive smoke lacks a signed RS16 finality observation from every process"
+        );
+        signed_finality_timing.complete();
+        let replay_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ReplayValidation, None);
+        // Replay the original signed carrier while it is live. The acknowledgment must
+        // retain its finalized identity without creating another financial effect.
+        let replayed = observe_idempotent_finalized_retry(
+            &sponsor,
+            &network,
+            &final_manifest,
+            &request,
+            &receipt,
+        )?;
+        ensure!(
+            sponsor_nexus_fee_balance(&sponsor)? == fee_after_finalization,
+            "acknowledged finalization retry charged a third carrier fee"
+        );
+        ensure_fault_state_reverted(&after, &replayed)?;
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "state-replay.json",
+            &replayed,
+        )?);
+        let (summaries, observations) = observer.finish_with_evidence(&replayed)?;
+        ensure!(
+            summaries.len() == shape.process_count()
+                && observations.len() == shape.process_count()
+                && summaries.iter().all(|row| row.check_count >= 3
+                    && row.finalized_observations > 0
+                    && row.poll_failure_count == 0),
+            "smoke continuous observer omitted validators, finality or successful polling"
+        );
+        for (index, (summary, observations)) in summaries.iter().zip(&observations).enumerate() {
+            evidence_files.push(write_smoke_evidence(
+                &evidence_root,
+                &format!("continuous-{index:02}.json"),
+                &SmokeContinuousEvidenceV1 {
+                    summary: summary.clone(),
+                    observations: observations.clone(),
+                },
+            )?);
+        }
+        replay_timing.complete();
+        if experiment == N3SettlementExperimentV1::HappyDay {
+            let final_inventory = smoke_process_inventory(
+                &network,
+                &runtime,
+                shape,
+                SmokeInventoryReadinessV1::Immediate,
+            )?;
+            ensure!(
+                initial_inventory
+                    .iter()
+                    .zip(&final_inventory)
+                    .all(|(before, after)| before.peer_id == after.peer_id
+                        && before.configuration_sha256 == after.configuration_sha256
+                        && before.executable_sha256 == after.executable_sha256
+                        && before.pid == after.pid),
+                "happy-day experiment changed a validator process, identity or configuration"
+            );
+            evidence_files.push(write_smoke_evidence(
+                &evidence_root,
+                "processes-after.json",
+                &final_inventory,
+            )?);
+            write_real_process_result(&RealProcessSmokeResultV1 {
+                version: 1,
+                protocol: "AtomicPrivateSettlementV1".to_owned(),
+                kind: "happy_day".to_owned(),
+                request: smoke_request,
+                request_sha256: request_sha,
+                network_id: norito::json::to_value(&network.network_id())?,
+                participants: shape.participants,
+                processes: shape.process_count(),
+                restarted: 0,
+                activation_height: activated_height,
+                authority_context_height,
+                finalized_height: receipt.finalized_height,
+                signed_rs16_observations: finality.observations,
+                continuous_checks: summaries.iter().map(|row| row.check_count).sum::<u64>(),
+                passed: true,
+                artifacts: evidence_files,
+            })?;
+            println!(
+                "APS happy_day completed: participants={} processes={} finalized_height={}",
+                shape.participants,
+                shape.process_count(),
+                receipt.finalized_height
+            );
+            return Ok(());
+        }
+        let mut restarts = Vec::new();
+
+        // Recover each durable store while preserving a live 3-of-4 quorum in
+        // every committee. A receipt alone would miss duplicated nullifiers,
+        // outputs, or residual reservations, so recheck the complete APS state.
+        for (peer_index, peer) in network.all_peers().enumerate() {
+            let restart_timing =
+                SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::RestartReconciliation, None);
+            let before_pid = runtime
+                .block_on(peer.process_id())
+                .ok_or_else(|| eyre!("smoke restart target #{peer_index} has no live PID"))?;
+            let config_layers = network.config_layers_for_peer(peer).collect::<Vec<_>>();
+            ensure!(
+                runtime.block_on(peer.shutdown_if_started())
+                    && runtime.block_on(peer.process_id()).is_none(),
+                "smoke restart target #{peer_index} did not stop"
+            );
+            runtime
+                .block_on(async {
+                    tokio::time::timeout(
+                        FINALITY_TIMEOUT,
+                        peer.start_checked(config_layers.iter(), None),
+                    )
+                    .await
+                })
+                .wrap_err_with(|| format!("smoke restart target #{peer_index} timed out"))??;
+            let after_pid = runtime
+                .block_on(peer.process_id())
+                .ok_or_else(|| eyre!("smoke restart target #{peer_index} did not recover"))?;
+            ensure!(
+                before_pid != after_pid && peer.client().status().get().is_ok(),
+                "smoke restart target #{peer_index} lacks a healthy replacement process"
+            );
+            ensure!(
+                wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
+                "smoke restart target #{peer_index} changed the finalized receipt"
+            );
+            let recovered = wait_for_converged_fault_state_snapshot(&network, "smoke-restarted")?;
+            ensure_fault_state_reverted(&after, &recovered)?;
+            evidence_files.push(write_smoke_evidence(
+                &evidence_root,
+                &format!("state-restarted-{peer_index:02}.json"),
+                &recovered,
+            )?);
+            restart_timing.complete();
+            restarts.push(SmokeRestartV1 {
+                peer_index,
+                before_pid,
+                after_pid,
+            });
+            println!(
+                "APS smoke restart verified: peer_index={peer_index} before_pid={before_pid} after_pid={after_pid}"
+            );
+        }
+        let recovered_finality_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::SignedFinalityEvidence, None);
+        let (recovered_finality, files) = collect_signed_rs16_finality(
+            &network,
+            &runtime,
+            receipt.finalized_height,
+            FinalityObservationV1::Restored(finality.anchor),
+            Some((&evidence_root, "finality-after")),
+        )?;
+        ensure!(
+            recovered_finality == finality,
+            "restarted smoke network changed its finalized block, authority context, or coverage"
+        );
+        recovered_finality_timing.complete();
+        evidence_files.extend(files);
+        let recovered_inventory = smoke_process_inventory(
             &network,
             &runtime,
             shape,
@@ -3872,28 +3996,32 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
         ensure!(
             initial_inventory
                 .iter()
-                .zip(&final_inventory)
+                .zip(&recovered_inventory)
                 .all(|(before, after)| before.peer_id == after.peer_id
                     && before.configuration_sha256 == after.configuration_sha256
-                    && before.executable_sha256 == after.executable_sha256
-                    && before.pid == after.pid),
-            "happy-day experiment changed a validator process, identity or configuration"
+                    && before.pid != after.pid),
+            "smoke restart changed identity/configuration or retained its process"
         );
         evidence_files.push(write_smoke_evidence(
             &evidence_root,
             "processes-after.json",
-            &final_inventory,
+            &recovered_inventory,
+        )?);
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "restarts.json",
+            &restarts,
         )?);
         write_real_process_result(&RealProcessSmokeResultV1 {
             version: 1,
             protocol: "AtomicPrivateSettlementV1".to_owned(),
-            kind: "happy_day".to_owned(),
+            kind: "smoke".to_owned(),
             request: smoke_request,
             request_sha256: request_sha,
             network_id: norito::json::to_value(&network.network_id())?,
             participants: shape.participants,
             processes: shape.process_count(),
-            restarted: 0,
+            restarted: restarts.len(),
             activation_height: activated_height,
             authority_context_height,
             finalized_height: receipt.finalized_height,
@@ -3903,133 +4031,16 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
             artifacts: evidence_files,
         })?;
         println!(
-            "APS happy_day completed: participants={} processes={} finalized_height={}",
+            "APS smoke completed: participants={} processes={} restarted={} finalized_height={}",
             shape.participants,
             shape.process_count(),
-            receipt.finalized_height
+            shape.process_count(),
+            receipt.finalized_height,
         );
-        return Ok(());
-    }
-    let mut restarts = Vec::new();
-
-    // Recover each durable store while preserving a live 3-of-4 quorum in
-    // every committee. A receipt alone would miss duplicated nullifiers,
-    // outputs, or residual reservations, so recheck the complete APS state.
-    for (peer_index, peer) in network.all_peers().enumerate() {
-        let restart_timing =
-            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::RestartReconciliation, None);
-        let before_pid = runtime
-            .block_on(peer.process_id())
-            .ok_or_else(|| eyre!("smoke restart target #{peer_index} has no live PID"))?;
-        let config_layers = network.config_layers_for_peer(peer).collect::<Vec<_>>();
-        ensure!(
-            runtime.block_on(peer.shutdown_if_started())
-                && runtime.block_on(peer.process_id()).is_none(),
-            "smoke restart target #{peer_index} did not stop"
-        );
-        runtime
-            .block_on(async {
-                tokio::time::timeout(
-                    FINALITY_TIMEOUT,
-                    peer.start_checked(config_layers.iter(), None),
-                )
-                .await
-            })
-            .wrap_err_with(|| format!("smoke restart target #{peer_index} timed out"))??;
-        let after_pid = runtime
-            .block_on(peer.process_id())
-            .ok_or_else(|| eyre!("smoke restart target #{peer_index} did not recover"))?;
-        ensure!(
-            before_pid != after_pid && peer.client().status().get().is_ok(),
-            "smoke restart target #{peer_index} lacks a healthy replacement process"
-        );
-        ensure!(
-            wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
-            "smoke restart target #{peer_index} changed the finalized receipt"
-        );
-        let recovered = wait_for_converged_fault_state_snapshot(&network, "smoke-restarted")?;
-        ensure_fault_state_reverted(&after, &recovered)?;
-        evidence_files.push(write_smoke_evidence(
-            &evidence_root,
-            &format!("state-restarted-{peer_index:02}.json"),
-            &recovered,
-        )?);
-        restart_timing.complete();
-        restarts.push(SmokeRestartV1 {
-            peer_index,
-            before_pid,
-            after_pid,
-        });
-        println!(
-            "APS smoke restart verified: peer_index={peer_index} before_pid={before_pid} after_pid={after_pid}"
-        );
-    }
-    let recovered_finality_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::SignedFinalityEvidence, None);
-    let (recovered_finality, files) = collect_signed_rs16_finality(
-        &network,
-        &runtime,
-        receipt.finalized_height,
-        FinalityObservationV1::Restored(finality.anchor),
-        Some((&evidence_root, "finality-after")),
-    )?;
-    ensure!(
-        recovered_finality == finality,
-        "restarted smoke network changed its finalized block, authority context, or coverage"
-    );
-    recovered_finality_timing.complete();
-    evidence_files.extend(files);
-    let recovered_inventory = smoke_process_inventory(
-        &network,
-        &runtime,
-        shape,
-        SmokeInventoryReadinessV1::Immediate,
-    )?;
-    ensure!(
-        initial_inventory
-            .iter()
-            .zip(&recovered_inventory)
-            .all(|(before, after)| before.peer_id == after.peer_id
-                && before.configuration_sha256 == after.configuration_sha256
-                && before.pid != after.pid),
-        "smoke restart changed identity/configuration or retained its process"
-    );
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "processes-after.json",
-        &recovered_inventory,
-    )?);
-    evidence_files.push(write_smoke_evidence(
-        &evidence_root,
-        "restarts.json",
-        &restarts,
-    )?);
-    write_real_process_result(&RealProcessSmokeResultV1 {
-        version: 1,
-        protocol: "AtomicPrivateSettlementV1".to_owned(),
-        kind: "smoke".to_owned(),
-        request: smoke_request,
-        request_sha256: request_sha,
-        network_id: norito::json::to_value(&network.network_id())?,
-        participants: shape.participants,
-        processes: shape.process_count(),
-        restarted: restarts.len(),
-        activation_height: activated_height,
-        authority_context_height,
-        finalized_height: receipt.finalized_height,
-        signed_rs16_observations: finality.observations,
-        continuous_checks: summaries.iter().map(|row| row.check_count).sum::<u64>(),
-        passed: true,
-        artifacts: evidence_files,
-    })?;
-    println!(
-        "APS smoke completed: participants={} processes={} restarted={} finalized_height={}",
-        shape.participants,
-        shape.process_count(),
-        shape.process_count(),
-        receipt.finalized_height,
-    );
-    Ok(())
+        Ok(())
+    })();
+    runtime.block_on(network.shutdown());
+    result
 }
 
 #[cfg(feature = "atomic-private-settlement-smoke")]

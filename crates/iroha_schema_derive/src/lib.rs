@@ -93,7 +93,6 @@ impl NoritoContainerAttrs {
         let mut reuse_archived = false;
         let mut decode_from_slice = false;
         let mut decode_fields = false;
-        let mut decode_fields = false;
         let mut deny_unknown_fields = false;
         let mut schema_name = false;
         let mut validate = false;
@@ -156,14 +155,6 @@ impl NoritoContainerAttrs {
                         return Err(meta.error("duplicate decode_from_slice attribute"));
                     }
                     decode_from_slice = true;
-                } else if meta.path.is_ident("decode_fields") {
-                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
-                        return Err(meta.error("decode_fields does not take a value"));
-                    }
-                    if decode_fields {
-                        return Err(meta.error("duplicate decode_fields attribute"));
-                    }
-                    decode_fields = true;
                 } else if meta.path.is_ident("deny_unknown_fields") {
                     if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
                         return Err(

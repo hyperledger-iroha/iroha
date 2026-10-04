@@ -157,10 +157,6 @@ impl ReservePolicyProofV1 {
     /// # Errors
     /// Wrong scope/schema, substituted permission/policy/roles, absent selected entities, noncanonical
     /// or concealed state, invalid activation provenance, or exceeded finite reader bounds.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "independent trust selections remain explicit"
-    )]
     pub fn verify(
         &self,
         expected_chain: &str,

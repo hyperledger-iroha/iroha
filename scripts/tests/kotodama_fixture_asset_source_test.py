@@ -188,7 +188,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_toolchain/src/koto_test_driver_tests.rs',
-        '02df794136b01ae44e8fc9069635286274044917be775de814208c5fc1fd5db2',
+        'b5e38c0cae16265a6b7d381a851a7a628604a6583e3e6f0ba28befb9ea3c2a12',
         (
             AssetSpec('001.ko', 'e005c7a50dbd95fc718ff68174019a8313a923d497efe1eab9dbfb3f161e9d52', 892, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),

@@ -97,7 +97,7 @@ impl Intent {
         if labels.len() != 3 {
             return Err(invalid("generated reputation requires all three gateways"));
         }
-        encode(&labels, MAX_SELECTION_BYTES)?;
+        validate_gateway_label_bound(labels)?;
         let mut expected = Vec::with_capacity(3);
         for provider in &authority.manifest.providers {
             let plan = authority
@@ -377,4 +377,61 @@ pub(super) fn explicit(
                 .retain(account, &attempt.wallet_path())
         },
     )
+}
+
+/// Measure the original borrowed labels with canonical vector framing before cloning them.
+fn validate_gateway_label_bound(labels: &[String]) -> Result<()> {
+    let mut measured =
+        norito::core::SequencePayloadLength::new(norito::core::default_encode_flags())
+            .map_err(|_| invalid("cannot size original gateway labels"))?;
+    let empty_payload = measured.len();
+    // This uses the actual Vec<String> frame, including its schema-independent alignment.
+    let empty_frame = norito::canonical_frame_len(&Vec::<String>::new())
+        .map_err(|_| invalid("cannot size original gateway labels"))?;
+    for label in labels {
+        measured
+            .push(label)
+            .map_err(|_| invalid("cannot size original gateway labels"))?;
+        let frame = measured
+            .len()
+            .checked_sub(empty_payload)
+            .and_then(|payload| empty_frame.checked_add(payload))
+            .ok_or_else(|| invalid("original gateway labels exceed byte bound"))?;
+        if frame > MAX_SELECTION_BYTES {
+            return Err(invalid("original gateway labels exceed byte bound"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod label_bound_tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_label_measurement_matches_canonical_vector_boundary() {
+        for labels in [
+            vec![String::new(); 3],
+            vec!["gateway-1".into(), "\u{1f338}".repeat(200), "a".repeat(512)],
+        ] {
+            assert!(norito::canonical_frame_len(&labels).unwrap() <= MAX_SELECTION_BYTES);
+            validate_gateway_label_bound(&labels).unwrap();
+        }
+        let mut labels = vec![String::new(); 3];
+        // Select the exact canonical size without presuming a length-prefix width.
+        while norito::canonical_frame_len(&labels).unwrap() < MAX_SELECTION_BYTES {
+            labels[0].push('x');
+        }
+        assert_eq!(
+            norito::canonical_frame_len(&labels).unwrap(),
+            MAX_SELECTION_BYTES
+        );
+        validate_gateway_label_bound(&labels).unwrap();
+        labels[0].push('x');
+        assert_eq!(
+            norito::canonical_frame_len(&labels).unwrap(),
+            MAX_SELECTION_BYTES + 1
+        );
+        assert!(validate_gateway_label_bound(&labels).is_err());
+    }
 }

@@ -1,32 +1,39 @@
 //! One original proof stream and atomic native clock, retaining local refusals.
 
 use super::*;
+use iroha_data_model::sumeragi::finality::PreparedNativeFinalityJournal;
 
-/// Canonical journal and exact raw frame survive until the original cursor advances.
-/// TODO: prepare/fund the journal's decoded block/index graph independently.
+/// Prepared source ranges and exact raw frame survive until the original cursor advances.
+/// TODO: fund decoded nested SignedBlock/result graphs independently.
 pub(super) struct FinalityInput {
     input: FrameInput,
-    journal: Option<NativeFinalityJournal>,
+    journal: PreparedNativeFinalityJournal,
     clock: NativeJournalCursor,
     height: u64,
     committed: bool,
 }
 impl FinalityInput {
-    pub(super) fn new(input: FrameInput, clock: NativeJournalCursor, height: u64) -> Self {
-        Self {
+    pub(super) fn new(
+        input: FrameInput,
+        clock: NativeJournalCursor,
+        height: u64,
+    ) -> std::result::Result<Self, AttemptError> {
+        let journal =
+            PreparedNativeFinalityJournal::new(clock.limits(), clock.allocation_budget())?;
+        Ok(Self {
             input,
-            journal: None,
+            journal,
             clock,
             height,
             committed: false,
-        }
+        })
     }
     pub(super) fn height(&self) -> u64 {
         self.height
     }
     fn finish_frame(&mut self) -> std::result::Result<(), AttemptError> {
         self.input.consume_verified_frame()?;
-        self.journal = None;
+        self.journal.clear_consumed();
         self.committed = false;
         Ok(())
     }
@@ -40,16 +47,10 @@ impl FinalityInput {
         }
         while self.height < target {
             self.input.read_until_complete()?;
-            if self.journal.is_none() {
-                // Keep the sole existing canonical journal decoder. Raw frame
-                // admission does not establish its decoded/index graph custody.
-                self.journal = Some(NativeFinalityJournal::decode(
-                    self.input.frame().ok_or(AttemptError::Phase)?,
-                    self.clock.limits(),
-                )?);
-            }
-            let journal = self.journal.as_ref().ok_or(AttemptError::Phase)?;
-            let height = u64::try_from(journal.blocks.len()).map_err(|_| AttemptError::Height)?;
+            let frame = self.input.frame().ok_or(AttemptError::Phase)?;
+            self.journal.decode(frame)?;
+            let journal = self.journal.view(frame)?;
+            let height = u64::try_from(journal.len()).map_err(|_| AttemptError::Height)?;
             check_rotation_phase_height(self.height, height, cutoff)
                 .map_err(|_| AttemptError::Height)?;
             if height > target

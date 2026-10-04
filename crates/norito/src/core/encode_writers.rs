@@ -1,5 +1,70 @@
 //! Allocation-free writers used by count-first Norito encoding.
-use std::io::{self, Write};
+use std::{
+    cell::Cell,
+    io::{self, Write},
+};
+#[derive(Clone, Copy)]
+struct CountBudget {
+    remaining: usize,
+    rejected: bool,
+}
+thread_local! {
+    static ACTIVE_COUNT_BUDGET: Cell<Option<CountBudget>> = const { Cell::new(None) };
+}
+/// A caller's finite count allowance, shared by all nested measurement writers.
+pub(super) struct CountBudgetGuard {
+    previous: Option<CountBudget>,
+    initial: usize,
+}
+impl CountBudgetGuard {
+    pub(super) fn enter(maximum: usize) -> Self {
+        let previous = ACTIVE_COUNT_BUDGET.get();
+        let initial = previous.map_or(maximum, |budget| maximum.min(budget.remaining));
+        ACTIVE_COUNT_BUDGET.set(Some(CountBudget {
+            remaining: initial,
+            rejected: previous.is_some_and(|budget| budget.rejected),
+        }));
+        Self { previous, initial }
+    }
+    pub(super) fn check(&self) -> Result<(), super::Error> {
+        if ACTIVE_COUNT_BUDGET
+            .get()
+            .is_some_and(|budget| budget.rejected)
+        {
+            Err(super::Error::LengthMismatch)
+        } else {
+            Ok(())
+        }
+    }
+}
+impl Drop for CountBudgetGuard {
+    fn drop(&mut self) {
+        let current = ACTIVE_COUNT_BUDGET
+            .get()
+            .expect("original count budget scope");
+        let previous = self.previous.map(|mut previous| {
+            previous.remaining -= self.initial - current.remaining;
+            previous.rejected |= current.rejected;
+            previous
+        });
+        ACTIVE_COUNT_BUDGET.set(previous);
+    }
+}
+pub(super) fn charge_counted_bytes(bytes: usize) -> io::Result<()> {
+    let Some(mut budget) = ACTIVE_COUNT_BUDGET.get() else {
+        return Ok(());
+    };
+    if budget.rejected || bytes > budget.remaining {
+        budget.rejected = true;
+        ACTIVE_COUNT_BUDGET.set(Some(budget));
+        return Err(io::Error::other(
+            "Norito encoded length exceeds admitted count allowance",
+        ));
+    }
+    budget.remaining -= bytes;
+    ACTIVE_COUNT_BUDGET.set(Some(budget));
+    Ok(())
+}
 /// Writer which counts bytes without retaining them.
 #[derive(Default)]
 pub(super) struct LengthCountingWriter {
@@ -28,10 +93,12 @@ impl LengthCountingWriter {
 }
 impl Write for LengthCountingWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        charge_counted_bytes(buf.len())?;
         self.add(buf.len())?;
         Ok(buf.len())
     }
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        charge_counted_bytes(buf.len())?;
         self.add(buf.len())
     }
     fn flush(&mut self) -> io::Result<()> {

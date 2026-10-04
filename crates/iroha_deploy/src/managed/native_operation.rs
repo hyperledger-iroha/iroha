@@ -496,7 +496,7 @@ pub(super) fn require_deadline(deadline: Instant) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn now_ms() -> Result<u64> {
+pub(crate) fn now_ms() -> Result<u64> {
     u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

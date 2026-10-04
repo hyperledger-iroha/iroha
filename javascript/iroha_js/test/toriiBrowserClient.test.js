@@ -6,11 +6,8 @@ import { ed25519 } from "@noble/curves/ed25519";
 
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";
-import {
-  ToriiBrowserClient,
-  ToriiBrowserHttpError,
-  ToriiBrowserStreamGapError,
-} from "../src/toriiBrowserClient.js";
+import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
+import { ToriiHttpError, ToriiStreamGapError } from "../src/toriiErrors.js";
 import {
   browserSignedTransactionHashHex,
   browserTransactionPayloadHashHex,
@@ -689,7 +686,6 @@ test("ToriiBrowserClient signs every scoped Explorer and contract read over its 
     () => client.getExplorerInstruction("transaction-hash", 0, { addressFormat: "i105" }),
     () => client.getExplorerInstructionContractView("transaction-hash", 0),
     () => client.getAccount(FIXTURE_ALICE_ID),
-    () => client.listAccountAssets(FIXTURE_ALICE_ID),
     () => client.listAccountPermissions(FIXTURE_ALICE_ID),
     () => client.listAccountHistory(FIXTURE_ALICE_ID),
     () => client.listContractActivity({ limit: 1, contractAlias: "demo::module" }),
@@ -723,8 +719,8 @@ test("ToriiBrowserClient leaves optional dataspace reads anonymous without a sig
       if (new URL(url).pathname.endsWith("/events/sse")) {
         return sseResponse([]);
       }
-      if (new URL(url).pathname.endsWith("/assets")) {
-        return jsonResponse({ items: [], total: 0 });
+      if (new URL(url).pathname.endsWith("/assets/query")) {
+        return jsonResponse({ items: [], next_cursor: null });
       }
       return jsonResponse({});
     },
@@ -732,7 +728,7 @@ test("ToriiBrowserClient leaves optional dataspace reads anonymous without a sig
   await client.getExplorerDomain("wonderland");
   await client.getExplorerMetrics();
   await client.getAccount(FIXTURE_ALICE_ID);
-  await client.listAccountAssets(FIXTURE_ALICE_ID);
+  await client.accountAssets(FIXTURE_ALICE_ID).list();
   await client.listAccountPermissions(FIXTURE_ALICE_ID);
   await client.listAccountHistory(FIXTURE_ALICE_ID);
   await client.listContractEvents();
@@ -1244,29 +1240,6 @@ test("ToriiBrowserClient rejects malformed ledger selectors and representations 
   );
 });
 
-test("ToriiBrowserClient account assets use the current asset selector query key", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/accounts/test-account/assets");
-    assert.equal(parsed.searchParams.get("asset"), "asset-alias");
-    assert.equal(parsed.searchParams.get("limit"), "10");
-    assert.equal(parsed.searchParams.get("offset"), "20");
-    assert.equal(parsed.searchParams.get("count_mode"), "exact");
-    return jsonResponse({
-      items: [{ asset: "asset-alias", account_id: "test-account", quantity: "7" }],
-      total: 1,
-    });
-  };
-  const client = new ToriiBrowserClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountAssets("test-account", {
-    asset: "asset-alias",
-    limit: 10,
-    offset: 20,
-    countMode: " Exact ",
-  });
-  assert.equal(payload.items[0].asset, "asset-alias");
-});
-
 test("ToriiBrowserClient account and contract lists encode only route-specific filters", async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
@@ -1489,7 +1462,7 @@ test("ToriiBrowserClient turns contract stream_error events into typed gaps", as
   await assert.rejects(
     client.streamContractEvents().next(),
     (error) => {
-      assert(error instanceof ToriiBrowserStreamGapError);
+      assert(error instanceof ToriiStreamGapError);
       assert.equal(error.code, "stream_lagged");
       assert.equal(error.message, "events were lost");
       assert.equal(error.droppedMessages, 4);
@@ -1512,7 +1485,7 @@ test("ToriiBrowserClient treats contract stream EOF as a terminal non-replayable
   await assert.rejects(
     client.streamContractEvents().next(),
     (error) => {
-      assert(error instanceof ToriiBrowserStreamGapError);
+      assert(error instanceof ToriiStreamGapError);
       assert.equal(error.code, "stream_unexpected_eof");
       assert.equal(error.droppedMessages, null);
       assert.equal(error.replayAvailable, false);
@@ -1520,118 +1493,6 @@ test("ToriiBrowserClient treats contract stream EOF as a terminal non-replayable
     },
   );
   assert.equal(fetchCalls, 1);
-});
-
-test("ToriiBrowserClient queryTransactions posts a browser-safe envelope", async () => {
-  let capturedUrl;
-  let capturedInit;
-  const fetchImpl = async (url, init) => {
-    capturedUrl = String(url);
-    capturedInit = init;
-    return jsonResponse({ items: [], total: 0 });
-  };
-  const client = new ToriiBrowserClient("https://torii.example", {
-    fetchImpl,
-    networkId: QUERY_NETWORK_ID,
-  });
-
-  const payload = await client.queryTransactions({
-    ...canonicalReadOptions(),
-    assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
-    select: [" entrypoint_hash ", { authority: true }],
-    sort: "newest",
-    limit: 25,
-    fetch_size: 50,
-    queryName: "Transactions",
-    countMode: " BOUNDED ",
-  });
-
-  assert.equal(capturedUrl, "https://torii.example/v1/transactions/query");
-  assert.equal(capturedInit.method, "POST");
-  assert.equal(capturedInit.redirect, "error");
-  assert.equal(
-    capturedInit.headers["X-Iroha-Account"],
-    AccountAddress.parseEncoded(FIXTURE_ALICE_ID).address.canonicalHex(),
-  );
-  assert.deepEqual(JSON.parse(capturedInit.body), {
-    pagination: { limit: 25 },
-    sort: [
-      { key: "timestamp_ms", order: "desc" },
-      { key: "entrypoint_hash", order: "desc" },
-    ],
-    filter: {
-      op: "eq",
-      args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"],
-    },
-    select: ["entrypoint_hash", { authority: true }],
-    fetch_size: 50,
-    query: "Transactions",
-    count_mode: "bounded",
-  });
-  assert.deepEqual(payload, { items: [], total: 0 });
-});
-
-test("ToriiBrowserClient transaction queries bind exact genesis, path, and body", async () => {
-  const messages = [];
-  const fetchImpl = async () => jsonResponse({ items: [], total: 0 });
-  const sign = async ({ message }) => {
-    messages.push(Buffer.from(message));
-    return Buffer.alloc(64, messages.length);
-  };
-  const client = new ToriiBrowserClient("https://torii.example", {
-    fetchImpl,
-    networkId: QUERY_NETWORK_ID,
-  });
-  const foreign = new ToriiBrowserClient("https://torii.example", {
-    fetchImpl,
-    networkId: FOREIGN_QUERY_NETWORK_ID,
-  });
-  const auth = { authAccountId: FIXTURE_ALICE_ID, sign, timestampMs: 1_700_000_000_000, nonce: "query-binding" };
-
-  await client.queryAccountTransactions(FIXTURE_ALICE_ID, { ...auth, limit: 1 });
-  await client.queryAccountTransactions(FIXTURE_BOB_ID, { ...auth, limit: 1 });
-  await client.queryTransactions({ ...auth, limit: 2 });
-  await foreign.queryTransactions({ ...auth, limit: 2 });
-
-  assert.notDeepEqual(messages[0], messages[1], "the substituted account path must be signed");
-  assert.notDeepEqual(messages[1], messages[2], "the final query body must be signed");
-  assert.notDeepEqual(messages[2], messages[3], "a foreign genesis must change the signature message");
-});
-
-test("ToriiBrowserClient transaction queries are one-shot and reject legacy auth shapes", async () => {
-  let fetchCalls = 0;
-  const client = new ToriiBrowserClient("https://torii.example", {
-    networkId: QUERY_NETWORK_ID,
-    fetchImpl: async (_url, init) => {
-      fetchCalls += 1;
-      assert.equal(init.redirect, "error");
-      return jsonResponse({ error: "unavailable" }, { status: 503 });
-    },
-  });
-  await assert.rejects(
-    client.queryTransactions({ ...canonicalReadOptions(), limit: 1 }),
-    (error) => error instanceof ToriiBrowserHttpError && error.status === 503,
-  );
-  assert.equal(fetchCalls, 1);
-
-  const noFetch = new ToriiBrowserClient("https://torii.example", {
-    networkId: QUERY_NETWORK_ID,
-    fetchImpl: async () => {
-      throw new Error("invalid authentication must fail before fetch");
-    },
-  });
-  assert.throws(() => noFetch.queryTransactions({ limit: 1 }), /authAccountId/);
-  assert.throws(
-    () => noFetch.queryTransactions({ ...canonicalReadOptions(), privateKey: "inline" }),
-    /unsupported option privateKey/,
-  );
-  assert.throws(
-    () => noFetch.queryTransactions({
-      ...canonicalReadOptions(),
-      headers: { "X-Iroha-Signature": "precomputed" },
-    }),
-    /cannot be precomputed/,
-  );
 });
 
 test("ToriiBrowserClient rejects adversarial query options before fetch", async () => {
@@ -1645,38 +1506,6 @@ test("ToriiBrowserClient rejects adversarial query options before fetch", async 
     /contains unsupported option page/,
   );
   assert.throws(
-    () => client.queryTransactions({ sort: "timestamp_ms:drop" }),
-    /asc or desc/,
-  );
-  assert.throws(
-    () => client.queryTransactions({ sort: "timestamp_ms:desc:extra" }),
-    /key:asc\/key:desc/,
-  );
-  assert.throws(
-    () => client.queryTransactions({ sort: [{ key: "timestamp ms", order: "desc" }] }),
-    /ASCII field name/,
-  );
-  assert.throws(
-    () => client.queryTransactions({ select: "entrypoint_hash" }),
-    /select must be an array/,
-  );
-  assert.throws(
-    () => client.queryTransactions({ select: ["entrypoint_hash", []] }),
-    /select\[1] must be a field-path string or plain object/,
-  );
-  assert.throws(
-    () => client.queryTransactions({ select: ["entrypoint_hash", " "] }),
-    /select\[1] must be a non-empty field path/,
-  );
-  assert.throws(
-    () => client.queryTransactions({ count_mode: "full" }),
-    /countMode must be bounded or exact/,
-  );
-  assert.throws(
-    () => client.listAssetDefinitions({ countMode: "full" }),
-    /countMode must be bounded or exact/,
-  );
-  assert.throws(
     () => client.resolveAlias("  "),
     /alias must not be empty/,
   );
@@ -1688,7 +1517,7 @@ test("ToriiBrowserClient preserves error responses for callers", async () => {
   await assert.rejects(
     () => client.getExplorerRwa("missing$domain"),
     (error) => {
-      assert(error instanceof ToriiBrowserHttpError);
+      assert(error instanceof ToriiHttpError);
       assert.equal(error.status, 404);
       assert.equal(error.bodyText, "not found");
       return true;
@@ -1699,8 +1528,8 @@ test("ToriiBrowserClient preserves error responses for callers", async () => {
 test("browser aggregate exports reusable browser-safe SDK APIs", () => {
   assert.equal(typeof browserSdk.AccountAddress, "function");
   assert.equal(typeof browserSdk.ToriiBrowserClient, "function");
-  assert.equal(typeof browserSdk.ToriiBrowserStreamGapError, "function");
-  assert.equal(typeof browserDistSdk.ToriiBrowserStreamGapError, "function");
+  assert.equal(typeof browserSdk.ToriiStreamGapError, "function");
+  assert.equal(typeof browserDistSdk.ToriiStreamGapError, "function");
   assert.equal(typeof browserSdk.normalizeAccountAliasFqn, "function");
   assert.equal(typeof browserSdk.noritoEncodeMultisigProposeRequest, "function");
   assert.equal(typeof browserSdk.noritoDecodeBlockProofs, "function");
@@ -1719,14 +1548,6 @@ test("browser aggregate exports reusable browser-safe SDK APIs", () => {
 
 test("ToriiBrowserClient rejects noncanonical asset and RWA quantity readbacks", async () => {
   const cases = [
-    {
-      payload: { items: [{ asset: "asset", quantity: "1.0" }], total: 1 },
-      invoke: (client) => client.listAccountAssets("account"),
-    },
-    {
-      payload: { items: [{ account_id: "account", quantity: -1 }], total: 1 },
-      invoke: (client) => client.listAssetHolders("asset-definition"),
-    },
     {
       payload: {
         pagination: { limit: 25, next_cursor: null, has_more: false },
@@ -2049,7 +1870,7 @@ for (const status of [200, 201, 204]) {
 
     await assert.rejects(
       () => client.submitTransaction(signedTransaction),
-      (error) => error instanceof ToriiBrowserHttpError && error.status === status,
+      (error) => error instanceof ToriiHttpError && error.status === status,
     );
     assert.equal(attempts, 1);
   });
@@ -2097,7 +1918,7 @@ for (const redirectStatus of [307, 308]) {
     await assert.rejects(
       () => client.submitTransaction(signedTransaction),
       (error) =>
-        error instanceof ToriiBrowserHttpError &&
+        error instanceof ToriiHttpError &&
         error.status === redirectStatus,
     );
     assert.equal(attempts, 1);
@@ -2126,7 +1947,7 @@ test("ToriiBrowserClient rejects redirects for caller-supplied nonce headers", a
         body: { query: "signed" },
         headers: { "X-Iroha-Nonce": "caller-generated-nonce" },
       }),
-    (error) => error instanceof ToriiBrowserHttpError && error.status === 307,
+    (error) => error instanceof ToriiHttpError && error.status === 307,
   );
   assert.equal(attempts, 1);
 });
@@ -2440,7 +2261,7 @@ test("ToriiBrowserClient status reads accept only exact HTTP 200 or 404", async 
     });
     await assert.rejects(
       client.getTransactionStatus(hash),
-      (error) => error instanceof ToriiBrowserHttpError && error.status === status,
+      (error) => error instanceof ToriiHttpError && error.status === status,
     );
   }
 

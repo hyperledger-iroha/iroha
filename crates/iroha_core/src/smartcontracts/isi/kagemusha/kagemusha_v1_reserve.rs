@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 #[path = "ordinary_top_up.rs"]
 pub(super) mod ordinary_top_up;
-pub use ordinary_top_up::{KagemushaOrdinaryTopUpRecordV1, read_finalized_ordinary_top_up_v1};
+pub use ordinary_top_up::KagemushaOrdinaryTopUpRecordV1;
 
 #[cfg(test)]
 use iroha_data_model::isi::{KagemushaFinalityTrustAnchorV1, KagemushaTopUpResultV1};

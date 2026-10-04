@@ -1,4 +1,6 @@
 //! This module contains [`State`] snapshot actor service.
+#[cfg(test)]
+use crate::state::StateBlock;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
@@ -7,10 +9,11 @@ use crate::{
     query::store::LiveQueryStoreHandle,
     secure_file_metadata::{self, SecureMetadata},
     state::{
-        LaneIncarnationLineage, SnapshotNexusRuntime, State, StateBlock, ZkConfigInstallError,
+        LaneIncarnationLineage, SnapshotNexusRuntime, State, ZkConfigInstallError,
         deserialize::KuraSeed, lane_incarnation_lineage_root, snapshot_storage,
     },
 };
+#[cfg(test)]
 use blake2::{Blake2b, digest::consts::U32};
 use hex;
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
@@ -103,6 +106,7 @@ pub(crate) enum SnapshotCaptureError {
     Runtime(#[source] Box<crate::state::LaneLifecycleError>),
     /// Canonical snapshot encoding or projection was rejected.
     #[error("invalid canonical State snapshot encoding: {0}")]
+    #[cfg(test)]
     Encoding(#[source] Box<TryReadError>),
 }
 impl SnapshotCaptureError {
@@ -124,7 +128,10 @@ impl From<SnapshotCaptureError> for crate::state::MergeLedgerCommitError {
             SnapshotCaptureError::Runtime(error) => {
                 Self::StateView(crate::state::StateViewError::Runtime(*error))
             }
-            error => Self::ExecutionStatePublication(error.to_string()),
+            #[cfg(test)]
+            error @ SnapshotCaptureError::Encoding(_) => {
+                Self::ExecutionStatePublication(error.to_string())
+            }
         }
     }
 }
@@ -243,6 +250,7 @@ impl CapturedStateSnapshot {
         Self::capture_with_observer(state, publication)
     }
     /// Canonical history height owned by this exact captured cut.
+    #[cfg(test)]
     pub(crate) fn height(&self) -> usize {
         self.identity.height
     }
@@ -251,6 +259,7 @@ impl CapturedStateSnapshot {
         &self.json
     }
     /// Hash the existing canonical WSV projection of these immutable bytes.
+    #[cfg(test)]
     pub(crate) fn canonical_hash(&self) -> Result<Hash, SnapshotCaptureError> {
         canonical_snapshot_wsv_hash(self.json.as_bytes())
             .map_err(|error| SnapshotCaptureError::Encoding(Box::new(error)))
@@ -344,6 +353,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     state.prev_commit_topology.json_serialize(out);
     out.push('}');
 }
+#[cfg(test)]
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     let world = state.world();
     let block_hashes = state.block_hashes();
@@ -2269,6 +2279,7 @@ fn snapshot_object_field_raw<'a>(
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 enum CanonicalWsvPath {
     Root,
     World,
@@ -2277,17 +2288,20 @@ enum CanonicalWsvPath {
     Other,
 }
 #[derive(Clone, Copy, Default)]
+#[cfg(test)]
 struct CanonicalWsvOverrides<'a> {
     committed_external_event_buf: Option<&'a str>,
     committed_axt_replay_ledger: Option<&'a str>,
     committed_smart_contract_state: Option<&'a str>,
     committed_da_pin_indexes: [Option<&'a str>; 4],
 }
+#[cfg(test)]
 struct BorrowedJsonMember<'a> {
     key: String,
     encoded_key: &'a str,
     value: &'a str,
 }
+#[cfg(test)]
 fn borrowed_json_object_members(input: &str) -> Result<Vec<BorrowedJsonMember<'_>>, TryReadError> {
     let mut parser = json::Parser::new(input);
     parser.expect(b'{').map_err(TryReadError::Serialization)?;
@@ -2324,6 +2338,7 @@ fn borrowed_json_object_members(input: &str) -> Result<Vec<BorrowedJsonMember<'_
     }
     Ok(members)
 }
+#[cfg(test)]
 fn borrowed_json_array_items(input: &str) -> Result<Vec<&str>, TryReadError> {
     let mut parser = json::Parser::new(input);
     parser.expect(b'[').map_err(TryReadError::Serialization)?;
@@ -2350,6 +2365,7 @@ fn borrowed_json_array_items(input: &str) -> Result<Vec<&str>, TryReadError> {
     }
     Ok(items)
 }
+#[cfg(test)]
 fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
     match path {
         CanonicalWsvPath::Root => matches!(
@@ -2364,6 +2380,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
         }
     }
 }
+#[cfg(test)]
 fn canonical_wsv_child_path(path: CanonicalWsvPath, key: &str) -> CanonicalWsvPath {
     match (path, key) {
         (CanonicalWsvPath::Root, "world") => CanonicalWsvPath::World,
@@ -2372,6 +2389,7 @@ fn canonical_wsv_child_path(path: CanonicalWsvPath, key: &str) -> CanonicalWsvPa
         _ => CanonicalWsvPath::Other,
     }
 }
+#[cfg(test)]
 fn canonical_wsv_cell_value<'a>(
     path: CanonicalWsvPath,
     key: &str,
@@ -2406,11 +2424,13 @@ fn canonical_wsv_cell_value<'a>(
         .map_or(input, |member| member.value))
 }
 
+#[cfg(test)]
 fn canonical_json_fragment(input: &str) -> Result<String, TryReadError> {
     let value: json::Value = json::from_str(input).map_err(TryReadError::Serialization)?;
     json::to_json(&value).map_err(TryReadError::Serialization)
 }
 
+#[cfg(test)]
 fn update_snapshot_wsv_hash<'a>(
     hasher: &mut Blake2b<U32>,
     input: &'a str,
@@ -2433,6 +2453,7 @@ fn update_snapshot_wsv_hash<'a>(
     }
 }
 
+#[cfg(test)]
 fn update_snapshot_wsv_object_hash<'a>(
     hasher: &mut Blake2b<U32>,
     input: &'a str,
@@ -2508,6 +2529,7 @@ fn update_snapshot_wsv_object_hash<'a>(
     Ok(())
 }
 
+#[cfg(test)]
 fn update_snapshot_wsv_array_hash<'a>(
     hasher: &mut Blake2b<U32>,
     input: &'a str,
@@ -2549,6 +2571,7 @@ fn update_snapshot_wsv_array_hash<'a>(
     Digest::update(hasher, b"]");
     Ok(())
 }
+#[cfg(test)]
 fn update_sorted_string_set_hash(
     hasher: &mut Blake2b<U32>,
     input: &str,
@@ -2576,10 +2599,12 @@ fn update_sorted_string_set_hash(
     Digest::update(hasher, b"]");
     Ok(())
 }
+#[cfg(test)]
 fn canonical_snapshot_wsv_hash(bytes: &[u8]) -> Result<Hash, TryReadError> {
     canonical_snapshot_wsv_hash_with_overrides(bytes, CanonicalWsvOverrides::default())
 }
 
+#[cfg(test)]
 fn canonical_snapshot_wsv_hash_with_overrides<'a>(
     bytes: &'a [u8],
     overrides: CanonicalWsvOverrides<'a>,
@@ -4859,10 +4884,12 @@ pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
         .into_bytes()
 }
 /// Canonical hash for the committed ledger WSV surface.
+#[cfg(test)]
 pub(crate) fn canonical_state_snapshot_hash(state: &State) -> Result<Hash, SnapshotCaptureError> {
     CapturedStateSnapshot::capture(state)?.canonical_hash()
 }
 /// Retain the exact reader releases beyond all caller-owned State or snapshot fences.
+#[cfg(test)]
 pub(crate) fn canonical_state_snapshot_hash_with_releases(
     releases: &mut crate::state::StateViewReleases<'_>,
 ) -> Result<Hash, SnapshotCaptureError> {
@@ -4931,6 +4958,7 @@ pub(crate) fn canonical_staged_state_snapshot_bytes(state_block: &StateBlock<'_>
 ///
 /// The block remains an uncommitted MVCC overlay, so callers can reject a mismatched
 /// durable checkpoint without mutating live state.
+#[cfg(test)]
 pub(crate) fn canonical_staged_state_snapshot_hash(
     state_block: &StateBlock<'_>,
 ) -> iroha_crypto::Hash {
@@ -5101,6 +5129,24 @@ fn merkle_err_to_try_read(err: SnapshotMerkleError, _path: PathBuf) -> TryReadEr
 #[cfg(test)]
 mod tests {
     use iroha_model_base::topology::LaneId;
+
+    /// Exhaustive conversion preserves the original read classification and encoding text.
+    #[test]
+    fn snapshot_capture_merge_conversion_preserves_original_errors() {
+        use super::{SnapshotCaptureError, TryReadError};
+        use crate::state::{MergeLedgerCommitError, StateViewError};
+
+        assert!(matches!(
+            MergeLedgerCommitError::from(SnapshotCaptureError::Read(StateViewError::Changed)),
+            MergeLedgerCommitError::StateView(StateViewError::Changed)
+        ));
+        let encoding = SnapshotCaptureError::Encoding(Box::new(TryReadError::NotFound));
+        let original_message = encoding.to_string();
+        let MergeLedgerCommitError::ExecutionStatePublication(message) = encoding.into() else {
+            panic!("the original encoding failure must retain its publication classification");
+        };
+        assert_eq!(message, original_message);
+    }
 
     fn election_corpus_snapshot(field: &str, value: &str, previous: bool) -> Vec<u8> {
         let mut input = String::from(r#"{"world":{"elections":{"#);

@@ -982,12 +982,30 @@ async fn spawn_provider_broker(
     )?;
     let endpoint = root.path().join("runtime-provider-broker-v1.sock");
     iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(endpoint.clone())?;
+    let policy_path = root.path().join("broker-policy.toml");
+    let mut policy = toml::Table::new();
+    policy.insert(
+        "endpoint_path".into(),
+        toml::Value::String(
+            endpoint
+                .to_str()
+                .ok_or_else(|| eyre!("broker endpoint must be UTF-8"))?
+                .into(),
+        ),
+    );
+    policy.insert(
+        "observer_operation_timeout_ms".into(),
+        toml::Value::Integer(15_000),
+    );
+    let policy_file = private_file(&policy_path, toml::to_string(&policy)?.as_bytes())?;
+    policy_file.set_permissions(fs::Permissions::from_mode(0o400))?;
+    policy_file.sync_all()?;
     let mut child = command(binary, root.path());
     child
         .arg("--catalog")
         .arg(&catalog_path)
-        .arg("--broker-endpoint")
-        .arg(&endpoint)
+        .arg("--broker-policy")
+        .arg(&policy_path)
         .stdin(Stdio::piped())
         .stderr(Stdio::from(private_file(
             &root.path().join("broker-stderr.log"),
@@ -2052,7 +2070,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
             &launcher,
             native_finality_limits(),
             5,
-            move |expected| {
+            move |expected, _public_snapshot| {
                 let predecessor = Arc::clone(&predecessor);
                 let first_config = directory.join("peer0.toml");
                 let canary = canary_ref;

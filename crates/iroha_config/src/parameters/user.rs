@@ -831,6 +831,11 @@ mod chain_id_config_tests {
 /// Public location of the authenticated local runtime-provider broker.
 #[derive(Debug, ReadConfig)]
 pub struct RuntimeProviderBroker {
+    /// Server observer-operation allowance before dispatch through reply publication.
+    #[config(
+        default = "DurationMs(defaults::runtime_provider_broker::OBSERVER_OPERATION_TIMEOUT)"
+    )]
+    observer_operation_timeout_ms: DurationMs,
     /// Aggregate memory retained by current and pending consensus credentials.
     #[config(default = "defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES")]
     credential_max_memory_bytes: NonZeroUsize,
@@ -843,9 +848,18 @@ impl RuntimeProviderBroker {
     pub(super) fn parse(
         self,
     ) -> core::result::Result<actual::RuntimeProviderBroker, Report<ParseError>> {
+        let observer_operation_timeout = self.observer_operation_timeout_ms.get();
+        if observer_operation_timeout.is_zero()
+            || observer_operation_timeout
+                > defaults::runtime_provider_broker::OBSERVER_OPERATION_TIMEOUT
+        {
+            return Err(Report::new(ParseError::InvalidRuntimeProviderBrokerConfig)
+                .attach("observer_operation_timeout_ms must be between 1 and 15000"));
+        }
         let (endpoint_path, endpoint_origin) = self.endpoint_path.into_tuple();
         actual::RuntimeProviderBrokerEndpointPath::try_new(endpoint_path)
             .map(|endpoint_path| actual::RuntimeProviderBroker {
+                observer_operation_timeout,
                 endpoint_path,
                 credential_max_memory_bytes: self.credential_max_memory_bytes,
             })

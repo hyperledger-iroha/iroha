@@ -6,11 +6,15 @@
 //! for these columns. All fetch choices and instruction activity are private.
 // The callable_lookup component joins artifact-derived child descriptors and
 // return operands/first-cell initialization through these original ports.
+// CALL descriptor lookup, repeated table reads and frame-work gas are joined
+// in their separate 47-port component. Typed argument/pointer work, local
+// allocation and actual success remain mandatory unresolved owners.
 // TODO: Compose general typed-word/full-initialization/copyback/memory effects and
 // their dynamic gas between these fixed slots, then initialize and terminate
 // the entire invocation in one masked STARK. This partial dispatcher has no
 // production adapter, verifier registration or complete-State authority.
 
+mod call_descriptor;
 mod code_words;
 mod load_success;
 pub(super) mod native_witness;
@@ -816,6 +820,8 @@ fn append_control_residues<'a>(
             let pc = u64::from(program.first_pc) + n as u64 * 4;
             match role(w) {
                 Some(Role::Child | Role::Jump) => {
+                    // Canonical preparation binds direct targets to instruction
+                    // boundaries. JMP and JAL rd0 have no link/frame effects.
                     let delta =
                         if matches!(wide::opcode(w), wide::control::JALS | wide::control::JMP) {
                             i64::from(wide::imm24(w))
@@ -899,3 +905,6 @@ pub(super) fn append_residues<'a>(
 
 #[cfg(test)]
 pub(super) mod tests;
+
+#[cfg(test)]
+mod jump_tests;

@@ -251,8 +251,8 @@ as do complete State commitments and finalized publication/recovery custody.
 Frozen native storage exposes borrowed current rows and physical undo entries
 from its original detached owner, preserving acquisition mode and predecessor
 identity without cloning rows or reacquiring a reader. The sealed raw-image
-boundary lets committed and frozen verifying-key and proof-status sources use
-their respective shared bounded both-image inverse relations. Each frozen consumer
+boundary lets committed and frozen verifying-key, proof-status and validation-fee
+sources use their respective shared bounded both-image inverse relations. Each frozen consumer
 requires the actual StateBlock's completely frozen World, both exact State target
 owners, equal acquisition modes and its original allocation pool; it feeds current
 canonical rows into the existing paired encoder. The proof-status adapter checks
@@ -268,13 +268,30 @@ caller-admitted local controls, and refusal leaves the original frozen source
 available for retry. These scoped consumers do not publish a root or establish
 complete State currentness.
 
+The fee-proposal adapter checks the exact `(created_height, stored proposal id)`
+lookup for both fee kinds and every status in both original images. Its private
+fixed-key merge admits every physical row, including masked rows and absent/no-op
+undo, before advancing, and prepays both full keys before each comparison (64
+bytes for proposal IDs and 80 for height/ID tuples). Both directions use complete
+borrowed scans with no lookup, reconstructed map/set or cloned record. One indexed
+row without undo costs 328; the committed descriptor replaces its former row-times-8
+allowance with this named local unit. Larger cuts have explicit quadratic work and
+may defer without changing gas, table validity or consensus limits. Work refusal can
+precede latent missing/foreign membership corruption until the complete required
+scan is admitted; committed source-identity changes still override either result.
+The adapter encodes only checked current canonical proposals, using the actual
+complete frozen StateBlock, both original matching-mode owners and its pool. It
+does not establish proposal admission, exact JSON, operator identity, Parliament
+execution/status/history or policy correctness.
+
 The same 217-output table catalog derives both committed and original-frozen
 callbacks from each of its 192 native field declarations. Frozen native callbacks
 retain the actual selected field and concrete storage mode, require complete World
 freeze and exact State target ownership, and use the original State encoding pool.
 They return only existing scoped paired-table snapshots. Raw encoding does not
 validate dependent indexes or other fields' modes and identities. Verifier and
-proof-status captures use their complete bounded inverse relations; 23 other
+proof-status and validation-fee captures use their complete bounded inverse
+relations; 22 other
 structural, trigger, Musubi and membership outputs report an explicit missing
 original adapter instead
 of yielding partial success. Complete structural/cell/history checks and the sole
@@ -505,6 +522,14 @@ reproducible, authenticated and physically qualified bundle before CUDA release
 readiness can be claimed. Generated diagnostic kernels and loader-only tests do
 not satisfy that gate.
 
+Merkle construction, root-only hashing and retained-tree rehash resolve one
+operation-local policy from the complete acceleration configuration. Reapplying
+`None` restores defaults or generic inheritance; `Some(0)` is an explicit zero
+floor. Each backend's floor overrides the generic floor, and an available CPU
+SHA2 ceiling applies to all three operations. Admission retains the existing
+native qualification, staged publication and canonical fallback owners; these
+operator thresholds do not establish fastest-path calibration or CUDA readiness.
+
 G7 native Check binding and finalized verification return move-only failure owners.
 They retain the original preparation, signed transaction graph, State pool and
 absolute deadline; retry cannot replace them or request another signature.
@@ -562,9 +587,31 @@ response frame, operation request, admission permit, locked connection and origi
 validation. Only original typed local codec or bounded-encoding refusal retries;
 successful phases and the exact reply leaves stay owned. No retry writes, reads,
 observes, signs or submits again. Immutable metadata and protocol failures remain
-terminal. The server's post-observe/pre-write reply stage still needs its own
-absolute pre-dispatch request owner. Combined `finalize_check` sign/submission and
-partial socket I/O also remain separate transport-custody gaps.
+terminal. The authenticated server admits one absolute observer-operation deadline
+before provider qualification and its one synchronous Observe. Its file-configured
+budget is nonzero, defaults to the existing 15 seconds and cannot exceed that bound;
+handshake and wire ingress retain their separate transport bounds. Embedded server
+APIs carry the parsed broker policy, and standalone launchers read one bounded public
+TOML policy file instead of an endpoint override.
+
+The server's move-only completed-reply owner borrows the original accepted socket,
+request, raw frame, inbound/decode admission and lifecycle permit. It retains the
+actual returned reply, decoded query and original deadline across typed observation
+admission, separate retained record/observation copies, wire encoding, response digest,
+envelope validation and outer framing. Successful phases do not repeat; only original
+typed codec, bounded-encoder or allocation causes authorize bounded local backoff.
+Immutable handle qualification, protocol/cumulative limits and fixed backend service
+categories remain terminal. Final qualification and the first write use that same
+original deadline and complete encoded frame. Request IDs remain retired; local retry
+cannot Observe, sign, submit Check, replace the socket or renew the budget.
+
+Boundary checks suppress late publication after a synchronous provider returns; they
+do not forcibly cancel a provider already running. Once the first write is attempted,
+partial or failed I/O is terminal transport uncertainty and never re-enters the local
+reply owner. Physical bounded-encoder/allocation refusal probes, complete backing for
+existing buffers/scratch/clones and release qualification remain open. Combined
+`finalize_check` sign/submission and partial socket I/O remain separate transport-custody
+gaps; no process-local owner supplies durable restart recovery.
 Nested receipt/custody codec projections, late consumer native/current-State
 acceptance refusals and original-pool funding for existing reply buffers,
 decoder/serializer scratch and native proof owners also remain open. No continuation

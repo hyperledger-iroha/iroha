@@ -23,15 +23,6 @@ impl KagemushaAuthenticatedOrdinaryIncomingTerminalGuardV1 {
     pub(crate) fn original(&self) -> &[u8] {
         &self.original
     }
-    pub(crate) fn original_digests(&self) -> [DigestV1; 5] {
-        self.digests
-    }
-    pub(crate) fn eq_history(&self) -> &History {
-        &self.eq_history
-    }
-    pub(crate) fn ep_history(&self) -> &History {
-        &self.ep_history
-    }
     pub(crate) fn recheck_terminal_selection(
         &self,
         selection: &KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1<'_>,

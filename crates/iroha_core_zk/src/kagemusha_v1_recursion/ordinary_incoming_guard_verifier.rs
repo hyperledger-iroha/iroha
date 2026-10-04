@@ -23,23 +23,8 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryIncomingPreparationGuardV1 {
     original: Vec<u8>,
 }
 impl KagemushaAuthenticatedOrdinaryIncomingPreparationGuardV1 {
-    pub(crate) fn operation_id(&self) -> DigestV1 {
-        self.operation_id
-    }
-    pub(crate) fn nonce(&self) -> DigestV1 {
-        self.nonce
-    }
-    pub(crate) fn approval_admission_interval_ms(&self) -> (u64, u64) {
-        self.admission_interval_ms
-    }
     pub(crate) fn original_digests(&self) -> [DigestV1; 5] {
         self.digests
-    }
-    pub(crate) fn eq_history(&self) -> &History {
-        &self.eq_history
-    }
-    pub(crate) fn ep_history(&self) -> &History {
-        &self.ep_history
     }
     pub(crate) fn original(&self) -> &[u8] {
         &self.original

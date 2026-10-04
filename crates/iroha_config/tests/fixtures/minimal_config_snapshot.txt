@@ -154,6 +154,7 @@ Root {
         },
     },
     runtime_provider_broker: RuntimeProviderBroker {
+        observer_operation_timeout: 15s,
         credential_max_memory_bytes: 67108864,
         endpoint_path: RuntimeProviderBrokerEndpointPath(
             "<platform-default broker endpoint>",

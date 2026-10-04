@@ -12,7 +12,7 @@ import pytest
 from iroha_python._quantity import _normalize_quantity
 from iroha_python.numeric_v1 import KotodamaQuantity
 from iroha_python.repo import (
-    RepoAgreementListPage,
+    RepoAgreementRecord,
     RepoCashLeg,
     RepoCollateralLeg,
 )
@@ -119,7 +119,7 @@ def test_repo_agreement_readback_rejects_noncanonical_quantities(quantity: objec
     }
 
     with pytest.raises((TypeError, ValueError)):
-        RepoAgreementListPage.from_payload(payload)
+        RepoAgreementRecord.from_payload(payload["items"][0])
 
 
 def test_repo_agreement_readback_requires_quantity_fields() -> None:
@@ -142,4 +142,4 @@ def test_repo_agreement_readback_requires_quantity_fields() -> None:
     }
 
     with pytest.raises(KeyError, match="quantity"):
-        RepoAgreementListPage.from_payload({"items": [payload]})
+        RepoAgreementRecord.from_payload(payload)

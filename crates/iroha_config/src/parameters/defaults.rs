@@ -96,6 +96,10 @@ pub mod common {
 /// Public endpoint used by the stock runtime-provider broker.
 pub mod runtime_provider_broker {
     use super::{NonZeroUsize, PathBuf};
+    use std::time::Duration;
+
+    /// Maximum and default admitted observer-operation duration, including dispatch and reply.
+    pub const OBSERVER_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 
     /// Finite aggregate public-transcript memory for one credential registry (64 MiB).
     pub const CREDENTIAL_MAX_MEMORY_BYTES: NonZeroUsize = nonzero_ext::nonzero!(67_108_864usize);

@@ -110,13 +110,14 @@ fn prepared_key_retains_canonical_late_allocation_limit_and_original_retry_backi
     for flags in [0, header_flags::COMPACT_LEN] {
         let _flags = DecodeFlagsGuard::enter(flags);
         let bytes = encode(key);
-        // The compact sequence's count charge fits; its canonical retained
-        // storage charge must still refuse after point validation. Prepaid
-        // physical backing is independent of this logical work ceiling.
-        for allowed in [len, 2 * len - 1] {
+        // The shared parser charges the sequence count and every declared
+        // one-byte element payload, then the validated compact owner charges
+        // its retained storage. All three costs survive prepaid backing.
+        let required = 3 * len;
+        for allowed in [len, 2 * len - 1, 2 * len, required - 1] {
             without_allocations(|| destination.decode_payload(&bytes)).unwrap();
             let limits = DecodeLimits::new(1024, 4096, 1024, allowed, 32);
-            let protocol = DecodeLimits::new(1024, 4096, 1024, 2 * len, 32);
+            let protocol = DecodeLimits::new(1024, 4096, 1024, required, 32);
             // The observer must see the new protocol scope inside the attempt;
             // the stricter caller scope remains outside it. A bare leaf alone
             // cannot authenticate a fresh decode-budget family.
@@ -157,14 +158,18 @@ fn prepared_key_retains_canonical_late_allocation_limit_and_original_retry_backi
             assert_eq!(destination.0.bytes.as_slice().as_ptr(), pointer);
             assert_eq!(pool.reserved_bytes(), len);
         }
-        let exact = DecodeLimits::new(1024, 4096, 1024, 2 * len, 32);
-        let (ordinary, used) =
-            norito::core::with_decode_limits_scope(exact, || PublicKey::decode_from_slice(&bytes))
-                .unwrap();
+        let exact = DecodeLimits::new(1024, 4096, 1024, required, 32);
+        let (ordinary, ordinary_usage) = norito::core::with_decode_limits_measured(exact, || {
+            PublicKey::decode_from_slice(&bytes)
+        });
+        let (ordinary, used) = ordinary.unwrap();
         assert_eq!(ordinary, *key);
         assert_eq!(used, bytes.len());
-        norito::core::with_decode_limits_scope(exact, || destination.decode_payload(&bytes))
-            .unwrap();
+        let (prepared, prepared_usage) =
+            norito::core::with_decode_limits_measured(exact, || destination.decode_payload(&bytes));
+        prepared.unwrap();
+        assert_eq!(ordinary_usage.total_allocated_bytes(), required);
+        assert_eq!(prepared_usage, ordinary_usage);
         assert_eq!(destination.decoded_compact().unwrap().as_ptr(), pointer);
         assert_eq!(
             destination.decoded_compact(),

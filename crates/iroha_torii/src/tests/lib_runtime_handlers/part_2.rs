@@ -313,7 +313,7 @@ async fn transaction_batch_authenticates_before_fresh_capacity_and_preserves_cus
 #[tokio::test(flavor = "multi_thread")]
 async fn handler_post_transactions_batch_accepts_multiple_payloads() {
     let key = checked_torii_test_ed25519_keypair(0xca, "batch submit signer");
-    let mut app = native_ingress_app_for_test(&[&key]);
+    let app = native_ingress_app_for_test(&[&key]);
     let authority = AccountId::new(key.public_key().clone());
     let tx1 = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
@@ -787,6 +787,7 @@ async fn handler_policy_reports_required_token_even_when_configuration_is_unavai
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn kaigi_signal_history_rate_bypass_still_requires_heavy_query_admission() {
     let mut app = mk_app_state_for_tests();
     {
@@ -1205,8 +1206,7 @@ fn account_id_inventory_does_not_collide_with_trigger_inventory_scope() {
 #[test]
 fn query_scope_payload_matching_rejects_malformed_and_trailing_bytes() {
     use iroha_data_model::query::transaction::prelude::FindTransactions;
-    let mut payload = norito::to_bytes(&FindTransactions::new())
-        .expect("encode canonical transactions query payload");
+    let mut payload = norito::codec::Encode::encode(&FindTransactions::new());
     assert!(super::payload_matches_query::<FindTransactions>(&payload));
     payload.push(0xa5);
     assert!(
@@ -1246,80 +1246,133 @@ fn iterable_target_domain_query_builders_capture_target_payload() {
 }
 #[tokio::test]
 async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_routes() {
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
-        world_with_account(&ALICE_ID),
-        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
-    );
-    configure_private_ingress_routes_for_test(&mut app);
-    {
-        let inner = Arc::get_mut(&mut app).expect("unique asset-query fixture");
-        let state = Arc::get_mut(&mut inner.state).expect("unique asset-query state");
-        for seed in [0xc0, 0xc2, 0xc4] {
-            let authority_key =
-                checked_torii_test_ed25519_keypair(seed, "derive asset-query validator authority");
-            let peer_key =
-                checked_torii_test_bls_keypair(seed + 1, "derive asset-query consensus peer");
-            let authority = AccountId::new(authority_key.public_key().clone());
-            ensure_runtime_peer_binding_for_test(
-                state,
-                &authority,
-                &peer_key,
-                &format!("asset-query-{seed}"),
-            );
-            let mut topology = state.commit_topology.block();
-            topology.push(PeerId::from(peer_key.public_key().clone()));
-            topology.commit();
-        }
-    }
+    use iroha_core::sumeragi::test_chain::TestChainConfig;
     let definition: iroha_data_model::asset::AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
         .parse()
         .expect("canonical XOR id");
-    seed_asset_definition_for_test(&app, &definition, None);
-    let asset = iroha_data_model::asset::AssetId::new(definition.clone(), ALICE_ID.clone());
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    iroha_data_model::isi::Mint::asset_quantity(77_u32, asset.clone())
-        .execute(&ALICE_ID, &mut tx)
-        .expect("fund exact native holding");
-    tx.apply();
-    block.commit_world_overlay_for_testing().unwrap();
-    // The registered validator keys become active at height one. Retain the
-    // funded transaction in that committed fixture block rather than testing
-    // routing against an uncommitted, pre-genesis world overlay.
-    let funded = checked_torii_test_transaction(
-        TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([iroha_data_model::isi::Mint::asset_quantity(
-            77_u32,
-            asset.clone(),
-        )]),
-        &iroha_test_samples::ALICE_KEYPAIR,
-        "sign funded asset-query fixture transaction",
+    let caller_key =
+        checked_torii_test_ed25519_keypair(0xc0, "derive existing asset-query validator authority");
+    let caller = AccountId::new(caller_key.public_key().clone());
+    let mut nexus = private_ingress_nexus_for_test();
+    let fee_asset: AssetDefinitionId = nexus
+        .fees
+        .fee_asset_id
+        .parse()
+        .expect("canonical Nexus fee currency");
+    assert_eq!(
+        fee_asset, definition,
+        "the global XOR fixture uses its original fee currency"
     );
-    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
-    builder.push_transaction(funded);
-    let mut committed =
-        builder.build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key());
-    crate::test_utils::attach_fixture_execution_outputs(
-        &mut committed,
-        vec![
-            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
-                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
-                    input_index: 0,
-                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
-                    completions: vec![],
-                },
-            ),
+    let fee_sink = checked_torii_test_account_id(0xc1, "independent global-asset fee sink");
+    assert_ne!(
+        fee_sink, *ALICE_ID,
+        "the configured sink is independent from the original payer"
+    );
+    nexus.fees.fee_sink_account_id = fee_sink.to_string();
+    // The original native Mint costs 150 gas plus one instruction at the
+    // unchanged default Nexus schedule; Core quotes the actual signed limit below.
+    let original_fee: Quantity = "0.0085".parse().expect("exact original Mint fee");
+    assert!(!original_fee.is_zero());
+    let world = World::with_assets(
+        [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
+        [
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+            Account::new(caller.clone()).build(&caller),
+            Account::new(fee_sink.clone()).build(&fee_sink),
         ],
+        [iroha_data_model::asset::AssetDefinition::numeric(
+            definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID)],
+        [Asset::new(
+            AssetId::new(fee_asset.clone(), ALICE_ID.clone()),
+            original_fee.clone(),
+        )],
+        [],
     );
-    assert_eq!(committed.external_transactions().count(), 1);
-    let committed_header = committed.header();
-    let committed_hash = store_block(&app, committed);
-    record_committed_block_hash_for_test(&app, committed_header, committed_hash);
+    let asset = iroha_data_model::asset::AssetId::new(definition.clone(), ALICE_ID.clone());
+    let initial_supply = world
+        .view()
+        .asset_definitions()
+        .get(&definition)
+        .expect("original global fee currency")
+        .total_quantity()
+        .clone();
+    assert_eq!(initial_supply, original_fee);
+    let mut config = TestChainConfig::new(world, 1_000);
+    config.nexus = Some(nexus);
+    let (mut app, _funded_hash, chain) = executed_history_test_fixture(
+        config,
+        &iroha_test_samples::ALICE_KEYPAIR,
+        vec![iroha_data_model::isi::Mint::asset_quantity(77_u32, asset.clone()).into()],
+        true,
+    );
+    assert_eq!(
+        chain.committed(2).block().external_transactions().count(),
+        1
+    );
+    assert_eq!(
+        chain
+            .committed(2)
+            .block()
+            .network_output_at(0)
+            .unwrap()
+            .1
+            .result
+            .is_ok(),
+        true
+    );
+    Arc::get_mut(&mut app).unwrap().local_peer_id = Some(chain.validators()[0].0.clone());
+    let committed = chain.committed(2);
+    let input = committed.block().external_transactions().next().unwrap();
+    let limits = input.fee_payment_intent().charge_limits();
+    assert_eq!(limits.len(), 1, "one original signed native fee component");
+    assert_eq!(
+        limits[0].kind(),
+        iroha_data_model::transaction::FeeChargeKind::Nexus
+    );
+    assert_eq!(limits[0].asset_definition_id(), &fee_asset);
+    assert_eq!(limits[0].max_amount(), &original_fee);
+    let view = app.state.view();
+    let sink_balance = view
+        .world()
+        .assets()
+        .get(&AssetId::new(fee_asset.clone(), fee_sink))
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone());
+    assert_eq!(
+        sink_balance,
+        Quantity::zero(),
+        "ordinary native Nexus fees burn instead of crediting the configured sink"
+    );
+    let supply_after = view
+        .world()
+        .asset_definitions()
+        .get(&fee_asset)
+        .unwrap()
+        .total_quantity();
+    let minted = Quantity::from(77_u32);
+    let before_burn = initial_supply.checked_add(&minted).unwrap();
+    assert_eq!(
+        before_burn
+            .checked_sub(supply_after)
+            .expect("original supply covers its charged fee"),
+        original_fee.clone(),
+        "the original native fee reduces actual total supply by its signed amount"
+    );
+    let payer_after = view.world().assets().get(&asset).unwrap().as_ref();
+    assert_eq!(
+        before_burn
+            .checked_sub(payer_after)
+            .expect("original payer balance covers its charged fee"),
+        original_fee,
+        "the original payer alone funds the native fee burn"
+    );
+    assert_eq!(payer_after, &minted);
+    assert_eq!(supply_after, &minted);
+    drop(view);
     let global_route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let committee = app
         .state
@@ -1353,11 +1406,12 @@ async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_rou
                 .iter()
                 .all(|route| route.dataspace_id == DataSpaceId::UNIVERSAL)
         );
-        let signed = authorize_query_for_test(
+        let mut request = authorize_query_for_test(
             iroha_data_model::query::QueryRequest::Singular(query),
             ALICE_ID.clone(),
-        )
-        .sign(&iroha_test_samples::ALICE_KEYPAIR);
+        );
+        request.network_id = *app.state.network_id_ref();
+        let signed = request.sign(&iroha_test_samples::ALICE_KEYPAIR);
         let response = super::handler_signed_query(
             State(app.clone()),
             HeaderMap::new(),
@@ -1371,9 +1425,6 @@ async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_rou
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
     }
-    let caller_key =
-        checked_torii_test_ed25519_keypair(0xc0, "derive existing asset-query validator authority");
-    let caller = AccountId::new(caller_key.public_key().clone());
     for granted in [false, true] {
         if granted {
             grant_account_permission_for_test(
@@ -1385,18 +1436,21 @@ async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_rou
                 .into(),
             );
         }
-        let signed = authorize_query_for_test(
+        let mut request = authorize_query_for_test(
             iroha_data_model::query::QueryRequest::Singular(
                 iroha_data_model::query::asset::prelude::FindAssetById::new(asset.clone()).into(),
             ),
             caller.clone(),
-        )
-        .sign(&caller_key);
+        );
+        request.network_id = *app.state.network_id_ref();
+        let signed = request.sign(&caller_key);
         let response = super::handler_signed_query(
             State(app.clone()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            None,
+            Some(crate::utils::extractors::ExtractAccept(
+                axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            )),
             crate::NoritoQuery(QueryOptions::default()),
             versioned_query_for_test(signed),
         )
@@ -1552,17 +1606,32 @@ fn signed_query_scope_classifies_find_asset_definition_by_id_as_target_domain() 
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
     );
-    assert_eq!(
-        super::signed_query_scope(&request_for_test(
-            &authority,
-            iroha_data_model::query::QueryRequest::Singular(
-                iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
-                    iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
-                        asset_definition_id,
-                    ),
+    let app = mk_app_state_for_tests_with_world_and_nexus(
+        World::default(),
+        private_ingress_nexus_for_test(),
+    );
+    let request = request_for_test(
+        &authority,
+        iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
+                iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
+                    asset_definition_id.clone(),
                 ),
             ),
-        )),
+        ),
+    );
+    assert_eq!(
+        super::signed_query_scope(&request),
+        super::SignedQueryScope::CrossDataspaceFanout
+    );
+    assert_eq!(
+        super::signed_query_scope_for_app(app.as_ref(), &request),
+        super::SignedQueryScope::CrossDataspaceFanout,
+        "an opaque ID cannot invent absent ledger ownership"
+    );
+    seed_asset_definition_for_test(&app, &asset_definition_id, Some(&domain_id));
+    assert_eq!(
+        super::signed_query_scope_for_app(app.as_ref(), &request),
         super::SignedQueryScope::TargetDomain(domain_id)
     );
 }
@@ -1578,7 +1647,10 @@ async fn signed_query_scope_for_app_keeps_opaque_find_asset_by_id_targeted_to_ac
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
     );
-    let app = mk_app_state_for_tests();
+    let app = mk_app_state_for_tests_with_world_and_nexus(
+        World::default(),
+        private_ingress_nexus_for_test(),
+    );
     seed_asset_definition_for_test(&app, &asset_definition_id, Some(&domain_id));
     let request = roundtrip_request_for_test(
         &authority,
@@ -1610,7 +1682,10 @@ async fn signed_query_scope_for_app_classifies_opaque_find_asset_definition_by_i
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
     );
-    let app = mk_app_state_for_tests();
+    let app = mk_app_state_for_tests_with_world_and_nexus(
+        World::default(),
+        private_ingress_nexus_for_test(),
+    );
     seed_asset_definition_for_test(&app, &asset_definition_id, Some(&domain_id));
     let request = roundtrip_request_for_test(
         &authority,
@@ -1641,7 +1716,10 @@ async fn signed_query_scope_for_app_classifies_opaque_find_accounts_with_asset_a
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
     );
-    let app = mk_app_state_for_tests();
+    let app = mk_app_state_for_tests_with_world_and_nexus(
+        World::default(),
+        private_ingress_nexus_for_test(),
+    );
     seed_asset_definition_for_test(&app, &asset_definition_id, Some(&domain_id));
     let request = roundtrip_request_for_test(
         &authority,
@@ -1818,17 +1896,32 @@ fn signed_query_scope_classifies_target_account_queries() {
         )),
         super::SignedQueryScope::TargetAccount(account_id.clone())
     );
-    assert_eq!(
-        super::signed_query_scope(&request_for_test(
-            &authority,
-            iroha_data_model::query::QueryRequest::Singular(
-                iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
-                    iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
-                        asset_definition_id.clone(),
-                    ),
+    let app = mk_app_state_for_tests_with_world_and_nexus(
+        World::default(),
+        private_ingress_nexus_for_test(),
+    );
+    let definition_request = request_for_test(
+        &authority,
+        iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
+                iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
+                    asset_definition_id.clone(),
                 ),
             ),
-        )),
+        ),
+    );
+    assert_eq!(
+        super::signed_query_scope(&definition_request),
+        super::SignedQueryScope::CrossDataspaceFanout
+    );
+    assert_eq!(
+        super::signed_query_scope_for_app(app.as_ref(), &definition_request),
+        super::SignedQueryScope::CrossDataspaceFanout,
+        "a source-free opaque definition must not inherit a domain"
+    );
+    seed_asset_definition_for_test(&app, &asset_definition_id, Some(&domain_id));
+    assert_eq!(
+        super::signed_query_scope_for_app(app.as_ref(), &definition_request),
         super::SignedQueryScope::TargetDomain(domain_id.clone())
     );
     assert_eq!(
@@ -2877,7 +2970,6 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(authority.to_string()),
-        AxQuery(crate::routing::AccountAssetsGetParams::default()),
     )
     .await
     .expect("account assets should execute")
@@ -2912,7 +3004,6 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(missing.to_string()),
-        AxQuery(crate::routing::AccountAssetsGetParams::default()),
     )
     .await
     .expect("missing account assets should preserve the empty public response")
@@ -3050,6 +3141,23 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
+    let denied = super::handler_signed_query(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        crate::NoritoQuery(QueryOptions::default()),
+        versioned_query_for_test(signed_find_triggers_query_for_test(
+            authority.clone(),
+            &key_pair,
+        )),
+    )
+    .await;
+    assert!(
+        matches!(denied, Err(Error::Query(ValidationFail::NotPermitted(message)))
+        if message.contains("CanReadAllLedgerData"))
+    );
+    grant_account_permission_for_test(&app, &authority, CanReadAllLedgerData.into());
     let response = super::handler_signed_query(
         State(app),
         HeaderMap::new(),
@@ -3087,6 +3195,23 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
+    let denied = super::handler_signed_query(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        crate::NoritoQuery(QueryOptions::default()),
+        versioned_query_for_test(signed_find_active_trigger_ids_query_for_test(
+            authority.clone(),
+            &key_pair,
+        )),
+    )
+    .await;
+    assert!(
+        matches!(denied, Err(Error::Query(ValidationFail::NotPermitted(message)))
+        if message.contains("CanReadAllLedgerData"))
+    );
+    grant_account_permission_for_test(&app, &authority, CanReadAllLedgerData.into());
     let response = super::handler_signed_query(
         State(app),
         HeaderMap::new(),
@@ -3114,6 +3239,7 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn anonymous_accounts_list_excludes_restricted_private_ingress_route() {
     let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
         iroha_core::state::World::default(),
@@ -3126,7 +3252,6 @@ async fn anonymous_accounts_list_excludes_restricted_private_ingress_route() {
         "/v1/accounts".parse().expect("valid accounts list uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        AxQuery(crate::routing::ListFilterParams::default()),
     )
     .await
     .expect("accounts list should execute")
@@ -3144,6 +3269,7 @@ async fn anonymous_accounts_list_excludes_restricted_private_ingress_route() {
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
     let authority = checked_torii_test_account_id(
         0xf6,
@@ -3164,7 +3290,6 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(authority.to_string()),
-        AxQuery(crate::routing::AccountAssetsGetParams::default()),
     )
     .await
     .expect("account assets should execute")
@@ -3188,6 +3313,7 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn handler_transactions_query_fan_outs_across_dataspaces() {
     let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
         iroha_core::state::World::default(),
@@ -3198,25 +3324,12 @@ async fn handler_transactions_query_fan_outs_across_dataspaces() {
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
-    let env = crate::filter::QueryEnvelope {
-        query: None,
-        filter: None,
-        select: None,
-        aggregate: None,
-        sort: Vec::new(),
-        pagination: crate::filter::Pagination {
-            limit: Some(10),
-            offset: 0,
-        },
-        fetch_size: None,
-        count_mode: Some("exact".to_owned()),
-    };
     let response = super::handler_transactions_query(
         State(app),
         Extension(super::ToriiAccountReadVisibility::None),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        NoritoJson(env),
+        crate::JsonOnly(norito::json!({ "limit": 10 })),
     )
     .await
     .expect("transactions query should execute")
@@ -3456,6 +3569,7 @@ async fn public_dataspace_upstream_drops_reject_classification_on_success() {
     upstream_task.abort();
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn handler_account_get_fan_outs_across_global_dataspaces() {
     let authority = checked_torii_test_account_id(
         0xf8,
@@ -3884,5 +3998,35 @@ fn signed_query_scope_exact_transaction_recovery_is_shared_and_bounded() {
     assert_eq!(
         super::signed_query_scope(&request_for_test(&authority, continuation)),
         super::SignedQueryScope::AuthorityRouted
+    );
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn account_assets_reject_invalid_queries_before_routing() {
+    let authority =
+        checked_torii_test_account_id(0xf7, "derive account assets validation fixture key");
+    // The minimal app has no visible route for this account, which used to
+    // answer every query, valid or not, with an empty page.
+    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let uri: axum::http::Uri =
+        format!("/v1/accounts/{authority}/assets?filter=unknown_field%20%3D%201")
+            .parse()
+            .expect("valid account assets uri");
+    let error = super::handler_account_assets(
+        State(app),
+        axum::http::Method::GET,
+        uri,
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxPath(authority.to_string()),
+    )
+    .await
+    .err()
+    .expect("an unknown filter field is rejected before routing");
+    let response = error.into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-reject-code"),
+        Some("invalid_filter")
     );
 }

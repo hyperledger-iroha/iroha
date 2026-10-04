@@ -75,6 +75,24 @@ impl Callables {
             children,
         })
     }
+
+    /// Derive child fields and absolute targets from the same original fetch columns.
+    pub(super) fn select_child(&self, fetch: &[F; CAPACITY]) -> (SelectedCallable, F, [F; 4]) {
+        let mut child = SelectedCallable::zero();
+        let mut absolute = [F::ZERO; 4];
+        let mut selected = F::ZERO;
+        for (index, &fetch) in fetch.iter().enumerate() {
+            if let Some(callable) = self.children[index] {
+                let callable = self.entries[callable];
+                child.include(fetch, callable);
+                selected = selected.add(fetch);
+                for (index, limb) in absolute.iter_mut().enumerate() {
+                    *limb = limb.add(fetch.mul(F((callable.absolute >> (16 * index)) & 0xffff)));
+                }
+            }
+        }
+        (child, selected, absolute)
+    }
 }
 
 /// Derived columns only. There is no non-test constructor accepting claimed
@@ -334,19 +352,7 @@ fn append_control_residues<'a>(
         &packets.dispatch,
     );
     let callables = program.callables();
-    let mut child = SelectedCallable::zero();
-    let mut absolute = [F::ZERO; 4];
-    let mut selected = F::ZERO;
-    for (index, &fetch) in program.fetch(witness.dispatch).iter().enumerate() {
-        if let Some(callable) = callables.children[index] {
-            let callable = callables.entries[callable];
-            child.include(fetch, callable);
-            selected = selected.add(fetch);
-            for (index, limb) in absolute.iter_mut().enumerate() {
-                *limb = limb.add(fetch.mul(F((callable.absolute >> (16 * index)) & 0xffff)));
-            }
-        }
-    }
+    let (child, selected, absolute) = callables.select_child(program.fetch(witness.dispatch));
     out.push(selected.sub(decoded.child));
     for (target, absolute) in decoded.target.iter().zip(absolute) {
         out.push(decoded.child.mul(*target).sub(absolute));

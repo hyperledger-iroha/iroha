@@ -2182,13 +2182,13 @@ fn storage_response_requires_replication_quorum_and_exact_lock_digest() {
     let fixture = control_service_fixture(false, false);
     let mut below_quorum = fixture.storage_response.clone();
     let MusubiStorageLocationDispositionV1::NeedsRegistration {
-        provider_attestations,
+        completed_providers,
         ..
     } = &mut below_quorum.disposition
     else {
         panic!("fixture requires location registration")
     };
-    provider_attestations.truncate(usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1).saturating_sub(1));
+    completed_providers.truncate(usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1).saturating_sub(1));
     assert!(below_quorum.validate_for(&fixture.storage_request).is_err());
     let mut wrong_lock = fixture.storage_request.clone();
     wrong_lock.verification_lock_digest = MusubiVerificationLockDigestV1::new([0xee; 32]);
@@ -2450,4 +2450,47 @@ fn restored_journal_preserves_completed_idempotency_and_replay_state() {
         restored.begin(&replay, 10_003),
         Err(MusubiPublicationServiceJournalErrorV1::Replay)
     );
+}
+
+#[test]
+fn storage_request_digest_uses_exact_canonical_authorization_domain() {
+    let fixture = control_service_fixture(false, false);
+    let request = &fixture.storage_request;
+    let canonical = norito::encode_canonical(request).unwrap();
+    let digest = request.canonical_request_digest().unwrap();
+    assert_eq!(
+        digest,
+        request_digest(
+            MusubiPublicationRuntimeOperationV1::StorageCoordination,
+            &canonical
+        )
+        .unwrap()
+    );
+    assert_eq!(fixture.storage_response.request_digest, digest);
+    {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(request.canonical_request_digest().unwrap(), digest);
+        fixture.storage_response.validate_for(request).unwrap();
+    }
+    let mut changed = request.clone();
+    changed.verification_lock_digest = MusubiVerificationLockDigestV1::new([0xee; 32]);
+    assert_ne!(changed.canonical_request_digest().unwrap(), digest);
+    assert!(fixture.storage_response.validate_for(&changed).is_err());
+    changed.operation_id = [0; 32];
+    assert!(changed.canonical_request_digest().is_err());
+    let mut changed_response = fixture.storage_response.clone();
+    changed_response.request_digest = [0; 32];
+    assert!(changed_response.validate_for(request).is_err());
+    let mut duplicates = fixture.storage_response.clone();
+    let MusubiStorageLocationDispositionV1::NeedsRegistration {
+        completed_providers,
+        ..
+    } = &mut duplicates.disposition
+    else {
+        panic!("registration fixture");
+    };
+    completed_providers[1] = completed_providers[0];
+    assert!(duplicates.validate_for(request).is_err());
 }

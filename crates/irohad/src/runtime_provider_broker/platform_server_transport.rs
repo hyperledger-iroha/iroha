@@ -304,6 +304,7 @@ fn serve_client(
     source_stream_permits: Arc<tokio::sync::Semaphore>,
     inbound_operation_budget: Arc<tokio::sync::Semaphore>,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+    observer_operation_timeout: Duration,
 ) -> Result<(), BrokerError> {
     if lifecycle.shutdown_requested() {
         return Err(BrokerError::Unavailable);
@@ -406,6 +407,24 @@ fn serve_client(
         let Some(_operation_permit) = lifecycle.try_begin_operation() else {
             return Ok(());
         };
+        if request.operation == OPERATION_STREAM_TOKEN_OBSERVE_V1 {
+            // One original admitted-operation bound, created before any provider
+            // qualification/dispatch. Handshake and wire ingress remain separate.
+            let deadline = BrokerDeadlineV1::new(observer_operation_timeout)?;
+            let terminate = server_observation::serve(server_observation::Output {
+                state,
+                request: &request,
+                stream: &mut stream,
+                request_frame: &request_frame,
+                admission: &decode_admission,
+                operation_permit: &_operation_permit,
+                deadline,
+            })?;
+            if terminate {
+                return Ok(());
+            }
+            continue;
+        }
         if request.binding.slot
             == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id()
             && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
@@ -986,6 +1005,7 @@ where
             let session_source_stream_permits = Arc::clone(&source_stream_permits);
             let session_inbound_operation_budget = Arc::clone(&inbound_operation_budget);
             let session_lifecycle = Arc::clone(&lifecycle);
+            let observer_operation_timeout = policy.observer_operation_timeout;
             let _session_registration = sessions.spawn_blocking(move || {
                 // A peer protocol error, timeout, disconnect, or
                 // backend rejection terminates only this authenticated
@@ -997,6 +1017,7 @@ where
                     session_source_stream_permits,
                     session_inbound_operation_budget,
                     session_lifecycle,
+                    observer_operation_timeout,
                 );
                 (session_token, result)
             });

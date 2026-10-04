@@ -27,6 +27,7 @@ pub mod moderation_runtime;
 pub mod native_transaction_signer;
 #[cfg(feature = "app_api")]
 pub(crate) mod orderbook_runtime;
+#[cfg(any(feature = "app_api", test))]
 pub(crate) mod orderbook_worker;
 #[cfg(feature = "app_api")]
 pub mod pop_api;
@@ -46,6 +47,7 @@ pub mod registry;
 pub(crate) mod reserve_api;
 #[cfg(feature = "app_api")]
 pub(crate) mod reserve_runtime;
+#[cfg(any(feature = "app_api", test))]
 pub(crate) mod reserve_worker;
 pub mod site;
 #[cfg(feature = "app_api")]

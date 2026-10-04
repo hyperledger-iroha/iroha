@@ -2,11 +2,13 @@
 //!
 //! No failure exposes a preparation, replaceable signed envelope, or renewed deadline. A local
 //! refusal retains the exact original graph. TODO: admit serializer-internal scratch and the
-//! preparation/signing graph at their producers; the charge below owns only the output backing.
+//! ordinary preparation/signing graphs at their producers. The allocated-pin variant additionally
+//! retains its explicitly prepaid graph; the separate frame charge owns only output backing.
 
 use super::*;
 use crate::execution_attempt::{ExecutionAttemptError, ExecutionDeferred};
 use iroha_allocation::{ChargedBuffer, ChargedBufferError};
+use iroha_data_model::transaction::signed::pin_allocation::AllocatedPinTransactionV1;
 use ivm::error::ExecutionDeferral;
 use std::{fmt, io};
 
@@ -83,20 +85,49 @@ pub(crate) struct BindingScope<'a> {
 
 /// Opaque continuation marker; only this owner can retry its already-spent round.
 pub(crate) struct SignedCheckAttempt {
-    entry: TransactionEntrypoint,
+    entry: SignedCheckOwner,
     started: bool,
 }
-impl SignedCheckAttempt {
-    #[cfg(test)]
+/// Immutable signed owner; allocated pin custody retains every graph charge through native
+/// finality/current-row verification. Other purpose owners retain their existing moved graphs.
+pub(crate) enum SignedCheckOwner {
+    Ordinary(TransactionEntrypoint),
+    AllocatedPin(AllocatedPinTransactionV1),
+}
+impl SignedCheckOwner {
+    fn entrypoint(&self) -> &TransactionEntrypoint {
+        match self {
+            Self::Ordinary(entry) => entry,
+            Self::AllocatedPin(entry) => entry.entrypoint(),
+        }
+    }
     pub(crate) fn signed_transaction(&self) -> &SignedTransaction {
-        let TransactionEntrypoint::External(signed) = &self.entry else {
+        let TransactionEntrypoint::External(signed) = self.entrypoint() else {
             unreachable!("private signed attempt")
         };
         signed
     }
+    fn matches_pool(&self, state: &State) -> bool {
+        match self {
+            Self::Ordinary(_) => true,
+            Self::AllocatedPin(entry) => entry.belongs_to(&state.ivm_execution_budget()),
+        }
+    }
+}
+impl SignedCheckAttempt {
+    #[cfg(test)]
+    pub(crate) fn signed_transaction(&self) -> &SignedTransaction {
+        self.entry.signed_transaction()
+    }
     pub(crate) fn new(signed: SignedTransaction) -> Self {
         Self {
-            entry: TransactionEntrypoint::External(signed),
+            entry: SignedCheckOwner::Ordinary(TransactionEntrypoint::External(signed)),
+            started: false,
+        }
+    }
+    pub(crate) fn from_allocated_pin(signed: AllocatedPinTransactionV1) -> Self {
+        Self {
+            entry: SignedCheckOwner::AllocatedPin(signed),
             started: false,
         }
     }
@@ -151,6 +182,9 @@ pub(crate) fn bind_signed_check_v1<P, E: From<Error>>(
             authority,
             floor,
         } = scope(&mut prepared)?;
+        if !attempt.entry.matches_pool(state) {
+            return Err(Error::Transaction.into());
+        }
         if !attempt.started {
             if round.bound {
                 return Err(Error::Invalid.into());
@@ -193,7 +227,7 @@ pub(crate) fn bind_signed_check_v1<P, E: From<Error>>(
         {
             return Err(Error::Transaction.into());
         }
-        let TransactionEntrypoint::External(signed) = &attempt.entry else {
+        let TransactionEntrypoint::External(signed) = attempt.entry.entrypoint() else {
             return Err(Error::Transaction.into());
         };
         let Executable::Instructions(instructions) = signed.instructions() else {
@@ -221,13 +255,13 @@ pub(crate) fn bind_signed_check_v1<P, E: From<Error>>(
         .map_err(|_| Error::Transaction)?;
         // Fixed canonical flags are independent of the caller's layout. No new decode context
         // replaces surviving ceilings, and no encode/decode copy recreates the signed graph.
-        let length = norito::canonical_frame_len(&attempt.entry)?;
+        let length = norito::canonical_frame_len(attempt.entry.entrypoint())?;
         if length > FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1 {
             return Err(Error::Transaction.into());
         }
         norito::core::reserve_decode_allocation(length)?;
         let mut writer = FrameWriter(ChargedBuffer::new(length, &state.ivm_execution_budget())?);
-        norito::core::write_canonical_to_writer(&attempt.entry, &mut writer)?;
+        norito::core::write_canonical_to_writer(attempt.entry.entrypoint(), &mut writer)?;
         if writer.0.as_slice().len() != length {
             return Err(norito::Error::LengthMismatch.into());
         }
@@ -253,25 +287,20 @@ pub(crate) fn bind_signed_check_v1<P, E: From<Error>>(
             max_elapsed,
             challenge,
             entry_bytes,
-        )) => {
-            let TransactionEntrypoint::External(signed) = attempt.entry else {
-                unreachable!("private signed attempt is always External")
-            };
-            Ok((
-                prepared,
-                BoundNativeCheckV1 {
-                    purpose,
-                    chain_id,
-                    network_id,
-                    floor,
-                    started,
-                    max_elapsed,
-                    challenge,
-                    signed,
-                    entry_bytes,
-                },
-            ))
-        }
+        )) => Ok((
+            prepared,
+            BoundNativeCheckV1 {
+                purpose,
+                chain_id,
+                network_id,
+                floor,
+                started,
+                max_elapsed,
+                challenge,
+                entry: attempt.entry,
+                entry_bytes,
+            },
+        )),
         Err(error) => Err(BindingFailure {
             prepared,
             signed: attempt,

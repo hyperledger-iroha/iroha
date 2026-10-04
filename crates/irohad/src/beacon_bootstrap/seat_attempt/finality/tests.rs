@@ -59,7 +59,10 @@ fn source(chain: ChainId, network: NetworkId, pool: &AllocationBudget) -> (File,
         cursor.tip().is_none(),
         "signed genesis alone is not a finalized execution"
     );
-    (File::from(write), FinalityInput::new(input, cursor, 1))
+    (
+        File::from(write),
+        FinalityInput::new(input, cursor, 1).unwrap(),
+    )
 }
 fn write_frame(writer: &File, bytes: &[u8]) -> std::io::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -143,7 +146,14 @@ fn original_pool_refusal_keeps_once_decoded_journal_and_same_complete_frame_unti
     };
     assert_eq!(input.height(), 1);
     assert!(input.clock.tip().is_none());
-    let journal_pointer = input.journal.as_ref().unwrap().blocks.as_ptr();
+    let journal_pointer = input
+        .journal
+        .view(input.input.frame().unwrap())
+        .unwrap()
+        .blocks()
+        .next()
+        .unwrap()
+        .as_ptr();
     assert_eq!(input.input.frame().unwrap().as_ptr(), frame_pointer);
     let mut context = Context::from_waker(Waker::noop());
     assert!(registration.poll_wait(&release, &mut context).is_pending());
@@ -152,7 +162,14 @@ fn original_pool_refusal_keeps_once_decoded_journal_and_same_complete_frame_unti
     assert!(registration.poll_wait(&release, &mut context).is_pending());
     assert!(input.advance_to(2, 4).is_err());
     assert_eq!(
-        input.journal.as_ref().unwrap().blocks.as_ptr(),
+        input
+            .journal
+            .view(input.input.frame().unwrap())
+            .unwrap()
+            .blocks()
+            .next()
+            .unwrap()
+            .as_ptr(),
         journal_pointer
     );
     assert_eq!(input.input.frame().unwrap().as_ptr(), frame_pointer);
@@ -161,7 +178,7 @@ fn original_pool_refusal_keeps_once_decoded_journal_and_same_complete_frame_unti
     registration.cancel();
     input.advance_to(2, 4).unwrap();
     assert_eq!(input.height(), 2);
-    assert!(input.journal.is_none());
+    assert!(!input.journal.is_decoded());
     assert!(input.input.frame().is_none());
     drop(input);
     drop(registration);
@@ -194,4 +211,28 @@ fn rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs() {
         drop(input);
         assert_eq!(pool.reserved_bytes(), 0);
     }
+}
+
+#[test]
+fn malformed_original_journal_and_prepared_source_failures_are_terminal() {
+    let error = NativeFinalityJournal::decode(&[0], limits()).unwrap_err();
+    assert!(
+        AttemptError::Journal(
+            iroha_core::sumeragi::native_journal::NativeJournalError::Decode(error)
+        )
+        .terminal()
+    );
+    let pool = AllocationBudget::new(64 * 1024 * 1024);
+    let mut prepared = PreparedNativeFinalityJournal::new(limits(), &pool).unwrap();
+    let error = prepared.decode(&[0]).unwrap_err();
+    assert!(AttemptError::JournalSource(error).terminal());
+    let (bytes, _, _) = proof();
+    prepared.clear_consumed();
+    let error = norito::core::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || prepared.decode(&bytes),
+    )
+    .unwrap_err();
+    assert!(!AttemptError::JournalSource(error).terminal());
+    prepared.decode(&bytes).unwrap();
 }

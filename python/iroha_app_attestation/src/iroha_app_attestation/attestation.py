@@ -61,6 +61,12 @@ KEYMINT_AUTH_TAGS = (KEYMINT_SET_TAGS | KEYMINT_INTEGER_TAGS
                      | KEYMINT_NULL_TAGS | KEYMINT_OCTET_TAGS | {704})
 HARDWARE_ONLY_TAGS = {1, 2, 3, 5, 10, 303, 405, 702, 704}
 ANDROID_APPROVAL_REQUIRED_HARDWARE_TAGS = {1, 2, 3, 5, 10, 702, 704}
+# KeyMint AuthorizationList OS version and patch-level tags. Only their
+# hardware-enforced copies describe the attested device.
+ANDROID_OS_VERSION_TAG = 705
+ANDROID_OS_PATCH_LEVEL_TAG = 706
+ANDROID_VENDOR_PATCH_LEVEL_TAG = 718
+ANDROID_BOOT_PATCH_LEVEL_TAG = 719
 
 
 class AttestationRejected(ValueError):
@@ -128,6 +134,22 @@ class Selection:
 
 
 @dataclass(frozen=True)
+class AndroidPatchLevels:
+    """Hardware-enforced OS facts of the KeyDescription the verifier selected.
+
+    Values are the exact signed integers (``None`` when the hardware list omits
+    the tag). They describe the device when the key was generated, not a live
+    examination. Software-enforced copies are never read.
+    """
+
+    attestation_version: int
+    os_version: int | None
+    os_patch_level: int | None
+    vendor_patch_level: int | None
+    boot_patch_level: int | None
+
+
+@dataclass(frozen=True)
 class RawPlatformProof:
     """Only checked platform key/app identity; deliberately not an issuance token."""
 
@@ -138,6 +160,49 @@ class RawPlatformProof:
     apple_validation_category: int | None = None
     apple_bundle_version: str | None = None
     android_security_level: int | None = None
+    android_patch_levels: AndroidPatchLevels | None = None
+
+
+def patch_level_yyyymm(value: int) -> int | None:
+    """Normalize a KeyMint patch level (YYYYMM or YYYYMMDD) to YYYYMM.
+
+    Returns ``None`` for any other value. Zero means "not reported" and is
+    handled by the caller.
+    """
+    if type(value) is not int:
+        return None
+    if 19000101 <= value <= 99991231:
+        value //= 100
+    if 190001 <= value <= 999912 and 1 <= value % 100 <= 12:
+        return value
+    return None
+
+
+def require_android_patch_floor(levels: AndroidPatchLevels, floor_yyyymm: int) -> None:
+    """Apply an authenticated enrollment patch floor to verified patch levels.
+
+    The hardware-enforced OS patch level must be present. Every reported OS,
+    vendor or boot patch level must parse and be at least ``floor_yyyymm``;
+    a vendor or boot level of zero or an absent tag means "not reported".
+    ``levels`` must come from a ``RawPlatformProof`` whose chain verified.
+
+    TODO: carry the floor in the Native-selected Android policy (the Rust
+    hardware-profile owner and ``native_policy_projection.py``) and call this
+    from ``ordinary_provider.GovernedOrdinaryEvidenceProvider.prepare_raw``;
+    spec §2.2 requires an enrollment patch policy.
+    """
+    require(type(levels) is AndroidPatchLevels, "verified Android patch levels absent")
+    require(type(floor_yyyymm) is int and patch_level_yyyymm(floor_yyyymm) == floor_yyyymm,
+            "invalid Android patch floor")
+    require(type(levels.os_patch_level) is int and levels.os_patch_level != 0,
+            "hardware-enforced Android OS patch level absent")
+    for name, level in (("OS", levels.os_patch_level), ("vendor", levels.vendor_patch_level),
+                        ("boot", levels.boot_patch_level)):
+        if level is None or level == 0:
+            continue
+        normalized = patch_level_yyyymm(level)
+        require(normalized is not None, f"unparsable Android {name} patch level")
+        require(normalized >= floor_yyyymm, f"Android {name} patch level is below the enrollment floor")
 
 
 @dataclass(frozen=True)
@@ -1056,6 +1121,15 @@ def _verify_android_raw(
             and positive_integer(boot[2], 10) == 0 and any(primitive(boot[0], 4))
             and (boot_fields == 3 or len(primitive(boot[3], 4)) == 32
                  and any(primitive(boot[3], 4))), "Android boot state is not locked and verified")
+
+    def hardware_integer(tag: int) -> int | None:
+        return positive_integer(hardware[tag]) if tag in hardware else None
+
+    patch_levels = AndroidPatchLevels(
+        version, hardware_integer(ANDROID_OS_VERSION_TAG),
+        hardware_integer(ANDROID_OS_PATCH_LEVEL_TAG),
+        hardware_integer(ANDROID_VENDOR_PATCH_LEVEL_TAG),
+        hardware_integer(ANDROID_BOOT_PATCH_LEVEL_TAG))
     digest = hashlib.sha256(encode_android_chain(chain_der)).digest()
     return RawPlatformProof(digest, point, device_key_reference(point), "android_keymint",
-                            android_security_level=level)
+                            android_security_level=level, android_patch_levels=patch_levels)
