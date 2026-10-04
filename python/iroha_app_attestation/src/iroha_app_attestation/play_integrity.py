@@ -19,7 +19,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
-from .attestation import AttestationRejected, fixed32, require
+from .attestation import AttestationRejected, VerificationUnavailable, fixed32, require
 
 MAX_TOKEN_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 128 * 1024
@@ -27,6 +27,10 @@ _PACKAGE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\Z")
 _DECIMAL = re.compile(r"(?:0|[1-9][0-9]{0,19})\Z")
 _LABELS = frozenset({"MEETS_BASIC_INTEGRITY", "MEETS_DEVICE_INTEGRITY",
                      "MEETS_STRONG_INTEGRITY", "MEETS_VIRTUAL_INTEGRITY"})
+
+
+class PlayIntegrityUnavailable(VerificationUnavailable):
+    """Google's decoder or its OAuth token could not answer; retry later."""
 
 
 @dataclass(frozen=True)
@@ -196,29 +200,42 @@ class GooglePlayIntegrityVerifier:
         require(type(opaque_token) is str and 0 < len(opaque_token) <= MAX_TOKEN_BYTES
                 and all(33 <= ord(char) <= 126 for char in opaque_token),
                 "invalid opaque Play Integrity token")
+        # Only HTTP 400 (a malformed or foreign token) judges the token. A
+        # transport, OAuth or other HTTP failure, or a changed decoder source
+        # or response type, is retryable unavailability. Exceptions are not
+        # chained: they may carry the bearer token.
         try:
             access = self._access_token()
-            require(type(access) is str and 0 < len(access) <= 8192
-                    and all(33 <= ord(char) <= 126 for char in access),
-                    "Play Integrity service-account token unavailable")
-            url = f"https://playintegrity.googleapis.com/v1/{policy.package_name}:decodeIntegrityToken"
-            request = urllib.request.Request(url,
-                data=json.dumps({"integrity_token": opaque_token}, separators=(",", ":")).encode("ascii"),
-                headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json", "Accept": "application/json"},
-                method="POST")
+        except Exception:
+            raise PlayIntegrityUnavailable("Play Integrity OAuth token unavailable") from None
+        if not (type(access) is str and 0 < len(access) <= 8192
+                and all(33 <= ord(char) <= 126 for char in access)):
+            raise PlayIntegrityUnavailable("Play Integrity service-account token unavailable")
+        url = f"https://playintegrity.googleapis.com/v1/{policy.package_name}:decodeIntegrityToken"
+        request = urllib.request.Request(url,
+            data=json.dumps({"integrity_token": opaque_token}, separators=(",", ":")).encode("ascii"),
+            headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json", "Accept": "application/json"},
+            method="POST")
+        try:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
                 urllib.request.HTTPSHandler(context=ssl.create_default_context()), _NoRedirect())
             with opener.open(request, timeout=5) as response:
-                require(response.status == 200 and response.geturl() == url,
-                        "Play Integrity decoder source changed")
-                require(response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() == "application/json"
-                        and response.headers.get("Content-Encoding", "identity").lower() == "identity",
-                        "invalid Play Integrity response type")
+                if not (response.status == 200 and response.geturl() == url):
+                    raise PlayIntegrityUnavailable("Play Integrity decoder source changed")
+                if not (response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() == "application/json"
+                        and response.headers.get("Content-Encoding", "identity").lower() == "identity"):
+                    raise PlayIntegrityUnavailable("invalid Play Integrity response type")
                 body = response.read(MAX_RESPONSE_BYTES + 1)
-        except AttestationRejected:
+        except urllib.error.HTTPError as error:
+            code = error.code
+            error.close()
+            if code == 400:
+                raise AttestationRejected("Play Integrity decoder rejected the token") from None
+            raise PlayIntegrityUnavailable("Play Integrity decoder unavailable") from None
+        except VerificationUnavailable:
             raise
-        except Exception as error:
-            raise AttestationRejected("Play Integrity decoder unavailable") from error
+        except Exception:
+            raise PlayIntegrityUnavailable("Play Integrity decoder unavailable") from None
         proof = _verify_google_payload(body, policy, expected_request_hash, trusted_time_ms,
                                       hashlib.sha256(opaque_token.encode("ascii")).digest())
         return DecodedPlayIntegrityEvidence(body, proof)

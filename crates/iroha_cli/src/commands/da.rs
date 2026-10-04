@@ -1134,25 +1134,25 @@ fn render_submit_text(output: &SubmitOutput) -> String {
 fn render_da_proof_policies_text(title: &str, bundle: &DaProofPolicyBundle) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{title}");
-    let _ = writeln!(out, "version: {}", bundle.version);
+    let _ = writeln!(out, "version: {}", bundle.version());
     let _ = writeln!(
         out,
         "policy_hash: {}",
-        hex::encode(bundle.policy_hash.as_ref())
+        hex::encode(bundle.policy_hash().as_ref())
     );
-    let _ = writeln!(out, "policy_count: {}", bundle.policies.len());
+    let _ = writeln!(out, "policy_count: {}", bundle.policies().len());
     out
 }
 fn render_da_commitments_list_text(response: &iroha::da::DaCommitmentListResponse) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "DA commitments");
-    let _ = writeln!(out, "version: {}", response.policies.version);
+    let _ = writeln!(out, "version: {}", response.policies.version());
     let _ = writeln!(
         out,
         "policy_hash: {}",
-        hex::encode(response.policies.policy_hash.as_ref())
+        hex::encode(response.policies.policy_hash().as_ref())
     );
-    let _ = writeln!(out, "policy_count: {}", response.policies.policies.len());
+    let _ = writeln!(out, "policy_count: {}", response.policies.policies().len());
     let _ = writeln!(out, "commitment_count: {}", response.commitments.len());
     let _ = writeln!(out, "has_next_cursor: {}", response.next_cursor.is_some());
     out

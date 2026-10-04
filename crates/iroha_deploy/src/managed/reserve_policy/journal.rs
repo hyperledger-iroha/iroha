@@ -114,7 +114,12 @@ pub(super) fn read_original(directory: &PrivateDirectory) -> Result<Option<Selec
         require_empty(directory)?;
         return Ok(None);
     };
-    let history = History::read(directory, Purpose::ReservePolicy, intent.digest()?)?;
+    let history = History::read(
+        directory,
+        Purpose::ReservePolicy,
+        intent.digest()?,
+        &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
+    )?;
     Selected::from_history(intent, history).map(Some)
 }
 pub(super) fn required_original(directory: &PrivateDirectory) -> Result<Selected<Original>> {
@@ -139,11 +144,16 @@ pub(super) fn explicit(
     options: &BoundedTransactionOptions,
     account: &AccountService,
 ) -> Result<()> {
-    let history = History::read(directory, Purpose::ReservePolicy, original.digest()?)?;
-    let terms = match history.last() {
-        Some(attempt) => {
-            attempt.terms().matches(utc, options)?;
-            attempt.terms().clone()
+    let history = History::read(
+        directory,
+        Purpose::ReservePolicy,
+        original.digest()?,
+        &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
+    )?;
+    let terms = match history.retained_terms() {
+        Some(terms) => {
+            terms.matches(utc, options)?;
+            terms.clone()
         }
         None => Terms::new(utc, options)?,
     };
@@ -151,6 +161,7 @@ pub(super) fn explicit(
         directory,
         Purpose::ReservePolicy,
         original.digest()?,
+        &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
         terms,
         Observation::ordinary(),
         options.deadline,

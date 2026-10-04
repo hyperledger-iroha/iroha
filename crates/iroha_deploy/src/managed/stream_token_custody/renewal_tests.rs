@@ -25,17 +25,23 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use std::{collections::BTreeMap, sync::Arc};
 
-struct Fixture {
-    _temporary: tempfile::TempDir,
-    prepared: PreparedLocalnet,
-    owner: ManagedStreamTokenCustody,
-    native: NativeFixture,
-    policy: SignerCustodyPolicyV1,
-    options: BoundedTransactionOptions,
-    initial: ManagedCustodyEnrollmentInterval,
+pub(super) struct Fixture {
+    pub(super) _temporary: tempfile::TempDir,
+    pub(super) prepared: PreparedLocalnet,
+    pub(super) owner: ManagedStreamTokenCustody,
+    pub(super) native: NativeFixture,
+    pub(super) policy: SignerCustodyPolicyV1,
+    pub(super) options: BoundedTransactionOptions,
+    pub(super) initial: ManagedCustodyEnrollmentInterval,
 }
 impl Fixture {
-    fn enrolled(validity_ms: u64) -> Self {
+    pub(super) fn enrolled(validity_ms: u64) -> Self {
+        Self::enrolled_with_renewal_validity(validity_ms, 120_000)
+    }
+    pub(super) fn enrolled_with_renewal_validity(
+        validity_ms: u64,
+        renewal_validity_ms: u64,
+    ) -> Self {
         let temporary = tempfile::tempdir().unwrap();
         let ports = crate::managed::LocalnetPorts::reserve().unwrap();
         let prepared = crate::localnet::prepare_localnet_at(
@@ -53,7 +59,7 @@ impl Fixture {
         .unwrap();
         let mut policy = super::transport_tests::policy(&owner);
         policy.active_until_unix_ms = now_ms().unwrap() + 600_000;
-        policy.max_validity_ms = 120_000;
+        policy.max_validity_ms = renewal_validity_ms;
         policy.max_anchor_age_ms = 120_000;
         let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
         let log = quote_instructions(
@@ -88,20 +94,22 @@ impl Fixture {
                 .height,
             3
         );
-        let now = now_ms().unwrap();
-        let initial = ManagedCustodyEnrollmentInterval {
-            issued_at_unix_ms: now,
-            expires_at_unix_ms: now + validity_ms,
-            deadline_unix_ms: now + validity_ms,
-        };
-        assert_eq!(
-            owner
-                .bootstrap_native_enroll(&mut native, &policy, initial, &options)
-                .finalized
-                .unwrap()
-                .height,
-            4
+        let (initial, enrolled) = owner.bootstrap_native_enroll_with_interval(
+            &mut native,
+            &policy,
+            |now| ManagedCustodyEnrollmentInterval {
+                issued_at_unix_ms: now,
+                expires_at_unix_ms: now.checked_add(validity_ms).unwrap(),
+                deadline_unix_ms: now.checked_add(validity_ms).unwrap(),
+            },
+            &options,
         );
+        assert_eq!(
+            initial.expires_at_unix_ms - initial.issued_at_unix_ms,
+            validity_ms
+        );
+        assert_eq!(initial.deadline_unix_ms, initial.expires_at_unix_ms);
+        assert_eq!(enrolled.finalized.unwrap().height, 4);
         Self {
             _temporary: temporary,
             prepared,
@@ -112,37 +120,44 @@ impl Fixture {
             initial,
         }
     }
-    fn current(&self) -> (FinalityVerifier, VerifiedStreamTokenCustodyStateV1) {
+    pub(super) fn current(&self) -> (FinalityVerifier, VerifiedStreamTokenCustodyStateV1) {
         let checkpoint = self.native.observe(&self.owner.authority);
         let current =
             self.native
                 .bootstrap_custody(&self.owner.authority, &self.policy, &checkpoint);
         (checkpoint, current)
     }
-    fn select(&self, sequence: u64) -> Original {
+    fn select(&self, sequence: u64) -> BodyHistory {
+        self.select_with_deadline(sequence, now_ms().unwrap() + 60_000)
+    }
+    fn select_with_deadline(&self, sequence: u64, utc: u64) -> BodyHistory {
         let (checkpoint, current) = self.current();
-        self.owner
-            .select_renewal_original(
+        let terms = Terms::new(utc, &self.options).unwrap();
+        let unsigned = self
+            .owner
+            .select_renewal_unsigned(
                 sequence,
                 &self.policy,
                 &current,
                 &checkpoint,
-                Terms::new(now_ms().unwrap() + 60_000, &self.options).unwrap(),
+                &terms,
                 self.options.deadline,
             )
-            .unwrap()
+            .unwrap();
+        self.owner.bootstrap_native_body(
+            &self.native,
+            CustodyPurpose::Renewal(sequence),
+            unsigned,
+            utc,
+            &self.options,
+        )
     }
     fn prepare(
         &self,
-        original: &Original,
+        history: &BodyHistory,
     ) -> (PrivateDirectory, Selected<Original>, SignedTransaction) {
-        let directory = self
-            .owner
-            .authority
-            .directory
-            .ensure_child(&renewal::directory_name(2).unwrap())
-            .unwrap();
-        journal::publish_intent(&directory, original).unwrap();
+        let (directory, original, scope) = history.dispatch().unwrap();
+        let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
         let account = AccountService::new(self.owner.authority.config.clone()).unwrap();
         journal::explicit(
             &directory,
@@ -150,9 +165,13 @@ impl Fixture {
             now_ms().unwrap() + 60_000,
             &self.options,
             &account,
+            scope,
         )
         .unwrap();
-        let original = journal::required_original(&directory).unwrap();
+        let original = self
+            .owner
+            .required_enrollment(CustodyPurpose::Renewal(2))
+            .unwrap();
         let mut http = NativeReadHttp::start_config(
             &self.owner.authority.config,
             Arc::clone(self.native.chain.state()),
@@ -190,7 +209,7 @@ impl Fixture {
     }
 }
 
-fn wait_until(utc: u64, limit: Duration) {
+pub(super) fn wait_until(utc: u64, limit: Duration) {
     let deadline = Instant::now() + limit;
     while now_ms().unwrap() < utc {
         assert!(
@@ -266,12 +285,12 @@ fn generated_renewal_changes_native_head_and_preserves_initial_and_renewed_histo
     assert!(
         fixture
             .owner
-            .select_renewal_original(
+            .select_renewal_unsigned(
                 2,
                 &fixture.policy,
                 &old_current,
                 &old_checkpoint,
-                Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
+                &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
             )
             .is_err()
@@ -338,12 +357,12 @@ fn generated_renewal_changes_native_head_and_preserves_initial_and_renewed_histo
     assert!(
         fixture
             .owner
-            .select_renewal_original(
+            .select_renewal_unsigned(
                 3,
                 &fixture.policy,
                 &old_current,
                 &carrier,
-                Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
+                &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
             )
             .is_err()
@@ -351,12 +370,12 @@ fn generated_renewal_changes_native_head_and_preserves_initial_and_renewed_histo
     assert!(
         fixture
             .owner
-            .select_renewal_original(
+            .select_renewal_unsigned(
                 2,
                 &fixture.policy,
                 &current,
                 &carrier,
-                Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
+                &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
             )
             .is_err()
@@ -710,7 +729,7 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
             .is_err()
     ); // Genuine wall-clock expiry is not revived by fresh observation.
     let original = fixture.select(2); // Genuine elapsed old interval, never a clock rewrite.
-    let (directory, original, signed) = fixture.prepare(&original);
+    let (_directory, original, signed) = fixture.prepare(&original);
     let (_, before) = fixture.current();
     let state = before.current().unwrap();
     let revoke = quote_instructions(
@@ -749,12 +768,12 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
     assert!(
         fixture
             .owner
-            .select_renewal_original(
+            .select_renewal_unsigned(
                 2,
                 &fixture.policy,
                 &revoked,
                 &revoked_checkpoint,
-                Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
+                &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
             )
             .is_err()
@@ -837,12 +856,12 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
     );
     assert!(
         other_owner
-            .select_renewal_original(
+            .select_renewal_unsigned(
                 2,
                 &fixture.policy,
                 &revoked,
                 &revoked_checkpoint,
-                Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
+                &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
             )
             .is_err()
@@ -895,30 +914,16 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
         fixture.initial.issued_at_unix_ms + 4_000,
         Duration::from_secs(6),
     );
-    let (checkpoint, current) = fixture.current();
     let utc = now_ms().unwrap() + 2_000;
+    let history = fixture.select_with_deadline(2, utc);
+    let (directory, original, scope) = history.dispatch().unwrap();
+    let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
+    let account = AccountService::new(fixture.owner.authority.config.clone()).unwrap();
+    journal::explicit(&directory, original, utc, &fixture.options, &account, scope).unwrap();
     let original = fixture
         .owner
-        .select_renewal_original(
-            2,
-            &fixture.policy,
-            &current,
-            &checkpoint,
-            Terms::new(utc, &fixture.options).unwrap(),
-            fixture.options.deadline,
-        )
+        .required_enrollment(CustodyPurpose::Renewal(2))
         .unwrap();
-    let name = renewal::directory_name(2).unwrap();
-    let directory = fixture
-        .owner
-        .authority
-        .directory
-        .ensure_child(&name)
-        .unwrap();
-    journal::publish_intent(&directory, &original).unwrap();
-    let account = AccountService::new(fixture.owner.authority.config.clone()).unwrap();
-    journal::explicit(&directory, &original, utc, &fixture.options, &account).unwrap();
-    let original = journal::required_original(&directory).unwrap();
     let wallet = original.directory().open_child("transaction").unwrap();
     let request_bytes = wallet.read("preparation.json", 4 * 1024 * 1024).unwrap();
     let wallet_inventory = wallet.entries(8).unwrap();
@@ -968,13 +973,564 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
             .unwrap(),
         fixture.initial
     );
-    let restored = journal::required_original(&directory).unwrap();
+    let restored = owner
+        .required_enrollment(CustodyPurpose::Renewal(2))
+        .unwrap();
     assert_eq!(restored.terms.requested_deadline_unix_ms, utc);
     assert!(
         restored
             .terms
             .signing_deadline(Instant::now() + Duration::from_secs(300))
             .is_err()
+    );
+    assert!(peers.requests.lock().unwrap().is_empty());
+    peers.finish();
+}
+
+impl Fixture {
+    pub(super) fn renewal_turn(&self) -> renewal::GeneratedRenewalTurn {
+        let initial = self
+            .owner
+            .retained_initial_enrollment(&self.policy, self.initial, self.options.deadline)
+            .unwrap();
+        renewal::GeneratedRenewalTurn::begin(
+            &self.owner,
+            &self.policy,
+            Fees::from_options(&self.options).unwrap(),
+            *initial.finalized(),
+            self.options.deadline,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap()
+    }
+
+    // Only transport is replaced by an actually executed NativeFixture. The fresh predecessor
+    // predicate, sealed live authorization, attempt transition and canonical wallet stay shared.
+    pub(super) fn retain_generated_attempt(
+        &self,
+        turn: &mut renewal::GeneratedRenewalTurn,
+        history: &BodyHistory,
+        historical: &VerifiedStreamTokenCustodyStateV1,
+    ) -> Result<Selected<Original>> {
+        use crate::managed::native_operation::authorization::DispatchAuthorization;
+        let (_, current) = self.current();
+        let deadline = self.options.deadline;
+        let authorization = turn.authorize_retained(&self.owner, history, deadline)?;
+        let (directory, original, scope) = history.dispatch()?;
+        let account = authorization.bind_account(self.owner.wallet()?)?;
+        let Action::Enroll { validity, .. } = &original.action else {
+            unreachable!()
+        };
+        attempts::generated(
+            directory,
+            original.dispatch_purpose()?,
+            original.digest()?,
+            scope,
+            authorization,
+            deadline,
+            Some(validity.expires_at_unix_ms),
+            |attempt| {
+                original
+                    .request(attempt.terms(), attempt.observation()?, deadline)?
+                    .inspect(&account, &attempt.wallet_path())
+            },
+            |attempt| {
+                original
+                    .request(attempt.terms(), attempt.observation()?, deadline)?
+                    .retire(&account, &attempt.wallet_path())
+            },
+            |attempt, observation, deadline| {
+                original
+                    .request(attempt.terms(), observation, deadline)?
+                    .retain(&account, &attempt.wallet_path())
+            },
+            |_, deadline| {
+                self.owner
+                    .fresh_predecessor_observation(original, historical, &current, deadline)
+            },
+            |attempt| {
+                let observed = attempt
+                    .observation()?
+                    .enrollment_observed_at_unix_ms
+                    .ok_or_else(|| invalid("test original observation absent"))?;
+                let now = now_ms()?;
+                Ok(observed <= now && now - observed <= self.policy.max_anchor_age_ms)
+            },
+        )?;
+        history.retained_selected(&self.owner)
+    }
+}
+
+pub(super) struct FixtureReads<'a> {
+    pub(super) native: &'a NativeFixture,
+}
+impl renewal::RenewalReads for FixtureReads<'_> {
+    fn observe(
+        &self,
+        owner: &mut ManagedStreamTokenCustody,
+        policy: &SignerCustodyPolicyV1,
+        deadline: Instant,
+    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)> {
+        require_deadline(deadline)?;
+        let mut checkpoint = self.native.observe(&owner.authority);
+        let observation = checkpoint.observe(self.native, &rand::random());
+        crate::managed::native_operation::retain_observation(
+            &owner.authority.directory,
+            &mut checkpoint,
+            observation,
+        )?;
+        let current = self
+            .native
+            .bootstrap_custody(&owner.authority, policy, &checkpoint);
+        Ok((checkpoint, current))
+    }
+    fn retain_carrier(
+        &self,
+        authority: &ServiceAuthority,
+        directory: &PrivateDirectory,
+        checkpoint: &[u8],
+        transaction: &SignedTransaction,
+        height: u64,
+        observed_height: u64,
+        deadline: Instant,
+    ) -> Result<()> {
+        require_deadline(deadline)?;
+        assert!(height <= observed_height);
+        let mut replay = authority.decode_checkpoint(checkpoint)?;
+        crate::managed::native_operation::retain_carrier_progress(
+            directory,
+            transaction,
+            &mut replay,
+            height,
+            self.native,
+        )?;
+        Ok(())
+    }
+}
+
+#[test]
+fn expired_unsigned_renewal_uses_new_closed_epoch_same_body_and_recovers_exact_native_carrier() {
+    use crate::managed::native_operation::authorization::DispatchAuthorization;
+    use iroha_wallet::operations::NativePreparationPhase;
+    let _guard = crate::managed::native_test_guard();
+    let mut fixture = Fixture::enrolled(8_000);
+    // Expired unrevoked use is refused, while its exact material remains a native predecessor.
+    wait_until(fixture.initial.expires_at_unix_ms, Duration::from_secs(10));
+    let initial = fixture
+        .owner
+        .retained_initial_enrollment(&fixture.policy, fixture.initial, fixture.options.deadline)
+        .unwrap();
+    let (_, historical) = fixture.current();
+    assert!(
+        fixture
+            .owner
+            .select_retained_current_enrollment(
+                &fixture.policy,
+                fixture.initial,
+                initial.finalized().height,
+                *initial.finalized().block_hash.as_ref(),
+                &historical,
+                now_ms().unwrap(),
+                fixture.options.deadline,
+            )
+            .is_err()
+    );
+    let material = fixture
+        .owner
+        .retained_head_material_at(
+            &fixture.policy,
+            fixture.initial,
+            initial.finalized().height,
+            *initial.finalized().block_hash.as_ref(),
+            &historical,
+            fixture.options.deadline,
+        )
+        .unwrap();
+    assert_eq!(material.bytes(), initial.bytes());
+    let history = fixture.select(2);
+    let (directory, original, scope) = history.dispatch().unwrap();
+    let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
+    let body = directory
+        .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+        .unwrap();
+    let account = fixture.owner.wallet().unwrap();
+    let old_utc = now_ms().unwrap() + 2_000;
+    journal::explicit(
+        &directory,
+        original,
+        old_utc,
+        &fixture.options,
+        &account,
+        scope,
+    )
+    .unwrap();
+    let old = fixture
+        .owner
+        .required_enrollment(CustodyPurpose::Renewal(2))
+        .unwrap();
+    let request_path = old.directory().path().join("transaction");
+    let old_request = std::fs::read(request_path.join("preparation.json")).unwrap();
+    assert_eq!(
+        old.request(fixture.options.deadline)
+            .unwrap()
+            .inspect(&account, &request_path)
+            .unwrap()
+            .phase(),
+        NativePreparationPhase::RequestOnly
+    );
+    wait_until(old_utc, Duration::from_secs(3));
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    let progress = fixture
+        .owner
+        .recover_renewal(2, fixture.options.deadline)
+        .unwrap()
+        .unwrap();
+    assert_eq!(progress.transaction_status, OperationStatus::Expired);
+    assert!(!request_path.join("payload.json").exists());
+    let mut turn = fixture.renewal_turn();
+    let selected = fixture
+        .retain_generated_attempt(&mut turn, &history, &historical)
+        .unwrap();
+    assert!(selected.terms.requested_deadline_unix_ms > old_utc);
+    assert_ne!(selected.directory().path(), old.directory().path());
+    assert_eq!(
+        old.request(fixture.options.deadline)
+            .unwrap()
+            .inspect(&account, &request_path)
+            .unwrap()
+            .phase(),
+        NativePreparationPhase::Retired
+    );
+    assert_eq!(
+        std::fs::read(request_path.join("preparation.json")).unwrap(),
+        old_request
+    );
+    assert!(!request_path.join("payload.json").exists());
+    assert_eq!(
+        directory
+            .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+            .unwrap(),
+        body
+    );
+    let epochs = history.root().open_child("epochs").unwrap();
+    assert_eq!(epochs.entries(128).unwrap().len(), 2); // one epoch + its exact replacement claim
+    let authorization = turn
+        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .unwrap();
+    assert!(
+        authorization
+            .check(
+                Purpose::CustodyEnroll(fixture.owner.authority.provider_id().unwrap()),
+                fixture.options.deadline
+            )
+            .is_err()
+    );
+    fixture
+        .retain_generated_attempt(&mut turn, &history, &historical)
+        .unwrap();
+    assert_eq!(epochs.entries(128).unwrap().len(), 2);
+    assert!(peers.requests.lock().unwrap().is_empty());
+    peers.finish();
+
+    // Prepare the same retained successor through the ordinary positive-fee quote path once.
+    let mut http = NativeReadHttp::start_config(
+        &fixture.owner.authority.config,
+        Arc::clone(fixture.native.chain.state()),
+    );
+    let journal::Request::Enroll(request) = selected.request(fixture.options.deadline).unwrap()
+    else {
+        unreachable!()
+    };
+    account
+        .prepare_stream_token_custody_enroll(
+            &request,
+            &selected.directory().path().join("transaction"),
+        )
+        .unwrap();
+    let signed = fixture
+        .owner
+        .verify_wallet(selected.directory(), &selected, fixture.options.deadline)
+        .unwrap();
+    let wire = signed.encode_wire_v1().unwrap();
+    http.finish();
+    assert_eq!(
+        fixture.native.chain.commit(vec![signed.clone()]),
+        vec![true]
+    );
+    let (_, renewed) = fixture.current();
+    assert_eq!(
+        renewed
+            .current()
+            .unwrap()
+            .control()
+            .active_head
+            .unwrap()
+            .sequence,
+        2
+    );
+    assert!(!selected.directory().path().join("carrier.nrt").exists());
+    // Crash prefix: native success already exists, local original carrier has not been retained.
+    let reconciled = fixture
+        .owner
+        .reconcile_generated_with_reads(
+            &mut turn,
+            fixture.options.deadline,
+            &FixtureReads {
+                native: &fixture.native,
+            },
+        )
+        .unwrap();
+    let renewal::Reconciliation::Current(recovered_head) = reconciled else {
+        panic!("actual native head must finish original recovery")
+    };
+    let finalized = *recovered_head.finalized();
+    assert_eq!(finalized.height, 5);
+    assert_eq!(recovered_head.statement().sequence, 2);
+    let replay = fixture
+        .owner
+        .authority
+        .decode_checkpoint(
+            &selected
+                .directory()
+                .read("carrier.nrt", MAX_CHECKPOINT_BYTES)
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        replay
+            .verified_tip()
+            .unwrap()
+            .block()
+            .network_entrypoint_count(),
+        1
+    );
+    assert_eq!(
+        replay
+            .verified_tip()
+            .unwrap()
+            .block()
+            .external_transactions()
+            .next()
+            .unwrap()
+            .encode_wire_v1()
+            .unwrap(),
+        wire
+    );
+    let retained = fixture
+        .owner
+        .retained_renewed_enrollment(2, &fixture.policy, fixture.options.deadline)
+        .unwrap();
+    fixture
+        .owner
+        .verify_enrollment_at(
+            &retained,
+            &fixture.policy,
+            finalized.height,
+            *finalized.block_hash.as_ref(),
+            &renewed,
+            now_ms().unwrap(),
+            fixture.options.deadline,
+        )
+        .unwrap();
+    assert_eq!(
+        directory
+            .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+            .unwrap(),
+        body
+    );
+    drop(turn);
+    drop(fixture.owner);
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    let mut reopened = ManagedStreamTokenCustody::open(
+        &fixture.prepared,
+        crate::managed::native_operation::test_support::provider_id(&fixture.prepared, 0),
+    )
+    .unwrap();
+    let recovered = reopened
+        .recover_renewal(2, fixture.options.deadline)
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.finalized, Some(finalized));
+    assert_eq!(recovered.transaction_status, OperationStatus::Applied);
+    assert_eq!(
+        reopened
+            .verify_wallet(selected.directory(), &selected, fixture.options.deadline)
+            .unwrap()
+            .encode_wire_v1()
+            .unwrap(),
+        wire
+    );
+    assert!(
+        !selected
+            .directory()
+            .path()
+            .join("transaction/submission.json")
+            .exists()
+    );
+    assert!(peers.requests.lock().unwrap().is_empty());
+    peers.finish();
+}
+
+#[test]
+fn renewal_selection_commitment_refuses_lost_body_and_uncertain_epoch_cannot_reissue_in_turn() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Fixture::enrolled(8_000);
+    wait_until(
+        fixture.initial.issued_at_unix_ms + 4_000,
+        Duration::from_secs(6),
+    );
+    let history = fixture.select(2);
+    let directory = PrivateDirectory::open_exact(history.dispatch().unwrap().0.path()).unwrap();
+    let body = directory
+        .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+        .unwrap();
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    // Actual signed body publication precedes dispatch and grants no wallet phase by itself.
+    assert!(
+        BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2))
+            .unwrap()
+            .unwrap()
+            .original()
+            .unwrap()
+            .is_some()
+    );
+    assert!(!directory.path().join("attempts").exists());
+    let held = fixture._temporary.path().join("held-renewal-original.nrt");
+    std::fs::rename(directory.path().join("original.nrt"), &held).unwrap();
+    assert!(matches!(
+        fixture.owner.original_renewal_if_present(2),
+        Err(crate::managed::Error::Bootstrap(
+            ManagedBootstrapFailure::RetainedMaterial
+        ))
+    ));
+    assert!(!directory.path().join("original.nrt").exists());
+    std::fs::rename(&held, directory.path().join("original.nrt")).unwrap();
+    let name = renewal::directory_name(2).unwrap();
+    let moved = fixture._temporary.path().join("held-renewal-directory");
+    std::fs::rename(history.root().path(), &moved).unwrap();
+    assert!(matches!(
+        fixture.owner.original_renewal_if_present(2),
+        Err(crate::managed::Error::Bootstrap(
+            ManagedBootstrapFailure::RetainedMaterial
+        ))
+    ));
+    assert!(
+        !fixture
+            .owner
+            .authority
+            .directory
+            .path()
+            .join(&name)
+            .exists()
+    );
+    std::fs::rename(&moved, fixture.owner.authority.directory.path().join(&name)).unwrap();
+    let mut turn = fixture.renewal_turn();
+    let epochs = history.root().ensure_child("epochs").unwrap();
+    epochs
+        .write_atomic(
+            "unknown.nrt",
+            b"refuse this custody",
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    assert!(
+        turn.authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+            .is_err()
+    );
+    std::fs::remove_file(epochs.path().join("unknown.nrt")).unwrap();
+    // Even a failure before publication consumes issue permission in this turn. Removing the
+    // obstruction cannot append; a later live invocation must own its own finite authorization.
+    assert!(matches!(
+        turn.authorize_retained(&fixture.owner, &history, fixture.options.deadline),
+        Err(crate::managed::Error::Bootstrap(
+            ManagedBootstrapFailure::TransitionPending
+        ))
+    ));
+    assert!(epochs.entries(0).unwrap().is_empty());
+    let mut next_turn = fixture.renewal_turn();
+    next_turn
+        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .unwrap();
+    assert_eq!(
+        epochs.entries(128).unwrap(),
+        vec![std::ffi::OsString::from("0001.nrt")]
+    );
+    assert_eq!(
+        directory
+            .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+            .unwrap(),
+        body
+    );
+    assert!(!directory.path().join("attempts").exists());
+    assert!(peers.requests.lock().unwrap().is_empty());
+    peers.finish();
+}
+
+#[test]
+fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacement() {
+    let _guard = crate::managed::native_test_guard();
+    let mut fixture = Fixture::enrolled_with_renewal_validity(4_000, 8_000);
+    wait_until(
+        fixture.initial.issued_at_unix_ms + 2_000,
+        Duration::from_secs(4),
+    );
+    let utc = now_ms().unwrap() + 2_000;
+    let history = fixture.select_with_deadline(2, utc);
+    let (directory, original, scope) = history.dispatch().unwrap();
+    let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
+    let Action::Enroll { validity, .. } = &original.action else {
+        unreachable!()
+    };
+    let expires = validity.expires_at_unix_ms;
+    journal::explicit(
+        &directory,
+        original,
+        utc,
+        &fixture.options,
+        &fixture.owner.wallet().unwrap(),
+        scope,
+    )
+    .unwrap();
+    let selected = fixture
+        .owner
+        .required_enrollment(CustodyPurpose::Renewal(2))
+        .unwrap();
+    let wallet = selected.directory().open_child("transaction").unwrap();
+    let bytes = wallet.read("preparation.json", 4 * 1024 * 1024).unwrap();
+    let body = directory
+        .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+        .unwrap();
+    let inventory = wallet.entries(8).unwrap();
+    wait_until(expires, Duration::from_secs(10));
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    // Explicit one-intent calls cannot refresh the retained dispatch UTC or replace this body.
+    // Semantic replacement requires a separate live generated issuer and native predecessor join.
+    assert!(
+        fixture
+            .owner
+            .renew(2, now_ms().unwrap() + 60_000, &fixture.options)
+            .is_err()
+    );
+    assert!(!history.root().path().join("epochs").exists());
+    assert_eq!(wallet.entries(8).unwrap(), inventory);
+    assert_eq!(
+        wallet.read("preparation.json", 4 * 1024 * 1024).unwrap(),
+        bytes
+    );
+    assert_eq!(
+        directory
+            .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+            .unwrap(),
+        body
+    );
+    assert_eq!(
+        fixture
+            .owner
+            .recover_renewal(2, fixture.options.deadline)
+            .unwrap()
+            .unwrap()
+            .transaction_status,
+        OperationStatus::Expired
     );
     assert!(peers.requests.lock().unwrap().is_empty());
     peers.finish();

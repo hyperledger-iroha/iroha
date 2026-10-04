@@ -67,7 +67,6 @@ jobs:
             docker.soramitsu.co.jp/iroha3/iroha:dev
           labels: commit=${{ github.sha }}
           build-args: |
-            "IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}"
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
             "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
           cache-from: type=gha

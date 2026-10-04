@@ -1,5 +1,8 @@
 //! Portable finality and challenged node statements from the current certified chain.
 
+mod cursor;
+pub use cursor::{NativeCurrentFinalityV1, NativeFinalityCursorErrorV1, NativeFinalityCursorV1};
+
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     sumeragi::SumeragiStatus,

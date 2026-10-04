@@ -9131,7 +9131,7 @@ class TriggerCompletionList:
 
 @dataclass(frozen=True)
 class SumeragiEvidencePenaltyDetails:
-    """Committed block height for an applied or cancelled penalty."""
+    """Canonical block height that applied the consensus penalty."""
 
     height: int
 
@@ -9152,18 +9152,9 @@ class SumeragiEvidenceAppliedPenaltyStatus:
     details: SumeragiEvidencePenaltyDetails
 
 
-@dataclass(frozen=True)
-class SumeragiEvidenceCancelledPenaltyStatus:
-    """Penalty lifecycle state for evidence cancelled in a committed block."""
-
-    status: Literal["cancelled"]
-    details: SumeragiEvidencePenaltyDetails
-
-
 SumeragiEvidencePenaltyStatus = Union[
     SumeragiEvidencePendingPenaltyStatus,
     SumeragiEvidenceAppliedPenaltyStatus,
-    SumeragiEvidenceCancelledPenaltyStatus,
 ]
 
 
@@ -9185,8 +9176,8 @@ def _parse_sumeragi_evidence_penalty_status(
         if payload["details"] is not None:
             raise TypeError(f"{context}.details must be null when status is pending")
         return SumeragiEvidencePendingPenaltyStatus(status="pending", details=None)
-    if status not in {"applied", "cancelled"}:
-        raise ValueError(f"{context}.status must be pending, applied, or cancelled")
+    if status != "applied":
+        raise ValueError(f"{context}.status must be pending or applied")
     details = payload["details"]
     if not isinstance(details, Mapping):
         raise TypeError(f"{context}.details must be an object")
@@ -9198,13 +9189,8 @@ def _parse_sumeragi_evidence_penalty_status(
     typed_details = SumeragiEvidencePenaltyDetails(
         height=_require_u64(details["height"], f"{context}.details.height")
     )
-    if status == "applied":
-        return SumeragiEvidenceAppliedPenaltyStatus(
-            status="applied",
-            details=typed_details,
-        )
-    return SumeragiEvidenceCancelledPenaltyStatus(
-        status="cancelled",
+    return SumeragiEvidenceAppliedPenaltyStatus(
+        status="applied",
         details=typed_details,
     )
 
@@ -11283,7 +11269,6 @@ __all__ = [
     "SumeragiEvidencePenaltyDetails",
     "SumeragiEvidencePendingPenaltyStatus",
     "SumeragiEvidenceAppliedPenaltyStatus",
-    "SumeragiEvidenceCancelledPenaltyStatus",
     "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
@@ -15330,7 +15315,19 @@ class ToriiClient(
         allow_redirects: bool = False,
         stream: bool = False,
         _headers_are_final: bool = False,
+        _operation_deadline_ns: Optional[int] = None,
+        _maximum_body_bytes: Optional[int] = None,
+        _response_media_type: Optional[str] = None,
     ) -> requests.Response:
+        bounded = any(value is not None for value in (
+            _operation_deadline_ns, _maximum_body_bytes, _response_media_type,
+        ))
+        if bounded:
+            from .requests_deadline import check_bounded_client, check_bounded_request
+            bounded_client = check_bounded_client(self)
+            headers = check_bounded_request(method, path, headers, data, json_body, params, timeout,
+                (_headers_are_final, stream, allow_retry, allow_redirects),
+                _operation_deadline_ns, _maximum_body_bytes, _response_media_type)
         if _headers_are_final and (not stream or headers is None):
             raise ValueError("final SSE headers require a streaming request with headers")
         if json_body is not None and data is not None:
@@ -15345,7 +15342,9 @@ class ToriiClient(
         normalized_path = _normalize_request_path(path)
 
         final_headers: Dict[str, str] = (
-            {} if _headers_are_final else dict(self._default_headers)
+            {} if _headers_are_final else dict(
+                bounded_client["headers"] if bounded else self._default_headers
+            )
         )
         if headers is not None:
             for name, value in _copy_http_headers(headers, "headers").items():
@@ -15364,7 +15363,7 @@ class ToriiClient(
 
         method_upper = _normalize_http_method(method)
         request_timeout = (
-            self._timeout
+            (bounded_client["timeout"] if bounded else self._timeout)
             if timeout is None
             else _require_positive_finite_float(timeout, "timeout")
         )
@@ -15378,6 +15377,40 @@ class ToriiClient(
             signed_headers = _OperatorRequestHeaderPlan(final_headers, headers.context)
         else:
             signed_headers = final_headers
+        if bounded:
+            if (type(_operation_deadline_ns) is not int
+                    or type(_maximum_body_bytes) is not int
+                    or type(_response_media_type) is not str
+                    or params is not None or not stream or allow_retry or allow_redirects
+                    or isinstance(signed_headers, (_CanonicalRequestHeaderPlan, _OperatorRequestHeaderPlan))):
+                raise ValueError("bounded observation requires one unsigned, nonredirecting dispatch")
+            from .requests_deadline import check_alias_state, send_bounded_request
+            if type(self) is not ToriiClient:
+                raise TypeError("bounded staking preparation requires the canonical ToriiClient")
+            check_alias_state(self._sorafs_alias_metrics, self._last_sorafs_alias_evaluation)
+            response = send_bounded_request(
+                session=self._session, method=method_upper,
+                url=f"{bounded_client['base_url']}{normalized_path}", headers=signed_headers,
+                body=payload, timeout=request_timeout, deadline_ns=_operation_deadline_ns,
+                max_body=_maximum_body_bytes, media_type=_response_media_type,
+                alias_policy=self._sorafs_alias_policy,
+                alias_warning_hook=self._sorafs_alias_warning_hook,
+                alias_logger=self._sorafs_alias_logger,
+            )
+            # The worker already ran the canonical proof policy and emitted each
+            # admitted warning once. Only closed in-memory data is touched here.
+            check_alias_state(self._sorafs_alias_metrics, self._last_sorafs_alias_evaluation)
+            evaluation = response._iroha_alias_evaluation
+            self._last_sorafs_alias_evaluation = evaluation
+            if evaluation is not None:
+                metrics = self._sorafs_alias_metrics
+                metrics["total"] = metrics.get("total", 0) + 1
+                label = evaluation.status_label or evaluation.state
+                metrics[label] = metrics.get(label, 0) + 1
+                if evaluation.state == "refresh_window" or evaluation.rotation_due:
+                    metrics["warnings"] = metrics.get("warnings", 0) + 1
+            return response
+
         if isinstance(
             signed_headers,
             (_CanonicalRequestHeaderPlan, _OperatorRequestHeaderPlan),
@@ -15441,26 +15474,31 @@ class ToriiClient(
         No transaction is signed or submitted. The observation carries no state
         proof; execution rechecks every effect and expiry. Transport dispatches
         once, rejects redirects, byte-bounds success/error streams, and closes
-        after completion or failure. Requests enforces connect/read inactivity;
-        it does not enforce an absolute deadline across blocking streamed reads.
+        after completion or failure. A private Requests worker owns blocking
+        I/O under the original absolute deadline on POSIX. Unsupported custom
+        Sessions/adapters are rejected before dispatch; there is no fallback.
         """
-        # TODO: qualify an absolute operation deadline in the canonical Requests
-        # owner before marking this route production-qualified. Chunk checks or
-        # a timer calling Response.close cannot interrupt every blocking read.
+        started_ns = time.monotonic_ns()
+        from .requests_deadline import _remaining, check_preparation_inputs
+        original_timeout, network, request = check_preparation_inputs(self, request, xor_asset_definition_id)
+        if original_timeout > (((1 << 64) - 1 - started_ns) // 1_000_000_000):
+            raise ValueError("staking preparation timeout exceeds the absolute deadline range")
+        deadline_ns = started_ns + int(original_timeout * 1_000_000_000)
         from .validator_staking import (
             StakingPreparationRequestV1, StakingPreparationV1,
             encode_staking_preparation_frame_v1, decode_staking_preparation_frame_v1,
             validate_staking_preparation_v1,
         )
         from .address import asset_definition_id_to_bytes
-        network = self._require_local_signing_context("staking preparation").network_id
         asset_definition_id_to_bytes(xor_asset_definition_id)
         if type(request) is not StakingPreparationRequestV1:
             raise TypeError("staking preparation requires an exact typed request")
         body = encode_staking_preparation_frame_v1(request)
-        response = self._request("POST", "/v1/nexus/staking/prepare",
+        response = ToriiClient._request(self, "POST", "/v1/nexus/staking/prepare",
             headers={"Content-Type": "application/x-norito", "Accept": "application/x-norito"},
-            data=body, stream=True, allow_retry=False, allow_redirects=False)
+            data=body, stream=True, allow_retry=False, allow_redirects=False,
+            _operation_deadline_ns=deadline_ns, _maximum_body_bytes=256 * 1024,
+            _response_media_type="application/x-norito")
         try:
             if response.status_code == 200 and response.headers.get("Content-Type", "").strip().lower() != "application/x-norito":
                 raise ValueError("staking preparation requires application/x-norito")
@@ -15473,7 +15511,9 @@ class ToriiClient(
                 error.staking_preparation_body = raw
                 raise error
             prepared = decode_staking_preparation_frame_v1(StakingPreparationV1, raw)
-            return validate_staking_preparation_v1(prepared, request, network, xor_asset_definition_id)
+            validated = validate_staking_preparation_v1(prepared, request, network, xor_asset_definition_id)
+            _remaining(deadline_ns)
+            return validated
         finally:
             response.close()
 

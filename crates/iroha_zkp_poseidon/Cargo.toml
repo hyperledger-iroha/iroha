@@ -13,9 +13,10 @@ categories = ["cryptography"]
 [dependencies]
 halo2curves = { workspace = true }
 once_cell = { workspace = true }
-poseidon-primitives = "0.2.0"
 zeroize = { workspace = true }
 
 [dev-dependencies]
+# Pinned original fixed-parameter generator is a test oracle only.
+poseidon-primitives = "0.2.0"
 halo2curves-axiom = { version = "0.7.0", default-features = false }
 sha2 = "0.10.9"

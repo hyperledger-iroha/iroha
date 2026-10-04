@@ -19,6 +19,10 @@ use norito::{JsonDeserialize, JsonSerialize};
 mod compliance_material;
 pub use compliance_material::RetainedGatewayCompliancePlan;
 mod native_attestation;
+pub(super) mod publication_client;
+pub use publication_client::RetainedPublicationClientConfig;
+mod publication_material;
+pub use publication_material::RetainedPublicationServicePlan;
 mod network_material;
 mod provider_material;
 pub use provider_material::RetainedProviderServicePlan;
@@ -94,13 +98,13 @@ pub enum LocalnetServiceProfile {
     norito::Decode,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenAuthorityRole")]
 #[norito(
     tag = "role",
     content = "value",
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenAuthorityRole")]
 pub enum StreamTokenAuthorityRole {
     /// Provider owner and issuer operation transaction signer.
     IssuerOperator,
@@ -169,8 +173,8 @@ const ROLES: [StreamTokenAuthorityRole; 10] = [
     norito::Decode,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenAuthority")]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenAuthority")]
 pub struct StreamTokenAuthority {
     /// Purpose whose fixed filename is exposed by [`StreamTokenAuthorityRole::credential_filename`].
     pub role: StreamTokenAuthorityRole,
@@ -193,8 +197,8 @@ pub struct StreamTokenAuthority {
     norito::Decode,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenReserveAccounts")]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenReserveAccounts")]
 pub struct StreamTokenReserveAccounts {
     /// Pooled native reserve custody, initially unfunded.
     pub custody: AccountId,
@@ -239,18 +243,20 @@ fn reserve_accounts(operations: &AccountId) -> Result<StreamTokenReserveAccounts
     norito::Decode,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceAuthorityRole")]
 #[norito(
     tag = "role",
     content = "value",
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceAuthorityRole")]
 pub enum NetworkServiceAuthorityRole {
     /// Exact native reserve operations account, shared by all provider partitions.
     ReserveOperations,
     /// Exact native reputation journal recorder, shared by all selected gateways.
     ReputationRecorder,
+    /// Ordinary funded pin and publisher-source signer, separate from receipt and manager roles.
+    MusubiPin,
 }
 impl NetworkServiceAuthorityRole {
     /// Fixed basename under the original network credential directory.
@@ -259,12 +265,14 @@ impl NetworkServiceAuthorityRole {
         match self {
             Self::ReserveOperations => "reserve-operations.key",
             Self::ReputationRecorder => "reputation-recorder.key",
+            Self::MusubiPin => "musubi-pin.key",
         }
     }
 }
-const NETWORK_ROLES: [NetworkServiceAuthorityRole; 2] = [
+const NETWORK_ROLES: [NetworkServiceAuthorityRole; 3] = [
     NetworkServiceAuthorityRole::ReserveOperations,
     NetworkServiceAuthorityRole::ReputationRecorder,
+    NetworkServiceAuthorityRole::MusubiPin,
 ];
 /// One original public network role and registered universal account.
 #[derive(
@@ -278,8 +286,8 @@ const NETWORK_ROLES: [NetworkServiceAuthorityRole; 2] = [
     norito::Decode,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceAuthority")]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceAuthority")]
 pub struct NetworkServiceAuthority {
     /// Fixed signing purpose.
     pub role: NetworkServiceAuthorityRole,
@@ -298,15 +306,17 @@ pub struct NetworkServiceAuthority {
     norito::Decode,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceInventory")]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceInventory")]
 pub struct NetworkServiceInventory {
-    /// Exactly two original accounts in canonical network-role order.
+    /// Exactly three original accounts in canonical network-role order.
     pub authorities: Vec<NetworkServiceAuthority>,
     /// Shared non-signing custody and treasury for the sole native reserve policy.
     pub reserve_accounts: StreamTokenReserveAccounts,
     /// Canonical original timestamp, pricing and single provider-admission council.
     pub network_plan: Vec<u8>,
+    /// Canonical fixed publication host/session, limits and original private listener port.
+    pub publication_plan: Vec<u8>,
 }
 impl NetworkServiceInventory {
     /// Select public original intent; this does not establish current permission or policy.
@@ -352,8 +362,8 @@ impl NetworkServiceInventory {
     norito::Decode,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_deploy::localnet::service_authorities::ProviderServiceInventory")]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::ProviderServiceInventory")]
 pub struct ProviderServiceInventory {
     /// Fixed slot, equal to its original validator peer index (zero, one or two).
     pub slot: u8,
@@ -428,61 +438,70 @@ pub struct StreamTokenAuthorityManifest {
     /// One network-wide inventory, pricing/council and reserve account selection.
     pub network: NetworkServiceInventory,
     /// Exactly three provider inventories in fixed original peer order.
-    #[norito(json = "provider_inventory_json")]
+    #[norito(json = "provider_inventories_json")]
     pub providers: [ProviderServiceInventory; PROVIDER_COUNT],
 }
+// JSON keeps the same closed array layout as the canonical aggregate commitment. This adapter
+// borrows the original inventories during both writes and does not widen the public array type.
+mod provider_inventories_json {
+    use norito::json::{
+        self, BoundedJsonError, JsonDeserialize, JsonSerialize, JsonWriteSink, Parser,
+    };
 
-/// The manifest owns the exact three-provider JSON array while retaining its fixed public type.
-mod provider_inventory_json {
     use super::{PROVIDER_COUNT, ProviderServiceInventory};
-    use norito::json::{BoundedJsonError, Error, JsonSerialize, JsonWriteSink, Parser, SeqVisitor};
 
-    pub(super) fn serialize(
-        providers: &[ProviderServiceInventory; PROVIDER_COUNT],
-        output: &mut String,
-    ) {
-        output.push('[');
-        for (index, provider) in providers.iter().enumerate() {
+    pub(super) fn serialize(value: &[ProviderServiceInventory; PROVIDER_COUNT], out: &mut String) {
+        out.push('[');
+        for (index, provider) in value.iter().enumerate() {
             if index != 0 {
-                output.push(',');
+                out.push(',');
             }
-            provider.json_serialize(output);
+            provider.json_serialize(out);
         }
-        output.push(']');
+        out.push(']');
     }
 
     pub(super) fn serialize_bounded(
-        providers: &[ProviderServiceInventory; PROVIDER_COUNT],
-        output: &mut dyn JsonWriteSink,
+        value: &[ProviderServiceInventory; PROVIDER_COUNT],
+        out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
-        output.begin_container()?;
-        output.push('[')?;
-        for (index, provider) in providers.iter().enumerate() {
+        out.begin_container()?;
+        out.push('[')?;
+        for (index, provider) in value.iter().enumerate() {
             if index != 0 {
-                output.push(',')?;
+                out.push(',')?;
             }
-            provider.json_serialize_to(output)?;
+            provider.json_serialize_to(out)?;
         }
-        output.push(']')?;
-        output.end_container();
+        out.push(']')?;
+        out.end_container();
         Ok(())
     }
 
     pub(super) fn deserialize(
         parser: &mut Parser<'_>,
-    ) -> Result<[ProviderServiceInventory; PROVIDER_COUNT], Error> {
-        let cardinality = || Error::Message("expected exactly three provider inventories".into());
-        let mut sequence = SeqVisitor::new(parser)?;
-        let mut next = || {
-            sequence
-                .next_element::<ProviderServiceInventory>()?
-                .ok_or_else(cardinality)
-        };
-        let providers = [next()?, next()?, next()?];
-        if !sequence.is_finished() {
-            return Err(cardinality());
+    ) -> Result<[ProviderServiceInventory; PROVIDER_COUNT], json::Error> {
+        // Prove the fixed boundary without constructing inventories or traversing a fourth body.
+        // Only then run the original array depth/sequence/resource guard before owned decoding.
+        let mut boundary = *parser;
+        boundary.expect(b'[')?;
+        for index in 0..PROVIDER_COUNT {
+            if index != 0 {
+                boundary.expect(b',')?;
+            }
+            boundary.skip_value_lexical()?;
         }
-        Ok(providers)
+        boundary.expect(b']')?;
+        parser.preflight_array_entries()?;
+
+        parser.expect(b'[')?;
+        let first = ProviderServiceInventory::json_deserialize(parser)?;
+        parser.expect(b',')?;
+        let second = ProviderServiceInventory::json_deserialize(parser)?;
+        parser.expect(b',')?;
+        let third = ProviderServiceInventory::json_deserialize(parser)?;
+        parser.expect(b']')?;
+        Ok([first, second, third])
     }
 }
 
@@ -602,6 +621,7 @@ struct GeneratedProviderAuthorities {
 pub(super) struct GeneratedAuthorities {
     authorities: Vec<(NetworkServiceAuthorityRole, LocalnetClientIdentity)>,
     network: network_material::NetworkServicePlanV1,
+    publication: publication_material::GeneratedPublication,
     providers: [GeneratedProviderAuthorities; PROVIDER_COUNT],
 }
 
@@ -733,12 +753,18 @@ pub(super) fn generate(
             compliance,
         });
     }
-    let providers = providers
+    let providers: [GeneratedProviderAuthorities; PROVIDER_COUNT] = providers
         .try_into()
         .map_err(|_| eyre!("generated provider count differs"))?;
+    let publication = publication_material::GeneratedPublication::generate(
+        &authorities,
+        &providers,
+        network.creation_time_ms,
+    )?;
     Ok(Some(GeneratedAuthorities {
         authorities,
         network,
+        publication,
         providers,
     }))
 }
@@ -865,6 +891,7 @@ impl GeneratedAuthorities {
                 .collect(),
             reserve_accounts: reserve_accounts(&self.authorities[0].1.account_id)?,
             network_plan: self.network.bytes()?,
+            publication_plan: self.publication.bytes()?,
         };
         let providers = self
             .providers
@@ -1009,6 +1036,21 @@ impl GeneratedAuthorities {
 }
 
 impl PreparedLocalnet {
+    /// Recover the exact original singleton publication intent after full profile validation.
+    ///
+    /// This does not open custody, install a listener or grant current native authority.
+    /// Standard/private profiles contain no publication selection.
+    /// # Errors
+    /// Refuses changed original genesis, roles, TLS material, session, ports or limits.
+    pub fn publication_service_plan(
+        &self,
+    ) -> crate::managed::Result<Option<RetainedPublicationServicePlan>> {
+        validate_retained(self)?
+            .map(|manifest| publication_material::retained(self, &manifest))
+            .transpose()
+            .map_err(|_| Error::Invalid("retained generated publication plan differs".into()))
+    }
+
     /// Recover original compliance selections bound to the actual authenticated network.
     ///
     /// This provides original trust, not a current catalog, operator permission or serving state.
@@ -1489,6 +1531,7 @@ pub(crate) fn validate_retained(
         )
         .map_err(|_| invalid())?;
     }
+    publication_material::validate_retained(&manifest, &network).map_err(|_| invalid())?;
     let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&block)
         .map_err(|_| invalid())?;
     if metadata.sumeragi_context.root_scope != SumeragiRootScope::Global
@@ -1564,7 +1607,8 @@ pub(crate) fn validate_retained(
             config.torii.transport.https.as_ref(),
         )
         .map_err(|_| invalid())?;
-        if config.genesis.expected_hash != block.hash()
+        if config.musubi_publication.installation.is_some()
+            || config.genesis.expected_hash != block.hash()
             || config.gov.sorafs_provider_owners != owners
             || configured_execution_policy(&config).map_err(|_| invalid())?
                 != Hash::prehashed(metadata.sumeragi_context.execution_policy_hash)
@@ -1709,3 +1753,238 @@ mod native_roles_tests;
 
 #[cfg(test)]
 mod topology_tests;
+
+#[cfg(test)]
+mod manifest_codec_tests {
+    use super::*;
+
+    // Codec inputs only; these generated public accounts do not constitute an admitted profile.
+    fn account(seed: u8) -> AccountId {
+        AccountId::new(iroha_crypto::derive_non_signing_ed25519_public_key(
+            b"iroha:localnet:service-manifest-codec-test:v1",
+            &[&[seed]],
+        ))
+    }
+
+    fn manifest() -> StreamTokenAuthorityManifest {
+        StreamTokenAuthorityManifest {
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::new([0xA5; Hash::LENGTH])
+            )),
+            manager: account(0),
+            network: NetworkServiceInventory {
+                authorities: NETWORK_ROLES
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, role)| NetworkServiceAuthority {
+                        role,
+                        account: account(u8::try_from(index + 1).unwrap()),
+                    })
+                    .collect(),
+                reserve_accounts: StreamTokenReserveAccounts {
+                    custody: account(u8::try_from(NETWORK_ROLES.len() + 1).unwrap()),
+                    treasury: account(u8::try_from(NETWORK_ROLES.len() + 2).unwrap()),
+                },
+                network_plan: vec![1, 2, 3],
+                // Canonical opaque codec input only, not an admitted PublicationPlanV1.
+                publication_plan: norito::encode_canonical(&NetworkServiceAuthorityRole::MusubiPin)
+                    .unwrap(),
+            },
+            providers: std::array::from_fn(|slot| ProviderServiceInventory {
+                slot: u8::try_from(slot).unwrap(),
+                provider_id: ProviderId::new([u8::try_from(slot + 1).unwrap(); 32]),
+                authorities: ROLES
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, role)| StreamTokenAuthority {
+                        role,
+                        account: account(
+                            u8::try_from(NETWORK_ROLES.len() + 3 + slot * ROLES.len() + index)
+                                .unwrap(),
+                        ),
+                    })
+                    .collect(),
+                provider_plan: vec![u8::try_from(slot).unwrap(), 0x11],
+                compliance_plan: vec![0x22, u8::try_from(slot).unwrap()],
+            }),
+        }
+    }
+
+    fn assert_identity<T: norito::NoritoSchema>(expected: &'static str) {
+        assert_eq!(T::nominal_name(), expected);
+        assert_eq!(T::frame_name(), expected);
+        assert_eq!(T::static_nominal_name(), Some(expected));
+        assert_eq!(T::static_frame_name(), Some(expected));
+    }
+
+    #[test]
+    fn authority_inventory_schema_names_are_exact_canonical_identities() {
+        assert_identity::<StreamTokenAuthorityRole>(
+            "iroha_deploy::localnet::service_authorities::StreamTokenAuthorityRole",
+        );
+        assert_identity::<StreamTokenAuthority>(
+            "iroha_deploy::localnet::service_authorities::StreamTokenAuthority",
+        );
+        assert_identity::<StreamTokenReserveAccounts>(
+            "iroha_deploy::localnet::service_authorities::StreamTokenReserveAccounts",
+        );
+        assert_identity::<NetworkServiceAuthorityRole>(
+            "iroha_deploy::localnet::service_authorities::NetworkServiceAuthorityRole",
+        );
+        assert_identity::<NetworkServiceAuthority>(
+            "iroha_deploy::localnet::service_authorities::NetworkServiceAuthority",
+        );
+        assert_identity::<NetworkServiceInventory>(
+            "iroha_deploy::localnet::service_authorities::NetworkServiceInventory",
+        );
+        assert_identity::<ProviderServiceInventory>(
+            "iroha_deploy::localnet::service_authorities::ProviderServiceInventory",
+        );
+    }
+
+    #[test]
+    fn manifest_provider_json_preserves_original_order_and_exact_bounded_bytes() {
+        let original = manifest();
+        let accounts: BTreeSet<_> = std::iter::once(&original.manager)
+            .chain(
+                original
+                    .network
+                    .authorities
+                    .iter()
+                    .map(|role| &role.account),
+            )
+            .chain([
+                &original.network.reserve_accounts.custody,
+                &original.network.reserve_accounts.treasury,
+            ])
+            .chain(
+                original
+                    .providers
+                    .iter()
+                    .flat_map(|provider| provider.authorities.iter().map(|role| &role.account)),
+            )
+            .collect();
+        assert_eq!(
+            accounts.len(),
+            1 + NETWORK_ROLES.len() + 2 + PROVIDER_COUNT * ROLES.len()
+        );
+        let ordinary = norito::json::to_json(&original).unwrap();
+        let decoded: StreamTokenAuthorityManifest = norito::json::from_json(&ordinary).unwrap();
+        assert_eq!(decoded, original);
+        for (slot, provider) in decoded.providers.iter().enumerate() {
+            assert_eq!(usize::from(provider.slot), slot);
+            assert_eq!(provider, &original.providers[slot]);
+        }
+        assert_eq!(
+            norito::json::to_json_bounded(&original, ordinary.len()).unwrap(),
+            ordinary
+        );
+        assert!(matches!(
+            norito::json::to_json_bounded(&original, ordinary.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        ));
+    }
+
+    #[test]
+    fn manifest_provider_json_refuses_incomplete_or_extended_fixed_inventory() {
+        let original = manifest();
+        let provider = norito::json::to_value(&original.providers[0]).unwrap();
+        for count in [0, 1, 2, 4] {
+            let mut hostile = norito::json::to_value(&original).unwrap();
+            let providers = hostile
+                .as_object_mut()
+                .and_then(|object| object.get_mut("providers"))
+                .and_then(norito::json::Value::as_array_mut)
+                .unwrap();
+            providers.clear();
+            providers.extend(std::iter::repeat_n(provider.clone(), count));
+            assert!(
+                norito::json::from_value::<StreamTokenAuthorityManifest>(hostile).is_err(),
+                "accepted {count} original provider inventories"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_provider_json_keeps_strict_fields_and_original_slot_validation() {
+        let original = manifest();
+        let mut hostile = norito::json::to_value(&original).unwrap();
+        let providers = hostile
+            .as_object_mut()
+            .and_then(|object| object.get_mut("providers"))
+            .and_then(norito::json::Value::as_array_mut)
+            .unwrap();
+        providers[0]
+            .as_object_mut()
+            .unwrap()
+            .insert("extra".to_owned(), norito::json::Value::Bool(true));
+        assert!(norito::json::from_value::<StreamTokenAuthorityManifest>(hostile).is_err());
+
+        let mut reordered = original;
+        reordered.providers.swap(0, 1);
+        let decoded: StreamTokenAuthorityManifest =
+            norito::json::from_json(&norito::json::to_json(&reordered).unwrap()).unwrap();
+        assert!(decoded.provider(decoded.providers[0].provider_id).is_err());
+    }
+
+    #[test]
+    fn fixed_provider_array_rejects_fourth_before_parsing_or_constructing_its_body() {
+        let original = manifest();
+        let mut prefix = String::new();
+        provider_inventories_json::serialize(&original.providers, &mut prefix);
+        assert_eq!(prefix.pop(), Some(']'));
+        let fourth_comma = prefix.len();
+        for fourth in [
+            "{invalid-json".to_owned(),
+            format!("\"{}\"", "x".repeat(MAX_MANIFEST + 1)),
+        ] {
+            let hostile = format!("{prefix},{fourth}]");
+            let mut parser = norito::json::Parser::new(&hostile);
+            let error = provider_inventories_json::deserialize(&mut parser).unwrap_err();
+            assert!(matches!(
+                error,
+                norito::json::Error::UnexpectedCharacter {
+                    found: norito::json::UnexpectedToken::Char(','),
+                    byte,
+                    ..
+                } if byte == fourth_comma
+            ));
+            assert_eq!(
+                parser.position(),
+                0,
+                "constructed a typed inventory before refusal"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_provider_array_keeps_depth_and_resource_guards_before_inventory_decode() {
+        for limits in [
+            norito::DecodeLimits::new(2, usize::MAX, usize::MAX, usize::MAX, 32),
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, 2, usize::MAX, 32),
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 2, 32),
+        ] {
+            let mut parser = norito::json::Parser::new("[{},{},{}]");
+            let error = norito::with_decode_limits_scope(limits, || {
+                provider_inventories_json::deserialize(&mut parser)
+            })
+            .unwrap_err();
+            assert!(
+                error.is_decode_resource_limit(),
+                "lost the original array guard"
+            );
+            assert_eq!(parser.position(), 0);
+        }
+
+        let depth = norito::json::MAX_JSON_VALUE_NESTING_DEPTH;
+        let hostile = format!("[{}0{},{{}},{{}}]", "[".repeat(depth), "]".repeat(depth));
+        let mut parser = norito::json::Parser::new(&hostile);
+        assert!(matches!(
+            provider_inventories_json::deserialize(&mut parser),
+            Err(norito::json::Error::NestingDepthExceeded { .. })
+        ));
+        assert_eq!(parser.position(), 0);
+    }
+}

@@ -8,10 +8,10 @@ pub(super) mod deployment_lifecycle;
 pub(super) mod dispatcher_transition;
 #[path = "taira_public_reset_first_boot.rs"]
 mod first_boot;
-#[path = "taira_public_reset_host_phases.rs"]
-mod phases;
 #[path = "taira_public_reset_native_edge.rs"]
 mod native_edge;
+#[path = "taira_public_reset_host_phases.rs"]
+mod phases;
 
 #[path = "taira_stopped_owner_maintenance.rs"]
 pub(crate) mod maintenance;

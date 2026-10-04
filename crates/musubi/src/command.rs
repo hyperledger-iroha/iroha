@@ -725,7 +725,7 @@ fn dispatch(
         Command::Build(args) => run_build(manifest_path, "build", args),
         Command::Test(args) => run_build(manifest_path, "test", args),
         Command::Package(args) => run_package(manifest_path, args),
-        Command::Publish(args) => run_publish(manifest_path, args),
+        Command::Publish(args) => run_publish(manifest_path, args, None),
         Command::Search(args) => run_search(args),
         Command::Info(args) => run_package_info(args),
         Command::Versions(args) => run_package_versions(args),
@@ -1547,12 +1547,14 @@ fn load_selected_workspace(
     Ok((workspace, selected_packages))
 }
 
-/// Build a package using only the caller's retained runtime identity and optional storage policy.
+/// Build a package using the caller's retained runtime identity, explicit cache and storage policy.
+/// Local-only graphs do not open the cache; external resolver and archive records share this root.
 ///
 /// # Errors
 /// Returns the complete build diagnostic if package resolution, custody or compilation fails.
 pub fn build_runtime_package(
     config: &iroha::config::Config,
+    cache_root: &Path,
     registry_config: Option<&iroha::config::Config>,
     registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
     manifest: &Path,
@@ -1563,6 +1565,7 @@ pub fn build_runtime_package(
 ) -> eyre::Result<crate::deployment_runtime::BuiltArtifact> {
     build::build_runtime_package(
         config,
+        cache_root,
         registry_config,
         registry_resolver,
         manifest,
@@ -1582,6 +1585,8 @@ struct WorkspaceResolutionOptionsV1<'a> {
     fresh_only: bool,
     purpose: GraphPurposeV1,
     requested_chain_discriminant: Option<u16>,
+    cache_root: Option<&'a Path>,
+    archive_transport: Option<&'a PreparedProductionSorafsArchiveTransportV1>,
 }
 fn ensure_network_identity(
     expected: iroha_data_model::NetworkId,
@@ -1688,6 +1693,8 @@ fn resolve_and_persist_graph(
         fresh_only,
         purpose,
         requested_chain_discriminant,
+        cache_root,
+        archive_transport,
     } = options;
     let public_config = match config_image {
         Some(image) => Some(image),
@@ -1774,13 +1781,16 @@ fn resolve_and_persist_graph(
     if let Some((_, profile)) = explicit_binding {
         select_compiler_chain_discriminant(profile, requested_chain_discriminant, true)?;
     }
-    let cache_root = platform_cache_root_v1().map_err(|error| {
-        Diagnostic::new(
-            ErrorCode::CacheCorrupt,
-            "platform Musubi resolver cache root is unavailable",
-        )
-        .with_context("reason", error.to_string())
-    })?;
+    let cache_root = match cache_root {
+        Some(root) => root.to_path_buf(),
+        None => platform_cache_root_v1().map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::CacheCorrupt,
+                "platform Musubi resolver cache root is unavailable",
+            )
+            .with_context("reason", error.to_string())
+        })?,
+    };
     let resolver_cache = ResolverIndexCacheV1::open(&cache_root).map_err(|error| {
         Diagnostic::new(
             ErrorCode::CacheCorrupt,
@@ -1846,8 +1856,15 @@ fn resolve_and_persist_graph(
         if let Some(expected) = expected_network_id {
             ensure_network_identity(expected, registry.network_id())?;
         }
-        let prepared_archive_fetch =
-            prepare_production_archive_transport_v1(config_image.path(), config_image.bytes());
+        let prepared_archive_fetch = match archive_transport {
+            Some(transport) => {
+                ensure_network_identity(registry.network_id(), transport.network_id())?;
+                Ok(transport.clone())
+            }
+            None => {
+                prepare_production_archive_transport_v1(config_image.path(), config_image.bytes())
+            }
+        };
         let platform_config_provenance = config_image.provenance();
         drop(config_image);
         let account_chain_discriminant = select_compiler_chain_discriminant(
@@ -2020,6 +2037,8 @@ fn run_fetch(explicit_manifest: Option<&Path>, args: &FetchArgs) -> CommandResul
         previous,
         None,
         WorkspaceResolutionOptionsV1 {
+            cache_root: None,
+            archive_transport: None,
             config_image: None,
             expected_network_id: None,
             mode: args.mode,
@@ -2166,6 +2185,9 @@ fn open_user_cache() -> Result<MusubiCache, Diagnostic> {
         Diagnostic::new(ErrorCode::Io, "platform Musubi cache root is unavailable")
             .with_context("reason", error.to_string())
     })?;
+    open_cache_at(&root)
+}
+fn open_cache_at(root: &Path) -> Result<MusubiCache, Diagnostic> {
     MusubiCache::open(root).map_err(|error| {
         let code = if matches!(
             &error,
@@ -2243,6 +2265,8 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
         previous,
         None,
         WorkspaceResolutionOptionsV1 {
+            cache_root: None,
+            archive_transport: None,
             config_image: None,
             expected_network_id: None,
             mode: args.mode,
@@ -2482,13 +2506,53 @@ fn package_diagnostic(error: &PackageError) -> Diagnostic {
     };
     Diagnostic::new(code, error.to_string())
 }
+/// Adapt explicit generated inputs to the sole existing publication command workflow.
+pub(crate) fn publish_generated(
+    context: &crate::publication_runtime::GeneratedPublicationContextV1,
+    request: &crate::generated_publication::GeneratedPublishRequest,
+) -> CommandOutput {
+    use crate::generated_publication::{Execution, GeneratedPublishAction};
+    let execution = Execution {
+        context,
+        state_root: &request.state_root,
+        cache_root: &request.cache_root,
+        archive_transport: &request.archive_transport,
+    };
+    let result = execution.validate().and_then(|()| {
+        let mut args = PublishArgs {
+            selection: SelectionArgs::default(),
+            mode: GraphModeArgs::default(),
+            network: NetworkArgs::default(),
+            detach: false,
+            resume: None,
+            recover: None,
+        };
+        match &request.action {
+            GeneratedPublishAction::Begin { package, detach } => {
+                args.selection.packages.extend(package.iter().cloned());
+                args.detach = *detach;
+            }
+            GeneratedPublishAction::Resume { operation_id } => args.resume = Some(*operation_id),
+            GeneratedPublishAction::Recover { operation_id } => args.recover = Some(*operation_id),
+        }
+        run_publish(Some(&request.manifest_path), &args, Some(execution))
+    });
+    match result {
+        Ok(success) => CommandOutput::success("publish", success.message, success.data),
+        Err(diagnostic) => CommandOutput::failure("publish", diagnostic),
+    }
+}
 #[allow(
     clippy::too_many_lines,
     reason = "publication setup is one security-sensitive validation and staging workflow"
 )]
-fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandResult {
+fn run_publish(
+    explicit_manifest: Option<&Path>,
+    args: &PublishArgs,
+    generated: Option<crate::generated_publication::Execution<'_>>,
+) -> CommandResult {
     if let Some(operation_id) = args.recover {
-        return recover_publication_sidecars(explicit_manifest, args, operation_id);
+        return recover_publication_sidecars(explicit_manifest, args, operation_id, generated);
     }
     if let Some(operation_id) = args.resume {
         if args.mode.effective_offline() {
@@ -2498,7 +2562,7 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
             )
             .with_context("operation_id", operation_id.to_string()));
         }
-        return resume_publication(explicit_manifest, args, operation_id);
+        return resume_publication(explicit_manifest, args, operation_id, generated);
     }
     if args.mode.effective_offline() {
         return Err(Diagnostic::new(
@@ -2506,6 +2570,10 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
             "publication requires authenticated seed ingress and finalized registry evidence",
         ));
     }
+    let generated_store = generated
+        .map(|execution| PublicationJournalStore::open_existing(execution.state_root))
+        .transpose()
+        .map_err(|error| publication_diagnostic(&error))?;
     let (workspace, selected_names) = load_selected_workspace(explicit_manifest, &args.selection)?;
     let [selector] = selected_names.as_slice() else {
         return Err(Diagnostic::new(
@@ -2517,13 +2585,25 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     };
     let lock_path = workspace.root().join(PUBLICATION_LOCK_PATH);
     let previous = read_optional_publication_lock(&workspace)?;
-    let config_image = args.network.workspace_image(Some(workspace.root()))?;
+    let config_image = if let Some(execution) = generated {
+        execution.validate()?;
+        crate::generated_publication::ensure_namespace(
+            execution.context,
+            &selector.namespace,
+            true,
+        )?;
+        execution.image()?
+    } else {
+        args.network.workspace_image(Some(workspace.root()))?
+    };
     let graph = resolve_and_persist_graph(
         &workspace,
         &selected_names,
         previous,
         None,
         WorkspaceResolutionOptionsV1 {
+            cache_root: generated.map(|execution| execution.cache_root),
+            archive_transport: generated.map(|execution| execution.archive_transport),
             config_image: Some(config_image),
             expected_network_id: None,
             mode: args.mode,
@@ -2559,7 +2639,10 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     let layout = package_layout_for_member(workspace.root(), member);
     let plan = plan_package(&layout, &manifest, &verification_lock)
         .map_err(|error| package_diagnostic(&error))?;
-    let cache = open_user_cache()?;
+    let cache = match generated {
+        Some(execution) => open_cache_at(execution.cache_root)?,
+        None => open_user_cache()?,
+    };
     ensure_graph_archives(&cache, &graph, args.mode)?;
     let interface_digest = validate_packaged_plan(
         &cache,
@@ -2607,9 +2690,15 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
                 "publication configuration provenance is unavailable",
             )
         })?;
-    let loaded =
-        load_bound_production_publication_runtime_v1(platform_config_provenance, validator)
-            .map_err(publication_configuration_diagnostic)?;
+    let loaded = match generated {
+        Some(execution) => crate::publication_runtime::load_bound_generated_publication_runtime_v1(
+            platform_config_provenance,
+            execution.context,
+            validator,
+        ),
+        None => load_bound_production_publication_runtime_v1(platform_config_provenance, validator),
+    }
+    .map_err(publication_configuration_diagnostic)?;
     let registry = loaded.registry_reader();
     let bindings = loaded.bindings().clone();
     let (signing, mut services, _) = loaded.into_parts();
@@ -2635,10 +2724,19 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     request
         .validate()
         .map_err(|error| publication_diagnostic(&error))?;
+    if let Some(execution) = generated {
+        execution.validate_journal(&request)?;
+    }
     let operation_id = request.operation_id();
-    let state_root = publication_state_root()?;
-    let store = PublicationJournalStore::open(&state_root)
-        .map_err(|error| publication_diagnostic(&error))?;
+    let state_root = match generated {
+        Some(execution) => execution.state_root.to_path_buf(),
+        None => publication_state_root()?,
+    };
+    let store = match generated_store {
+        Some(store) => store,
+        None => PublicationJournalStore::open(&state_root)
+            .map_err(|error| publication_diagnostic(&error))?,
+    };
     services
         .bind_publication_state_root(&state_root)
         .map_err(publication_configuration_diagnostic)?;
@@ -2707,6 +2805,7 @@ fn recover_publication_sidecars(
     explicit_manifest: Option<&Path>,
     args: &PublishArgs,
     operation_id: PublicationOperationIdV1,
+    generated: Option<crate::generated_publication::Execution<'_>>,
 ) -> CommandResult {
     if args.selection.workspace
         || !args.selection.packages.is_empty()
@@ -2719,8 +2818,18 @@ fn recover_publication_sidecars(
         .with_context("operation_id", operation_id.to_string())
         .with_help("remove `--workspace`, `--exclude`, and `-p/--package` from `--recover`"));
     }
-    let state_root = publication_state_root()?;
-    recover_publication_sidecars_at(explicit_manifest, args, operation_id, &state_root, None)
+    let state_root = match generated {
+        Some(execution) => execution.state_root.to_path_buf(),
+        None => publication_state_root()?,
+    };
+    recover_publication_sidecars_at(
+        explicit_manifest,
+        args,
+        operation_id,
+        &state_root,
+        None,
+        generated,
+    )
 }
 #[allow(
     clippy::too_many_lines,
@@ -2732,9 +2841,14 @@ fn recover_publication_sidecars_at(
     operation_id: PublicationOperationIdV1,
     state_root: &Path,
     injected_cache: Option<&MusubiCache>,
+    generated: Option<crate::generated_publication::Execution<'_>>,
 ) -> CommandResult {
-    let store = PublicationJournalStore::open(state_root)
-        .map_err(|error| publication_diagnostic(&error))?;
+    let store = if generated.is_some() {
+        PublicationJournalStore::open_existing(state_root)
+    } else {
+        PublicationJournalStore::open(state_root)
+    }
+    .map_err(|error| publication_diagnostic(&error))?;
     let journal = store.load(operation_id).map_err(|error| {
         publication_diagnostic(&error).with_context("operation_id", operation_id.to_string())
     })?;
@@ -2744,6 +2858,14 @@ fn recover_publication_sidecars_at(
         ))
         .with_context("operation_id", operation_id.to_string())
         .with_help("advanced publication operations must continue with `musubi publish --resume OPERATION_ID`"));
+    }
+    if let Some(execution) = generated {
+        execution.validate_journal(&journal.request)?;
+        crate::generated_publication::ensure_namespace(
+            execution.context,
+            &journal.request.namespace,
+            false,
+        )?;
     }
     let expected_release = &journal.request.publication.manifest.release;
     let selector = MusubiPackageSelectorV1 {
@@ -2798,7 +2920,10 @@ fn recover_publication_sidecars_at(
     let layout = package_layout_for_member(workspace.root(), member);
     let plan = plan_package(&layout, &manifest, &verification_lock)
         .map_err(|error| package_diagnostic(&error))?;
-    let config_image = args.network.workspace_image(Some(workspace.root()))?;
+    let config_image = match generated {
+        Some(execution) => execution.image()?,
+        None => args.network.workspace_image(Some(workspace.root()))?,
+    };
     let account_chain_discriminant = config_image
         .account_chain_discriminant()
         .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
@@ -2814,7 +2939,10 @@ fn recover_publication_sidecars_at(
     let cache = if let Some(cache) = injected_cache {
         cache
     } else {
-        platform_cache = open_user_cache()?;
+        platform_cache = match generated {
+            Some(execution) => open_cache_at(execution.cache_root)?,
+            None => open_user_cache()?,
+        };
         &platform_cache
     };
     // The immutable journal and authenticated cache are sufficient for local reconstruction.
@@ -2834,10 +2962,12 @@ fn recover_publication_sidecars_at(
             RegistryReadClientV1::load_from_config_bytes(config_image.path(), config_image.bytes())
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?,
         );
-        graph.prepared_archive_fetch = Some(prepare_production_archive_transport_v1(
-            config_image.path(),
-            config_image.bytes(),
-        ));
+        graph.prepared_archive_fetch = Some(match generated {
+            Some(execution) => Ok(execution.archive_transport.clone()),
+            None => {
+                prepare_production_archive_transport_v1(config_image.path(), config_image.bytes())
+            }
+        });
         ensure_graph_archives(cache, &graph, args.mode)?;
     }
     drop(config_image);
@@ -2890,18 +3020,43 @@ fn resume_publication(
     explicit_manifest: Option<&Path>,
     args: &PublishArgs,
     operation_id: PublicationOperationIdV1,
+    generated: Option<crate::generated_publication::Execution<'_>>,
 ) -> CommandResult {
-    let state_root = publication_state_root()?;
-    let store = PublicationJournalStore::open(&state_root)
-        .map_err(|error| publication_diagnostic(&error))?;
+    let state_root = match generated {
+        Some(execution) => execution.state_root.to_path_buf(),
+        None => publication_state_root()?,
+    };
+    let store = if generated.is_some() {
+        PublicationJournalStore::open_existing(&state_root)
+    } else {
+        PublicationJournalStore::open(&state_root)
+    }
+    .map_err(|error| publication_diagnostic(&error))?;
     let journal = store
         .load(operation_id)
         .map_err(|error| publication_diagnostic(&error))?;
-    let image = args.network.publication_image(explicit_manifest)?;
-    let loaded = load_bound_production_publication_runtime_v1(
-        &image.provenance(),
-        validate_resumable_publication_car,
-    )
+    let image = if let Some(execution) = generated {
+        execution.validate_journal(&journal.request)?;
+        crate::generated_publication::ensure_namespace(
+            execution.context,
+            &journal.request.namespace,
+            false,
+        )?;
+        execution.image()?
+    } else {
+        args.network.publication_image(explicit_manifest)?
+    };
+    let loaded = match generated {
+        Some(execution) => crate::publication_runtime::load_bound_generated_publication_runtime_v1(
+            &image.provenance(),
+            execution.context,
+            validate_resumable_publication_car,
+        ),
+        None => load_bound_production_publication_runtime_v1(
+            &image.provenance(),
+            validate_resumable_publication_car,
+        ),
+    }
     .map_err(publication_configuration_diagnostic)?;
     let reader = loaded.registry_reader();
     let (signer, mut services, _) = loaded.into_parts();
@@ -3871,6 +4026,8 @@ fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandRes
         previous_for_resolution,
         graph_update,
         WorkspaceResolutionOptionsV1 {
+            cache_root: None,
+            archive_transport: None,
             config_image: None,
             expected_network_id: None,
             mode: args.mode,

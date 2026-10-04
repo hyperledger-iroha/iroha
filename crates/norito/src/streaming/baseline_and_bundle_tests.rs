@@ -141,6 +141,57 @@ fn dump_baseline_streaming_snapshot() {
     println!("{snapshot_json}");
 }
 #[test]
+fn bundle_table_checksum_pins_v1_layout_and_restores_ambient_flags() {
+    let body = RansTablesBodyV1 {
+        seed: 9,
+        bundle_width: 2,
+        groups: vec![RansGroupTableV1 {
+            width_bits: 2,
+            group_size: 4,
+            precision_bits: 12,
+            frequencies: vec![1024; 4],
+            cumulative: vec![0, 1024, 2048, 3072, 4096],
+        }],
+    };
+    let fixed_checksum: [u8; 32] = {
+        let _flags = norito_core::DecodeFlagsGuard::enter(0);
+        Sha256::digest(to_bytes(&body).expect("fixed-width checksum frame")).into()
+    };
+    let compact_checksum: [u8; 32] = {
+        let _flags = norito_core::DecodeFlagsGuard::enter(norito_core::header_flags::COMPACT_LEN);
+        Sha256::digest(to_bytes(&body).expect("compact checksum frame")).into()
+    };
+    assert_ne!(fixed_checksum, compact_checksum);
+    let mut signed = SignedRansTablesV1 {
+        payload: RansTablesV1 {
+            version: 1,
+            generated_at: 0,
+            generator_commit: "checksum-layout-test".into(),
+            checksum_sha256: fixed_checksum,
+            body,
+        },
+        signature: None,
+    };
+    for flags in [0, norito_core::header_flags::COMPACT_LEN] {
+        let _ambient = norito_core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(
+            signed.payload.body.checksum_sha256().unwrap(),
+            fixed_checksum
+        );
+        assert_eq!(norito_core::effective_decode_flags(), Some(flags));
+        let tables = BundleAnsTables::from_signed_for_tests(&signed).unwrap();
+        assert_eq!(tables.checksum(), fixed_checksum);
+        assert_eq!(tables.max_width(), 2);
+        assert_eq!(norito_core::effective_decode_flags(), Some(flags));
+    }
+    signed.payload.checksum_sha256 = compact_checksum;
+    assert!(matches!(
+        BundleAnsTables::from_signed_for_tests(&signed),
+        Err(BundleTableError::ChecksumMismatch)
+    ));
+}
+
+#[test]
 fn bundle_tables_enforce_max_width() {
     let precision_bits = 12;
     let frequencies_2 = vec![1024u16; 4];
@@ -167,14 +218,7 @@ fn bundle_tables_enforce_max_width() {
             },
         ],
     };
-    let checksum = {
-        let _guard = norito_core::DecodeFlagsGuard::enter(0);
-        let bytes = to_bytes(&body).expect("encode tables");
-        let digest = Sha256::digest(bytes);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest);
-        out
-    };
+    let checksum = body.checksum_sha256().expect("compute V1 table checksum");
     let payload = RansTablesV1 {
         version: 1,
         generated_at: 0,

@@ -97,9 +97,12 @@ fn native_journal_index_capacity_refusal_keeps_original_release_and_unchanged_cu
     )
     .unwrap();
     cursor
-        .advance(&NativeFinalityJournal {
-            blocks: journal.blocks[..2].to_vec(),
-        })
+        .advance(
+            (&NativeFinalityJournal {
+                blocks: journal.blocks[..2].to_vec(),
+            })
+                .into(),
+        )
         .unwrap();
     let retained = cursor.tip().unwrap().block_hash();
     let credits = pool.reserved_bytes();
@@ -119,7 +122,7 @@ fn native_journal_index_capacity_refusal_keeps_original_release_and_unchanged_cu
         else {
             panic!("same original occupied pool");
         };
-        let error = cursor.advance(&journal).unwrap_err();
+        let error = cursor.advance((&journal).into()).unwrap_err();
         let NativeJournalError::Index(ChargedBufferError::Admission(AllocationRefusal::Capacity {
             requested_bytes,
             reserved_bytes,
@@ -144,7 +147,7 @@ fn native_journal_index_capacity_refusal_keeps_original_release_and_unchanged_cu
         assert_eq!(pool.reserved_bytes(), credits);
     }
     assert_eq!(
-        cursor.advance(&journal).unwrap().block_hash(),
+        cursor.advance((&journal).into()).unwrap().block_hash(),
         chain.committed(3).block_hash()
     );
     drop(cursor);

@@ -75,11 +75,22 @@ fn current_signed_genesis_admission_is_discoverable_and_keeps_expiry_and_replay_
     assert!(cache.admitted_record_by_provider(&provider, now).is_some());
     assert!(
         cache
+            .unverified_record_for_native_proof(&provider)
+            .is_some()
+    );
+    assert!(cache.unverified_record_for_native_proof(&[0; 32]).is_none());
+    assert!(
+        cache
             .admitted_record_by_provider(&provider, now + 60)
             .is_none()
     );
     cache.replay_checkpoint_poisoned = true;
     assert!(cache.admitted_record_by_provider(&provider, now).is_none());
+    assert!(
+        cache
+            .unverified_record_for_native_proof(&provider)
+            .is_none()
+    );
 }
 
 #[test]
@@ -139,6 +150,13 @@ fn live_finalized_revocation_fences_prepared_adverts_and_survives_registry_resta
         .unwrap();
     native.revoke();
     assert!(registry.entry(&provider).is_none());
+    assert!(cache.admitted_record_by_provider(&provider, now).is_none());
+    assert!(
+        cache
+            .unverified_record_for_native_proof(&provider)
+            .is_some(),
+        "the candidate accessor grants no authority and leaves revocation to the native proof owner"
+    );
     assert!(matches!(
         cache.commit_prepared(in_flight, now),
         Err(AdvertError::AdmissionMissing { .. })

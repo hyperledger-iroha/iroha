@@ -44,7 +44,9 @@ mod retained_payload;
 pub use buffer::{
     ChargedBuffer, ChargedBufferError, ChargedBufferFromChargeError, PrepaidBufferError,
 };
-pub use charged_shared::{ChargedShared, PrepaidSharedError, ReservedChargedShared};
+pub use charged_shared::{
+    ChargedShared, PrepaidSharedError, ReservedChargedShared, SharedFromChargeError,
+};
 pub use refund_batch::AllocationRefundBatch;
 pub use retained_payload::{RetainedPayload, RetainedPayloadError};
 

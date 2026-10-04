@@ -177,10 +177,11 @@ impl std::error::Error for MusubiArchiveRuntimeErrorV1 {}
 struct ProviderRuntimeV1 {
     provider: ProviderId,
     base_url: Url,
-    credential: ProviderCredentialV1,
     // Original intent only. Every local client/session additionally needs the native join.
     local_transport: Option<GeneratedLocalProviderTransportV1>,
     http: HttpClient,
+    // Drop transport graphs before the callback and any original allocation custody it holds.
+    credential: ProviderCredentialV1,
 }
 #[derive(Clone)]
 struct PreparedProviderRuntimeV1 {
@@ -251,13 +252,14 @@ struct GatewaySessionV1 {
 }
 /// Authenticated production `SoraFS` transport with bounded, pinned provider clients.
 pub struct AuthenticatedMusubiArchiveFetchClientV1 {
-    account_registry: Option<Arc<AccountRegistryV1>>,
     providers: BTreeMap<ProviderId, ProviderRuntimeV1>,
     network_id: NetworkId,
     client_id: String,
     request_timeout: Duration,
     prepared: BTreeMap<(ManifestDigest, ProviderId, ArchiveId), PreparedPlanV1>,
     stream_failure: Option<Arc<Mutex<Option<MusubiArchiveRuntimeErrorV1>>>>,
+    // Registry callback custody outlives every locally retained provider transport.
+    account_registry: Option<Arc<AccountRegistryV1>>,
 }
 impl fmt::Debug for AuthenticatedMusubiArchiveFetchClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1340,8 +1342,9 @@ fn stream_canonical_car(
 }
 struct GatewayPayloadReaderV1 {
     runtime: tokio::runtime::Runtime,
-    sessions: GatewaySessionFactoryV1,
     session: GatewaySessionV1,
+    // Active TLS/session graphs drop before the factory's final callback custody.
+    sessions: GatewaySessionFactoryV1,
     chunks: Vec<ChunkFetchSpec>,
     next_chunk: usize,
     current: Cursor<Vec<u8>>,

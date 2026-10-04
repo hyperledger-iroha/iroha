@@ -98,7 +98,6 @@ jobs:
           tags: docker.soramitsu.co.jp/iroha3/iroha:glibc-${{ steps.checkout_meta.outputs.sha }}
           labels: commit=${{ steps.checkout_meta.outputs.sha }}
           build-args: |
-            "IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}"
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
             "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
           context: .
@@ -125,12 +124,11 @@ jobs:
           tags: docker.soramitsu.co.jp/iroha3/iroha:profiling-${{ env.TAG }}-${{ steps.checkout_meta.outputs.sha }}
           labels: commit=${{ steps.checkout_meta.outputs.sha }}
           build-args: |
-            "IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}"
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
             "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
             "PROFILE=profiling"
             "RUSTFLAGS=-C force-frame-pointers=on"
-            "FEATURES=profiling,irohad/ivm-cuda"
+            "FEATURES=profiling"
             "CARGOFLAGS=-Z build-std"
           context: .
 
@@ -144,7 +142,6 @@ jobs:
           labels: commit=${{ steps.checkout_meta.outputs.sha }}
           file: Dockerfile.musl
           build-args: |
-            "IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}"
             "IROHA_MUSL_BUILDER_IMAGE=${{ env.IROHA_MUSL_BUILDER_IMAGE }}"
             "IROHA_MUSL_RUNTIME_IMAGE=${{ env.IROHA_MUSL_RUNTIME_IMAGE }}"
           context: .

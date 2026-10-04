@@ -25,6 +25,10 @@ use iroha_fs::PrivateDirectory;
 use iroha_model_base::peer::PeerId;
 use std::{collections::BTreeSet, fs::File, time::Instant};
 
+#[path = "service_authority/inventory.rs"]
+mod inventory;
+pub(super) use inventory::ServiceChildInventory;
+
 pub(super) enum NetworkPurpose {
     BuildRegistry,
     InitialReservePolicy,
@@ -171,6 +175,8 @@ impl ServiceAuthority {
         purpose: &'static str,
         create: bool,
     ) -> Result<Option<Self>> {
+        #[cfg(test)]
+        inventory::record_authority_open();
         let manifest = prepared.stream_token_authorities()?.ok_or_else(|| {
             invalid("managed native operation requires its original StreamTokenAuthorities profile")
         })?;
@@ -375,13 +381,18 @@ impl ServiceAuthority {
         Ok(config)
     }
 
-    pub(super) fn validate_profile(&self) -> Result<()> {
+    fn validate_operation_custody(&self) -> Result<()> {
         self.directory.revalidate()?;
         if iroha_fs::FileIdentity::of(&self.directory.open_read("operation.lock")?)?
             != iroha_fs::FileIdentity::of(&self._lock)?
         {
             return Err(invalid("managed native operation lock was replaced"));
         }
+        Ok(())
+    }
+
+    pub(super) fn validate_profile(&self) -> Result<()> {
+        self.validate_operation_custody()?;
         if self.prepared.stream_token_authorities()?.as_ref() != Some(&self.manifest) {
             return Err(invalid("original service authority profile changed"));
         }

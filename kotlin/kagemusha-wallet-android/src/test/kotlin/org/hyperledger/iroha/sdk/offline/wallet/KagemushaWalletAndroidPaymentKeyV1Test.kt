@@ -10,6 +10,7 @@ import java.security.InvalidKeyException
 import java.security.ProviderException
 import java.security.Signature
 import java.security.SignatureException
+import java.security.UnrecoverableKeyException
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -23,13 +24,7 @@ import org.junit.jupiter.api.Test
 class KagemushaWalletAndroidPaymentKeyV1Test {
     private val keyStore = TestKeyStoreV1()
     private val environment = TestEnvironmentV1(File("."))
-    private var intentState = KagemushaWalletAndroidIntentStateV1.DURABLE
-    private val gateCalls = ArrayList<ByteArray>()
-    private val paymentKey = KagemushaWalletAndroidPaymentKeyV1(keyStore, environment) { slot ->
-        gateCalls += slot.copyOf()
-        slot.fill(0)
-        intentState
-    }
+    private val paymentKey = KagemushaWalletAndroidPaymentKeyV1(keyStore, environment)
 
     private var nextSlot = 1
     private fun slot(): ByteArray = ByteArray(32) { (nextSlot + it).toByte() }.also { nextSlot += 1 }
@@ -49,53 +44,83 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         val slot = ByteArray(32) { (0xa0 + it).toByte() }
         val alias = alias(slot)
         assertEquals("kgm-w1-" + slot.joinToString("") { "%02x".format(it.toInt() and 0xff) }, alias)
-        assertEquals(alias, KagemushaWalletAndroidPlatformV1.paymentKeyAlias(slot))
         assertFailsWith<IllegalArgumentException> { alias(ByteArray(32)) }
         assertFailsWith<IllegalArgumentException> { alias(ByteArray(31) { 1 }) }
         assertFailsWith<IllegalArgumentException> { alias(ByteArray(33) { 1 }) }
     }
 
-    @Test fun `probe is absent only for a null getKey and present with the certificate key`() {
+    @Test fun `probe is absent only for a null getKey and present with the attested leaf key`() {
         val slot = slot()
         assertSame(KagemushaWalletAndroidKeyProbeV1.Absent, paymentKey.probe(slot))
         val entry = keyStore.seed(alias(slot))
         val present = assertIs<KagemushaWalletAndroidKeyProbeV1.Present>(paymentKey.probe(slot))
-        assertContentEquals(KagemushaP256Codec.uncompressedFromPublicKey(entry.pair.public), present.publicKeySec1())
+        assertContentEquals(testSec1V1(entry.pair.public), present.publicKeySec1())
         present.publicKeySec1().fill(0)
-        assertContentEquals(KagemushaP256Codec.uncompressedFromPublicKey(entry.pair.public), present.publicKeySec1())
+        assertContentEquals(testSec1V1(entry.pair.public), present.publicKeySec1())
     }
 
     @Test fun `every Keystore error is unavailable and never absence`() {
         val slot = slot()
-        keyStore.getKeyFailure = java.security.UnrecoverableKeyException("keystore2 SYSTEM_ERROR")
+        keyStore.getKeyFailure = UnrecoverableKeyException("keystore2 SYSTEM_ERROR")
         assertEquals(
             platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE),
             assertIs<KagemushaWalletAndroidKeyProbeV1.Unavailable>(paymentKey.probe(slot)).reason,
         )
-        keyStore.getKeyFailure = java.security.UnrecoverableKeyException("invalidated")
-            .apply { initCause(TestPermanentlyInvalidatedKeyV1()) }
+        // AOSP keystore2 engineGetKey rethrows KeyPermanentlyInvalidatedException as an
+        // UnrecoverableKeyException carrying only the message, so the probe cannot name it.
+        keyStore.getKeyFailure = UnrecoverableKeyException("Key permanently invalidated")
         assertEquals(
-            KagemushaWalletAndroidUnavailableV1.PERMANENTLY_INVALIDATED,
+            platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE),
             assertIs<KagemushaWalletAndroidKeyProbeV1.Unavailable>(paymentKey.probe(slot)).reason,
         )
         keyStore.getKeyFailure = OutOfMemoryError("binder buffer")
         assertIs<KagemushaWalletAndroidKeyProbeV1.Unavailable>(paymentKey.probe(slot))
         keyStore.getKeyFailure = null
-        keyStore.seed(alias(slot))
-        keyStore.nullCertificate = true
+        val entry = keyStore.seed(alias(slot))
+        keyStore.nullChain = true
         assertEquals(
             platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_CERTIFICATE),
             assertIs<KagemushaWalletAndroidKeyProbeV1.Unavailable>(paymentKey.probe(slot)).reason,
         )
-        keyStore.nullCertificate = false
-        keyStore.certificateFailure = IllegalStateException("certificate read failed")
+        keyStore.nullChain = false
+        keyStore.chainFailure = IllegalStateException("certificate read failed")
         assertIs<KagemushaWalletAndroidKeyProbeV1.Unavailable>(paymentKey.probe(slot))
-        keyStore.certificateFailure = null
+        keyStore.chainFailure = null
+        entry.chain = listOf(entry.chain!!.first())
+        assertEquals(
+            platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_CERTIFICATE),
+            assertIs<KagemushaWalletAndroidKeyProbeV1.Unavailable>(paymentKey.probe(slot)).reason,
+        )
+        // A chain without the attestation extension names no attested key.
+        val root = keyStore.seed("kgm-w1-other").chain!![1]
+        entry.chain = listOf(root, root)
+        assertEquals(
+            KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE,
+            assertIs<KagemushaWalletAndroidKeyProbeV1.Unavailable>(paymentKey.probe(slot)).reason,
+        )
         keyStore.getKeyResult = javax.crypto.spec.SecretKeySpec(ByteArray(16), "AES")
         assertEquals(
             KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE,
             assertIs<KagemushaWalletAndroidKeyProbeV1.Unavailable>(paymentKey.probe(slot)).reason,
         )
+    }
+
+    @Test fun `below API 31 nothing is absent, generated or deleted`() {
+        // Keystore1 getKey returns null when KeyStore.contains swallows a daemon error.
+        environment.apiLevel = 30
+        val unsupported = platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE_UNSUPPORTED)
+        val empty = slot()
+        assertEquals(unsupported, assertIs<KagemushaWalletAndroidKeyProbeV1.Unavailable>(paymentKey.probe(empty)).reason)
+        assertGenerationUnavailable(
+            unsupported,
+            paymentKey.generate(empty, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE),
+        )
+        assertEquals(unsupported, assertIs<KagemushaWalletAndroidRemoveV1.Uncertain>(paymentKey.delete(slot())).reason)
+        assertEquals(unsupported, assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.attestationChain(empty)).reason)
+        assertEquals(unsupported, assertIs<KagemushaWalletAndroidSignatureV1.Unavailable>(paymentKey.sign(empty, byteArrayOf(1))).reason)
+        assertTrue(keyStore.generated.isEmpty())
+        assertEquals(0, keyStore.getKeyCalls)
+        assertEquals(0, keyStore.deleteCalls)
     }
 
     @Test fun `a TEE key is generated with the exact non-authenticated spec and read back`() {
@@ -111,15 +136,29 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertFalse(spec.strongBox)
         assertEquals("secp256r1", spec.curve)
         assertEquals(KeyProperties.PURPOSE_SIGN, spec.purposes)
-        assertEquals(setOf(KeyProperties.DIGEST_SHA256), spec.digests)
-        assertFalse(spec.userAuthenticationRequired)
-        assertFalse(spec.unlockedDeviceRequired)
-        assertFalse(spec.userPresenceRequired)
-        assertFalse(spec.userConfirmationRequired)
-        assertEquals(null, spec.maxUsageCount)
+        assertEquals(listOf(KeyProperties.DIGEST_SHA256), spec.digests)
         val entry = keyStore.entries.getValue(alias(slot))
-        assertContentEquals(KagemushaP256Codec.uncompressedFromPublicKey(entry.pair.public), generated.publicKeySec1())
-        assertContentEquals(slot, gateCalls.single())
+        assertContentEquals(testSec1V1(entry.pair.public), generated.publicKeySec1())
+    }
+
+    @Test fun `the key spec reaches the platform builder only through the four permitted setters`() {
+        class Recording : KagemushaWalletAndroidKeyGenBuilderV1 {
+            val calls = ArrayList<String>()
+            override fun algorithmParameterSpec(curve: String) { calls += "curve:$curve" }
+            override fun digests(digests: List<String>) { calls += "digests:$digests" }
+            override fun attestationChallenge(challenge: ByteArray) { calls += "challenge:${challenge.toList()}" }
+            override fun strongBoxBacked() { calls += "strongbox" }
+        }
+        val alias = alias(slot())
+        val tee = Recording().also { kagemushaWalletAndroidConfigureKeyGenV1(KagemushaWalletAndroidKeySpecV1(alias, challenge, false), it) }
+        assertEquals(
+            listOf("curve:secp256r1", "digests:[SHA-256]", "challenge:${challenge.toList()}"),
+            tee.calls,
+        )
+        val strong = Recording().also { kagemushaWalletAndroidConfigureKeyGenV1(KagemushaWalletAndroidKeySpecV1(alias, challenge, true), it) }
+        assertEquals(tee.calls + "strongbox", strong.calls)
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletAndroidKeySpecV1("other", challenge, false) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletAndroidKeySpecV1(alias, ByteArray(31), false) }
     }
 
     @Test fun `StrongBox is used when present and the secure-element profile never falls back`() {
@@ -196,46 +235,27 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertSame(original, keyStore.entries.getValue(alias(slot)))
     }
 
-    @Test fun `generation requires a durable intent for the slot`() {
+    @Test fun `generation is refused unless the backup set is provably empty`() {
         val slot = slot()
-        for ((state, code) in listOf(
-            KagemushaWalletAndroidIntentStateV1.ABSENT to KagemushaWalletAndroidUnavailableV1.PLATFORM_INTENT_NOT_DURABLE,
-            KagemushaWalletAndroidIntentStateV1.UNAVAILABLE to KagemushaWalletAndroidUnavailableV1.PLATFORM_INTENT_UNAVAILABLE,
-        )) {
-            intentState = state
-            assertGenerationUnavailable(
-                platformCode(code),
-                paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE),
-            )
-        }
-        val throwing = KagemushaWalletAndroidPaymentKeyV1(keyStore, environment) { throw IllegalStateException("bridge") }
-        assertGenerationUnavailable(
-            platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_INTENT_UNAVAILABLE),
-            throwing.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE),
-        )
+        val refused = platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_BACKUP_ENABLED)
+        environment.flags = ApplicationInfo.FLAG_ALLOW_BACKUP
+        assertGenerationUnavailable(refused, paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE))
+        environment.flags = 0
+        environment.agent = "com.example.BackupAgent"
+        assertGenerationUnavailable(refused, paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE))
+        environment.agent = null
+        val shipped = environment.dataExtraction
+        environment.dataExtraction = KagemushaWalletAndroidXmlElementV1(shipped.name, shipped.attributes, shipped.children.take(1))
+        assertGenerationUnavailable(refused, paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE))
+        environment.dataExtraction = shipped
+        environment.rulesFailure = IllegalStateException("Resources\$NotFoundException")
+        assertGenerationUnavailable(refused, paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE))
         assertTrue(keyStore.generated.isEmpty())
-        gateCalls.forEach { assertContentEquals(slot, it) }
-        intentState = KagemushaWalletAndroidIntentStateV1.DURABLE
+        assertEquals(0, keyStore.getKeyCalls)
+        environment.rulesFailure = null
         assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(
             paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE),
         )
-    }
-
-    @Test fun `generation is refused while the application allows backup`() {
-        val slot = slot()
-        environment.flags = ApplicationInfo.FLAG_ALLOW_BACKUP
-        assertGenerationUnavailable(
-            platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_BACKUP_ENABLED),
-            paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE),
-        )
-        environment.flags = 0
-        environment.agent = "com.example.BackupAgent"
-        assertGenerationUnavailable(
-            platformCode(KagemushaWalletAndroidUnavailableV1.PLATFORM_BACKUP_ENABLED),
-            paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE),
-        )
-        assertTrue(keyStore.generated.isEmpty())
-        assertTrue(gateCalls.isEmpty())
     }
 
     @Test fun `a failed generation retries only after another definitive absence`() {
@@ -252,7 +272,14 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertEquals(2, keyStore.generated.size)
     }
 
-    @Test fun `a generated key that differs from the request is unusable and stays in place`() {
+    private fun assertUnusableAndKept(profile: KagemushaWalletAndroidKeyProfileV1) {
+        val slot = slot()
+        assertGenerationUnavailable(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE, paymentKey.generate(slot, challenge, profile))
+        assertTrue(keyStore.entries.containsKey(alias(slot)))
+        assertSame(KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent, paymentKey.generate(slot, challenge, profile))
+    }
+
+    @Test fun `a generated key whose KeyInfo differs from the request is unusable and stays in place`() {
         val edits: List<(KagemushaWalletAndroidKeyFactsV1) -> KagemushaWalletAndroidKeyFactsV1> = listOf(
             { it.copy(userAuthenticationRequired = true) },
             { it.copy(userPresenceRequired = true) },
@@ -266,48 +293,58 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
             { it.copy(keySize = 384) },
         )
         for (edit in edits) {
-            val slot = slot()
             keyStore.factsEdit = edit
-            assertGenerationUnavailable(
-                KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE,
-                paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT),
-            )
-            assertTrue(keyStore.entries.containsKey(alias(slot)))
-            assertSame(
-                KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent,
-                paymentKey.generate(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT),
-            )
+            assertUnusableAndKept(KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT)
         }
-        keyStore.factsEdit = { it }
-        val attested = slot()
-        keyStore.attestedChallenge = ByteArray(32) { 7 }
-        assertGenerationUnavailable(
-            KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE,
-            paymentKey.generate(attested, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT),
-        )
-        assertTrue(keyStore.entries.containsKey(alias(attested)))
     }
 
-    @Test fun `key facts follow the API level of the readback`() {
-        val modern = keyStore.facts(strongBox = true)
-        assertTrue(kagemushaWalletAndroidFactsMatchV1(modern, KagemushaWalletAndroidSecurityLevelV1.STRONGBOX, exportable = false))
-        assertFalse(kagemushaWalletAndroidFactsMatchV1(modern, KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT, exportable = false))
-        assertFalse(kagemushaWalletAndroidFactsMatchV1(modern, KagemushaWalletAndroidSecurityLevelV1.STRONGBOX, exportable = true))
-        keyStore.apiLevel = 30
-        val legacy = keyStore.facts(strongBox = true)
-        assertTrue(kagemushaWalletAndroidFactsMatchV1(legacy, KagemushaWalletAndroidSecurityLevelV1.STRONGBOX, exportable = false))
-        assertTrue(kagemushaWalletAndroidFactsMatchV1(legacy, KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT, exportable = false))
-        assertFalse(kagemushaWalletAndroidFactsMatchV1(legacy.copy(securityLevel = 2), KagemushaWalletAndroidSecurityLevelV1.STRONGBOX, exportable = false))
+    @Test fun `a generated key whose signed attestation differs from the request is unusable and stays in place`() {
+        val edits: List<(TestKeyDescriptionV1) -> TestKeyDescriptionV1> = listOf(
+            // Software attestation and Keymaster levels.
+            { it.copy(attestationLevel = 0, keymasterLevel = 0) },
+            // Attested TEE while StrongBox was planned (and KeyInfo reports StrongBox).
+            { it.copy(attestationLevel = 1, keymasterLevel = 1) },
+            // Attestation level differs from the Keymaster level.
+            { it.copy(attestationLevel = 2, keymasterLevel = 1) },
+            // A usage-count limit (tag 405), the only one older readbacks cannot show.
+            { it.copy(hardware = it.hardware + (405 to TestDerV1.integer(1))) },
+            // PURPOSE enforced in software, not by the secure hardware.
+            { it.copy(software = mapOf(1 to it.hardware.getValue(1)), hardware = it.hardware - 1) },
+            // ORIGIN imported, not generated.
+            { it.copy(hardware = it.hardware + (702 to TestDerV1.integer(2))) },
+            // Wrong curve.
+            { it.copy(hardware = it.hardware + (10 to TestDerV1.integer(2))) },
+        )
+        for (edit in edits) {
+            keyStore.descriptionEdit = edit
+            assertUnusableAndKept(KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT)
+        }
+        keyStore.descriptionEdit = { it }
+        keyStore.attestedChallenge = ByteArray(32) { 7 }
+        assertUnusableAndKept(KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT)
+        keyStore.attestedChallenge = null
+        assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(
+            paymentKey.generate(slot(), challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT),
+        )
+    }
+
+    @Test fun `key facts must report exactly the planned hardware`() {
+        val strongBox = keyStore.facts(strongBox = true)
+        assertTrue(kagemushaWalletAndroidFactsMatchV1(strongBox, KagemushaWalletAndroidSecurityLevelV1.STRONGBOX, exportable = false))
+        assertFalse(kagemushaWalletAndroidFactsMatchV1(strongBox, KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT, exportable = false))
+        assertFalse(kagemushaWalletAndroidFactsMatchV1(strongBox, KagemushaWalletAndroidSecurityLevelV1.STRONGBOX, exportable = true))
+        val tee = keyStore.facts(strongBox = false)
+        assertTrue(kagemushaWalletAndroidFactsMatchV1(tee, KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT, exportable = false))
+        assertFalse(kagemushaWalletAndroidFactsMatchV1(tee.copy(securityLevel = 0), KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT, exportable = false))
     }
 
     @Test fun `the hardware plan never selects the TEE for the secure-element profile`() {
         val profiles = KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT to KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE
-        assertEquals(KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_ONLY, kagemushaWalletAndroidHardwarePlanV1(profiles.first, 28, true))
-        assertEquals(KagemushaWalletAndroidHardwarePlanV1.REFUSE, kagemushaWalletAndroidHardwarePlanV1(profiles.first, 28, false))
+        assertEquals(KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_ONLY, kagemushaWalletAndroidHardwarePlanV1(profiles.first, 31, true))
+        assertEquals(KagemushaWalletAndroidHardwarePlanV1.REFUSE, kagemushaWalletAndroidHardwarePlanV1(profiles.first, 31, false))
         assertEquals(KagemushaWalletAndroidHardwarePlanV1.REFUSE, kagemushaWalletAndroidHardwarePlanV1(profiles.first, 27, true))
-        assertEquals(KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_THEN_TEE, kagemushaWalletAndroidHardwarePlanV1(profiles.second, 28, true))
-        assertEquals(KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY, kagemushaWalletAndroidHardwarePlanV1(profiles.second, 28, false))
-        assertEquals(KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY, kagemushaWalletAndroidHardwarePlanV1(profiles.second, 24, true))
+        assertEquals(KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_THEN_TEE, kagemushaWalletAndroidHardwarePlanV1(profiles.second, 31, true))
+        assertEquals(KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY, kagemushaWalletAndroidHardwarePlanV1(profiles.second, 31, false))
         assertEquals(KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT, KagemushaWalletAndroidKeyProfileV1.fromTag(1))
         assertEquals(KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE, KagemushaWalletAndroidKeyProfileV1.fromTag(2))
         assertEquals(null, KagemushaWalletAndroidKeyProfileV1.fromTag(0))
@@ -324,7 +361,7 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
             verify(der)
         })
         val raw = KagemushaP256Codec.rawLowSFromStrictDer(der)
-        assertTrue(KagemushaP256Codec.verifyRawLowS(KagemushaP256Codec.uncompressedFromPublicKey(entry.pair.public), preimage, raw))
+        assertTrue(KagemushaP256Codec.verifyRawLowS(testSec1V1(entry.pair.public), preimage, raw))
         assertFailsWith<IllegalArgumentException> { paymentKey.sign(slot, ByteArray(0)) }
     }
 
@@ -336,6 +373,7 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         )
         val entry = keyStore.seed(alias(slot))
         val cases = listOf(
+            // Signature.initSign throws KeyPermanentlyInvalidatedException itself.
             TestPermanentlyInvalidatedKeyV1() to KagemushaWalletAndroidUnavailableV1.PERMANENTLY_INVALIDATED,
             InvalidKeyException("key rejected") to KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE,
             SignatureException("operation failed") to KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE,
@@ -398,8 +436,8 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
 
     private fun KagemushaWalletAndroidKeyFactsV1.copy(
         insideSecureHardware: Boolean = this.insideSecureHardware,
-        securityLevel: Int? = this.securityLevel,
-        remainingUsageCount: Int? = this.remainingUsageCount,
+        securityLevel: Int = this.securityLevel,
+        remainingUsageCount: Int = this.remainingUsageCount,
         origin: Int = this.origin,
         purposes: Int = this.purposes,
         digests: Set<String> = this.digests,
@@ -408,7 +446,7 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         userPresenceRequired: Boolean = this.userPresenceRequired,
         userConfirmationRequired: Boolean = this.userConfirmationRequired,
     ) = KagemushaWalletAndroidKeyFactsV1(
-        apiLevel, insideSecureHardware, securityLevel, remainingUsageCount, origin, purposes, digests, keySize,
+        insideSecureHardware, securityLevel, remainingUsageCount, origin, purposes, digests, keySize,
         userAuthenticationRequired, userPresenceRequired, userConfirmationRequired,
     )
 }

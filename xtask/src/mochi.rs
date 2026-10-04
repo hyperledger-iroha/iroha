@@ -1,10 +1,7 @@
 //! Build and inspect a complete native developer runtime bundle.
 
 use crate::workspace_root;
-use iroha_deploy::{
-    bootstrap::InstalledNetworkProfiles,
-    managed::{NativeBundleLayout, macos_info_plist},
-};
+use iroha_deploy::managed::{NativeBundleLayout, macos_info_plist};
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -18,6 +15,9 @@ use std::{
 };
 use walkdir::WalkDir;
 mod developer_smoke;
+mod network_profiles;
+#[cfg(test)]
+use iroha_deploy::bootstrap::InstalledNetworkProfiles;
 pub(crate) mod latency;
 const MOCHI_UI_MANIFEST_REL: &str = "mochi/mochi-ui-egui/Cargo.toml";
 const MOCHI_BIN_NAME: &str = "mochi";
@@ -32,6 +32,8 @@ pub(crate) struct MochiBundleResult {
     pub bundle_root: PathBuf,
     pub manifest_path: PathBuf,
     pub archive_path: Option<PathBuf>,
+    archive_sha256: Option<String>,
+    network_profiles: Option<network_profiles::Selection>,
 }
 pub(crate) fn bundle_mochi(
     output_root: &Path,
@@ -40,9 +42,7 @@ pub(crate) fn bundle_mochi(
     network_profiles: Option<&Path>,
 ) -> Result<MochiBundleResult, Box<dyn Error>> {
     validate_bundle_profile(profile)?;
-    // Independently supplied installation authority is validated before a build or any bundle
-    // replacement. No queried network can supply a profile, and absent input installs none.
-    let network_profiles = load_network_profiles(network_profiles)?;
+    let network_profiles = network_profiles::select(&workspace_root(), profile, network_profiles)?;
     build_runtime(profile)?;
     if !output_root.exists() {
         fs::create_dir_all(output_root)?;
@@ -60,7 +60,9 @@ pub(crate) fn bundle_mochi(
         &bundle_root,
     )?;
     stage_application_metadata(&bundle_root)?;
-    stage_network_profiles(network_profiles.as_ref(), &bundle_root)?;
+    if let Some(profiles) = &network_profiles {
+        profiles.stage(&bundle_root)?;
+    }
     copy_into_bundle("LICENSE", &bundle_root.join("LICENSE"))?;
     copy_into_bundle(
         "mochi/BUNDLE_README.md",
@@ -76,6 +78,7 @@ pub(crate) fn bundle_mochi(
     } else {
         None
     };
+    let archive_sha256 = archive_path.as_deref().map(archive_digest).transpose()?;
     Ok(MochiBundleResult {
         target: host,
         profile: profile.to_owned(),
@@ -84,7 +87,17 @@ pub(crate) fn bundle_mochi(
         bundle_root,
         manifest_path,
         archive_path,
+        archive_sha256,
+        network_profiles,
     })
+}
+
+/// Validate the exact release/development profile input before packaging effects.
+pub(crate) fn validate_network_profile_input(
+    profile: &str,
+    supplied: Option<&Path>,
+) -> Result<(), &'static str> {
+    network_profiles::validate_input(profile, supplied)
 }
 
 /// Refuse the workspace's explicitly non-packaging profile before doing any work.
@@ -97,13 +110,11 @@ pub(crate) fn validate_bundle_profile(profile: &str) -> Result<(), &'static str>
     Ok(())
 }
 
+#[cfg(test)]
 fn load_network_profiles(
     source: Option<&Path>,
-) -> Result<Option<InstalledNetworkProfiles>, Box<dyn Error>> {
-    source
-        .map(InstalledNetworkProfiles::load)
-        .transpose()
-        .map_err(Into::into)
+) -> Result<Option<network_profiles::Selection>, Box<dyn Error>> {
+    network_profiles::select(&workspace_root(), "debug", source)
 }
 
 fn stage_application_metadata(bundle_root: &Path) -> Result<(), Box<dyn Error>> {
@@ -124,19 +135,25 @@ fn stage_application_metadata(bundle_root: &Path) -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
+#[cfg(test)]
 fn stage_network_profiles(
     profiles: Option<&InstalledNetworkProfiles>,
     bundle_root: &Path,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(profiles) = profiles {
-        let bytes = profiles.encode_installation()?;
-        let path = NativeBundleLayout::current().profiles_path(bundle_root);
-        fs::create_dir_all(path.parent().ok_or("profiles have no parent")?)?;
-        fs::write(path, bytes)?;
+        network_profiles::development(profiles)?.stage(bundle_root)?;
     }
     Ok(())
 }
+
 pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn Error>> {
+    verify_bundle_profiles(result)?;
+    if let Some(profiles) = &result.network_profiles {
+        let kagami = NativeBundleLayout::current().executable(&result.bundle_root, "kagami");
+        let mut probe = developer_smoke::Harness::new(&kagami)?;
+        profiles.require_cli_names(&json::to_vec(&probe.network_names()?)?)?;
+        verify_bundle_profiles(result)?;
+    }
     let mochi_bin = NativeBundleLayout::current().executable(&result.bundle_root, "mochi");
     if !mochi_bin.exists() {
         return Err(format!("missing mochi binary at {}", mochi_bin.display()).into());
@@ -165,6 +182,26 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
         )
     }
 }
+fn verify_bundle_profiles(result: &MochiBundleResult) -> Result<(), Box<dyn Error>> {
+    match (&result.archive_path, &result.archive_sha256) {
+        (Some(path), Some(expected)) if archive_digest(path)? == *expected => {}
+        (None, None) => {}
+        _ => return Err("bundle archive differs from original packaging selection".into()),
+    }
+    match &result.network_profiles {
+        Some(profiles) => profiles.verify_installed(&result.bundle_root),
+        None if result.profile == "release" => {
+            Err("release bundle has no retained Taira profile selection".into())
+        }
+        None => match fs::symlink_metadata(
+            NativeBundleLayout::current().profiles_path(&result.bundle_root),
+        ) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err("unexpected network profile in profile-free development bundle".into()),
+        },
+    }
+}
+
 fn validate_mochi_help_output(stdout: &str) -> Result<(), String> {
     if !stdout.contains(MOCHI_HELP_HEADER) {
         return Err(format!("missing `{MOCHI_HELP_HEADER}`"));
@@ -176,6 +213,7 @@ pub(crate) fn update_bundle_matrix(
     matrix_path: &Path,
     smoke_passed: bool,
 ) -> Result<(), Box<dyn Error>> {
+    verify_bundle_profiles(result)?;
     if let Some(parent) = matrix_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -243,8 +281,26 @@ pub(crate) fn update_bundle_matrix(
             );
         }
     }
+    if let Some(digest) = &result.archive_sha256 {
+        entry.insert("archive_sha256".into(), Value::from(digest.clone()));
+    }
     entry.insert("generated_unix_ms".into(), Value::from(timestamp));
     entry.insert("smoke_passed".into(), Value::from(smoke_passed));
+    entry.insert(
+        "network_profiles".into(),
+        result
+            .network_profiles
+            .as_ref()
+            .map_or(Value::Null, network_profiles::Selection::provenance),
+    );
+    entry.insert(
+        "qualification".into(),
+        Value::from("local_native_diagnostic"),
+    );
+    entry.insert(
+        "official_taira_attachment_qualified".into(),
+        Value::from(false),
+    );
     entries.push(Value::Object(entry));
     root_map.insert("entries".into(), Value::Array(entries));
     let mut text = json::to_string_pretty(&Value::Object(root_map))?;
@@ -256,6 +312,7 @@ pub(crate) fn stage_bundle(
     result: &MochiBundleResult,
     stage_root: &Path,
 ) -> Result<(), Box<dyn Error>> {
+    verify_bundle_profiles(result)?;
     fs::create_dir_all(stage_root)?;
     let staged_bundle_root = stage_root.join(&result.bundle_name);
     if staged_bundle_root.starts_with(&result.bundle_root)
@@ -291,8 +348,28 @@ pub(crate) fn stage_bundle(
             .into());
         }
     }
+    verify_bundle_profiles(result)?;
+    if let Some(profiles) = &result.network_profiles {
+        profiles.verify_installed(&staged_bundle_root)?;
+    }
+    if let (Some(original), Some(expected)) = (&result.archive_path, &result.archive_sha256) {
+        let staged = stage_root.join(original.file_name().ok_or("archive filename absent")?);
+        if archive_digest(&staged)? != *expected {
+            return Err("staged archive differs from original packaging selection".into());
+        }
+    }
     Ok(())
 }
+// Stream the existing bounded artifact hash owner; never allocate an entire release archive.
+fn archive_digest(path: &Path) -> Result<String, Box<dyn Error>> {
+    if !fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err("bundle archive must be a direct regular file".into());
+    }
+    let (digest, _) =
+        iroha_crypto::sha256_reader_bounded(fs::File::open(path)?, 32 * 1024 * 1024 * 1024)?;
+    Ok(hex::encode(digest))
+}
+
 fn copy_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn Error>> {
     for entry in WalkDir::new(source).follow_root_links(false) {
         let entry = entry?;
@@ -336,6 +413,7 @@ fn runtime_build_args(profile: &str) -> Vec<OsString> {
     }
     args.extend([
         OsString::from("--locked"),
+        OsString::from("--message-format=json-render-diagnostics"),
         OsString::from("-p"),
         OsString::from("mochi-ui"),
         OsString::from("-p"),
@@ -599,6 +677,18 @@ mod tests {
     fn runtime_build_is_locked_and_includes_every_runtime_package() {
         let args = runtime_build_args("debug");
         assert!(args.contains(&OsString::from("--locked")));
+        assert_eq!(
+            args.iter()
+                .filter(|arg| *arg == "--message-format=json-render-diagnostics")
+                .count(),
+            1
+        );
+        for binary in RUNTIME_BINARIES {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == [OsString::from("--bin"), OsString::from(binary)])
+            );
+        }
         for package in ["mochi-ui", "iroha_kagami", "irohad"] {
             assert!(
                 args.windows(2)
@@ -778,7 +868,7 @@ mod tests {
             .unwrap();
         let bundle = root.path().join("bundle");
         fs::create_dir_all(NativeBundleLayout::current().runtime_directory(&bundle)).unwrap();
-        super::stage_network_profiles(Some(&loaded), &bundle).unwrap();
+        loaded.stage(&bundle).unwrap();
         assert_eq!(
             fs::read(NativeBundleLayout::current().profiles_path(&bundle)).unwrap(),
             bytes
@@ -802,7 +892,7 @@ mod tests {
             entry["sha256"].as_str(),
             Some(super::sha256_hex(&bytes).as_str())
         );
-        assert!(loaded.select("taira").is_err());
+        assert!(loaded.require_cli_names(br#"["taira"]"#).is_err());
     }
     #[test]
     fn missing_profile_option_installs_no_authority_and_invalid_input_is_rejected() {

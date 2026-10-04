@@ -582,3 +582,291 @@ fn original_ownership_obeys_inherited_allocation_refusal() {
         .is_ok()
     );
 }
+
+fn publication_selection(identity: &Identity, port: u16) -> GeneratedLocalPublicationTransportV1 {
+    // This public constructor selects transport intent only; no native proof is fabricated.
+    let provider_port = if port == 8443 { 8444 } else { 8443 };
+    GeneratedLocalPublicationTransportV1::select(
+        network(),
+        "component",
+        provider(),
+        &owner(),
+        &material(identity, provider_port),
+        port,
+    )
+    .unwrap()
+}
+fn publication_post(
+    selected: &GeneratedLocalPublicationHttpClientV1,
+    route: &str,
+) -> Result<(u16, Vec<u8>), GeneratedLocalPublicationTransportErrorV1> {
+    let request = reqwest::blocking::Request::new(
+        reqwest::Method::POST,
+        selected.selection().base_url().join(route).unwrap(),
+    );
+    let response = selected.execute(request)?;
+    let status = response.status().as_u16();
+    let bytes = response
+        .bytes()
+        .map_err(|_| GeneratedLocalPublicationTransportErrorV1)?;
+    Ok((status, bytes.to_vec()))
+}
+#[test]
+fn publication_selection_is_separate_bounded_original_intent() {
+    let identity = Identity::new(&host(), false);
+    let original = material(&identity, 8443);
+    let select = |port| {
+        GeneratedLocalPublicationTransportV1::select(
+            network(),
+            "component",
+            provider(),
+            &owner(),
+            &original,
+            port,
+        )
+    };
+    assert!(select(0).is_err());
+    assert!(select(8443).is_err());
+    let selection = select(9443).unwrap();
+    assert_eq!(selection.network_id(), network());
+    assert_eq!(selection.chain_id(), "component");
+    assert_eq!(selection.provider_id(), provider());
+    assert_eq!(
+        selection.base_url().as_str(),
+        format!("https://{}:9443/", host())
+    );
+    assert!(!format!("{selection:?}").contains(&host()));
+    assert!(selection.blocking_client(Duration::ZERO).is_err());
+    let client = selection.blocking_client(WAIT).unwrap();
+    assert!(!format!("{client:?}").contains(&host()));
+    assert_eq!(client.selection().base_url(), selection.base_url());
+    let mut malformed = original.clone();
+    malformed.proposal.endpoints[0]
+        .attestation
+        .leaf_certificate
+        .resize(CERT_MAX + 1, 1);
+    assert!(
+        GeneratedLocalPublicationTransportV1::select(
+            network(),
+            "component",
+            provider(),
+            &owner(),
+            &malformed,
+            9443
+        )
+        .is_err()
+    );
+    let limits = norito::DecodeLimits::new(8 * 1024, 8 * 1024, 8 * 1024, 1, 48);
+    assert!(norito::core::with_decode_limits_scope(limits, || select(9443)).is_err());
+}
+#[test]
+fn publication_guard_refuses_foreign_destinations_before_any_connection() {
+    let identity = Identity::new(&host(), false);
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let selection = publication_selection(&identity, listener.local_addr().unwrap().port());
+    let client = selection.blocking_client(WAIT).unwrap();
+    selection.validate_base_url(selection.base_url()).unwrap();
+    for raw in [
+        "https://other.localhost/".to_owned(),
+        format!("https://{}:8443/", host()),
+        format!("{}private/", selection.base_url()),
+        format!("{}?changed", selection.base_url()),
+        format!("{}#changed", selection.base_url()),
+    ] {
+        assert!(
+            selection
+                .validate_base_url(&Url::parse(&raw).unwrap())
+                .is_err()
+        );
+    }
+    for raw in [
+        "https://other.localhost/v1/musubi/publication/seed-ingress".to_owned(),
+        format!("https://{}:8443/v1/musubi/publication/seed-ingress", host()),
+        format!("{}v1/sorafs/stream-token", selection.base_url()),
+        format!("{}v1/musubi/publication/", selection.base_url()),
+        format!(
+            "{}v1/musubi/publication/seed-ingress?q=1",
+            selection.base_url()
+        ),
+        format!(
+            "{}v1/musubi/publication/seed-ingress#fragment",
+            selection.base_url()
+        ),
+        format!(
+            "https://user@{}:{}/v1/musubi/publication/seed-ingress",
+            host(),
+            listener.local_addr().unwrap().port()
+        ),
+    ] {
+        assert!(
+            client
+                .execute(reqwest::blocking::Request::new(
+                    reqwest::Method::POST,
+                    Url::parse(&raw).unwrap()
+                ))
+                .is_err()
+        );
+    }
+    let endpoint = selection
+        .base_url()
+        .join("v1/musubi/publication/seed-ingress")
+        .unwrap();
+    assert!(
+        client
+            .execute(reqwest::blocking::Request::new(
+                reqwest::Method::GET,
+                endpoint.clone()
+            ))
+            .is_err()
+    );
+    let mut request = reqwest::blocking::Request::new(reqwest::Method::POST, endpoint);
+    request.headers_mut().insert(
+        reqwest::header::HOST,
+        reqwest::header::HeaderValue::from_static("other.localhost"),
+    );
+    assert!(client.execute(request).is_err());
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+}
+#[test]
+fn publication_client_uses_original_tls_for_all_three_routes() {
+    let identity = Identity::new(&host(), false);
+    let server = Server::start(
+        &identity,
+        3,
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+    );
+    let selection = publication_selection(&identity, server.port);
+    let client = selection.blocking_client(WAIT).unwrap();
+    for route in ["seed-ingress", "storage-coordinate", "provider-readback"] {
+        assert_eq!(
+            publication_post(&client, &format!("v1/musubi/publication/{route}")).unwrap(),
+            (200, b"ok".to_vec())
+        );
+    }
+    let requests = server.finish();
+    assert_eq!(requests.len(), 3);
+    for (name, head) in requests {
+        assert_eq!(name, host());
+        assert!(head.starts_with("POST /v1/musubi/publication/"));
+        assert!(head.to_ascii_lowercase().contains(&format!(
+            "host: {}:{}",
+            host(),
+            selection.base_url().port_or_known_default().unwrap()
+        )));
+        assert!(!head.to_ascii_lowercase().contains("authorization:"));
+        assert!(!head.to_ascii_lowercase().contains("x-sorafs-stream-token:"));
+    }
+}
+#[test]
+fn publication_tls_rejects_wrong_root_name_expiry_and_same_root_leaf_substitution() {
+    for (name, expired, wrong_ca, substitute_leaf) in [
+        (host(), false, true, false),
+        ("other.localhost".into(), false, false, false),
+        (host(), true, false, false),
+        (host(), false, false, true),
+    ] {
+        let (original, substitute) = Identity::pair(&name, expired);
+        let server_identity = if substitute_leaf {
+            &substitute
+        } else {
+            &original
+        };
+        let server = Server::start(
+            server_identity,
+            1,
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        let other_root = Identity::new(&host(), false);
+        let mut original_material =
+            material(&original, if server.port == 8443 { 8444 } else { 8443 });
+        if wrong_ca {
+            // The exact served leaf is retained, isolating normal CA verification from pinning.
+            original_material.proposal.endpoints[0]
+                .attestation
+                .intermediate_certificates[0] = other_root.root.clone();
+        }
+        let selection = GeneratedLocalPublicationTransportV1::select(
+            network(),
+            "component",
+            provider(),
+            &owner(),
+            &original_material,
+            server.port,
+        )
+        .unwrap();
+        assert!(
+            publication_post(
+                &selection.blocking_client(WAIT).unwrap(),
+                "v1/musubi/publication/seed-ingress"
+            )
+            .is_err()
+        );
+        assert!(server.finish().is_empty());
+    }
+}
+#[test]
+fn publication_client_never_follows_redirects_or_decompresses() {
+    let identity = Identity::new(&host(), false);
+    for response in [
+        b"HTTP/1.1 307 Temporary Redirect\r\nLocation: https://other.localhost:1/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_slice(),
+        b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 3\r\nConnection: close\r\n\r\nraw".as_slice(),
+    ] {
+        let server = Server::start(&identity, 1, response);
+        let selection = publication_selection(&identity, server.port);
+        let expected = if response.starts_with(b"HTTP/1.1 307") { (307, vec![]) } else { (200, b"raw".to_vec()) };
+        assert_eq!(publication_post(&selection.blocking_client(WAIT).unwrap(), "v1/musubi/publication/provider-readback").unwrap(), expected);
+        assert_eq!(server.finish().len(), 1);
+    }
+}
+#[test]
+fn publication_client_bounds_an_unfinished_real_tls_handshake() {
+    let identity = Identity::new(&host(), false);
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let (release, released) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let (mut socket, _) = tokio::time::timeout(WAIT, listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    tokio::time::timeout(WAIT, socket.read_u8())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    0x16
+                );
+                // Keep the peer open until the client has returned on its own finite bound.
+                // A leaked 30-second Request override cannot pass by observing peer closure.
+                released
+                    .recv_timeout(WAIT)
+                    .expect("client did not enforce selected timeout");
+            });
+    });
+    let client = publication_selection(&identity, port)
+        .blocking_client(Duration::from_millis(100))
+        .unwrap();
+    let mut request = reqwest::blocking::Request::new(
+        reqwest::Method::POST,
+        client
+            .selection()
+            .base_url()
+            .join("v1/musubi/publication/seed-ingress")
+            .unwrap(),
+    );
+    *request.timeout_mut() = Some(Duration::from_secs(30));
+    assert!(client.execute(request).is_err());
+    release.send(()).unwrap();
+    worker.join().unwrap();
+}

@@ -208,7 +208,8 @@ pub(crate) mod kagemusha_top_up_admission_tests {
                 &accepted,
                 &state_transaction,
                 route,
-            ).expect("completed original physical policy capture");
+            )
+            .expect("completed original physical policy capture");
         let error = StateBlock::validate_stateful_admission(
             transaction,
             &mut state_transaction,
@@ -415,7 +416,7 @@ pub(crate) mod kagemusha_top_up_admission_tests {
             0,
         ));
         builder.push_transaction(signed);
-        let block = builder.build(BTreeSet::new());
+        let block = builder.build(iroha_data_model::block::BlockSignatures::default());
         assert!(crate::sumeragi::executor::attestation_required(&block));
     }
 }

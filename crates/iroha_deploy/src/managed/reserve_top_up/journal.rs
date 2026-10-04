@@ -188,6 +188,7 @@ pub(super) fn read_original(directory: &PrivateDirectory) -> Result<Option<Selec
         directory,
         Purpose::FundingRequest(intent.selection.provider_id),
         intent.digest()?,
+        &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
     )?;
     Selected::from_history(intent, history).map(Some)
 }
@@ -214,11 +215,16 @@ pub(super) fn explicit(
     account: &AccountService,
 ) -> Result<()> {
     let purpose = Purpose::FundingRequest(original.selection.provider_id);
-    let history = History::read(directory, purpose, original.digest()?)?;
-    let terms = match history.last() {
-        Some(attempt) => {
-            attempt.terms().matches(utc, options)?;
-            attempt.terms().clone()
+    let history = History::read(
+        directory,
+        purpose,
+        original.digest()?,
+        &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
+    )?;
+    let terms = match history.retained_terms() {
+        Some(terms) => {
+            terms.matches(utc, options)?;
+            terms.clone()
         }
         None => Terms::new(utc, options)?,
     };
@@ -226,6 +232,7 @@ pub(super) fn explicit(
         directory,
         purpose,
         original.digest()?,
+        &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
         terms,
         Observation::ordinary(),
         options.deadline,

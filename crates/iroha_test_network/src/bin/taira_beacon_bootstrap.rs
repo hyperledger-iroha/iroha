@@ -504,7 +504,7 @@ fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinali
                 .map_err(|error| eyre!(error))?;
                 ensure!(
                     cursor
-                        .advance(&journal)
+                        .advance((&journal).into())
                         .map_err(|error| eyre!(error))?
                         .height()
                         == height,
@@ -1306,7 +1306,8 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use iroha_core::beacon::{
-        LocalGlobalThresholdBeaconDkgSeatV1, ceremony::global_beacon_genesis_dkg_session_v1,
+        LocalGlobalThresholdBeaconDkgSeatV1, PreparedLocalGlobalThresholdBeaconDkgSeatV1,
+        ceremony::global_beacon_genesis_dkg_session_v1,
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::block::BlockHeader;
@@ -1345,16 +1346,20 @@ mod tests {
                 validator_configs: Vec::new(),
             };
             let session = global_beacon_genesis_dkg_session_v1(network_id, &roster).unwrap();
+            let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
             let mut local = signers
                 .iter()
                 .enumerate()
                 .map(|(index, signer)| {
-                    LocalGlobalThresholdBeaconDkgSeatV1::new(
+                    PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
                         session,
                         &roster,
                         u16::try_from(index + 1).unwrap(),
                         signer,
+                        &budget,
                     )
+                    .unwrap()
+                    .generate(signer)
                     .unwrap()
                 })
                 .collect::<Vec<_>>();
@@ -1364,20 +1369,21 @@ mod tests {
                 .collect::<Vec<_>>();
             let keys = publications
                 .iter()
-                .map(|(key, _)| key.clone())
+                .map(|(key, _)| (**key).clone())
                 .collect::<Vec<_>>();
             let commitments = publications
                 .iter()
-                .map(|(_, commitment)| commitment.clone())
+                .map(|(_, commitment)| (**commitment).clone())
                 .collect::<Vec<_>>();
             let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
-            let mut public = GlobalThresholdBeaconDkgStateV1::new(session, &crypto).unwrap();
+            let mut public =
+                GlobalThresholdBeaconDkgStateV1::new(session, &crypto, &budget).unwrap();
             for key in &keys {
-                public.record_recipient_key(1, key.clone()).unwrap();
+                public.record_recipient_key(1, key).unwrap();
             }
             for commitment in &commitments {
                 public
-                    .record_dealer_commitment(1, commitment.clone(), &crypto)
+                    .record_dealer_commitment(1, commitment, &crypto)
                     .unwrap();
             }
             let committed = public.public_snapshot().unwrap();
@@ -1385,6 +1391,11 @@ mod tests {
                 for edge in seat.deliver(&keys, &commitments, 2, signer).unwrap() {
                     public.record_encrypted_share(2, edge).unwrap();
                 }
+            }
+            // Logical audit fixture mirrors completed original public publication;
+            // the daemon owns the actual file/directory durability requirement.
+            for seat in &mut local {
+                seat.retire_durably_published_dealer().unwrap();
             }
             let delivered = public.public_snapshot().unwrap();
             for (seat, signer) in local.iter_mut().zip(&signers) {
@@ -1398,7 +1409,18 @@ mod tests {
                 public.public_snapshot().is_err(),
                 "acceptance snapshot must precede consuming finalization"
             );
-            (binding, roster, [committed, delivered, accepted])
+            let phases = [
+                committed.record().clone(),
+                delivered.record().clone(),
+                accepted.record().clone(),
+            ];
+            drop(committed);
+            drop(delivered);
+            drop(accepted);
+            drop(local);
+            drop(public);
+            assert_eq!(budget.reserved_bytes(), 0);
+            (binding, roster, phases)
         });
         &FIXTURE
     }

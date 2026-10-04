@@ -10,7 +10,7 @@ use crate::{
 };
 use iroha_crypto::{KeyPair, bls_normal_pop_prove};
 use iroha_sumeragi::types::{Bitmap, ChainParams, ControlWitness};
-use std::{collections::BTreeSet, num::NonZeroU64};
+use std::num::NonZeroU64;
 
 #[test]
 fn finality_root_scope_preserves_original_global_and_private_genesis_authority() {
@@ -352,7 +352,7 @@ impl Fixture {
             0,
         ));
         builder.push_transaction(tx);
-        let mut block = builder.build(BTreeSet::new());
+        let mut block = builder.build(crate::block::BlockSignatures::default());
         output_test_support::install_network(&mut block, vec![Ok(Vec::default())]).unwrap();
         let result = result(&block, &epoch);
         let parent = first.decode_checked().unwrap();

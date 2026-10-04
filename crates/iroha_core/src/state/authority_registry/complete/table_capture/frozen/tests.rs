@@ -115,7 +115,21 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
             if matches!(owner, TableMaterializer::Native { .. })
                 || matches!(
                     table,
-                    "world.verifying_keys" | "world.proofs" | "world.governance_proposals"
+                    "world.verifying_keys"
+                        | "world.proofs"
+                        | "world.governance_proposals"
+                        | "world.contract_alias_bindings"
+                        | "world.domains"
+                        | "world.accounts"
+                        | "world.account_aliases"
+                        | "world.contract_subject_bindings"
+                        | "world.asset_definitions"
+                        | "world.assets"
+                        | "world.asset_escrows"
+                        | "world.repo_agreements"
+                        | "world.nfts"
+                        | "world.rwas"
+                        | "world.account_rekey_records"
                 )
             {
                 continue;
@@ -129,9 +143,20 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
             missing.push(table);
         }
     }
-    assert_eq!(missing.len(), 22);
+    assert_eq!(missing.len(), 10);
+    assert!(!missing.contains(&"world.account_rekey_records"));
+    assert!(!missing.contains(&"world.nfts"));
+    assert!(!missing.contains(&"world.rwas"));
+    assert!(!missing.contains(&"world.asset_escrows"));
+    assert!(!missing.contains(&"world.repo_agreements"));
+    assert!(!missing.contains(&"world.assets"));
+    assert!(!missing.contains(&"world.asset_definitions"));
+    assert!(!missing.contains(&"world.contract_alias_bindings"));
     assert!(!missing.contains(&"world.governance_proposals"));
-    assert!(missing.contains(&"world.domains"));
+    assert!(!missing.contains(&"world.domains"));
+    assert!(!missing.contains(&"world.accounts"));
+    assert!(!missing.contains(&"world.account_aliases"));
+    assert!(!missing.contains(&"world.contract_subject_bindings"));
     assert!(missing.contains(&"triggers.data"));
     assert!(missing.contains(&"world.musubi_archive_availability"));
     assert!(missing.contains(&"state.transactions.current"));

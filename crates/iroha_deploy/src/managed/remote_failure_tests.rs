@@ -51,54 +51,22 @@ fn preparation_recovery_and_native_finality_have_distinct_safe_codes() {
 
 #[test]
 fn retained_bootstrap_failures_preserve_unresolved_journals_without_signed_terminal_claims() {
-    for (reason, expected) in [
-        (
-            ManagedBootstrapFailure::Cancelled,
-            ManagedAttachmentFailure::WorkerUnavailable,
-        ),
-        (
-            ManagedBootstrapFailure::TransitionPending,
-            ManagedAttachmentFailure::RecoveryFailed,
-        ),
-        (
-            ManagedBootstrapFailure::SignedUnresolved,
-            ManagedAttachmentFailure::RecoveryFailed,
-        ),
-        (
-            ManagedBootstrapFailure::AuthorizationExpired,
-            ManagedAttachmentFailure::ContextRejected,
-        ),
-        (
-            ManagedBootstrapFailure::PayloadExpired,
-            ManagedAttachmentFailure::ContextRejected,
-        ),
-        (
-            ManagedBootstrapFailure::EnrollmentExpired,
-            ManagedAttachmentFailure::ContextRejected,
-        ),
-        (
-            ManagedBootstrapFailure::EnrollmentObservationExpired,
-            ManagedAttachmentFailure::ContextRejected,
-        ),
-        (
-            ManagedBootstrapFailure::EnrollmentPredecessorChanged,
-            ManagedAttachmentFailure::ContextRejected,
-        ),
-        (
-            ManagedBootstrapFailure::ProfileExpired,
-            ManagedAttachmentFailure::ContextRejected,
-        ),
-        (
-            ManagedBootstrapFailure::EpochLimit,
-            ManagedAttachmentFailure::ContextRejected,
-        ),
-        (
-            ManagedBootstrapFailure::ReplacementLimit,
-            ManagedAttachmentFailure::ContextRejected,
-        ),
+    for reason in [
+        ManagedBootstrapFailure::RetainedMaterial,
+        ManagedBootstrapFailure::Cancelled,
+        ManagedBootstrapFailure::TransitionPending,
+        ManagedBootstrapFailure::SignedUnresolved,
+        ManagedBootstrapFailure::AuthorizationExpired,
+        ManagedBootstrapFailure::PayloadExpired,
+        ManagedBootstrapFailure::EnrollmentExpired,
+        ManagedBootstrapFailure::EnrollmentObservationExpired,
+        ManagedBootstrapFailure::EnrollmentPredecessorChanged,
+        ManagedBootstrapFailure::ProfileExpired,
+        ManagedBootstrapFailure::EpochLimit,
+        ManagedBootstrapFailure::ReplacementLimit,
     ] {
         let failure = ManagedAttachmentFailure::from(Error::Bootstrap(reason));
-        assert_eq!(failure, expected);
+        assert_eq!(failure, ManagedAttachmentFailure::Bootstrap(reason));
         assert!(!failure.is_terminal_operation());
         let original = norito::json::to_vec(&failure).unwrap();
         assert_eq!(

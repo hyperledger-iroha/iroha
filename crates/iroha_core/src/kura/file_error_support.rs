@@ -371,6 +371,8 @@ pub enum Error {
     MkDir(#[source] std::io::Error, PathBuf),
     /// Original canonical block decoder outcome, including local admission refusal.
     BlockDecode(#[from] norito::core::DecodeAttemptError),
+    /// The original native source pool or physical allocator refused the raw frame backing.
+    NativeFrameAllocation(#[source] iroha_allocation::ChargedBufferError),
     /// Failed to frame or deframe Norito payload
     NoritoFrame(#[from] norito::core::Error),
 

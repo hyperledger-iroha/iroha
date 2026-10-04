@@ -1,11 +1,11 @@
-//! Original native packet custody for one bounded empty-argument Unit root.
+//! Original native packet custody for one bounded public Unit/Bool leaf root.
 //!
 //! The ordinary interpreter produces these accesses while it executes. The only
 //! public constructor owns a fresh VM and its admitted artifact; callers cannot
 //! provide initial registers, memory, packets, clocks, frame IDs or a host.
 //! This is an unregistered execution component, not a proof or finalized-State
 //! authority. The privacy crate's initializer/history relation consumes this
-//! owner, including its Unit validation gas and successful padding. General
+//! owner, including its artifact-selected leaf validation gas and successful padding. General
 //! instruction/typed semantics and complete invocation statement/transcript
 //! joins remain required before these packets can authorize proof admission.
 //! No diagnostic snapshots or native recomputation establish those constraints.
@@ -86,7 +86,7 @@ impl std::error::Error for CaptureError {
 
 /// Sealed successful native output. Private backing is erased on final drop.
 ///
-/// Coverage is exactly one public empty-argument Unit root, no syscalls or child
+/// Coverage is exactly one public empty-argument Unit or Bool leaf root, no syscalls or child
 /// calls, at most 64 total instructions and 64 configured cycles. This is
 /// intentionally not a complete IVM proof capability.
 pub struct NativeInvocation {
@@ -108,7 +108,9 @@ impl NativeInvocation {
     /// Packet backing is partitioned from the original parent before the VM is
     /// constructed; the VM's existing owners use `budget`. Profile refusal is a
     /// local proving refusal and never changes ordinary transaction validity.
-    pub fn run_unit_root(
+    /// The retained artifact selects the exact Unit or Bool result schema;
+    /// callers cannot supply a result kind or accepted value.
+    pub fn run_public_leaf_root(
         contract: PreparedContract,
         selector: &str,
         initial_gas: u64,
@@ -118,7 +120,7 @@ impl NativeInvocation {
         if !parent.belongs_to(budget) {
             return Err(CaptureError::PoolMismatch);
         }
-        crate::IVM::capture_unit_root(contract, selector, initial_gas, parent, budget)
+        crate::IVM::capture_public_leaf_root(contract, selector, initial_gas, parent, budget)
     }
     /// Original admitted immutable artifact, retained rather than identified by a supplied hash.
     pub fn artifact(&self) -> &PreparedContract {

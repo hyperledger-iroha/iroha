@@ -152,13 +152,17 @@ impl Fixture {
         assert_eq!(execution_hash, final_execution_hash);
         block
             .replace_signatures(
-                [iroha_data_model::block::BlockSignature::new(
-                    0,
-                    iroha_crypto::SignatureOf::try_from_hash(genesis.private_key(), block.hash())
+                iroha_data_model::block::BlockSignatures::try_from_iter([
+                    iroha_data_model::block::BlockSignature::new(
+                        0,
+                        iroha_crypto::SignatureOf::try_from_hash(
+                            genesis.private_key(),
+                            block.hash(),
+                        )
                         .unwrap(),
-                )]
-                .into_iter()
-                .collect(),
+                    ),
+                ])
+                .expect("at most 31 block signatures"),
             )
             .unwrap();
         iroha_genesis::validate_prepared_genesis_bundle(

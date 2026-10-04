@@ -8938,11 +8938,6 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
             details.insert("height".into(), Value::from(height));
             ("applied", Value::Object(details))
         }
-        EvidencePenaltyStatus::Cancelled { height } => {
-            let mut details = json::Map::new();
-            details.insert("height".into(), Value::from(height));
-            ("cancelled", Value::Object(details))
-        }
     };
     let mut lifecycle = json::Map::new();
     lifecycle.insert("status".into(), Value::from(status));
@@ -36468,6 +36463,9 @@ mod explorer_lookup_tests {
         );
         state.gov.voting_asset_id = definition_id.clone();
         state.gov.bond_escrow_account = escrow_id.clone();
+        let (borrowed_definition, borrowed_escrow) = state.governance_voting_asset_and_bond_escrow();
+        assert!(std::ptr::eq(borrowed_definition, &state.gov.voting_asset_id));
+        assert!(std::ptr::eq(borrowed_escrow, &state.gov.bond_escrow_account));
         let state = Arc::new(state);
         bind_account_alias_for_test(&state, &escrow_id, "escrow@restricted");
         (state, public_dataspace, definition_id)
@@ -53123,7 +53121,7 @@ fn handle_v1_explorer_asset_definitions_sync(
 ) -> Result<AxResponse, Error> {
     with_explorer_response_byte_budget(byte_budget, || {
     let world = state.world_view();
-    let governance = state.governance_snapshot();
+    let (voting_asset_id, bond_escrow_account) = state.governance_voting_asset_and_bond_escrow();
     let mut page = crate::explorer::asset_definitions_page_for_filters(
         &world,
         domain.as_ref(),
@@ -53135,11 +53133,10 @@ fn handle_v1_explorer_asset_definitions_sync(
     .map_err(explorer_world_cursor_error)?;
     // Enrich the governance voting asset definition with locked/circulating supply figures.
     // (Other assets default to null for these fields.)
-    let voting_asset_id = &governance.voting_asset_id;
     if page.items.iter().any(|item| item.id == voting_asset_id) {
         use iroha_primitives::numeric::Quantity;
         // Borrow the committed key instead of cloning the escrow controller to build a lookup ID.
-        let escrow_asset_id = world.assets_by_account().get(&governance.bond_escrow_account)
+        let escrow_asset_id = world.assets_by_account().get(bond_escrow_account)
             .and_then(|assets| assets.iter().find(|asset| asset.definition() == voting_asset_id
                 && matches!(asset.scope(), dm::asset::AssetBalanceScope::Global)));
         if visibility.can_read_all || escrow_asset_id.is_some_and(|id| visibility.allows_asset(&world, id)) {

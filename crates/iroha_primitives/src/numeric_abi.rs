@@ -135,11 +135,23 @@ impl IntValueV1 {
     /// # Errors
     /// Rejects values outside the signed 512-bit V1 domain.
     pub fn try_new_with_mantissa_len(value: BigInt) -> Result<(Self, usize), NumericAbiError> {
-        let mantissa_len = value.twos_byte_len();
-        if mantissa_len > MAX_MANTISSA_BYTES {
-            return Err(NumericAbiError::MantissaOverflow);
-        }
+        let mantissa_len = validated_int_mantissa_len(&value)?;
         Ok((Self(value), mantissa_len))
+    }
+    /// Prepare the exact nominal frame while borrowing its original integer.
+    ///
+    /// Preparation retains the minimal length without copying native digits or
+    /// acquiring allocation credit. The borrow keeps the source immutable until
+    /// its prepared frame is no longer used.
+    ///
+    /// # Errors
+    /// Rejects values outside the signed 512-bit V1 domain.
+    pub fn prepare_frame(value: &BigInt) -> Result<PreparedNumericFrameV1<'_>, NumericAbiError> {
+        let mantissa_len = validated_int_mantissa_len(value)?;
+        Ok(PreparedNumericFrameV1 {
+            source: NumericFrameSourceV1::Int(value),
+            frame_len: NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + mantissa_len,
+        })
     }
     /// Borrow the integer.
     #[must_use]
@@ -156,7 +168,7 @@ impl IntValueV1 {
     /// # Errors
     /// Returns a Norito framing error.
     pub fn encode_frame(&self) -> Result<Vec<u8>, NumericAbiError> {
-        encode_frame::<Self>(&encode_int_body(&self.0))
+        NumericFrameSourceV1::Int(&self.0).encode_frame()
     }
     /// Strictly decode a canonical schema-bound integer frame.
     ///
@@ -206,6 +218,17 @@ impl DecimalValueV1 {
     pub fn new(value: Numeric) -> Self {
         Self(value)
     }
+    /// Prepare the exact nominal frame while borrowing a canonical decimal.
+    ///
+    /// The existing Numeric invariant supplies its domain and normalization;
+    /// preparation only retains the minimal length and never copies its digits.
+    #[must_use]
+    pub fn prepare_frame(value: &Numeric) -> PreparedNumericFrameV1<'_> {
+        PreparedNumericFrameV1 {
+            source: NumericFrameSourceV1::Decimal(value),
+            frame_len: NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + value.mantissa().twos_byte_len() + 1,
+        }
+    }
     /// Canonicalize a decimal for the V1 wire domain.
     ///
     /// # Errors
@@ -236,7 +259,7 @@ impl DecimalValueV1 {
     /// # Errors
     /// Returns a Norito framing error.
     pub fn encode_frame(&self) -> Result<Vec<u8>, NumericAbiError> {
-        encode_frame::<Self>(&encode_scaled_body(&self.0))
+        NumericFrameSourceV1::Decimal(&self.0).encode_frame()
     }
     /// Strictly decode a canonical schema-bound decimal frame.
     ///
@@ -279,6 +302,17 @@ impl QuantityValueV1 {
     pub fn new(value: Quantity) -> Self {
         Self(value)
     }
+    /// Prepare the exact nominal frame while borrowing a canonical quantity.
+    ///
+    /// Its existing nonnegative canonical invariant remains with the original
+    /// owner; preparation retains length without copying any native digits.
+    #[must_use]
+    pub fn prepare_frame(value: &Quantity) -> PreparedNumericFrameV1<'_> {
+        PreparedNumericFrameV1 {
+            source: NumericFrameSourceV1::Quantity(value),
+            frame_len: NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + value.mantissa().twos_byte_len() + 1,
+        }
+    }
     /// Borrow the quantity.
     #[must_use]
     pub fn as_quantity(&self) -> &Quantity {
@@ -294,7 +328,7 @@ impl QuantityValueV1 {
     /// # Errors
     /// Returns a Norito framing error.
     pub fn encode_frame(&self) -> Result<Vec<u8>, NumericAbiError> {
-        encode_frame::<Self>(&encode_scaled_body(self.0.as_numeric()))
+        NumericFrameSourceV1::Quantity(&self.0).encode_frame()
     }
     /// Strictly decode a canonical schema-bound quantity frame.
     ///
@@ -336,6 +370,58 @@ impl QuantityValueV1 {
             },
         )
     }
+}
+/// Prepared canonical numeric frame borrowing one immutable original value.
+///
+/// This opaque owner carries only its source borrow and exact length. It grants
+/// no allocation credit or codec/schema identity, and serialization uses the
+/// corresponding actual V1 nominal value type. The existing frame-name and
+/// output allocations remain separate original-owner funding work.
+/// TODO: fund remaining native result/scratch/frame/envelope/host custody.
+pub struct PreparedNumericFrameV1<'value> {
+    source: NumericFrameSourceV1<'value>,
+    frame_len: usize,
+}
+impl PreparedNumericFrameV1<'_> {
+    /// Read the retained exact frame length without repeating a value scan.
+    #[must_use]
+    pub fn frame_len(&self) -> usize {
+        self.frame_len
+    }
+    /// Encode through the sole canonical body and actual nominal frame writer.
+    ///
+    /// # Errors
+    /// Preserves the original Norito serialization or framing error.
+    pub fn encode_frame(&self) -> Result<Vec<u8>, NumericAbiError> {
+        self.source.encode_frame()
+    }
+}
+enum NumericFrameSourceV1<'value> {
+    Int(&'value BigInt),
+    Decimal(&'value Numeric),
+    Quantity(&'value Quantity),
+}
+impl NumericFrameSourceV1<'_> {
+    fn encode_frame(&self) -> Result<Vec<u8>, NumericAbiError> {
+        match self {
+            Self::Int(value) => {
+                encode_numeric_frame::<IntValueV1>(|writer| serialize_int_body(value, writer))
+            }
+            Self::Decimal(value) => encode_numeric_frame::<DecimalValueV1>(|writer| {
+                serialize_scaled_body(value, writer)
+            }),
+            Self::Quantity(value) => encode_numeric_frame::<QuantityValueV1>(|writer| {
+                serialize_scaled_body(value.as_numeric(), writer)
+            }),
+        }
+    }
+}
+fn validated_int_mantissa_len(value: &BigInt) -> Result<usize, NumericAbiError> {
+    let mantissa_len = value.twos_byte_len();
+    if mantissa_len > MAX_MANTISSA_BYTES {
+        return Err(NumericAbiError::MantissaOverflow);
+    }
+    Ok(mantissa_len)
 }
 impl FastJsonWrite for IntValueV1 {
     fn write_json(&self, out: &mut String) {
@@ -405,21 +491,41 @@ impl JsonDeserialize for QuantityValueV1 {
         Ok(Self(Quantity::json_deserialize(parser)?))
     }
 }
-fn encode_int_body(value: &BigInt) -> Vec<u8> {
-    let bytes = value.to_twos_bytes();
-    let mut body = Vec::with_capacity(4 + bytes.len());
-    body.extend_from_slice(
-        &u32::try_from(bytes.len())
-            .expect("bounded mantissa length fits u32")
-            .to_le_bytes(),
-    );
-    body.extend_from_slice(&bytes);
-    body
+// Borrow the same canonical mantissa serializer used by BigInt's Norito codec.
+// Valid V1 values need no native-digit clone or temporary encoded byte Vec.
+fn serialize_int_body(
+    value: &BigInt,
+    writer: &mut norito::core::Encoder<'_>,
+) -> Result<(), NoritoError> {
+    value.serialize(writer).map_err(|error| match error {
+        // Preserve the numeric payload writer's existing error representation.
+        NoritoError::Io(error) => NoritoError::Message(error.to_string()),
+        error => error,
+    })
 }
-fn encode_scaled_body(value: &Numeric) -> Vec<u8> {
-    let mut body = encode_int_body(value.mantissa());
-    body.push(u8::try_from(value.scale()).expect("validated decimal scale fits u8"));
-    body
+fn serialize_scaled_body(
+    value: &Numeric,
+    writer: &mut norito::core::Encoder<'_>,
+) -> Result<(), NoritoError> {
+    serialize_int_body(value.mantissa(), writer)?;
+    writer
+        .write_all(&[u8::try_from(value.scale()).expect("validated decimal scale fits u8")])
+        .map_err(|error| NoritoError::Message(error.to_string()))
+}
+fn encode_numeric_frame<T: NoritoSerialize>(
+    serialize: impl FnOnce(&mut norito::core::Encoder<'_>) -> Result<(), NoritoError>,
+) -> Result<Vec<u8>, NumericAbiError> {
+    // All three canonical bodies are at most u32 length + signed512 bytes +
+    // one scale byte. The existing frame writer still owns header/CRC/output.
+    let mut body = [0_u8; 4 + MAX_MANTISSA_BYTES + 1];
+    let unused = {
+        let mut remaining = body.as_mut_slice();
+        serialize(&mut norito::core::Encoder::new(&mut remaining))
+            .map_err(|error| NumericAbiError::Norito(error.to_string()))?;
+        remaining.len()
+    };
+    let used = body.len() - unused;
+    encode_frame::<T>(&body[..used])
 }
 fn encode_frame<T: NoritoSerialize>(body: &[u8]) -> Result<Vec<u8>, NumericAbiError> {
     norito::core::frame_bare_with_header_flags::<T>(body, 0)
@@ -608,15 +714,13 @@ numeric_schema_identity! {
     QuantityValueV1 => ("iroha_primitives::numeric_abi::QuantityValueV1", QUANTITY_SCHEMA_NAME_V1),
 }
 macro_rules! impl_payload_codec {
-    ($ty:ty, $encode:expr, $decode:expr) => {
+    ($ty:ty, $serialize:expr, $length:expr, $decode:expr) => {
         impl SerializePayload for $ty {
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
-                writer
-                    .write_all(&$encode(self))
-                    .map_err(|error| NoritoError::Message(error.to_string()))
+                $serialize(self, writer)
             }
             fn encoded_len_exact(&self) -> Option<usize> {
-                Some($encode(self).len())
+                $length(self)
             }
         }
         impl<'a> DeserializePayload<'a> for $ty {
@@ -647,17 +751,27 @@ macro_rules! impl_payload_codec {
 }
 impl_payload_codec!(
     IntValueV1,
-    |value: &IntValueV1| encode_int_body(&value.0),
+    |value: &IntValueV1, writer: &mut norito::core::Encoder<'_>| serialize_int_body(
+        &value.0, writer
+    ),
+    |value: &IntValueV1| value.0.encoded_len_exact(),
     |bytes: &[u8]| decode_int_body(bytes).map(|(value, used)| (IntValueV1(value), used))
 );
 impl_payload_codec!(
     DecimalValueV1,
-    |value: &DecimalValueV1| encode_scaled_body(&value.0),
+    |value: &DecimalValueV1, writer: &mut norito::core::Encoder<'_>| serialize_scaled_body(
+        &value.0, writer
+    ),
+    |value: &DecimalValueV1| value.0.mantissa().encoded_len_exact()?.checked_add(1),
     |bytes: &[u8]| decode_scaled_body(bytes).map(|(value, used)| (DecimalValueV1(value), used))
 );
 impl_payload_codec!(
     QuantityValueV1,
-    |value: &QuantityValueV1| encode_scaled_body(value.0.as_numeric()),
+    |value: &QuantityValueV1, writer: &mut norito::core::Encoder<'_>| serialize_scaled_body(
+        value.0.as_numeric(),
+        writer
+    ),
+    |value: &QuantityValueV1| value.0.mantissa().encoded_len_exact()?.checked_add(1),
     |bytes: &[u8]| {
         let (value, used) = decode_scaled_body(bytes)?;
         let quantity = Quantity::from_canonical_numeric(value).map_err(|error| match error {
@@ -672,6 +786,13 @@ impl_payload_codec!(
 mod tests {
     use super::*;
     use core::fmt::Write as _;
+    fn fixture_int_body(value: &BigInt) -> Vec<u8> {
+        let mut body =
+            Vec::with_capacity(value.encoded_len_exact().expect("bounded integer length"));
+        serialize_int_body(value, &mut norito::core::Encoder::for_buffer(&mut body))
+            .expect("canonical fixture body");
+        body
+    }
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let (payload, canonical_flags) = norito::codec::encode_with_header_flags(value);
         assert_eq!(
@@ -1136,7 +1257,7 @@ mod tests {
             (10, 1, NumericAbiError::NonCanonicalDecimal),
             (1, 29, NumericAbiError::InvalidScale),
         ] {
-            let mut body = encode_int_body(&BigInt::from_i128(mantissa));
+            let mut body = fixture_int_body(&BigInt::from_i128(mantissa));
             body.push(scale);
             assert_eq!(decode_scaled_body(&body), Err(expected.clone()));
             let frame = encode_frame::<DecimalValueV1>(&body)
@@ -1146,7 +1267,7 @@ mod tests {
     }
     #[test]
     fn quantity_body_rejects_negative_value_even_when_otherwise_canonical() {
-        let mut body = encode_int_body(&BigInt::from_i128(-1));
+        let mut body = fixture_int_body(&BigInt::from_i128(-1));
         body.push(0);
         let frame = encode_frame::<QuantityValueV1>(&body).expect("well-formed frame");
         assert_eq!(
@@ -1259,5 +1380,251 @@ mod tests {
             }),
             Err(ObservedNumericAbiError::Observer("out-of-gas"))
         );
+    }
+
+    #[test]
+    fn canonical_numeric_body_writer_matches_literal_payloads_and_frame_prefixes() {
+        for (bytes, expected) in [
+            (&[][..], &[0, 0, 0, 0][..]),
+            (&[0x01][..], &[1, 0, 0, 0, 0x01][..]),
+            (&[0xff][..], &[1, 0, 0, 0, 0xff][..]),
+            (&[0x80, 0x00][..], &[2, 0, 0, 0, 0x80, 0x00][..]),
+            (&[0x80][..], &[1, 0, 0, 0, 0x80][..]),
+            (&[0x7f, 0xff][..], &[2, 0, 0, 0, 0x7f, 0xff][..]),
+        ] {
+            let value = IntValueV1::try_new(BigInt::from_twos_bytes(bytes).unwrap()).unwrap();
+            let mut body = [0xa5; 69];
+            let unused = {
+                let mut output = body.as_mut_slice();
+                value
+                    .serialize(&mut norito::core::Encoder::new(&mut output))
+                    .unwrap();
+                output.len()
+            };
+            let used = body.len() - unused;
+            assert_eq!(&body[..used], expected);
+            assert!(body[used..].iter().all(|byte| *byte == 0xa5));
+            assert_eq!(value.encoded_len_exact(), Some(expected.len()));
+            let frame = value.encode_frame().unwrap();
+            assert_eq!(frame, encode_frame::<IntValueV1>(expected).unwrap());
+            assert_eq!(IntValueV1::decode_frame(&frame), Ok(value));
+        }
+        for scale in 0..=MAX_DECIMAL_SCALE {
+            for (mantissa, expected_byte) in [(1_i128, 0x01), (-1, 0xff)] {
+                let numeric = Numeric::try_new(BigInt::from_i128(mantissa), scale).unwrap();
+                let value = DecimalValueV1::new(numeric.clone());
+                let expected = [1, 0, 0, 0, expected_byte, scale as u8];
+                let mut body = [0xa5; 69];
+                let unused = {
+                    let mut output = body.as_mut_slice();
+                    value
+                        .serialize(&mut norito::core::Encoder::new(&mut output))
+                        .unwrap();
+                    output.len()
+                };
+                let used = body.len() - unused;
+                assert_eq!(&body[..used], expected);
+                assert!(body[used..].iter().all(|byte| *byte == 0xa5));
+                assert_eq!(value.encoded_len_exact(), Some(expected.len()));
+                let frame = value.encode_frame().unwrap();
+                assert_eq!(frame, encode_frame::<DecimalValueV1>(&expected).unwrap());
+                assert_eq!(DecimalValueV1::decode_frame(&frame), Ok(value));
+                if mantissa >= 0 {
+                    let quantity =
+                        QuantityValueV1::new(Quantity::from_canonical_numeric(numeric).unwrap());
+                    assert_eq!(quantity.encoded_len_exact(), Some(expected.len()));
+                    let frame = quantity.encode_frame().unwrap();
+                    assert_eq!(frame, encode_frame::<QuantityValueV1>(&expected).unwrap());
+                    assert_eq!(QuantityValueV1::decode_frame(&frame), Ok(quantity));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_payload_writer_refusals_keep_the_existing_message_cause() {
+        struct RefuseAfter {
+            available: usize,
+        }
+        impl std::io::Write for RefuseAfter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if bytes.len() > self.available {
+                    return Err(std::io::ErrorKind::WriteZero.into());
+                }
+                self.available -= bytes.len();
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let integer = IntValueV1::try_new(BigInt::from_i128(-129)).unwrap();
+        let decimal = DecimalValueV1::new(Numeric::try_new(1, 28).unwrap());
+        let quantity = QuantityValueV1::new(
+            Quantity::from_canonical_numeric(Numeric::try_new(1, 28).unwrap()).unwrap(),
+        );
+        let values: [&dyn SerializePayload; 3] = [&integer, &decimal, &quantity];
+        for value in values {
+            let length = value.encoded_len_exact().unwrap();
+            for available in 0..length {
+                let mut output = RefuseAfter { available };
+                let error = value
+                    .serialize(&mut norito::core::Encoder::new(&mut output))
+                    .expect_err("a short original writer must refuse");
+                match error {
+                    NoritoError::Message(message) => assert_eq!(
+                        message,
+                        std::io::Error::from(std::io::ErrorKind::WriteZero).to_string(),
+                    ),
+                    error => panic!("numeric payload changed its writer cause: {error}"),
+                }
+            }
+            let mut output = RefuseAfter { available: length };
+            value
+                .serialize(&mut norito::core::Encoder::new(&mut output))
+                .unwrap();
+            assert_eq!(output.available, 0);
+        }
+    }
+    fn literal_prepared_body(bytes: &[u8], scale: Option<u8>) -> Vec<u8> {
+        let mut body = (bytes.len() as u32).to_le_bytes().to_vec();
+        body.extend_from_slice(bytes);
+        if let Some(scale) = scale {
+            body.push(scale);
+        }
+        body
+    }
+    #[test]
+    fn prepared_numeric_frames_borrow_exact_sources_and_keep_nominal_frames() {
+        for bytes in [
+            &[][..],
+            &[0x01],
+            &[0xff],
+            &[0x80, 0x00],
+            &[0x80],
+            &[0x7f, 0xff],
+        ] {
+            let source = BigInt::from_twos_bytes(bytes).unwrap();
+            let before = source.clone();
+            let prepared = IntValueV1::prepare_frame(&source).unwrap();
+            assert!(
+                matches!(&prepared.source, NumericFrameSourceV1::Int(retained) if core::ptr::eq(*retained, &source))
+            );
+            let body = literal_prepared_body(bytes, None);
+            let expected = encode_frame::<IntValueV1>(&body).unwrap();
+            assert_eq!(prepared.frame_len(), 44 + bytes.len());
+            for _ in 0..2 {
+                let frame = prepared.encode_frame().unwrap();
+                assert_eq!(frame, expected);
+                assert_eq!(IntValueV1::decode_frame(&frame).unwrap().as_int(), &source);
+                assert_eq!(
+                    DecimalValueV1::decode_frame(&frame).err(),
+                    Some(NumericAbiError::SchemaMismatch)
+                );
+            }
+            assert_eq!(source, before);
+        }
+        for (integer, byte) in [(1, 0x01), (-1, 0xff)] {
+            let source = Numeric::try_new(integer, 28).unwrap();
+            let before = source.clone();
+            let prepared = DecimalValueV1::prepare_frame(&source);
+            assert!(
+                matches!(&prepared.source, NumericFrameSourceV1::Decimal(retained) if core::ptr::eq(*retained, &source))
+            );
+            let body = literal_prepared_body(&[byte], Some(28));
+            let expected = encode_frame::<DecimalValueV1>(&body).unwrap();
+            assert_eq!(prepared.frame_len(), 46);
+            for _ in 0..2 {
+                let frame = prepared.encode_frame().unwrap();
+                assert_eq!(frame, expected);
+                assert_eq!(
+                    DecimalValueV1::decode_frame(&frame).unwrap().as_numeric(),
+                    &source
+                );
+                assert_eq!(
+                    QuantityValueV1::decode_frame(&frame).err(),
+                    Some(NumericAbiError::SchemaMismatch)
+                );
+            }
+            assert_eq!(source, before);
+        }
+        let source = Quantity::from_canonical_numeric(Numeric::try_new(1, 28).unwrap()).unwrap();
+        let before = source.clone();
+        let prepared = QuantityValueV1::prepare_frame(&source);
+        assert!(
+            matches!(&prepared.source, NumericFrameSourceV1::Quantity(retained) if core::ptr::eq(*retained, &source))
+        );
+        let expected =
+            encode_frame::<QuantityValueV1>(&literal_prepared_body(&[1], Some(28))).unwrap();
+        assert_eq!(prepared.frame_len(), 46);
+        for _ in 0..2 {
+            let frame = prepared.encode_frame().unwrap();
+            assert_eq!(frame, expected);
+            assert_eq!(
+                QuantityValueV1::decode_frame(&frame).unwrap().as_quantity(),
+                &source
+            );
+            assert_eq!(
+                IntValueV1::decode_frame(&frame).err(),
+                Some(NumericAbiError::SchemaMismatch)
+            );
+        }
+        assert_eq!(source, before);
+    }
+    #[test]
+    fn prepared_numeric_lengths_cover_signed_neighbors_and_scaled_boundaries() {
+        for width in 1..=MAX_MANTISSA_BYTES {
+            let mut positive = vec![0xff; width];
+            positive[width - 1] = 0x7f;
+            let mut negative = vec![0; width];
+            negative[width - 1] = 0x80;
+            for bytes in [&positive, &negative] {
+                let source = BigInt::from_twos_bytes(bytes).unwrap();
+                let prepared = IntValueV1::prepare_frame(&source).unwrap();
+                assert_eq!(prepared.frame_len(), 44 + width);
+                assert_eq!(
+                    prepared.encode_frame().unwrap(),
+                    encode_frame::<IntValueV1>(&literal_prepared_body(bytes, None)).unwrap()
+                );
+                for scale in 0..=MAX_DECIMAL_SCALE {
+                    let numeric = Numeric::try_new(source.clone(), scale).unwrap();
+                    let prepared = DecimalValueV1::prepare_frame(&numeric);
+                    let body = literal_prepared_body(bytes, Some(scale as u8));
+                    assert_eq!(prepared.frame_len(), 45 + width);
+                    assert_eq!(
+                        prepared.encode_frame().unwrap(),
+                        encode_frame::<DecimalValueV1>(&body).unwrap()
+                    );
+                    if !source.is_negative() {
+                        let quantity = Quantity::from_canonical_numeric(numeric).unwrap();
+                        let prepared = QuantityValueV1::prepare_frame(&quantity);
+                        assert_eq!(prepared.frame_len(), 45 + width);
+                        assert_eq!(
+                            prepared.encode_frame().unwrap(),
+                            encode_frame::<QuantityValueV1>(&body).unwrap()
+                        );
+                    }
+                }
+            }
+        }
+        let mut above = [0; MAX_MANTISSA_BYTES + 1];
+        above[MAX_MANTISSA_BYTES - 1] = 0x80;
+        let mut below = [0xff; MAX_MANTISSA_BYTES + 1];
+        below[MAX_MANTISSA_BYTES - 1] = 0x7f;
+        for bytes in [&above, &below] {
+            let source = BigInt::from_twos_bytes(bytes).unwrap();
+            assert_eq!(
+                IntValueV1::prepare_frame(&source).err(),
+                Some(NumericAbiError::MantissaOverflow)
+            );
+            assert_eq!(
+                IntValueV1::try_new_with_mantissa_len(source).err(),
+                Some(NumericAbiError::MantissaOverflow)
+            );
+        }
+        let zero = Numeric::try_new(0, 28).unwrap();
+        assert_eq!(DecimalValueV1::prepare_frame(&zero).frame_len(), 45);
+        let quantity = Quantity::from_canonical_numeric(zero).unwrap();
+        assert_eq!(QuantityValueV1::prepare_frame(&quantity).frame_len(), 45);
     }
 }

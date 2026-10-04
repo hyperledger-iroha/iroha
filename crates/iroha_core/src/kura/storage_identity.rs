@@ -23,8 +23,8 @@ struct StableSidecarMetadata {
     directory: SecureMetadata,
 }
 #[derive(Debug)]
-struct StableSidecarRead {
-    bytes: Vec<u8>,
+struct StableSidecarRead<B> {
+    bytes: B,
     bytes_hash: Hash,
     metadata: StableSidecarMetadata,
 }

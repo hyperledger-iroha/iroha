@@ -179,6 +179,16 @@ They do not merge defaults into an active layout: changing length formats
 after an enclosing field has been written would make the frame internally
 inconsistent. Defaults apply only when no layout context is active.
 
+### rANS table V1 checksum
+
+`RansTablesV1.checksum_sha256` is SHA-256 of the complete uncompressed Norito
+frame for `RansTablesBodyV1`, including its canonical schema identity and
+header, with fixed-width per-value lengths (`flags = 0x00`).
+`RansTablesBodyV1::checksum_sha256` owns this domain for both the native table
+producer and the runtime loader. Ambient layout guards and the default compact
+layout do not change this checksum; the loader accepts only this V1 domain.
+This checksum checks the table body, not its optional manifest signature.
+
 ## Length Prefixes
 
 Norito uses length prefixes in multiple places, with explicit flags deciding the
@@ -383,9 +393,11 @@ trigger metadata; copying diagnostic fields or formatting JSON errors cannot rep
 scope identity. JSON body, nesting, and arithmetic-overflow bounds remain protocol failures.
 
 
-Closed named records can opt into `#[norito(decode_fields)]`. Their ordinary
+Closed named and tuple records can opt into `#[norito(decode_fields)]`. Their ordinary
 `DeserializePayload` and caller-prepared destination then use one generated
-positional field walk. Fixed byte-array fields retain their raw-field framing;
+positional field walk. Tuple slice decoding keeps its original whole-input
+archived contract; named slice decoding keeps its existing prefix contract.
+Fixed byte-array fields retain their raw-field framing;
 other fields use the canonical child decoder relationship. Generic, skipped,
 flattened and whole-value validation-hook records are rejected by this initial
 opt-in rather than silently changing their contracts. No schema or V1 bytes change.
@@ -842,6 +854,15 @@ produce the same semantic result as the scalar path or fall back:
 `len` uses the per-value prefix rules above (`COMPACT_LEN`). Decoders must not
 apply nested-length heuristics or reinterpret string payloads based on their
 contents.
+
+Owning `String` slice and archived decoders share their length/body/UTF-8 kernel
+with `core::borrow_canonical_string` and `core::decode_string_into`. Prepared
+decoding borrows the original payload or fills initialized caller storage without
+allocating another string. It preserves the original logical byte charge before
+body/UTF-8 validation and the `InvalidUtf8` cause. A short destination is a local
+storage error. These payload operations do not admit physical storage or verify a
+complete frame: the enclosing field retains its flags/depth checks, and its owner
+still requires exact consumption and canonical full-frame comparison.
 
 ## Numeric and BigInt
 

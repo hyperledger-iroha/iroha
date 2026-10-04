@@ -15,6 +15,7 @@ mod journal_io;
 pub mod musubi_pin_outbox;
 /// Original complete native context projection archive, authenticated by canonical R.
 pub mod native_context_archive;
+pub mod native_musubi_storage;
 /// Historical receipt openings from original writes and native certified execution.
 pub mod native_receipts;
 pub mod pagination;

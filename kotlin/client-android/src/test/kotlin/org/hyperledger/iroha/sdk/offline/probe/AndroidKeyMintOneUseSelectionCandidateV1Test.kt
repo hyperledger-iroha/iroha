@@ -6,6 +6,8 @@ package org.hyperledger.iroha.sdk.offline.probe
 
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidOriginalJournalIoV1
 import org.hyperledger.iroha.sdk.crypto.keystore.AndroidOriginalJournalIoV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreAliasStateV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreUnavailableExceptionV1
 
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -133,6 +135,7 @@ class AndroidKeyMintOneUseSelectionCandidateV1Test {
         var deleteCalls = 0
         var readCalls = 0
         var active = false
+        var aliasProbeFails = false
         var selectedPublicKey = fakeSec1(1)
         var onGenerate: (() -> Unit)? = null
         var onSign: (() -> Unit)? = null
@@ -140,7 +143,10 @@ class AndroidKeyMintOneUseSelectionCandidateV1Test {
         var attestationChallenge = byteArrayOf()
         override fun hasHardwareSingleUseFeature() = feature
         override fun newChallenge() = ByteArray(32) { 7 }
-        override fun hasAlias(alias: String) = active
+        override fun aliasState(alias: String): AndroidKeystoreAliasStateV1 {
+            if (aliasProbeFails) throw AndroidKeystoreUnavailableExceptionV1("keystore2 binder failure")
+            return if (active) AndroidKeystoreAliasStateV1.PRESENT else AndroidKeystoreAliasStateV1.ABSENT
+        }
         override fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1 {
             check(!active) { "one-use alias already exists" }
             onGenerate?.invoke()
@@ -350,6 +356,26 @@ class AndroidKeyMintOneUseSelectionCandidateV1Test {
             val recovered = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
                 directory, TestJournalIo { })).prepare(lane, before, after)
             assertTrue(recovered is KeyMintOneUsePreparationResultV1.Frozen)
+            assertEquals(0, device.generateCalls)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun unanswerableAliasProbeFreezesBeforeAnyKeyIsGeneratedOrDeleted() {
+        val directory = Files.createTempDirectory("kagemusha-keymint-probe-").toFile()
+        try {
+            val device = FakeDevice().apply { aliasProbeFails = true }
+            val frozen = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                directory, TestJournalIo { })).prepare(lane, before, after)
+                as KeyMintOneUsePreparationResultV1.Frozen
+            assertEquals("alias", frozen.stage)
+            assertEquals(0, device.generateCalls)
+            assertEquals(0, device.deleteCalls)
+            device.aliasProbeFails = false
+            val retried = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                directory, TestJournalIo { })).prepare(lane, before, after)
+            assertTrue(retried is KeyMintOneUsePreparationResultV1.Frozen)
             assertEquals(0, device.generateCalls)
         } finally {
             directory.deleteRecursively()

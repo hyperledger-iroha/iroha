@@ -16,7 +16,7 @@ use iroha_operation_journal::{Journal, NativeRecord};
 use iroha_version::codec::DecodeVersioned as _;
 use norito::json::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest as _, Sha256};
-use std::{path::Path, time::Instant};
+use std::{cell::Cell, path::Path, time::Instant};
 
 use super::authorization::NativePinAuthorizationV1;
 
@@ -254,6 +254,7 @@ pub(in crate::musubi_publication_service) struct Slot {
     journal: Journal,
     request: SlotRequest,
     signed: Option<SignedTransaction>,
+    signed_persisted: Cell<bool>,
 }
 impl Slot {
     pub(in crate::musubi_publication_service) fn create(
@@ -268,6 +269,7 @@ impl Slot {
             journal,
             request,
             signed: None,
+            signed_persisted: Cell::new(false),
         })
     }
     pub(in crate::musubi_publication_service) fn open(
@@ -291,11 +293,56 @@ impl Slot {
             journal,
             request,
             signed: None,
+            signed_persisted: Cell::new(false),
         };
-        // Validate every stage before reporting a local phase. A partial later record is an error,
-        // never RequestOnly, and a recovered signed Check remains historical bytes only.
-        let payload = slot.payload()?;
-        if let Some(record) = slot
+        slot.signed = slot.read_durable_signed()?;
+        slot.signed_persisted.set(slot.signed.is_some());
+        Ok(slot)
+    }
+    /// Re-read the exact durable prefix under this already-held Journal lock. A valid in-memory
+    /// signature can precede its refused durable write, but cannot replace a changed disk record.
+    fn revalidate_original(&self) -> Result<()> {
+        norito::with_decode_limits_scope(LIMITS, || {
+            let durable = self.read_durable_signed()?;
+            match (&self.signed, durable) {
+                (Some(owned), Some(durable)) => {
+                    ensure!(
+                        self.signed_record(owned)? == self.signed_record(&durable)?,
+                        "held native signature differs from durable original"
+                    );
+                    self.signed_persisted.set(true);
+                }
+                (None, Some(_)) => eyre::bail!("held native slot lost its signed original"),
+                (Some(owned), None) => {
+                    ensure!(
+                        !self.signed_persisted.get(),
+                        "held native slot lost its persisted signature"
+                    );
+                    let payload = self
+                        .payload()?
+                        .ok_or_else(|| eyre::eyre!("held signature lost its payload"))?;
+                    self.verify_signed(owned, &payload)?;
+                    self.require_unretired()?;
+                }
+                (None, None) => {}
+            }
+            Ok(())
+        })
+    }
+    /// Shared decoder for detached reopen and held-owner inspection; neither repairs history.
+    fn read_durable_signed(&self) -> Result<Option<SignedTransaction>> {
+        self.journal.verify_native_inventory()?;
+        let request: SlotRequest = self
+            .journal
+            .read_native(NativeRecord::Request)?
+            .ok_or_else(|| eyre::eyre!("native pin slot lost its original request"))?;
+        ensure!(
+            request == self.request,
+            "native pin slot changed its original request"
+        );
+        request.validate()?;
+        let payload = self.payload()?;
+        let signed = if let Some(record) = self
             .journal
             .read_native::<SignedRecord>(NativeRecord::Operation)?
         {
@@ -304,36 +351,34 @@ impl Slot {
                 .ok_or_else(|| eyre::eyre!("native signed slot lost its payload"))?;
             let wire = decode_hex(&record.wire)?;
             let signed = SignedTransaction::decode_all_versioned(&wire)?;
-            slot.verify_signed(&signed, payload)?;
+            self.verify_signed(&signed, payload)?;
             ensure!(
-                record == slot.signed_record(&signed)?,
+                record == self.signed_record(&signed)?,
                 "native signed slot commitments differ"
             );
-            slot.signed = Some(signed);
+            self.journal.submission_recorded(&record)?;
+            Some(signed)
         } else {
             ensure!(
-                !slot.journal.has_dispatch_evidence()?,
+                !self.journal.has_dispatch_evidence()?,
                 "native unsigned slot contains exposure evidence"
             );
-        }
-        if slot
+            None
+        };
+        if let Some(retired) = self
             .journal
             .read_native::<Retirement>(NativeRecord::Retired)?
-            .is_some()
         {
             ensure!(
-                payload.is_none() && slot.signed.is_none(),
+                payload.is_none() && signed.is_none(),
                 "retired native request has later evidence"
             );
-            let retired: Retirement = slot.journal.read_native(NativeRecord::Retired)?.unwrap();
             ensure!(
-                retired.request == slot.request.hash()?,
+                retired.request == self.request.hash()?,
                 "native retirement differs from original request"
             );
         }
-        // This owner deliberately retains no decoded Applied flag. Finality is always read
-        // from the original native source, so an unexplained applied.json is inconsistent custody.
-        let directory = iroha_fs::PrivateDirectory::open(slot.journal.path())?;
+        let directory = iroha_fs::PrivateDirectory::open(self.journal.path())?;
         ensure!(
             directory
                 .entries(7)?
@@ -341,8 +386,7 @@ impl Slot {
                 .all(|name| name != "applied.json"),
             "native pin slot contains unsupported applied evidence"
         );
-        slot.exposed()?; // validates a present marker against the exact signed record.
-        Ok(slot)
+        Ok(signed)
     }
     pub(in crate::musubi_publication_service) fn open_retained(path: &Path) -> Result<Self> {
         norito::with_decode_limits_scope(LIMITS, || {
@@ -362,8 +406,8 @@ impl Slot {
             self.journal.path() == selected,
             "native pin slot directory differs"
         );
-        // This shared-owner inspection revalidates both retained directory and original lock.
-        self.journal.verify_native_inventory()?;
+        // Reuse the sole phase decoder without reopening our own exclusive lock.
+        self.revalidate_original()?;
         Ok(())
     }
     pub(in crate::musubi_publication_service) fn request(&self) -> &SlotRequest {
@@ -477,6 +521,7 @@ impl Slot {
             self.journal
                 .write_native(NativeRecord::Operation, &record)?;
         }
+        self.signed_persisted.set(true);
         Ok(())
     }
     fn verify_signed(

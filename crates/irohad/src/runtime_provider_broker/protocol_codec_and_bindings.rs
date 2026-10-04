@@ -347,6 +347,8 @@ struct DecodeResourcePolicyV1 {
     max_total_allocated_bytes: usize,
     element_headroom: usize,
     allocation_headroom_bytes: usize,
+    // Private schema work bound; ordinary operation policies retain one wire pass.
+    allocation_wire_passes: usize,
     max_nesting_depth: usize,
     // Process-wide reservation for the audited maximum simultaneously
     // live frame, typed value, and canonical-copy layers.
@@ -370,6 +372,7 @@ impl DecodeResourcePolicyV1 {
             max_total_allocated_bytes: total_caps.1,
             element_headroom: headroom.0,
             allocation_headroom_bytes: headroom.1,
+            allocation_wire_passes: 1,
             max_nesting_depth,
             max_composed_bytes: resource_caps.0,
             max_cumulative_bytes: resource_caps.1,
@@ -398,20 +401,24 @@ fn decode_resource_budget(
         || policy.max_blob_bytes == 0
         || policy.max_total_elements == 0
         || policy.max_total_allocated_bytes == 0
+        || policy.allocation_wire_passes == 0
         || policy.max_nesting_depth == 0
         || policy.max_composed_bytes == 0
         || policy.max_cumulative_bytes < policy.max_composed_bytes
     {
         return Err(BrokerError::Protocol);
     }
-    // Each allowance has an audited absolute ceiling. Wire length only
-    // reduces the allowance for a small value; it can never amplify it.
+    // Each allowance has its unchanged audited absolute ceiling. The ordinary
+    // one-pass policy keeps its previous fixed headroom. Complete beacon graphs
+    // additionally bound their actual schema framing/copy work by wire length;
+    // the source-derived multiplier never raises the absolute ceiling.
     let max_total_elements = encoded_len
         .checked_add(policy.element_headroom)
         .ok_or(BrokerError::Protocol)?
         .min(policy.max_total_elements);
     let max_total_allocated_bytes = encoded_len
-        .checked_add(policy.allocation_headroom_bytes)
+        .checked_mul(policy.allocation_wire_passes)
+        .and_then(|bytes| bytes.checked_add(policy.allocation_headroom_bytes))
         .ok_or(BrokerError::Protocol)?
         .min(policy.max_total_allocated_bytes);
     // A canonicality check allocates one exact re-encoding alongside the

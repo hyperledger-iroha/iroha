@@ -15,7 +15,7 @@ impl Kura {
     ) -> Result<
         Option<(
             iroha_data_model::kagemusha::KagemushaOrdinaryFinalizedMintCreditOriginalV1,
-            StableSidecarRead,
+            StableSidecarRead<Vec<u8>>,
         )>,
     > {
         let directory = self.ordinary_mint_credit_directory();

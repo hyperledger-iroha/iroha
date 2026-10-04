@@ -1498,6 +1498,21 @@ pub struct RansTablesBodyV1 {
     /// Frequency/cumulative tables per symbol group.
     pub groups: Vec<RansGroupTableV1>,
 }
+impl RansTablesBodyV1 {
+    /// Compute the V1 table checksum over the complete uncompressed Norito frame.
+    ///
+    /// This checksum domain explicitly selects fixed-width per-value lengths
+    /// (`flags = 0x00`), independently of the ambient layout or encode default.
+    /// The frame includes this body's canonical schema identity and header.
+    ///
+    /// # Errors
+    /// Returns an error if the body cannot be serialized.
+    pub fn checksum_sha256(&self) -> Result<[u8; 32], CoreError> {
+        use sha2::Digest as _;
+        let _flags = norito_core::DecodeFlagsGuard::enter(0);
+        Ok(sha2::Sha256::digest(norito_core::to_bytes(self)?).into())
+    }
+}
 const fn default_bundle_width() -> u8 {
     0
 }
@@ -1519,7 +1534,7 @@ pub struct RansTablesV1 {
     pub generated_at: Timestamp,
     /// Git commit hash of the generator producing the tables.
     pub generator_commit: String,
-    /// SHA-256 checksum of the [`RansTablesBodyV1`] Norito payload.
+    /// Canonical V1 checksum produced by [`RansTablesBodyV1::checksum_sha256`].
     pub checksum_sha256: [u8; 32],
     /// Deterministic table body.
     pub body: RansTablesBodyV1,

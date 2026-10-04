@@ -29,7 +29,7 @@ use thiserror::Error;
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[norito(tag = "type", content = "value")]
+#[norito(tag = "type", content = "value", decode_from_slice)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaProofScheme")]
 pub enum DaProofScheme {
@@ -52,7 +52,7 @@ pub enum DaProofScheme {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaProofPolicy")]
 pub struct DaProofPolicy {
@@ -65,44 +65,11 @@ pub struct DaProofPolicy {
     /// Proof scheme enforced for DA commitments on this lane.
     pub proof_scheme: DaProofScheme,
 }
-/// Versioned bundle of proof policies for all configured lanes.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::da::commitment::DaProofPolicyBundle")]
-pub struct DaProofPolicyBundle {
-    /// Bundle layout version.
-    pub version: u16,
-    /// Deterministic hash over the ordered policies in this bundle.
-    pub policy_hash: Hash,
-    /// Ordered proof policies referenced by lanes.
-    pub policies: Vec<DaProofPolicy>,
-}
-impl DaProofPolicyBundle {
-    /// Initial version identifier for proof policy bundles.
-    pub const VERSION_V1: u16 = 1;
-    /// Construct a bundle using the latest supported version.
-    #[must_use]
-    pub fn new(policies: Vec<DaProofPolicy>) -> Self {
-        Self {
-            version: Self::VERSION_V1,
-            policy_hash: hash_policies(&policies),
-            policies,
-        }
-    }
-}
+mod proof_policy;
+pub use proof_policy::{
+    DaProofPolicyBundle, DaProofPolicyCustodyError, PreparedDaProofPolicyBundle,
+};
+
 fn hash_policies(policies: &[DaProofPolicy]) -> Hash {
     let bytes = to_bytes(&policies.to_vec())
         .expect("serializing proof policies with Norito must not fail at runtime");
@@ -734,7 +701,7 @@ mod tests {
         switched.alias = "lane-b".to_string();
         let bundle_a = DaProofPolicyBundle::new(vec![base]);
         let bundle_b = DaProofPolicyBundle::new(vec![switched]);
-        assert_ne!(bundle_a.policy_hash, bundle_b.policy_hash);
+        assert_ne!(bundle_a.policy_hash(), bundle_b.policy_hash());
     }
     #[test]
     fn proof_policy_bundle_hash_stable_for_same_ordering() {
@@ -752,8 +719,8 @@ mod tests {
         };
         let first = DaProofPolicyBundle::new(vec![policy_a.clone(), policy_b.clone()]);
         let second = DaProofPolicyBundle::new(vec![policy_a, policy_b]);
-        assert_eq!(first.policy_hash, second.policy_hash);
-        assert_eq!(first.version, DaProofPolicyBundle::VERSION_V1);
+        assert_eq!(first.policy_hash(), second.policy_hash());
+        assert_eq!(first.version(), DaProofPolicyBundle::VERSION_V1);
     }
 }
 

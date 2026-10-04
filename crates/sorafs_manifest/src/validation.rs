@@ -48,13 +48,17 @@ pub enum ManifestDecodeError {
     /// Norito rejected the payload under the manifest resource budget.
     #[error("failed to decode bounded ManifestV1 payload: {source}")]
     Decode {
-        /// Original codec refusal, including its local allocation or scope identity.
+        /// Original typed codec failure, including its active-scope provenance.
         #[source]
         source: norito::Error,
     },
     /// The manifest could not be encoded canonically.
-    #[error("failed to encode canonical ManifestV1 payload: {reason}")]
-    CanonicalEncoding { reason: String },
+    #[error("failed to encode canonical ManifestV1 payload: {source}")]
+    CanonicalEncoding {
+        /// Original canonical encoder refusal without diagnostic reconstruction.
+        #[source]
+        source: norito::Error,
+    },
     /// The input contained a non-canonical or trailing-byte encoding.
     #[error("manifest payload is not the exact canonical Norito encoding")]
     NonCanonicalEncoding,
@@ -116,11 +120,8 @@ pub fn decode_manifest_v1_base64_canonical(
 pub fn encode_manifest_v1_base64_canonical(
     manifest: &ManifestV1,
 ) -> Result<String, ManifestDecodeError> {
-    let bytes = norito::encode_canonical(manifest).map_err(|error| {
-        ManifestDecodeError::CanonicalEncoding {
-            reason: error.to_string(),
-        }
-    })?;
+    let bytes = norito::encode_canonical(manifest)
+        .map_err(|source| ManifestDecodeError::CanonicalEncoding { source })?;
     if bytes.len() > MAX_MANIFEST_ENCODED_BYTES {
         return Err(ManifestDecodeError::PayloadTooLarge {
             found: bytes.len(),
@@ -826,6 +827,34 @@ mod tests {
         ));
     }
     #[test]
+    fn bounded_manifest_decoder_retains_original_active_allocation_refusal() {
+        use std::error::Error as _;
+
+        let original = norito::encode_canonical(&manifest_with_defaults()).unwrap();
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+        norito::with_decode_limits_scope(limits, || {
+            let error = decode_manifest_v1_canonical(&original).unwrap_err();
+            let source = error
+                .source()
+                .and_then(|source| source.downcast_ref::<norito::Error>())
+                .expect("original typed codec cause");
+            assert!(norito::core::decode_error_matches_active_limits(source));
+            let ManifestDecodeError::Decode { source } = error else {
+                panic!("expected the original typed canonical decoder refusal");
+            };
+            assert!(matches!(
+                source.decode_resource_error(),
+                Some(norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+            ));
+            assert!(norito::core::decode_error_matches_active_limits(&source));
+        });
+        assert_eq!(
+            decode_manifest_v1_canonical(&original).unwrap(),
+            manifest_with_defaults()
+        );
+    }
+
+    #[test]
     fn bounded_manifest_decoder_rejects_oversized_input_before_decode() {
         let oversized = vec![0_u8; MAX_MANIFEST_ENCODED_BYTES + 1];
         assert!(matches!(
@@ -835,27 +864,6 @@ mod tests {
                 maximum: MAX_MANIFEST_ENCODED_BYTES,
             }) if found == MAX_MANIFEST_ENCODED_BYTES + 1
         ));
-    }
-    #[test]
-    fn bounded_manifest_decoder_preserves_original_local_capacity_cause() {
-        use std::error::Error as _;
-
-        let manifest = manifest_with_defaults();
-        let canonical = manifest.encode().expect("canonical manifest");
-        let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
-        norito::with_decode_limits_scope(zero, || {
-            let error = decode_manifest_v1_canonical(&canonical)
-                .expect_err("inherited local allocation ceiling must refuse decode");
-            let source = error
-                .source()
-                .and_then(|source| source.downcast_ref::<norito::Error>())
-                .expect("original typed codec cause");
-            assert!(norito::core::decode_error_matches_active_limits(source));
-        });
-        assert_eq!(
-            decode_manifest_v1_canonical(&canonical).expect("same bytes retry after scope release"),
-            manifest
-        );
     }
     #[test]
     fn canonical_base64_manifest_codec_round_trips_and_rejects_malformed_text() {

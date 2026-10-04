@@ -681,9 +681,9 @@ Root {
         },
     },
     musubi_publication: MusubiPublication {
+        installation: None,
         custody_root: "./storage/musubi-publication",
         private_tls_bind: 127.0.0.1:18495,
-        private_mount_prefix: "/private",
         max_inflight_requests: 2,
         journal_max_operations: 1024,
         journal_max_authorizations: 4096,

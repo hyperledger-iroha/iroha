@@ -25,9 +25,9 @@ workspace = true
 [features]
 # Test-only deterministic daemon integration mutations; never enabled in shipping builds.
 mutation-testing = []
-# Portable daemon defaults retain automatic SIMD and target-appropriate Metal.
-# The canonical Linux release builder adds `ivm-cuda`, requiring the signed PTX
-# bundle while keeping nvcc and the driver out of build/startup dependencies.
+# Portable defaults retain automatic SIMD and target-appropriate Metal.
+# Linux/Windows dependencies compile IVM CUDA with source-owned optional
+# authentication; genuine absence preserves CPU builds/startup without nvcc.
 default = ["daemon", "iroha_core/simd"]
 daemon = [
     "telemetry",
@@ -45,9 +45,6 @@ daemon = [
 # Build the standalone external signer only in release lanes that request it.
 dev-tools = ["daemon", "zk-stark"]
 accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
-# Canonical Linux daemon release feature: IVM CUDA alone uses a runtime driver
-# loader and an embedded, signed PTX bundle.
-ivm-cuda = ["ivm/cuda"]
 # Explicit toolkit-coupled helper bundle; these helpers still require separate
 # nvcc/cudart qualification and are not part of driverless daemon defaults.
 accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
@@ -180,6 +177,7 @@ rand = { workspace = true }
 blake3 = { workspace = true }
 
 [dev-dependencies]
+iroha_deploy = { workspace = true }
 iroha_musubi_service = { workspace = true, features = ["test-fixtures"] }
 iroha_executor_data_model = { workspace = true }
 iroha_torii = { workspace = true, default-features = false, features = ["test-fixtures"] }
@@ -191,6 +189,12 @@ assertables = { workspace = true }
 iroha_test_samples = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
 rcgen = "0.14.5"
+time = { workspace = true }
+
+# Standard Linux/Windows daemons include the driverless optional IVM backend.
+# This mandatory target row preserves the macOS Metal graph.
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+ivm = { workspace = true, features = ["cuda"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["event", "fs", "net", "pipe", "process"] }

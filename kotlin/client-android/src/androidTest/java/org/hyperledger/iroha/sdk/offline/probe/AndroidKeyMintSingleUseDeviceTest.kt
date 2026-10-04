@@ -59,7 +59,8 @@ class AndroidKeyMintSingleUseDeviceTest {
         val alias = "iroha_keymint_strongbox_diagnostic_" +
             challenge.take(12).joinToString("") { "%02x".format(it.toInt() and 0xff) }
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        check(!store.containsAlias(alias)) { "diagnostic alias already exists" }
+        // keystore2 getKey: null is a definitive absence and a Keystore error throws.
+        check(store.getKey(alias, null) == null) { "diagnostic alias already exists" }
         try {
             val specification = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
                 .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
@@ -107,7 +108,8 @@ class AndroidKeyMintSingleUseDeviceTest {
                 "first signature valid; second signed=${second.isSuccess}; " +
                 "second failure=${second.exceptionOrNull()?.javaClass?.name}")
         } finally {
-            if (store.containsAlias(alias)) store.deleteEntry(alias)
+            // keystore2 treats a missing alias as deleted and reports every other error.
+            store.deleteEntry(alias)
         }
     }
 
@@ -116,7 +118,7 @@ class AndroidKeyMintSingleUseDeviceTest {
     fun pixel6RestartStage1ProvisionUnusedKey() {
         requirePixel6RestartProbe()
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        check(!store.containsAlias(restartAlias)) { "restart diagnostic alias already exists" }
+        check(store.getKey(restartAlias, null) == null) { "restart diagnostic alias already exists" }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val marker = File(context.noBackupFilesDir, restartMarker)
         check(!marker.exists()) { "restart diagnostic marker already exists" }
@@ -178,7 +180,7 @@ class AndroidKeyMintSingleUseDeviceTest {
             output.fd.sync()
         }
         Log.i("IrohaKeyMintProbe", "restart stage 2: first signature verified; " +
-            "signature SHA-256=$signatureDigest; alias remains=${store.containsAlias(restartAlias)}")
+            "signature SHA-256=$signatureDigest; alias remains=${aliasRemains(store, restartAlias)}")
     }
 
     /** Stage 3: after a device reboot, the consumed alias cannot produce a second signature. */
@@ -202,10 +204,12 @@ class AndroidKeyMintSingleUseDeviceTest {
         // A generic provider failure is not either documented exhausted-key observation.
         val observation = completeKeyMintRestartDiagnosticV1(
             verifyFreshControl = { verifyFreshRestartControlKey(store) },
+            // keystore2 getKey: null is a definitive deletion; a Keystore error throws rather
+            // than reading as the documented exhausted-key deletion.
             readConsumedKey = {
-                if (!store.containsAlias(restartAlias)) null
-                else store.getKey(restartAlias, null) as? PrivateKey
-                    ?: error("consumed alias exists but has no private key")
+                store.getKey(restartAlias, null)?.let {
+                    it as? PrivateKey ?: error("consumed alias exists but has no private key")
+                }
             },
             signConsumedKey = { key ->
                 Signature.getInstance("SHA256withECDSA").run {
@@ -230,7 +234,7 @@ class AndroidKeyMintSingleUseDeviceTest {
         val nonce = ByteArray(32).also(SecureRandom()::nextBytes)
         val alias = "iroha_keymint_restart_control_" +
             nonce.joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        check(!store.containsAlias(alias)) { "restart control alias already exists" }
+        check(store.getKey(alias, null) == null) { "restart control alias already exists" }
         try {
             val specification = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
                 .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
@@ -260,10 +264,18 @@ class AndroidKeyMintSingleUseDeviceTest {
                     verify(signature)
                 })
         } finally {
-            if (store.containsAlias(alias)) store.deleteEntry(alias)
-            check(!store.containsAlias(alias)) { "restart control alias cleanup failed" }
+            store.deleteEntry(alias)
+            check(store.getKey(alias, null) == null) { "restart control alias cleanup failed" }
         }
     }
+
+    /** Tri-state diagnostic text: a Keystore error is reported, never shown as a removed alias. */
+    private fun aliasRemains(store: KeyStore, alias: String): String =
+        try {
+            (store.getKey(alias, null) != null).toString()
+        } catch (error: Exception) {
+            "unknown (${error.javaClass.name})"
+        }
 
     private fun requirePixel6RestartProbe() {
         assertTrue("restart probe requires the physical Pixel 6",

@@ -180,7 +180,7 @@ SUMERAGI_EVIDENCE_CLASSES = {
 
 @dataclass(frozen=True)
 class SumeragiEvidencePenaltyDetails:
-    """Committed block height for an applied or cancelled penalty."""
+    """Canonical block height that applied the consensus penalty."""
 
     height: int
 
@@ -201,18 +201,9 @@ class SumeragiEvidenceAppliedPenaltyStatus:
     details: SumeragiEvidencePenaltyDetails
 
 
-@dataclass(frozen=True)
-class SumeragiEvidenceCancelledPenaltyStatus:
-    """Penalty lifecycle state for evidence cancelled in a committed block."""
-
-    status: Literal["cancelled"]
-    details: SumeragiEvidencePenaltyDetails
-
-
 SumeragiEvidencePenaltyStatus = Union[
     SumeragiEvidencePendingPenaltyStatus,
     SumeragiEvidenceAppliedPenaltyStatus,
-    SumeragiEvidenceCancelledPenaltyStatus,
 ]
 
 

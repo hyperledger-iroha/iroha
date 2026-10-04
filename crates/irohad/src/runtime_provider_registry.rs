@@ -1600,6 +1600,38 @@ impl IrohaRuntimeProviderBindingsV1 {
     pub const fn credential_max_memory_bytes(&self) -> usize {
         self.credential_max_memory_bytes
     }
+    /// Check the parsed local memory policy against this public assembly.
+    ///
+    /// A positive catalog bound must match exactly. Zero is valid only when
+    /// neither consensus threshold-signing slot is present and therefore grants
+    /// no threshold custody. This compares public metadata only; it does not
+    /// qualify a backend, validate credentials, or grant allocation credit.
+    /// The bound controls local operational admission, not transaction validity
+    /// or gas accounting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IrohaRuntimeProviderRegistryErrorV1::BindingMismatch`] before
+    /// credential input or backend discovery for a differing bound or a zero
+    /// bound attached to threshold custody.
+    pub fn validate_credential_memory_policy_v1(
+        &self,
+        policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
+    ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+        let has_threshold_custody = self.iter().any(|binding| {
+            matches!(
+                binding.slot(),
+                IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner
+                    | IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner
+            )
+        });
+        if (self.credential_max_memory_bytes != 0 || has_threshold_custody)
+            && self.credential_max_memory_bytes != policy.credential_max_memory_bytes.get()
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+        }
+        Ok(())
+    }
     /// Create the original finite pool once at a credential-registry service boundary.
     ///
     /// Pass this same pool to every current and pending credential import for that

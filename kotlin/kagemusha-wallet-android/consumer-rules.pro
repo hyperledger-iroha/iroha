@@ -41,3 +41,25 @@
 -keep class org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryMintFundingNativeProviderV1 {
     public <init>();
 }
+
+# KAGEMUSHA wallet Advance provider platform handle (G2). The Rust JNI adapter in
+# crates/connect_norito_bridge/src/platform_jni/kagemusha_wallet_advance.rs calls its private
+# upcalls and reads the internal result objects by name; app code has no public route to them.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidPlatformV1 {
+    private org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidKeyProbeV1 keyProbe(byte[]);
+    private org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidKeyGenerationV1 keyGenerate(byte[], byte[], int);
+    private org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidSignatureV1 keySign(byte[], byte[]);
+    private org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidRemoveV1 keyDelete(byte[]);
+    private org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidAttestationChainV1 attestationChain(byte[]);
+    private int anchorPolicyTag();
+    private org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidUnavailableV1 storageState();
+    private org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidCustodyRootV1 custodyRoot();
+}
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidUnavailableV1** { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidKeyProbeV1** { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidKeyGenerationV1** { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidSecurityLevelV1 { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidSignatureV1** { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidRemoveV1** { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidAttestationChainV1** { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletAndroidCustodyRootV1** { *; }

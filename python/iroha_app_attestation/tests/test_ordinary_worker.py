@@ -1,13 +1,17 @@
 """Actual private-pipe framing, independent of production Native startup."""
 import hashlib
+import http.client
 import json
 import os
 import threading
 import unittest
 from unittest.mock import Mock, patch
 from iroha_app_attestation.attestation import AttestationRejected
+from iroha_app_attestation.play_integrity import PlayIntegrityUnavailable
+from iroha_app_attestation.revocation import verify_google_chain_not_revoked
 from iroha_app_attestation import ordinary_worker as worker
 from iroha_app_attestation.ordinary_worker import NativeParentChannel
+from test_revocation import certificate
 
 
 class OrdinaryWorkerChannelTests(unittest.TestCase):
@@ -45,6 +49,33 @@ class OrdinaryWorkerChannelTests(unittest.TestCase):
         with self.assertRaises(AttestationRejected):self.channel.receive()
         os.write(self.input_write,(3*1024*1024+1).to_bytes(4,'little'))
         with self.assertRaises(AttestationRejected):self.channel.receive()
+
+
+class OrdinaryWorkerHardwareResultTests(unittest.TestCase):
+    class Hardware:
+        def __init__(self,action):self.action=action
+        def handle(self,phase,body):
+            self.seen=(phase,body);return self.action()
+
+    def test_google_outage_is_retryable_and_evidence_failure_is_rejected(self):
+        def revocation_outage():
+            # A real revocation lookup whose HTTP response is truncated.
+            with patch('iroha_app_attestation.revocation.urllib.request.build_opener') as build:
+                build.return_value.open.side_effect=http.client.IncompleteRead(b'')
+                verify_google_chain_not_revoked([certificate(0x2a),certificate(0x3b)])
+        def decoder_outage():raise PlayIntegrityUnavailable('Play Integrity decoder unavailable')
+        def rejected():raise AttestationRejected('revoked Android attestation certificate')
+        for action,expected in ((revocation_outage,(503,b'{"error":"issuer_unavailable"}')),
+                                (decoder_outage,(503,b'{"error":"issuer_unavailable"}')),
+                                (rejected,(400,b'{"error":"hardware evidence rejected"}')),
+                                (lambda:b'{"checked":true}',(200,b'{"checked":true}'))):
+            hardware=self.Hardware(action)
+            with self.subTest(action=action.__name__):
+                self.assertEqual(worker._hardware_result(hardware,'hardware_raw',b'{}'),expected)
+                self.assertEqual(hardware.seen,('hardware_raw',b'{}'))
+        def fault():raise RuntimeError('custody fault')
+        with self.assertRaisesRegex(RuntimeError,'custody fault'):
+            worker._hardware_result(self.Hardware(fault),'hardware_integrity',b'{}')
 
 
 class OrdinaryWorkerProtectionTests(unittest.TestCase):

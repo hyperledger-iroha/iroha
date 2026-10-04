@@ -30,7 +30,7 @@ pub fn encode_envelope(pointer_type: PointerType, frame: &[u8]) -> Result<Vec<u8
 /// # Errors
 /// Returns the exact numeric pointer fault for invalid frames or a checked length overflow.
 pub fn encode_int(value: &BigInt) -> Result<Vec<u8>, VMError> {
-    let frame = IntValueV1::try_new(value.clone())
+    let frame = IntValueV1::prepare_frame(value)
         .map_err(VMError::from)?
         .encode_frame()
         .map_err(VMError::from)?;
@@ -41,7 +41,7 @@ pub fn encode_int(value: &BigInt) -> Result<Vec<u8>, VMError> {
 /// # Errors
 /// Returns the exact numeric pointer fault for invalid frames or a checked length overflow.
 pub fn encode_decimal(value: &Numeric) -> Result<Vec<u8>, VMError> {
-    let frame = DecimalValueV1::new(value.clone())
+    let frame = DecimalValueV1::prepare_frame(value)
         .encode_frame()
         .map_err(VMError::from)?;
     encode_envelope(PointerType::Decimal, &frame)
@@ -51,7 +51,7 @@ pub fn encode_decimal(value: &Numeric) -> Result<Vec<u8>, VMError> {
 /// # Errors
 /// Returns the exact numeric pointer fault for invalid frames or a checked length overflow.
 pub fn encode_quantity(value: &Quantity) -> Result<Vec<u8>, VMError> {
-    let frame = QuantityValueV1::new(value.clone())
+    let frame = QuantityValueV1::prepare_frame(value)
         .encode_frame()
         .map_err(VMError::from)?;
     encode_envelope(PointerType::Quantity, &frame)
@@ -60,6 +60,23 @@ pub fn encode_quantity(value: &Quantity) -> Result<Vec<u8>, VMError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn integer_encoding_rejects_both_signed_domain_overflows() {
+        use crate::numeric::PointerAbiFaultV1;
+        use iroha_primitives::numeric::MAX_MANTISSA_BYTES;
+
+        let mut above = [0; MAX_MANTISSA_BYTES + 1];
+        above[MAX_MANTISSA_BYTES - 1] = 0x80;
+        let mut below = [0xff; MAX_MANTISSA_BYTES + 1];
+        below[MAX_MANTISSA_BYTES - 1] = 0x7f;
+        for bytes in [&above, &below] {
+            let value = BigInt::from_twos_bytes(bytes).expect("arbitrary-width integer");
+            assert_eq!(
+                encode_int(&value),
+                Err(VMError::PointerAbiFault(PointerAbiFaultV1::NonCanonical))
+            );
+        }
+    }
     #[test]
     fn all_shared_numeric_envelopes_match_the_cross_sdk_golden_bytes() {
         let fixture =

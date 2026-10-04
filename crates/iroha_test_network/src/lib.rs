@@ -12764,7 +12764,7 @@ mod tests {
         );
         let policies = resolve_da_proof_policies(peer, &config_layers)
             .expect("should resolve da proof policies");
-        assert_eq!(policies.policies.len(), 2);
+        assert_eq!(policies.policies().len(), 2);
         let actual = resolve_actual_config(peer, &config_layers)
             .expect("should resolve full config for genesis");
         assert_eq!(

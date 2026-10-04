@@ -90,8 +90,8 @@ fn owner_and_optional_domain_changes_keep_both_images_through_replacement() {
             block.commit();
         }
         world.rebuild_asset_definition_indexes().unwrap();
-        assert_eq!(check(&world, 1024), Ok(()));
-        let checked = CheckedAssetDefinitions::capture(&world, 1024).unwrap();
+        assert_eq!(check(&world, 16_777_216), Ok(()));
+        let checked = CheckedAssetDefinitions::capture(&world, 16_777_216).unwrap();
         let current = checked.rows().get(&id()).unwrap();
         assert_eq!(current.owned_by(), after.owned_by());
         assert_eq!(current.owning_domain(), after.owning_domain());
@@ -101,7 +101,7 @@ fn owner_and_optional_domain_changes_keep_both_images_through_replacement() {
         assert!(checked.matches_current().unwrap());
         drop(checked);
         world.block_and_revert().commit();
-        assert_eq!(check(&world, 1024), Ok(()));
+        assert_eq!(check(&world, 16_777_216), Ok(()));
         let view = world.asset_definitions.view();
         let restored = view.get(&id()).unwrap();
         assert_eq!(restored.owned_by(), before.owned_by());
@@ -136,7 +136,7 @@ fn each_projection_rejects_omitted_members_in_both_images() {
                 _ => unreachable!(),
             };
             assert_eq!(
-                check(&world, 1024),
+                check(&world, 16_777_216),
                 Err(corrupt(name, previous, GroupMismatch::MissingMember))
             );
         }
@@ -177,7 +177,7 @@ fn optional_and_unknown_contexts_and_empty_or_foreign_groups_are_rejected() {
                 _ => unreachable!(),
             };
             assert_eq!(
-                check(&world, 1024),
+                check(&world, 16_777_216),
                 Err(corrupt(
                     name,
                     previous,
@@ -218,7 +218,7 @@ fn source_reference_failures_precede_index_checks_and_leave_sources_unchanged() 
             let mut before = String::new();
             crate::state::snapshot_storage::serialize(&world.asset_definitions, &mut before);
             assert_eq!(
-                check(&world, 1024),
+                check(&world, 16_777_216),
                 Err(GroupedOwnershipError::Source {
                     table: "world.asset_definitions",
                     image: image(previous),
@@ -238,8 +238,9 @@ fn source_reference_failures_precede_index_checks_and_leave_sources_unchanged() 
 
 #[test]
 fn work_is_charged_before_rows_domain_lookups_and_absent_undo_inspections() {
-    for (context, exact) in [(false, 12), (true, 20)] {
+    for (context, exact, delta) in [(false, 434, 175), (true, 1218, 245)] {
         let world = fixture(context);
+        assert_eq!(test_support::world_work(&world), exact);
         assert_eq!(check(&world, exact), Ok(()));
         assert_eq!(
             check(&world, exact - 1),
@@ -254,10 +255,11 @@ fn work_is_charged_before_rows_domain_lookups_and_absent_undo_inspections() {
             block.commit();
         }
         assert_eq!(
-            check(&world, exact + 3),
+            check(&world, exact + delta - 1),
             Err(GroupedOwnershipError::WorkLimit)
         );
-        assert_eq!(check(&world, exact + 4), Ok(()));
+        assert_eq!(test_support::world_work(&world), exact + delta);
+        assert_eq!(check(&world, exact + delta), Ok(()));
     }
 }
 
@@ -265,7 +267,7 @@ fn work_is_charged_before_rows_domain_lookups_and_absent_undo_inspections() {
 fn every_original_source_and_index_reader_detects_native_publication() {
     for index in 0..7 {
         let world = fixture(true);
-        let checked = CheckedAssetDefinitions::capture(&world, 1024).unwrap();
+        let checked = CheckedAssetDefinitions::capture(&world, 16_777_216).unwrap();
         match index {
             0 => world.asset_definitions.block().commit(),
             1 => world.domains.block().commit(),
@@ -306,4 +308,74 @@ fn checked_capture_keeps_original_state_budget_refusal_and_retries() {
         .unwrap();
     assert_eq!(snapshot.table_id(), "world.asset_definitions");
     assert_eq!(snapshot.row_count(), 1);
+}
+
+#[test]
+fn every_asset_original_publication_precedes_success_work_and_semantic_outcomes() {
+    for source in 0..7 {
+        for outcome in 0..3 {
+            let world = fixture(true);
+            let checked = CheckedAssetDefinitions::capture(&world, 16_777_216).unwrap();
+            match source {
+                0 => world.asset_definitions.block().commit(),
+                1 => world.domains.block().commit(),
+                2 => world.asset_definition_domains.block().commit(),
+                3 => world.domain_asset_definitions.block().commit(),
+                4 => world.asset_definitions_by_owner.block().commit(),
+                5 => world.confidential_policy_transition_index.block().commit(),
+                6 => world.confidential_policy_transition_counts.block().commit(),
+                _ => unreachable!(),
+            };
+            let result = match outcome {
+                0 => Ok(()),
+                1 => Err(GroupedOwnershipError::WorkLimit),
+                _ => Err(corrupt(
+                    "world.asset_definition_domains",
+                    false,
+                    GroupMismatch::MissingMember,
+                )),
+            };
+            let mut error = None;
+            assert_eq!(
+                allocations_during(|| error = checked.finish_validation(result).err()),
+                0
+            );
+            assert_eq!(
+                error,
+                Some(GroupedOwnershipError::Publication(
+                    PublicationPreparationError::Changed
+                ))
+            );
+        }
+    }
+}
+#[test]
+fn first_original_busy_refusal_keeps_exact_release_and_all_probe_order() {
+    let world = fixture(true);
+    let checked = CheckedAssetDefinitions::capture(&world, 16_777_216).unwrap();
+    world.domains.block().commit();
+    world.confidential_policy_transition_counts.block().commit();
+    let detached = world
+        .asset_definitions
+        .block()
+        .try_detach(|_| Ok::<_, ()>(()))
+        .unwrap();
+    let prepared = detached
+        .try_prepare_publication(&world.asset_definitions, |_, _| Ok::<_, ()>(()))
+        .unwrap_or_else(|(_, error, _)| panic!("original preparation: {error:?}"));
+    let original = checked
+        .rows
+        .try_matches_current(&world.asset_definitions)
+        .unwrap_err();
+    assert!(matches!(original, PublicationPreparationError::Busy(_)));
+    let mut error = None;
+    assert_eq!(
+        allocations_during(|| error = checked
+            .finish_validation(Err(GroupedOwnershipError::WorkLimit))
+            .err()),
+        0
+    );
+    assert_eq!(error, Some(GroupedOwnershipError::Publication(original)));
+    drop(prepared);
+    assert_eq!(check(&world, 16_777_216), Ok(()));
 }

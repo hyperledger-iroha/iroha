@@ -481,6 +481,7 @@ fn sign_records(
         host_pair_sha256: request.hosts.digest()?,
         helper_source_closure_sha256: host_pair::helper_source_closure_sha256(),
         incumbent: capture.clone(),
+        incumbent_nginx_request: request.current_nginx_request.clone(),
         nginx_apply_plan: request.new_nginx_apply_plan.clone(),
         forwarding_plan: request.forwarding_plan.clone(),
         forwarding_identity_receipt: request.forwarding_identity_receipt.clone(),
@@ -1014,6 +1015,10 @@ mod tests {
             )
             .unwrap();
         capability.validate(&request.hosts).unwrap();
+        assert_eq!(
+            capability.incumbent_nginx_request,
+            request.current_nginx_request
+        );
         let mut substituted = capture.clone();
         substituted.claims.main_configuration.identity.inode += 1;
         assert!(

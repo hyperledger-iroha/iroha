@@ -39,7 +39,6 @@ fn format_evidence_summary(idx: usize, item: &SumeragiEvidenceAuditRecord) -> St
     let (penalty_status, penalty_height) = match item.penalty_status {
         SumeragiEvidencePenaltyStatus::Pending => ("pending", None),
         SumeragiEvidencePenaltyStatus::Applied { height } => ("applied", Some(height)),
-        SumeragiEvidencePenaltyStatus::Cancelled { height } => ("cancelled", Some(height)),
     };
     let offenders = item
         .offenders

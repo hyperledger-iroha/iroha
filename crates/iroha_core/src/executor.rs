@@ -1835,6 +1835,12 @@ pub enum NexusFeeAdmissionError {
     /// Node or persisted fee configuration is invalid.
     ConfigInvalid(String),
 }
+impl core::fmt::Display for NexusFeeAdmissionError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.reason())
+    }
+}
+impl std::error::Error for NexusFeeAdmissionError {}
 impl NexusFeeAdmissionError {
     fn rejected(code: FeeRejectionCode, reason: impl Into<String>) -> Self {
         Self::Rejected {

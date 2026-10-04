@@ -23,6 +23,7 @@ iroha = { workspace = true }
 iroha_contract_deploy = { workspace = true }
 iroha_storage_client = { workspace = true }
 iroha_wallet = { workspace = true }
+iroha_musubi_service = { workspace = true }
 iroha_config = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["node"] }
 iroha_core_zk = { workspace = true, default-features = false }
@@ -65,6 +66,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_System_Pipes", "Win32_Sys
 
 [dev-dependencies]
 iroha_operation_journal = { workspace = true }
+mv = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_version = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }

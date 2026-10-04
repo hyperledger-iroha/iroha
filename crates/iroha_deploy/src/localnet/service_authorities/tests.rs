@@ -116,7 +116,7 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
         );
     }
     assert_eq!(manifest.providers.len(), 3);
-    assert_eq!(manifest.network.authorities.len(), 2);
+    assert_eq!(manifest.network.authorities.len(), 3);
     assert_eq!(manifest.providers[0].authorities.len(), 10);
     for provider in &manifest.providers {
         assert_eq!(
@@ -783,6 +783,8 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
     );
     fs::remove_file(alias).unwrap();
     prepared.stream_token_authorities().unwrap().unwrap();
+    // Parent publication requires releasing its original descendant directory custody.
+    drop(credentials);
     let removed = inventory
         .rename_to_sibling("removed-native-authorities", PublishMode::CreateNew)
         .unwrap();

@@ -573,6 +573,81 @@ fn is_direct_call(op: &DecodedOp) -> bool {
     let opcode = wide::opcode(op.inst);
     opcode == wide::control::JALS || (opcode == wide::control::JAL && wide::rd(op.inst) == 1)
 }
+/// A nominal failure cannot successfully return from its authenticated consumer.
+/// The host either rejects it or synchronously halts with the complete error.
+fn is_terminal_contract_abort(op: &DecodedOp) -> bool {
+    decoded_syscall_number(op.inst) == Some(ivm_abi::syscalls::SYSCALL_CONTRACT_ABORT)
+}
+/// Prove the one finite nominal-abort suffix independently of compiler metadata.
+/// Only its exact beginning may receive ordinary unconditional transfers; no
+/// callable root, middle target, extra effect, return or substituted word is shared.
+fn shared_nominal_abort_tail_pcs(
+    decoded: &[DecodedOp],
+    instructions: &BTreeMap<u64, &DecodedOp>,
+    roots: &BTreeSet<u64>,
+) -> BTreeSet<u64> {
+    use ivm_abi::{encoding::wide as encoding, instruction::wide};
+    if !decoded.iter().any(is_terminal_contract_abort) {
+        return BTreeSet::new();
+    }
+    let ordinary_jump = |op: &DecodedOp| {
+        wide::opcode(op.inst) == wide::control::JMP
+            || (wide::opcode(op.inst) == wide::control::JAL && wide::rd(op.inst) == 0)
+    };
+    // One target census covers all decoded edges, including unreachable words.
+    // False records any incoming edge that could call or conditionally enter.
+    let mut incoming = BTreeMap::<u64, bool>::new();
+    for op in decoded {
+        if let Some(target) = direct_control_flow_target(op) {
+            incoming
+                .entry(target)
+                .and_modify(|allowed| *allowed &= ordinary_jump(op))
+                .or_insert_with(|| ordinary_jump(op));
+        }
+    }
+    let expected = [
+        encoding::encode_sys(
+            wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        ),
+        encoding::encode_rr(wide::arithmetic::ADDI, 12, 0, 0),
+        encoding::encode_rr(wide::arithmetic::ADDI, 13, 0, 0),
+        encoding::encode_rr(wide::arithmetic::ADDI, 14, 0, 0),
+        encoding::encode_rr(wide::arithmetic::ADDI, 15, 0, 0),
+        encoding::encode_sys(
+            wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_CONTRACT_ABORT as u8,
+        ),
+    ];
+    let mut proven = BTreeSet::new();
+    for suffix in decoded.windows(expected.len()) {
+        let start = suffix[0].pc;
+        if incoming.get(&start) != Some(&true)
+            || suffix.iter().enumerate().any(|(index, op)| {
+                op.inst != expected[index]
+                    || start.checked_add((index as u64) * 4) != Some(op.pc)
+                    || roots.contains(&op.pc)
+                    || (index != 0 && incoming.contains_key(&op.pc))
+            })
+        {
+            continue;
+        }
+        let Some(previous) = start.checked_sub(4).and_then(|pc| instructions.get(&pc)) else {
+            continue;
+        };
+        if !matches!(
+            wide::opcode(previous.inst),
+            wide::control::HALT | wide::control::JALR
+        ) && !ordinary_jump(previous)
+            && !is_terminal_contract_abort(previous)
+        {
+            // A normal path must not fall through into the borrowed failure body.
+            continue;
+        }
+        proven.extend(suffix.iter().map(|op| op.pc));
+    }
+    proven
+}
 /// Validate the deployable direct-call graph without trusting compiler metadata.
 fn validate_nonrecursive_direct_calls(
     decoded: &[DecodedOp],
@@ -593,6 +668,7 @@ fn validate_nonrecursive_direct_calls(
         })?;
         roots.insert(target);
     }
+    let terminal_tail_pcs = shared_nominal_abort_tail_pcs(decoded, &instructions, &roots);
     let mut owners = BTreeMap::<u64, u64>::new();
     let mut pending = roots
         .iter()
@@ -601,7 +677,7 @@ fn validate_nonrecursive_direct_calls(
         .collect::<VecDeque<_>>();
     while let Some((pc, owner)) = pending.pop_front() {
         if let Some(previous) = owners.get(&pc).copied() {
-            if previous != owner {
+            if previous != owner && !terminal_tail_pcs.contains(&pc) {
                 return Err(ContractArtifactError::invalid(format!(
                     "ordinary control flow at pc {pc} is shared by function roots {previous} and {owner}; helper entry requires a direct call"
                 )));
@@ -614,6 +690,9 @@ fn validate_nonrecursive_direct_calls(
                 "function root {owner} reaches non-instruction pc {pc}"
             ))
         })?;
+        if is_terminal_contract_abort(op) {
+            continue;
+        }
         let opcode = wide::opcode(op.inst);
         let fallthrough = || {
             op.pc.checked_add(4).ok_or_else(|| {
@@ -768,6 +847,9 @@ fn reachable_syscalls(
         })?;
         if let Some(number) = decoded_syscall_number(op.inst) {
             syscalls.insert(number);
+        }
+        if is_terminal_contract_abort(op) {
+            continue;
         }
         let opcode = wide::opcode(op.inst);
         let fallthrough = op.pc.checked_add(4);
@@ -1930,3 +2012,6 @@ mod tests {
             .expect_err("a CNTR type whose canonical runtime schema exceeds 64 KiB must reject");
     }
 }
+
+#[cfg(test)]
+mod nominal_abort_tests;

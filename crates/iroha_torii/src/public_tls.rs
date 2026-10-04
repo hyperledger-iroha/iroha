@@ -42,61 +42,20 @@ impl PreparedHttps {
     /// Read bounded native private files and check the actual leaf/key pair.
     pub(super) fn load(config: &ToriiHttpsTransport) -> io::Result<Self> {
         validate(config)?;
-        let mut certificates = Vec::with_capacity(config.certificate_chain.len());
-        for path in &config.certificate_chain {
-            let bytes = iroha_fs::read_private(path, https::MAX_DER_BYTES)?;
-            if bytes.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "empty Torii HTTPS certificate",
-                ));
-            }
-            let (remaining, _) = x509_parser::parse_x509_certificate(&bytes).map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "invalid Torii HTTPS certificate DER",
-                )
-            })?;
-            if !remaining.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "trailing Torii HTTPS certificate bytes",
-                ));
-            }
-            certificates.push(CertificateDer::from(bytes.to_vec()));
-        }
+        let certificates = config
+            .certificate_chain
+            .iter()
+            .map(|path| iroha_fs::read_private(path, https::MAX_DER_BYTES))
+            .collect::<io::Result<Vec<_>>>()?;
         let bytes = iroha_fs::read_private(&config.private_key, https::MAX_DER_BYTES)?;
-        let private_key = PrivateKeyDer::try_from(bytes.to_vec()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid Torii HTTPS private key DER",
-            )
-        })?;
-        // The ordinary Rustls owner validates DER and the leaf/private-key match.
-        // Name, certificate lifetime and root validation remain with TLS clients.
-        let mut server = rustls::ServerConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Torii HTTPS protocol configuration failed",
-            )
-        })?
-        .with_no_client_auth()
-        .with_single_cert(certificates, private_key)
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid Torii HTTPS certificate/key identity",
-            )
-        })?;
-        server.max_early_data_size = 0;
-        server.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let borrowed = certificates
+            .iter()
+            .map(|bytes| bytes.as_slice())
+            .collect::<Vec<_>>();
+        let server = native_https_server_identity_v1(&borrowed, &bytes)?;
         Ok(Self {
             address: config.address.value().clone(),
-            acceptor: TlsAcceptor::from(Arc::new(server)),
+            acceptor: TlsAcceptor::from(server),
             handshake_timeout: config.handshake_timeout,
         })
     }
@@ -112,6 +71,48 @@ impl PreparedHttps {
             },
         })
     }
+}
+
+/// Build an ordinary native server identity from bounded runtime-held DER originals.
+///
+/// This shares the public and private listener's sole DER/key admission. It grants no route,
+/// provider or native service authority. Root/name/time verification belongs to TLS clients.
+/// # Errors
+/// Invalid bounds, malformed/trailing DER, or a certificate/private-key mismatch.
+pub fn native_https_server_identity_v1(
+    certificate_chain: &[&[u8]],
+    private_key: &[u8],
+) -> io::Result<Arc<rustls::ServerConfig>> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid native HTTPS identity");
+    if !(1..=https::MAX_CERTIFICATES).contains(&certificate_chain.len())
+        || private_key.is_empty()
+        || private_key.len() > https::MAX_DER_BYTES
+    {
+        return Err(invalid());
+    }
+    let mut certificates = Vec::with_capacity(certificate_chain.len());
+    for bytes in certificate_chain {
+        if bytes.is_empty() || bytes.len() > https::MAX_DER_BYTES {
+            return Err(invalid());
+        }
+        let (remaining, _) = x509_parser::parse_x509_certificate(bytes).map_err(|_| invalid())?;
+        if !remaining.is_empty() {
+            return Err(invalid());
+        }
+        certificates.push(CertificateDer::from(bytes.to_vec()));
+    }
+    let private_key = PrivateKeyDer::try_from(private_key.to_vec()).map_err(|_| invalid())?;
+    let mut server = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|_| invalid())?
+    .with_no_client_auth()
+    .with_single_cert(certificates, private_key)
+    .map_err(|_| invalid())?;
+    server.max_early_data_size = 0;
+    server.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(Arc::new(server))
 }
 
 #[derive(Clone)]

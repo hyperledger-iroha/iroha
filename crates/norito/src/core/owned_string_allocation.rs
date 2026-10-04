@@ -1,7 +1,7 @@
 // Fallible exact retained storage for owned strings decoded from Norito.
 #[allow(unsafe_code)]
-fn try_copy_string_for_decode(bytes: &[u8]) -> Result<String, Error> {
-    std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
+fn try_copy_string_for_decode(value: &str) -> Result<String, Error> {
+    let bytes = value.as_bytes();
     if bytes.is_empty() {
         return Ok(String::new());
     }
@@ -17,7 +17,7 @@ fn try_copy_string_for_decode(bytes: &[u8]) -> Result<String, Error> {
     // SAFETY: source and destination are valid, exact, non-overlapping buffers.
     unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), allocation, bytes.len()) };
     let slice = std::ptr::slice_from_raw_parts_mut(allocation, bytes.len());
-    // SAFETY: the exact allocation is initialized and UTF-8 was checked above.
+    // SAFETY: the exact allocation is initialized from the kernel-validated str.
     let owned = unsafe { Box::from_raw(slice) }.into_vec();
     Ok(unsafe { String::from_utf8_unchecked(owned) })
 }

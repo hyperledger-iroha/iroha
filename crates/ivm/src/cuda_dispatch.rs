@@ -22,14 +22,14 @@ use std::{
 };
 
 mod admission;
-pub(crate) mod bn254;
+pub(crate) mod measured;
 use admission::KernelAdmission;
 
 struct DevicePolicy {
     slot: usize,
     identity: DeviceIdentity,
     kernels: [KernelAdmission; Kernel::ALL.len()],
-    bn254_costs: [crate::cuda_bn254_cost::ProfileCell; 3],
+    measured_costs: [crate::cuda_cost::ProfileCell; crate::cuda_cost::FAMILY_COUNT],
 }
 struct Policies {
     records: Mutex<ChargedBuffer<ChargedShared<DevicePolicy>>>,
@@ -56,6 +56,9 @@ thread_local! {
 thread_local! { static QUALIFICATION: Cell<Option<usize>> = const { Cell::new(None) }; }
 
 fn physical_process() -> Option<&'static CudaProcess> {
+    if !crate::cuda_artifact::eligible() {
+        return None;
+    }
     CudaProcess::get().or_else(|| {
         let config = crate::acceleration_config();
         CudaProcess::install(config.resource_limits).ok()
@@ -113,7 +116,7 @@ fn policy_for(device: &CudaDevice<'static>, slot: usize) -> Option<ChargedShared
             slot,
             identity: device.identity(),
             kernels: std::array::from_fn(|_| KernelAdmission::default()),
-            bn254_costs: std::array::from_fn(|_| crate::cuda_bn254_cost::ProfileCell::default()),
+            measured_costs: std::array::from_fn(|_| crate::cuda_cost::ProfileCell::default()),
         },
         &mut reservation,
     )
@@ -390,7 +393,7 @@ pub(crate) fn with_device_for_qualification<T>(
     index: usize,
     call: impl FnOnce() -> T,
 ) -> Option<T> {
-    CudaProcess::get()?.device(index)?;
+    physical_process()?.device(index)?;
     struct Restore(Option<usize>);
     impl Drop for Restore {
         fn drop(&mut self) {

@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     bn254_vec::{BatchOperation, cpu_batch_into},
-    cuda_bn254_cost::{CalibrationFailure, CostProfile, SIZES, TRIALS, TrialSample},
+    cuda_cost::{CalibrationFailure, CostProfile, SIZES, TRIALS, TrialSample},
     field_dispatch::{FieldArithmetic, field_impl},
 };
 use iroha_accel::ProcessResources;
@@ -51,7 +51,7 @@ pub(super) fn calibrate(
     let mut cpu_output = allocate()?;
     let mut gpu_output = allocate()?;
     let (golden_left, golden_right) = golden_operands();
-    let kernel = crate::cuda_dispatch::bn254::kernel(operation);
+    let kernel = kernel(operation);
     let expected =
         golden_output(kernel, &golden_left, &golden_right).ok_or(CalibrationFailure::Deferred)?;
     for index in 0..left.len() {

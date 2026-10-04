@@ -90,10 +90,10 @@ mod history;
 mod host;
 #[path = "taira_public_reset_host_pair.rs"]
 mod host_pair;
-#[path = "taira_public_reset_native_edge_protocol.rs"]
-mod native_edge_protocol;
 #[path = "taira_public_reset_native_edge_prepare.rs"]
 mod native_edge_prepare;
+#[path = "taira_public_reset_native_edge_protocol.rs"]
+mod native_edge_protocol;
 #[path = "taira_public_reset_validator_config.rs"]
 mod validator_config;
 pub(crate) use host::maintenance::StoppedOwnerMaintenance;
@@ -2446,7 +2446,11 @@ fn validate_validator(
     host::occupied::validate_occupied_binding(validator)
 }
 
-fn validate_edge(edge: &EdgeV1, revision: &RevisionV1, hosts: &host_pair::ResetHostPairV1) -> Result<()> {
+fn validate_edge(
+    edge: &EdgeV1,
+    revision: &RevisionV1,
+    hosts: &host_pair::ResetHostPairV1,
+) -> Result<()> {
     hosts.validate()?;
     edge.native_capability.validate(hosts)?;
     let native = &hosts.native_edge;
@@ -2455,11 +2459,21 @@ fn validate_edge(edge: &EdgeV1, revision: &RevisionV1, hosts: &host_pair::ResetH
         || edge.service_root != service_root
         || edge.state_root != format!("{service_root}/state")
         || edge.reset_guard != format!("{}/taira-edge", native.custody_root)
-        || edge.nginx_config != edge.native_capability.incumbent.claims.owned_publication.publication.file.path
-        || edge.platform.os != "macos" || edge.platform.arch != "aarch64"
+        || edge.nginx_config
+            != edge
+                .native_capability
+                .incumbent
+                .claims
+                .owned_publication
+                .publication
+                .file
+                .path
+        || edge.platform.os != "macos"
+        || edge.platform.arch != "aarch64"
         || edge.platform.kvm_api_version != 0
         || edge.endpoint.hostname != native.endpoint.hostname
-        || edge.endpoint.user != native.endpoint.user || edge.endpoint.port != native.endpoint.port
+        || edge.endpoint.user != native.endpoint.user
+        || edge.endpoint.port != native.endpoint.port
         || edge.endpoint.known_host_line_sha256 != native.endpoint.known_host_line_sha256
         || edge.endpoint.host_identity_sha256 != native.endpoint.host_identity_sha256
         || edge.endpoint.upload_guard_sha256 != native.guard_sha256
@@ -2479,11 +2493,17 @@ fn validate_edge(edge: &EdgeV1, revision: &RevisionV1, hosts: &host_pair::ResetH
         }
         validate_lower_hex("edge rollback CLI SHA-256", &release.cli_sha256, 64)?;
         validate_lower_hex("edge rollback config SHA-256", &release.config_sha256, 64)?;
-        if json::to_json(release)? != json::to_json(&edge.native_capability.incumbent.claims.release)? {
-            return Err(eyre!("native edge rollback release differs from its signed captured incumbent"));
+        if json::to_json(release)?
+            != json::to_json(&edge.native_capability.incumbent.claims.release)?
+        {
+            return Err(eyre!(
+                "native edge rollback release differs from its signed captured incumbent"
+            ));
         }
     } else {
-        return Err(eyre!("native edge requires an independently captured owned incumbent publication"));
+        return Err(eyre!(
+            "native edge requires an independently captured owned incumbent publication"
+        ));
     }
     validate_artifacts(
         &edge.artifacts,
@@ -3227,7 +3247,9 @@ fn validate_known_host_endpoints(endpoints: &[&EndpointV1], path: &Path) -> Resu
             && (previous.host_identity_sha256 != endpoint.host_identity_sha256
                 || previous.known_host_line_sha256 != endpoint.known_host_line_sha256)
         {
-            return Err(eyre!("roles sharing one SSH route disagree on its independently admitted pins"));
+            return Err(eyre!(
+                "roles sharing one SSH route disagree on its independently admitted pins"
+            ));
         }
     }
     if physical.len() != 2 || lines.len() != physical.len() {
@@ -8882,7 +8904,8 @@ mod executor_model {
                 } else {
                     sample_inventory()
                 };
-                validate_inventory_structure(&original).expect("complete admitted MacStadium host pair");
+                validate_inventory_structure(&original)
+                    .expect("complete admitted MacStadium host pair");
                 for mask in 0_u8..15 {
                     let mut inventory = original.clone();
                     for (index, validator) in inventory.validators.iter_mut().enumerate() {
@@ -8891,8 +8914,10 @@ mod executor_model {
                                 hex::encode([index as u8 + 1; 32]);
                         }
                     }
-                    assert!(validate_inventory_structure(&inventory).is_err(),
-                        "every guest role must retain the exact admitted route (vacant={vacant}, mask={mask})");
+                    assert!(
+                        validate_inventory_structure(&inventory).is_err(),
+                        "every guest role must retain the exact admitted route (vacant={vacant}, mask={mask})"
+                    );
                 }
             }
         }
@@ -8971,45 +8996,97 @@ mod executor_model {
         fn host_pair_known_hosts_binds_two_independent_actual_native_keys() {
             use base64::Engine as _;
             let directory = private_tempdir();
-            let root = directory.path().canonicalize().expect("canonical fixture root");
+            let root = directory
+                .path()
+                .canonicalize()
+                .expect("canonical fixture root");
             let mut inventory = sample_inventory();
             let public_identity = |byte| {
                 let mut wire = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
                 wire.extend_from_slice(&[byte; 32]);
-                format!("ssh-ed25519 {}", base64::engine::general_purpose::STANDARD.encode(wire))
+                format!(
+                    "ssh-ed25519 {}",
+                    base64::engine::general_purpose::STANDARD.encode(wire)
+                )
             };
             let guest_identity = public_identity(1);
             let native_identity = public_identity(2);
-            let guest_line = format!("{} {guest_identity}", inventory.hosts.validator_guest.endpoint.hostname);
-            let native_line = format!("{} {native_identity}", inventory.hosts.native_edge.endpoint.hostname);
-            inventory.hosts.validator_guest.endpoint.host_identity_sha256 = sha256_hex(guest_identity.as_bytes());
-            inventory.hosts.validator_guest.endpoint.known_host_line_sha256 = sha256_hex(guest_line.as_bytes());
-            inventory.hosts.native_edge.endpoint.host_identity_sha256 = sha256_hex(native_identity.as_bytes());
-            inventory.hosts.native_edge.endpoint.known_host_line_sha256 = sha256_hex(native_line.as_bytes());
+            let guest_line = format!(
+                "{} {guest_identity}",
+                inventory.hosts.validator_guest.endpoint.hostname
+            );
+            let native_line = format!(
+                "{} {native_identity}",
+                inventory.hosts.native_edge.endpoint.hostname
+            );
+            inventory
+                .hosts
+                .validator_guest
+                .endpoint
+                .host_identity_sha256 = sha256_hex(guest_identity.as_bytes());
+            inventory
+                .hosts
+                .validator_guest
+                .endpoint
+                .known_host_line_sha256 = sha256_hex(guest_line.as_bytes());
+            inventory.hosts.native_edge.endpoint.host_identity_sha256 =
+                sha256_hex(native_identity.as_bytes());
+            inventory.hosts.native_edge.endpoint.known_host_line_sha256 =
+                sha256_hex(native_line.as_bytes());
             for validator in &mut inventory.validators {
-                validator.endpoint = endpoint(&inventory.hosts.validator_guest, &validator.service_root, &inventory.revision);
+                validator.endpoint = endpoint(
+                    &inventory.hosts.validator_guest,
+                    &validator.service_root,
+                    &inventory.revision,
+                );
             }
-            inventory.edge.endpoint = endpoint(&inventory.hosts.native_edge, &inventory.edge.service_root, &inventory.revision);
-            inventory.edge.native_capability = native_edge_protocol::fixture_capability(&inventory.hosts,
-                inventory.edge.admitted_release().unwrap().clone(), &inventory.authorization_nonce, &inventory.previous_genesis_hash);
+            inventory.edge.endpoint = endpoint(
+                &inventory.hosts.native_edge,
+                &inventory.edge.service_root,
+                &inventory.revision,
+            );
+            inventory.edge.native_capability = native_edge_protocol::fixture_capability(
+                &inventory.hosts,
+                inventory.edge.admitted_release().unwrap().clone(),
+                &inventory.authorization_nonce,
+                &inventory.previous_genesis_hash,
+            );
             let path = root.join("known-hosts");
             let mut file = create_private_new(&path).expect("private known-host fixture");
-            file.write_all(format!("{guest_line}\n{native_line}\n").as_bytes()).expect("write known-hosts");
+            file.write_all(format!("{guest_line}\n{native_line}\n").as_bytes())
+                .expect("write known-hosts");
             drop(file);
-            validate_inventory_structure(&inventory).expect("canonical two-host structural inventory");
-            drop(validate_known_hosts(&inventory, &path).expect("each native physical host pins its own key"));
-            let mut disagreement=inventory.clone();
-            disagreement.validators[1].endpoint.known_host_line_sha256="f".repeat(64);
-            assert!(validate_known_hosts(&disagreement,&path).is_err(),"roles sharing one physical route cannot disagree on its pin");
+            validate_inventory_structure(&inventory)
+                .expect("canonical two-host structural inventory");
+            drop(
+                validate_known_hosts(&inventory, &path)
+                    .expect("each native physical host pins its own key"),
+            );
+            let mut disagreement = inventory.clone();
+            disagreement.validators[1].endpoint.known_host_line_sha256 = "f".repeat(64);
+            assert!(
+                validate_known_hosts(&disagreement, &path).is_err(),
+                "roles sharing one physical route cannot disagree on its pin"
+            );
 
             let foreign_identity = public_identity(3);
             let foreign_line = format!("{} {foreign_identity}", inventory.edge.endpoint.hostname);
             inventory.edge.endpoint.known_host_line_sha256 = sha256_hex(foreign_line.as_bytes());
-            fs::write(&path, format!("{guest_line}\n{foreign_line}\n")).expect("substitute native edge key");
-            assert!(validate_known_hosts(&inventory, &path).is_err(), "a line digest cannot authenticate another native host key");
+            fs::write(&path, format!("{guest_line}\n{foreign_line}\n"))
+                .expect("substitute native edge key");
+            assert!(
+                validate_known_hosts(&inventory, &path).is_err(),
+                "a line digest cannot authenticate another native host key"
+            );
             inventory.edge.endpoint.host_identity_sha256 = sha256_hex(foreign_identity.as_bytes());
-            drop(validate_known_hosts(&inventory, &path).expect("transport can measure the substituted public key"));
-            assert!(validate_inventory_structure(&inventory).is_err(), "transport observation cannot replace the independently admitted native host pair");
+            drop(
+                validate_known_hosts(&inventory, &path)
+                    .expect("transport can measure the substituted public key"),
+            );
+            assert!(
+                validate_inventory_structure(&inventory).is_err(),
+                "transport observation cannot replace the independently admitted native host pair"
+            );
         }
 
         #[test]
@@ -9241,7 +9318,22 @@ mod executor_model {
                 .expect("canonical vacant inventory is admissible");
             assert!(decoded.validators.iter().all(ValidatorV1::is_vacant));
             assert!(!decoded.edge.is_vacant());
-            assert_eq!(decoded.edge.native_capability.incumbent.claims.owned_publication.operation_id, canonical.edge.native_capability.incumbent.claims.owned_publication.operation_id);
+            assert_eq!(
+                decoded
+                    .edge
+                    .native_capability
+                    .incumbent
+                    .claims
+                    .owned_publication
+                    .operation_id,
+                canonical
+                    .edge
+                    .native_capability
+                    .incumbent
+                    .claims
+                    .owned_publication
+                    .operation_id
+            );
 
             for edge in [false, true] {
                 let mut invalid: Value = json::from_slice(
@@ -9569,7 +9661,11 @@ mod executor_model {
             wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
             assert!(validate_inventory_structure(&wrong).is_err());
             let mut wrong = inventory;
-            wrong.edge.native_capability.helper_source_closure_sha256.clear();
+            wrong
+                .edge
+                .native_capability
+                .helper_source_closure_sha256
+                .clear();
             assert!(validate_inventory_structure(&wrong).is_err());
         }
 
@@ -9818,11 +9914,15 @@ mod executor_model {
                     peer_id: client.peer_id.clone(),
                 })
                 .collect();
-            let edge_root = format!("{}/.local/share/iroha/taira/edge", hosts.native_edge.owner_home);
+            let edge_root = format!(
+                "{}/.local/share/iroha/taira/edge",
+                hosts.native_edge.owner_home
+            );
             let edge_release = EdgeAdmittedReleaseV1 {
                 commit: "4".repeat(40),
                 release_root: format!("{edge_root}/releases/{}", "4".repeat(40)),
-                cli_sha256: "a".repeat(64), config_sha256: "b".repeat(64),
+                cli_sha256: "a".repeat(64),
+                config_sha256: "b".repeat(64),
             };
             let mut native_artifacts = artifacts(&edge_root, &revision, &EDGE_ARTIFACT_ROLES);
             for artifact in &mut native_artifacts {
@@ -9872,11 +9972,16 @@ mod executor_model {
                     service_root: edge_root.to_owned(),
                     state_root: format!("{edge_root}/state"),
                     reset_guard: format!("{}/taira-edge", hosts.native_edge.custody_root),
-                    nginx_config: "/opt/homebrew/etc/nginx/servers/taira-public-validator-listeners.conf".into(),
+                    nginx_config:
+                        "/opt/homebrew/etc/nginx/servers/taira-public-validator-listeners.conf"
+                            .into(),
                     artifacts: native_artifacts,
-                    native_capability: native_edge_protocol::fixture_capability(&hosts,
-                        edge_release.clone(), "abcdefghijklmnopqrstuvwx12345678",
-                        &Hash::new(b"fixture previous Taira genesis").to_string()),
+                    native_capability: native_edge_protocol::fixture_capability(
+                        &hosts,
+                        edge_release.clone(),
+                        "abcdefghijklmnopqrstuvwx12345678",
+                        &Hash::new(b"fixture previous Taira genesis").to_string(),
+                    ),
                     initial_state: EdgeInitialStateV1::AdmittedRelease(edge_release),
                 },
                 inrou_canary: Some(InrouCanaryV1 {
@@ -9975,7 +10080,11 @@ mod executor_model {
             inventory
         }
 
-        fn endpoint(host: &host_pair::ResetHostV1, root: &str, revision: &RevisionV1) -> EndpointV1 {
+        fn endpoint(
+            host: &host_pair::ResetHostV1,
+            root: &str,
+            revision: &RevisionV1,
+        ) -> EndpointV1 {
             EndpointV1 {
                 hostname: host.endpoint.hostname.clone(),
                 port: host.endpoint.port,

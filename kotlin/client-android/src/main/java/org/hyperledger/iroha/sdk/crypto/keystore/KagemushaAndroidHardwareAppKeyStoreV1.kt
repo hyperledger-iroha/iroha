@@ -3,15 +3,7 @@ package org.hyperledger.iroha.sdk.crypto.keystore
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
-import android.security.keystore.StrongBoxUnavailableException
-import androidx.annotation.Keep
-import androidx.annotation.RequiresApi
-import java.security.KeyFactory
-import java.security.KeyPairGenerator
-import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
@@ -24,7 +16,6 @@ import org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryIdentityOriginalTransp
 import org.hyperledger.iroha.sdk.offline.KagemushaNativeRawAppIdentityAdmissionV1
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
-import java.security.spec.ECGenParameterSpec
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AndroidKeyAttestationOriginalV1
 import org.hyperledger.iroha.sdk.offline.KagemushaPlatformAttestationOriginalV1
 
@@ -48,62 +39,72 @@ class KagemushaAndroidHardwareAppKeyEvidenceV1 internal constructor(val security
 /** Shared ordinary app-key adapter. No custom applet or finite-use key is required to enroll.
  * StrongBox is preferred when available; only an independently permitted TEE policy may use TEE.
  * The original alias must be recovered after uncertainty, never replaced by a new identity.
+ *
+ * Every existence decision is the tri-state `getKey` probe ([probeAndroidKeystoreAliasV1]): a
+ * Keystore error stops the call and is never read as absence, a key is generated only after a
+ * definitive absence, and nothing here deletes or regenerates a key in response to an error.
+ * Custody requires keystore2 (API 31+). keystore1 cannot prove that an alias is empty, so every
+ * call refuses below API 31, as the KAGEMUSHA wallet payment key does.
  */
-class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
-    private val context = context.applicationContext
+class KagemushaAndroidHardwareAppKeyStoreV1 internal constructor(
+    private val keyStore: AndroidKeystoreV1,
+    private val hasStrongBox: () -> Boolean,
+) {
+    constructor(context: Context) : this(AndroidSystemKeystoreV1(), kagemushaAppKeyStrongBoxFeatureV1(context.applicationContext))
+
     fun issueExact(alias: String, challenge: ByteArray, policy: KagemushaAndroidAppKeyHardwarePolicyV1,
         requireCurrent: () -> Unit): KagemushaAndroidHardwareAppKeyEvidenceV1 = synchronized(lock) {
         requireCurrent(); requireAvailable()
         val digest = challenge.copyOf(); require(alias.isNotBlank() && alias.length <= 128 && digest.size == 32)
-        val strongBox = persistentHardwareAppKeyStrongBoxRequestedV1(Build.VERSION.SDK_INT, policy,
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE))
-        val store = keyStore(); check(!store.containsAlias(alias)) { "Original app key already exists; recover it" }
+        val strongBox = persistentHardwareAppKeyStrongBoxRequestedV1(keyStore.apiLevel, policy, hasStrongBox())
+        requireDefinitelyAbsent(alias)
         fun generate(strong: Boolean) {
-            requireCurrent(); check(!store.containsAlias(alias))
-            KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore").apply {
-                initialize(persistentHardwareAppKeyParametersV1(alias, digest, strong))
-            }.generateKeyPair()
+            requireCurrent(); requireDefinitelyAbsent(alias)
+            keyStore.generate(AndroidKeystoreEcKeyRequestV1(alias, digest, strong))
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && strongBox) PersistentAppStrongBoxApi28V1.generate(::generate) {
-            // A definite StrongBox-unavailable result may use the policy-approved TEE under the
-            // same original alias. Any retained key or another uncertain error stops instead.
-            requireCurrent()
-            policy == KagemushaAndroidAppKeyHardwarePolicyV1.TEE_OR_STRONGBOX && !store.containsAlias(alias)
+        if (strongBox) {
+            try { generate(true) }
+            catch (unavailable: AndroidKeystoreStrongBoxUnavailableV1) {
+                // A definite StrongBox-unavailable result may use the policy-approved TEE under the
+                // same original alias, after a second definitive absence. A retained key or a
+                // Keystore that cannot answer stops instead.
+                requireCurrent()
+                if (policy != KagemushaAndroidAppKeyHardwarePolicyV1.TEE_OR_STRONGBOX) {
+                    throw IllegalStateException("Required StrongBox is unavailable", unavailable)
+                }
+                generate(false)
+            }
         } else generate(false)
-        requireCurrent(); loadExact(store, alias, digest, policy).also { requireCurrent() }
+        requireCurrent(); loadExact(alias, digest, policy).also { requireCurrent() }
     }
     fun recoverExact(alias: String, challenge: ByteArray, policy: KagemushaAndroidAppKeyHardwarePolicyV1,
         requireCurrent: () -> Unit): KagemushaAndroidHardwareAppKeyEvidenceV1? = synchronized(lock) {
         requireCurrent(); requireAvailable()
-        requirePersistentAppHardwarePolicyApiV1(Build.VERSION.SDK_INT, policy)
-        val store = keyStore()
-        if (!store.containsAlias(alias)) return@synchronized null
-        loadExact(store, alias, challenge.copyOf(), policy).also { requireCurrent() }
+        // Null only for a definitive keystore2 absence; a Keystore that cannot answer throws.
+        keyStore.probe(alias) ?: return@synchronized null
+        loadExact(alias, challenge.copyOf(), policy).also { requireCurrent() }
     }
     /** Internal native-original signer. No key is generated, replaced or exported by this path. */
     internal fun originalSignatureDevice(): KagemushaAndroidAppSignatureDeviceV1 = object : KagemushaAndroidAppSignatureDeviceV1 {
         override fun signOriginal(original: KagemushaAndroidHeldAppSignatureV1): ByteArray = synchronized(lock) {
             original.requireOriginal(); requireAvailable()
-            val store = keyStore(); requireOriginalKey(store, original)
-            val key = checkNotNull(store.getKey(original.alias, null)) as PrivateKey
+            requireOriginalKey(original)
+            val key = presentPrivateKey(original.alias)
             original.requireOriginal()
-            Signature.getInstance("SHA256withECDSA").run {
-                initSign(key); update(original.signingBytes()); sign()
-            }.also { original.requireOriginal() }
+            keyStore.sign(key, original.signingBytes()).also { original.requireOriginal() }
         }
         override fun verifyOriginal(original: KagemushaAndroidHeldAppSignatureV1, signatureDer: ByteArray) = synchronized(lock) {
             original.requireOriginal(); requireAvailable(); requireCanonicalP256SignatureDerV1(signatureDer)
-            val store = keyStore(); requireOriginalKey(store, original)
-            val publicKey = checkNotNull(store.getCertificate(original.alias)).publicKey
+            requireOriginalKey(original)
+            val publicKey = leafCertificate(original.alias).publicKey
             check(Signature.getInstance("SHA256withECDSA").run {
                 initVerify(publicKey); update(original.signingBytes()); verify(signatureDer)
             }) { "Retained app signature does not belong to the original key and bytes" }
             original.requireOriginal()
         }
     }
-    private fun requireOriginalKey(store: KeyStore, original: KagemushaAndroidHeldAppSignatureV1) {
-        val evidence = loadExact(store, original.alias, original.attestationChallenge(), original.hardwarePolicy)
+    private fun requireOriginalKey(original: KagemushaAndroidHeldAppSignatureV1) {
+        val evidence = loadExact(original.alias, original.attestationChallenge(), original.hardwarePolicy)
         check(MessageDigest.isEqual(evidence.attestedKeyId(), original.attestedKeyId())) { "Original app approval key changed" }
         original.requireOriginal()
     }
@@ -187,26 +188,24 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
         requireCurrent: () -> Unit): ByteArray = synchronized(lock) {
         requireCurrent(); requireAvailable()
         requireAppPlatformSigningMessageV1(message, purpose)
-        val store = keyStore()
-        check(store.containsAlias(alias)) { "The enrolled app key is missing; native recovery is required" }
-        val original = loadExact(store, alias, generationChallenge.copyOf(), policy)
+        // Null is a definitive keystore2 absence; a Keystore that cannot answer throws instead.
+        checkNotNull(keyStore.probe(alias)) { "The enrolled app key is missing; native recovery is required" }
+        val original = loadExact(alias, generationChallenge.copyOf(), policy)
         requireOriginalAppKeyBindingV1(original.publicKeySec1(), original.attestedKeyId(), expectedPoint, expectedKeyId)
         requireCurrent()
-        val key = store.getKey(alias, null) as? PrivateKey
-            ?: error("Original app signing key is unavailable")
+        val key = presentPrivateKey(alias)
         check(key.encoded == null) { "Original app key must remain nonexportable" }
-        val certificate = store.getCertificate(alias) as? X509Certificate
-            ?: error("Original app-key certificate is unavailable")
+        val certificate = leafCertificate(alias)
         val public = certificate.publicKey as? ECPublicKey
             ?: error("Original app-key certificate is not P-256")
         // Re-read the original alias after loading its private key and immediately before
         // the actual platform call; neither an endpoint projection nor an app DTO selects it.
-        val rechecked = loadExact(store, alias, generationChallenge, policy)
+        val rechecked = loadExact(alias, generationChallenge, policy)
         requireOriginalAppKeyBindingV1(rechecked.publicKeySec1(), rechecked.attestedKeyId(), expectedPoint, expectedKeyId)
         requireCurrent()
         val signature = signOriginalAndroidAppMessageV1(key, public, message, purpose, requireCurrent)
         try {
-            val retained = loadExact(store, alias, generationChallenge, policy)
+            val retained = loadExact(alias, generationChallenge, policy)
             requireOriginalAppKeyBindingV1(retained.publicKeySec1(), retained.attestedKeyId(), expectedPoint, expectedKeyId)
             requireCurrent()
             signature
@@ -216,36 +215,41 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
         }
     }
 
-    private fun requireAvailable() { check(isPlatformApiAvailable()) { "Hardware app-key API26 support is unavailable" } }
-    private fun keyStore() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-    private fun loadExact(store: KeyStore, alias: String, challenge: ByteArray,
+    private fun requireAvailable() {
+        check(persistentHardwareAppKeyApiAvailableV1(keyStore.apiLevel)) { HARDWARE_APP_KEY_KEYSTORE2_REQUIRED_V1 }
+    }
+    /** Generation precondition: the tri-state probe reports a definitive absence. */
+    private fun requireDefinitelyAbsent(alias: String) {
+        check(keyStore.probe(alias) == null) { "Original app key already exists; recover it" }
+    }
+    /** The present private key of [alias]; a definitive absence and a Keystore error both stop. */
+    private fun presentPrivateKey(alias: String): PrivateKey =
+        checkNotNull(keyStore.probe(alias)) { "Original app signing key is unavailable" } as? PrivateKey
+            ?: error("Original app signing key is unavailable")
+    /** Leaf certificate of a present key; a missing chain is a Keystore error, never absence. */
+    private fun leafCertificate(alias: String): X509Certificate =
+        keyStore.getCertificateChain(alias)?.firstOrNull() as? X509Certificate
+            ?: error("Original app-key certificate is unavailable")
+    private fun loadExact(alias: String, challenge: ByteArray,
         policy: KagemushaAndroidAppKeyHardwarePolicyV1): KagemushaAndroidHardwareAppKeyEvidenceV1 {
         require(alias.isNotBlank() && alias.length <= 128 && challenge.size == 32)
-        val key = checkNotNull(store.getKey(alias, null)) { "Original app key disappeared" }
-        val info = KeyFactory.getInstance("EC", "AndroidKeyStore").getKeySpec(key, KeyInfo::class.java)
-        val chain = checkNotNull(store.getCertificateChain(alias)).map { it as X509Certificate }
+        val key = checkNotNull(keyStore.probe(alias)) { "Original app key disappeared" } as? PrivateKey
+            ?: error("Original app key is not a private key")
+        val facts = keyStore.facts(key)
+        val chain = checkNotNull(keyStore.getCertificateChain(alias)) { "Original app-key certificate chain is unavailable" }
+            .map { it as? X509Certificate ?: error("Original app-key certificate is not X.509") }
         val der = chain.map(X509Certificate::getEncoded)
         check(der.size in 2..8 && der.all { it.isNotEmpty() && it.size <= 16 * 1024 })
         val attested = AndroidKeyAttestationOriginalV1.persistentAppHardwareSecurityLevel(chain, challenge)
-        val modern = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-        val reportedLevel = if (modern) PersistentAppKeyInfoApi31V1.securityLevel(info) else null
-        val remaining = if (modern) PersistentAppKeyInfoApi31V1.remainingUsageCount(info) else null
-        val level = requirePersistentAppHardwareMetadataV1(Build.VERSION.SDK_INT, info.isInsideSecureHardware,
-            attested.encodedValue, reportedLevel, remaining)
-        if (modern) {
-            requirePersistentHardwareAppKeyV1(level, info.origin, info.purposes, info.digests.toSet(),
-                checkNotNull(remaining), key.encoded != null, policy)
-        } else {
-            // The original signed extension rejected finite tag405 above. API26–30 provides no
-            // remainingUsageCount readback; do not substitute a handset/software count for it.
-            requirePersistentHardwareAppKeyWithoutUsageMetadataV1(level, info.origin, info.purposes,
-                info.digests.toSet(), key.encoded != null, policy)
-        }
+        val level = requirePersistentAppHardwareMetadataV1(keyStore.apiLevel, facts.insideSecureHardware,
+            attested.encodedValue, facts.securityLevel, facts.remainingUsageCount)
+        requirePersistentHardwareAppKeyV1(level, facts.origin, facts.purposes, facts.digests,
+            facts.remainingUsageCount, key.encoded != null, policy)
         val point = AndroidKeyAttestationOriginalV1.publicKeySec1(chain)
         return KagemushaAndroidHardwareAppKeyEvidenceV1(level, MessageDigest.getInstance("SHA-256").digest(point), point, der)
     }
     companion object {
-        /** Provisioning API eligibility only; actual key custody, attestation and Native admission are separate. */
+        /** Provisioning API eligibility (keystore2, API 31+) only; actual key custody, attestation and Native admission are separate. */
         @JvmStatic fun isPlatformApiAvailable(): Boolean = persistentHardwareAppKeyApiAvailableV1(Build.VERSION.SDK_INT)
         private val lock = Any()
         @JvmStatic fun originalAlias(account: String, clientNonceHex: String, signedPreparation: ByteArray): String {
@@ -258,66 +262,30 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
     }
 }
 
-internal fun persistentHardwareAppKeyApiAvailableV1(apiLevel: Int): Boolean = apiLevel >= Build.VERSION_CODES.O
+/** `FEATURE_STRONGBOX_KEYSTORE`; read only after the keystore2 check. */
+private fun kagemushaAppKeyStrongBoxFeatureV1(context: Context): () -> Boolean =
+    { context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE) }
 
-internal fun requirePersistentAppHardwarePolicyApiV1(api: Int, policy: KagemushaAndroidAppKeyHardwarePolicyV1) {
-    check(persistentHardwareAppKeyApiAvailableV1(api)) { "Hardware app-key API26 support is unavailable" }
-    check(api >= Build.VERSION_CODES.P || policy != KagemushaAndroidAppKeyHardwarePolicyV1.STRONGBOX_ONLY) {
-        "Required StrongBox is unavailable"
-    }
-}
+private const val HARDWARE_APP_KEY_KEYSTORE2_REQUIRED_V1 =
+    "Hardware app-key custody requires keystore2 (API 31+); keystore1 cannot prove an alias is empty"
+
+/** keystore2 only: below API 31 `getKey` cannot report a definitive absence. */
+internal fun persistentHardwareAppKeyApiAvailableV1(apiLevel: Int): Boolean = apiLevel >= ANDROID_KEYSTORE2_MIN_API_V1
 
 internal fun persistentHardwareAppKeyStrongBoxRequestedV1(api: Int, policy: KagemushaAndroidAppKeyHardwarePolicyV1,
     hasStrongBox: Boolean): Boolean {
-    requirePersistentAppHardwarePolicyApiV1(api, policy)
-    val strongBox = api >= Build.VERSION_CODES.P && hasStrongBox && policy != KagemushaAndroidAppKeyHardwarePolicyV1.TEE_ONLY
+    check(persistentHardwareAppKeyApiAvailableV1(api)) { HARDWARE_APP_KEY_KEYSTORE2_REQUIRED_V1 }
+    val strongBox = hasStrongBox && policy != KagemushaAndroidAppKeyHardwarePolicyV1.TEE_ONLY
     check(strongBox || policy != KagemushaAndroidAppKeyHardwarePolicyV1.STRONGBOX_ONLY) { "Required StrongBox is unavailable" }
     return strongBox
 }
 
-internal fun persistentHardwareAppKeyParametersV1(alias: String, challenge: ByteArray, strongBox: Boolean): KeyGenParameterSpec {
-    require(alias.isNotBlank() && challenge.size == 32)
-    check(persistentHardwareAppKeyApiAvailableV1(Build.VERSION.SDK_INT)) { "Hardware app-key API26 support is unavailable" }
-    check(!strongBox || Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) { "Required StrongBox is unavailable" }
-    val builder = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
-        .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-        .setDigests(KeyProperties.DIGEST_SHA256).setAttestationChallenge(challenge.copyOf())
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) PersistentAppStrongBoxApi28V1.configure(builder, strongBox)
-    return builder.build()
-}
-
-/** Keep API28 method and exception linkage out of the API26/27 TEE path, including shrinking. */
-@RequiresApi(28)
-@Keep
-private object PersistentAppStrongBoxApi28V1 {
-    fun configure(builder: KeyGenParameterSpec.Builder, strongBox: Boolean) {
-        builder.setIsStrongBoxBacked(strongBox)
-    }
-    fun generate(generate: (Boolean) -> Unit, mayUseTee: () -> Boolean) {
-        try { generate(true) }
-        catch (unavailable: StrongBoxUnavailableException) {
-            if (!mayUseTee()) throw unavailable
-            generate(false)
-        }
-    }
-}
-
-/** Modern readback is absent on older APIs, rather than replaced by synthetic metadata. */
-@RequiresApi(31)
-@Keep
-private object PersistentAppKeyInfoApi31V1 {
-    fun securityLevel(info: KeyInfo): Int = info.securityLevel
-    fun remainingUsageCount(info: KeyInfo): Int = info.remainingUsageCount
-}
+/** Exact persistent custody: a level [policy] admits, generated on the device, `PURPOSE_SIGN` and
+ * `SHA-256` only, not exportable, and unlimited use.
+ */
 internal fun requirePersistentHardwareAppKeyV1(level: Int, origin: Int, purposes: Int, digests: Set<String>,
     remaining: Int, exportable: Boolean, policy: KagemushaAndroidAppKeyHardwarePolicyV1) {
     check(remaining == KeyProperties.UNRESTRICTED_USAGE_COUNT) { "Original persistent app-key usage metadata differs" }
-    requirePersistentHardwareAppKeyWithoutUsageMetadataV1(level, origin, purposes, digests, exportable, policy)
-}
-
-/** API26–30 checks actual custody/parameters after exact signed-extension finite-tag rejection. */
-internal fun requirePersistentHardwareAppKeyWithoutUsageMetadataV1(level: Int, origin: Int, purposes: Int,
-    digests: Set<String>, exportable: Boolean, policy: KagemushaAndroidAppKeyHardwarePolicyV1) {
     val admittedLevel = when (policy) {
         KagemushaAndroidAppKeyHardwarePolicyV1.STRONGBOX_ONLY -> level == KeyProperties.SECURITY_LEVEL_STRONGBOX
         KagemushaAndroidAppKeyHardwarePolicyV1.TEE_ONLY -> level == KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT
@@ -330,24 +298,18 @@ internal fun requirePersistentHardwareAppKeyWithoutUsageMetadataV1(level: Int, o
     }
 }
 
-/** Legacy custody uses actual KeyInfo hardware residency plus the exact signed extension level.
- * Null modern-only fields represent an unavailable API, never a software usage-count substitute.
+/** keystore2 custody uses actual KeyInfo hardware residency, a KeyInfo security level equal to the
+ * exact signed extension level, and unlimited use.
  */
 internal fun requirePersistentAppHardwareMetadataV1(api: Int, insideSecureHardware: Boolean,
-    attestedLevel: Int, reportedLevel: Int?, remaining: Int?): Int {
-    check(api >= 26 && insideSecureHardware && attestedLevel in setOf(
+    attestedLevel: Int, reportedLevel: Int, remaining: Int): Int {
+    check(persistentHardwareAppKeyApiAvailableV1(api)) { HARDWARE_APP_KEY_KEYSTORE2_REQUIRED_V1 }
+    check(insideSecureHardware && attestedLevel in setOf(
         KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT, KeyProperties.SECURITY_LEVEL_STRONGBOX)) {
         "Persistent app key lacks actual hardware custody or an exact attested hardware level"
     }
-    check(api >= 28 || attestedLevel == KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT) {
-        "Original pre-StrongBox app key must have the attested TEE level"
-    }
-    if (api >= 31) {
-        check(reportedLevel == attestedLevel && remaining == KeyProperties.UNRESTRICTED_USAGE_COUNT) {
-            "Original modern hardware metadata differs from the signed persistent key"
-        }
-    } else {
-        check(reportedLevel == null && remaining == null) { "Legacy hardware metadata was invented" }
+    check(reportedLevel == attestedLevel && remaining == KeyProperties.UNRESTRICTED_USAGE_COUNT) {
+        "Original modern hardware metadata differs from the signed persistent key"
     }
     return attestedLevel
 }

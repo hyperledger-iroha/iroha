@@ -400,7 +400,7 @@ fn reveal_event_joins_outer_source_and_preserves_inner_signed_identity() {
 #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
 #[norito_schema(name = "iroha_core::block::event::tests::MutableEventBlockWire")]
 struct MutableEventBlockWire {
-    signatures: BTreeSet<BlockSignature>,
+    signatures: iroha_data_model::block::BlockSignatures,
     payload: BlockPayload,
     result: Option<BlockResult>,
     commit_certificate: Option<iroha_data_model::block::CommitCertificate>,

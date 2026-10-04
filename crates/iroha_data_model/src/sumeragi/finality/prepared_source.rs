@@ -2,7 +2,10 @@
 //!
 //! The generated artifact/journal field walk remains the only wire traversal. These
 //! destinations borrow raw byte leaves and retain physically funded spans instead of
-//! copying each artifact body. Decoded `SignedBlock` graphs are a separate obligation.
+//! copying each artifact body. Indexed views retain a borrow of the same original
+//! charged source; ordinary owned journals cannot create this provenance.
+//! TODO: physically fund every decoded `SignedBlock` payload/result/DA and authority
+//! graph. This storage seam grants no finality or whole-native-graph guarantee.
 
 use super::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits};
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
@@ -19,13 +22,14 @@ use norito::core::{
 enum Frames<'a> {
     Owned(&'a [NativeFinalityArtifact]),
     Indexed {
-        source: &'a [u8],
+        source: &'a ChargedBuffer<u8>,
         spans: &'a [SequenceSpan],
     },
 }
 
 /// One borrowed native journal source, with one canonical `SignedBlockWire` per height.
 /// This transport view grants no finality authority and never decodes blocks itself.
+/// The consuming block/native verifier must validate each opaque wire and protocol.
 #[derive(Clone, Copy)]
 pub struct NativeFinalitySource<'a> {
     frames: Frames<'a>,
@@ -53,7 +57,7 @@ impl<'a> NativeFinalitySource<'a> {
     }
     /// Borrow each original canonical wire without copying its bytes.
     #[must_use]
-    pub fn blocks(self) -> NativeFinalityFrames<'a> {
+    pub fn frames(self) -> NativeFinalityFrames<'a> {
         NativeFinalityFrames {
             source: self,
             index: 0,
@@ -69,7 +73,8 @@ impl<'a> NativeFinalitySource<'a> {
             return Err("native journal block count exceeds its configured bound".into());
         }
         let mut total = 0_usize;
-        for wire in self.blocks() {
+        for frame in self.frames() {
+            let wire = frame.wire();
             if wire.is_empty() || wire.len() > limits.block_bytes {
                 return Err("native journal contains an oversized or empty frame".into());
             }
@@ -84,24 +89,97 @@ impl<'a> NativeFinalitySource<'a> {
     }
 }
 
-/// Exact borrowed sequence of canonical block wires from one immutable source.
+#[derive(Clone, Copy)]
+enum Frame<'a> {
+    Owned(&'a [u8]),
+    Charged(NativeFinalityChargedFrame<'a>),
+}
+
+/// One original native frame with privately constructed storage provenance.
+///
+/// A legitimate ordinary journal exposes its original wire without charged
+/// provenance. Only the complete prepared canonical journal can create a charged
+/// frame. Neither form authenticates a block, quorum or native finality.
+#[derive(Clone, Copy)]
+pub struct NativeFinalityFrame<'a> {
+    frame: Frame<'a>,
+}
+impl<'a> NativeFinalityFrame<'a> {
+    /// Borrow the exact original block wire bytes without copying them.
+    #[must_use]
+    pub fn wire(&self) -> &'a [u8] {
+        match self.frame {
+            Frame::Owned(wire) => wire,
+            Frame::Charged(source) => source.wire(),
+        }
+    }
+
+    /// Borrow charged provenance only when the prepared canonical source established it.
+    #[must_use]
+    pub fn charged_source(&self) -> Option<NativeFinalityChargedFrame<'a>> {
+        match self.frame {
+            Frame::Owned(_) => None,
+            Frame::Charged(source) => Some(source),
+        }
+    }
+}
+
+/// A canonically bounded frame borrowing its original charged journal allocation.
+///
+/// Fields and construction are private. The borrow keeps the source backing and
+/// charge inseparable while it is in use. This proves original storage identity
+/// only; the consuming native verifier still authenticates the complete protocol.
+#[derive(Clone, Copy)]
+pub struct NativeFinalityChargedFrame<'a> {
+    source: &'a ChargedBuffer<u8>,
+    span: SequenceSpan,
+}
+impl<'a> NativeFinalityChargedFrame<'a> {
+    /// Borrow the original complete source owner, never a projected or copied wire.
+    #[must_use]
+    pub fn original_source(&self) -> &'a ChargedBuffer<u8> {
+        self.source
+    }
+
+    /// Exact canonical wire range within the original initialized source backing.
+    #[must_use]
+    pub fn span(&self) -> SequenceSpan {
+        self.span
+    }
+
+    /// Borrow the canonically validated range from the same original source.
+    #[must_use]
+    pub fn wire(&self) -> &'a [u8] {
+        &self.source.as_slice()[self.span.start..self.span.end]
+    }
+
+    /// Whether this actual original source owner belongs to the supplied finite pool.
+    #[must_use]
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.source.belongs_to(budget)
+    }
+}
+
+/// Exact borrowed sequence of original native frames from one immutable source.
 pub struct NativeFinalityFrames<'a> {
     source: NativeFinalitySource<'a>,
     index: usize,
 }
 impl<'a> Iterator for NativeFinalityFrames<'a> {
-    type Item = &'a [u8];
+    type Item = NativeFinalityFrame<'a>;
     fn next(&mut self) -> Option<Self::Item> {
-        let wire = match self.source.frames {
-            Frames::Owned(frames) => frames.get(self.index)?.block_wire.as_slice(),
+        let frame = match self.source.frames {
+            Frames::Owned(frames) => Frame::Owned(frames.get(self.index)?.block_wire.as_slice()),
             Frames::Indexed { source, spans } => {
-                let span = spans.get(self.index)?;
-                // Only the private canonical destination can construct indexed spans.
-                source.get(span.start..span.end)?
+                let span = *spans.get(self.index)?;
+                // Only the complete private canonical destination supplies these
+                // original-source ranges; keep the existing checked range boundary.
+                source.as_slice().get(span.start..span.end)?;
+                Frame::Charged(NativeFinalityChargedFrame { source, span })
             }
         };
         self.index += 1;
-        Some(wire)
+        Some(NativeFinalityFrame { frame })
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         let left = self.source.len() - self.index;
@@ -123,6 +201,9 @@ pub enum PreparedNativeFinalityDestinationError {
 /// Original preparation, canonical decoding or immutable-source custody failure.
 #[derive(Debug, thiserror::Error)]
 pub enum PreparedNativeFinalityError {
+    /// The actual source allocation belongs to another original finite pool.
+    #[error("native journal source belongs to another original pool")]
+    ForeignPool,
     /// Explicit source bounds were invalid or a decoded source exceeded them.
     #[error("native prepared journal: {0}")]
     Invalid(String),
@@ -174,7 +255,9 @@ impl SourceIdentity {
 /// Construct this owner before the private protocol attempt begins. Every decode
 /// borrows its complete original input; no artifact byte Vec, late span allocation,
 /// owning-decoder fallback or alternate wire representation is created. Retry keeps
-/// that source's allocation identity as well as its complete byte hash.
+/// that source's allocation identity as well as its complete byte hash. The caller
+/// retains its actual charged input until success or explicit abandonment; returned
+/// views borrow that same owner and cannot outlive or mutate its allocation.
 pub struct PreparedNativeFinalityJournal {
     spans: ChargedBuffer<SequenceSpan>,
     blocks: ChargedBuffer<SequenceSpan>,
@@ -233,8 +316,13 @@ impl PreparedNativeFinalityJournal {
     /// Decode at most once, retaining exact source and initialized backing on refusal.
     ///
     /// # Errors
-    /// Returns original canonical/refusal classification or changed-source custody.
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<(), PreparedNativeFinalityError> {
+    /// Rejects a foreign source pool before pinning or canonical work. Preserves
+    /// original canonical/refusal classification and changed-source custody.
+    pub fn decode(&mut self, input: &ChargedBuffer<u8>) -> Result<(), PreparedNativeFinalityError> {
+        if !input.belongs_to(&self.budget) {
+            return Err(PreparedNativeFinalityError::ForeignPool);
+        }
+        let bytes = input.as_slice();
         if bytes.is_empty() || bytes.len() > self.limits.journal_bytes {
             return Err(PreparedNativeFinalityError::Invalid(
                 "native journal archive exceeds its configured byte bound".into(),
@@ -263,7 +351,7 @@ impl PreparedNativeFinalityJournal {
                 )?;
             self.count = destination.count;
             // Keep the same final source validation used by the owning canonical decoder.
-            if let Err(error) = self.view(bytes)?.validate(self.limits) {
+            if let Err(error) = self.view(input)?.validate(self.limits) {
                 self.count = None;
                 return Err(error.into());
             }
@@ -273,11 +361,16 @@ impl PreparedNativeFinalityJournal {
     /// Borrow only the unchanged, completely canonical original source.
     ///
     /// # Errors
-    /// Rejects a different allocation/content or an unfinished canonical decode.
+    /// Rejects a foreign pool before other checks, a different allocation/content,
+    /// or an unfinished canonical decode.
     pub fn view<'a>(
         &'a self,
-        bytes: &'a [u8],
+        input: &'a ChargedBuffer<u8>,
     ) -> Result<NativeFinalitySource<'a>, PreparedNativeFinalityError> {
+        if !input.belongs_to(&self.budget) {
+            return Err(PreparedNativeFinalityError::ForeignPool);
+        }
+        let bytes = input.as_slice();
         let count = self.count.ok_or(PreparedNativeFinalityError::NotDecoded)?;
         if !self
             .source
@@ -288,7 +381,7 @@ impl PreparedNativeFinalityJournal {
         }
         Ok(NativeFinalitySource {
             frames: Frames::Indexed {
-                source: bytes,
+                source: input,
                 spans: &self.blocks.as_slice()[..count],
             },
         })

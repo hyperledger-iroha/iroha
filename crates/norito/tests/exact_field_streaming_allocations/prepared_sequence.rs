@@ -265,3 +265,96 @@ fn raw_bytes_keep_owning_layout_logical_limits_and_original_backing() {
         ));
     }
 }
+
+#[test]
+fn inspected_complete_sequence_keeps_original_spans_without_allocating_or_decoding_children() {
+    let pool = AllocationBudget::new(1 << 20);
+    let mut work = workspace(&pool);
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        for count in [0, 4, 31] {
+            let values = (0..count).map(|i| i as u64 * 7 + 3).collect::<Vec<_>>();
+            let bytes = super::bare_bytes(&values, flags);
+            let mut spans = scratch(&pool, count);
+            let original = prepare_element_sequence(&bytes, spans.as_mut_slice()).unwrap();
+            let expected = (original.len(), original.used());
+            let held = pool
+                .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+                .unwrap();
+            let mut result = None;
+            let allocations = super::allocations_during(|| {
+                result = Some(
+                    work.with_limits(limits(1 << 20), limits(1 << 20), || {
+                        norito::core::inspect_element_sequence(&bytes)
+                    })
+                    .unwrap()
+                    .unwrap(),
+                );
+            });
+            assert_eq!(allocations, 0);
+            assert_eq!(result.unwrap(), expected);
+            assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
+            drop(held);
+            let mut trailing = bytes.clone();
+            trailing.extend_from_slice(&[0xff, 0xee]);
+            assert_eq!(
+                norito::core::inspect_element_sequence(&trailing).unwrap(),
+                expected
+            );
+            for end in 0..bytes.len() {
+                assert!(matches!(
+                    norito::core::inspect_element_sequence(&bytes[..end]),
+                    Err(norito::Error::LengthMismatch)
+                ));
+            }
+        }
+    }
+    drop(work);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+#[test]
+fn inspected_sequence_keeps_declared_element_byte_charges_and_late_framing_error_order() {
+    use norito::core::{DecodeResourceError, with_decode_limits_measured};
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let bytes = super::bare_bytes(&vec![3_u64, 5, 7, 11], flags);
+        let (result, usage) = with_decode_limits_measured(limits(1 << 20), || {
+            norito::core::inspect_element_sequence(&bytes)
+        });
+        assert_eq!(result.unwrap(), (4, bytes.len()));
+        assert_eq!(
+            usage.total_allocated_bytes(),
+            4 * std::mem::size_of::<u64>()
+        );
+        let (result, usage) = with_decode_limits_measured(limits(31), || {
+            norito::core::inspect_element_sequence(&bytes)
+        });
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.decode_resource_error(),
+            Some(DecodeResourceError::TotalAllocationExceeded {
+                attempted: 32,
+                limit: 31
+            })
+        );
+        assert_eq!(usage.total_allocated_bytes(), 24);
+        let mut late = super::bare_bytes(&vec![false, true, false, true], flags);
+        let first_prefix = if flags == 0 { 8 } else { 1 };
+        late[8 + first_prefix] = 2;
+        late.pop();
+        assert!(matches!(
+            norito::core::inspect_element_sequence(&late),
+            Err(norito::Error::LengthMismatch)
+        ));
+        let oversized = 4097_u64.to_le_bytes();
+        assert!(matches!(
+            with_decode_limits(limits(1 << 20), || norito::core::inspect_element_sequence(
+                &oversized
+            )),
+            Err(norito::Error::SequenceLengthExceeded {
+                length: 4097,
+                limit: 4096
+            })
+        ));
+    }
+}

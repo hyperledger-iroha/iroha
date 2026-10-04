@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import urllib.error
 import urllib.parse
 from dataclasses import replace
 from pathlib import Path
@@ -26,7 +27,7 @@ from iroha_app_attestation.google_oauth import (
     POLICY_SCHEMA, TOKEN_URI, select_google_decoder,
     _key_command,
 )
-from iroha_app_attestation.play_integrity import PlayIntegrityPolicy
+from iroha_app_attestation.play_integrity import PlayIntegrityPolicy, PlayIntegrityUnavailable
 
 PROJECT = 'example-integrity-project'
 EMAIL = 'integrity-decoder@' + PROJECT + '.iam.gserviceaccount.com'
@@ -295,11 +296,20 @@ class GoogleOAuthTests(unittest.TestCase):
             for field, value in change.items(): setattr(response, field, value)
             with patch('iroha_app_attestation.google_oauth.urllib.request.build_opener') as build:
                 build.return_value.open.return_value = response
-                with self.subTest(change=list(change)), self.assertRaises(AttestationRejected): provider()
-        provider = self.provider()
-        with patch('iroha_app_attestation.google_oauth.urllib.request.build_opener') as build:
-            build.return_value.open.side_effect = OSError('synthetic private content must not escape')
-            with self.assertRaisesRegex(AttestationRejected, '^Google OAuth token exchange unavailable$'): provider()
+                # A changed or malformed Google answer is retryable, never a
+                # verdict on the mobile evidence; it still fails closed.
+                with self.subTest(change=list(change)), self.assertRaises(PlayIntegrityUnavailable): provider()
+                self.assertIsNone(provider._access)
+        for failure in (OSError('synthetic private content must not escape'),
+                        urllib.error.HTTPError(TOKEN_URI, 400, 'invalid_grant', {}, None),
+                        urllib.error.HTTPError(TOKEN_URI, 503, 'unavailable', {}, None)):
+            provider = self.provider()
+            with patch('iroha_app_attestation.google_oauth.urllib.request.build_opener') as build:
+                build.return_value.open.side_effect = failure
+                with self.subTest(failure=type(failure).__name__), self.assertRaisesRegex(
+                        PlayIntegrityUnavailable, '^Google OAuth token exchange unavailable$') as raised:
+                    provider()
+                self.assertIsNone(raised.exception.__cause__)
 
     def test_ec_or_invalid_private_key_cannot_sign_rs256(self):
         result = subprocess.run([str(self.openssl), 'genpkey', '-algorithm', 'EC',

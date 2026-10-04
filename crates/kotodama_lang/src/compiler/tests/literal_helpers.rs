@@ -46,30 +46,54 @@ seiyaku LiteralRoots {
     view fn owner() -> AccountId { return private_authority(); }
 }
 "#;
-    let (artifact, manifest, report) = Compiler::new()
-        .compile_source_with_manifest_and_report(source)
-        .expect("compile public and effectful roots");
-    let names = report
-        .budget_report
-        .iter()
-        .map(|function| function.function_name.as_str())
-        .collect::<Vec<_>>();
-    for retained in ["public_zero", "private_authority", "owner"] {
+    // Compare the exact same source through both forms of the current compiler.
+    // Private-body movement may retire this helper's callable, while literal
+    // folding must never turn its authority read into a constant.
+    let before = super::super::single_use_private::compile(source, true);
+    let after = super::super::single_use_private::compile(source, false);
+    super::super::single_use_private::assert_public_metadata(&before, &after);
+    for retained in ["public_zero", "owner"] {
         assert!(
-            names.contains(&retained),
-            "missing original callable {retained}: {names:?}"
+            after
+                .report
+                .budget_report
+                .iter()
+                .any(|function| function.function_name == retained)
         );
     }
-    let (_, repeated_manifest, _) = Compiler::new()
-        .compile_source_with_manifest_and_report(source)
-        .expect("compile deterministic repeat");
-    assert_eq!(manifest, repeated_manifest);
-    assert_eq!(
-        artifact,
-        Compiler::new()
-            .compile_source(source)
-            .expect("repeat artifact")
+    assert!(
+        before
+            .report
+            .budget_report
+            .iter()
+            .any(|function| function.function_name == "private_authority")
     );
+    assert!(
+        !after
+            .report
+            .budget_report
+            .iter()
+            .any(|function| function.function_name == "private_authority")
+    );
+    let authority_word = crate::encoding::wide::encode_sys(
+        crate::instruction::wide::system::SCALL,
+        crate::syscalls::SYSCALL_GET_AUTHORITY as u8,
+    );
+    for output in [&before, &after] {
+        let parsed = crate::metadata::ProgramMetadata::parse(&output.artifact).unwrap();
+        assert_eq!(
+            output.artifact[parsed.code_offset..]
+                .chunks_exact(4)
+                .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+                .filter(|word| *word == authority_word)
+                .count(),
+            1,
+            "the original host authority read remains executable exactly once"
+        );
+    }
+    let repeated = super::super::single_use_private::compile(source, false);
+    assert_eq!(after.artifact, repeated.artifact);
+    assert_eq!(after.manifest, repeated.manifest);
 }
 
 #[test]
@@ -261,6 +285,12 @@ fn canonical_dlmm_literal_folding_measures_same_compiler_artifacts_and_public_me
                 ssa.ssa_program
                     .optimize_and_retain(&ssa.executable_roots, &std::collections::BTreeMap::new())
                     .expect("same optimizer without eligible literals");
+                ssa.ssa_program
+                    .inline_single_use_private_calls(
+                        &ssa.executable_roots,
+                        &super::super::private_inline_candidates(&ssa.typed),
+                    )
+                    .expect("same whole-program private-body pass in both diagnostic arms");
                 super::super::PreparedCompilation {
                     typed: ssa.typed,
                     state_descriptors: ssa.state_descriptors,

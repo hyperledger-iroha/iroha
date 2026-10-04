@@ -1107,6 +1107,7 @@ fn client_config_selects_the_generated_identity_file_only() {
         DEFAULT_CHAIN_ID,
         None,
         &localnet_client_identity(None, false).expect("default client"),
+        None,
     )
     .expect("write client config");
     let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
@@ -1163,6 +1164,7 @@ fn client_config_records_chain_discriminant_when_known() {
         DEFAULT_CHAIN_ID,
         Some(369),
         &localnet_client_identity(None, false).expect("default client"),
+        None,
     )
     .expect("write client config");
     let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
@@ -1177,6 +1179,36 @@ fn client_config_records_chain_discriminant_when_known() {
             .and_then(toml::Value::as_integer),
         Some(369)
     );
+}
+#[test]
+fn client_config_preserves_publication_with_explicit_network_context() {
+    let host =
+        CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
+    let client = localnet_client_identity(None, false).expect("default client");
+    let publication =
+        toml::Table::from_iter([("request_timeout_ms".into(), toml::Value::Integer(30_000))]);
+    for configured in [None, Some(369)] {
+        let rendered = render_client_config(
+            8080,
+            &host,
+            DEFAULT_CHAIN_ID,
+            configured,
+            &client,
+            Some(&publication),
+        )
+        .expect("render client config");
+        let value: toml::Value = toml::from_str(&rendered).expect("parse client config");
+        let expected = configured
+            .unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant);
+        assert_eq!(
+            value["account"]["chain_discriminant"].as_integer(),
+            Some(i64::from(expected))
+        );
+        assert_eq!(
+            value["musubi"]["publication"].as_table(),
+            Some(&publication)
+        );
+    }
 }
 #[test]
 fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
@@ -1805,6 +1837,7 @@ fn client_config_renders_ipv6_torii_url() {
         DEFAULT_CHAIN_ID,
         None,
         &localnet_client_identity(None, false).expect("default client"),
+        None,
     )
     .expect("write client config");
     let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");

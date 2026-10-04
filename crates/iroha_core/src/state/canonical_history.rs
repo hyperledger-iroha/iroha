@@ -226,6 +226,15 @@ impl<'a> CanonicalHistorySource<'a> {
                 QueryExecutionFail::Conversion(error.to_string())
             }),
             crate::kura::Error::BlockDecode(error) => canonical_source_error(error),
+            crate::kura::Error::NativeFrameAllocation(error) => {
+                let deferred = match error {
+                    iroha_allocation::ChargedBufferError::Admission(original) => original.into(),
+                    iroha_allocation::ChargedBufferError::Allocator { .. } => {
+                        ivm::error::ExecutionDeferral::AllocationUnavailable.into()
+                    }
+                };
+                ExecutionAttemptError::Deferred(deferred)
+            }
             error => {
                 ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(error.to_string()))
             }
@@ -240,7 +249,7 @@ impl<'a> CanonicalHistorySource<'a> {
         let shell = SharedSignedBlock::reserve(&self.budget)
             .map_err(|error| ExecutionAttemptError::Deferred(error.into()))?;
         let bytes = source
-            .read(wire_len)
+            .read(wire_len, &self.budget)
             .map_err(storage_error)?
             .ok_or_else(missing)?;
         let block = iroha_data_model::block::decode_framed_signed_block(&bytes)

@@ -1150,11 +1150,16 @@ mod observer_tests {
 }
 #[cfg(target_os = "macos")]
 fn metal_available() -> bool {
-    // The offline Metal compiler is an optional Xcode component on recent macOS
-    // releases. Runtime source compilation remains available through MTLDevice,
-    // so accelerator discovery must reflect usable hardware rather than the
-    // presence of a build-time `fastpq.metallib` artifact.
-    metal_device_visible_via_api()
+    // Artifact identity is checked before device discovery. A visible device
+    // cannot authorize absent, stale or refused compiled bytes.
+    #[cfg(feature = "fastpq-gpu")]
+    {
+        crate::metal_artifact::admitted_bundle().is_ok() && metal_device_visible_via_api()
+    }
+    #[cfg(not(feature = "fastpq-gpu"))]
+    {
+        false
+    }
 }
 #[cfg(target_os = "macos")]
 fn macos_opencl_devices_present() -> bool {
@@ -1193,7 +1198,7 @@ fn macos_ioreg_reports_accelerator() -> bool {
 }
 #[cfg(not(target_os = "macos"))]
 fn metal_available() -> bool {
-    metal_library_path().is_some()
+    false
 }
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn metal_device_visible_via_api() -> bool {
@@ -1228,10 +1233,6 @@ fn metal_device_visible_via_api() -> bool {
     }
     !devices.is_empty()
 }
-#[cfg(all(target_os = "macos", not(feature = "fastpq-gpu")))]
-fn metal_device_visible_via_api() -> bool {
-    false
-}
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn fastpq_debug_metal_enum() -> bool {
     if let Some(enabled) = overrides::metal_debug_enum_override() {
@@ -1254,23 +1255,6 @@ fn device_location_label(location: MTLDeviceLocation) -> &'static str {
         MTLDeviceLocation::External => "external",
         _ => "unknown",
     }
-}
-#[cfg(not(target_os = "macos"))]
-fn metal_library_path() -> Option<String> {
-    overrides::guard_env_override(|| {
-        overrides::debug_env_string("FASTPQ_METAL_LIB").and_then(|path| {
-            if !path.is_empty() && Path::new(&path).exists() {
-                Some(path)
-            } else {
-                None
-            }
-        })
-    })
-    .or_else(|| {
-        option_env!("FASTPQ_METAL_LIB")
-            .filter(|path| !path.is_empty() && Path::new(path).exists())
-            .map(str::to_owned)
-    })
 }
 /// Internal backend configuration used by the FASTPQ prover.
 #[derive(Debug, Clone, Copy)]

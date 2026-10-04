@@ -2550,6 +2550,59 @@ mod tests {
     }
 
     #[test]
+    fn credential_policy_matches_exact_catalog_metadata_and_zero_requires_no_threshold_slot() {
+        use iroha_config::parameters::actual::RuntimeProviderBroker;
+        let policy = |contents: &str| {
+            RuntimeProviderBroker::from_toml_source(iroha_config_base::toml::TomlSource::inline(
+                contents.parse().expect("broker policy table"),
+            ))
+            .expect("validated broker policy")
+        };
+        for slot in [
+            IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+            IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
+            IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider,
+        ] {
+            let mut catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+                "credential-policy",
+                slot,
+                "software://credential-policy/primary",
+                1,
+                [0x39; 32],
+            );
+            for exact in [policy(""), policy("credential_max_memory_bytes = 123456")] {
+                catalog.credential_max_memory_bytes = exact.credential_max_memory_bytes.get();
+                let restored = IrohaRuntimeProviderBindingsV1::load_canonical_v1(
+                    &catalog.export_canonical_v1().expect("export exact catalog"),
+                )
+                .expect("reload exact public metadata");
+                assert_eq!(
+                    restored.validate_credential_memory_policy_v1(&exact),
+                    Ok(())
+                );
+                let limit = exact.credential_max_memory_bytes.get();
+                for supplied in [1, limit - 1, limit + 1] {
+                    assert_eq!(
+                        restored.validate_credential_memory_policy_v1(&policy(&format!(
+                            "credential_max_memory_bytes = {supplied}"
+                        ))),
+                        Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+                    );
+                }
+            }
+            catalog.credential_max_memory_bytes = 0;
+            assert_eq!(
+                catalog.validate_credential_memory_policy_v1(&policy("")),
+                if slot == IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider {
+                    Ok(())
+                } else {
+                    Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+                }
+            );
+        }
+    }
+
+    #[test]
     fn catalog_without_explicit_credential_bound_is_rejected() {
         #[derive(Encode, norito::NoritoSchema)]
         #[norito_schema(

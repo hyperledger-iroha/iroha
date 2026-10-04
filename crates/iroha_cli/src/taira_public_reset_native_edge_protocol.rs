@@ -26,6 +26,7 @@ pub(super) struct NativeEdgeCapabilityV1 {
     pub(super) host_pair_sha256: String,
     pub(super) helper_source_closure_sha256: String,
     pub(super) incumbent: host_pair::SignedNativeEdgeCaptureV1,
+    pub(super) incumbent_nginx_request: NativePublicFileV1,
     pub(super) nginx_apply_plan: NativePublicFileV1,
     pub(super) forwarding_plan: NativePublicFileV1,
     pub(super) forwarding_identity_receipt: NativePublicFileV1,
@@ -59,6 +60,7 @@ impl NativeEdgeCapabilityV1 {
             &claims.next_genesis_hash,
         )?;
         for reference in [
+            &self.incumbent_nginx_request,
             &self.nginx_apply_plan,
             &self.forwarding_plan,
             &self.forwarding_identity_receipt,
@@ -84,7 +86,20 @@ impl NativeEdgeCapabilityV1 {
 pub(super) struct NativeNginxCompletionPlanV1 {
     pub(super) schema: String,
     pub(super) nginx: Value,
+    pub(super) publication_effect: NativePublicationEffectV1,
     pub(super) completion_journal_basename: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
+pub(super) enum NativePublicationEffectV1 {
+    #[norito(rename = "owned")]
+    Owned,
+    #[norito(rename = "not_requested")]
+    NotRequested {
+        intended_operation_id: String,
+        incumbent: host_pair::NativeOwnedPublicationV1,
+    },
 }
 
 impl NativeNginxCompletionPlanV1 {
@@ -102,15 +117,31 @@ impl NativeNginxCompletionPlanV1 {
             .get("prior")
             .and_then(Value::as_object)
             .ok_or_else(|| eyre!("native completion lacks the retained prior publication"))?;
+        let publisher = match &self.publication_effect {
+            NativePublicationEffectV1::Owned => publication_operation_id,
+            NativePublicationEffectV1::NotRequested {
+                intended_operation_id,
+                incumbent,
+            } => {
+                if intended_operation_id != publication_operation_id
+                    || incumbent.operation_id == *intended_operation_id
+                {
+                    return Err(eyre!(
+                        "no-effect rollback changed its intended or incumbent owner"
+                    ));
+                }
+                incumbent.operation_id.as_str()
+            }
+        };
         if self.schema != "iroha.taira.public-reset.native-nginx-completion-plan.v1"
             || self.completion_journal_basename != "native-completion.ndjson"
             || plan.get("schema").and_then(Value::as_str)
                 != Some("iroha.taira.native-nginx-apply.plan.v1")
             || plan.get("host_kind").and_then(Value::as_str) != Some("macos")
             || plan.get("provider").and_then(Value::as_str) != Some("macstadium-dublin")
-            || plan.get("operation_id").and_then(Value::as_str) != Some(publication_operation_id)
+            || plan.get("operation_id").and_then(Value::as_str) != Some(publisher)
             || publication.get("kind").and_then(Value::as_str) != Some("reconcile")
-            || prior.get("operation_id").and_then(Value::as_str) != Some(publication_operation_id)
+            || prior.get("operation_id").and_then(Value::as_str) != Some(publisher)
         {
             return Err(eyre!(
                 "native completion plan is not an exact reconciliation of this admitted publisher"
@@ -527,7 +558,9 @@ pub(super) fn validate_terminal_provenance(
         json::from_slice(&read_native_public(progress, owner, MAX_PROGRESS_BYTES)?)?;
     terminal.validate(inventory, inventory_sha256, authorization_sha256)?;
     if terminal.digest()? != progress.sha256 {
-        return Err(eyre!("native terminal progress is not its exact canonical retained bytes"));
+        return Err(eyre!(
+            "native terminal progress is not its exact canonical retained bytes"
+        ));
     }
     let receipt: NativeCompletionReceiptV1 =
         json::from_slice(&read_native_public(completion_receipt, owner, 64 * 1024)?)?;
@@ -592,10 +625,15 @@ pub(super) fn validate_terminal_provenance(
         chain.push(checkpoint);
     }
     if status == "rolled_back" {
-        let restored = receipt.restored_owned_publication.as_ref()
-            .ok_or_else(|| eyre!("rolled-back native capture lacks its exact restored publisher custody"))?;
-        if restored != owned_publication || restored.operation_id == receipt.publication_operation_id {
-            return Err(eyre!("native rollback terminal proof names another restored predecessor"));
+        let restored = receipt.restored_owned_publication.as_ref().ok_or_else(|| {
+            eyre!("rolled-back native capture lacks its exact restored publisher custody")
+        })?;
+        if restored != owned_publication
+            || restored.operation_id == receipt.publication_operation_id
+        {
+            return Err(eyre!(
+                "native rollback terminal proof names another restored predecessor"
+            ));
         }
         read_native_public(&restored.journal, owner, 1024 * 1024)?;
         read_native_public(&restored.publication, owner, 1024 * 1024)?;
@@ -631,7 +669,9 @@ pub(super) fn validate_terminal_provenance(
         }
         directory.revalidate()?;
     } else {
-        if receipt.restored_owned_publication.is_some() || receipt.publication_operation_id != owned_publication.operation_id {
+        if receipt.restored_owned_publication.is_some()
+            || receipt.publication_operation_id != owned_publication.operation_id
+        {
             return Err(eyre!("native seal changed its current publication owner"));
         }
         let reference = global_proof
@@ -652,9 +692,16 @@ pub(super) fn validate_terminal_provenance(
             json::from_slice(&read_native_public(reference, owner, MAX_PROGRESS_BYTES)?)?;
         let ready: NativeEdgeProgressV1 =
             json::from_slice(&read_native_public(ready, owner, MAX_PROGRESS_BYTES)?)?;
-        if ready.digest()? != global_proof_predecessor.as_ref().expect("required predecessor above").sha256
-            || ready.digest()? != fence.progress_predecessor_sha256 {
-            return Err(eyre!("native global proof predecessor is not the exact immutable canonical snapshot"));
+        if ready.digest()?
+            != global_proof_predecessor
+                .as_ref()
+                .expect("required predecessor above")
+                .sha256
+            || ready.digest()? != fence.progress_predecessor_sha256
+        {
+            return Err(eyre!(
+                "native global proof predecessor is not the exact immutable canonical snapshot"
+            ));
         }
         fence.validate(
             inventory,
@@ -697,6 +744,12 @@ pub(super) fn fixture_capability(
         hosts.native_edge.custody_root
     );
     apply.file.identity.inode = 10;
+    let mut incumbent_request = apply.clone();
+    incumbent_request.file.path = format!(
+        "{}/native-nginx-incumbent-request.json",
+        hosts.native_edge.custody_root
+    );
+    incumbent_request.file.identity.inode = 11;
     NativeEdgeCapabilityV1 {
         schema: "iroha.taira.public-reset.native-edge-capability.v1".into(),
         captured_hosts: hosts.clone(),
@@ -705,6 +758,7 @@ pub(super) fn fixture_capability(
         forwarding_plan: incumbent.claims.forwarding_plan.clone(),
         forwarding_identity_receipt: incumbent.claims.forwarding_identity_receipt.clone(),
         incumbent,
+        incumbent_nginx_request: incumbent_request,
         nginx_apply_plan: apply,
     }
 }

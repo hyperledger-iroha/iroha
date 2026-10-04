@@ -62,6 +62,31 @@ fn generated_provider_plan_recovers_exact_original_economics_and_interval() {
         "0.75".parse().unwrap()
     );
     let material = original.admission_material();
+    let aliases: Vec<String> = sorafs_manifest::chunker_registry::lookup_by_handle(PROFILE)
+        .unwrap()
+        .aliases
+        .iter()
+        .map(|alias| (*alias).to_owned())
+        .collect();
+    assert_eq!(material.proposal.profile_aliases.as_ref(), Some(&aliases));
+    assert_eq!(
+        material.advert_body.profile_aliases.as_ref(),
+        Some(&aliases)
+    );
+    assert_eq!(original.declaration().chunker_commitments.len(), 1);
+    assert_eq!(
+        original.declaration().chunker_commitments[0]
+            .profile_aliases
+            .as_ref(),
+        Some(&aliases)
+    );
+    material.advert_body.validate().unwrap();
+    let advert = prepared
+        .provider_advert(original.provider_id(), material.issued_at)
+        .unwrap();
+    advert.validate_with_body(material.issued_at).unwrap();
+    advert.verify_signature().unwrap();
+    assert_eq!(advert.body, material.advert_body);
     assert_eq!(
         material.retention_epoch - material.issued_at,
         VALIDITY_SECONDS

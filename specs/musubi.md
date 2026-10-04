@@ -1453,15 +1453,18 @@ Effectful provider coordination, independent replica readbacks, live council
 admission refresh, qualified receipt-signer custody, and stock activation
 still gate production publication. A deployment may inject the daemon's
 prebound private TLS ingress builder with an in-memory server identity;
-`iroha_config` supplies only the bind socket, exact private mount prefix,
-and a maximum of four concurrent requests. The builder disables TLS early
+`iroha_config` supplies the bind socket and a maximum of four concurrent
+requests. This dedicated listener accepts only the three exact
+`/v1/musubi/publication/...` paths; prefixed paths and query strings refuse.
+The builder disables TLS early
 data, serves only the three closed HTTP/1.1 routes, rejects duplicate
 security-sensitive headers, and bounds header and body reads before handing
 the exact request to the service core. On supervised shutdown it drains
 in-flight blocking service calls. If the supervisor's bounded wait expires,
 the blocking call still retains the service and its durable custody until it
-finishes. Loopback and shutdown controls pass 5/5; configuration projection
-and invalid-geometry controls pass 2/2. Runtime TLS credentials, certificate
+finishes. Focused controls cover all three fixed paths, rejected prefixes and
+queries, configuration projection, invalid geometry and shutdown custody.
+Runtime TLS credentials, certificate
 rotation, provider coordination, and live network qualification remain
 deployment gates; the stock daemon opens no publication listener.
 

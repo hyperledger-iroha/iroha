@@ -53,13 +53,11 @@ use iroha_data_model::{
         TransactionSignature, signed::MultisigSignatures,
     },
 };
-use iroha_fs::{
-    FileIdentity, FileSnapshot, OwnerDirectory, PrivateDirectory, PublishMode, RetainedFile,
-};
+use iroha_fs::{FileIdentity, FileSnapshot, PrivateDirectory, PublishMode, RetainedFile};
 use iroha_model_base::metadata::Metadata;
 use iroha_musubi_service::{
     MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
-    MusubiSeedIngressCarPlanV1,
+    MusubiSeedIngressCarPlanV1, publication_client_journal,
 };
 use norito::{
     DecodeLimits,
@@ -78,7 +76,6 @@ use std::{
 };
 const JOURNAL_SCHEMA: &str = "musubi-publication-journal";
 const JOURNAL_VERSION: u8 = 1;
-const JOURNAL_DIRECTORY: &str = "publication-v1";
 const JOURNAL_EXTENSION: &str = "norito";
 const JOURNAL_LOCK_EXTENSION: &str = "lock";
 const STAGED_CAR_EXTENSION: &str = "car";
@@ -3874,17 +3871,25 @@ impl PublicationJournalStore {
     /// Returns a journal error when the existing state root or private publication directory
     /// cannot be opened, created, synchronized, or proven to retain native owner custody.
     pub fn open(user_state_root: &Path) -> Result<Self, PublicationError> {
+        Self::open_with_creation(user_state_root, true)
+    }
+    /// Open retained publication custody without creating its root or inner journal directory.
+    ///
+    /// All generated actions use original custody initialized before generation publication.
+    /// A missing retained directory is a custody refusal, never an empty new operation history.
+    /// # Errors
+    /// Refuses missing, unsafe or changed custody and native I/O failures.
+    pub fn open_existing(user_state_root: &Path) -> Result<Self, PublicationError> {
+        Self::open_with_creation(user_state_root, false)
+    }
+    fn open_with_creation(user_state_root: &Path, create: bool) -> Result<Self, PublicationError> {
         let root = AtomicWriteRoot::new(user_state_root).map_err(PublicationError::JournalWrite)?;
-        let owner = OwnerDirectory::open(root.path()).map_err(journal_custody_error)?;
-        let directory = match owner.create_private_child(JOURNAL_DIRECTORY) {
-            Ok(directory) => directory,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                PrivateDirectory::open(owner.path().join(JOURNAL_DIRECTORY))
-                    .map_err(journal_custody_error)?
-            }
-            Err(error) => return Err(journal_custody_error(error)),
-        };
-        owner.revalidate().map_err(journal_custody_error)?;
+        let directory = if create {
+            publication_client_journal::open_or_create(root.path())
+        } else {
+            publication_client_journal::open_existing(root.path())
+        }
+        .map_err(journal_custody_error)?;
         Ok(Self { root, directory })
     }
     /// Persist a new operation, or return the identical existing operation idempotently.
@@ -4157,17 +4162,21 @@ fn prepare_release_submission_attempt(
 include!("publish_engine.rs");
 #[cfg(test)]
 fn journal_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
-    Path::new(JOURNAL_DIRECTORY).join(format!("{operation_id}.{JOURNAL_EXTENSION}"))
+    Path::new(publication_client_journal::DIRECTORY_NAME)
+        .join(format!("{operation_id}.{JOURNAL_EXTENSION}"))
 }
 #[cfg(test)]
 fn operation_lock_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
-    Path::new(JOURNAL_DIRECTORY).join(format!("{operation_id}.{JOURNAL_LOCK_EXTENSION}"))
+    Path::new(publication_client_journal::DIRECTORY_NAME)
+        .join(format!("{operation_id}.{JOURNAL_LOCK_EXTENSION}"))
 }
 fn staged_car_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
-    PathBuf::from(JOURNAL_DIRECTORY).join(format!("{operation_id}.{STAGED_CAR_EXTENSION}"))
+    PathBuf::from(publication_client_journal::DIRECTORY_NAME)
+        .join(format!("{operation_id}.{STAGED_CAR_EXTENSION}"))
 }
 fn staged_plan_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
-    PathBuf::from(JOURNAL_DIRECTORY).join(format!("{operation_id}.{STAGED_PLAN_EXTENSION}"))
+    PathBuf::from(publication_client_journal::DIRECTORY_NAME)
+        .join(format!("{operation_id}.{STAGED_PLAN_EXTENSION}"))
 }
 fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
@@ -4251,6 +4260,32 @@ fn substitute_publication_read_target_with_fifo_for_test(path: &Path) -> io::Res
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn existing_publication_journal_open_never_recreates_missing_custody() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("operations");
+        assert!(super::PublicationJournalStore::open_existing(&root).is_err());
+        assert!(super::PublicationJournalStore::open(&root).is_err());
+        assert!(!root.exists());
+        let outer = iroha_fs::PrivateDirectory::open_or_create(&root).unwrap();
+        assert!(super::PublicationJournalStore::open_existing(&root).is_err());
+        assert!(outer.entries(1).unwrap().is_empty());
+        let created = super::PublicationJournalStore::open(&root).unwrap();
+        let identity = created.directory.identity().unwrap();
+        drop(created);
+        let retained = super::PublicationJournalStore::open_existing(&root).unwrap();
+        assert_eq!(retained.directory.identity().unwrap(), identity);
+        assert!(retained.directory.entries(1).unwrap().is_empty());
+        drop(retained);
+        std::fs::remove_dir(root.join(super::publication_client_journal::DIRECTORY_NAME)).unwrap();
+        assert!(super::PublicationJournalStore::open_existing(&root).is_err());
+        assert!(outer.entries(1).unwrap().is_empty());
+        drop(outer);
+        std::fs::remove_dir(&root).unwrap();
+        assert!(super::PublicationJournalStore::open_existing(&root).is_err());
+        assert!(!root.exists());
+    }
+
     include!("publish_fixture_tests.rs");
     include!("publish_backend_test_support.rs");
     include!("publish_recovery_tests.rs");

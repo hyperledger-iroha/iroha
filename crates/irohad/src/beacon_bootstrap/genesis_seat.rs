@@ -155,7 +155,12 @@ fn verify_signed_genesis_attempt(
     request: &GenesisRequest,
     genesis: &GenesisProof,
     budget: &iroha_allocation::AllocationBudget,
-) -> Result<(Vec<PeerId>, NativeJournalCursor, u64)> {
+) -> Result<(
+    Vec<PeerId>,
+    NativeJournalCursor,
+    u64,
+    iroha_core::beacon::AuthenticatedGlobalBeaconDkgAttemptV1,
+)> {
     iroha_genesis::init_instruction_registry();
     let session = request.dkg_session;
     let validated = iroha_genesis::validate_prepared_genesis_bundle(
@@ -196,7 +201,15 @@ fn verify_signed_genesis_attempt(
         limits,
         budget,
     )?;
-    Ok((roster, verifier, cutoff))
+    let authority = iroha_core::beacon::AuthenticatedGlobalBeaconDkgAttemptV1::signed_genesis(
+        &signed_genesis,
+        network,
+        chain_id,
+    )?;
+    if authority.session() != session || authority.cutoff() != cutoff {
+        return Err(Error::InvalidInput);
+    }
+    Ok((roster, verifier, cutoff, authority))
 }
 
 #[allow(
@@ -253,7 +266,7 @@ pub(super) fn provision_genesis_seat_command(
     }
     let request: GenesisRequest = read_json(request_path)?;
     let genesis = read_genesis_proof(manifest_path, wire_path, key_path)?;
-    let (roster, verifier, cutoff) = verify_signed_genesis_attempt(
+    let (roster, verifier, _cutoff, authority) = verify_signed_genesis_attempt(
         chain_id,
         limits,
         network,
@@ -281,14 +294,13 @@ pub(super) fn provision_genesis_seat_command(
     // moved once, never duplicated or reacquired on a retained attempt retry.
     use std::os::fd::FromRawFd as _;
     let attempt = seat_attempt::SeatDkgAttempt::new(
-        session,
+        authority,
         &roster,
         signer_index,
         signer,
         unsafe { File::from_raw_fd(public_fd) },
         unsafe { File::from_raw_fd(finality_fd) },
         verifier,
-        cutoff,
         handle,
         request.provider_revision,
         attempt_root,
@@ -308,7 +320,7 @@ fn validate_genesis_phase_chain(
     phases: &[NativeFinalityJournal],
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<Vec<PeerId>> {
-    let (roster, mut verifier, cutoff) = verify_signed_genesis_attempt(
+    let (roster, mut verifier, cutoff, _authority) = verify_signed_genesis_attempt(
         chain_id,
         limits,
         network,

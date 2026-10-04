@@ -241,6 +241,28 @@ impl Session {
             canonical: false,
         })
     }
+    /// Exact temporary row and sequence layouts retired by this original bank's finish.
+    #[cfg(test)]
+    pub(super) fn extraction_scaffolding_bytes(&self) -> usize {
+        self.shares.extraction_scaffolding_bytes()
+            + self.transcript.dealers.extraction_scaffolding_bytes()
+            + self.transcript.recipients.extraction_scaffolding_bytes()
+            + self.transcript.edges.extraction_scaffolding_bytes()
+            + self.transcript.acceptances.extraction_scaffolding_bytes()
+            + self.transcript.qualified.extraction_scaffolding_bytes()
+            + self
+                .transcript
+                .dealers
+                .destinations
+                .as_slice()
+                .iter()
+                .map(|dealer| {
+                    dealer
+                        .coefficient_commitments
+                        .extraction_scaffolding_bytes()
+                })
+                .sum::<usize>()
+    }
     pub(super) fn decode(
         &mut self,
         workspace: &mut norito::core::PreparedDecodeWorkspace,

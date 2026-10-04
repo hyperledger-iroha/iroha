@@ -1491,3 +1491,66 @@ fn borrowed_numeric_literal_and_host_results_keep_decimal_and_quantity_faults() 
         );
     }
 }
+
+#[test]
+fn reversed_named_helpers_preserve_noncommutative_results_and_odd_signed_means() {
+    for (name, syscall, cases) in [
+        (
+            "div_ceil",
+            syscalls::SYSCALL_INT_DIV_CEIL,
+            &[
+                ("7", "2", "4"),
+                ("-7", "2", "-3"),
+                ("7", "-2", "-3"),
+                ("-7", "-2", "4"),
+                (
+                    "340282366920938463463374607431768211457",
+                    "3",
+                    "113427455640312821154458202477256070486",
+                ),
+                (
+                    "-340282366920938463463374607431768211457",
+                    "3",
+                    "-113427455640312821154458202477256070485",
+                ),
+            ][..],
+        ),
+        (
+            "mean",
+            syscalls::SYSCALL_INT_MEAN,
+            &[
+                ("7", "2", "4"),
+                ("-7", "-2", "-4"),
+                ("7", "-2", "2"),
+                ("-7", "2", "-2"),
+                ("-1", "0", "0"),
+                ("0", "-1", "0"),
+            ][..],
+        ),
+    ] {
+        let runtime = compile(&format!(
+            "seiyaku NamedMath {{ view fn run(int left, int right) -> int {{ return math::{name}(right: right, left: left); }} }}"
+        ));
+        assert!(contains_extended_syscall(&runtime, syscall));
+        for &(left, right, expected) in cases {
+            let folded = compile(&format!(
+                "seiyaku NamedMath {{ view fn run(int left, int right) -> int {{ return math::{name}(right: {right}, left: {left}); }} }}"
+            ));
+            assert!(!contains_extended_syscall(&folded, syscall));
+            let expected = bigint(expected);
+            assert_eq!(run_binary(&runtime, left, right).unwrap(), expected);
+            assert_eq!(run_binary(&folded, "0", "0").unwrap(), expected);
+        }
+    }
+    let reversed_division = compile(
+        "seiyaku NamedMath { view fn run(int left, int right) -> int { return math::div_ceil(right: right, left: left); } }",
+    );
+    assert_eq!(
+        classify_runtime(run_binary(&reversed_division, MIN_INT, "-1")),
+        ArithmeticOutcome::MantissaOverflow
+    );
+    assert_eq!(
+        folded_outcome(&format!("math::div_ceil(right: -1, left: {MIN_INT})")),
+        ArithmeticOutcome::MantissaOverflow
+    );
+}

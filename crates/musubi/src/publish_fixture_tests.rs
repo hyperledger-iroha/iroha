@@ -1902,3 +1902,48 @@ fn native_staged_car_retains_non_delete_sharing_ancestors_and_file() {
         .expect("exact retained bytes");
     assert_eq!(bytes, b"car!");
 }
+
+#[test]
+fn original_client_journal_loss_cannot_reopen_real_detached_engine_history() {
+    let temporary = tempdir().expect("original client custody");
+    let state = temporary.path().join("operations");
+    let outer = PrivateDirectory::open_or_create(&state).expect("unpublished outer");
+    let original = publication_client_journal::initialize(outer.path()).expect("original inner");
+    let inner_identity = original.identity().expect("original inner identity");
+    drop(original);
+    let (plan, car, commitment) = publication_fixture_canonical_car();
+    let (request, _) = request_with_archive_commitment(commitment);
+    let operation_id = request.operation_id();
+    {
+        let store = PublicationJournalStore::open_existing(&state).expect("preinitialized store");
+        assert_eq!(store.directory.identity().unwrap(), inner_identity);
+        let engine = PublicationEngine::new(&store);
+        let (created, source) = engine
+            .begin_detached_with_car(request.clone(), &plan, &car)
+            .expect("real engine journal and canonical CAR sidecars");
+        assert_eq!(created, operation_id);
+        let journal = store.load(operation_id).expect("actual retained journal");
+        assert_eq!(journal.request, request);
+        assert_eq!(journal.revision, 1);
+        assert_eq!(journal.phase, PublicationPhaseV1::Validation);
+        assert_eq!(std::fs::read(source.path()).unwrap(), car);
+        assert!(source.plan_path().is_file());
+    }
+    let reopened = PublicationJournalStore::open_existing(&state).expect("original reopen");
+    assert_eq!(reopened.load(operation_id).unwrap().request, request);
+    drop(reopened);
+    // Only client operation history is lost; the original outer remains owner-held.
+    std::fs::remove_dir_all(state.join(publication_client_journal::DIRECTORY_NAME)).unwrap();
+    assert!(PublicationJournalStore::open_existing(&state).is_err());
+    assert!(outer.entries(1).unwrap().is_empty());
+    assert!(
+        !state
+            .join(publication_client_journal::DIRECTORY_NAME)
+            .exists()
+    );
+    // Losing the complete outer must likewise never authorize generated reconstruction.
+    drop(outer);
+    std::fs::remove_dir(&state).unwrap();
+    assert!(PublicationJournalStore::open_existing(&state).is_err());
+    assert!(!state.exists());
+}

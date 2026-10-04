@@ -151,7 +151,7 @@ pub fn verify_validator_committee_selection_evidence_v1(
 ) -> Result<VerifiedValidatorCommitteeSelectionV1, NativeJournalError> {
     check_evidence_size(evidence, limits)?;
     with_verified_native_journal(
-        &evidence.finality_journal,
+        (&evidence.finality_journal).into(),
         chain_id,
         &network,
         limits,
@@ -367,7 +367,7 @@ pub fn verify_validator_committee_provisioning_evidence_v1(
     // TODO: the journal source and nested decoded public graphs still need retained pool
     // ledgers. Typed errors and admitted block/session controls do not fund those graphs.
     with_verified_native_journal(
-        &evidence.finality_journal,
+        (&evidence.finality_journal).into(),
         chain_id,
         &network,
         limits,

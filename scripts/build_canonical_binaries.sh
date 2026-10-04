@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Build the canonical daemon, Governance DAG, external signer, and client.
 #
-# Prerequisites: the repository Rust toolchain and Cargo dependencies. Set
+# Prerequisites: Rust/Cargo; shipping Linux preflight also needs Python 3.10+. Set
 # BUILD_PROFILE to select a non-default Cargo profile (for example `deploy`).
 # Keep package defaults so the daemon retains ordinary SIMD/Metal selection.
 # The Linux release adds the signed, embedded IVM CUDA path automatically;
@@ -51,15 +51,17 @@ echo "Building canonical binaries (iroha, iroha3d, sorafs_governance_dag, extern
 daemon_features="irohad/external-software-signer-bin,iroha_cli/cli"
 # Debug development remains driver/toolkit independent without a release bundle.
 # Every non-debug Linux artifact is a shipping CUDA candidate and must
-# consume the already signed embedded bundle with a reviewed public fingerprint.
+# compare the held source bundle with its source-approved signer/manifest pins.
 if [[ "${BUILD_PROFILE:-dev}" != "dev" && "${BUILD_PROFILE:-dev}" != "debug" ]]; then
   case "$target" in
     *-linux-*)
-      [[ "${IVM_CUDA_TRUSTED_KEY_SHA256:-}" =~ ^[0-9a-f]{64}$ && "${IVM_CUDA_TRUSTED_KEY_SHA256:-}" != "$(printf '%064d' 0)" ]] || {
-        echo 'Shipping CUDA requires reviewed IVM_CUDA_TRUSTED_KEY_SHA256' >&2; exit 1;
-      }
-      export IVM_CUDA_PTX_MODE=bundled
-      daemon_features+=",irohad/ivm-cuda"
+      python3 -I -B -S - "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)" "$target" <<'CUDA_APPROVAL_PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+from release_artifact_contract import require_release_cuda_source_inputs
+require_release_cuda_source_inputs(Path(sys.argv[1]), sys.argv[2])
+CUDA_APPROVAL_PY
       ;;
     *-apple-darwin) ;;
     *) echo 'Unsupported shipping target OS' >&2; exit 1 ;;

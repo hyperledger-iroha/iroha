@@ -1,7 +1,9 @@
 //! Immutable native custody bodies; dispatch clocks and paid authorization live in bounded attempts.
 
 use super::*;
-use crate::managed::native_operation::attempts::{self, History, Observation, Purpose, Selected};
+use crate::managed::native_operation::attempts::{
+    self, History, HistoryScope, Observation, Purpose, Selected,
+};
 use norito::{Decode, Encode};
 use sorafs_manifest::signer::{
     custody::{
@@ -11,7 +13,7 @@ use sorafs_manifest::signer::{
     custody_control::SignerCustodyControlStateV1,
 };
 
-const MAX_ORIGINAL_BYTES: usize = MAX_CHECKPOINT_BYTES + 128 * 1024;
+pub(super) const MAX_ORIGINAL_BYTES: usize = MAX_CHECKPOINT_BYTES + 128 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_deploy::managed::stream_token_custody::EnrollmentValidity")]
@@ -302,9 +304,9 @@ impl Selected<Original> {
     }
 }
 pub(super) fn read_intent(directory: &PrivateDirectory) -> Result<Option<Original>> {
-    let names = directory.entries(3)?;
+    let names = directory.entries(4)?;
     if names.iter().any(|name| {
-        !["original.nrt", "dispatch.nrt", "attempts"]
+        !["original.nrt", "dispatch.nrt", "attempts", "epochs"]
             .iter()
             .any(|allowed| name == *allowed)
     }) {
@@ -314,8 +316,17 @@ pub(super) fn read_intent(directory: &PrivateDirectory) -> Result<Option<Origina
         require_empty(directory)?;
         return Ok(None);
     };
+    decode_original(&bytes).map(Some)
+}
+/// BodyHistory owns this directory census and anchored absence; the Original decoder is shared.
+pub(super) fn read_body_intent(directory: &PrivateDirectory) -> Result<Option<Original>> {
+    read_optional(directory, "original.nrt", MAX_ORIGINAL_BYTES)?
+        .map(|bytes| decode_original(&bytes))
+        .transpose()
+}
+fn decode_original(bytes: &[u8]) -> Result<Original> {
     let original: Original = norito::decode_canonical_with_limits(
-        &bytes,
+        bytes,
         norito::DecodeLimits::new(
             MAX_CHECKPOINT_BYTES,
             MAX_ORIGINAL_BYTES,
@@ -326,19 +337,37 @@ pub(super) fn read_intent(directory: &PrivateDirectory) -> Result<Option<Origina
     )
     .map_err(|_| invalid("invalid bounded original custody intent"))?;
     original.validate()?;
-    Ok(Some(original))
+    Ok(original)
 }
 pub(super) fn read_original(directory: &PrivateDirectory) -> Result<Option<Selected<Original>>> {
     let Some(intent) = read_intent(directory)? else {
         return Ok(None);
     };
-    let history = History::read(directory, intent.dispatch_purpose()?, intent.digest()?)?;
+    if !matches!(intent.action, Action::Configure(_)) {
+        return Err(invalid(
+            "enrollment must use its complete anchored body history",
+        ));
+    }
+    let history = History::read(
+        directory,
+        intent.dispatch_purpose()?,
+        intent.digest()?,
+        &HistoryScope::FixedBody,
+    )?;
     Selected::from_history(intent, history).map(Some)
 }
 pub(super) fn required_original(directory: &PrivateDirectory) -> Result<Selected<Original>> {
     read_original(directory)?.ok_or_else(|| invalid("original custody request is absent"))
 }
 pub(super) fn publish_intent(directory: &PrivateDirectory, original: &Original) -> Result<()> {
+    if !matches!(original.action, Action::Configure(_)) {
+        return Err(invalid(
+            "enrollment publication requires its unsigned body reservation",
+        ));
+    }
+    publish_body_intent(directory, original)
+}
+pub(super) fn publish_body_intent(directory: &PrivateDirectory, original: &Original) -> Result<()> {
     original.validate()?;
     let bytes = encode(original, MAX_ORIGINAL_BYTES)?;
     if let Some(retained) = read_optional(directory, "original.nrt", MAX_ORIGINAL_BYTES)? {
@@ -356,13 +385,14 @@ pub(super) fn explicit(
     utc: u64,
     options: &BoundedTransactionOptions,
     account: &AccountService,
+    scope: &HistoryScope,
 ) -> Result<()> {
     let purpose = original.dispatch_purpose()?;
-    let history = History::read(directory, purpose, original.digest()?)?;
-    let terms = match history.last() {
-        Some(attempt) => {
-            attempt.terms().matches(utc, options)?;
-            attempt.terms().clone()
+    let history = History::read(directory, purpose, original.digest()?, scope)?;
+    let terms = match history.retained_terms() {
+        Some(terms) => {
+            terms.matches(utc, options)?;
+            terms.clone()
         }
         None => Terms::new(utc, options)?,
     };
@@ -370,6 +400,7 @@ pub(super) fn explicit(
         directory,
         purpose,
         original.digest()?,
+        scope,
         terms,
         original.initial_observation(),
         options.deadline,

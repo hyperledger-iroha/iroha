@@ -71,6 +71,13 @@ connect_norito_bridge = { path = "crates/connect_norito_bridge" }
 fastpq_prover = { path = "crates/fastpq_prover" }
 iroha_zkp_halo2 = { path = "crates/iroha_zkp_halo2" }
 iroha_zkp_poseidon = { path = "crates/iroha_zkp_poseidon" }
+# Native PLONK/IPA stack. `iroha_plonk_oracle` is temporary test infrastructure
+# (publish = false): use it only as a dev-dependency.
+iroha_pasta = { path = "crates/iroha_pasta" }
+iroha_plonk = { path = "crates/iroha_plonk" }
+iroha_plonk_gadgets = { path = "crates/iroha_plonk_gadgets" }
+iroha_kagemusha_proof = { path = "crates/iroha_kagemusha_proof" }
+iroha_plonk_oracle = { path = "crates/iroha_plonk_oracle" }
 iroha_i18n = { path = "crates/iroha_i18n" }
 
 # Crates that need JSON, governance, HTTP, bridge, BLS, or transparent APIs
@@ -514,6 +521,15 @@ opt-level = 3
 opt-level = 3
 
 [profile.test.package.pasta_curves]
+opt-level = 3
+
+# The native Pasta arithmetic and prover kernels replace halo2curves-axiom and
+# pasta_curves above. Optimize them identically in both local runnable profiles,
+# keeping debug assertions and overflow checks.
+[profile.dev.package.iroha_pasta]
+opt-level = 3
+
+[profile.test.package.iroha_pasta]
 opt-level = 3
 
 [profile.dev.package.norito]

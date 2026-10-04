@@ -70,11 +70,11 @@ fn phase_retry_rejects_same_allocation_changed_bytes_and_equal_foreign_allocatio
 }
 
 #[test]
-fn every_phase_uses_its_exact_name_and_journal_is_owner_private() {
+fn every_phase_uses_its_exact_name_and_generation_intent_is_owner_private() {
     let (temporary, directory) = directory();
     let original = [0xA9; 73];
     for phase in [
-        PhaseFile::Journal,
+        PhaseFile::GenerationIntent,
         PhaseFile::Publication,
         PhaseFile::Deliveries,
         PhaseFile::Acceptances,
@@ -84,8 +84,40 @@ fn every_phase_uses_its_exact_name_and_journal_is_owner_private() {
         let path = temporary.path().join(phase.name());
         assert_eq!(fs::read(&path).unwrap(), original);
         assert!(slot.complete());
-        if phase == PhaseFile::Journal {
+        if phase == PhaseFile::GenerationIntent {
             assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o600);
         }
+    }
+}
+
+#[test]
+fn original_public_input_and_native_proof_roles_have_distinct_private_names_and_completed_source_hashes()
+ {
+    let (temporary, directory) = directory();
+    for (index, phase) in [
+        PhaseFile::CommitmentsInput,
+        PhaseFile::DeliveriesInput,
+        PhaseFile::SessionInput,
+        PhaseFile::CommitmentsProof,
+        PhaseFile::DeliveriesProof,
+        PhaseFile::SessionProof,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let original = [u8::try_from(index).unwrap() + 1; 73];
+        let mut slot = PhasePublication::new(phase);
+        assert!(matches!(slot.complete_hash(), Err(ExportError::Phase)));
+        slot.publish(&directory, &original).unwrap();
+        let path = temporary.path().join(phase.name());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o600);
+        assert_eq!(
+            slot.complete_hash().unwrap(),
+            <[u8; 32]>::from(Hash::new(original))
+        );
+        let inode = fs::metadata(&path).unwrap().ino();
+        slot.publish(&directory, &original).unwrap();
+        assert_eq!(fs::metadata(path).unwrap().ino(), inode);
     }
 }

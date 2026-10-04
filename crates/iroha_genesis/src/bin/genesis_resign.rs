@@ -196,7 +196,9 @@ fn resign_block(block: &SignedBlock, key_pair: &KeyPair) -> Result<SignedBlock> 
             .map_err(|error| eyre!("sign canonical genesis block: {error}"))?,
     );
     resigned
-        .replace_signatures([signature].into_iter().collect())
+        .replace_signatures(iroha_data_model::block::BlockSignatures::try_from_iter([
+            signature,
+        ])?)
         .map_err(|error| eyre!("replace genesis signatures: {error}"))?;
     Ok(resigned)
 }

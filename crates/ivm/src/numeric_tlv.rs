@@ -8,19 +8,18 @@ use crate::{
     syscall_metering::SyscallMeteringPhase,
 };
 pub use iroha_primitives::numeric_abi::MAX_QUANTITY_ENVELOPE_BYTES_V1;
+#[cfg(test)]
+use iroha_primitives::numeric_abi::NUMERIC_FRAME_HEADER_BYTES_V1;
 use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, NumericWorkStep, Quantity},
     numeric_abi::{
         DecimalValueV1, IntValueV1, MAX_DECIMAL_FRAME_BYTES_V1, MAX_INT_FRAME_BYTES_V1,
-        MAX_QUANTITY_FRAME_BYTES_V1, NUMERIC_FRAME_HEADER_BYTES_V1,
-        NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, NumericAbiWorkStep, ObservedNumericAbiError,
-        QuantityValueV1,
+        MAX_QUANTITY_FRAME_BYTES_V1, NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, NumericAbiWorkStep,
+        ObservedNumericAbiError, QuantityValueV1,
     },
 };
-#[cfg(test)]
-use ivm_abi::numeric_tlv::encode_int;
-use ivm_abi::numeric_tlv::{encode_decimal, encode_envelope, encode_quantity};
+use ivm_abi::numeric_tlv::encode_envelope;
 const OUTER_HEADER_BYTES: usize = 7;
 const OUTER_HASH_BYTES: usize = iroha_crypto::Hash::LENGTH;
 fn pointer_fault(fault: PointerAbiFaultV1) -> VMError {
@@ -213,15 +212,12 @@ fn finish_observed_decode<T>(
         Err(ObservedNumericAbiError::Observer(error)) => Err(error),
     }
 }
+// Independent length reference retained for the original boundary assertions.
+#[cfg(test)]
 fn exact_int_frame_len(value: &BigInt) -> Result<usize, VMError> {
     NUMERIC_FRAME_HEADER_BYTES_V1
         .checked_add(4)
         .and_then(|bytes| bytes.checked_add(value.twos_byte_len()))
-        .ok_or(VMError::GasCostOverflow)
-}
-fn exact_scaled_frame_len(value: &Numeric) -> Result<usize, VMError> {
-    exact_int_frame_len(value.mantissa())?
-        .checked_add(1)
         .ok_or(VMError::GasCostOverflow)
 }
 fn exact_envelope_len(frame_len: usize) -> Result<usize, VMError> {
@@ -323,15 +319,11 @@ pub fn decode_quantity_metered(vm: &mut IVM, pointer: u64) -> Result<Quantity, V
 /// Debit, serialize, and allocate a staged integer result.
 pub fn allocate_int_metered(vm: &mut IVM, value: &BigInt) -> Result<u64, VMError> {
     charge_output_length_probe(vm, value)?;
-    let (value, mantissa_len) =
-        IntValueV1::try_new_with_mantissa_len(value.clone()).map_err(VMError::from)?;
-    let frame_len = NUMERIC_FRAME_HEADER_BYTES_V1
-        .checked_add(4)
-        .and_then(|bytes| bytes.checked_add(mantissa_len))
-        .ok_or(VMError::GasCostOverflow)?;
+    let prepared = IntValueV1::prepare_frame(value).map_err(VMError::from)?;
+    let frame_len = prepared.frame_len();
     let envelope_len = exact_envelope_len(frame_len)?;
     charge_output(vm, envelope_len, frame_len)?;
-    let frame = value.encode_frame().map_err(VMError::from)?;
+    let frame = prepared.encode_frame().map_err(VMError::from)?;
     let envelope = encode_envelope(PointerType::Int, &frame)?;
     debug_assert_eq!(envelope.len(), envelope_len);
     vm.alloc_host_tlv(&envelope)
@@ -339,26 +331,31 @@ pub fn allocate_int_metered(vm: &mut IVM, value: &BigInt) -> Result<u64, VMError
 /// Debit, serialize, and allocate a staged decimal result.
 pub fn allocate_decimal_metered(vm: &mut IVM, value: &Numeric) -> Result<u64, VMError> {
     charge_output_length_probe(vm, value.mantissa())?;
-    let frame_len = exact_scaled_frame_len(value)?;
+    let prepared = DecimalValueV1::prepare_frame(value);
+    let frame_len = prepared.frame_len();
     let envelope_len = exact_envelope_len(frame_len)?;
     charge_output(vm, envelope_len, frame_len)?;
-    let envelope = encode_decimal(value)?;
+    let frame = prepared.encode_frame().map_err(VMError::from)?;
+    let envelope = encode_envelope(PointerType::Decimal, &frame)?;
     debug_assert_eq!(envelope.len(), envelope_len);
     vm.alloc_host_tlv(&envelope)
 }
 /// Debit, serialize, and allocate a staged quantity result.
 pub fn allocate_quantity_metered(vm: &mut IVM, value: &Quantity) -> Result<u64, VMError> {
     charge_output_length_probe(vm, value.mantissa())?;
-    let frame_len = exact_scaled_frame_len(value.as_numeric())?;
+    let prepared = QuantityValueV1::prepare_frame(value);
+    let frame_len = prepared.frame_len();
     let envelope_len = exact_envelope_len(frame_len)?;
     charge_output(vm, envelope_len, frame_len)?;
-    let envelope = encode_quantity(value)?;
+    let frame = prepared.encode_frame().map_err(VMError::from)?;
+    let envelope = encode_envelope(PointerType::Quantity, &frame)?;
     debug_assert_eq!(envelope.len(), envelope_len);
     vm.alloc_host_tlv(&envelope)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ivm_abi::numeric_tlv::{encode_decimal, encode_int, encode_quantity};
     #[test]
     fn pointer_transport_validates_numeric_frames_before_publication() {
         let integer = BigInt::from_twos_bytes(&[0x7f; 64]).expect("signed 512-bit value");

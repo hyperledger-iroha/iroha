@@ -10,13 +10,13 @@ Mochi.app/Contents/Info.plist
 Mochi.app/Contents/MacOS/mochi
 Mochi.app/Contents/MacOS/kagami
 Mochi.app/Contents/MacOS/iroha3d
-Mochi.app/Contents/Resources/network-profiles.nrt # optional installed authorities
+Mochi.app/Contents/Resources/network-profiles.nrt # required release-owned Taira preset
 docs/README.md
 LICENSE
 manifest.json
 ```
 
-Linux and Windows put the three programs and optional `network-profiles.nrt` in
+Linux and Windows put the three programs and release-owned `network-profiles.nrt` in
 `bin/`; executable names end in `.exe` on Windows. macOS has no outer `bin/`
 copies or launch scripts. Keep the application intact: its CLI and validator
 are part of the same installed runtime. You may move or rename the application
@@ -85,12 +85,16 @@ startup needs none of its input files or generated scripts.
 Release provenance must authenticate the manifest before those digests establish
 trust in a downloaded bundle.
 
-Release tooling accepts `cargo xtask mochi-bundle --profile release --network-profiles <artifact.nrt>` to
-validate and package an independently authenticated native profile artifact. Its
-release keys, rollback floors and HTTPS checkpoint locations are included in the
-bundle inventory. Omitting this option installs no remote-network authority;
-downloaded responses cannot choose one. This is an installer input, not a file
-developers must supply when using the installed CLI or desktop.
+Release tooling automatically includes the exact committed
+`defaults/developer/network-profiles.nrt` from the authenticated release source. It requires
+an independently approved Taira release key, rollback floor and HTTPS checkpoint location;
+missing or changed original material refuses packaging. The bundle manifest includes its
+exact digest. Installed developers supply no artifact. Neither a downloaded checkpoint nor
+an installer argument may choose the official release authority. Debug/development bundles
+may intentionally supply an explicit fixture profile or omit remote authority.
+
+Preset installation does not prove current remote service or attachment. Production Taira
+checkpoint publication and official remote attachment still require their separate checks.
 
 The repository's `cargo xtask` alias enables the required `dev-tools` feature.
 

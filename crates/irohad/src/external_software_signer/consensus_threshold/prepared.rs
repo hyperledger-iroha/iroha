@@ -170,7 +170,10 @@ pub(super) fn prepare_global_beacon_transition_from_retained_v1(
         inventory().map(|share| (share.authenticated_session(), share.signer_index())),
         budget,
     )?;
-    encode_global_beacon_partial_signer_credential_v1(&mut prepared, inventory())?;
+    encode_global_beacon_partial_signer_credential_v1(
+        &mut prepared,
+        inventory().map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+    )?;
     let credential = prepared.into_credential().map_err(|(_, error)| error)?;
     Ok(RuntimePreparedGlobalBeaconCredentialV1 {
         revision,

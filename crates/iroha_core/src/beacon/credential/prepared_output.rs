@@ -1,8 +1,9 @@
 //! Publicly prepared, source-bound secret frame with no post-extraction allocation.
 
 use super::*;
-use crate::beacon::{GlobalThresholdBeaconError, InMemoryGlobalThresholdBeaconPartialSignerV1};
+use crate::beacon::GlobalThresholdBeaconError;
 use iroha_allocation::{AllocationRefusal, ChargedBuffer, PrepaidBufferError};
+use iroha_crypto::threshold_bls::AdaptiveThresholdBlsSecretShare;
 
 /// Original producer failure, without exposing secret bytes in its display.
 #[derive(Debug, Error)]
@@ -16,7 +17,7 @@ pub enum GlobalBeaconCredentialEncodeErrorV1 {
     /// An admitted physical backing allocation could not be constructed.
     #[error(transparent)]
     Buffer(#[from] PrepaidBufferError),
-    /// The existing share-import primitive failed, retaining its actual entropy cause.
+    /// The existing deterministic secret-component/public-commitment relation failed.
     #[error(transparent)]
     Share(#[from] GlobalThresholdBeaconError),
     /// The canonical serializer or original fixed destination failed.
@@ -83,10 +84,14 @@ struct HeaderRef<'a> {
     policy_digest: [u8; 32],
 }
 #[derive(NoritoSerialize)]
+struct ComponentsRef<'a> {
+    components: PayloadRef<'a, [[u8; 32]; 3]>,
+}
+#[derive(NoritoSerialize)]
 struct ShareRef<'a> {
     public_session: PayloadRef<'a, GlobalThresholdBeaconKeySessionV1>,
     signer_index: u16,
-    components: PayloadRef<'a, ConsensusThresholdSecretScalarTripleV1>,
+    components: ComponentsRef<'a>,
 }
 #[derive(NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(
@@ -169,13 +174,15 @@ impl PreparedGlobalBeaconCredentialV1 {
         if consensus_threshold_public_inventory_digest_v1(&inventory)? != digest {
             return Err(ConsensusThresholdCredentialErrorV1::Rejected.into());
         }
-        let zero = ConsensusThresholdSecretScalarTripleV1([[0; 32]; 3]);
+        let zero = [[0; 32]; 3];
         let shares = bindings
             .iter()
             .map(|binding| ShareRef {
                 public_session: PayloadRef(binding.session.record()),
                 signer_index: binding.seat,
-                components: PayloadRef(&zero),
+                components: ComponentsRef {
+                    components: PayloadRef(&zero),
+                },
             })
             .collect::<arrayvec::ArrayVec<_, MAX_CONSENSUS_THRESHOLD_CREDENTIAL_SESSIONS_V1>>();
         let shape = CredentialRef {
@@ -267,13 +274,13 @@ impl Drop for ClearPartial<'_> {
 /// output for retry. A successful plan is single-use; the frame moves with `into_credential`.
 ///
 /// # Errors
-/// Returns exact original share/entropy/encoding failures or changed prepared bindings.
+/// Returns exact original share-equation/encoding failures or changed prepared bindings.
 pub fn encode_global_beacon_partial_signer_credential_v1<'a, 's>(
     prepared: &'a mut PreparedGlobalBeaconCredentialV1,
-    sessions: impl IntoIterator<Item = &'s RuntimeGlobalBeaconShareProvisioningV1>,
+    sessions: impl IntoIterator<Item = GlobalBeaconCredentialSourceV1<'s>>,
 ) -> Result<&'a [u8], GlobalBeaconCredentialEncodeErrorV1> {
     let mut source = arrayvec::ArrayVec::<
-        &RuntimeGlobalBeaconShareProvisioningV1,
+        GlobalBeaconCredentialSourceV1<'s>,
         MAX_CONSENSUS_THRESHOLD_CREDENTIAL_SESSIONS_V1,
     >::new();
     for share in sessions {
@@ -285,29 +292,34 @@ pub fn encode_global_beacon_partial_signer_credential_v1<'a, 's>(
         return Err(GlobalBeaconCredentialEncodeErrorV1::PlanChanged);
     }
     let mut ordered = arrayvec::ArrayVec::<
-        &RuntimeGlobalBeaconShareProvisioningV1,
+        GlobalBeaconCredentialSourceV1<'s>,
         MAX_CONSENSUS_THRESHOLD_CREDENTIAL_SESSIONS_V1,
     >::new();
     for binding in &prepared.bindings {
         let mut found = source.iter().copied().filter(|share| {
-            share.public_session.record().session_id == binding.session.record().session_id
+            share.session.record().session_id == binding.session.record().session_id
         });
         let share = found
             .next()
             .ok_or(GlobalBeaconCredentialEncodeErrorV1::PlanChanged)?;
         if found.next().is_some()
-            || share.signer_index != binding.seat
-            || !share.public_session.ptr_eq(&binding.session)
+            || share.seat != binding.seat
+            || !share.session.ptr_eq(&binding.session)
         {
             return Err(GlobalBeaconCredentialEncodeErrorV1::PlanChanged);
         }
-        // This is exactly the importer primitive, without an unfunded temporary registry.
-        // The borrowed source survives local entropy refusal and can retry unchanged.
-        InMemoryGlobalThresholdBeaconPartialSignerV1::from_components(
-            binding.session.clone(),
+        // Verify the exact canonical components against the existing validated
+        // transcript equation. Credential production is not runtime capability
+        // import: no newly randomized partial proof is serialized into this wire.
+        // The runtime importer separately retains its genuine signing self-test.
+        AdaptiveThresholdBlsSecretShare::from_components(
+            binding.session.transcript(),
             binding.seat,
-            Zeroizing::new(share.components.0),
-        )?;
+            share.components[0],
+            share.components[1],
+            share.components[2],
+        )
+        .map_err(GlobalThresholdBeaconError::from)?;
         ordered.push(share);
     }
     let handle =
@@ -326,9 +338,11 @@ pub fn encode_global_beacon_partial_signer_credential_v1<'a, 's>(
             ordered
                 .iter()
                 .map(|share| ShareRef {
-                    public_session: PayloadRef(share.public_session.record()),
-                    signer_index: share.signer_index,
-                    components: PayloadRef(&share.components),
+                    public_session: PayloadRef(share.session.record()),
+                    signer_index: share.seat,
+                    components: ComponentsRef {
+                        components: PayloadRef(share.components),
+                    },
                 })
                 .collect(),
         ),

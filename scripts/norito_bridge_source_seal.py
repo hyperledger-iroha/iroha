@@ -185,7 +185,7 @@ _REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS = frozenset({
     "kotlin/kagemusha-wallet-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.wallet.KagemushaAndroidHardwareProviderFactoryV1",
 })
 # Exact public trybuild diagnostics in the maintained package closures.
-# These are 67 expected originals plus three tracked event-set diagnostic copies
+# These are 68 expected originals plus three tracked event-set diagnostic copies
 # retained under iroha_data_model_derive/wip; their full bytes remain sealed.
 # This admits no other .stderr name or material/provider/path/custody exception.
 _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS = frozenset({
@@ -254,6 +254,7 @@ _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS = frozenset({
     "crates/norito_derive/tests/ui/fail/json_required_option_misuse.stderr",
     "crates/norito_derive/tests/ui/fail/prepared_record_generic.stderr",
     "crates/norito_derive/tests/ui/fail/prepared_record_tuple.stderr",
+    "crates/norito_derive/tests/ui/fail/prepared_record_unit.stderr",
     "crates/norito_derive/tests/ui/fail/prepared_record_validation.stderr",
     "crates/norito_derive/tests/ui/fail/schema_identity_duplicate.stderr",
     "crates/norito_derive/tests/ui/fail/schema_identity_generic_frame.stderr",

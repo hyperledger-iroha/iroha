@@ -15,7 +15,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sorafs_javascript_package_source as package
-from sorafs_javascript_package_fixtures import CHECKSUM, REQUIRED_OUTPUTS, archive_bytes, expected_files, source_inputs
+from sorafs_javascript_package_fixtures import (
+    CHECKSUM, PROJECTED_DIST_MEMBERS, PROJECTED_MEMBERS, REQUIRED_OUTPUTS, SOURCE_FILES,
+    archive_bytes, expected_files, source_inputs,
+)
 from sorafs_javascript_dependencies import parse_dependency_lock
 
 
@@ -37,7 +40,7 @@ def test_actual_candidate_sources_have_the_complete_reviewed_projection(captured
     sources, lock, _ = captured
     projected = project(sources, lock)
     expected = expected_files(sources)
-    assert len(sources) == 240 and len(projected.members) == 237
+    assert len(sources) == SOURCE_FILES and len(projected.members) == PROJECTED_MEMBERS
     assert projected.version == "0.0.3"
     rows = {row.name: row for row in projected.members}
     ordinary = rows["dist/crc64Xz.js"]
@@ -47,7 +50,7 @@ def test_actual_candidate_sources_have_the_complete_reviewed_projection(captured
     assert "src/retailFeeAssessment.js" in sources and "dist/retailFeeAssessment.js" in rows
     assert "src/validationFeeHijiriQuote.js" not in sources and "dist/validationFeeHijiriQuote.js" not in rows
     assert {row.name: row.content for row in projected.members} == expected
-    assert sum(row.name.startswith("dist/") for row in projected.members) == 198
+    assert sum(row.name.startswith("dist/") for row in projected.members) == PROJECTED_DIST_MEMBERS
     assert projected.source_sha256 == tuple((name, hashlib.sha256(body).hexdigest()) for name, body in sorted(sources.items()))
     for row in projected.members:
         if row.name == package.CHECKSUM_MEMBER:
@@ -227,7 +230,7 @@ def test_projection_and_original_content_perform_no_io_or_execution(captured, mo
                              (subprocess, ("run", "Popen")), (socket, ("create_connection",))):
             for name in names: patch.setattr(owner, name, forbidden)
         observed = verify(raw, sources, lock)
-    assert len(observed.projection.members) == 237
+    assert len(observed.projection.members) == PROJECTED_MEMBERS
 
 
 @pytest.mark.parametrize("name", ("src/._hidden.js", "src/CVS/a.js", "src/.git/a.js", "src/a.orig/b.js",

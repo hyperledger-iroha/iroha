@@ -29,6 +29,7 @@ _FILES = (
     "scripts/capture_release_command.py", "scripts/copy_release_file.py",
     "scripts/copy_release_tree.py", "scripts/write_release_checksum.py",
     "scripts/docker_entrypoint.sh", "scripts/ci/package_inrou_runtime_v1.py",
+    "scripts/run_release_pipeline.py", "scripts/release_manifest_signing.py", "scripts/publish_plan.py",
 )
 _TREES = (
     "defaults", "codec/rans/tables", "configs/sorafs/external_software_signer",
@@ -36,7 +37,21 @@ _TREES = (
 )
 
 
-def prepare_source_fixture(repo: Path, destination: Path, environment: dict[str, str]) -> Path:
+def write_cuda_approval_source(
+    source: Path, key: str = CUDA_KEY_SHA256, manifest: str = CUDA_BUNDLE_SHA256,
+    *, present: bool = True,
+) -> Path:
+    """Write only a disposable literal owner for packaging metadata controls."""
+    owner = source / "crates/ivm/src/cuda_build_policy.rs"
+    owner.parent.mkdir(parents=True, exist_ok=True)
+    value = ('Some(ReviewedCudaBundlePins { public_key_sha256: "' + key
+             + '", manifest_sha256: "' + manifest + '" })') if present else "None"
+    owner.write_text('pub(crate) const REVIEWED_CUDA_BUNDLE_PINS: Option<ReviewedCudaBundlePins> = '
+                     + value + ';\n')
+    return owner
+
+
+def prepare_source_fixture(repo: Path, destination: Path, environment: dict[str, str], *, cuda_approval: bool = True) -> Path:
     """Copy packaging inputs and seal a disposable synthetic source owner."""
     destination.mkdir()
     source = destination / "source"
@@ -55,6 +70,7 @@ def prepare_source_fixture(repo: Path, destination: Path, environment: dict[str,
     cuda.mkdir(parents=True)
     (cuda / "provenance.v1").write_bytes(CUDA_BUNDLE)
     (cuda / "provenance.v1.pub").write_bytes(CUDA_PUBLIC_KEY)
+    write_cuda_approval_source(source, present=cuda_approval)
     inventory = sorted(path.relative_to(source).as_posix() for path in source.rglob("*") if path.is_file())
     tools = destination / "tools"
     tools.mkdir()
@@ -81,6 +97,18 @@ def prepare_source_fixture(repo: Path, destination: Path, environment: dict[str,
     git.chmod(0o755)
     environment["PATH"] = f"{tools}{os.pathsep}{environment['PATH']}"
     checker = source / "scripts/check_release_feature_graph.py"
+    pipeline = source / "scripts/run_release_pipeline.py"
+    body = pipeline.read_text()
+    for name in ("release_artifact_contract", "release_manifest_signing", "publish_plan", "check_release_feature_graph"):
+        helper = (source / "scripts" / (name + ".py")).read_bytes()
+        if name == "check_release_feature_graph":
+            helper, count = re.subn(rb'(TRUSTED_RELEASE_SURFACE_SHA256\s*=\s*\(\s*")[0-9a-f]{64}("\s*\))',
+                                   lambda match: match[1] + b"0" * 64 + match[2], helper)
+            assert count == 1
+        body, count = re.subn(r'("' + name + r'": ")[0-9a-f]{64}("[,])',
+                             lambda match: match[1] + hashlib.sha256(helper).hexdigest() + match[2], body)
+        assert count == 1
+    pipeline.write_text(body)
     calculate = (
         "import importlib.util, pathlib, sys; "
         "spec=importlib.util.spec_from_file_location('fixture_guard', sys.argv[1]); "

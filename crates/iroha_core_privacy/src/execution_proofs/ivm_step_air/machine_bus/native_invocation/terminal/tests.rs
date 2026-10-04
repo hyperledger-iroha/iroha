@@ -24,7 +24,7 @@ fn capture(
     let mut lease =
         ExecutionMemoryLease::reserve(budget, NativeInvocation::allocation_plan().unwrap())
             .unwrap();
-    NativeInvocation::run_unit_root(contract, "main", gas, &mut lease, budget)
+    NativeInvocation::run_public_leaf_root(contract, "main", gas, &mut lease, budget)
 }
 fn native(cycles: u64, additions: usize, gas: u64) -> (NativeInvocation, AllocationBudget) {
     let budget = AllocationBudget::new(128 * 1024 * 1024);

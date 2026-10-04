@@ -8,7 +8,14 @@
 use super::{F, ROOT_SLOTS, packet};
 use crate::execution_proofs::ivm_step_air::residues::Sink;
 use ivm::{IvmStackPolicy, Memory, PreparedContract, execution_packets::MAX_STEPS};
-use ivm_abi::call::CallTypeNodeV1;
+use ivm_abi::{call::CallTypeNodeV1, entrypoint::EntrypointValueKindV1};
+
+/// Fixed public coefficient selected only from the retained admitted artifact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PublicLeafKind {
+    Unit,
+    Bool,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(in super::super) enum Error {
@@ -19,6 +26,7 @@ pub(in super::super) enum Error {
 }
 
 pub(super) struct Plan {
+    leaf_kind: PublicLeafKind,
     gas: [u64; 3],
     absolute_entry: u64,
     return_pc: u64,
@@ -54,12 +62,14 @@ impl Plan {
             .iter()
             .find(|call| call.entry_pc == public.entry_pc)
             .ok_or(Error::Entrypoint)?;
-        if public.argument_schema.is_some()
-            || !callable.arguments.nodes.is_empty()
-            || callable.results.nodes.as_slice() != [CallTypeNodeV1::Unit]
-        {
+        if public.argument_schema.is_some() || !callable.arguments.nodes.is_empty() {
             return Err(Error::Profile);
         }
+        let leaf_kind = match callable.results.nodes.as_slice() {
+            [CallTypeNodeV1::Unit] => PublicLeafKind::Unit,
+            [CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)] => PublicLeafKind::Bool,
+            _ => return Err(Error::Profile),
+        };
         let prefix = artifact
             .code_offset()
             .checked_sub(artifact.header_len())
@@ -89,6 +99,7 @@ impl Plan {
         let frame_cost = u64::from(callable.frame_bytes).div_ceil(8) + 1;
         let entered_gas = allocated_gas.checked_sub(frame_cost).ok_or(Error::Gas)?;
         Ok(Self {
+            leaf_kind,
             gas: [initial_gas, allocated_gas, entered_gas],
             absolute_entry,
             return_pc,
@@ -105,6 +116,11 @@ impl Plan {
                 callable.entry_pc,
             ],
         })
+    }
+
+    /// Exact one-node kind; no native value, summary or witness selects it.
+    pub(super) fn leaf_kind(&self) -> PublicLeafKind {
+        self.leaf_kind
     }
 
     /// The admitted artifact fixes successful native ZK padding geometry.

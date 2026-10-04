@@ -174,7 +174,7 @@ def _authenticated_prebuilt(
         "target": "x86_64-unknown-linux-gnu",
         "cargo_profile": "deploy",
         "default_features": True,
-        "selected_features": ["irohad/external-software-signer-bin", "irohad/ivm-cuda"],
+        "selected_features": ["irohad/external-software-signer-bin"],
         "acceleration": acceleration_record("x86_64-unknown-linux-gnu"),
         "binaries": rows,
     }
@@ -263,8 +263,6 @@ def _run(
             str(authenticated_binaries),
             "--trusted-prebuilt-provenance-sha256",
             provenance_digest,
-            "--trusted-cuda-key-sha256",
-            CUDA_KEY_SHA256,
             "--artifacts-dir",
             str(output),
         ],

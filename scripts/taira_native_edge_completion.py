@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import stat
 import struct
@@ -171,6 +172,61 @@ def retained_public(value, *, limit=MAX_PUBLIC_BYTES, executable=False):
     return bytes(body) if body is not None else None
 
 
+def native_custodian_anchor(packet):
+    """Resolve the independently provisioned guard from the actual OS account.
+
+    Incoming inventory, environment variables and public packet paths cannot
+    select this authority. Only the independently pinned Rust dispatcher may
+    hand signature-verified inventory/checkpoint custody to its direct child.
+    """
+    home = path_value(pwd.getpwuid(os.geteuid()).pw_dir)
+    custody = home / ".local/share/iroha/taira/public-reset-v1"
+    guard_path = custody / "taira-edge/guard.json"
+    dispatcher = custody / "dispatcher/iroha"
+    need(packet["custody_root"] == str(custody)
+         and packet["guard"]["reference"]["file"]["path"] == str(guard_path)
+         and packet["parent"]["executable"]["reference"]["file"]["path"] == str(dispatcher),
+         "independent_native_anchor_required")
+    opened = open_anchored(guard_path)
+    try:
+        observed = identity(os.fstat(opened))
+        reference = dict(file=dict(path=str(guard_path), identity=observed), sha256="")
+        validate_observed(reference["file"])
+        need(0 < observed["size"] <= 16 * 1024, "native_guard_size_bound")
+        body = os.pread(opened, 16 * 1024+1, 0)
+        recheck_observed(reference["file"], opened)
+        need(len(body) == observed["size"], "native_guard_changed")
+        reference["sha256"] = hashlib.sha256(body).hexdigest()
+        guard = public_json(body, 16 * 1024)
+        fields(guard, {"schema", "host_slug", "service_root", "state_root", "trusted_key_sha256",
+                       "dispatcher_path", "dispatcher_sha256", "upload_parent"}, "host_guard_fields")
+        need(guard["schema"] == "iroha.taira.public-reset.host-guard.v1"
+             and guard["dispatcher_path"] == str(dispatcher), "independent_native_guard_binding")
+        hex_value(guard["dispatcher_sha256"], 64, "native_dispatcher_digest")
+        hex_value(guard["trusted_key_sha256"], 64, "native_trusted_key_digest")
+        need(packet["guard"]["reference"] == reference, "independent_native_guard_changed")
+        retained_public(packet["guard"], limit=16 * 1024)
+        return dict(custody_root=str(custody), dispatcher_path=str(dispatcher),
+                    guard=guard, retained=dict(fd=opened, reference=reference))
+    except BaseException:
+        os.close(opened)
+        raise
+
+
+def kernel_executable_path(pid):
+    """Observe the actual Darwin executable, rather than any mapped text file."""
+    import ctypes
+    need(sys.platform == "darwin", "native_darwin_parent_required")
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    function = library.proc_pidpath
+    function.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    function.restype = ctypes.c_int
+    buffer = ctypes.create_string_buffer(4096)
+    result = function(pid, buffer, len(buffer))
+    need(0 < result < len(buffer), "native_parent_executable_unavailable")
+    return os.fsdecode(buffer.value)
+
+
 def source_closure():
     """Read only public embedded helpers; compile imports from these exact bytes."""
     source_root = Path(__file__).resolve().parent
@@ -234,16 +290,21 @@ class Admission:
         hex_value(packet["helper_source_closure_sha256"], 64, "helper_closure_digest")
         self.packet = packet
         self.bindings = {key: packet[key] for key in BINDING_KEYS}
+        # Resolve independent authority before any caller-selected operation,
+        # inventory, executable or guard file is opened.
+        self.anchor = native_custodian_anchor(packet)
+        self.directory = None
+        self.predecessor = None
+        self.parent_digest_verified = False
         self.path = path_value(packet["custody_root"]) / "taira-edge/operations" / packet["authorization_sha256"]
-        self.directory = open_anchored(self.path, directory=True)
-        self.directory_identity = identity(os.fstat(self.directory))
-        self.directory_owned_change = False
         self.plan = None
         self.progress = None
         self.fence_body = None
         self.sources = None
-        self.predecessor = None
         try:
+            self.directory = open_anchored(self.path, directory=True)
+            self.directory_identity = identity(os.fstat(self.directory))
+            self.directory_owned_change = False
             need(self.directory_identity["uid"] == os.geteuid()
                  and self.directory_identity["gid"] == os.getegid()
                  and self.directory_identity["mode"] == 0o700, "unsafe_operation_directory")
@@ -255,10 +316,16 @@ class Admission:
     def close(self):
         if self.predecessor is not None:
             os.close(self.predecessor["fd"])
-        os.close(self.directory)
+        if self.directory is not None:
+            os.close(self.directory)
+        os.close(self.anchor["retained"]["fd"])
 
     def verify(self):
         packet = self.packet
+        recheck_observed(self.anchor["retained"]["reference"]["file"], self.anchor["retained"]["fd"])
+        need(packet["guard"]["reference"] == self.anchor["retained"]["reference"],
+             "independent_native_guard_changed")
+        recheck_observed(packet["guard"]["reference"]["file"], packet["guard"]["fd"])
         current = open_anchored(self.path, directory=True)
         try:
             need(identity(os.fstat(current)) == self.directory_identity == identity(os.fstat(self.directory)),
@@ -272,7 +339,15 @@ class Admission:
              and isinstance(parent["started"], str)
              and re.fullmatch(r"[A-Za-z0-9: ]{20,32}", parent["started"]) is not None,
              "native_parent_changed")
-        retained_public(parent["executable"], limit=512 * 1024 * 1024, executable=True)
+        need(parent["executable"]["reference"]["file"]["path"] == self.anchor["dispatcher_path"]
+             and parent["executable"]["reference"]["sha256"] == self.anchor["guard"]["dispatcher_sha256"]
+             and kernel_executable_path(parent["pid"]) == self.anchor["dispatcher_path"],
+             "independent_native_parent_required")
+        if not self.parent_digest_verified:
+            retained_public(parent["executable"], limit=512 * 1024 * 1024, executable=True)
+            self.parent_digest_verified = True
+        else:
+            recheck_observed(parent["executable"]["reference"]["file"], parent["executable"]["fd"], executable=True)
         closure, sources = source_closure()
         need(closure == packet["helper_source_closure_sha256"], "helper_closure_changed")
         self.sources = sources
@@ -302,7 +377,7 @@ class Admission:
             need(packet[key]["reference"]["file"]["path"] == str(self.path / name), "operation_public_path")
         inventory = public_json(retained_public(packet["inventory"]))
         authorization = public_json(retained_public(packet["authorization"]))
-        guard = public_json(retained_public(packet["guard"]))
+        guard = self.anchor["guard"]
         fields(guard, {"schema", "host_slug", "service_root", "state_root", "trusted_key_sha256",
                        "dispatcher_path", "dispatcher_sha256", "upload_parent"}, "host_guard_fields")
         native = inventory["hosts"]["native_edge"]
@@ -344,15 +419,34 @@ class Admission:
             "cleanup": {"sealed", "cleanup_requested", "cleaned", "recovery_pending"}}
         need(self.progress["status"] in allowed_status[packet["action"]], "completion_progress_phase")
         self.plan = public_json(retained_public(packet["plan"]))
-        fields(self.plan, {"schema", "nginx", "completion_journal_basename"}, "completion_plan_fields")
+        fields(self.plan, {"schema", "nginx", "completion_journal_basename", "publication_effect"}, "completion_plan_fields")
         need(self.plan["schema"] == "iroha.taira.public-reset.native-nginx-completion-plan.v1"
              and self.plan["completion_journal_basename"] == "native-completion.ndjson",
              "completion_plan_schema")
         owner.validate_plan(self.plan["nginx"])
         plan = self.plan["nginx"]
         need(plan["host_kind"] == "macos" and plan["publication"]["kind"] == "reconcile"
-             and plan["operation_id"] == plan["publication"]["prior"]["operation_id"]
-             == self.progress["publication_operation_id"], "completion_publication_binding")
+             and plan["operation_id"] == plan["publication"]["prior"]["operation_id"], "completion_publication_binding")
+        effect = self.plan["publication_effect"]
+        fields(effect, {"kind", "value"}, "publication_effect_fields")
+        if effect["kind"] == "owned":
+            need(effect["value"] is None and plan["operation_id"] == self.progress["publication_operation_id"],
+                 "owned_publication_effect")
+        else:
+            need(effect["kind"] == "not_requested" and packet["action"] == "rollback"
+                 and self.progress["status"] in {"admitted", "staged", "rollback_requested", "rolled_back", "recovery_pending"},
+                 "publication_effect_not_requested")
+            fields(effect["value"], {"intended_operation_id", "incumbent"}, "not_requested_effect_fields")
+            hex_value(effect["value"]["intended_operation_id"], 32, "intended_publication_identity")
+            incumbent = effect["value"]["incumbent"]
+            fields(incumbent, {"operation_id", "journal", "publication"}, "incumbent_owner_fields")
+            for name in ("journal", "publication"):
+                fields(incumbent[name], {"file", "sha256"}, "incumbent_public_fields")
+                validate_observed(incumbent[name]["file"])
+                hex_value(incumbent[name]["sha256"], 64, "incumbent_public_digest")
+            need(effect["value"]["intended_operation_id"] == self.progress["publication_operation_id"]
+                 and effect["value"]["intended_operation_id"] != plan["operation_id"]
+                 and incumbent == numeric_owned_publication(plan), "incumbent_owner_binding")
         checkpoints = packet["checkpoints"]
         need(isinstance(checkpoints, list) and len(checkpoints) <= 3, "checkpoint_count")
         hashes = []
@@ -492,7 +586,7 @@ class CompletionJournal:
                  and record["sequence"] == ordinal
                  and all(record[key] == value for key, value in admission.bindings.items())
                  and record["plan_sha256"] == admission.packet["plan"]["reference"]["sha256"]
-                 and record["publication_operation_id"] == admission.plan["nginx"]["operation_id"]
+                 and record["publication_operation_id"] == intended_publication_operation(admission.plan)
                  and record["phase"] in {"admitted", "rollback_requested", "source_restored",
                      "reload_requested", "publisher_terminal_requested", "publisher_terminal", "rolled_back",
                      "seal_requested", "sealed", "cleanup_requested", "cleaned", "recovery_pending"}
@@ -520,7 +614,7 @@ class CompletionJournal:
                      if packet["fence"]["kind"] == "present" else None)
         record = dict(self.admission.bindings, schema=JOURNAL_SCHEMA, sequence=len(self.records)+1,
             plan_sha256=packet["plan"]["reference"]["sha256"], phase=phase, action=packet["action"],
-            publication_operation_id=self.admission.plan["nginx"]["operation_id"],
+            publication_operation_id=intended_publication_operation(self.admission.plan),
             publication_identity=publication_identity, backup_identity=backup_identity,
             publisher_journal=publisher_journal,
             progress_before_sha256=packet["progress"]["reference"]["sha256"],
@@ -595,13 +689,30 @@ def complete_owned(admission, journal):
                  if admission.packet["fence"]["kind"] == "present" else None)
     return dict(admission.bindings, schema=RECEIPT_SCHEMA, action=packet_action(admission),
         progress_before_sha256=admission.packet["progress"]["reference"]["sha256"],
-        global_proof_sha256=fence_sha, publication_operation_id=plan["operation_id"],
+        global_proof_sha256=fence_sha, publication_operation_id=intended_publication_operation(admission.plan),
         completion_journal=journal.reference(), status=status, error_code=code,
         restored_owned_publication=(result.get("restored_owned_publication") if status == "rolled_back" else None))
 
 
 def packet_action(admission):
     return admission.packet["action"]
+
+
+def intended_publication_operation(plan):
+    effect = plan["publication_effect"]
+    return (effect["value"]["intended_operation_id"] if effect["kind"] == "not_requested"
+            else plan["nginx"]["operation_id"])
+
+
+def numeric_owned_publication(plan):
+    """Project the sole maintained owner wire into exact native numeric refs."""
+    prior = plan["publication"]["prior"]
+    destination = str(Path(plan["destination"]["directory"]["path"]) / plan["destination"]["basename"])
+    def public(path, observed, digest):
+        return dict(file=dict(path=path, identity={key: int(value) for key, value in observed.items()}), sha256=digest)
+    return dict(operation_id=prior["operation_id"],
+        journal=public(prior["journal"]["path"], prior["journal"]["identity"], prior["journal"]["sha256"]),
+        publication=public(destination, prior["publication"]["identity"], prior["publication"]["sha256"]))
 
 
 def finish_in_context(receipt, request, context, admission, journal, owner):
@@ -693,6 +804,46 @@ def finish_in_context(receipt, request, context, admission, journal, owner):
 
     try:
         native_guard()
+        if admission.plan["publication_effect"]["kind"] == "not_requested":
+            # Stage-only rollback proves the incumbent without changing it.
+            # It cannot borrow the successor's nonexistent journal or undo a
+            # healthy current network to manufacture a rollback receipt.
+            need(action == "rollback", "not_requested_terminal_action")
+            incumbent = admission.plan["publication_effect"]["value"]["incumbent"]
+            intended = admission.plan["publication_effect"]["value"]["intended_operation_id"]
+            need(intended != request["operation_id"], "intended_operation_is_incumbent")
+            intended_journal = ".taira-native-nginx-apply-" + intended + ".receipt.ndjson"
+            def verify_unrequested():
+                try:
+                    os.stat(intended_journal, dir_fd=context["directory"], follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise RuntimeError("publication_effect_already_requested")
+            verify_unrequested()
+            observed = {}
+            owner.inspect_owned_publication_in_context(observed, request, context)
+            exact = dict(operation_id=observed["operation_id"], journal=observed["journal"],
+                         publication=observed["publication"])
+            need(exact == incumbent, "incumbent_owner_changed")
+            if not journal.records:
+                journal_effect("admitted")
+            need(all(row["action"] == "rollback" and row["phase"] in {
+                "admitted", "rollback_requested", "rolled_back", "recovery_pending"} for row in journal.records),
+                "not_requested_journal_phase")
+            if journal.records[-1]["phase"] != "rolled_back":
+                journal_effect("rollback_requested")
+                native_guard()
+                verify_unrequested()
+                observed = {}
+                owner.inspect_owned_publication_in_context(observed, request, context)
+                need(dict(operation_id=observed["operation_id"], journal=observed["journal"],
+                          publication=observed["publication"]) == incumbent, "incumbent_owner_changed")
+                journal_effect("rolled_back")
+            native_guard()
+            verify_unrequested()
+            receipt.update(exit_code=0, completion_status="rolled_back", restored_owned_publication=incumbent)
+            return
         last = journal.records[-1] if journal.records else None
         if last is not None:
             need(last["global_proof_sha256"] == (admission.packet["fence"]["value"]["reference"]["reference"]["sha256"]

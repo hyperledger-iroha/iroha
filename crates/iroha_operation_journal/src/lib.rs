@@ -24,7 +24,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum canonical byte length of each retained native journal record.
+pub const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
 const APPLIED_EVIDENCE: &str = "applied.json";
 
 /// Fixed native preparation stages; arbitrary journal names cannot enter this interface.
@@ -101,7 +102,7 @@ impl Journal {
     /// Invalid/oversized operation, unsafe or missing parent, existing destination, competing owner,
     /// or native publication failure. Private staging siblings can remain after interruption.
     pub fn create_prepared<T: JsonSerialize>(path: &Path, operation: &T) -> Result<Self> {
-        Self::publish_initial(path, "operation.json", operation)
+        Self::publish_initial(path, "operation.json", operation, None)
     }
 
     /// Publish the sole native request before any quote, payload or local signature.
@@ -110,10 +111,34 @@ impl Journal {
     /// # Errors
     /// Refuses oversized encoding, unsafe parents, existing custody, or native publication failure.
     pub fn create_preparation<T: JsonSerialize>(path: &Path, request: &T) -> Result<Self> {
-        Self::publish_initial(path, "preparation.json", request)
+        Self::publish_initial(path, "preparation.json", request, None)
     }
 
-    fn publish_initial<T: JsonSerialize>(path: &Path, record: &str, value: &T) -> Result<Self> {
+    /// Publish a purpose owner's required bounded custody anchor with the original atomically.
+    /// The purpose owner validates the anchor's codec and semantics and authorizes initialization.
+    /// Successful publication grants only local durable custody, not purpose or chain authority.
+    ///
+    /// # Errors
+    /// Refuses empty/oversized anchors, invalid/oversized operation encoding, unsafe or missing
+    /// parents, existing destinations, competing owners, or native publication failure.
+    pub fn create_prepared_with_custody_anchor<T: JsonSerialize>(
+        path: &Path,
+        operation: &T,
+        anchor: &[u8],
+    ) -> Result<Self> {
+        eyre::ensure!(
+            !anchor.is_empty() && anchor.len() <= MAX_JOURNAL_BYTES,
+            "custody anchor exceeds its byte bound"
+        );
+        Self::publish_initial(path, "operation.json", operation, Some(anchor))
+    }
+
+    fn publish_initial<T: JsonSerialize>(
+        path: &Path,
+        record: &str,
+        value: &T,
+        anchor: Option<&[u8]>,
+    ) -> Result<Self> {
         let bytes = canonical_bytes(value)?;
         let absolute = if path.is_absolute() {
             path.to_owned()
@@ -128,7 +153,17 @@ impl Journal {
                 .parent()
                 .ok_or_else(|| eyre!("journal has no parent"))?,
         )?;
-        let directory = parent.publish_private_child(name, &[("lock", &[]), (record, &bytes)])?;
+        let directory = match anchor {
+            Some(anchor) => parent.publish_private_child(
+                name,
+                &[
+                    ("lock", &[]),
+                    (record, &bytes),
+                    ("custody-anchor.nrt", anchor),
+                ],
+            )?,
+            None => parent.publish_private_child(name, &[("lock", &[]), (record, &bytes)])?,
+        };
         Self::lock_directory(directory, false)
     }
 
@@ -678,5 +713,47 @@ mod tests {
         fs::remove_file(path.join("lock")).unwrap();
         let _socket = std::os::unix::net::UnixListener::bind(path.join("lock")).unwrap();
         assert!(Journal::open(&path).is_err());
+    }
+}
+
+#[cfg(test)]
+mod custody_anchor_tests {
+    use super::*;
+    #[test]
+    fn required_custody_anchor_is_published_with_exact_original_once() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("anchored");
+        let original = norito::json!({"purpose":"bounded-anchor-owner"});
+        assert!(Journal::create_prepared_with_custody_anchor(&path, &original, &[]).is_err());
+        assert!(!path.exists());
+        let journal =
+            Journal::create_prepared_with_custody_anchor(&path, &original, b"exact opaque anchor")
+                .unwrap();
+        assert_eq!(
+            journal.read_operation::<norito::json::Value>().unwrap(),
+            original
+        );
+        assert_eq!(
+            journal
+                .directory
+                .read("custody-anchor.nrt", 64)
+                .unwrap()
+                .as_slice(),
+            b"exact opaque anchor"
+        );
+        assert!(
+            Journal::create_prepared_with_custody_anchor(&path, &original, b"replacement").is_err()
+        );
+        assert_eq!(journal.directory.entries(3).unwrap().len(), 3);
+        drop(journal);
+        let reopened = Journal::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .directory
+                .read("custody-anchor.nrt", 64)
+                .unwrap()
+                .as_slice(),
+            b"exact opaque anchor"
+        );
     }
 }

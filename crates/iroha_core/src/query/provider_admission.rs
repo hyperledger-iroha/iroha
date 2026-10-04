@@ -1,5 +1,8 @@
 //! Same-State provider admission heads, immutable history and authenticated current lookup.
 
+mod originals;
+pub use originals::with_genesis_provider_admission_originals_v1;
+
 use crate::{
     query::signer_finality::verify_signer_finality_v1,
     state::{StateReadOnly, WorldReadOnly},

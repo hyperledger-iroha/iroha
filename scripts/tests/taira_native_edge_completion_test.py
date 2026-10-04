@@ -66,7 +66,8 @@ class EffectAdmission:
             authorization_sha256="e" * 64, authorization_nonce="f" * 32, host_pair_sha256="1" * 64,
             host_identity_sha256="2" * 64, custody_root=str(root))
         self.plan = dict(schema="iroha.taira.public-reset.native-nginx-completion-plan.v1",
-            nginx=_plan(request, root), completion_journal_basename="native-completion.ndjson")
+            nginx=_plan(request, root), completion_journal_basename="native-completion.ndjson",
+            publication_effect=dict(kind="owned", value=None))
         self.packet = dict(action=action, plan=dict(reference=dict(sha256="3" * 64)),
             progress=dict(reference=dict(sha256="4" * 64)), fence=dict(kind="absent", value={}))
         self.refuse = None
@@ -169,6 +170,30 @@ def test_cleanup_before_durable_seal_preserves_both_owned_sources(effect_admissi
     assert records[-1]["phase"] == "recovery_pending"
     assert (root / "conf.d/new-scoped.conf").read_bytes() == before
     assert len(list((root / "conf.d").glob(".taira-nginx-backup-*"))) == 1
+
+
+def test_pre_effect_rollback_proves_incumbent_without_touching_it(effect_admission, monkeypatch):
+    admission, root = effect_admission
+    incumbent = MODULE.numeric_owned_publication(admission.plan["nginx"])
+    intended = "d" * 32
+    admission.plan["publication_effect"] = dict(kind="not_requested",
+        value=dict(intended_operation_id=intended, incumbent=incumbent))
+    destination = root / "conf.d/new-scoped.conf"
+    publication_before = destination.read_bytes(), _identity(destination)
+    journal = Path(incumbent["journal"]["file"]["path"])
+    journal_before = journal.read_bytes(), _identity(journal)
+    reloads = (root / "reload-count").read_bytes()
+    monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("pre-effect rollback signaled nginx"))
+    monkeypatch.setattr(OWNER, "native_exchange", lambda *args: pytest.fail("pre-effect rollback exchanged incumbent"))
+    result, records = _complete(admission)
+    assert result["status"] == "rolled_back" and result["error_code"] is None, result
+    assert result["publication_operation_id"] == intended
+    assert result["restored_owned_publication"] == incumbent
+    assert [row["phase"] for row in records] == ["admitted", "rollback_requested", "rolled_back"]
+    assert (destination.read_bytes(), _identity(destination)) == publication_before
+    assert (journal.read_bytes(), _identity(journal)) == journal_before
+    assert (root / "reload-count").read_bytes() == reloads
+    assert _complete(admission)[1] == records
 
 
 @pytest.mark.parametrize("fault", ["after_exchange", "after_signal", "after_publisher_append"])
@@ -360,7 +385,12 @@ def test_actual_isolated_cli_help_and_closed_malformed_request(native_apply):
 
 @pytest.fixture
 def native_admission(native_apply):
-    """Retain actual native descriptors/lock for a real child of pytest."""
+    """Project custody under an explicit authority stub, never fake Rust auth.
+
+    Unstubbed calls must reject this arbitrary C parent/custody root. The stub
+    admits only authority derivation so real parent executable/FD/lock/fence
+    checks can be fault-tested independently of the Rust signature gate.
+    """
     if sys.platform != "darwin":
         pytest.skip("the maintained completion corridor admits native Darwin only")
     request, root, _ = native_apply
@@ -427,7 +457,8 @@ int main(int argc, char **argv) {
         request_sha256="3" * 64, publication_operation_id=request["operation_id"], status="awaiting_readiness",
         checkpoint_sha256=None, completion_receipt_sha256=None)
     plan = dict(schema="iroha.taira.public-reset.native-nginx-completion-plan.v1",
-        nginx=_plan(request, root), completion_journal_basename="native-completion.ndjson")
+        nginx=_plan(request, root), completion_journal_basename="native-completion.ndjson",
+        publication_effect=dict(kind="owned", value=None))
     packet = dict(bindings, schema=MODULE.ADMISSION_SCHEMA, action="rollback",
         helper_source_closure_sha256=MODULE.source_closure()[0], parent=parent, guard=guard_reference,
         inventory=inventory_reference, authorization=authorization, progress=retained(operation / "progress.json", progress),
@@ -442,6 +473,18 @@ int main(int argc, char **argv) {
         directory=dict(path=str(operation), identity=MODULE.identity(os.fstat(directory_fd))), basename="global-proof.json"))
     child = '''import importlib.util, json, pathlib, sys
 spec=importlib.util.spec_from_file_location("completion",sys.argv[1]); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+if sys.argv[3]=="stub_authority":
+    def projection_authority(packet):
+        guard=module.public_json(module.retained_public(packet["guard"]))
+        reference=packet["guard"]["reference"]
+        retained=module.open_anchored(reference["file"]["path"])
+        return dict(custody_root=packet["custody_root"],dispatcher_path=packet["parent"]["executable"]["reference"]["file"]["path"],
+            guard=guard,retained=dict(fd=retained,reference=reference))
+    module.native_custodian_anchor=projection_authority
+else:
+    def reject_packet_file(*args,**kwargs):
+        raise AssertionError("arbitrary caller-selected input opened before independent anchor refusal")
+    module.open_anchored=reject_packet_file
 try:
     admission=module.Admission(json.loads(pathlib.Path(sys.argv[2]).read_bytes()))
     try: admission.verify(); result={"accepted":True}
@@ -451,13 +494,13 @@ except Exception as error:
     result={"accepted":False,"error_code":code}
 print(json.dumps(result))
 '''
-    def run():
+    def run(*, stub_authority=True):
         packet_path = root / "child-admission.json"
         # The native fixture stays the actual parent; it waits while pytest
         # records its live PID/start identity, then launches exactly one child.
         # The command is fixed text and receives only public fixture argv.
         process = subprocess.Popen([str(executable), sys.executable, "-I", "-c", child,
-            str(MODULE_PATH), str(packet_path)],
+            str(MODULE_PATH), str(packet_path), "stub_authority" if stub_authority else "independent_authority"],
             pass_fds=descriptors, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             admitted = copy.deepcopy(packet)
@@ -516,7 +559,7 @@ print(json.dumps(result))
             os.close(fd)
 
 
-def test_actual_native_parent_inherited_fd_lock_and_absent_fence_admission(native_admission):
+def test_actual_parent_inherited_fd_lock_and_absent_fence_projection_with_authority_stub(native_admission):
     fixture = native_admission
     assert fixture["run"]() == {"accepted": True}
     fixture["checkpoint"](2)
@@ -524,9 +567,15 @@ def test_actual_native_parent_inherited_fd_lock_and_absent_fence_admission(nativ
 
 
 @pytest.mark.parametrize("action", ["seal", "cleanup"])
-def test_actual_native_parent_accepts_exact_present_fence_and_native_unit_enum_wire(native_admission, action):
+def test_custody_projection_accepts_exact_fence_and_native_unit_enum_wire(native_admission, action):
     native_admission["proof"](action)
     assert native_admission["run"]() == {"accepted": True}
+
+
+def test_unmodified_anchor_refuses_self_rooted_c_parent_before_any_selected_file_read(native_admission):
+    result = native_admission["run"](stub_authority=False)
+    assert result == {"accepted":False, "error_code":"independent_native_anchor_required"}
+    assert not (native_admission["operation"] / "native-completion.ndjson").exists()
 
 
 @pytest.mark.parametrize("fault", ["unheld_lock", "wrong_parent", "changed_closure", "unknown_fence_field",
@@ -610,3 +659,16 @@ def test_actual_public_input_descriptor_path_and_body_binding(native_admission, 
     assert result["error_code"] == {"wrong_fd":"retained_identity_changed",
         "changed_digest":"retained_public_digest_changed", "unsafe_mode":"unsafe_retained_owner",
         "path_substitution":"retained_identity_changed"}[fault]
+
+
+@pytest.mark.parametrize("effect", [{"kind":"owned"}, {"kind":"owned","value":{}},
+    {"kind":"legacy","value":None}, {"kind":"owned","value":None,"unknown":True}])
+def test_publication_effect_is_exact_first_release_unit_wire(native_admission, effect):
+    fixture = native_admission
+    plan = json.loads((fixture["operation"] / "completion-plan.json").read_bytes())
+    plan["publication_effect"] = effect
+    fixture["rewrite"]("plan", plan)
+    fixture["absent_refresh"]()
+    result = fixture["run"]()
+    assert result["accepted"] is False
+    assert result["error_code"] in {"publication_effect_fields", "owned_publication_effect", "publication_effect_not_requested"}

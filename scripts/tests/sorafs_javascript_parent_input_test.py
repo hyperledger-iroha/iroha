@@ -20,7 +20,7 @@ import sorafs_javascript_input_files as files
 import sorafs_javascript_installed as installed
 import sorafs_javascript_qualification_source as qualification
 from sorafs_javascript_archive import ArchiveError
-from sorafs_javascript_package_fixtures import source_inputs, expected_files, archive_bytes, ROOT
+from sorafs_javascript_package_fixtures import INSTALLED_MEMBERS, source_inputs, expected_files, archive_bytes, ROOT
 from sorafs_javascript_dependencies_test import _originals
 from sorafs_javascript_installed_test import hidden_lock
 
@@ -91,7 +91,7 @@ def test_original_relation_derives_canonical_child_bytes_and_retains_real_descri
         assert hashlib.sha256(raw).hexdigest()==owner.sha256
         value=json.loads(raw)
         assert raw==(json.dumps(value,sort_keys=True,ensure_ascii=True,separators=(',',':'))+'\n').encode('ascii')
-        assert len(value['source'])==191 and len(value['tools'])==8 and len(value['installed'])==256
+        assert len(value['source'])==191 and len(value['tools'])==8 and len(value['installed'])==INSTALLED_MEMBERS
         assert value['native']['sha256']==hashlib.sha256(NATIVE).hexdigest()
         assert value['native']['workspaceSourceTreeSha256']==WORKSPACE
         assert value['native']['nativeSourceTreeSha256']==NATIVE_SOURCE

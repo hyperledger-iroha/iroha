@@ -6,18 +6,20 @@ package org.hyperledger.iroha.sdk.offline.probe
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
-import java.security.KeyPairGenerator
-import java.security.KeyStore
 import java.security.MessageDigest
+import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.SecureRandom
-import java.security.Signature
 import java.security.interfaces.ECPublicKey
-import java.security.spec.ECGenParameterSpec
 import java.security.spec.ECFieldFp
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.crypto.keystore.ANDROID_KEYSTORE2_MIN_API_V1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreAliasStateV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreEcKeyRequestV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidSystemKeystoreV1
+import org.hyperledger.iroha.sdk.crypto.keystore.aliasState
+import org.hyperledger.iroha.sdk.crypto.keystore.probe
 
 /**
  * Non-monetary diagnostic only. It never implements a wallet provider or native lifecycle bridge,
@@ -57,7 +59,8 @@ internal interface SingleUseProbeDeviceV1 {
     val apiLevel: Int
     fun hasHardwareSingleUseFeature(): Boolean
     fun newChallenge(): ByteArray
-    fun hasAlias(alias: String): Boolean
+    /** Tri-state Keystore probe: a definitive answer, or a throw when the Keystore cannot answer. */
+    fun aliasState(alias: String): AndroidKeystoreAliasStateV1
     fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1
     fun read(alias: String): ProbeKeyMaterialV1
     fun sign(alias: String, message: ByteArray): ByteArray
@@ -92,6 +95,16 @@ internal class SingleUseProbeRunnerV1(private val device: SingleUseProbeDeviceV1
         }
         val alias = "iroha_keymint_probe_" + challenge.joinToString("") {
             "%02x".format(it.toInt() and 0xff)
+        }
+        // Generate only after a definitive absence. A present key or a Keystore that cannot answer
+        // stops before generation and cleanup, so the cleanup below can only remove this run's key.
+        val absent = try {
+            device.aliasState(alias) == AndroidKeystoreAliasStateV1.ABSENT
+        } catch (error: Exception) {
+            return SingleUseProbeResultV1.Failed("alias", error.javaClass.name, null)
+        }
+        if (!absent) {
+            return SingleUseProbeResultV1.Failed("alias", IllegalStateException::class.java.name, null)
         }
         var stage = "generate"
         var material: ProbeKeyMaterialV1? = null
@@ -153,7 +166,12 @@ internal class SingleUseProbeRunnerV1(private val device: SingleUseProbeDeviceV1
         )
 }
 
-internal class AndroidSingleUseProbeDeviceV1(private val context: Context) : SingleUseProbeDeviceV1 {
+internal class AndroidSingleUseProbeDeviceV1(
+    private val context: Context,
+    keyStore: AndroidKeystoreV1 = AndroidSystemKeystoreV1(),
+) : SingleUseProbeDeviceV1 {
+    private val keys = AndroidKeystoreOneUseKeysV1(keyStore, strongBox = false)
+
     override val apiLevel: Int get() = Build.VERSION.SDK_INT
 
     override fun hasHardwareSingleUseFeature(): Boolean =
@@ -162,52 +180,60 @@ internal class AndroidSingleUseProbeDeviceV1(private val context: Context) : Sin
 
     override fun newChallenge(): ByteArray = ByteArray(32).also(SecureRandom()::nextBytes)
 
-    override fun hasAlias(alias: String): Boolean =
-        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.containsAlias(alias)
+    override fun aliasState(alias: String): AndroidKeystoreAliasStateV1 = keys.aliasState(alias)
 
-    override fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1 {
-        check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-        check(!hasAlias(alias)) { "one-use alias already exists" }
-        val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
-            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-            .setDigests(KeyProperties.DIGEST_SHA256)
-            .setAttestationChallenge(challenge.copyOf())
-            .setMaxUsageCount(1)
-            .build()
-        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-        generator.initialize(spec)
-        val pair = generator.generateKeyPair()
-        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val chain = keyStore.getCertificateChain(alias)?.map { it.encoded }
-            ?: throw IllegalStateException("no attestation chain for one-use key")
-        return ProbeKeyMaterialV1(uncompressedP256Sec1V1(pair.public), chain)
-    }
+    override fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1 = keys.generate(alias, challenge)
 
-    override fun read(alias: String): ProbeKeyMaterialV1 {
-        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val certificate = keyStore.getCertificate(alias)
-            ?: throw IllegalStateException("one-use key unavailable")
-        val chain = keyStore.getCertificateChain(alias)?.map { it.encoded }
-            ?: throw IllegalStateException("one-use attestation chain unavailable")
-        return ProbeKeyMaterialV1(uncompressedP256Sec1V1(certificate.publicKey), chain)
-    }
+    override fun read(alias: String): ProbeKeyMaterialV1 = keys.read(alias)
 
-    override fun sign(alias: String, message: ByteArray): ByteArray {
-        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val entry = keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry
-            ?: throw IllegalStateException("one-use key unavailable")
-        return Signature.getInstance("SHA256withECDSA").run {
-            initSign(entry.privateKey)
-            update(message)
-            sign()
+    override fun sign(alias: String, message: ByteArray): ByteArray = keys.sign(alias, message)
+
+    override fun delete(alias: String) = keys.delete(alias)
+}
+
+/**
+ * One-use EC P-256 diagnostic keys over [AndroidKeystoreV1] (API 31+).
+ *
+ * Every alias decision is the tri-state `getKey` probe: [generate] runs only after a definitive
+ * absence, and a present key or a Keystore that cannot answer throws instead. [delete] is not
+ * conditioned on a masked existence check; keystore2 treats a missing alias as deleted and reports
+ * every other error.
+ */
+internal class AndroidKeystoreOneUseKeysV1(
+    private val keyStore: AndroidKeystoreV1,
+    private val strongBox: Boolean,
+) {
+    fun aliasState(alias: String): AndroidKeystoreAliasStateV1 = keyStore.aliasState(alias)
+
+    fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1 {
+        check(keyStore.apiLevel >= ANDROID_KEYSTORE2_MIN_API_V1) { "one-use keys require Android API 31" }
+        check(keyStore.aliasState(alias) == AndroidKeystoreAliasStateV1.ABSENT) { "one-use alias already exists" }
+        val generated = keyStore.generate(
+            AndroidKeystoreEcKeyRequestV1(alias, challenge, strongBox, maxUsageCount = 1),
+        )
+        val material = read(alias)
+        check(material.publicKey.contentEquals(uncompressedP256Sec1V1(generated))) {
+            "generated key differs from attested certificate"
         }
+        return material
     }
 
-    override fun delete(alias: String) {
-        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        if (keyStore.containsAlias(alias)) keyStore.deleteEntry(alias)
+    fun read(alias: String): ProbeKeyMaterialV1 {
+        checkNotNull(keyStore.probe(alias)) { "one-use key unavailable" }
+        val chain = keyStore.getCertificateChain(alias)?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalStateException("one-use attestation chain unavailable")
+        return ProbeKeyMaterialV1(uncompressedP256Sec1V1(chain[0].publicKey), chain.map { it.encoded })
     }
 
+    fun sign(alias: String, message: ByteArray): ByteArray {
+        val key = keyStore.probe(alias) as? PrivateKey
+            ?: throw IllegalStateException("one-use key unavailable")
+        return keyStore.sign(key, message)
+    }
+
+    fun delete(alias: String) {
+        keyStore.deleteEntry(alias)
+    }
 }
 
 /** Core's first-release device key encoding, independent of Java's X.509 SPKI wrapper. */

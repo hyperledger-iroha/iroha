@@ -19,8 +19,9 @@ pub const NATIVE_FINALITY_MAX_BLOCK_COUNT: usize = 65_536;
 
 mod prepared_source;
 pub use prepared_source::{
-    NativeFinalityFrames, NativeFinalitySource, PreparedNativeFinalityDestinationError,
-    PreparedNativeFinalityError, PreparedNativeFinalityJournal,
+    NativeFinalityChargedFrame, NativeFinalityFrame, NativeFinalityFrames, NativeFinalitySource,
+    PreparedNativeFinalityDestinationError, PreparedNativeFinalityError,
+    PreparedNativeFinalityJournal,
 };
 
 /// Explicit caller-owned admission bounds. There is no implicit unbounded/default mode.
@@ -325,7 +326,7 @@ mod tests {
             2,
             0,
         ))
-        .build(std::collections::BTreeSet::default())
+        .build(crate::block::BlockSignatures::default())
     }
     #[test]
     fn codec_error_keeps_resource_refusal_distinct_from_malformed_source() {

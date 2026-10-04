@@ -11,92 +11,13 @@ use crate::{
             leaf::{LeafError, LeafLimits},
         },
     },
-    test_allocations::allocations_during,
 };
-use iroha_data_model::{
-    IntoKeyValue,
-    account::Account,
-    asset::{Asset, AssetBalanceScope},
-    prelude::Registrable,
-};
+use iroha_data_model::{asset::AssetBalanceScope, prelude::Registrable};
 use iroha_model_base::topology::DataSpaceId;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::Storage;
 
-fn domain(name: &str) -> DomainId {
-    DomainId::try_new(name, "universal").unwrap()
-}
-
-fn definition(name: &str) -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(domain("balances"), name.parse().unwrap())
-}
-
-fn id() -> AssetId {
-    AssetId::new(definition("coin"), ALICE_ID.clone())
-}
-
-fn value(id: &AssetId, amount: u32) -> AssetValue {
-    Asset::new(id.clone(), amount).into_key_value().1
-}
-
-fn fixture(context: bool) -> Box<World> {
-    let mut world = Box::new(World::default());
-    for owner in [&*ALICE_ID, &*BOB_ID] {
-        let (id, account) = Account::new(owner.clone()).build(owner).into_key_value();
-        world.accounts.insert(id, account);
-    }
-    world.domains.insert(
-        domain("balances"),
-        Domain::new(domain("balances")).build(&ALICE_ID),
-    );
-    let record = AssetDefinition::numeric(
-        definition("coin"),
-        "coin",
-        AssetBalancePolicy::Global,
-        context.then(|| domain("balances")),
-    )
-    .build(&ALICE_ID);
-    world.asset_definitions.insert(definition("coin"), record);
-    world.assets.insert(id(), value(&id(), 5));
-    world.rebuild_asset_definition_indexes().unwrap();
-    world
-}
-
-fn check(world: &World, work: u64) -> Result<(), GroupedOwnershipError> {
-    let mut result = None;
-    assert_eq!(
-        allocations_during(|| result = Some(CheckedAssets::capture(world, work).map(|_| ()))),
-        0
-    );
-    result.unwrap()
-}
-
-fn omit_initial<K: mv::Key, V: mv::Value>(store: &mut Storage<K, V>, key: &K) -> V {
-    let (replacement, removed) = {
-        let view = store.view();
-        let removed = view.get(key).unwrap().clone();
-        let replacement = view
-            .iter()
-            .filter(|(candidate, _)| *candidate != key)
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
-        (replacement, removed)
-    };
-    *store = replacement;
-    removed
-}
-
-fn corrupt(index: &'static str, previous: bool, mismatch: GroupMismatch) -> GroupedOwnershipError {
-    GroupedOwnershipError::Corrupt {
-        index,
-        image: if previous {
-            GroupImage::Predecessor
-        } else {
-            GroupImage::Current
-        },
-        mismatch,
-    }
-}
+use super::test_support::*;
 
 #[test]
 fn partitions_use_any_nonzero_value_and_restore_the_actual_predecessor() {
@@ -108,14 +29,14 @@ fn partitions_use_any_nonzero_value_and_restore_the_actual_predecessor() {
     );
     world.assets.insert(partition.clone(), value(&partition, 0));
     world.rebuild_asset_definition_indexes().unwrap();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, 16_777_216), Ok(()));
     {
         let mut balances = world.assets.block();
         balances.insert(id(), value(&id(), 0));
         balances.commit();
     }
     world.rebuild_asset_definition_indexes().unwrap();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, 16_777_216), Ok(()));
     assert!(
         world
             .asset_definition_nonzero_holders
@@ -123,7 +44,7 @@ fn partitions_use_any_nonzero_value_and_restore_the_actual_predecessor() {
             .get(&definition("coin"))
             .is_none()
     );
-    let checked = CheckedAssets::capture(&world, 1024).unwrap();
+    let checked = CheckedAssets::capture(&world, 16_777_216).unwrap();
     assert!(checked.rows().get(&id()).unwrap().as_ref().is_zero());
     assert_eq!(
         get_at(checked.rows(), GroupImage::Predecessor, &id())
@@ -133,7 +54,7 @@ fn partitions_use_any_nonzero_value_and_restore_the_actual_predecessor() {
     );
     drop(checked);
     world.block_and_revert().commit();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, 16_777_216), Ok(()));
     assert_eq!(
         world
             .asset_definition_nonzero_holders
@@ -157,7 +78,7 @@ fn changing_only_the_definition_domain_moves_untouched_balance_groups() {
     }
     assert!(world.assets.history().revert_map().is_empty());
     world.rebuild_asset_definition_indexes().unwrap();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, 16_777_216), Ok(()));
     assert!(
         world
             .assets_by_domain
@@ -166,7 +87,7 @@ fn changing_only_the_definition_domain_moves_untouched_balance_groups() {
             .is_none()
     );
     world.block_and_revert().commit();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, 16_777_216), Ok(()));
     assert_eq!(
         world.assets_by_domain.view().get(&domain("balances")),
         Some(&BTreeSet::from([id()]))
@@ -199,7 +120,7 @@ fn all_five_indexes_require_every_source_membership_in_both_images() {
                 _ => unreachable!(),
             };
             assert_eq!(
-                check(&world, 1024),
+                check(&world, 16_777_216),
                 Err(corrupt(index, previous, GroupMismatch::MissingMember))
             );
         }
@@ -248,7 +169,7 @@ fn all_five_indexes_reject_empty_and_foreign_membership_in_both_images() {
                     _ => unreachable!(),
                 };
                 assert_eq!(
-                    check(&world, 1024),
+                    check(&world, 16_777_216),
                     Err(corrupt(
                         index,
                         previous,
@@ -279,7 +200,7 @@ fn zero_only_and_deleted_partitions_cannot_supply_nonzero_membership() {
             balances.commit();
         }
         assert_eq!(
-            check(&world, 1024),
+            check(&world, 16_777_216),
             Err(corrupt(
                 "world.asset_definition_nonzero_holders",
                 previous,
@@ -294,12 +215,12 @@ fn zero_only_and_deleted_partitions_cannot_supply_nonzero_membership() {
         balances.commit();
     }
     world.rebuild_asset_definition_indexes().unwrap();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, 16_777_216), Ok(()));
     world
         .asset_definition_holders
         .insert(definition("coin"), BTreeSet::from([ALICE_ID.clone()]));
     assert_eq!(
-        check(&world, 1024),
+        check(&world, 16_777_216),
         Err(corrupt(
             "world.asset_definition_holders",
             false,
@@ -329,7 +250,7 @@ fn missing_definitions_and_domains_cannot_pass_through_consistent_indexes() {
                 }
             }
             assert_eq!(
-                check(&world, 1024),
+                check(&world, 16_777_216),
                 Err(GroupedOwnershipError::Source {
                     table: if missing_domain {
                         "world.asset_definitions"
@@ -354,7 +275,7 @@ fn missing_definitions_and_domains_cannot_pass_through_consistent_indexes() {
 
 #[test]
 fn work_counts_both_cuts_range_rows_and_absent_source_undo() {
-    for (context, exact) in [(false, 28), (true, 36)] {
+    for (context, exact) in [(false, 2144), (true, 2838)] {
         let world = fixture(context);
         assert_eq!(check(&world, exact), Ok(()));
         assert_eq!(
@@ -367,10 +288,13 @@ fn work_counts_both_cuts_range_rows_and_absent_source_undo() {
             block.commit();
         }
         assert_eq!(
-            check(&world, exact + 2),
+            check(&world, exact + if context { 840 } else { 735 } - 1),
             Err(GroupedOwnershipError::WorkLimit)
         );
-        assert_eq!(check(&world, exact + 3), Ok(()));
+        assert_eq!(
+            check(&world, exact + if context { 840 } else { 735 }),
+            Ok(())
+        );
     }
 }
 
@@ -398,7 +322,7 @@ fn restricted_definitions_require_a_domain_in_each_balance_source_image() {
             block.commit();
         }
         assert_eq!(
-            check(&world, 1024),
+            check(&world, 16_777_216),
             Err(GroupedOwnershipError::Source {
                 table: "world.asset_definitions",
                 image: if previous {
@@ -427,25 +351,27 @@ fn predecessor_partition_search_charges_masked_current_and_absent_undo_rows() {
         BTreeMap::from([(id(), None), (absent, None)]),
     );
     world.rebuild_asset_definition_indexes().unwrap();
-    let checked = CheckedAssets::capture(&world, 1024).unwrap();
+    let checked = CheckedAssets::capture(&world, 16_777_216).unwrap();
     for nonzero in [false, true] {
         assert_eq!(
-            checked.has_partition(
+            has_partition(
+                &checked.rows,
                 GroupImage::Predecessor,
                 &ALICE_ID,
                 &definition("coin"),
                 nonzero,
-                &mut Work(2)
+                &mut AssetBalanceWork::bounded(218)
             ),
             Err(GroupedOwnershipError::WorkLimit)
         );
         assert_eq!(
-            checked.has_partition(
+            has_partition(
+                &checked.rows,
                 GroupImage::Predecessor,
                 &ALICE_ID,
                 &definition("coin"),
                 nonzero,
-                &mut Work(3)
+                &mut AssetBalanceWork::bounded(219)
             ),
             Ok(false)
         );
@@ -456,7 +382,7 @@ fn predecessor_partition_search_charges_masked_current_and_absent_undo_rows() {
 fn all_eight_original_native_owners_remain_part_of_the_final_identity_check() {
     for index in 0..8 {
         let world = fixture(true);
-        let checked = CheckedAssets::capture(&world, 1024).unwrap();
+        let checked = CheckedAssets::capture(&world, 16_777_216).unwrap();
         match index {
             0 => world.assets.block().commit(),
             1 => world.asset_definitions.block().commit(),

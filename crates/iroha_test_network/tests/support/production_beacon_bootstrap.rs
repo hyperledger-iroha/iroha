@@ -1303,7 +1303,7 @@ fn read_exact_finality(config_path: &Path, height: u64) -> Result<NativeFinality
     .map_err(|error| eyre!(error))?;
     ensure!(
         cursor
-            .advance(&journal)
+            .advance((&journal).into())
             .map_err(|error| eyre!(error))?
             .height()
             == height,
@@ -1384,7 +1384,7 @@ fn verify_pulse(
         )
         .map_err(|error| eyre!(error))?;
         let certified = with_verified_native_journal(
-            &journal,
+            (&journal).into(),
             &native.common.chain,
             &record.session.network_id,
             native_finality_limits(),

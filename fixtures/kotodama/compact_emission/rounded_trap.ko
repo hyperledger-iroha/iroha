@@ -1,0 +1,15 @@
+seiyaku CompactRoundedTrap {
+    error enum Failure { Low = 3, High = 9 }
+    state int trace;
+    hajimari() { trace = 0; }
+    kotoage fn main() -> quantity authorize("WriteState") {
+        trace = 31;
+        require(true, Failure::Low);
+        let quantity value = 3;
+        let decimal zero = 0.0;
+        let result = value.div_round(divisor: zero, scale: 2, mode: Rounding::floor);
+        require(true, Failure::High);
+        trace = 99;
+        return result;
+    }
+}

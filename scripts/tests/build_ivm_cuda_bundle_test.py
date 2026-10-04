@@ -275,7 +275,7 @@ def test_cli_requires_explicit_tools_and_key_and_reports_only_public_digests(
     assert str(key) not in output and key.name not in {path.name for path in candidate.iterdir()}
 
 
-def test_flag_and_host_compiler_selection_match_build_script(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_flag_and_host_compiler_selection_are_explicit_offline_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     """The manifest flags retain one token per explicit option and CXX disables auto-selection."""
     assert bundle.compiler_flags("arch=compute_86,code=sm_86", None, ("--fmad=false",)) == (
         "-ptx -std=c++14 -gencode arch=compute_86,code=sm_86 --fmad=false"

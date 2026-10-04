@@ -223,6 +223,28 @@ pub(super) fn initial(
         }
         budget.wait()?;
     };
+    // Catalog is a real owned launch without active token custody. Reconcile original paid
+    // renewal history before strict current-use rendering, including an expired native head.
+    let terminal = bootstrap
+        .last()
+        .copied()
+        .ok_or_else(|| budget.progress.unconfirmed())?;
+    loop {
+        validate_gateways(prepared, &mut live, budget)?;
+        let material = owner.retain_current_custody_material(budget.deadline()?);
+        budget.check()?;
+        validate_gateways(prepared, &mut live, budget)?;
+        match material {
+            Ok(()) => break,
+            Err(crate::managed::Error::Bootstrap(reason)) => {
+                return Err(Failure::Bootstrap(reason));
+            }
+            Err(_) => budget.wait()?,
+        }
+    }
+    for gateway in &mut live {
+        renewal::reconcile(prepared, budget, gateway, terminal, None)?;
+    }
     let revision = budget.call(|deadline| owner.prepare_current_stream_tokens(deadline))?;
     budget.call(|_| {
         require_carriers(&revision)?;

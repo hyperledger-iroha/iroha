@@ -1294,6 +1294,8 @@ cp "${SCRIPT_DIR}/check_privacy_python_sdk.sh" \
   "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 cp "${SCRIPT_DIR}/verify_privacy_python_wheel.py" \
   "${PROVISION_HELPER_ROOT}/verify_privacy_python_wheel.py"
+cp "${SCRIPT_DIR}/python_native_source_delivery.py" \
+  "${PROVISION_HELPER_ROOT}/python_native_source_delivery.py"
 chmod 700 "${PROVISION_HELPER_PATH}" \
   "${PROVISION_HELPER_ROOT}/privacy_sdk_cargo_wrapper.sh" \
   "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
@@ -2114,6 +2116,7 @@ printf '%s\n' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "--version" ]]; then python_invocation_kind=probe:python-version-output' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_artifact.py ]]; then python_invocation_kind=abi25-checker' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == */verify_privacy_python_wheel.py ]]; then python_invocation_kind=verifier' \
+  'elif [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == */python_native_source_delivery.py ]]; then python_invocation_kind=source-pin' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == "-m" ]]; then python_invocation_kind="module:${4:-}"' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-m" ]]; then python_invocation_kind="module:${3:-}"' \
   'fi' \
@@ -2126,6 +2129,25 @@ printf '%s\n' \
   '  case "${3:-}" in *"version(\"maturin\")"*) echo "1.14.1" ;; *) echo "3.12" ;; esac' \
   '  exit 0' \
   'fi' \
+  '# BEGIN explicitly inert source-pin dispatch control.' \
+  '# This sentinel is not Git/native/build evidence. The fake interpreter never executes the real pin owner.' \
+  'if [[ "${python_invocation_kind}" == "source-pin" ]]; then' \
+  '  [[ -f "${3}" && "${5:-}" == "--root" && "${6:-}" == "${PRIVACY_PYTHON_SDK_ROOT}" ]] || { echo "source-pin dispatch root drifted" >&2; exit 119; }' \
+  '  case "${4:-}" in' \
+  '    pin)' \
+  '      [[ "$#" -eq 6 ]] || { echo "source-pin dispatch inventory drifted" >&2; exit 119; }' \
+  '      [[ "${FAKE_SOURCE_PIN_REFUSE_PHASE:-}" != "pin" ]] || { echo "inert before-build source-pin refusal" >&2; exit 119; }' \
+  '      echo "unqualified-source-pin-dispatch-control"' \
+  '      ;;' \
+  '    assert-pin)' \
+  '      [[ "$#" -eq 8 && "${7}" == "--source-pin" && "${8}" == "unqualified-source-pin-dispatch-control" ]] || { echo "original source-pin dispatch binding drifted" >&2; exit 119; }' \
+  '      [[ "${FAKE_SOURCE_PIN_REFUSE_PHASE:-}" != "assert-pin" ]] || { echo "inert original-source-pin revalidation refusal" >&2; exit 119; }' \
+  '      ;;' \
+  '    *) echo "unsupported inert source-pin command" >&2; exit 119 ;;' \
+  '  esac' \
+  '  exit 0' \
+  'fi' \
+  '# END explicitly inert source-pin dispatch control.' \
   'if [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == */verify_privacy_python_wheel.py ]]; then' \
   '  if [[ "${4:-}" == "--preflight" ]]; then' \
   '    [[ "$#" -eq 7 ]] || { echo "preflight verifier received extra dependency roots" >&2; exit 114; }' \
@@ -3873,6 +3895,32 @@ for record in nul_records(log_path):
         arguments_list.append(record.removeprefix("arg="))
     else:
         raise SystemExit(f"malformed Python transcript record: {record!r}")
+
+# Keep the entire original command transcript and every assertion below.
+# These additional calls are dispatch controls only, never genuine Git identity
+# or native provenance. Separate only their closed, exact new inventory.
+all_groups = groups
+source_calls = [(index, group) for index, group in enumerate(all_groups)
+                if group["kind"] == "source-pin"]
+source_helper = verifier.parent / "python_native_source_delivery.py"
+if not source_helper.is_file() or not source_calls:
+    raise SystemExit("maintained source-pin CLI was not copied/dispatched")
+original_pin_arguments = ["-I", "-B", str(source_helper), "pin", "--root", str(root)]
+original_assert_arguments = ["-I", "-B", str(source_helper), "assert-pin", "--root", str(root),
+                             "--source-pin", "unqualified-source-pin-dispatch-control"]
+if source_calls[0][1]["arguments"] != original_pin_arguments or any(
+        group["arguments"] != original_assert_arguments for _, group in source_calls[1:]):
+    raise SystemExit("original unqualified source-pin dispatch binding drifted")
+original_calls = [(index, group) for index, group in enumerate(all_groups)
+                  if group["kind"] != "source-pin"]
+if source_calls[0][0] >= original_calls[4][0] or source_calls[-1][0] <= original_calls[-1][0]:
+    raise SystemExit("source-pin dispatch did not bracket compilation and final cleanup")
+for phase in (4, 5, 9, 11, 12, 13):
+    start = original_calls[phase][0]
+    end = original_calls[phase + 1][0] if phase + 1 < len(original_calls) else len(all_groups)
+    if not any(start < index < end for index, _ in source_calls[1:]):
+        raise SystemExit(f"source-pin revalidation omitted original phase {phase}")
+groups = [group for _, group in original_calls]
 
 expected_kinds = [
     "probe:python-version",

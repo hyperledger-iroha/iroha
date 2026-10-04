@@ -868,3 +868,90 @@ mod unix {
         assert!(read_regular(temporary.path().join("alias/input"), 1024).is_err());
     }
 }
+
+#[test]
+fn retained_directory_custody_shares_original_ancestry_and_preserves_access() {
+    let (_temporary, store) = store();
+    let child = store.create_child("retained").unwrap();
+    child
+        .write_atomic("record", b"original", PublishMode::CreateNew)
+        .unwrap();
+    let identity = child.identity().unwrap();
+    let path = child.path().to_owned();
+    let retained = (0..64).map(|_| child.retain().unwrap()).collect::<Vec<_>>();
+    drop(child);
+    drop(store);
+    for directory in &retained {
+        assert_eq!(directory.identity().unwrap(), identity);
+        assert_eq!(directory.path(), path);
+        assert_eq!(directory.read("record", 8).unwrap().as_slice(), b"original");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(path.join("record"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(retained[0].retain().is_err());
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_directory_custody_refuses_replaced_child_and_ancestor() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for ancestor in [false, true] {
+        let (temporary, store) = store();
+        let child = store.create_child("retained").unwrap();
+        child
+            .write_atomic("record", b"original", PublishMode::CreateNew)
+            .unwrap();
+        let retained = child.retain().unwrap();
+        let target = if ancestor { store.path() } else { child.path() };
+        let displaced = temporary.path().join("displaced");
+        fs::rename(target, &displaced).unwrap();
+        fs::create_dir(target).unwrap();
+        fs::set_permissions(target, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(child.revalidate().is_err());
+        assert!(retained.revalidate().is_err());
+        assert!(child.retain().is_err());
+        assert!(retained.retain().is_err());
+        assert!(retained.read("record", 8).is_err());
+        let original = if ancestor {
+            displaced.join("retained/record")
+        } else {
+            displaced.join("record")
+        };
+        assert_eq!(fs::read(original).unwrap(), b"original");
+        assert_eq!(fs::read_dir(target).unwrap().count(), 0);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn retained_directory_custody_keeps_native_child_and_ancestor_replacement_blocked() {
+    let (temporary, store) = store();
+    let child = store.create_child("retained").unwrap();
+    let retained = child.retain().unwrap();
+    let identity = child.identity().unwrap();
+    assert!(fs::rename(child.path(), temporary.path().join("child-moved")).is_err());
+    assert!(fs::rename(store.path(), temporary.path().join("ancestor-moved")).is_err());
+    child.revalidate().unwrap();
+    retained.revalidate().unwrap();
+    assert_eq!(retained.identity().unwrap(), identity);
+}

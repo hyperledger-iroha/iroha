@@ -1624,6 +1624,65 @@ impl<V: StateReadOnly + ?Sized> ChainSource<'_, V> {
     }
 }
 
+/// Authenticate only the original signed genesis body from a bounded actual native source.
+/// This exports no result-only genesis execution or current-state authority.
+pub(crate) fn bounded_signed_genesis(
+    view: &(impl StateReadOnly + ?Sized),
+    maximum_wire_bytes: usize,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<ChainReadError>> {
+    let genesis = bounded_native_carrier(view, 1, maximum_wire_bytes, budget)?;
+    authenticate_genesis(&genesis, view.network_id(), view.chain_id())?;
+    Ok(genesis)
+}
+
+/// Inspect only the original durable extent before admitting a bounded native decode.
+/// The extent grants no authority and is checked again by the sole subsequent frame reader.
+pub(crate) fn bounded_native_carrier_extent(
+    view: &(impl StateReadOnly + ?Sized),
+    height: u64,
+    maximum_wire_bytes: usize,
+) -> Result<usize, ExecutionAttemptError<ChainReadError>> {
+    let index = usize::try_from(height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .ok_or(ChainReadError::NotCommitted { height })?;
+    let expected = *view
+        .block_hashes()
+        .get(index.get() - 1)
+        .ok_or(ChainReadError::NotCommitted { height })?;
+    let source = view
+        .kura()
+        .native_frame_read(height, expected)
+        .map_err(|_| ChainReadError::NotInView { height })?
+        .ok_or(ChainReadError::NotInView { height })?;
+    let length =
+        usize::try_from(source.wire_len()).map_err(|_| ChainReadError::NotInView { height })?;
+    if length == 0 || length > maximum_wire_bytes {
+        return Err(ChainReadError::NotInView { height }.into());
+    }
+    Ok(length)
+}
+
+/// Acquire exactly one State-pinned native frame after bounding its original durable extent.
+/// This reads no historical prefix and grants no certificate or current-state authority.
+pub(crate) fn bounded_native_carrier(
+    view: &(impl StateReadOnly + ?Sized),
+    height: u64,
+    maximum_wire_bytes: usize,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<ChainReadError>> {
+    let index = usize::try_from(height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .ok_or(ChainReadError::NotCommitted { height })?;
+    let expected = *view
+        .block_hashes()
+        .get(index.get() - 1)
+        .ok_or(ChainReadError::NotCommitted { height })?;
+    read_durable_pinned_block_bounded(view.kura(), index, expected, budget, maximum_wire_bytes)
+}
+
 /// Read the pinned durable certificate bytes even when Kura retains a decoded body.
 /// A cached body cannot establish the continued availability or validity of a local QC.
 fn read_durable_pinned_block(
@@ -1631,6 +1690,16 @@ fn read_durable_pinned_block(
     index: NonZeroUsize,
     expected: HashOf<IrohaHeader>,
     budget: &iroha_allocation::AllocationBudget,
+) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<ChainReadError>> {
+    read_durable_pinned_block_bounded(kura, index, expected, budget, usize::MAX)
+}
+
+fn read_durable_pinned_block_bounded(
+    kura: &Kura,
+    index: NonZeroUsize,
+    expected: HashOf<IrohaHeader>,
+    budget: &iroha_allocation::AllocationBudget,
+    maximum_wire_bytes: usize,
 ) -> Result<iroha_data_model::block::SharedSignedBlock, ExecutionAttemptError<ChainReadError>> {
     let height = index.get() as u64;
     let unavailable = || ChainReadError::NotInView { height };
@@ -1656,16 +1725,34 @@ fn read_durable_pinned_block(
             })?
             .ok_or_else(unavailable)?;
         let wire_len = source.wire_len();
+        if usize::try_from(wire_len).map_or(true, |length| length > maximum_wire_bytes) {
+            return Err(ChainReadError::Malformed {
+                height,
+                reason: "native finality carrier exceeds its bounded extent".into(),
+            }
+            .into());
+        }
         // NativeFrameRead owns the raw frame's allocation charge; the decoder below
         // separately charges its graph to the same inherited cumulative scope.
         let bytes = source
-            .read(wire_len)
+            .read(wire_len, budget)
             .map_err(|error| match error {
                 crate::kura::Error::NoritoFrame(error) => read_decode_error(height, error),
                 crate::kura::Error::BlockDecode(error) => {
                     crate::execution_attempt::canonical_decode_attempt_error(error, |_| {
                         unavailable()
                     })
+                }
+                crate::kura::Error::NativeFrameAllocation(error) => {
+                    let deferred = match error {
+                        iroha_allocation::ChargedBufferError::Admission(original) => {
+                            original.into()
+                        }
+                        iroha_allocation::ChargedBufferError::Allocator { .. } => {
+                            ivm::error::ExecutionDeferral::AllocationUnavailable.into()
+                        }
+                    };
+                    ExecutionAttemptError::Deferred(deferred)
                 }
                 _ => unavailable().into(),
             })?

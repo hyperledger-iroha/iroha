@@ -40,8 +40,8 @@ object AndroidKeyAttestationOriginalV1 {
     }
     /**
      * Parse the original signed extension's persistent P-256 app-key metadata. This does not
-     * authenticate roots, revocation, package/Play policy or issuer admission. Legacy API28–30
-     * combines this exact leaf/challenge correlation with actual KeyInfo hardware custody.
+     * authenticate roots, revocation, package/Play policy or issuer admission. The app-key adapter
+     * combines this exact leaf/challenge correlation with keystore2 (API 31+) KeyInfo custody.
      */
     @JvmStatic fun persistentAppHardwareSecurityLevel(chain: List<X509Certificate>, expectedChallenge: ByteArray): AttestationResult.SecurityLevel =
         parsePersistentAppDescriptionOriginal(chain, expectedChallenge).securityLevel

@@ -268,7 +268,7 @@ def test_external_software_signer_requires_explicit_release_opt_in() -> None:
         ".github/workflows/sorafs-cli-release.yml": (
             "--features external-software-signer-bin"
         ),
-        "Dockerfile": 'ARG FEATURES="external-software-signer-bin,irohad/ivm-cuda"',
+        "Dockerfile": 'ARG FEATURES="external-software-signer-bin"',
     }
     for relative, expected in caller_markers.items():
         assert expected in (ROOT / relative).read_text(encoding="utf-8")

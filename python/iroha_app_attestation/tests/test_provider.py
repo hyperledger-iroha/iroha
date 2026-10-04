@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -130,12 +131,30 @@ class ProviderFixture:
                                   selected, platform, evidence)
 
 
-def invented_repository_roots() -> list[bytes]:
-    """Mock/demo roots copied from certs/ and fixtures/android/attestation/."""
-    text = (Path(__file__).parent / "fixtures" / "invented_repository_roots.pem").read_text("ascii")
+# This package lives in the Iroha repository; the census reads its actual files.
+REPOSITORY = Path(__file__).resolve().parents[3]
+
+
+def pem_certificates(text: str) -> list[bytes]:
     blocks = text.split("-----BEGIN CERTIFICATE-----")[1:]
     return [base64.b64decode("".join(block.split("-----END CERTIFICATE-----")[0].split()))
             for block in blocks]
+
+
+def certificate_originals(path: Path) -> list[bytes]:
+    """DER certificates in one PEM, DER or zipped trust-bundle file."""
+    if path.suffix == ".zip":
+        with zipfile.ZipFile(path) as bundle:
+            return [original for name in sorted(bundle.namelist())
+                    for original in pem_certificates(bundle.read(name).decode("ascii"))]
+    raw = path.read_bytes()
+    return pem_certificates(raw.decode("ascii")) if b"-----BEGIN CERTIFICATE-----" in raw else [raw]
+
+
+def invented_repository_roots() -> list[bytes]:
+    """Mock/demo roots copied from certs/ and fixtures/android/attestation/."""
+    return pem_certificates(
+        (Path(__file__).parent / "fixtures" / "invented_repository_roots.pem").read_text("ascii"))
 
 
 class PublishedRootPinTests(unittest.TestCase):
@@ -174,6 +193,44 @@ class PublishedRootPinTests(unittest.TestCase):
                 policy.validate()
         OemKeyMintPolicy("org.example.app", 10, b"\x0e" * 32, ROOT, hashlib.sha256(ROOT).digest(),
                          lambda chain, now: True, frozenset({2})).validate()
+
+    def test_refusal_covers_every_actual_repository_mock_and_demo_root(self) -> None:
+        # Regenerating or adding a mock root must update the refusal; a frozen
+        # copy alone would let the refusal silently stop covering new bytes.
+        self.assertTrue((REPOSITORY / "certs").is_dir(), "provider tests run inside the Iroha repository")
+        attestation = REPOSITORY / "fixtures" / "android" / "attestation"
+        examples = REPOSITORY / "examples" / "android"
+        paths = sorted({*(path for path in (REPOSITORY / "certs").iterdir() if path.is_file()),
+                        *(path for pattern in ("*root*.pem", "*root*.der", "*root*.zip")
+                          for path in attestation.rglob(pattern)),
+                        *(path for pattern in ("*/src/**/*root*.pem", "*/src/**/*root*.der")
+                          for path in examples.glob(pattern))})
+        found: dict[bytes, list[str]] = {}
+        originals: dict[bytes, bytes] = {}
+        for path in paths:
+            certificates = certificate_originals(path)
+            self.assertTrue(certificates, path)
+            for original in certificates:
+                certificate_spki_extensions(original)
+                digest = hashlib.sha256(original).digest()
+                found.setdefault(digest, []).append(path.relative_to(REPOSITORY).as_posix())
+                originals[digest] = original
+        published = GOOGLE_ATTESTATION_ROOT_SHA256 | {APPLE_APP_ATTESTATION_ROOT_SHA256,
+                                                      APPLE_RECEIPT_ROOT_SHA256}
+        # Every root there is a published vendor pin or a refused invention.
+        invented = {digest: names for digest, names in found.items() if digest not in published}
+        self.assertEqual(set(invented), INVENTED_REPOSITORY_ROOT_SHA256,
+                         {digest.hex(): names for digest, names in invented.items()})
+        # The frozen negative fixture is the same set of originals.
+        self.assertEqual({hashlib.sha256(root).digest() for root in invented_repository_roots()},
+                         INVENTED_REPOSITORY_ROOT_SHA256)
+        for digest, names in invented.items():
+            root = originals[digest]
+            policy = OemKeyMintPolicy("org.example.app", 10, b"\x0e" * 32, root, digest,
+                                      lambda chain, now: True, frozenset({2}))
+            with self.subTest(names=names), \
+                    self.assertRaisesRegex(AttestationRejected, "invented repository root"):
+                policy.validate()
 
 
 class GovernedEvidenceProviderTests(unittest.TestCase):

@@ -253,7 +253,9 @@ pub fn bind_and_sign_staged_sumeragi_context(
         .wrap_err("sign fully executed genesis block")?,
     );
     executed_block
-        .replace_signatures([signature].into_iter().collect())
+        .replace_signatures(iroha_data_model::block::BlockSignatures::try_from_iter([
+            signature,
+        ])?)
         .wrap_err("replace provisional genesis signature after execution")?;
     Ok((bound_manifest, GenesisBlock(executed_block)))
 }

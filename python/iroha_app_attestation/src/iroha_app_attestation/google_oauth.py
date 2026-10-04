@@ -24,9 +24,9 @@ from pathlib import Path
 from typing import Callable
 
 from .native_time_interval import NativeTimeInterval
-from .attestation import (AttestationRejected, children, der_one,
+from .attestation import (AttestationRejected, VerificationUnavailable, children, der_one,
                           oid, positive_integer, primitive, require)
-from .play_integrity import PlayIntegrityPolicy, _NoRedirect, _unique
+from .play_integrity import PlayIntegrityPolicy, PlayIntegrityUnavailable, _NoRedirect, _unique
 from .openssl_private_rsa import acquire_crypto_originals, private_rsa_operation
 
 POLICY_SCHEMA = "iroha.kagemusha.play-integrity-verification-policy.v1"
@@ -277,10 +277,14 @@ class GoogleServiceAccountTokenProvider:
                 self._access, self._issued = value["access_token"], now
                 self._refresh = now + value["expires_in"] - 60
                 return self._access
-            except AttestationRejected:
+            except VerificationUnavailable:
                 raise
+            except AttestationRejected as error:
+                # A changed Google response, trusted clock or held original
+                # is an operational fault, never a verdict on mobile evidence.
+                raise PlayIntegrityUnavailable(str(error)) from None
             except Exception:
-                raise AttestationRejected("Google OAuth token exchange unavailable") from None
+                raise PlayIntegrityUnavailable("Google OAuth token exchange unavailable") from None
 
     def close(self) -> None:
         with self._lock:

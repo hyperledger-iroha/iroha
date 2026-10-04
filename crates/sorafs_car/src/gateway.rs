@@ -42,9 +42,11 @@ use std::{
 };
 use thiserror::Error;
 mod generated_local;
+mod generated_tls;
 pub use generated_local::{
     AuthenticatedGeneratedLocalProviderTransportV1, GeneratedLocalProviderTransportErrorV1,
-    GeneratedLocalProviderTransportV1,
+    GeneratedLocalProviderTransportV1, GeneratedLocalPublicationHttpClientV1,
+    GeneratedLocalPublicationTransportErrorV1, GeneratedLocalPublicationTransportV1,
 };
 mod source;
 pub use source::{GatewaySourceErrorV1, GatewaySourceLimitsV1, GatewayVerifiedPayloadV1};

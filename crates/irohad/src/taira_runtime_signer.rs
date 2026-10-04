@@ -1890,6 +1890,34 @@ mod tests {
         }
     }
 
+    fn disposable_broker_policy() -> iroha_config::parameters::actual::RuntimeProviderBroker {
+        iroha_config::parameters::actual::RuntimeProviderBroker::from_toml_source(
+            iroha_config_base::toml::TomlSource::inline(
+                "".parse().expect("empty public broker policy table"),
+            ),
+        )
+        .expect("validated default broker policy")
+    }
+
+    #[test]
+    fn disposable_broker_policy_mismatch_precedes_credential_reads_and_signer_loading() {
+        let fixture =
+            crate::external_software_signer::consensus_threshold_beacon_broker_test_fixture_v1();
+        for supplied in [1, fixture.catalog.credential_max_memory_bytes() + 1] {
+            let mut policy = disposable_broker_policy();
+            policy.credential_max_memory_bytes =
+                std::num::NonZeroUsize::new(supplied).expect("nonzero test policy");
+            let mut reader = std::io::Cursor::new([0xA5; 32]);
+            assert!(matches!(
+                disposable_broker::load_with_signer(&fixture.catalog, &policy, &mut reader, || {
+                    panic!("policy mismatch must not consume unrelated signer custody")
+                }),
+                Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+            ));
+            assert_eq!(reader.position(), 0);
+        }
+    }
+
     #[test]
     fn disposable_broker_composes_exact_soracloud_and_threshold_catalogs() {
         use crate::{
@@ -1918,14 +1946,18 @@ mod tests {
             .unwrap();
             let (_directory, path) = key_file(&fixture_key_pair());
             let mut loaded_signer = false;
-            let registry =
-                disposable_broker::load_with_signer(&catalog, &mut bundle.as_slice(), || {
+            let registry = disposable_broker::load_with_signer(
+                &catalog,
+                &disposable_broker_policy(),
+                &mut bundle.as_slice(),
+                || {
                     loaded_signer = true;
                     Ok(Arc::new(taira_runtime_signer(load_key_pair_from_file(
                         open_consumable_key_file(&path),
                     )?)?))
-                })
-                .expect("complete exact broker custody");
+                },
+            )
+            .expect("complete exact broker custody");
             assert_eq!(loaded_signer, with_soracloud);
             assert_eq!(
                 fs::metadata(path).unwrap().len(),
@@ -1969,22 +2001,31 @@ mod tests {
                 .unwrap();
         let empty = encode_consensus_threshold_credential_bundle_v1(None, None).unwrap();
         assert!(
-            disposable_broker::load_with_signer(&catalog, &mut empty.as_slice(), || {
-                panic!("missing beacon custody must fail before consuming signer custody")
-            })
+            disposable_broker::load_with_signer(
+                &catalog,
+                &disposable_broker_policy(),
+                &mut empty.as_slice(),
+                || { panic!("missing beacon custody must fail before consuming signer custody") }
+            )
             .is_err()
         );
         let wrong = KeyPair::from_seed(vec![0x38; 32], Algorithm::Ed25519);
         assert!(matches!(
-            disposable_broker::load_with_signer(&catalog, &mut complete.as_slice(), || {
-                Ok(Arc::new(taira_runtime_signer(wrong)?))
-            }),
+            disposable_broker::load_with_signer(
+                &catalog,
+                &disposable_broker_policy(),
+                &mut complete.as_slice(),
+                || { Ok(Arc::new(taira_runtime_signer(wrong)?)) }
+            ),
             Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
         ));
         assert!(matches!(
-            disposable_broker::load_with_signer(&catalog, &mut complete.as_slice(), || {
-                Err(TairaRuntimeSignerErrorV1::DescriptorUnavailable)
-            }),
+            disposable_broker::load_with_signer(
+                &catalog,
+                &disposable_broker_policy(),
+                &mut complete.as_slice(),
+                || { Err(TairaRuntimeSignerErrorV1::DescriptorUnavailable) }
+            ),
             Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
         ));
     }
@@ -2000,9 +2041,12 @@ mod tests {
         );
         let mut input = std::io::Cursor::new([0xA5; 32]);
         assert!(matches!(
-            disposable_broker::load_with_signer(&unsupported, &mut input, || {
-                panic!("unrequested signer credential must remain untouched")
-            }),
+            disposable_broker::load_with_signer(
+                &unsupported,
+                &disposable_broker_policy(),
+                &mut input,
+                || { panic!("unrequested signer credential must remain untouched") }
+            ),
             Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
         ));
         assert_eq!(input.position(), 0);
@@ -2570,19 +2614,24 @@ mod tests {
             .unwrap();
         let original = iroha_crypto::Hash::new(bundle.as_slice());
         let failed = norito::with_decode_limits_scope(limits, || {
-            disposable_broker::load_with_signer(&fixture.catalog, &mut bundle.as_slice(), || {
-                panic!("threshold-only catalog never loads unrelated signer")
-            })
+            disposable_broker::load_with_signer(
+                &fixture.catalog,
+                &disposable_broker_policy(),
+                &mut bundle.as_slice(),
+                || panic!("threshold-only catalog never loads unrelated signer"),
+            )
         });
         assert!(matches!(
             failed,
             Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
         ));
-        let loaded =
-            disposable_broker::load_with_signer(&fixture.catalog, &mut bundle.as_slice(), || {
-                panic!("threshold-only catalog never loads unrelated signer")
-            })
-            .unwrap();
+        let loaded = disposable_broker::load_with_signer(
+            &fixture.catalog,
+            &disposable_broker_policy(),
+            &mut bundle.as_slice(),
+            || panic!("threshold-only catalog never loads unrelated signer"),
+        )
+        .unwrap();
         assert_eq!(iroha_crypto::Hash::new(bundle.as_slice()), original);
         drop(loaded);
     }

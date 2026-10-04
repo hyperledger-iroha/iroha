@@ -6,7 +6,7 @@ type rows preserve 375 populated values and 1,500 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`9ed377f607fd37851a2e3fa8fbe5443237f8286e8959b4b549e2862f57dc2944`.
+`fda9d3efe685fda3f368d5858fa80c6e00b2098965ead928a5446a5f84d81373`.
 `ClaimPublicLaneRewards` uses the required explicit fee-claim field and canonical
 XOR custody. Its native producer checks all four frame roundtrips; the nominal
 and directional identity hashes are unchanged.
@@ -127,13 +127,19 @@ qualification remain separate gates. Earlier dated evidence applies only to its
 original source snapshots.
 
 On 2026-09-28 the `CancelConsensusEvidencePenalty` row was removed together with
-the instruction: consensus evidence is a local log and telemetry record, so no
-on-chain penalty exists to cancel. The merged first-release inventory retains 330 rows and 366 populated cases;
+the instruction. Native evidence admitted by a certified carrier is canonical
+state and authorizes mandatory finality slashing; there is no instruction or
+consensus effect that cancels that penalty. The merged first-release inventory retains 330 rows and 366 populated cases;
 the current registry has 388 instructions (21 governance and 367 non-governance).
 These totals combine existing captures and are not a new native qualification run.
 
 The current capture contains 332 rows, 375 populated cases and 1,500 frame forms.
 Earlier dated counts and checksums above describe only their original candidates.
+
+The completion-authority instruction cases bind distinct provider-owner and
+completion-signer accounts to the governed signer policy. The Musubi provider-bundle
+registration retains its complete signed binding, and the current typed constructors
+verify the attestation and all four canonical frame forms.
 
 The current scoped-artifact candidate recaptures the six artifact lifecycle records
 with an explicit full-width dataspace and adds the two private-root registration

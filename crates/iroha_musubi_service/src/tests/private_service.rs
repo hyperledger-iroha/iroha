@@ -2250,6 +2250,11 @@ fn storage_response_never_reuses_a_prior_location_generation() {
     );
     let mut replacement = fixture.storage_response;
     replacement.location_id = MusubiArchiveLocationIdV1::new([0xee; 32]);
+    assert!(
+        replacement.validate_for(&replacement_request).is_err(),
+        "a new location still requires the exact replacement request digest"
+    );
+    replacement.request_digest = replacement_request.canonical_request_digest().unwrap();
     replacement
         .validate_for(&replacement_request)
         .expect("a never-before-used replacement identity remains valid");

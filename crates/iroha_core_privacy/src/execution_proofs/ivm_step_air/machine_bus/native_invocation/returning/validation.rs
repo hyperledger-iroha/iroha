@@ -1,4 +1,4 @@
-//! Exact Unit value/privacy and staged NODE/WORD debits at original clocks.
+//! Exact artifact-selected public leaf/privacy and staged NODE/WORD debits at original clocks.
 
 use super::*;
 use packet::{AFTER, AFTER_TAG, BEFORE, BEFORE_TAG};
@@ -34,6 +34,7 @@ impl Validation {
         first: u32,
         gas: [&Fields; 2],
         memory: &Fields,
+        leaf_kind: root::PublicLeafKind,
     ) {
         for (stage, cost) in [ivm::call_gas::NODE, ivm::call_gas::WORD]
             .into_iter()
@@ -85,8 +86,13 @@ impl Validation {
             out.push(port[AFTER + limb].sub(port[BEFORE + limb]));
         }
         out.push(port[AFTER_TAG].sub(port[BEFORE_TAG]));
-        // Unit owns only the low eight bytes of the root's aligned result cell.
-        out.extend(port[BEFORE..BEFORE + 4].iter().copied());
+        // The one-word leaf owns only the low eight bytes. Keep every u16 limb:
+        // reducing a u64 to one proof field would alias the modulus to Unit/false.
+        out.push(match leaf_kind {
+            root::PublicLeafKind::Unit => port[BEFORE],
+            root::PublicLeafKind::Bool => super::super::super::bit(port[BEFORE]),
+        });
+        out.extend(port[BEFORE + 1..BEFORE + 4].iter().copied());
         let mut mask = F::ZERO;
         for (bit, value) in self.0[BORROWS..].iter().copied().enumerate() {
             out.push(super::super::super::bit(value));
@@ -155,6 +161,7 @@ mod tests {
                     first(),
                     [&fields[0], &fields[1]],
                     &fields[2],
+                    root::PublicLeafKind::Unit,
                 );
                 Ok::<_, core::convert::Infallible>(residues)
             },
@@ -163,5 +170,34 @@ mod tests {
         let mut scratch = Validation([F::ONE; BORROWS + 16]);
         scratch.clear();
         assert!(scratch.0.iter().all(|field| *field == F::ZERO));
+    }
+
+    #[test]
+    fn artifact_selected_bool_validation_keeps_all_original_columns_and_degree_two() {
+        use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::measured_maximum_affine_degree_v1;
+        assert_eq!(core::mem::size_of::<Validation>(), 192);
+        let degree = measured_maximum_affine_degree_v1(
+            [0x77; 32],
+            [BORROWS + 16 + 3 * packet::WIDTH, 0, 0, 0, 0],
+            8,
+            2,
+            |row, _, _, _, _| {
+                let witness = Validation(row[..BORROWS + 16].try_into().unwrap());
+                let fields: [Fields; 3] = core::array::from_fn(|index| {
+                    let start = BORROWS + 16 + index * packet::WIDTH;
+                    Fields(row[start..start + packet::WIDTH].try_into().unwrap())
+                });
+                let mut residues = Vec::new();
+                witness.append_residues(
+                    &mut residues,
+                    first(),
+                    [&fields[0], &fields[1]],
+                    &fields[2],
+                    root::PublicLeafKind::Bool,
+                );
+                Ok::<_, core::convert::Infallible>(residues)
+            },
+        );
+        assert_eq!(degree, 2);
     }
 }

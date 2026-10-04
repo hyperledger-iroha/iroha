@@ -229,16 +229,29 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             ));
         }
         let genesis = beacon::plan_genesis(inventory, &bytes)?;
-        let peers = if public { beacon::public_peers(inventory)? } else { beacon::peers(inventory)? };
-        let mut observer = AuthenticatedHeightObserverV1::new(&genesis, &inventory.chain_id, peers)?;
-        let clients = if public { self.beacon_public_clients(deadline)? } else { self.beacon_clients(deadline)? };
+        let peers = if public {
+            beacon::public_peers(inventory)?
+        } else {
+            beacon::peers(inventory)?
+        };
+        let mut observer =
+            AuthenticatedHeightObserverV1::new(&genesis, &inventory.chain_id, peers)?;
+        let clients = if public {
+            self.beacon_public_clients(deadline)?
+        } else {
+            self.beacon_clients(deadline)?
+        };
         loop {
             ensure_authorization_current(self.admitted)?;
             self.runtime.revalidate(self.admitted, deadline, false)?;
             match observer.observe(&clients, inventory.chain_discriminant, deadline)? {
                 HeightObservationV1::Verified(evidence) => {
                     let report = json::json!({ "schema": "iroha.taira.public-reset.route-finality.v1", "public_tls": public, "evidence": evidence });
-                    let name = if public { "public-finality.json" } else { "candidate-frontier.json" };
+                    let name = if public {
+                        "public-finality.json"
+                    } else {
+                        "candidate-frontier.json"
+                    };
                     if self.read_local_receipt(name)?.is_none() {
                         self.publish_local_receipt(name, &report)?;
                     }

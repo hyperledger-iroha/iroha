@@ -11,40 +11,16 @@ use crate::{
             leaf::{LeafError, LeafLimits},
         },
     },
-    test_allocations::allocations_during,
 };
 use iroha_crypto::Hash;
-use iroha_data_model::account::AccountDetails;
-use iroha_model_base::metadata::Metadata;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::Storage;
 use std::collections::BTreeMap;
 
-fn uaid() -> UniversalAccountId {
-    UniversalAccountId::from_hash(Hash::new(b"checked identity uaid"))
-}
-fn opaque(index: u8) -> OpaqueAccountId {
-    OpaqueAccountId::from_hash(Hash::new([index; 32]))
-}
-fn details(uaid: Option<UniversalAccountId>, ids: Vec<OpaqueAccountId>) -> AccountValue {
-    AccountValue::new(AccountDetails::new(Metadata::default(), None, uaid, ids))
-}
-fn fixture() -> World {
-    let mut world = World::default();
-    world
-        .accounts
-        .insert(ALICE_ID.clone(), details(Some(uaid()), vec![opaque(1)]));
-    world.accounts.insert(BOB_ID.clone(), details(None, vec![]));
-    crate::state::account_identity_restore::rebuild(&mut world).unwrap();
-    world
-}
-fn without_allocations<T>(run: impl FnOnce() -> T) -> T {
-    let mut value = None;
-    assert_eq!(allocations_during(|| value = Some(run())), 0);
-    value.unwrap()
-}
+use super::test_support::*;
+
 fn check_error(world: &World) -> IdentityOwnershipError {
-    without_allocations(|| CheckedAccountIdentities::capture(world, 1024))
+    without_allocations(|| CheckedAccountIdentities::capture(world, 16_777_216))
         .err()
         .unwrap()
 }
@@ -62,7 +38,8 @@ fn reassignment_retains_original_current_predecessor_and_implicit_accounts() {
     accounts.commit();
     uaids.commit();
     opaques.commit();
-    let checked = without_allocations(|| CheckedAccountIdentities::capture(&world, 128)).unwrap();
+    let checked =
+        without_allocations(|| CheckedAccountIdentities::capture(&world, 16_777_216)).unwrap();
     assert_eq!(
         checked.accounts().get(&*ALICE_ID).unwrap().as_ref().uaid(),
         None
@@ -83,7 +60,8 @@ fn reassignment_retains_original_current_predecessor_and_implicit_accounts() {
     drop(checked);
     // Replacement restores the exact prior account, inverse and redundant touch.
     world.block_and_revert().commit();
-    let checked = without_allocations(|| CheckedAccountIdentities::capture(&world, 128)).unwrap();
+    let checked =
+        without_allocations(|| CheckedAccountIdentities::capture(&world, 16_777_216)).unwrap();
     assert_eq!(checked.uaids.get(&uaid()), Some(&*ALICE_ID));
 }
 
@@ -243,8 +221,9 @@ fn correct_current_indexes_do_not_hide_missing_or_foreign_predecessors() {
 #[test]
 fn work_charges_physical_tombstones_and_each_source_and_reverse_member() {
     let world = fixture();
-    // Two account rows, one row per index and two member inspections per image.
-    for bound in 0..12 {
+    // Complete actual advances/comparisons over both original images.
+    let exact = exact_world_work(&world);
+    for bound in (0..12).chain([exact - 1]) {
         assert_eq!(
             without_allocations(|| CheckedAccountIdentities::capture(&world, bound))
                 .err()
@@ -252,7 +231,7 @@ fn work_charges_physical_tombstones_and_each_source_and_reverse_member() {
             IdentityOwnershipError::WorkLimit
         );
     }
-    drop(without_allocations(|| CheckedAccountIdentities::capture(&world, 12)).unwrap());
+    drop(without_allocations(|| CheckedAccountIdentities::capture(&world, exact)).unwrap());
     let mut world = World::default();
     world.accounts =
         Storage::from_snapshot_parts(BTreeMap::new(), BTreeMap::from([(ALICE_ID.clone(), None)]));
@@ -281,7 +260,7 @@ fn work_charges_physical_tombstones_and_each_source_and_reverse_member() {
             .unwrap(),
         IdentityOwnershipError::WorkLimit
     );
-    drop(without_allocations(|| CheckedAccountIdentities::capture(&world, 8192)).unwrap());
+    drop(without_allocations(|| CheckedAccountIdentities::capture(&world, 16_777_216)).unwrap());
 }
 
 #[test]
@@ -289,7 +268,7 @@ fn equal_value_publication_of_every_original_dependency_invalidates_capture() {
     for source in 0..3 {
         let world = fixture();
         let checked =
-            without_allocations(|| CheckedAccountIdentities::capture(&world, 128)).unwrap();
+            without_allocations(|| CheckedAccountIdentities::capture(&world, 16_777_216)).unwrap();
         match source {
             0 => {
                 let mut block = world.accounts.block();
@@ -359,4 +338,190 @@ fn consumed_accounts_capture_checks_sources_before_allocating_leaves() {
         .unwrap();
     assert_eq!(snapshot.table_id(), "world.accounts");
     assert_eq!(snapshot.row_count(), 2);
+}
+
+#[test]
+fn exact_identity_reference_keeps_implicit_accounts_and_complete_controller_work() {
+    assert_eq!(ACCOUNT_IDENTITY_WORK_PER_ROW, 1196);
+    for (world, exact) in [(single(), 1196), (fixture(), 1474)] {
+        assert_eq!(exact_world_work(&world), exact);
+        assert_eq!(
+            without_allocations(|| CheckedAccountIdentities::capture(&world, exact - 1)).err(),
+            Some(IdentityOwnershipError::WorkLimit)
+        );
+        without_allocations(|| CheckedAccountIdentities::capture(&world, exact)).unwrap();
+    }
+    let mut implicit = World::default();
+    implicit
+        .accounts
+        .insert(ALICE_ID.clone(), details(None, vec![]));
+    assert_eq!(exact_world_work(&implicit), 2);
+    without_allocations(|| CheckedAccountIdentities::capture(&implicit, 2)).unwrap();
+}
+
+#[test]
+fn every_physical_mask_and_lookup_candidate_is_prepaid_after_a_match() {
+    let other = UniversalAccountId::from_hash(Hash::new(b"physical tail"));
+    let rows = Storage::from_snapshot_parts(
+        BTreeMap::from([(uaid(), ())]),
+        BTreeMap::from([(uaid(), None), (other, None)]),
+    );
+    let original = rows.try_committed_view_nonblocking().unwrap();
+    let inspected = std::cell::Cell::new(0);
+    for bound in [132, 133] {
+        let result = without_allocations(|| {
+            visit_original(
+                &original,
+                IdentityImage::Predecessor,
+                &mut Work(bound),
+                |_, _, _| {
+                    inspected.set(inspected.get() + 1);
+                    Ok(())
+                },
+            )
+        });
+        assert_eq!(
+            result,
+            if bound == 133 {
+                Ok(())
+            } else {
+                Err(IdentityOwnershipError::WorkLimit)
+            }
+        );
+        assert_eq!(inspected.get(), 0);
+    }
+    let rows = Storage::from_iter([(uaid(), 1_u8), (other, 2)]);
+    let original = rows.try_committed_view_nonblocking().unwrap();
+    let key = original.current_entries().next().unwrap().0;
+    assert_eq!(
+        without_allocations(|| lookup_original(
+            &original,
+            IdentityImage::Current,
+            key,
+            &mut Work(129)
+        )),
+        Err(IdentityOwnershipError::WorkLimit)
+    );
+    assert!(
+        without_allocations(|| lookup_original(
+            &original,
+            IdentityImage::Current,
+            key,
+            &mut Work(130)
+        ))
+        .unwrap()
+        .is_some()
+    );
+    let visits = std::cell::Cell::new(0);
+    let values = [1];
+    let mut physical = values.iter().inspect(|_| visits.set(visits.get() + 1));
+    assert_eq!(
+        next_physical(&mut physical, &mut Work(0)),
+        Err(IdentityOwnershipError::WorkLimit)
+    );
+    assert_eq!(visits.get(), 0);
+}
+
+#[test]
+fn full_reverse_opaque_tail_and_wide_controller_geometry_are_admitted() {
+    use iroha_data_model::account::{MultisigMember, MultisigPolicy};
+    let mut members = [opaque(1), opaque(2)];
+    members.sort();
+    members.reverse(); // final native opaque row matches the first source member
+    let mut world = single();
+    world
+        .accounts
+        .insert(ALICE_ID.clone(), details(Some(uaid()), members.to_vec()));
+    crate::state::account_identity_restore::rebuild(&mut world).unwrap();
+    assert_eq!(exact_world_work(&world), 2376);
+    assert_eq!(
+        without_allocations(|| CheckedAccountIdentities::capture(&world, 2375)).err(),
+        Some(IdentityOwnershipError::WorkLimit)
+    );
+    without_allocations(|| CheckedAccountIdentities::capture(&world, 2376)).unwrap();
+    let owner = AccountId::new_multisig(
+        MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(ALICE_ID.expect_single_signatory().clone(), 1).unwrap(),
+                MultisigMember::new(BOB_ID.expect_single_signatory().clone(), 2).unwrap(),
+            ],
+        )
+        .unwrap(),
+    );
+    let mut world = World::default();
+    world
+        .accounts
+        .insert(owner.clone(), details(Some(uaid()), vec![opaque(1)]));
+    world.uaid_accounts.insert(uaid(), owner.clone());
+    world.opaque_uaids.insert(opaque(1), uaid());
+    assert_eq!(exact_world_work(&world), 1796);
+    assert_eq!(
+        without_allocations(|| CheckedAccountIdentities::capture(&world, 1795)).err(),
+        Some(IdentityOwnershipError::WorkLimit)
+    );
+    without_allocations(|| CheckedAccountIdentities::capture(&world, 1796)).unwrap();
+    for (left, right, exact) in [
+        (ALICE_ID.clone(), BOB_ID.clone(), 68),
+        (ALICE_ID.clone(), owner.clone(), 118),
+        (owner.clone(), owner, 168),
+    ] {
+        assert_eq!(
+            without_allocations(|| equal(&left, &right, &mut Work(exact - 1))),
+            Err(IdentityOwnershipError::WorkLimit)
+        );
+        assert_eq!(
+            without_allocations(|| equal(&left, &right, &mut Work(exact))).unwrap(),
+            left == right
+        );
+    }
+}
+
+#[test]
+fn malformed_typed_account_equality_keeps_membership_without_validity_or_ord() {
+    let mut key = ALICE_ID.expect_single_signatory().clone();
+    key.zeroize_for_confidential_discard();
+    let owner = AccountId::new(key);
+    let mut world = World::default();
+    world
+        .accounts
+        .insert(owner.clone(), details(Some(uaid()), vec![opaque(1)]));
+    world.uaid_accounts.insert(uaid(), owner);
+    world.opaque_uaids.insert(opaque(1), uaid());
+    assert_eq!(exact_world_work(&world), 812);
+    without_allocations(|| CheckedAccountIdentities::capture(&world, 812)).unwrap();
+    world.uaid_accounts = Storage::from_iter([(uaid(), ALICE_ID.clone())]);
+    assert_eq!(
+        check_error(&world),
+        corrupt(IdentityImage::Current, IdentityMismatch::UaidBinding)
+    );
+}
+
+#[test]
+fn each_original_identity_publication_precedes_every_validation_outcome() {
+    for source in 0..3 {
+        for result in [
+            Ok(()),
+            Err(IdentityOwnershipError::WorkLimit),
+            Err(corrupt(
+                IdentityImage::Predecessor,
+                IdentityMismatch::ForeignOpaque,
+            )),
+        ] {
+            let world = fixture();
+            let checked = CheckedAccountIdentities::capture(&world, 16_777_216).unwrap();
+            match source {
+                0 => world.accounts.block().commit(),
+                1 => world.uaid_accounts.block().commit(),
+                2 => world.opaque_uaids.block().commit(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                without_allocations(|| checked.finish_validation(result)).err(),
+                Some(IdentityOwnershipError::Publication(
+                    PublicationPreparationError::Changed
+                ))
+            );
+        }
+    }
 }

@@ -950,7 +950,7 @@ mod harness {
             "             and other tracing flags launch under `xcrun xctrace record` (Metal System Trace by default).\n",
             "             `--require-gpu` exits immediately when Metal is unavailable so sweeps do not record CPU fallbacks as GPU runs.\n",
             "             `--require-telemetry` fails the run when GPU queue/staging telemetry is missing so WP2-E captures do not silently fall back.\n",
-            "             `--gpu-probe` emits a GPU detection snapshot (override, resolved mode, enumerated Metal devices) before running the bench."
+            "             `--gpu-probe` emits override, resolved mode and backend; Metal inventory requires admitted Metal selection and is withheld for current absent bundle."
         ));
     }
     fn auto_trace_output(dir: &Path, rows: usize, iterations: usize) -> Result<PathBuf, String> {
@@ -2611,7 +2611,7 @@ mod harness {
             .duration_since(UNIX_EPOCH)
             .map_err(|err| format!("system clock error: {err}"))?
             .as_secs();
-        let device_profile = if gpu_available {
+        let device_profile = if gpu_available && backend_label == "metal" {
             capture_device_profile()
         } else {
             None
@@ -3251,7 +3251,7 @@ mod harness {
         };
         Err(format!(
             "{requested} requested but no GPU backend was detected (resolved mode={}, backend=\"{}\"). \
-            Development/debug builds can set FASTPQ_DEBUG_METAL_ENUM=1 to inspect MTLDevice enumeration; FASTPQ_METAL_LIB is a debug-only override because missing build-time libraries use embedded source compilation. Rerun with --gpu-probe to capture the detection snapshot.",
+            Metal requires an independently admitted embedded compiled bundle before device discovery; ordinary builds and runtime never compile Metal source. Development/debug FASTPQ_DEBUG_METAL_ENUM=1 logs device discovery only after bundle admission. Current absent admission performs no Metal enumeration. Rerun with --gpu-probe for requested/resolved mode and backend; additional Metal inventory requires admitted Metal selection.",
             resolved_mode.as_str(),
             backend_label
         ))
@@ -3279,13 +3279,13 @@ mod harness {
         eprintln!("  requested execution mode: {}", requested.as_str());
         eprintln!("  resolved execution mode: {}", resolved.as_str());
         eprintln!("  detected backend: {backend_label}");
-        if let Some(path) = debug_env_var("FASTPQ_METAL_LIB") {
-            if !path.is_empty() {
-                eprintln!("  FASTPQ_METAL_LIB debug override: {path}");
-            }
-        }
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-        log_metal_device_inventory();
+        if backend_label == "metal" {
+            // The original backend selection checked the private bundle first.
+            log_metal_device_inventory();
+        } else {
+            eprintln!("  Metal inventory withheld: no admitted Metal backend selected");
+        }
         #[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
         eprintln!("  Metal device inventory unavailable on this platform");
     }

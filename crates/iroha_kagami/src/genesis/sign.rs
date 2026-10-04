@@ -4650,7 +4650,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .da_proof_policies()
             .expect("expected genesis to embed configured DA proof policies");
         let aliases: Vec<_> = bundle
-            .policies
+            .policies()
             .iter()
             .map(|policy| policy.alias.as_str())
             .collect();

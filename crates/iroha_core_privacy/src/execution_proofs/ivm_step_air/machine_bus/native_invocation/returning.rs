@@ -1,4 +1,4 @@
-//! Original Unit return operands, staged validation and the complete scan.
+//! Original public-leaf return operands, staged validation and the complete scan.
 //!
 //! This component borrows the sealed native packet owner. The existing full
 //! history pass authenticates its actual clocks; no separate events or clock
@@ -6,7 +6,7 @@
 //! statement publication with a masked invocation transcript remain open.
 
 use super::super::{callable_lookup::SelectedCallable, packet, return_copyback};
-use super::{F, Fields};
+use super::{F, Fields, root};
 use crate::execution_proofs::ivm_step_air::residues::{Scratch, Sink, Stream};
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use ivm::execution_packets::{MAX_STEPS, NativeInvocation, instruction_clocks};
@@ -47,12 +47,17 @@ pub(super) struct Returning {
     rows: ChargedBuffer<Witness>,
     validation: Validation,
     callable: SelectedCallable,
+    leaf_kind: root::PublicLeafKind,
 }
 impl Returning {
     pub(super) const BYTES: usize = return_copyback::CELLS * core::mem::size_of::<Witness>();
 
-    pub(super) fn new(native: &NativeInvocation, budget: &AllocationBudget) -> Result<Self, Error> {
-        let callable = SelectedCallable::native_unit_root(native).ok_or(Error::Profile)?;
+    pub(super) fn new(
+        native: &NativeInvocation,
+        root: &root::Plan,
+        budget: &AllocationBudget,
+    ) -> Result<Self, Error> {
+        let callable = SelectedCallable::native_public_leaf_root(native).ok_or(Error::Profile)?;
         // No private row or validation workspace is computed before the full
         // fixed allocation is admitted against its final owner's original pool.
         let mut rows =
@@ -70,6 +75,7 @@ impl Returning {
             rows,
             validation,
             callable,
+            leaf_kind: root.leaf_kind(),
         })
     }
 
@@ -115,6 +121,7 @@ impl Returning {
                 first,
                 [&fixed.gas[0], &fixed.gas[1]],
                 &fixed.memory,
+                self.leaf_kind,
             );
             out.finish()?;
         }

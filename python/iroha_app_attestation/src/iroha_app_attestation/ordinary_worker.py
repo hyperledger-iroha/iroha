@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-from .attestation import AttestationRejected, require
+from .attestation import AttestationRejected, VerificationUnavailable, require
 from .native_time_interval import NativeTimeInterval
 from .google_oauth import GoogleServiceAccountTokenProvider, _json
 from .native_policy_projection import decode_native_policy_projection
@@ -153,6 +153,21 @@ def _command_path(command: dict) -> str:
     return {"raw":RAW_PATH,"credential":PATH,"refresh":REFRESH_PATH}.get(command["phase"])
 
 
+def _hardware_result(hardware, phase: str, body: bytes) -> tuple[int, bytes]:
+    """Run one hardware phase and map its outcome to the parent's status.
+
+    A Google revocation, decoder or OAuth outage is retryable (503); other
+    evidence failures are rejections (400). Any other fault propagates and
+    ends the worker, which the parent observes as EOF and refuses.
+    """
+    try:
+        return 200, hardware.handle(phase, body)
+    except VerificationUnavailable:
+        return 503, b'{"error":"issuer_unavailable"}'
+    except AttestationRejected:
+        return 400, b'{"error":"hardware evidence rejected"}'
+
+
 def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> None:
     oauth=None;encoder=None;raw_encoder=None;hardware=None
     try:
@@ -210,10 +225,7 @@ def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> No
             channel.recheck();_store_directory(startup["store_directory"],17)
             if path is None:
                 require(hardware is not None,"hardware issuer source absent")
-                try:
-                    result=hardware.handle(command["phase"],body);status=200
-                except AttestationRejected:
-                    status=400;result=b'{"error":"hardware evidence rejected"}'
+                status,result=_hardware_result(hardware,command["phase"],body)
             else:
                 status,result=service.handle(method="POST",path=path,
                                              body=body,content_type="application/json",

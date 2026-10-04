@@ -391,6 +391,148 @@ def test_readiness_rechecks_require_same_native_launch_lineage(plan,tmp_path):
     finally:os.close(fd);os.close(directory)
 
 
+@pytest.fixture
+def incumbent_forwarder(plan, tmp_path, monkeypatch):
+    """Retain real public/key metadata while stubbing only service/network effects."""
+    root = tmp_path.resolve()
+    native_root = root / "native-forwarding"
+    native_root.mkdir(mode=0o700)
+    agents = root / "LaunchAgents"
+    agents.mkdir(mode=0o700)
+    uid = os.geteuid()
+    def directory(path):
+        actual = M.identity(path.stat())
+        return dict(path=str(path), identity={key: actual[key] for key in ("device", "inode", "uid", "gid", "mode")})
+    plan["mac"].update(uid=uid, domain="gui/" + str(uid), root=str(native_root),
+        root_parent=directory(root), launch_agents=directory(agents))
+    # The four programs remain the real root-owned native executables; no
+    # service command is executed by this fixture.
+    for key, path in dict(ssh="/usr/bin/ssh", ssh_keygen="/usr/bin/ssh-keygen",
+                          launchctl="/bin/launchctl", plutil="/usr/bin/plutil").items():
+        native = Path(path)
+        if not native.exists():
+            pytest.skip("native forwarding inspection fixture requires macOS tools")
+        plan["mac"]["native"][key] = dict(path=str(native), identity=M.identity(native.stat()))
+    private = native_root / "id_ed25519"
+    private.write_bytes(b"opaque fixture native key; Python must never read this")
+    private.chmod(0o600)
+    known = native_root / "known_hosts"
+    known.write_bytes((plan["host_pin"]["record"] + "\n").encode())
+    known.chmod(0o600)
+    plist = agents / (plan["mac"]["label"] + ".plist")
+    plist.write_bytes(M.render_launch_agent(plan))
+    plist.chmod(0o600)
+    root_identity = directory(native_root)["identity"]
+    receipt = dict(schema=M.RECEIPT_SCHEMA, phase="identity_ready", exit_code=0, qualified=False,
+        private_bytes_read=False, operation_id=plan["operation_id"], host_kind="macos",
+        plan_sha256=hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest(),
+        private_key_identity=M.identity(private.stat()), public_key=KEY,
+        public_key_fingerprint="SHA256:" + base64.b64encode(hashlib.sha256(KEY_BLOB).digest()).decode().rstrip("="),
+        known_hosts_identity=M.identity(known.stat()), known_hosts_sha256=hashlib.sha256(known.read_bytes()).hexdigest(),
+        root_identity=root_identity, journal_path=str(root / (".taira-validator-forwarding-" + plan["operation_id"] + ".receipt.ndjson")))
+    parent = M.open_directory(str(root))
+    fd, append, _ = M.journal_writer(parent, plan, "macos")
+    append("identity_ready")
+    append("awaiting_forwarding_readiness", service=plan["mac"]["domain"] + "/" + plan["mac"]["label"],
+        plist_identity=M.identity(plist.stat()), plist_sha256=hashlib.sha256(plist.read_bytes()).hexdigest())
+    append("forwarding_ready_unqualified")
+    os.close(fd); os.close(parent)
+    service = dict(pid=10001, uid=uid, started="Sun Oct 4 12:34:56 2026", executable="/usr/bin/ssh")
+    calls = []
+    class Connection:
+        def __init__(self, host, port, timeout):
+            assert host == "127.0.0.1" and timeout == 15
+            self.port = port
+        def request(self, method, path, headers):
+            assert method == "GET" and path == "/status"
+            assert headers == {"Host":"taira.sora.org", "Accept":"application/json"}
+            calls.append(self.port)
+        def getresponse(self):
+            return SimpleNamespace(status=200, read=lambda limit: b'{"public":"status"}')
+        def close(self):
+            pass
+    monkeypatch.setattr(M.http.client, "HTTPConnection", Connection)
+    monkeypatch.setattr(M, "native_service_metadata", lambda selected: dict(service))
+    monkeypatch.setattr(M, "verify_denied_channels", lambda selected: dict(session_refused=True,
+        remote_forward_refused=True, unauthorized_target_refused=True))
+    native_pread = os.pread
+    key_identity = private.stat()
+    def public_only(fd, count, offset):
+        info = os.fstat(fd)
+        assert (info.st_dev, info.st_ino) != (key_identity.st_dev, key_identity.st_ino), "Python read a private key"
+        return native_pread(fd, count, offset)
+    monkeypatch.setattr(M.os, "pread", public_only)
+    yield dict(plan=plan, identity=receipt, root=root, private=private, plist=plist, calls=calls, service=service)
+
+
+def test_incumbent_inspection_preserves_exact_signed_journal_and_returns_closed_numeric_metadata(incumbent_forwarder):
+    fixture = incumbent_forwarder
+    path = Path(fixture["identity"]["journal_path"])
+    before, observed = path.read_bytes(), M.identity(path.stat())
+    result = M.inspect_mac_forwarding(fixture["plan"], fixture["identity"])
+    assert set(result) == {"schema", "operation_id", "plan_sha256", "qualified", "private_bytes_read",
+        "service_metadata", "requests", "denied_channels", "journal"}
+    assert result["schema"] == M.INSPECTION_SCHEMA
+    assert result["qualified"] is result["private_bytes_read"] is False
+    assert result["journal"] == dict(file=dict(path=str(path), identity={key:int(value) for key,value in observed.items()}),
+        sha256=hashlib.sha256(before).hexdigest())
+    assert result["journal"]["file"]["identity"]["mtime_ns"] > 2**53
+    assert fixture["calls"] == [18480, 18481, 18482, 18483]
+    assert path.read_bytes() == before and M.identity(path.stat()) == observed
+    assert "public" not in json.dumps(result["requests"])
+
+
+@pytest.mark.parametrize("fault", ["service_changed", "private_mode", "plist_substitution", "journal_append", "denial_failed"])
+def test_incumbent_inspection_refuses_owner_or_readiness_drift_without_appending(incumbent_forwarder, monkeypatch, fault):
+    fixture = incumbent_forwarder
+    journal = Path(fixture["identity"]["journal_path"])
+    before = journal.read_bytes()
+    calls = 0
+    def changing_service(selected):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            if fault == "service_changed":
+                return fixture["service"] | dict(pid=10002)
+            if fault == "private_mode":
+                fixture["private"].chmod(0o644)
+            if fault == "plist_substitution":
+                foreign = fixture["root"] / "foreign.plist"
+                foreign.write_bytes(fixture["plist"].read_bytes()); foreign.chmod(0o600)
+                os.replace(foreign, fixture["plist"])
+            if fault == "journal_append":
+                with journal.open("ab") as target: target.write(b'{"foreign":"public appendix"}\n')
+        return dict(fixture["service"])
+    monkeypatch.setattr(M, "native_service_metadata", changing_service)
+    if fault == "denial_failed":
+        def deny(selected):
+            raise M.ForwardingError("session_restriction_not_verified")
+        monkeypatch.setattr(M, "verify_denied_channels", deny)
+    with pytest.raises(M.ForwardingError):
+        M.inspect_mac_forwarding(fixture["plan"], fixture["identity"])
+    assert journal.read_bytes() == (before + b'{"foreign":"public appendix"}\n' if fault == "journal_append" else before)
+
+
+def test_incumbent_inspection_refuses_active_journal_owner_before_service_or_api_probe(incumbent_forwarder):
+    fixture = incumbent_forwarder
+    parent = M.open_directory(fixture["plan"]["mac"]["root_parent"]["path"])
+    fd, _, _ = M.journal_writer(parent, fixture["plan"], "macos", False)
+    try:
+        with pytest.raises(M.ForwardingError, match="journal_operation_in_progress"):
+            M.inspect_mac_forwarding(fixture["plan"], fixture["identity"])
+        assert fixture["calls"] == []
+    finally:
+        os.close(fd); os.close(parent)
+
+
+def test_canonical_mac_verification_still_records_progress_after_shared_readiness(incumbent_forwarder):
+    fixture = incumbent_forwarder
+    result = M.mac_verify(fixture["plan"], fixture["identity"])
+    assert result["exit_code"] == 0 and result["phase"] == "forwarding_ready_unqualified", result
+    rows = [json.loads(line) for line in Path(fixture["identity"]["journal_path"]).read_text().splitlines()]
+    assert [row["phase"] for row in rows][-2:] == ["verification_requested", "forwarding_ready_unqualified"]
+
+
 @pytest.mark.parametrize("rollback_allowed",[True,False])
 def test_reconciliation_failure_after_hup_reports_requested_reload_and_owned_publication(plan,tmp_path,monkeypatch,rollback_allowed):
     """Exercise the real exchange/journal/rollback phase with native child stubs."""

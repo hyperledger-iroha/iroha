@@ -927,8 +927,15 @@ assert_private_wheel_unchanged() {
   fi
 }
 
+# This pin is captured once the admitted private interpreter exists and before
+# compilation. Cleanup before that lifecycle point has no build to authenticate.
+SOURCE_BEFORE_PIN=""
 assert_privacy_sdk_inputs_unchanged() {
   local status=0
+  if [[ -n "${SOURCE_BEFORE_PIN}" ]]; then
+    "${VENV_DIR}/bin/python" -I -B "${SCRIPT_DIR}/python_native_source_delivery.py" \
+      assert-pin --root "${ROOT_DIR}" --source-pin "${SOURCE_BEFORE_PIN}" || status=1
+  fi
   privacy_sdk_assert_file_seal \
     "${SELECTED_CARGO_LOCKFILE}" \
     "${SELECTED_CARGO_LOCK_SEAL}" \
@@ -1068,6 +1075,15 @@ export IROHA_PRIVACY_AUTHENTICATED_PYTHON_BUILD_POLICY="$(
     "${IROHA_PRIVACY_AUTHENTICATED_PYO3_PYTHON}" \
     "${IROHA_PRIVACY_AUTHENTICATED_MATURIN_VERSION}"
 )"
+
+# Unconditional in both production and the explicit inert command harness. The
+# real CLI requires the existing complete, clean, committed source identity.
+SOURCE_BEFORE_PIN="$("${VENV_DIR}/bin/python" -I -B \
+  "${SCRIPT_DIR}/python_native_source_delivery.py" pin --root "${ROOT_DIR}")"
+if [[ -z "${SOURCE_BEFORE_PIN}" ]]; then
+  echo "error: Python native before-build source pin is absent" >&2
+  exit 1
+fi
 
 cd "${ROOT_DIR}/python/iroha_native"
 "${VENV_DIR}/bin/python" -I -m maturin build \

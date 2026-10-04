@@ -28,12 +28,20 @@
 //! ```compile_fail
 //! use iroha_zkp_poseidon::poseidon::poseidon2_params_width6;
 //! ```
+#[cfg(test)]
+use bn254_v1_tests::FrSpec;
 use halo2curves::{
     bn256::Fr,
     ff::{Field, PrimeField},
 };
 use once_cell::sync::OnceCell;
+#[cfg(test)]
 use poseidon_primitives::poseidon::primitives::Spec;
+#[path = "poseidon/bn254_v1.rs"]
+mod bn254_v1;
+#[cfg(test)]
+#[path = "poseidon/bn254_v1_tests.rs"]
+mod bn254_v1_tests;
 use std::io::{self, Write};
 const FULL_ROUNDS: usize = 8;
 const FULL_ROUNDS_HALF: usize = FULL_ROUNDS / 2;
@@ -44,39 +52,9 @@ type PoseidonConstants<const W: usize> = ([[Fr; W]; ROUND_COUNT], [[Fr; W]; W]);
 #[derive(Debug, Clone)]
 pub struct Bn254PoseidonParams<const W: usize> {
     /// Round constants for the width.
-    pub round_constants: Vec<[[u8; 32]; W]>,
+    pub round_constants: [[[u8; 32]; W]; ROUND_COUNT],
     /// MDS matrix entries for the width.
     pub mds: [[[u8; 32]; W]; W],
-}
-#[derive(Debug)]
-struct FrSpec;
-impl Spec<Fr, 3, 2> for FrSpec {
-    fn full_rounds() -> usize {
-        FULL_ROUNDS
-    }
-    fn partial_rounds() -> usize {
-        PARTIAL_ROUNDS
-    }
-    fn sbox(val: Fr) -> Fr {
-        crate::poseidon::sbox(val)
-    }
-    fn secure_mds() -> usize {
-        0
-    }
-}
-impl Spec<Fr, 6, 5> for FrSpec {
-    fn full_rounds() -> usize {
-        FULL_ROUNDS
-    }
-    fn partial_rounds() -> usize {
-        PARTIAL_ROUNDS
-    }
-    fn sbox(val: Fr) -> Fr {
-        crate::poseidon::sbox(val)
-    }
-    fn secure_mds() -> usize {
-        0
-    }
 }
 #[inline(always)]
 fn sbox(x: Fr) -> Fr {
@@ -202,23 +180,26 @@ fn apply_mds6(state: &mut [Fr; 6], mds: &[[Fr; 6]; 6]) {
             + mds[5][5] * s5,
     ];
 }
+fn decode_fixed_field(bytes: [u8; 32]) -> Fr {
+    let field = Fr::from_repr(bytes.into()).expect("fixed V1 field is canonical");
+    assert_eq!(field_to_bytes(field), bytes, "fixed V1 field round-trip");
+    field
+}
+fn fixed_fields<const W: usize>(params: Bn254PoseidonParams<W>) -> PoseidonConstants<W> {
+    (
+        params
+            .round_constants
+            .map(|row| row.map(decode_fixed_field)),
+        params.mds.map(|row| row.map(decode_fixed_field)),
+    )
+}
 fn poseidon3_params() -> &'static PoseidonConstants<3> {
     static CONSTS: OnceCell<PoseidonConstants<3>> = OnceCell::new();
-    CONSTS.get_or_init(|| {
-        let (rc, m, _) = <FrSpec as Spec<Fr, 3, 2>>::constants();
-        (round_constants_array(rc), m)
-    })
+    CONSTS.get_or_init(|| fixed_fields(bn254_v1::WIDTH3))
 }
 fn poseidon6_params() -> &'static PoseidonConstants<6> {
     static CONSTS: OnceCell<PoseidonConstants<6>> = OnceCell::new();
-    CONSTS.get_or_init(|| {
-        let (rc, m, _) = <FrSpec as Spec<Fr, 6, 5>>::constants();
-        (round_constants_array(rc), m)
-    })
-}
-fn round_constants_array<const W: usize>(rc: Vec<[Fr; W]>) -> [[Fr; W]; ROUND_COUNT] {
-    rc.try_into()
-        .unwrap_or_else(|rc: Vec<[Fr; W]>| panic!("unexpected Poseidon round count: {}", rc.len()))
+    CONSTS.get_or_init(|| fixed_fields(bn254_v1::WIDTH6))
 }
 #[inline(always)]
 fn poseidon3_permute(state: &mut [Fr; 3]) {
@@ -251,8 +232,8 @@ fn hash6_field(inputs: [u64; 6]) -> Fr {
         Fr::from(inputs[4]),
         Fr::from(inputs[5]),
     ];
-    let rf_half = <FrSpec as Spec<Fr, 6, 5>>::full_rounds() / 2;
-    let rp = <FrSpec as Spec<Fr, 6, 5>>::partial_rounds();
+    let rf_half = FULL_ROUNDS_HALF;
+    let rp = PARTIAL_ROUNDS;
     for rc in round_constants.iter().take(rf_half) {
         for (i, s) in state.iter_mut().enumerate() {
             *s = sbox(*s + rc[i]);
@@ -275,27 +256,15 @@ fn hash6_field(inputs: [u64; 6]) -> Fr {
     }
     state[0]
 }
-fn params_to_bytes<const W: usize>(params: &PoseidonConstants<W>) -> Bn254PoseidonParams<W> {
-    let (round_constants, mds) = params;
-    let round_constants = round_constants
-        .iter()
-        .map(|round| round.map(field_to_bytes))
-        .collect();
-    let mds = mds.map(|row| row.map(field_to_bytes));
-    Bn254PoseidonParams {
-        round_constants,
-        mds,
-    }
-}
 /// Export Poseidon parameters for width 3 as byte arrays.
 #[must_use]
 pub fn bn254_poseidon_params_width3() -> Bn254PoseidonParams<3> {
-    params_to_bytes(poseidon3_params())
+    bn254_v1::WIDTH3
 }
 /// Export Poseidon parameters for width 6 as byte arrays.
 #[must_use]
 pub fn bn254_poseidon_params_width6() -> Bn254PoseidonParams<6> {
-    params_to_bytes(poseidon6_params())
+    bn254_v1::WIDTH6
 }
 #[cfg(test)]
 fn pack_bytes_to_fr_with_delimiter(bytes: &[u8]) -> Vec<Fr> {
