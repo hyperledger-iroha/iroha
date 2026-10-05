@@ -7,9 +7,29 @@
 use super::super::{host_pair, native_edge_protocol as protocol, validate_lower_hex};
 use super::*;
 use host_pair::{NativeObservedFileV1, NativePublicFileV1, SignedHostPhaseV1};
-use iroha_fs::{PrivateDirectory, PublishMode, RetainedFile};
+use iroha_fs::{PrivateDirectory, PublishMode, ReaderDirectory, RetainedFile};
 
 const MAX_PLAN: usize = 1024 * 1024;
+
+#[path = "taira_public_reset_native_custody.rs"]
+mod native_custody;
+pub(in crate::taira_public_reset) use native_custody::{
+    InitializeNativeEdgeCustody, initialize_native_edge_custody,
+};
+
+#[path = "taira_public_reset_native_python.rs"]
+mod native_python;
+pub(in crate::taira_public_reset) use native_python::{CaptureNativePython, capture_native_python};
+
+#[path = "taira_public_reset_native_edge_adoption.rs"]
+mod adoption;
+pub(in crate::taira_public_reset) use adoption::{
+    AdoptNativeEdgeOwner, AuthorizeNativeEdgeOwner, PrepareNativeEdgeOwner,
+};
+pub(in crate::taira_public_reset) use adoption::{
+    adopt as adopt_native_edge_owner, authorize as authorize_native_edge_owner,
+    prepare_native_edge_owner,
+};
 
 /// The native OS account selects the guard; no inventory path or HOME value can do so.
 #[cfg(target_os = "macos")]
@@ -132,8 +152,11 @@ const SOURCES: [(&str, &[u8]); 4] = [
 ];
 const BOOTSTRAP: &str = r#"import json, os, sys, types
 root, action, input_fd = sys.argv[1], sys.argv[2], int(sys.argv[3])
+runtime, runtime_fd = json.loads(sys.argv[4]), int(sys.argv[5])
+if list(sys.version_info[:3]) != runtime['version'] or sys.version_info[:2] < (3,11):
+    raise RuntimeError('native_python_version_changed')
 names = ('taira_native_nginx_check','taira_native_nginx_apply','taira_native_validator_forwarding','taira_native_edge_completion')
-for name, raw_fd in zip(names, sys.argv[4:], strict=True):
+for name, raw_fd in zip(names, sys.argv[6:], strict=True):
     fd = int(raw_fd)
     source = os.pread(fd, 1048577, 0)
     if not source or len(source) > 1048576 or len(source) != os.fstat(fd).st_size: raise RuntimeError('source_bound')
@@ -141,15 +164,60 @@ for name, raw_fd in zip(names, sys.argv[4:], strict=True):
     module.__file__ = root + '/' + name + '.py'
     sys.modules[name] = module
     exec(compile(source, module.__file__, 'exec'), module.__dict__)
+native = sys.modules['taira_native_edge_completion']
+image = runtime['executable']
+def verify_runtime():
+    if sys.platform != 'darwin' or native.kernel_executable_path(os.getpid()) != image['file']['path']:
+        raise RuntimeError('native_python_image_changed')
+    if native.identity(os.fstat(runtime_fd)) != image['file']['identity'] or native.identity(os.stat(image['file']['path'], follow_symlinks=False)) != image['file']['identity']:
+        raise RuntimeError('native_python_identity_changed')
+verify_runtime()
+import hashlib
+digest, offset = hashlib.sha256(), 0
+while offset < image['file']['identity']['size']:
+    chunk = os.pread(runtime_fd, min(65536, image['file']['identity']['size'] - offset), offset)
+    if not chunk: raise RuntimeError('native_python_extent_changed')
+    digest.update(chunk)
+    offset += len(chunk)
+if digest.hexdigest() != image['sha256']: raise RuntimeError('native_python_digest_changed')
+verify_runtime()
 body = os.pread(input_fd, 1048577, 0)
 if not body or len(body) > 1048576 or len(body) != os.fstat(input_fd).st_size: raise RuntimeError('request_bound')
 request = json.loads(body)
 owner = sys.modules['taira_native_nginx_apply']
-if action == 'apply': result = owner.apply_owned_publication(request)
+if action == 'python-preflight': result = {}
+elif action == 'apply': result = owner.apply_owned_publication(request)
+elif action == 'recover': result = owner.reconcile_interrupted_publication(request['original_plan'], request['journal'], request['direction'])
 elif action == 'inspect': result = owner.inspect_owned_publication(request)
+elif action == 'validate-plan':
+    owner.validate_plan(request)
+    result = {}
+elif action == 'validate-owner-inputs':
+    owner.validate_plan(request)
+    def check_existing(receipt, plan, context):
+        def guard():
+            for key, opened in context['bound'].items():
+                context['revalidate'](plan['native'][key], opened)
+            context['revalidate'](plan['native']['directory'], context['directory'], True)
+            if owner.observe_master(plan['master']) != plan['master']:
+                raise RuntimeError('master_identity_changed')
+            if context['identity'](os.fstat(context['lock'])) != context['lock_identity']:
+                raise RuntimeError('check_lock_identity_changed')
+            if context['identity'](os.stat('.taira-native-nginx-check.lock', dir_fd=context['directory'], follow_symlinks=False)) != context['lock_identity']:
+                raise RuntimeError('check_lock_identity_changed')
+        guard()
+        sys.modules['taira_native_edge_completion'].native_context_check(context, plan, owner, includes=True)
+        guard()
+        receipt['exit_code'] = 0
+    result = owner.adopt_owned_publication(request, check_existing)
+    if result.get('exit_code') != 0 or result.get('validation_files_removed') is not True:
+        raise RuntimeError('native_owner_inputs_refused')
+    result = {}
 elif action == 'forwarding': result = sys.modules['taira_native_validator_forwarding'].inspect_mac_forwarding(request['plan'], request['identity_receipt'])
 elif action == 'complete': result = sys.modules['taira_native_edge_completion'].complete(request)
+elif action == 'adopt': result = sys.modules['taira_native_edge_completion'].adopt(request)
 else: raise RuntimeError('native_action')
+verify_runtime()
 wire = json.dumps(result, sort_keys=True, separators=(',', ':')).encode() + b'\n'
 if len(wire) > 65536: raise RuntimeError('result_bound')
 sys.stdout.buffer.write(wire)
@@ -163,16 +231,49 @@ struct PublicPin {
 
 impl PublicPin {
     fn open(path: &Path, maximum: u64, private: bool) -> Result<Self> {
-        let mut retained = if private {
+        let retained = if private {
             RetainedFile::open_private(path)?
         } else {
             RetainedFile::open_regular(path)?
         };
+        Self::from_retained(path, retained, maximum)
+    }
+
+    fn private_child(directory: &PrivateDirectory, name: &str, maximum: u64) -> Result<Self> {
+        Self::from_retained(
+            &directory.path().join(name),
+            directory.open_retained_private(name)?,
+            maximum,
+        )
+    }
+
+    fn reader_child(
+        directory: &ReaderDirectory,
+        name: &OsStr,
+        maximum: u64,
+        private: bool,
+    ) -> Result<Self> {
+        let retained = if private {
+            directory.open_retained_private(name)?
+        } else {
+            directory.open_retained_regular(name)?
+        };
+        Self::from_retained(&directory.path().join(name), retained, maximum)
+    }
+
+    fn from_retained(path: &Path, mut retained: RetainedFile, maximum: u64) -> Result<Self> {
         let before = protocol::native_file_identity(&retained.file().metadata()?)?;
         if before.size == 0 || before.size > maximum {
             return Err(eyre!("native public input exceeds its phase bound"));
         }
-        let digest = hash_reader(retained.file_mut())?;
+        let digest = hash_reader(
+            &mut retained.file_mut().take(
+                before
+                    .size
+                    .checked_add(1)
+                    .ok_or_else(|| eyre!("native digest extent overflow"))?,
+            ),
+        )?;
         retained.file_mut().rewind()?;
         if protocol::native_file_identity(&retained.file().metadata()?)? != before {
             return Err(eyre!("native public input changed during bounded digest"));
@@ -204,7 +305,35 @@ impl PublicPin {
         Ok(pin)
     }
 
+    fn expected_child(
+        directory: &ReaderDirectory,
+        reference: &NativePublicFileV1,
+        private: bool,
+    ) -> Result<Self> {
+        let path = Path::new(&reference.file.path);
+        if path.parent() != Some(directory.path()) {
+            return Err(eyre!(
+                "native public child selected another retained directory"
+            ));
+        }
+        let name = path
+            .file_name()
+            .ok_or_else(|| eyre!("native public child basename missing"))?;
+        let pin = Self::reader_child(directory, name, reference.file.identity.size, private)?;
+        if &pin.reference != reference {
+            return Err(eyre!(
+                "native public child differs from its authenticated file reference"
+            ));
+        }
+        Ok(pin)
+    }
+
     fn bytes(&mut self, maximum: usize) -> Result<Vec<u8>> {
+        if self.reference.file.identity.size > u64::try_from(maximum)? {
+            return Err(eyre!(
+                "native public input exceeds the selected decoder extent"
+            ));
+        }
         self.revalidate()?;
         self.retained.file_mut().rewind()?;
         let mut bytes = Vec::with_capacity(usize::try_from(self.reference.file.identity.size)?);
@@ -248,11 +377,19 @@ impl PublicPin {
 struct NativeCapsule {
     root: PrivateDirectory,
     sources: Vec<PublicPin>,
+    runtime: PublicPin,
+    runtime_capability: host_pair::NativePythonRuntimeV1,
 }
 
 impl NativeCapsule {
     fn admit(admitted: &HostAdmission) -> Result<Self> {
-        let host = &admitted.inventory.hosts.native_edge;
+        Self::admit_host(&admitted.inventory.hosts.native_edge)
+    }
+
+    fn admit_host(host: &host_pair::ResetHostV1) -> Result<Self> {
+        let runtime_capability = host.native_python()?.clone();
+        runtime_capability.validate(host.owner_uid)?;
+        let runtime = PublicPin::expected(&runtime_capability.executable, false)?;
         let custody = PrivateDirectory::open(&host.custody_root)?;
         let helpers = custody.ensure_child("helpers")?;
         let name = host_pair::helper_source_closure_sha256();
@@ -267,7 +404,7 @@ impl NativeCapsule {
                 }
                 Err(error) => return Err(error.into()),
             }
-            let pin = PublicPin::open(&root.path().join(filename), MAX_PLAN as u64, true)?;
+            let pin = PublicPin::private_child(&root, filename, MAX_PLAN as u64)?;
             if pin.reference.sha256 != sha256_hex(source) {
                 return Err(eyre!("native helper publication changed"));
             }
@@ -276,7 +413,23 @@ impl NativeCapsule {
         root.sync()?;
         custody.revalidate()?;
         helpers.revalidate()?;
-        Ok(Self { root, sources })
+        let capsule = Self {
+            root,
+            sources,
+            runtime,
+            runtime_capability,
+        };
+        let ready = capsule.run(
+            &capsule.root,
+            "python-preflight",
+            b"{}",
+            &[],
+            Instant::now() + Duration::from_secs(20),
+        )?;
+        if json::from_slice::<json::Value>(&ready)? != norito::json!({}) {
+            return Err(eyre!("native Python preflight returned another capability"));
+        }
+        Ok(capsule)
     }
 
     fn run(
@@ -291,6 +444,8 @@ impl NativeCapsule {
             return Err(eyre!("native helper request exceeds its finite body bound"));
         }
         let mut inherited_files = Vec::with_capacity(self.sources.len() + inherited.len() + 1);
+        self.runtime.revalidate()?;
+        let runtime_file = self.runtime.retained.file().try_clone()?;
         for source in &self.sources {
             source.revalidate()?;
             inherited_files.push(source.retained.file().try_clone()?);
@@ -304,14 +459,16 @@ impl NativeCapsule {
             );
             inherited_files.push(clone);
         }
-        let bytes = if action == "complete" {
+        let bytes = if matches!(action, "complete" | "adopt") {
             let mut packet: json::Value = json::from_slice(body)?;
             rebase_descriptors(&mut packet, &descriptor_map)?;
             json::to_json(&packet)?.into_bytes()
         } else {
             body.to_vec()
         };
-        if action == "complete" && bytes.len() > protocol::MAX_COMPLETION_ADMISSION_BYTES {
+        if matches!(action, "complete" | "adopt")
+            && bytes.len() > protocol::MAX_COMPLETION_ADMISSION_BYTES
+        {
             return Err(eyre!("native completion admission exceeds 64KiB"));
         }
         // The request capsule is software custody, outside the immutable native
@@ -322,7 +479,7 @@ impl NativeCapsule {
         let name = format!("{action}.json");
         request_owner.write_atomic(&name, &bytes, PublishMode::Replace)?;
         request_owner.sync()?;
-        let request = PublicPin::open(&request_owner.path().join(name), MAX_PLAN as u64, true)?;
+        let request = PublicPin::private_child(&request_owner, &name, MAX_PLAN as u64)?;
         let request_file = request.retained.file().try_clone()?;
         let mut args = vec![
             OsString::from("-B"),
@@ -332,15 +489,19 @@ impl NativeCapsule {
             self.root.path().into(),
             action.into(),
             request_file.as_raw_fd().to_string().into(),
+            json::to_json(&self.runtime_capability)?.into(),
+            runtime_file.as_raw_fd().to_string().into(),
         ];
         for source in &inherited_files[..self.sources.len()] {
             args.push(source.as_raw_fd().to_string().into());
         }
         inherited_files.push(request_file);
+        inherited_files.push(runtime_file);
+        self.runtime.revalidate()?;
         self.root.revalidate()?;
         let output = require_success(
             RealProcessRunner.run(&ProcessSpec {
-                program: PathBuf::from("/usr/bin/python3"),
+                program: PathBuf::from(&self.runtime.reference.file.path),
                 args,
                 stdin_prefix: Vec::new(),
                 stdin_file: None,
@@ -354,6 +515,7 @@ impl NativeCapsule {
             source.revalidate()?;
         }
         request.revalidate()?;
+        self.runtime.revalidate()?;
         self.root.revalidate()?;
         directory.revalidate()?;
         if output.is_empty() || output.len() > 64 * 1024 {
@@ -417,7 +579,10 @@ struct NativeOperation {
     root: PrivateDirectory,
     lock: File,
     lock_identity: host_pair::NativeFileIdentityV1,
-    _host_lock: File,
+    host_root: PrivateDirectory,
+    host_lock: File,
+    host_lock_identity: host_pair::NativeFileIdentityV1,
+    lease_sha256: String,
     progress: protocol::NativeEdgeProgressV1,
 }
 
@@ -430,6 +595,19 @@ impl NativeOperation {
         host_lock
             .try_lock()
             .wrap_err("another native edge operation owns the host")?;
+        let host_lock_identity = protocol::native_file_identity(&host_lock.metadata()?)?;
+        if host_lock_identity.uid != native.owner_uid
+            || host_lock_identity.gid != native.owner_gid
+            || host_lock_identity.mode != 0o600
+            || host_lock_identity.links != 1
+            || host_lock_identity.size != 0
+        {
+            return Err(eyre!("native host ownership lock has unsafe custody"));
+        }
+        require_path_absent(
+            &edge.path().join("active-adoption.json"),
+            "unresolved native publication adoption",
+        )?;
         let operations = edge.ensure_child("operations")?;
         let root = operations.ensure_child(&admitted.authorization_sha256)?;
         let lock = root.open_lock("operation.lock")?;
@@ -547,7 +725,10 @@ impl NativeOperation {
             root,
             lock,
             lock_identity,
-            _host_lock: host_lock,
+            host_root: edge,
+            host_lock,
+            host_lock_identity,
+            lease_sha256: sha256_hex(json::to_json(&lease)?.as_bytes()),
             progress,
         };
         operation.retain_checkpoints(admitted)?;
@@ -566,6 +747,16 @@ impl NativeOperation {
     }
 
     fn revalidate(&self) -> Result<()> {
+        self.host_root.revalidate()?;
+        if protocol::native_file_identity(&self.host_lock.metadata()?)? != self.host_lock_identity
+            || protocol::native_file_identity(&fs::symlink_metadata(
+                self.host_root.path().join("host-operation.lock"),
+            )?)? != self.host_lock_identity
+            || sha256_hex(&self.host_root.read("active-lease.json", 64 * 1024)?)
+                != self.lease_sha256
+        {
+            return Err(eyre!("native physical-host lock or durable lease changed"));
+        }
         self.root.revalidate()?;
         let path = self.root.path().join("operation.lock");
         if protocol::native_file_identity(&self.lock.metadata()?)? != self.lock_identity
@@ -785,27 +976,34 @@ fn admit_native_platform(admitted: &HostAdmission) -> Result<()> {
             "native custodian guard root does not derive from the actual executable"
         ));
     }
-    let output = require_success(
-        RealProcessRunner.run(&ProcessSpec::public_input(
-            PathBuf::from("/usr/bin/python3"),
-            vec![
-                "-B".into(),
-                "-I".into(),
-                "-c".into(),
-                "import sys; assert sys.version_info >= (3,11)".into(),
-            ],
-            Vec::new(),
-            admitted.action_deadline,
-        ))?,
-        "native Python capability preflight",
-    )?;
-    if !output.is_empty() {
-        return Err(eyre!(
-            "native capability preflight returned unexpected bytes"
-        ));
-    }
+    native.native_python()?.validate(native.owner_uid)?;
     PrivateDirectory::open(&native.custody_root)?.revalidate()?;
     Ok(())
+}
+
+/// Native captures use the same retained interpreter and four-source capsule as effects.
+pub(in crate::taira_public_reset) fn inspect_native_owner_inputs(
+    host: &host_pair::ResetHostV1,
+    action: &str,
+    request: &[u8],
+    directory: &Path,
+) -> Result<Vec<u8>> {
+    if !matches!(action, "inspect" | "validate-plan") {
+        return Err(eyre!("native capture selected a mutating capsule action"));
+    }
+    let (_, _, owner, home) = native_account()?;
+    if owner != host.endpoint.user || home != host.owner_home {
+        return Err(eyre!("native capture differs from its actual OS owner"));
+    }
+    let private = PrivateDirectory::open(directory)?;
+    let capsule = NativeCapsule::admit_host(host)?;
+    capsule.run(
+        &private,
+        action,
+        request,
+        &[],
+        Instant::now() + Duration::from_secs(60),
+    )
 }
 
 fn verify_native_artifacts(edge: &EdgeV1) -> Result<()> {
@@ -921,7 +1119,7 @@ fn cutover(
     ) {
         return Err(eyre!("native cutover lacks its durable staged frontier"));
     }
-    let mut plan = load_apply_plan(edge)?;
+    let plan = load_apply_plan(edge)?;
     admit_apply_plan(&plan, edge)?;
     let publication = plan_operation(&plan)?;
     if operation.progress.publication_operation_id.as_ref() != Some(&publication) {
@@ -929,54 +1127,338 @@ fn cutover(
             "native publication operation drifted from durable staging"
         ));
     }
-    if operation.progress.status != "staged" {
-        plan = reconcile_plan(&plan)?;
+    let mut applied_now = false;
+    if operation.progress.status == "staged" {
+        operation.commit(
+            admitted,
+            "cutover_requested",
+            Some(publication.clone()),
+            operation.progress.checkpoint_sha256.clone(),
+            None,
+        )?;
+        let output = capsule.run(
+            &operation.root,
+            "apply",
+            json::to_json(&plan)?.as_bytes(),
+            &[&operation.lock, &operation.host_lock],
+            admitted.action_deadline,
+        )?;
+        operation.revalidate()?;
+        let result: json::Value = json::from_slice(&output)?;
+        if result.get("exit_code").and_then(json::Value::as_u64) != Some(0)
+            || result.get("operation_id").and_then(json::Value::as_str)
+                != Some(publication.as_str())
+            || result.get("qualified").and_then(json::Value::as_bool) != Some(false)
+            || result.get("phase").and_then(json::Value::as_str) != Some("awaiting_readiness")
+        {
+            return Err(eyre!(
+                "native publication has not completed its exact unqualified cutover"
+            ));
+        }
+        let witness = admit_journal_write_intent(&result, &plan, true)?;
+        retain_exact(
+            &operation.root,
+            &format!("publisher-apply-receipt-{}.json", sha256_hex(&output)),
+            &output,
+        )?;
+        witness
+            .as_ref()
+            .expect("successful publisher witness")
+            .revalidate()?;
+        applied_now = true;
     }
-    operation.commit(
-        admitted,
-        "cutover_requested",
-        Some(publication.clone()),
-        operation.progress.checkpoint_sha256.clone(),
-        None,
-    )?;
-    let output = capsule.run(
+    if !applied_now
+        && operation.progress.status == "cutover_requested"
+        && !operation
+            .root
+            .entries(128)?
+            .iter()
+            .any(|name| name == "completion-plan.json")
+    {
+        let receipt = recover_publication(admitted, capsule, operation, &plan, "resume")?;
+        if receipt.get("phase").and_then(json::Value::as_str) != Some("awaiting_readiness") {
+            return Err(eyre!("interrupted cutover did not recover its exact owner"));
+        }
+    }
+    // A completed owner is observed before any retry. In particular, a lost
+    // HTTP response or interrupted progress publication never authorizes HUP.
+    let completion = match operation.root.read("completion-plan.json", MAX_PLAN) {
+        Ok(bytes) => {
+            let completion: protocol::NativeNginxCompletionPlanV1 = json::from_slice(&bytes)?;
+            completion.validate(&publication)?;
+            if !matches!(
+                completion.publication_effect,
+                protocol::NativePublicationEffectV1::Owned
+            ) {
+                return Err(eyre!(
+                    "native cutover cannot reuse a no-effect rollback plan"
+                ));
+            }
+            completion
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            protocol::NativeNginxCompletionPlanV1 {
+                schema: "iroha.taira.public-reset.native-nginx-completion-plan.v1".into(),
+                nginx: reconcile_plan(&plan)?,
+                publication_effect: protocol::NativePublicationEffectV1::Owned,
+                completion_journal_basename: "native-completion.ndjson".into(),
+            }
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let request = inspection_request(&completion.nginx)?;
+    operation.revalidate()?;
+    let inspected = capsule.run(
         &operation.root,
-        "apply",
-        json::to_json(&plan)?.as_bytes(),
-        &[],
+        "inspect",
+        json::to_json(&request)?.as_bytes(),
+        &[&operation.lock, &operation.host_lock],
         admitted.action_deadline,
     )?;
-    let result: json::Value = json::from_slice(&output)?;
-    if result.get("exit_code").and_then(json::Value::as_u64) != Some(0)
-        || result.get("operation_id").and_then(json::Value::as_str) != Some(publication.as_str())
-        || result.get("qualified").and_then(json::Value::as_bool) != Some(false)
-        || result.get("phase").and_then(json::Value::as_str) != Some("awaiting_readiness")
+    operation.revalidate()?;
+    let observation: protocol::NativeOwnerObservationV1 = json::from_slice(&inspected)?;
+    observation.validate(&publication)?;
+    if observation.owned_publication.publication.sha256
+        != artifact(&edge.artifacts, "edge_config")?.sha256
     {
         return Err(eyre!(
-            "native publication has not completed its exact unqualified cutover"
+            "native cutover owner has another admitted public artifact"
         ));
     }
-    retain_exact(&operation.root, "cutover-receipt.json", &output)?;
-    let reconciled = reconcile_plan(&plan)?;
-    let completion = protocol::NativeNginxCompletionPlanV1 {
-        schema: "iroha.taira.public-reset.native-nginx-completion-plan.v1".into(),
-        nginx: reconciled,
-        publication_effect: protocol::NativePublicationEffectV1::Owned,
-        completion_journal_basename: "native-completion.ndjson".into(),
-    };
-    completion.validate(&publication)?;
+    retain_exact(
+        &operation.root,
+        "cutover-receipt.json",
+        json::to_json(&observation)?.as_bytes(),
+    )?;
     retain_exact(
         &operation.root,
         "completion-plan.json",
         json::to_json(&completion)?.as_bytes(),
     )?;
-    operation.commit(
-        admitted,
-        "awaiting_readiness",
-        Some(publication),
-        operation.progress.checkpoint_sha256.clone(),
-        None,
-    )
+    if operation.progress.status != "awaiting_readiness"
+        && operation.progress.status != "edge_ready_unqualified"
+    {
+        operation.commit(
+            admitted,
+            "awaiting_readiness",
+            Some(publication),
+            operation.progress.checkpoint_sha256.clone(),
+            None,
+        )?;
+    }
+    Ok(())
+}
+
+fn recover_publication(
+    admitted: &HostAdmission,
+    capsule: &NativeCapsule,
+    operation: &NativeOperation,
+    plan: &json::Value,
+    direction: &'static str,
+) -> Result<json::Value> {
+    if !matches!(direction, "resume" | "rollback") {
+        return Err(eyre!("native publisher recovery has another direction"));
+    }
+    let directory_path = plan
+        .get("native")
+        .and_then(|value| value.get("directory"))
+        .and_then(|value| value.get("path"))
+        .and_then(json::Value::as_str)
+        .ok_or_else(|| eyre!("native recovery publisher journal directory missing"))?;
+    let directory = iroha_fs::OwnerDirectory::open(directory_path)?;
+    let journal_path = protocol::publisher_journal_path(plan, &plan_operation(plan)?)?;
+    let mut journal = match fs::symlink_metadata(&journal_path) {
+        Ok(_) => Some(PublicPin::open(&journal_path, MAX_PLAN as u64, true)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let request = norito::json!({ "original_plan": plan, "journal": (journal.as_ref().map(owner_reference)), "direction": direction });
+    let mut inherited = vec![&operation.lock, &operation.host_lock];
+    if let Some(journal) = journal.as_ref() {
+        inherited.push(journal.retained.file());
+    }
+    operation.revalidate()?;
+    directory.revalidate()?;
+    let output = capsule.run(
+        &operation.root,
+        "recover",
+        json::to_json(&request)?.as_bytes(),
+        &inherited,
+        admitted.action_deadline,
+    )?;
+    operation.revalidate()?;
+    directory.revalidate()?;
+    let receipt: json::Value = json::from_slice(&output)?;
+    if receipt.get("exit_code").and_then(json::Value::as_u64) != Some(0)
+        || receipt
+            .get("recovery_direction")
+            .and_then(json::Value::as_str)
+            != Some(direction)
+        || receipt.get("operation_id").and_then(json::Value::as_str)
+            != Some(plan_operation(plan)?.as_str())
+        || receipt.get("qualified").and_then(json::Value::as_bool) != Some(false)
+    {
+        return Err(eyre!(
+            "interrupted native publisher preserves exact-operation recovery pending"
+        ));
+    }
+    let successor: Option<NativePublicFileV1> = json::from_slice(
+        json::to_json(
+            receipt
+                .get("journal")
+                .ok_or_else(|| eyre!("native recovery lacks its required journal result"))?,
+        )?
+        .as_bytes(),
+    )?;
+    let mut successor = match successor {
+        Some(reference) => {
+            reference.validate_public(admitted.inventory.hosts.native_edge.owner_uid)?;
+            if Path::new(&reference.file.path) != journal_path
+                || reference.file.identity.size > MAX_PLAN as u64
+                || reference.file.identity.mode != 0o600
+            {
+                return Err(eyre!("native recovery returned another owner journal"));
+            }
+            Some(PublicPin::expected(&reference, true)?)
+        }
+        None if journal.is_none()
+            && direction == "rollback"
+            && receipt.get("phase").and_then(json::Value::as_str) == Some("not_requested") =>
+        {
+            require_path_absent(&journal_path, "unchanged native publisher journal")?;
+            None
+        }
+        None => return Err(eyre!("native recovery omitted its admitted owner journal")),
+    };
+    if let (Some(predecessor), Some(successor)) = (journal.as_mut(), successor.as_mut()) {
+        admit_owned_journal_successor(predecessor, successor)?;
+    }
+    let witness = admit_journal_write_intent(&receipt, plan, successor.is_some())?;
+    retain_exact(
+        &operation.root,
+        &format!("publisher-recovery-receipt-{}.json", sha256_hex(&output)),
+        &output,
+    )?;
+    if let Some(successor) = successor.as_ref() {
+        successor.revalidate()?;
+    }
+    if let Some(witness) = witness.as_ref() {
+        witness.revalidate()?;
+    }
+    directory.revalidate()?;
+    operation.revalidate()?;
+    Ok(receipt)
+}
+
+fn admit_journal_write_intent(
+    receipt: &json::Value,
+    plan: &json::Value,
+    journal_exists: bool,
+) -> Result<Option<PublicPin>> {
+    let witness: Option<NativePublicFileV1> =
+        json::from_slice(
+            json::to_json(receipt.get("journal_write_intent").ok_or_else(|| {
+                eyre!("native publisher lacks its required durable intent result")
+            })?)?
+            .as_bytes(),
+        )?;
+    let Some(witness) = witness else {
+        if journal_exists {
+            return Err(eyre!(
+                "native publisher journal lacks its independently durable intent"
+            ));
+        }
+        return Ok(None);
+    };
+    let operation = plan_operation(plan)?;
+    let directory = protocol::publisher_journal_path(plan, &operation)?
+        .parent()
+        .ok_or_else(|| eyre!("native publisher intent directory missing"))?
+        .to_path_buf();
+    let path = Path::new(&witness.file.path);
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .and_then(|value| value.strip_prefix(&format!(".taira-native-nginx-write-{operation}-")))
+        .and_then(|value| value.strip_suffix(".intent.json"))
+        .ok_or_else(|| eyre!("native publisher intent has another operation namespace"))?;
+    let (sequence_text, nonce) = name
+        .split_once('-')
+        .ok_or_else(|| eyre!("native publisher intent sequence missing"))?;
+    let sequence = sequence_text.parse::<u64>()?;
+    validate_lower_hex("native publisher intent nonce", nonce, 32)?;
+    let owner = plan
+        .get("native")
+        .and_then(|value| value.get("owner_uid"))
+        .and_then(json::Value::as_u64)
+        .ok_or_else(|| eyre!("native publisher owner missing"))?;
+    witness.validate_public(u32::try_from(owner)?)?;
+    if !journal_exists
+        || path.parent() != Some(directory.as_path())
+        || !(1..=128).contains(&sequence)
+        || sequence.to_string() != sequence_text
+        || receipt
+            .get("journal_sequence")
+            .and_then(json::Value::as_u64)
+            != Some(sequence)
+        || witness.file.identity.mode != 0o600
+        || u64::from(witness.file.identity.uid) != owner
+        || witness.file.identity.size > 64 * 1024
+    {
+        return Err(eyre!(
+            "native publisher intent does not join its complete owner result"
+        ));
+    }
+    Ok(Some(PublicPin::expected(&witness, true)?))
+}
+
+/// The maintained publisher alone authenticates its independently durable
+/// created-inode intent. Here the receiver retains both returned custody and the
+/// immutable old raw prefix; it never reconstructs phase authority from rows.
+fn admit_owned_journal_successor(
+    predecessor: &mut PublicPin,
+    successor: &mut PublicPin,
+) -> Result<()> {
+    successor.revalidate()?;
+    let current = protocol::native_file_identity(&predecessor.retained.file().metadata()?)?;
+    let initial = &predecessor.reference.file.identity;
+    let unchanged = successor.reference == predecessor.reference;
+    if current.device != initial.device
+        || current.inode != initial.inode
+        || current.uid != initial.uid
+        || current.gid != initial.gid
+        || current.mode != initial.mode
+        || current.size != initial.size
+        || current.mtime_ns != initial.mtime_ns
+        || current.links != if unchanged { initial.links } else { 0 }
+        || (unchanged && current.ctime_ns != initial.ctime_ns)
+        || successor.reference.file.path != predecessor.reference.file.path
+        || successor.reference.file.identity.size < initial.size
+        || successor.reference.file.identity.size > MAX_PLAN as u64
+    {
+        return Err(eyre!(
+            "native recovered owner journal changed its immutable custody"
+        ));
+    }
+    predecessor.retained.file_mut().rewind()?;
+    if hash_reader(&mut predecessor.retained.file_mut().take(initial.size))?
+        != predecessor.reference.sha256
+    {
+        return Err(eyre!(
+            "native recovered journal changed its immutable admitted prefix"
+        ));
+    }
+    successor.retained.file_mut().rewind()?;
+    if hash_reader(&mut successor.retained.file_mut().take(initial.size))?
+        != predecessor.reference.sha256
+        || protocol::native_file_identity(&predecessor.retained.file().metadata()?)? != current
+    {
+        return Err(eyre!(
+            "native recovered journal changed beside its retained prefix read"
+        ));
+    }
+    successor.revalidate()?;
+    Ok(())
 }
 
 fn verify_ready(
@@ -1000,31 +1482,49 @@ fn verify_ready(
         .ok_or_else(|| eyre!("native readiness lacks its publication owner"))?;
     completion.validate(&publication)?;
     let request = inspection_request(&completion.nginx)?;
+    operation.revalidate()?;
     let _observation = capsule.run(
         &operation.root,
         "inspect",
         json::to_json(&request)?.as_bytes(),
-        &[],
+        &[&operation.lock, &operation.host_lock],
         admitted.action_deadline,
     )?;
-    let plan = protocol::read_native_public(
-        &edge.native_capability.forwarding_plan,
-        admitted.inventory.hosts.native_edge.owner_uid,
-        MAX_PLAN,
-    )?;
-    let identity = protocol::read_native_public(
-        &edge.native_capability.forwarding_identity_receipt,
-        admitted.inventory.hosts.native_edge.owner_uid,
-        MAX_PLAN,
-    )?;
+    operation.revalidate()?;
+    let mut plan_pin = PublicPin::expected(&edge.native_capability.forwarding_plan, true)?;
+    let plan = plan_pin.bytes(MAX_PLAN)?;
+    let mut identity_pin =
+        PublicPin::expected(&edge.native_capability.forwarding_identity_receipt, true)?;
+    let identity = identity_pin.bytes(MAX_PLAN)?;
     let request = norito::json!({ "plan": (json::from_slice::<json::Value>(&plan)?), "identity_receipt": (json::from_slice::<json::Value>(&identity)?) });
-    let _forwarding = capsule.run(
+    let forwarding = capsule.run(
         &operation.root,
         "forwarding",
         json::to_json(&request)?.as_bytes(),
-        &[],
+        &[
+            &operation.lock,
+            &operation.host_lock,
+            plan_pin.retained.file(),
+            identity_pin.retained.file(),
+        ],
         admitted.action_deadline,
     )?;
+    plan_pin.revalidate()?;
+    identity_pin.revalidate()?;
+    operation.revalidate()?;
+    let forwarding: json::Value = json::from_slice(&forwarding)?;
+    let journal: NativePublicFileV1 =
+        json::from_slice(
+            json::to_json(forwarding.get("journal").ok_or_else(|| {
+                eyre!("native forwarding inspection lacks its retained journal")
+            })?)?
+            .as_bytes(),
+        )?;
+    if journal != edge.native_capability.incumbent.claims.forwarding_journal {
+        return Err(eyre!(
+            "native forwarding inspection changed its signed incumbent journal"
+        ));
+    }
     operation.commit(
         admitted,
         "edge_ready_unqualified",
@@ -1039,7 +1539,7 @@ fn native_identity_json(identity: &host_pair::NativeFileIdentityV1) -> json::Val
 }
 
 fn owner_reference(pin: &PublicPin) -> json::Value {
-    norito::json!({ "path": (pin.reference.file.path), "identity": (native_identity_json(&pin.reference.file.identity)), "sha256": (pin.reference.sha256) })
+    norito::json!({ "path": (&pin.reference.file.path), "identity": (native_identity_json(&pin.reference.file.identity)), "sha256": (&pin.reference.sha256) })
 }
 
 fn reconcile_plan(plan: &json::Value) -> Result<json::Value> {
@@ -1058,13 +1558,13 @@ fn reconcile_plan(plan: &json::Value) -> Result<json::Value> {
         .and_then(json::Value::as_str)
         .ok_or_else(|| eyre!("native plan basename missing"))?;
     let journal = PublicPin::open(
-        &Path::new(directory).join(format!(".taira-native-nginx-apply-{op}.receipt.ndjson")),
+        &protocol::publisher_journal_path(plan, &op)?,
         MAX_PLAN as u64,
         true,
     )?;
     let publication =
         PublicPin::open(&Path::new(directory).join(basename), MAX_PLAN as u64, false)?;
-    result.as_object_mut().ok_or_else(|| eyre!("native plan object missing"))?.insert("publication".into(), norito::json!({ "kind": "reconcile", "prior": { "operation_id": op, "journal": (owner_reference(&journal)), "publication": (owner_reference(&publication)) } }));
+    result.as_object_mut().ok_or_else(|| eyre!("native plan object missing"))?.insert("publication".into(), norito::json!({ "kind": "reconcile", "prior": { "operation_id": op, "journal": (owner_reference(&journal)), "publication": { "identity": (native_identity_json(&publication.reference.file.identity)), "sha256": (&publication.reference.sha256) } } }));
     Ok(result)
 }
 
@@ -1077,7 +1577,7 @@ fn inspection_request(plan: &json::Value) -> Result<json::Value> {
     let mut candidate = PublicPin::open(Path::new(path), MAX_PLAN as u64, false)?;
     let bytes = candidate.bytes(MAX_PLAN)?;
     Ok(
-        norito::json!({ "host_kind": (plan.get("host_kind").ok_or_else(|| eyre!("native host kind missing"))?), "native": (plan.get("native").ok_or_else(|| eyre!("native plan metadata missing"))?), "candidate_sha256": (candidate.reference.sha256), "candidate_base64": (BASE64.encode(bytes)), "renderer_source_sha256": (plan.get("renderer_source").and_then(|value| value.get("sha256")).ok_or_else(|| eyre!("renderer SHA missing"))?), "master": (plan.get("master").ok_or_else(|| eyre!("native master missing"))?), "destination": (plan.get("destination").ok_or_else(|| eyre!("native destination missing"))?), "operation_id": (plan_operation(plan)?), "publication": (plan.get("publication").ok_or_else(|| eyre!("native publisher missing"))?) }),
+        norito::json!({ "host_kind": (plan.get("host_kind").ok_or_else(|| eyre!("native host kind missing"))?), "native": (plan.get("native").ok_or_else(|| eyre!("native plan metadata missing"))?), "candidate_sha256": (&candidate.reference.sha256), "candidate_base64": (BASE64.encode(bytes)), "renderer_source_sha256": (plan.get("renderer_source").and_then(|value| value.get("sha256")).ok_or_else(|| eyre!("renderer SHA missing"))?), "master": (plan.get("master").ok_or_else(|| eyre!("native master missing"))?), "destination": (plan.get("destination").ok_or_else(|| eyre!("native destination missing"))?), "operation_id": (plan_operation(plan)?), "publication": (plan.get("publication").ok_or_else(|| eyre!("native publisher missing"))?) }),
     )
 }
 
@@ -1202,19 +1702,24 @@ fn no_effect_completion_plan(
     capsule: &NativeCapsule,
     operation: &NativeOperation,
 ) -> Result<protocol::NativeNginxCompletionPlanV1> {
-    let request = protocol::read_native_public(
-        &edge.native_capability.incumbent_nginx_request,
-        admitted.inventory.hosts.native_edge.owner_uid,
-        MAX_PLAN,
-    )?;
+    let mut request_pin =
+        PublicPin::expected(&edge.native_capability.incumbent_nginx_request, true)?;
+    let request = request_pin.bytes(MAX_PLAN)?;
     let request: json::Value = json::from_slice(&request)?;
+    operation.revalidate()?;
     let observation = capsule.run(
         &operation.root,
         "inspect",
         json::to_json(&request)?.as_bytes(),
-        &[],
+        &[
+            &operation.lock,
+            &operation.host_lock,
+            request_pin.retained.file(),
+        ],
         admitted.action_deadline,
     )?;
+    request_pin.revalidate()?;
+    operation.revalidate()?;
     let observation: json::Value = json::from_slice(&observation)?;
     let observed: host_pair::NativeOwnedPublicationV1 = json::from_slice(
         json::to_json(
@@ -1248,7 +1753,7 @@ fn no_effect_completion_plan(
                 .clone(),
         );
     }
-    object.insert("candidate".into(), norito::json!({ "path": (observed.publication.file.path), "owner_uid": (admitted.inventory.hosts.native_edge.owner_uid), "sha256": (observed.publication.sha256) }));
+    object.insert("candidate".into(), norito::json!({ "path": (&observed.publication.file.path), "owner_uid": (admitted.inventory.hosts.native_edge.owner_uid), "sha256": (&observed.publication.sha256) }));
     object
         .get_mut("renderer_source")
         .and_then(json::Value::as_object_mut)
@@ -1270,6 +1775,89 @@ fn no_effect_completion_plan(
         completion_journal_basename: "native-completion.ndjson".into(),
     };
     plan.validate(&intended)?;
+    Ok(plan)
+}
+
+/// Restore an interrupted publisher directly, before the completion journal
+/// acknowledges it. The original signed plan and publisher journal remain the
+/// sole source of inode arrangements; this path never completes candidate HUP.
+fn interrupted_rollback_plan(
+    admitted: &HostAdmission,
+    edge: &EdgeV1,
+    capsule: &NativeCapsule,
+    operation: &NativeOperation,
+) -> Result<protocol::NativeNginxCompletionPlanV1> {
+    if operation.progress.status != "rollback_requested" {
+        return Err(eyre!(
+            "interrupted publisher rollback lacks its durable requested direction"
+        ));
+    }
+    let original = load_apply_plan(edge)?;
+    admit_apply_plan(&original, edge)?;
+    let intended = plan_operation(&original)?;
+    let receipt = recover_publication(admitted, capsule, operation, &original, "rollback")?;
+    let journal: Option<NativePublicFileV1> =
+        json::from_slice(
+            json::to_json(receipt.get("journal").ok_or_else(|| {
+                eyre!("native rollback recovery lacks its required journal result")
+            })?)?
+            .as_bytes(),
+        )?;
+    let restored: Option<host_pair::NativeOwnedPublicationV1> = json::from_slice(
+        json::to_json(receipt.get("restored_owned_publication").ok_or_else(|| {
+            eyre!("native rollback recovery lacks its required restored owner result")
+        })?)?
+        .as_bytes(),
+    )?;
+    let phase = receipt.get("phase").and_then(json::Value::as_str);
+    if phase == Some("not_requested") {
+        if journal.is_some()
+            || restored.as_ref() != Some(&edge.native_capability.incumbent.claims.owned_publication)
+        {
+            return Err(eyre!(
+                "native no-effect recovery changed its unchanged incumbent or created a journal"
+            ));
+        }
+        return no_effect_completion_plan(admitted, edge, capsule, operation);
+    }
+    if phase != Some("rolled_back_unqualified") {
+        return Err(eyre!(
+            "native interrupted publisher has not proven its direct restoration"
+        ));
+    }
+    let journal =
+        journal.ok_or_else(|| eyre!("native restored publisher has no terminal journal"))?;
+    let retained = PublicPin::expected(&journal, true)?;
+    let mut restored_pins = Vec::new();
+    if let Some(restored) = restored.as_ref() {
+        if restored.operation_id
+            != edge
+                .native_capability
+                .incumbent
+                .claims
+                .owned_publication
+                .operation_id
+        {
+            return Err(eyre!("native publisher restored another predecessor owner"));
+        }
+        restored_pins.push(PublicPin::expected(&restored.journal, true)?);
+        restored_pins.push(PublicPin::expected(&restored.publication, false)?);
+    }
+    let plan = protocol::NativeNginxCompletionPlanV1 {
+        schema: "iroha.taira.public-reset.native-nginx-completion-plan.v1".into(),
+        nginx: original,
+        publication_effect: protocol::NativePublicationEffectV1::PublisherRolledBack {
+            journal,
+            restored_owned_publication: restored,
+        },
+        completion_journal_basename: "native-completion.ndjson".into(),
+    };
+    plan.validate(&intended)?;
+    retained.revalidate()?;
+    for pin in restored_pins {
+        pin.revalidate()?;
+    }
+    operation.revalidate()?;
     Ok(plan)
 }
 
@@ -1318,7 +1906,7 @@ fn completion_packet(
         &["-p", &std::process::id().to_string(), "-o", "lstart="],
         admitted.action_deadline,
     )?;
-    let started = std::str::from_utf8(&started)?.trim().to_string();
+    let started = canonical_parent_start(&started)?;
     if started.len() < 20
         || started.len() > 32
         || !started
@@ -1352,6 +1940,18 @@ fn completion_packet(
             started,
             executable,
         },
+        host_lock: protocol::NativeRetainedLockV1 {
+            fd: u32::try_from(operation.host_lock.as_raw_fd())?,
+            file: NativeObservedFileV1 {
+                path: operation
+                    .host_root
+                    .path()
+                    .join("host-operation.lock")
+                    .to_string_lossy()
+                    .into_owned(),
+                identity: operation.host_lock_identity.clone(),
+            },
+        },
         lock: protocol::NativeRetainedLockV1 {
             fd: u32::try_from(operation.lock.as_raw_fd())?,
             file: NativeObservedFileV1 {
@@ -1381,6 +1981,34 @@ fn complete(
     capsule: &NativeCapsule,
     operation: &mut NativeOperation,
 ) -> Result<()> {
+    if operation.progress.status == "recovery_pending" {
+        let digest = operation
+            .progress
+            .completion_receipt_sha256
+            .as_ref()
+            .ok_or_else(|| eyre!("native terminal recovery has no retained action receipt"))?;
+        let bytes = operation
+            .root
+            .read(format!("completion-receipt-{digest}.json"), 64 * 1024)?;
+        let prior: protocol::NativeCompletionReceiptV1 = json::from_slice(&bytes)?;
+        let requested = match action {
+            HostAction::Rollback => "rollback",
+            HostAction::Seal => "seal",
+            HostAction::Cleanup => "cleanup",
+            _ => return Err(eyre!("native terminal recovery has another action")),
+        };
+        if sha256_hex(&bytes) != *digest
+            || prior.status != "recovery_pending"
+            || prior.action != requested
+            || prior.operation_id != operation.progress.operation_id
+            || prior.inventory_sha256 != admitted.inventory_sha256
+            || prior.authorization_sha256 != admitted.authorization_sha256
+        {
+            return Err(eyre!(
+                "native recovery cannot switch its retained terminal action"
+            ));
+        }
+    }
     let publication = operation
         .progress
         .publication_operation_id
@@ -1414,6 +2042,31 @@ fn complete(
                 | "recovery_pending"
         ) {
             return Err(eyre!("native rollback cannot revoke a terminal seal"));
+        }
+        if matches!(
+            operation.progress.status.as_str(),
+            "cutover_requested" | "rollback_requested"
+        ) && !operation
+            .root
+            .entries(128)?
+            .iter()
+            .any(|name| name == "completion-plan.json")
+        {
+            if operation.progress.status != "rollback_requested" {
+                operation.commit(
+                    admitted,
+                    "rollback_requested",
+                    Some(publication.clone()),
+                    operation.progress.checkpoint_sha256.clone(),
+                    None,
+                )?;
+            }
+            let plan = interrupted_rollback_plan(admitted, edge, capsule, operation)?;
+            retain_exact(
+                &operation.root,
+                "completion-plan.json",
+                json::to_json(&plan)?.as_bytes(),
+            )?;
         }
     } else {
         ensure_global_fence(admitted, operation)?;
@@ -1483,20 +2136,17 @@ fn complete(
         "progress.json",
         "completion-plan.json",
     ] {
-        pins.push(PublicPin::open(
-            &operation.root.path().join(name),
+        pins.push(PublicPin::private_child(
+            &operation.root,
+            name,
             MAX_PLAN as u64,
-            true,
         )?);
     }
     for index in 0..admitted.request.phase_checkpoints.len() {
-        pins.push(PublicPin::open(
-            &operation
-                .root
-                .path()
-                .join(format!("checkpoint-{}.json", index + 1)),
+        pins.push(PublicPin::private_child(
+            &operation.root,
+            &format!("checkpoint-{}.json", index + 1),
             host_pair::MAX_CHECKPOINT_BYTES as u64,
-            true,
         )?);
     }
     let directory = if action == HostAction::Rollback {
@@ -1517,10 +2167,10 @@ fn complete(
         }
         Some(descriptor)
     } else {
-        pins.push(PublicPin::open(
-            &operation.root.path().join("global-proof.json"),
+        pins.push(PublicPin::private_child(
+            &operation.root,
+            "global-proof.json",
             protocol::MAX_PROGRESS_BYTES as u64,
-            true,
         )?);
         None
     };
@@ -1530,6 +2180,7 @@ fn complete(
         .map(|pin| pin.retained.file())
         .collect::<Vec<_>>();
     inherited.push(&operation.lock);
+    inherited.push(&operation.host_lock);
     if let Some(directory) = directory.as_ref() {
         inherited.push(directory);
     }
@@ -1615,9 +2266,200 @@ fn complete(
     Ok(())
 }
 
+fn canonical_parent_start(bytes: &[u8]) -> Result<String> {
+    if bytes.len() > 64 {
+        return Err(eyre!(
+            "native parent start identity exceeds its fixed native extent"
+        ));
+    }
+    let value = std::str::from_utf8(bytes)?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if value.len() < 20
+        || value.len() > 32
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b' '))
+    {
+        return Err(eyre!(
+            "native parent start identity is outside its exact public form"
+        ));
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_parent_start_uses_the_maintained_single_digit_day_wire() {
+        assert_eq!(
+            canonical_parent_start(b"  Sun Oct  4 20:03:58 2026\n").unwrap(),
+            "Sun Oct 4 20:03:58 2026"
+        );
+        assert!(canonical_parent_start(b"Sun Oct 4 20:03:58 2026;evil").is_err());
+        assert!(canonical_parent_start(&[b' '; 65]).is_err());
+    }
+
+    #[test]
+    fn inherited_descriptor_rebase_is_closed_and_requires_every_retained_owner() {
+        let mut packet = norito::json!({ "lock": { "fd": 7 }, "fence": { "kind": "absent", "value": { "directory_fd": 8 } }, "source": [{ "fd": 9 }] });
+        let descriptors = BTreeMap::from([(7, 17), (8, 18), (9, 19)]);
+        rebase_descriptors(&mut packet, &descriptors).unwrap();
+        assert_eq!(
+            packet.get("lock").unwrap().get("fd").unwrap().as_u64(),
+            Some(17)
+        );
+        assert_eq!(
+            packet
+                .get("fence")
+                .unwrap()
+                .get("value")
+                .unwrap()
+                .get("directory_fd")
+                .unwrap()
+                .as_u64(),
+            Some(18)
+        );
+        let mut unowned = norito::json!({ "fd": 10 });
+        assert!(rebase_descriptors(&mut unowned, &descriptors).is_err());
+        let mut wrong_wire = norito::json!({ "fd": "7" });
+        assert!(rebase_descriptors(&mut wrong_wire, &descriptors).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_public_pin_rejects_digest_snapshot_and_path_substitution() {
+        let directory = tempfile::Builder::new()
+            .prefix(".native-edge-pin-")
+            .tempdir_in(std::env::var_os("HOME").unwrap())
+            .unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let path = directory.path().join("input.json");
+        fs::write(&path, b"first-native-record").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut pin = PublicPin::open(&path, 128, true).unwrap();
+        let reference = pin.reference.clone();
+        assert_eq!(pin.bytes(128).unwrap(), b"first-native-record");
+        assert!(pin.bytes(8).is_err());
+        let original = directory.path().join("original.json");
+        fs::rename(&path, &original).unwrap();
+        fs::write(&path, b"second-native-record").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(pin.revalidate().is_err());
+        assert!(PublicPin::expected(&reference, true).is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"first-native-record");
+        assert_eq!(fs::read(&path).unwrap(), b"second-native-record");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovered_journal_retains_the_unlinked_raw_predecessor_and_exact_successor() {
+        let directory = tempfile::Builder::new()
+            .prefix(".native-journal-successor-")
+            .tempdir_in(std::env::var_os("HOME").unwrap())
+            .unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let path = directory.path().join("journal.ndjson");
+        let displaced = directory.path().join("displaced.ndjson");
+        let first = b"{\"sequence\":1}\n";
+        fs::write(&path, first).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut predecessor = PublicPin::open(&path, 256, true).unwrap();
+        let mut unchanged = PublicPin::expected(&predecessor.reference, true).unwrap();
+        admit_owned_journal_successor(&mut predecessor, &mut unchanged).unwrap();
+        fs::rename(&path, &displaced).unwrap();
+        fs::write(&path, [first.as_slice(), b"{\"sequence\":2}\n"].concat()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut successor = PublicPin::open(&path, 256, true).unwrap();
+        assert!(admit_owned_journal_successor(&mut predecessor, &mut successor).is_err());
+        fs::remove_file(&displaced).unwrap();
+        admit_owned_journal_successor(&mut predecessor, &mut successor).unwrap();
+        fs::write(&path, b"foreign-prefix\n{\"sequence\":2}\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut foreign = PublicPin::open(&path, 256, true).unwrap();
+        assert!(admit_owned_journal_successor(&mut predecessor, &mut foreign).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reconciliation_retains_the_main_directory_journal_and_child_publication() {
+        let directory = tempfile::Builder::new()
+            .prefix(".native-reconcile-layout-")
+            .tempdir_in(std::env::var_os("HOME").unwrap())
+            .unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let includes = directory.path().join("servers");
+        fs::create_dir(&includes).unwrap();
+        fs::set_permissions(&includes, fs::Permissions::from_mode(0o700)).unwrap();
+        let operation = "b".repeat(32);
+        let journal = directory.path().join(format!(
+            ".taira-native-nginx-apply-{operation}.receipt.ndjson"
+        ));
+        fs::write(&journal, b"retained-public-owner-journal\n").unwrap();
+        fs::set_permissions(&journal, fs::Permissions::from_mode(0o600)).unwrap();
+        let public = includes.join("taira-public.conf");
+        fs::write(&public, b"server { listen 8443; }\n").unwrap();
+        fs::set_permissions(&public, fs::Permissions::from_mode(0o644)).unwrap();
+        let original = norito::json!({ "operation_id": operation, "native": {"directory":{"path":(directory.path().to_string_lossy().into_owned())}}, "destination":{"directory":{"path":(includes.to_string_lossy().into_owned())},"basename":"taira-public.conf"},"publication":{"kind":"create"} });
+        let result = reconcile_plan(&original).unwrap();
+        let prior = result.get("publication").unwrap().get("prior").unwrap();
+        assert_eq!(
+            prior.get("journal").unwrap().get("path").unwrap().as_str(),
+            journal.to_str()
+        );
+        let public_ref = prior.get("publication").unwrap().as_object().unwrap();
+        assert_eq!(
+            public_ref
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["identity", "sha256"])
+        );
+        assert_eq!(
+            public_ref.get("sha256").unwrap().as_str(),
+            Some(sha256_hex(b"server { listen 8443; }\n").as_str())
+        );
+        assert_eq!(
+            fs::read(&journal).unwrap(),
+            b"retained-public-owner-journal\n"
+        );
+        assert!(!includes.join(journal.file_name().unwrap()).exists());
+    }
+
+    #[test]
+    fn completion_plan_requires_explicit_effect_and_exact_incumbent_join() {
+        let inventory = super::super::super::sample_inventory_fixture();
+        let incumbent = inventory
+            .edge
+            .native_capability
+            .incumbent
+            .claims
+            .owned_publication;
+        let mut plan = protocol::NativeNginxCompletionPlanV1 {
+            schema: "iroha.taira.public-reset.native-nginx-completion-plan.v1".into(),
+            nginx: norito::json!({"schema":"iroha.taira.native-nginx-apply.plan.v1","provider":"macstadium-dublin","host_kind":"macos","operation_id":(&incumbent.operation_id),"publication":{"kind":"reconcile","prior":{"operation_id":(&incumbent.operation_id)}}}),
+            publication_effect: protocol::NativePublicationEffectV1::NotRequested {
+                intended_operation_id: "b".repeat(32),
+                incumbent,
+            },
+            completion_journal_basename: "native-completion.ndjson".into(),
+        };
+        plan.validate(&"b".repeat(32)).unwrap();
+        let mut wire: json::Value =
+            json::from_slice(json::to_json(&plan).unwrap().as_bytes()).unwrap();
+        wire.as_object_mut().unwrap().remove("publication_effect");
+        assert!(
+            json::from_slice::<protocol::NativeNginxCompletionPlanV1>(
+                json::to_json(&wire).unwrap().as_bytes()
+            )
+            .is_err()
+        );
+        plan.publication_effect = protocol::NativePublicationEffectV1::Owned;
+        assert!(plan.validate(&"b".repeat(32)).is_err());
+    }
 
     #[test]
     fn apply_plan_binds_the_admitted_native_publication_destination() {
@@ -1631,8 +2473,8 @@ mod tests {
             "host_kind": "macos",
             "operation_id": ("a".repeat(32)),
             "candidate": {
-                "path": (selected.remote_path),
-                "sha256": (selected.sha256)
+                "path": (&selected.remote_path),
+                "sha256": (&selected.sha256)
             },
             "destination": {
                 "directory": {"path": (destination.parent().unwrap().to_str().unwrap())},

@@ -1211,6 +1211,132 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o775)
         self.assertEqual(list(parent.iterdir()), [])
 
+    @unittest.skipUnless(sys.platform == 'darwin' and os.geteuid() != 0,
+                         'Darwin directory publication requires a non-root native filesystem test')
+    def test_darwin_readonly_directory_rename_and_real_signed_source_publication(self):
+        stage = self.root / 'native-readonly-directory'
+        stage.mkdir(mode=0o700)
+        stage.chmod(0o500)
+        try:
+            os.rename(stage, self.root / 'native-readonly-published')
+        except PermissionError:
+            # The approved deployment Mac refuses this rename. Some Darwin
+            # filesystems permit it; publication must work on both natively.
+            stage.chmod(0o700)
+            os.rename(stage, self.root / 'native-readonly-published')
+        self.assertTrue((self.root / 'native-readonly-published').is_dir())
+        commit, files = self.controller_fixture()
+        key = self.root / 'fixture-ssh-signing-key'
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)],
+                       check=True, capture_output=True, timeout=10)
+        allowed = self.root / 'fixture-allowed-signers'
+        allowed.write_bytes(b'fixture@example.invalid ' + key.with_suffix('.pub').read_bytes())
+        for name, value in [('gpg.format', 'ssh'), ('user.signingkey', str(key)),
+                            ('gpg.ssh.allowedSignersFile', str(allowed))]:
+            self.fixture_git('config', name, value)
+        self.fixture_git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                         'commit', '--allow-empty', '-S', '-m', 'real native signed source')
+        commit = self.fixture_git('rev-parse', 'HEAD').decode()
+        release.git(self.root, 'verify-commit', commit)
+        self.assertTrue(release.git(self.root, 'show', '--no-patch', '--format=%GF', commit))
+        with release.source_lane(self.root, self.target) as (source, _):
+            release.capture_source(self.root, source, self.target, commit,
+                                   release.commit_entries(self.root, commit))
+            self.assertEqual((source / 'source.rs').read_bytes(), files['source.rs'])
+            self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o500)
+            self.assertEqual(release.read_record(source.parent / 'source-state.json'), {'commit': commit})
+
+    def test_source_publication_keeps_original_root_fd_until_readonly_checkpoint(self):
+        entries = self.source_entries({'deep/source.rs': ('100644', b'committed source')})
+        publish, record = release.publish_directory_noreplace, release.write_record
+        held = []
+        with release.source_lane(self.root, self.target) as (source, _):
+            def observe_publish(stage, destination, **kwargs):
+                self.assertEqual(destination, source)
+                self.assertEqual(stat.S_IMODE(stage.stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE((stage / 'deep').stat().st_mode), 0o500)
+                self.assertEqual(stat.S_IMODE((stage / 'deep/source.rs').stat().st_mode), 0o400)
+                fd = os.dup(kwargs['stage_fd'])
+                held.append(fd)
+                self.assertEqual(release.file_identity(os.fstat(fd)), release.file_identity(stage.lstat()))
+                return publish(stage, destination, **kwargs)
+            def observe_checkpoint(path, value):
+                if path.name.startswith('source-state.pending-'):
+                    self.assertEqual(stat.S_IMODE(os.fstat(held[0]).st_mode), 0o500)
+                    self.assertEqual(release.file_identity(os.fstat(held[0])),
+                                     release.file_identity(source.lstat()))
+                return record(path, value)
+            try:
+                with patch.object(release, 'publish_directory_noreplace', side_effect=observe_publish), \
+                     patch.object(release, 'write_record', side_effect=observe_checkpoint):
+                    release.capture_source(self.root, source, self.target, 'a' * 40, entries)
+                release.frozen_snapshot(source, entries, self.target)
+            finally:
+                for fd in held:
+                    os.close(fd)
+
+    def test_source_root_substitution_before_publication_never_creates_checkpoint(self):
+        entries = self.source_entries({'deep/source': ('100644', b'original')})
+        publish = release.PrivateSourceTree.publish
+        foreign = []
+        with release.source_lane(self.root, self.target) as (source, _):
+            def substitute(writer, destination):
+                original = writer.root
+                original.rename(original.with_name(original.name + '-original'))
+                original.mkdir(mode=0o700)
+                (original / 'foreign').write_bytes(b'preserve foreign root')
+                foreign.append(original)
+                return publish(writer, destination)
+            with patch.object(release.PrivateSourceTree, 'publish', new=substitute), \
+                 self.assertRaisesRegex(release.PrepareError, 'replaced|custody changed'):
+                release.capture_source(self.root, source, self.target, 'a' * 40, entries)
+            self.assertFalse(source.exists())
+            self.assertFalse((source.parent / 'source-state.json').exists())
+            self.assertFalse(list(source.parent.glob('source-state.pending-*')))
+            self.assertEqual(stat.S_IMODE(foreign[0].stat().st_mode), 0o700)
+            self.assertEqual((foreign[0] / 'foreign').read_bytes(), b'preserve foreign root')
+
+    def test_source_root_substitution_during_final_freeze_never_creates_checkpoint(self):
+        entries = self.source_entries({'deep/source': ('100644', b'original')})
+        fsync = release.os.fsync
+        attacked = False
+        with release.source_lane(self.root, self.target) as (source, _):
+            def substitute(fd):
+                nonlocal attacked
+                info = os.fstat(fd)
+                if (not attacked and source.exists() and stat.S_ISDIR(info.st_mode)
+                        and info.st_ino == source.stat().st_ino
+                        and stat.S_IMODE(info.st_mode) == 0o500):
+                    attacked = True
+                    os.fchmod(fd, 0o700)
+                    source.rename(source.with_name('original-published-source'))
+                    os.fchmod(fd, 0o500)
+                    source.mkdir(mode=0o700)
+                    (source / 'foreign').write_bytes(b'preserve replacement')
+                fsync(fd)
+            with patch.object(release.os, 'fsync', side_effect=substitute), \
+                 self.assertRaisesRegex(release.PrepareError, 'replaced|custody changed'):
+                release.capture_source(self.root, source, self.target, 'a' * 40, entries)
+            self.assertTrue(attacked)
+            self.assertFalse((source.parent / 'source-state.json').exists())
+            self.assertFalse(list(source.parent.glob('source-state.pending-*')))
+            self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o700)
+            self.assertEqual((source / 'foreign').read_bytes(), b'preserve replacement')
+
+    def test_source_publication_refuses_even_empty_concurrent_destination(self):
+        entries = self.source_entries({'source': ('100644', b'original')})
+        publish = release.PrivateSourceTree.publish
+        with release.source_lane(self.root, self.target) as (source, _):
+            def occupy(writer, destination):
+                destination.mkdir(mode=0o700)
+                return publish(writer, destination)
+            with patch.object(release.PrivateSourceTree, 'publish', new=occupy), \
+                 self.assertRaises(release.ReleaseArtifactError):
+                release.capture_source(self.root, source, self.target, 'a' * 40, entries)
+            self.assertEqual(list(source.iterdir()), [])
+            self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o700)
+            self.assertFalse((source.parent / 'source-state.json').exists())
+
     def test_fixed_capture_reads_git_objects_and_survives_working_source_changes(self):
         entries = self.source_entries({"source.rs": ("100644", b"signed source"),
                                        "run.sh": ("100755", b"#!/bin/sh\nexit 0\n"),
@@ -1514,12 +1640,12 @@ class TairaPrepareTests(unittest.TestCase):
         with release.source_lane(self.root, self.target) as (source, _fd):
             release.capture_source(self.root, source, self.target, "a" * 40, entries)
             updated = self.source_entries({"source.rs": ("100644", b"new")})
-            rename = release.os.rename
-            def fail_publication(src, dst):
+            publish = release.publish_directory_noreplace
+            def fail_publication(src, dst, **kwargs):
                 if Path(dst) == source:
                     raise OSError("fixture interrupted source publication")
-                return rename(src, dst)
-            with patch.object(release.os, "rename", side_effect=fail_publication), \
+                return publish(src, dst, **kwargs)
+            with patch.object(release, "publish_directory_noreplace", side_effect=fail_publication), \
                  patch.object(release, "commit_entries", return_value=entries):
                 with self.assertRaisesRegex(OSError, "interrupted"):
                     release.capture_source(self.root, source, self.target, "b" * 40, updated)
@@ -2356,7 +2482,8 @@ class TairaPrepareTests(unittest.TestCase):
                 else:
                     relative = next(path for path, identity in writer.directories.items()
                                     if writer.identity(info) == identity)
-                    self.assertEqual(stat.S_IMODE(info.st_mode), 0o500)
+                    self.assertEqual(stat.S_IMODE(info.st_mode),
+                                     0o700 if relative == Path('.') else 0o500)
                     if relative == Path('deep/nested'):
                         self.assertEqual(info.st_mtime_ns, stamp)
                     synced.append(('directory', str(relative)))

@@ -11,6 +11,9 @@ on:
       - "scripts/tests/archive_norito_xcframework_test.py"
       - "scripts/validate_norito_bridge_archive.py"
       - "scripts/tests/validate_norito_bridge_archive_test.py"
+      - "scripts/check_swift_release_consumers.py"
+      - "scripts/tests/check_swift_release_consumers_test.py"
+      - "scripts/fixtures/swift_release_consumers/**"
       - "scripts/tests/norito_bridge_source_seal_test.py"
       - "scripts/norito_bridge_apple_slice_handoff.py"
       - "scripts/tests/norito_bridge_apple_slice_handoff_test.py"
@@ -172,6 +175,8 @@ jobs:
         run: python3 -I -S -B scripts/tests/archive_norito_xcframework_test.py
       - name: NoritoBridge authenticated SwiftPM archive fixtures
         run: python3 -I -S -B scripts/tests/validate_norito_bridge_archive_test.py
+      - name: SwiftPM Release consumer runner fixtures
+        run: python3 -I -S -B scripts/tests/check_swift_release_consumers_test.py
       - name: NoritoBridge source seal fixtures
         run: python3 -I -S -B scripts/tests/norito_bridge_source_seal_test.py
       - name: NoritoBridge Apple slice handoff fixtures
@@ -348,7 +353,7 @@ jobs:
           --scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR"
       - name: Package Apple mobile SDK artifact
         run: bash scripts/package_mobile_sdk_artifacts.sh --apple --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" --version "$MOBILE_SDK_VERSION"
-      - name: Consume packaged XCFramework archive with SwiftPM
+      - name: Execute packaged ZIP and public Swift SDK consumers in Release
         shell: bash
         run: |
           bridge_version="$(python3 -I -S -B - <<'PY'
@@ -383,52 +388,17 @@ jobs:
               --root "$GITHUB_WORKSPACE" \
               --archive "$archive" \
               --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" \
-              --scratch-dir "$NORITO_BRIDGE_BUILD_DIR"
-          /usr/bin/unzip -t "$archive"
-          consumer="$(mktemp -d "$RUNNER_TEMP/norito-bridge-archive-consumer.XXXXXXXX")"
-          trap 'rm -rf "$consumer"' EXIT
-          cp "$archive" "$consumer/NoritoBridge.xcframework.zip"
-          mkdir -p "$consumer/Sources/ArchiveConsumer"
-          cat > "$consumer/Package.swift" <<'SWIFT'
-          // swift-tools-version: 6.0
-          import PackageDescription
-
-          let package = Package(
-              name: "NoritoBridgeArchiveConsumer",
-              platforms: [.macOS(.v12)],
-              products: [
-                  .library(name: "ArchiveConsumer", targets: ["ArchiveConsumer"]),
-              ],
-              targets: [
-                  .binaryTarget(
-                      name: "NoritoBridge",
-                      path: "NoritoBridge.xcframework.zip"
-                  ),
-                  .target(
-                      name: "ArchiveConsumer",
-                      dependencies: ["NoritoBridge"],
-                      linkerSettings: [
-                          .linkedFramework("Foundation", .when(platforms: [.iOS, .macOS])),
-                          .linkedFramework("Security", .when(platforms: [.iOS, .macOS])),
-                          .linkedFramework("Metal", .when(platforms: [.iOS, .macOS])),
-                          .linkedFramework("CoreGraphics", .when(platforms: [.iOS, .macOS])),
-                          .linkedFramework("Accelerate", .when(platforms: [.iOS, .macOS])),
-                      ]
-                  ),
-              ]
-          )
-          SWIFT
-          cat > "$consumer/Sources/ArchiveConsumer/ArchiveConsumer.swift" <<'SWIFT'
-          import NoritoBridge
-
-          public func archivedNativeBridgeAbiVersion() -> UInt32 {
-              connect_norito_bridge_abi_version()
-          }
-          SWIFT
-          swift build \
-            --package-path "$consumer" \
-            --disable-automatic-resolution \
-            --scratch-path "$RUNNER_TEMP/norito-bridge-archive-consumer-build"
+              --scratch-dir "$NORITO_BRIDGE_BUILD_DIR" > "$RUNNER_TEMP/swift-release-archive-verification.json"
+          archive_sha256="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c \
+            'import json,sys; print(json.load(open(sys.argv[1]))["archive_sha256"])' \
+            "$RUNNER_TEMP/swift-release-archive-verification.json")"
+          "$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/check_swift_release_consumers.py \
+            --archive "$archive" \
+            --archive-sha256 "$archive_sha256" \
+            --sdk-path "$GITHUB_WORKSPACE/IrohaSwift" \
+            --work-dir "$RUNNER_TEMP/iroha-swift-release-consumers" \
+            --archive-scratch "$RUNNER_TEMP/norito-bridge-archive-consumer-build" \
+            --sdk-scratch "$RUNNER_TEMP/iroha-swift-sdk-release-consumer-build"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mobile-sdk-apple-${{ env.MOBILE_SDK_VERSION }}

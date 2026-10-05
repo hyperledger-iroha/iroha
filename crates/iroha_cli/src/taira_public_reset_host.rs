@@ -10,6 +10,13 @@ pub(super) mod dispatcher_transition;
 mod first_boot;
 #[path = "taira_public_reset_native_edge.rs"]
 mod native_edge;
+pub(super) use native_edge::inspect_native_owner_inputs;
+pub(super) use native_edge::{
+    AdoptNativeEdgeOwner, AuthorizeNativeEdgeOwner, CaptureNativePython,
+    InitializeNativeEdgeCustody, PrepareNativeEdgeOwner, adopt_native_edge_owner,
+    authorize_native_edge_owner, capture_native_python, initialize_native_edge_custody,
+    prepare_native_edge_owner,
+};
 #[path = "taira_public_reset_host_phases.rs"]
 mod phases;
 
@@ -130,7 +137,6 @@ const PREPARED_MUTATION_STATE_SCHEMA_V1: &str =
 const SSH: &str = "/usr/bin/ssh";
 const SYSTEMCTL: &str = "/usr/bin/systemctl";
 const SYSTEMD_RUN: &str = "/usr/bin/systemd-run";
-const NGINX: &str = "/usr/sbin/nginx";
 const FIXED_DISPATCHER: &str = "/usr/local/libexec/iroha-taira-public-reset-v1";
 const HOST_DISPATCH_SUFFIX: &str = "taira public-reset host-dispatch --protocol v1";
 const MAX_PROCESS_OUTPUT: usize = 4 * 1024 * 1024;
@@ -3727,14 +3733,6 @@ fn require_stream_eof(body: &mut impl Read) -> Result<()> {
     Ok(())
 }
 
-fn edge_forward_operation(edge: &EdgeV1) -> (&'static str, &'static str) {
-    if edge.is_vacant() {
-        ("edge-first-start", "start")
-    } else {
-        ("edge-cutover-reload", "reload")
-    }
-}
-
 fn require_path_absent(path: &Path, label: &str) -> Result<()> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -3755,10 +3753,18 @@ fn require_empty_root_directory(path: &Path, label: &str) -> Result<()> {
     require_empty_directory_contents(path, label)
 }
 
-fn refuse_guest_edge_execution() -> Result<()> {
+fn refuse_guest_edge_execution<T>() -> Result<T> {
     Err(eyre!(
         "native Mac edge actions require the independently admitted native dispatcher"
     ))
+}
+
+/// Guest executors must refuse native edge targets before inspecting Linux paths.
+fn require_guest_validator_target(admitted: &HostAdmission) -> Result<()> {
+    match &admitted.target {
+        HostTarget::Validator(_) => Ok(()),
+        HostTarget::Edge(_) => refuse_guest_edge_execution(),
+    }
 }
 
 fn validate_vacant_unit_evidence(bytes: &[u8], allow_failed: bool) -> Result<Option<PathBuf>> {
@@ -3821,10 +3827,7 @@ fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<(
             )?;
             validator.systemd_unit.as_str()
         }
-        HostTarget::Edge(edge) => {
-            refuse_guest_edge_execution()?;
-            "nginx.service"
-        }
+        HostTarget::Edge(_) => return refuse_guest_edge_execution(),
     };
     require_terminal_unit_absence(admitted, unit, allow_failed)
 }
@@ -4040,6 +4043,7 @@ fn require_no_live_target_references(_admitted: &HostAdmission) -> Result<()> {
 }
 
 fn require_vacant_host_precondition(admitted: &HostAdmission) -> Result<()> {
+    require_guest_validator_target(admitted)?;
     let service = Path::new(admitted.target.service_root());
     let state = Path::new(admitted.target.state_root());
     let guard = Path::new(admitted.target.reset_guard());
@@ -4071,43 +4075,7 @@ fn require_vacant_host_precondition(admitted: &HostAdmission) -> Result<()> {
             }
         }
     }
-    if let HostTarget::Edge(edge) = &admitted.target {
-        let route = Path::new(&edge.nginx_config);
-        let parent = route
-            .parent()
-            .ok_or_else(|| eyre!("edge route has no parent"))?;
-        require_root_directory(parent, false, "vacant edge route parent")?;
-        if parent.metadata()?.dev() != guard.metadata()?.dev() {
-            return Err(eyre!(
-                "vacant edge route and guard require one atomic filesystem"
-            ));
-        }
-        require_path_absent(route, "vacant edge route")?;
-        for name in [
-            ".taira.conf.public-reset.next",
-            ".taira.conf.public-reset-rollback.next",
-        ] {
-            require_path_absent(&parent.join(name), "vacant edge staging namespace")?;
-        }
-    }
     require_vacant_unit(admitted, false)
-}
-
-fn require_absent_or_exact_edge_candidate(edge: &EdgeV1) -> Result<()> {
-    let path = Path::new(&edge.nginx_config);
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).wrap_err("inspect first edge route"),
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-            let expected = artifact(&edge.artifacts, "edge_config")?;
-            let (_, snapshot) = open_pinned_regular(path, "first edge route")?;
-            if snapshot.uid != 0 || snapshot.nlink != 1 || snapshot.mode & 0o022 != 0 {
-                return Err(eyre!("first edge route custody drifted"));
-            }
-            verify_regular_hash(path, &expected.sha256)
-        }
-        Ok(_) => Err(eyre!("first edge route has an unexpected occupant")),
-    }
 }
 
 fn ensure_vacant_original_state_before_touch(
@@ -4151,61 +4119,6 @@ fn ensure_vacant_original_state_before_touch(
         Err(error) => return Err(error).wrap_err("inspect original vacant state identity"),
     }
     Ok(())
-}
-
-fn first_edge_start_was_prepared(admitted: &HostAdmission, edge: &EdgeV1) -> Result<bool> {
-    let (label, verb) = edge_forward_operation(edge);
-    let directory = ensure_host_receipt_dir(admitted)?;
-    let path = directory.join(manager_intent_name(label)?);
-    match fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).wrap_err("inspect first edge manager intent"),
-        Ok(_) => {
-            let (intent, _) =
-                read_private_json::<ManagerIntentV1>(&path, "first edge manager intent")?;
-            validate_manager_intent(admitted, label, verb, "nginx.service", &intent)?;
-            Ok(true)
-        }
-    }
-}
-
-fn sync_existing_file_publication(
-    destination: &Path,
-    expected_sha256: &str,
-    source_parent: &Path,
-    sync_parent: impl Fn(&Path) -> Result<()>,
-) -> Result<()> {
-    sync_verified_regular_hash(destination, expected_sha256)?;
-    let destination_parent = destination
-        .parent()
-        .ok_or_else(|| eyre!("published file has no parent"))?;
-    // A prior rename can be visible before either namespace reached disk.
-    // Both parents must be durable before a retry admits a manager intent.
-    sync_parent(destination_parent)?;
-    sync_parent(source_parent)
-}
-
-fn publish_first_edge_config(
-    admitted: &HostAdmission,
-    edge: &EdgeV1,
-    source: &Path,
-    rollback: &Path,
-) -> Result<()> {
-    let config = artifact(&edge.artifacts, "edge_config")?;
-    let route = Path::new(&edge.nginx_config);
-    require_absent_or_exact_edge_candidate(edge)?;
-    if fs::symlink_metadata(route).is_ok() {
-        return sync_existing_file_publication(route, &config.sha256, rollback, sync_directory);
-    }
-    // The only partial copy lives inside this authorization's root-private
-    // rollback namespace. The public path is published once, without replace.
-    let next = rollback.join("first-edge-config.next");
-    if !reconcile_verified_staging(&next, config.size, &config.sha256)? {
-        copy_verified_file(source, &next, config)?;
-    }
-    ensure_action_deadline(admitted)?;
-    rename_noreplace(&next, route)?;
-    verify_regular_hash(route, &config.sha256)
 }
 
 fn verify_or_recover_first_release_staging(root: &Path, admitted: &HostAdmission) -> Result<()> {
@@ -4308,31 +4221,8 @@ fn quarantine_vacant_release(admitted: &HostAdmission, rollback: &Path) -> Resul
     Ok(())
 }
 
-fn rollback_vacant_edge(admitted: &HostAdmission, edge: &EdgeV1, rollback: &Path) -> Result<()> {
-    stop_unit(admitted, "rollback-edge-stop", "nginx.service")?;
-    require_vacant_unit(admitted, true)?;
-    let route = Path::new(&edge.nginx_config);
-    let quarantine = rollback.join("first-edge-config.after");
-    if fs::symlink_metadata(route).is_ok() {
-        require_absent_or_exact_edge_candidate(edge)?;
-        require_path_absent(&quarantine, "first edge route quarantine")?;
-        rename_noreplace(route, &quarantine)?;
-        sync_directory(route.parent().expect("edge route has parent"))?;
-        sync_directory(rollback)?;
-    }
-    if fs::symlink_metadata(&quarantine).is_ok() {
-        verify_regular_hash(
-            &quarantine,
-            &artifact(&edge.artifacts, "edge_config")?.sha256,
-        )?;
-        sync_completed_rename(route, &quarantine, sync_directory)?;
-    }
-    require_path_absent(route, "rolled-back first edge route")?;
-    quarantine_vacant_release(admitted, rollback)?;
-    require_vacant_rollback_postcondition(admitted)
-}
-
 fn require_vacant_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
+    require_guest_validator_target(admitted)?;
     let service = Path::new(admitted.target.service_root());
     require_path_absent(&service.join("current"), "rolled-back vacant selector")?;
     require_path_absent(
@@ -4384,15 +4274,7 @@ fn require_vacant_rollback_postcondition(admitted: &HostAdmission) -> Result<()>
                 &validator.systemd_unit,
             )?;
         }
-        HostTarget::Edge(edge) => {
-            require_path_absent(Path::new(&edge.nginx_config), "restored vacant edge route")?;
-            require_session_manager_operation_applied(
-                admitted,
-                "rollback-edge-stop",
-                "stop",
-                "nginx.service",
-            )?;
-        }
+        HostTarget::Edge(_) => return refuse_guest_edge_execution(),
     }
     require_vacant_unit(admitted, true)?;
     stopped_runtime::reconcile(admitted, false)
@@ -4469,6 +4351,7 @@ fn reject_retired_epoch_worker_paths(state: &Path, unit: &Path) -> Result<()> {
 }
 
 fn host_preflight(admitted: &HostAdmission) -> Result<()> {
+    require_guest_validator_target(admitted)?;
     reject_retired_epoch_worker_paths(
         Path::new("/var/lib/taira-epoch-supervisor"),
         Path::new("/etc/systemd/system/iroha-taira-epoch-supervisor.service"),
@@ -4510,7 +4393,7 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     let current = validated_current_release_target(admitted)?;
     let expected_rollback = match &admitted.target {
         HostTarget::Validator(validator) => Path::new(&validator.admitted_release()?.release_root),
-        HostTarget::Edge(edge) => Path::new(&edge.admitted_release()?.release_root),
+        HostTarget::Edge(_) => return refuse_guest_edge_execution(),
     };
     if current != expected_rollback {
         return Err(eyre!(
@@ -4521,34 +4404,7 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
         HostTarget::Validator(validator) => {
             verify_occupied_predecessor(admitted, validator)?;
         }
-        HostTarget::Edge(edge) => {
-            refuse_guest_edge_execution()?;
-            let root = Path::new(&edge.admitted_release()?.release_root);
-            require_root_directory(root, false, "edge rollback release")?;
-            verify_regular_hash(
-                &root.join("bin/iroha"),
-                &edge.admitted_release()?.cli_sha256,
-            )?;
-            verify_regular_hash(
-                &root.join("taira.conf"),
-                &edge.admitted_release()?.config_sha256,
-            )?;
-            verify_regular_hash(
-                Path::new(&edge.nginx_config),
-                &edge.admitted_release()?.config_sha256,
-            )?;
-            run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
-            let active = run_host_command(
-                SYSTEMCTL,
-                &["show", "--property=ActiveState", "--value", "nginx.service"],
-                admitted.action_deadline,
-            )?;
-            if active != b"active\n" {
-                return Err(eyre!(
-                    "public edge nginx must be active with the signed rollback configuration"
-                ));
-            }
-        }
+        HostTarget::Edge(_) => return refuse_guest_edge_execution(),
     }
     Ok(())
 }
@@ -4714,6 +4570,98 @@ fn sync_verified_regular_hash(path: &Path, expected: &str) -> Result<()> {
     }
     file.sync_all()?;
     ensure_pinned_unchanged(path, "host staging file", &file, &snapshot)
+}
+
+/// Finish the file and both namespace barriers of a completed guest publication.
+fn sync_existing_file_publication(
+    destination: &Path,
+    expected_sha256: &str,
+    source_parent: &Path,
+    sync_parent: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
+    sync_verified_regular_hash(destination, expected_sha256)?;
+    let destination_parent = destination
+        .parent()
+        .ok_or_else(|| eyre!("published file has no parent"))?;
+    // A prior rename can be visible before either namespace reached disk.
+    // Both parents must be durable before a retry admits a manager intent.
+    sync_parent(destination_parent)?;
+    sync_parent(source_parent)
+}
+
+/// Retain the exact occupied validator unit before its guest publication.
+fn snapshot_root_file(
+    admitted: &HostAdmission,
+    source: &Path,
+    destination: &Path,
+    expected_sha256: &str,
+) -> Result<()> {
+    require_guest_validator_target(admitted)?;
+    if destination.exists() {
+        sync_verified_regular_hash(destination, expected_sha256)?;
+        return sync_directory(
+            destination
+                .parent()
+                .ok_or_else(|| eyre!("rollback snapshot has no parent"))?,
+        );
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| eyre!("rollback snapshot has no parent"))?;
+    require_root_directory(parent, false, "rollback snapshot parent")?;
+    let next = parent.join(".validator-unit.before.next");
+    let (mut input, snapshot) = open_pinned_regular(source, "rollback source")?;
+    if reconcile_verified_staging(&next, snapshot.len, expected_sha256)? {
+        ensure_action_deadline(admitted)?;
+        rename_noreplace(&next, destination)?;
+        return verify_regular_hash(destination, expected_sha256);
+    }
+    #[cfg(unix)]
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&next)?;
+    #[cfg(not(unix))]
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&next)?;
+    std::io::copy(&mut input, &mut output)?;
+    output.sync_all()?;
+    ensure_pinned_unchanged(source, "rollback source", &input, &snapshot)?;
+    verify_regular_hash(&next, expected_sha256)?;
+    ensure_action_deadline(admitted)?;
+    rename_noreplace(&next, destination)?;
+    verify_regular_hash(destination, expected_sha256)
+}
+
+/// Restore a signed validator unit within the guest's retained publication owner.
+fn atomic_replace_verified_file(
+    admitted: &HostAdmission,
+    source: &Path,
+    destination: &Path,
+    artifact: &ArtifactV1,
+) -> Result<()> {
+    require_guest_validator_target(admitted)?;
+    verify_regular_hash(source, &artifact.sha256)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| eyre!("replacement destination has no parent"))?;
+    require_root_directory(parent, false, "replacement parent")?;
+    let next = parent.join(format!(
+        ".{}.public-reset.next",
+        destination
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| eyre!("non-UTF8 replacement name"))?
+    ));
+    if !reconcile_verified_staging(&next, artifact.size, &artifact.sha256)? {
+        copy_verified_file(source, &next, artifact)?;
+    }
+    ensure_action_deadline(admitted)?;
+    fs::rename(&next, destination)?;
+    sync_directory(parent)
 }
 
 fn reconcile_verified_staging(
@@ -5253,7 +5201,9 @@ fn validate_host_progress(admitted: &HostAdmission, progress: &HostProgressV1) -
     }
     let mut unique_touched = BTreeSet::new();
     if progress.touched_hosts.iter().any(|slug| {
-        !unique_touched.insert(slug) || rollback_rank(&admitted.inventory, slug).is_none()
+        !unique_touched.insert(slug)
+            || rollback_rank(&admitted.inventory, slug).is_none()
+            || !plan.iter().any(|key| key.host_slug == *slug)
     }) {
         return Err(eyre!("host touched-target progress is not canonical"));
     }
@@ -5730,6 +5680,7 @@ fn revalidate_cached_action_postcondition(
     admitted: &HostAdmission,
     action: HostAction,
 ) -> Result<()> {
+    require_guest_validator_target(admitted)?;
     ensure_action_deadline(admitted)?;
     let candidate = Path::new(admitted.target.service_root())
         .join("releases")
@@ -5827,30 +5778,7 @@ fn revalidate_cached_action_postcondition(
             require_unit_active(&validator.systemd_unit, admitted.action_deadline)?;
             attest_validator_process(admitted, validator, &candidate, true)
         }
-        HostAction::EdgeCutover | HostAction::EdgeVerify => {
-            let HostTarget::Edge(edge) = &admitted.target else {
-                return Err(eyre!("cached edge receipt requires the edge target"));
-            };
-            verify_installed_release(admitted, &candidate)?;
-            if validated_current_release_target(admitted)? != candidate {
-                return Err(eyre!(
-                    "cached edge selector no longer selects the candidate"
-                ));
-            }
-            verify_regular_hash(
-                Path::new(&edge.nginx_config),
-                &artifact(&edge.artifacts, "edge_config")?.sha256,
-            )?;
-            require_session_manager_operation_applied(
-                admitted,
-                edge_forward_operation(edge).0,
-                edge_forward_operation(edge).1,
-                "nginx.service",
-            )?;
-            require_unit_active("nginx.service", admitted.action_deadline)?;
-            run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
-            Ok(())
-        }
+        HostAction::EdgeCutover | HostAction::EdgeVerify => refuse_guest_edge_execution(),
         HostAction::Seal => verify_success_seal_postcondition(admitted),
         // Cleanup replay proves only the immutable plan absent. A later aged
         // candidate is outside the already-published receipt and is untouched.
@@ -5898,6 +5826,7 @@ fn revalidate_current_target_postcondition(
 }
 
 fn verify_conservative_rollback_absence(admitted: &HostAdmission) -> Result<()> {
+    require_guest_validator_target(admitted)?;
     if admitted.target.is_vacant() {
         require_vacant_host_precondition(admitted)?;
         if let HostTarget::Validator(validator) = &admitted.target {
@@ -5933,24 +5862,12 @@ fn verify_conservative_rollback_absence(admitted: &HostAdmission) -> Result<()> 
             }
             verify_occupied_predecessor(admitted, validator)
         }
-        HostTarget::Edge(edge) => {
-            if selected != Path::new(&edge.admitted_release()?.release_root) {
-                return Err(eyre!(
-                    "conservative edge rollback has a non-rollback current selector"
-                ));
-            }
-            verify_regular_hash(
-                Path::new(&edge.nginx_config),
-                &edge.admitted_release()?.config_sha256,
-            )?;
-            require_unit_active("nginx.service", admitted.action_deadline)?;
-            run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
-            Ok(())
-        }
+        HostTarget::Edge(_) => refuse_guest_edge_execution(),
     }
 }
 
 fn verify_success_seal_postcondition(admitted: &HostAdmission) -> Result<()> {
+    require_guest_validator_target(admitted)?;
     let candidate = Path::new(admitted.target.service_root())
         .join("releases")
         .join(&admitted.inventory.revision.commit);
@@ -5965,21 +5882,7 @@ fn verify_success_seal_postcondition(admitted: &HostAdmission) -> Result<()> {
             require_unit_active(&validator.systemd_unit, admitted.action_deadline)?;
             attest_validator_process(admitted, validator, &candidate, true)
         }
-        HostTarget::Edge(edge) => {
-            verify_regular_hash(
-                Path::new(&edge.nginx_config),
-                &artifact(&edge.artifacts, "edge_config")?.sha256,
-            )?;
-            require_session_manager_operation_applied(
-                admitted,
-                edge_forward_operation(edge).0,
-                edge_forward_operation(edge).1,
-                "nginx.service",
-            )?;
-            require_unit_active("nginx.service", admitted.action_deadline)?;
-            run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
-            Ok(())
-        }
+        HostTarget::Edge(_) => refuse_guest_edge_execution(),
     }
 }
 
@@ -6033,6 +5936,7 @@ fn execute_host_action(
     action: HostAction,
     body: &mut impl Read,
 ) -> Result<(u64, u64, String)> {
+    require_guest_validator_target(admitted)?;
     ensure_action_deadline(admitted)?;
     let result = match action {
         HostAction::Preflight | HostAction::UnitProbe => {
@@ -6150,30 +6054,7 @@ fn execute_host_action(
             })?;
             Ok((0, 0, "validator restarted".to_owned()))
         }
-        HostAction::EdgeCutover => {
-            let HostTarget::Edge(edge) = &admitted.target else {
-                return Err(eyre!("edge cutover requires the edge target"));
-            };
-            if edge.is_vacant() && !first_edge_start_was_prepared(admitted, edge)? {
-                require_empty_root_directory(Path::new(&edge.state_root), "vacant edge state")?;
-                require_vacant_unit(admitted, false)?;
-                require_absent_or_exact_edge_candidate(edge)?;
-            }
-            install_release(admitted)?;
-            cutover_edge(admitted)?;
-            Ok((0, 0, "edge release cut over and nginx activated".to_owned()))
-        }
-        HostAction::EdgeVerify => {
-            let HostTarget::Edge(edge) = &admitted.target else {
-                return Err(eyre!("edge verify requires the edge target"));
-            };
-            verify_regular_hash(
-                Path::new(&edge.nginx_config),
-                &artifact(&edge.artifacts, "edge_config")?.sha256,
-            )?;
-            run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
-            Ok((0, 0, "edge configuration rehashed and verified".to_owned()))
-        }
+        HostAction::EdgeCutover | HostAction::EdgeVerify => refuse_guest_edge_execution(),
         HostAction::Seal => {
             verify_success_seal_postcondition(admitted)?;
             Ok((0, 0, "deployment success sealed on this target".to_owned()))
@@ -8171,122 +8052,6 @@ fn rollback_nonce_root(admitted: &HostAdmission) -> Result<PathBuf> {
     Ok(root)
 }
 
-fn cutover_edge(admitted: &HostAdmission) -> Result<()> {
-    let HostTarget::Edge(edge) = &admitted.target else {
-        return Err(eyre!("edge cutover requires the edge target"));
-    };
-    let release = Path::new(&edge.service_root)
-        .join("releases")
-        .join(&admitted.inventory.revision.commit);
-    verify_installed_release(admitted, &release)?;
-    let rollback = rollback_nonce_root(admitted)?;
-    if edge.is_vacant() {
-        if first_edge_start_was_prepared(admitted, edge)? {
-            verify_regular_hash(
-                Path::new(&edge.nginx_config),
-                &artifact(&edge.artifacts, "edge_config")?.sha256,
-            )?;
-            let (label, verb) = edge_forward_operation(edge);
-            return run_durable_manager_operation(admitted, label, verb, "nginx.service");
-        }
-        require_vacant_unit(admitted, false)?;
-        publish_first_edge_config(admitted, edge, &release.join("taira.conf"), &rollback)?;
-    } else {
-        let backup = rollback.join("edge-config.before");
-        if !backup.exists() {
-            verify_regular_hash(
-                Path::new(&edge.nginx_config),
-                &edge.admitted_release()?.config_sha256,
-            )?;
-            snapshot_root_file(
-                admitted,
-                Path::new(&edge.nginx_config),
-                &backup,
-                &edge.admitted_release()?.config_sha256,
-            )?;
-        }
-        verify_regular_hash(&backup, &edge.admitted_release()?.config_sha256)?;
-        let config = artifact(&edge.artifacts, "edge_config")?;
-        let source = release.join("taira.conf");
-        atomic_replace_verified_file(admitted, &source, Path::new(&edge.nginx_config), config)?;
-    }
-    run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
-    let (label, verb) = edge_forward_operation(edge);
-    run_durable_manager_operation(admitted, label, verb, "nginx.service")?;
-    Ok(())
-}
-
-fn snapshot_root_file(
-    admitted: &HostAdmission,
-    source: &Path,
-    destination: &Path,
-    expected_sha256: &str,
-) -> Result<()> {
-    if destination.exists() {
-        sync_verified_regular_hash(destination, expected_sha256)?;
-        return sync_directory(
-            destination
-                .parent()
-                .ok_or_else(|| eyre!("rollback snapshot has no parent"))?,
-        );
-    }
-    let parent = destination
-        .parent()
-        .ok_or_else(|| eyre!("rollback snapshot has no parent"))?;
-    require_root_directory(parent, false, "rollback snapshot parent")?;
-    let next = parent.join(".edge-config.before.next");
-    let (mut input, snapshot) = open_pinned_regular(source, "rollback source")?;
-    if reconcile_verified_staging(&next, snapshot.len, expected_sha256)? {
-        ensure_action_deadline(admitted)?;
-        rename_noreplace(&next, destination)?;
-        return verify_regular_hash(destination, expected_sha256);
-    }
-    #[cfg(unix)]
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&next)?;
-    #[cfg(not(unix))]
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&next)?;
-    std::io::copy(&mut input, &mut output)?;
-    output.sync_all()?;
-    ensure_pinned_unchanged(source, "rollback source", &input, &snapshot)?;
-    verify_regular_hash(&next, expected_sha256)?;
-    ensure_action_deadline(admitted)?;
-    rename_noreplace(&next, destination)?;
-    verify_regular_hash(destination, expected_sha256)
-}
-
-fn atomic_replace_verified_file(
-    admitted: &HostAdmission,
-    source: &Path,
-    destination: &Path,
-    artifact: &ArtifactV1,
-) -> Result<()> {
-    verify_regular_hash(source, &artifact.sha256)?;
-    let parent = destination
-        .parent()
-        .ok_or_else(|| eyre!("replacement destination has no parent"))?;
-    require_root_directory(parent, false, "replacement parent")?;
-    let next = parent.join(format!(
-        ".{}.public-reset.next",
-        destination
-            .file_name()
-            .and_then(OsStr::to_str)
-            .ok_or_else(|| eyre!("non-UTF8 replacement name"))?
-    ));
-    if !reconcile_verified_staging(&next, artifact.size, &artifact.sha256)? {
-        copy_verified_file(source, &next, artifact)?;
-    }
-    ensure_action_deadline(admitted)?;
-    fs::rename(&next, destination)?;
-    sync_directory(parent)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ManagerOperationEvidence {
     Absent,
@@ -8653,6 +8418,7 @@ fn submit_durable_manager_operation(
 }
 
 fn reconcile_prior_manager_operations(admitted: &HostAdmission) -> Result<()> {
+    require_guest_validator_target(admitted)?;
     let directory = ensure_host_receipt_dir(admitted)?;
     let operations: Vec<(&str, &str, &str)> = match &admitted.target {
         HostTarget::Validator(validator) => vec![
@@ -8666,10 +8432,7 @@ fn reconcile_prior_manager_operations(admitted: &HostAdmission) -> Result<()> {
             ("install-unit-reload", "daemon-reload", ""),
             ("rollback-unit-reload", "daemon-reload", ""),
         ],
-        HostTarget::Edge(edge) => {
-            let (label, verb) = edge_forward_operation(edge);
-            vec![(label, verb, "nginx.service")]
-        }
+        HostTarget::Edge(_) => return refuse_guest_edge_execution(),
     };
     for (label, verb, target_unit) in operations {
         let path = directory.join(manager_intent_name(label)?);
@@ -9244,6 +9007,7 @@ fn validate_validator_argv(
 }
 
 fn rollback_host(admitted: &HostAdmission) -> Result<()> {
+    require_guest_validator_target(admitted)?;
     reconcile_prior_manager_operations(admitted)?;
     let rollback = rollback_nonce_root(admitted)?;
     match &admitted.target {
@@ -9343,29 +9107,7 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
                 || verify_occupied_predecessor(admitted, validator),
             )
         }
-        HostTarget::Edge(edge) => {
-            if edge.is_vacant() {
-                return rollback_vacant_edge(admitted, edge, &rollback);
-            }
-            verify_regular_hash(
-                &Path::new(&edge.admitted_release()?.release_root).join("bin/iroha"),
-                &edge.admitted_release()?.cli_sha256,
-            )?;
-            verify_regular_hash(
-                &Path::new(&edge.admitted_release()?.release_root).join("taira.conf"),
-                &edge.admitted_release()?.config_sha256,
-            )?;
-            restore_admitted_edge_config(admitted, edge, &rollback, sync_directory)?;
-            select_rollback_release(admitted, Path::new(&edge.admitted_release()?.release_root))?;
-            run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
-            run_durable_manager_operation(
-                admitted,
-                "rollback-edge-reload",
-                "reload",
-                "nginx.service",
-            )?;
-            Ok(())
-        }
+        HostTarget::Edge(_) => refuse_guest_edge_execution(),
     }
 }
 
@@ -9409,37 +9151,8 @@ fn validate_historical_prior_state_marker(
     Ok(())
 }
 
-fn restore_admitted_edge_config(
-    admitted: &HostAdmission,
-    edge: &EdgeV1,
-    rollback: &Path,
-    sync_parent: impl Fn(&Path) -> Result<()>,
-) -> Result<()> {
-    let release = edge.admitted_release()?;
-    let destination = Path::new(&edge.nginx_config);
-    let backup = rollback.join("edge-config.before");
-    if backup.exists() {
-        verify_regular_hash(&backup, &release.config_sha256)?;
-        atomic_restore_file(admitted, &backup, destination, &release.config_sha256)
-    } else if verify_regular_hash(destination, &release.config_sha256).is_err() {
-        atomic_restore_file(
-            admitted,
-            &Path::new(&release.release_root).join("taira.conf"),
-            destination,
-            &release.config_sha256,
-        )
-    } else {
-        // A retry can see the restored prior bytes after rename but before
-        // the route directory reached disk. Finish that publication before
-        // accepting nginx reload or a durable rollback receipt.
-        let parent = destination
-            .parent()
-            .ok_or_else(|| eyre!("restored edge config has no parent"))?;
-        sync_existing_file_publication(destination, &release.config_sha256, parent, sync_parent)
-    }
-}
-
 fn verify_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
+    require_guest_validator_target(admitted)?;
     if admitted.target.is_vacant() {
         return require_vacant_rollback_postcondition(admitted);
     }
@@ -9493,67 +9206,13 @@ fn verify_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
                 },
             )
         }
-        HostTarget::Edge(edge) => {
-            let rollback = Path::new(&edge.admitted_release()?.release_root);
-            if validated_current_release_target(admitted)? != rollback {
-                return Err(eyre!(
-                    "edge rollback selector no longer selects the prior release"
-                ));
-            }
-            verify_regular_hash(
-                Path::new(&edge.nginx_config),
-                &edge.admitted_release()?.config_sha256,
-            )?;
-            require_session_manager_operation_applied(
-                admitted,
-                "rollback-edge-reload",
-                "reload",
-                "nginx.service",
-            )?;
-            require_unit_active("nginx.service", admitted.action_deadline)?;
-            run_host_command(NGINX, &["-t"], admitted.action_deadline)?;
-            Ok(())
-        }
+        HostTarget::Edge(_) => refuse_guest_edge_execution(),
     }
 }
 
 fn select_rollback_release(admitted: &HostAdmission, release: &Path) -> Result<()> {
     require_root_directory(release, false, "authorized rollback release")?;
     select_current_release(admitted, release)
-}
-
-fn atomic_restore_file(
-    admitted: &HostAdmission,
-    source: &Path,
-    destination: &Path,
-    expected_sha256: &str,
-) -> Result<()> {
-    let parent = destination
-        .parent()
-        .ok_or_else(|| eyre!("restore path has no parent"))?;
-    require_root_directory(parent, false, "restore parent")?;
-    let next = parent.join(".taira.conf.public-reset-rollback.next");
-    let (mut input, snapshot) = open_pinned_regular(source, "rollback config")?;
-    if !reconcile_verified_staging(&next, snapshot.len, expected_sha256)? {
-        #[cfg(unix)]
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o640)
-            .open(&next)?;
-        #[cfg(not(unix))]
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&next)?;
-        std::io::copy(&mut input, &mut output)?;
-        output.sync_all()?;
-        ensure_pinned_unchanged(source, "rollback config", &input, &snapshot)?;
-    }
-    verify_regular_hash(&next, expected_sha256)?;
-    ensure_action_deadline(admitted)?;
-    fs::rename(&next, destination)?;
-    sync_directory(parent)
 }
 
 #[cfg(target_os = "linux")]
@@ -11354,26 +11013,6 @@ pub(super) struct ProcessSpec {
     stdin_files: Vec<(File, u64)>,
     inherited_files: Vec<File>,
     deadline: Instant,
-}
-
-impl ProcessSpec {
-    /// One bounded public native subprocess; child cleanup stays in the shared runner.
-    pub(super) fn public_input(
-        program: PathBuf,
-        args: Vec<OsString>,
-        bytes: Vec<u8>,
-        deadline: Instant,
-    ) -> Self {
-        Self {
-            program,
-            args,
-            stdin_prefix: bytes,
-            stdin_file: None,
-            stdin_files: Vec::new(),
-            inherited_files: Vec::new(),
-            deadline,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -20242,18 +19881,24 @@ pub(super) mod tests {
             .map(|slug| {
                 select_target(&mut admitted, slug);
                 physical_host_cleanup_reclaim_limit(&admitted)
-                    .expect("canonical five-target physical-host partition")
+                    .expect("canonical partition within the selected physical host")
             })
             .collect::<Vec<_>>();
         assert_eq!(limits.len(), 5);
         assert_eq!(
-            limits.iter().copied().sum::<u64>(),
+            limits[..4].iter().copied().sum::<u64>(),
             max_reclaim_bytes_per_host
         );
-        assert_eq!(limits[0], limits[4] + 1);
-        assert_eq!(limits[1], limits[4] + 1);
-        assert_eq!(limits[2], limits[4] + 1);
-        assert_eq!(limits[3], limits[4]);
+        assert!(
+            limits[..4]
+                .iter()
+                .all(|limit| *limit == max_reclaim_bytes_per_host / 4)
+        );
+        assert_eq!(limits[4], max_reclaim_bytes_per_host);
+        assert_eq!(
+            limits.iter().copied().sum::<u64>(),
+            2 * max_reclaim_bytes_per_host
+        );
 
         let original_name = admitted.inventory.authorization_nonce.clone();
         let marker = GeneratedMarkerV1 {
@@ -20635,12 +20280,7 @@ pub(super) mod tests {
     }
 
     pub(super) fn progress_admission() -> HostAdmission {
-        let mut inventory = super::super::sample_inventory_fixture();
-        let shared_identity = "a".repeat(64);
-        for validator in &mut inventory.validators {
-            validator.endpoint.host_identity_sha256 = shared_identity.clone();
-        }
-        inventory.edge.endpoint.host_identity_sha256 = shared_identity;
+        let inventory = super::super::sample_inventory_fixture();
         let inventory_bytes =
             super::super::canonical_inventory_bytes(&inventory).expect("inventory JSON");
         let inventory_sha256 = sha256_hex(&inventory_bytes);
@@ -21382,8 +21022,12 @@ pub(super) mod tests {
     #[test]
     fn edge_cutover_is_touched_first_and_success_seal_forbids_rollback() {
         let mut admitted = progress_admission();
-        let plan = host_forward_plan(&admitted);
         let edge = admitted.inventory.edge.slug.clone();
+        let mut guest_progress = initial_host_progress(&admitted);
+        guest_progress.touched_hosts.push(edge.clone());
+        assert!(validate_host_progress(&admitted, &guest_progress).is_err());
+        select_target(&mut admitted, &edge);
+        let plan = host_forward_plan(&admitted);
         let cutover = HostActionKeyV1 {
             host_slug: edge.clone(),
             action: HostAction::EdgeCutover.label().to_owned(),
@@ -21391,7 +21035,7 @@ pub(super) mod tests {
         };
         assert!(host_action_touches_live_state(&cutover));
         let mut progress = initial_host_progress(&admitted);
-        progress.touched_hosts = vec!["taira-validator-1".to_owned(), edge.clone()];
+        progress.touched_hosts = vec![edge.clone()];
         progress.next_forward_ordinal = u16::try_from(
             plan.iter()
                 .position(|key| key == &cutover)
@@ -21399,7 +21043,11 @@ pub(super) mod tests {
         )
         .expect("bounded plan");
         progress.prepared_action = Some(cutover);
-        select_target(&mut admitted, &edge);
+        let mut foreign_host = progress.clone();
+        foreign_host
+            .touched_hosts
+            .insert(0, "taira-validator-1".to_owned());
+        assert!(validate_host_progress(&admitted, &foreign_host).is_err());
         assert_eq!(
             admit_host_action_progress(&admitted, HostAction::Rollback, &progress)
                 .expect("edge is exact first rollback target"),
@@ -21460,6 +21108,19 @@ pub(super) mod tests {
         assert_ne!(
             host_request_identity_sha256(&first).expect("first identity"),
             host_request_identity_sha256(&retry).expect("different action identity")
+        );
+    }
+
+    #[test]
+    fn host_request_requires_the_canonical_checkpoint_field() {
+        let request = sample_request();
+        let bytes = json::to_json(&request).unwrap();
+        let decoded: HostRequestV1 = json::from_slice(bytes.as_bytes()).unwrap();
+        assert!(decoded.phase_checkpoints.is_empty());
+        let mut missing: json::Value = json::from_slice(bytes.as_bytes()).unwrap();
+        missing.as_object_mut().unwrap().remove("phase_checkpoints");
+        assert!(
+            json::from_slice::<HostRequestV1>(json::to_json(&missing).unwrap().as_bytes()).is_err()
         );
     }
 
@@ -24313,7 +23974,12 @@ time.sleep(30)
                 .all(|i| *i < activations[0])
         );
         assert!(positions(HostAction::Restart).is_empty());
-        assert!(positions(HostAction::EdgeStage)[0] > activations[3]);
+        assert!(positions(HostAction::EdgeStage).is_empty());
+        assert!(
+            positions(HostAction::Seal)
+                .iter()
+                .all(|i| *i > activations[3])
+        );
         for action in [
             "epoch_supervisor_pause",
             "epoch_supervisor_start",
@@ -24934,7 +24600,7 @@ time.sleep(30)
 
         let admitted = progress_admission();
         super::super::validate_inventory_structure(&admitted.inventory)
-            .expect("complete cohost fixture");
+            .expect("complete independently admitted Mac and Linux guest fixture");
         let trusted = TrustedKeyV1 {
             schema: super::super::TRUSTED_KEY_SCHEMA_V1.to_owned(),
             algorithm: "ed25519".to_owned(),
@@ -24958,7 +24624,9 @@ time.sleep(30)
                 super::super::validate_inventory_structure(&inventory)
                     .unwrap_err()
                     .to_string()
-                    .contains("one authenticated SSH host identity")
+                    .contains(
+                        "role SSH route differs from its independently admitted physical host"
+                    )
             );
             for slug in super::super::VALIDATOR_SLUGS
                 .iter()
@@ -24979,7 +24647,7 @@ time.sleep(30)
                     .expect_err("direct host dispatch must reject unsupported topology");
                 super::super::assert_compiled_admission_error(
                     &error,
-                    "one authenticated SSH host identity",
+                    "role SSH route differs from its independently admitted physical host",
                 );
             }
         }
@@ -25008,7 +24676,6 @@ time.sleep(30)
                 .validators
                 .iter()
                 .map(|validator| validator.slug.clone())
-                .chain(std::iter::once(admitted.inventory.edge.slug.clone()))
                 .collect::<Vec<_>>();
             for slug in slugs {
                 select_target(&mut admitted, &slug);
@@ -25019,6 +24686,29 @@ time.sleep(30)
                     "{slug}"
                 );
             }
+            let edge_slug = admitted.inventory.edge.slug.clone();
+            select_target(&mut admitted, &edge_slug);
+            let native_plan = host_forward_plan(&admitted);
+            assert!(native_plan.iter().all(|key| key.host_slug == edge_slug));
+            assert!(plan.iter().all(|key| key.host_slug != edge_slug));
+            assert_ne!(native_plan, plan);
+            assert_eq!(
+                admitted.target.reset_guard(),
+                format!(
+                    "{}/taira-edge",
+                    admitted.inventory.hosts.native_edge.custody_root
+                )
+            );
+            assert_ne!(
+                admitted.inventory.hosts.native_edge.custody_root,
+                admitted.inventory.hosts.validator_guest.custody_root
+            );
+            assert!(
+                host_coordination_path(&admitted).is_err(),
+                "the independent native Mac cannot borrow the Linux guest coordination root"
+            );
+            let coordinator = admitted.inventory.validators[0].slug.clone();
+            select_target(&mut admitted, &coordinator);
             assert!(
                 plan.iter()
                     .all(|key| key.action != HostAction::Restart.label())
@@ -25042,7 +24732,19 @@ time.sleep(30)
                 .iter()
                 .position(|key| key.action == HostAction::Seal.label())
                 .expect("first seal");
-            assert_eq!(plan[first_seal - 1].action, HostAction::EdgeVerify.label());
+            assert_eq!(first_seal, first_beacon + 4);
+            assert_eq!(
+                plan[first_seal - 1].action,
+                HostAction::BeaconActivate.label()
+            );
+            let native_seal = native_plan
+                .iter()
+                .position(|key| key.action == HostAction::Seal.label())
+                .expect("native seal");
+            assert_eq!(
+                native_plan[native_seal - 1].action,
+                HostAction::EdgeVerify.label()
+            );
             admitted.request.mutation_phase = "pre_edge".to_owned();
             for kind in ["onboarding", "faucet", "write_canary"] {
                 admitted.request.mutation_kind = kind.to_owned();
@@ -25067,31 +24769,59 @@ time.sleep(30)
     }
 
     #[test]
-    fn shared_host_plan_cuts_over_edge_after_required_beacon_activations() {
-        let admitted = progress_admission();
-        let plan = host_forward_plan(&admitted);
-        let first = |action: HostAction| {
-            plan.iter()
+    fn separate_host_plans_preserve_guest_frontier_and_native_cutover_order() {
+        let mut admitted = progress_admission();
+        let guest_plan = host_forward_plan(&admitted);
+        let first_guest = |action: HostAction| {
+            guest_plan
+                .iter()
                 .position(|key| key.action == action.label())
-                .expect("required action")
+                .expect("required guest action")
         };
-        let last_start = plan
+        let last_start = guest_plan
             .iter()
             .rposition(|key| key.action == HostAction::Start.label())
             .expect("last local validator start");
-        assert!(last_start < first(HostAction::EdgeStage));
-        assert!(first(HostAction::EdgeStage) < first(HostAction::EdgeCutover));
-        assert!(
-            plan.iter()
-                .all(|key| key.action != HostAction::Restart.label())
-        );
-        let last_activation = plan
+        let last_activation = guest_plan
             .iter()
             .rposition(|key| key.action == HostAction::BeaconActivate.label())
             .expect("last provider activation");
-        assert!(last_start < first(HostAction::BeaconActivate));
-        assert!(last_activation < first(HostAction::EdgeStage));
-        assert!(first(HostAction::EdgeCutover) < first(HostAction::EdgeVerify));
+        assert!(last_start < first_guest(HostAction::BeaconActivate));
+        assert!(last_activation < first_guest(HostAction::Seal));
+        assert!(guest_plan.iter().all(|key| {
+            ![
+                HostAction::EdgeStage.label(),
+                HostAction::EdgeCutover.label(),
+                HostAction::EdgeVerify.label(),
+                HostAction::Restart.label(),
+            ]
+            .contains(&key.action.as_str())
+        }));
+        let edge = admitted.inventory.edge.slug.clone();
+        select_target(&mut admitted, &edge);
+        let native_plan = host_forward_plan(&admitted);
+        let first_native = |action: HostAction| {
+            native_plan
+                .iter()
+                .position(|key| key.action == action.label())
+                .expect("required native action")
+        };
+        assert!(native_plan.iter().all(|key| key.host_slug == edge));
+        assert!(first_native(HostAction::EdgeStage) < first_native(HostAction::EdgeCutover));
+        assert!(first_native(HostAction::EdgeCutover) < first_native(HostAction::EdgeVerify));
+        assert!(first_native(HostAction::EdgeVerify) < first_native(HostAction::Seal));
+        assert!(
+            host_pair::verify_checkpoint_chain(
+                &[],
+                &admitted.inventory,
+                &admitted.inventory_sha256,
+                &admitted.authorization_sha256,
+                admitted.authorization.claims.execution_expires_at_unix_ms,
+                host_pair::HostPhaseV1::CandidateFrontier
+            )
+            .is_err(),
+            "the native physical plan cannot replace authenticated guest-frontier custody"
+        );
     }
 
     #[test]
@@ -25465,16 +25195,106 @@ time.sleep(30)
     }
 
     #[test]
-    fn first_edge_activation_has_an_exact_start_operation() {
-        let admitted = progress_admission();
-        let mut edge = admitted.inventory.edge.clone();
+    fn guest_edge_execution_refuses_before_linux_custody_or_process_checks() {
+        let mut admitted = progress_admission();
+        admitted.target = HostTarget::Edge(admitted.inventory.edge.clone());
+        let checks: [fn(&HostAdmission) -> Result<()>; 10] = [
+            host_preflight,
+            require_vacant_host_precondition,
+            require_vacant_rollback_postcondition,
+            verify_conservative_rollback_absence,
+            verify_success_seal_postcondition,
+            reconcile_prior_manager_operations,
+            rollback_host,
+            verify_rollback_postcondition,
+            |admitted| require_vacant_unit(admitted, false),
+            |admitted| require_vacant_unit(admitted, true),
+        ];
+        for check in checks {
+            let error = check(&admitted).expect_err("native edge cannot enter a guest executor");
+            assert!(
+                error
+                    .to_string()
+                    .contains("independently admitted native dispatcher")
+            );
+        }
+        for action in [
+            HostAction::EdgeCutover,
+            HostAction::EdgeVerify,
+            HostAction::Rollback,
+            HostAction::Seal,
+        ] {
+            let error = revalidate_cached_action_postcondition(&admitted, action)
+                .expect_err("guest receipt replay cannot inspect native edge paths");
+            assert!(
+                error
+                    .to_string()
+                    .contains("independently admitted native dispatcher")
+            );
+        }
+        let absent = Path::new("/native-edge-must-not-enter-guest-publication");
+        for result in [
+            snapshot_root_file(&admitted, absent, absent, &"0".repeat(64)),
+            atomic_replace_verified_file(
+                &admitted,
+                absent,
+                absent,
+                &admitted.inventory.validators[0].artifacts[0],
+            ),
+        ] {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("independently admitted native dispatcher")
+            );
+        }
+    }
+
+    #[test]
+    fn completed_guest_file_publication_requires_both_durable_namespaces() {
+        let directory = super::super::private_custody_test_dir("guest-file-publication-");
+        let destination_parent = directory.path().join("installed");
+        let source_parent = directory.path().join("staged");
+        fs::create_dir(&destination_parent).unwrap();
+        fs::create_dir(&source_parent).unwrap();
+        let destination = destination_parent.join("validator.service");
+        let bytes = b"[Service]\nExecStart=/exact/validator\n";
+        fs::write(&destination, bytes).unwrap();
+        let sha256 = sha256_hex(bytes);
+        let visited = std::cell::RefCell::new(Vec::new());
+        sync_existing_file_publication(&destination, &sha256, &source_parent, |parent| {
+            visited.borrow_mut().push(parent.to_path_buf());
+            sync_directory(parent)
+        })
+        .unwrap();
         assert_eq!(
-            edge_forward_operation(&edge),
-            ("edge-cutover-reload", "reload")
+            visited.into_inner(),
+            vec![destination_parent.clone(), source_parent.clone()]
         );
-        edge.initial_state = super::super::EdgeInitialStateV1::Vacant;
-        assert_eq!(edge_forward_operation(&edge), ("edge-first-start", "start"));
-        assert!(edge.admitted_release().is_err());
+        assert!(
+            sync_existing_file_publication(&destination, &sha256, &source_parent, |parent| {
+                if parent == source_parent {
+                    Err(eyre!("source namespace barrier interrupted"))
+                } else {
+                    sync_directory(parent)
+                }
+            })
+            .is_err()
+        );
+        let barriers = std::cell::Cell::new(0);
+        assert!(
+            sync_existing_file_publication(&destination, &"0".repeat(64), &source_parent, |_| {
+                barriers.set(barriers.get() + 1);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(
+            barriers.get(),
+            0,
+            "conflicting bytes authorize no namespace barrier"
+        );
     }
 
     #[test]
@@ -25589,41 +25409,59 @@ time.sleep(30)
 
     #[cfg(unix)]
     #[test]
-    fn retained_edge_route_retry_requires_both_rename_parents_durable() {
-        let directory = super::super::private_custody_test_dir("taira-edge-route-retry-");
-        let root = directory
+    fn guest_edge_action_refuses_before_consuming_upload_or_creating_receipts() {
+        let directory = tempfile::tempdir().expect("native edge boundary fixture");
+        let mut admitted = progress_admission();
+        let mut edge = admitted.inventory.edge.clone();
+        edge.service_root = directory
             .path()
-            .canonicalize()
-            .expect("canonical fixture root");
-        let source_parent = root.join("rollback");
-        let destination_parent = root.join("nginx");
-        fs::create_dir(&source_parent).expect("source parent");
-        fs::create_dir(&destination_parent).expect("destination parent");
-        let destination = destination_parent.join("taira.conf");
-        let bytes = b"# nonsecret test route\n";
-        fs::write(&destination, bytes).expect("visible prior rename");
-        fs::set_permissions(&destination, fs::Permissions::from_mode(0o600))
-            .expect("private fixture");
-        let expected = sha256_hex(bytes);
-        for failed_parent in [&source_parent, &destination_parent] {
-            let error =
-                sync_existing_file_publication(&destination, &expected, &source_parent, |path| {
-                    if path == failed_parent {
-                        return Err(eyre!("injected rename-parent sync failure"));
-                    }
-                    sync_directory(path)
-                })
-                .expect_err("no receipt may be admitted after either parent sync fails");
-            assert!(error.to_string().contains("rename-parent sync failure"));
-            assert_eq!(fs::read(&destination).expect("retained route"), bytes);
+            .join("service")
+            .to_string_lossy()
+            .into_owned();
+        edge.state_root = directory
+            .path()
+            .join("state")
+            .to_string_lossy()
+            .into_owned();
+        edge.reset_guard = directory
+            .path()
+            .join("guard")
+            .to_string_lossy()
+            .into_owned();
+        admitted.target = HostTarget::Edge(edge);
+        for action in [
+            HostAction::Upload,
+            HostAction::EdgeStage,
+            HostAction::EdgeCutover,
+            HostAction::EdgeVerify,
+            HostAction::Rollback,
+            HostAction::Seal,
+            HostAction::Cleanup,
+        ] {
+            let mut input = std::io::Cursor::new(b"unconsumed native edge artifact");
+            let error = execute_host_action(&admitted, action, &mut input)
+                .expect_err("native edge action requires its native receiver");
+            assert!(
+                error
+                    .to_string()
+                    .contains("independently admitted native dispatcher")
+            );
+            assert_eq!(
+                input.position(),
+                0,
+                "guest rejection must not consume upload bytes"
+            );
+            assert!(
+                fs::read_dir(directory.path()).unwrap().next().is_none(),
+                "guest rejection must not create service, state or receipt custody"
+            );
         }
-        sync_existing_file_publication(&destination, &expected, &source_parent, sync_directory)
-            .expect("retry durably reconciles both parents");
     }
+
     #[cfg(unix)]
     #[test]
     fn rollback_retry_retained_moves_require_both_parent_barriers() {
-        // Exercise both directory rollback (release/state) and edge-file rollback
+        // Exercise both directory rollback (release/state) and generated-file rollback
         // after the exact crash cut: rename visible, neither parent synced yet.
         for directory_move in [false, true] {
             let fixture = tempfile::tempdir().expect("rollback crash fixture");
@@ -25637,7 +25475,7 @@ time.sleep(30)
                 fs::create_dir(&source).unwrap();
                 fs::write(source.join("identity"), b"retained original state").unwrap();
             } else {
-                fs::write(&source, b"exact authorized edge configuration").unwrap();
+                fs::write(&source, b"exact owned generated artifact").unwrap();
             }
             let inode = fs::symlink_metadata(&source).unwrap().ino();
             fs::rename(&source, &destination).expect("crash immediately after visible rename");
@@ -25668,7 +25506,7 @@ time.sleep(30)
             } else {
                 assert_eq!(
                     fs::read(&destination).unwrap(),
-                    b"exact authorized edge configuration"
+                    b"exact owned generated artifact"
                 );
             }
             fs::write(&source, b"unexpected new occupant").unwrap();
@@ -25896,53 +25734,56 @@ time.sleep(30)
 
     #[cfg(unix)]
     #[test]
-    fn admitted_edge_rollback_matching_prior_retry_requires_route_namespace_durable() {
-        let directory = super::super::private_custody_test_dir("taira-edge-rollback-");
+    fn guest_edge_rollback_preserves_native_publication_for_occupied_and_vacant_targets() {
+        let directory = super::super::private_custody_test_dir("taira-native-edge-boundary-");
         let root = directory
             .path()
             .canonicalize()
             .expect("canonical fixture root");
-        let route_parent = root.join("nginx");
-        let rollback = root.join("rollback");
-        fs::create_dir(&route_parent).expect("route parent");
-        fs::create_dir(&rollback).expect("rollback parent");
-        let route = route_parent.join("taira.conf");
-        let staging = route_parent.join(".taira.conf.public-reset-rollback.next");
-        let bytes = b"# exact nonsecret admitted prior route\n";
-        fs::write(&staging, bytes).expect("staged prior configuration");
-        fs::set_permissions(&staging, fs::Permissions::from_mode(0o600))
-            .expect("private fixture config");
-        File::open(&staging)
-            .expect("staged config inode")
-            .sync_all()
-            .expect("durable config bytes");
-        fs::rename(&staging, &route).expect("visible restore before parent sync");
-        let inode = route.metadata().expect("restored config inode").ino();
-        let mut admitted = progress_admission();
-        let mut edge = admitted.inventory.edge.clone();
-        edge.nginx_config = route.to_string_lossy().into_owned();
-        let super::super::EdgeInitialStateV1::AdmittedRelease(release) = &mut edge.initial_state
-        else {
-            panic!("admitted prior edge fixture");
-        };
-        release.config_sha256 = sha256_hex(bytes);
-        admitted.target = HostTarget::Edge(edge.clone());
-        let error = restore_admitted_edge_config(&admitted, &edge, &rollback, |_| {
-            Err(eyre!("injected restored-route sync failure"))
-        })
-        .expect_err("matching prior bytes cannot bypass the rename barrier");
-        assert!(error.to_string().contains("restored-route sync failure"));
-        assert!(!rollback.join("edge-config.before").exists());
-        assert!(!staging.exists());
-        assert_eq!(
-            route.metadata().expect("retained config inode").ino(),
-            inode
-        );
-        assert_eq!(fs::read(&route).expect("retained prior bytes"), bytes);
-        restore_admitted_edge_config(&admitted, &edge, &rollback, sync_directory)
-            .expect("durable retry accepts the same admitted prior inode");
-        assert_eq!(route.metadata().expect("durable config inode").ino(), inode);
-        assert_eq!(fs::read(&route).expect("durable prior bytes"), bytes);
+        let route = root.join("taira.conf");
+        let bytes = b"# independently owned nonsecret native Mac publication\n";
+        fs::write(&route, bytes).expect("native publication fixture");
+        fs::set_permissions(&route, fs::Permissions::from_mode(0o600)).unwrap();
+        let original = fs::symlink_metadata(&route).expect("retained native publication identity");
+        for vacant in [false, true] {
+            let mut admitted = progress_admission();
+            let mut edge = admitted.inventory.edge.clone();
+            edge.nginx_config = route.to_string_lossy().into_owned();
+            edge.service_root = root.join("service").to_string_lossy().into_owned();
+            edge.state_root = root.join("state").to_string_lossy().into_owned();
+            edge.reset_guard = root.join("guard").to_string_lossy().into_owned();
+            if vacant {
+                edge.initial_state = super::super::EdgeInitialStateV1::Vacant;
+            }
+            admitted.target = HostTarget::Edge(edge);
+            let checks: [fn(&HostAdmission) -> Result<()>; 2] =
+                [rollback_host, verify_rollback_postcondition];
+            for check in checks {
+                let error =
+                    check(&admitted).expect_err("guest rollback must never own native edge files");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("independently admitted native dispatcher")
+                );
+                let current = fs::symlink_metadata(&route).unwrap();
+                assert_eq!(
+                    (current.dev(), current.ino(), current.len(), current.mode()),
+                    (
+                        original.dev(),
+                        original.ino(),
+                        original.len(),
+                        original.mode()
+                    )
+                );
+                assert_eq!(fs::read(&route).unwrap(), bytes);
+                assert_eq!(
+                    fs::read_dir(&root).unwrap().count(),
+                    1,
+                    "native publication is the only retained fixture entry"
+                );
+            }
+        }
     }
 
     #[cfg(unix)]
@@ -26048,6 +25889,25 @@ time.sleep(30)
                     "fixture inventory",
                 )
                 .expect("inventory boundary");
+                let host = if request.host_slug == inventory.edge.slug {
+                    &inventory.hosts.native_edge
+                } else {
+                    &inventory.hosts.validator_guest
+                };
+                assert_eq!(
+                    spec.args.last(),
+                    Some(&OsString::from(format!(
+                        "{} {HOST_DISPATCH_SUFFIX}",
+                        host.dispatcher_path
+                    )))
+                );
+                assert_eq!(
+                    spec.args.get(spec.args.len() - 2),
+                    Some(&OsString::from(format!(
+                        "{}@{}",
+                        host.endpoint.user, host.endpoint.hostname
+                    )))
+                );
                 self.seen.push(request.host_slug.clone());
                 if self.fail_at == Some(self.seen.len()) {
                     return Err(eyre!("injected SSH preflight failure"));

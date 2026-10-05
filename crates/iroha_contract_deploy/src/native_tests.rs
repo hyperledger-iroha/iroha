@@ -548,6 +548,8 @@ fn every_real_deployment_transaction_carries_identical_governance_metadata() -> 
         ),
         &code,
     )?;
+    let mut manifest_budget = crate::manifest_encoding::ManifestEncodingBudget::new()?;
+    let signer_backing = manifest_budget.reserve_signer(key_pair.public_key())?;
     let mut transactions = upload
         .pre_stage
         .into_iter()
@@ -568,9 +570,16 @@ fn every_real_deployment_transaction_carries_identical_governance_metadata() -> 
         error_types: None,
         kotoba: None,
         provenance: None,
-    }
-    .try_signed(&key_pair)
-    .wrap_err("sign metadata-test manifest")?;
+    };
+    let signing_frame = manifest_budget.reserve_frame(&manifest)?;
+    let manifest = manifest
+        .try_signed(
+            manifest_budget.context(),
+            signing_frame.remaining_bytes(),
+            &key_pair,
+        )
+        .wrap_err("sign metadata-test manifest")?;
+    drop(signing_frame);
     transactions.push(
         signing.sign([InstructionBox::from(RegisterSmartContractCode {
             artifact_id: ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
@@ -601,6 +610,8 @@ fn every_real_deployment_transaction_carries_identical_governance_metadata() -> 
             );
         }
     }
+    drop(transactions);
+    drop(signer_backing);
     Ok(())
 }
 #[test]

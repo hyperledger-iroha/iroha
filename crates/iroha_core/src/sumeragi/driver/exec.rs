@@ -649,6 +649,11 @@ impl ExecSched {
         self.arrived_during_build = false;
     }
 
+    fn payload_build_is_current(&self, build: &BuildRequest) -> bool {
+        self.control_context
+            .is_some_and(|(source, view)| source.height == build.height && view == build.view)
+    }
+
     fn witness_is_current(&self, context: &ControlWitnessContext) -> bool {
         self.control_context.is_some_and(|(source, view)| {
             source.height == context.height
@@ -681,7 +686,13 @@ impl ExecSched {
                 slot.retry.registration.cancel();
             }
         }
-        if self.control_context != context {
+        let activates_waiting_parent = self.control_context.is_none()
+            && self.build.is_some_and(|build| {
+                context.is_some_and(|(source, view)| {
+                    source.height == build.height && view == build.view
+                })
+            });
+        if self.control_context != context && !activates_waiting_parent {
             if matches!(self.running, Some(Running::Build(_))) {
                 self.running_cancelled = true;
             }
@@ -691,6 +702,9 @@ impl ExecSched {
             self.payload_retry.reset();
             self.arrived_during_build = false;
         }
+        // Core may request its successor while the parent is still applying. That
+        // request is queued, never dispatched, until Core itself accepts BlockApplied.
+        // Its first matching parent activation is not a withdrawal of a bound source.
         self.control_context = context;
         match &self.running {
             Some(Running::BuildControl(build)) if !self.witness_build_is_current(build) => {
@@ -972,6 +986,7 @@ impl ExecSched {
         }
         if let Some(build) = self.build
             && build.height <= self.applied.saturating_add(1)
+            && self.payload_build_is_current(&build)
             && self.payload_retry.ready(now, &self.release_waker)
         {
             self.build = None;
@@ -1501,7 +1516,7 @@ impl ExecSched {
             .unwrap_or(Millis::MAX);
         let payload = self
             .build
-            .filter(|build| build.height <= next)
+            .filter(|build| build.height <= next && self.payload_build_is_current(build))
             .map_or(Millis::MAX, |_| self.payload_retry.deadline());
         witness.min(drive).min(inbound).min(payload)
     }

@@ -106,7 +106,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
     def test_native_archive_frameworks_reach_every_apple_consumer(self) -> None:
         builder = read("scripts/build_norito_xcframework.sh")
         swift_package = read("IrohaSwift/Package.swift")
-        archive_workflow = workflow_job(read(".github/workflows/mobile_sdk_artifacts.yml"), "apple-mobile-sdk")
+        archive_manifest = read("scripts/fixtures/swift_release_consumers/archive/Package.swift")
         frameworks = ("Foundation", "Security", "Metal", "CoreGraphics", "Accelerate")
         for framework in frameworks:
             with self.subTest(framework=framework):
@@ -117,7 +117,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                 )
                 self.assertIn(
                     f'.linkedFramework("{framework}", .when(platforms: [.iOS, .macOS]))',
-                    archive_workflow,
+                    archive_manifest,
                 )
 
     def test_swift_release_test_inventory_has_no_runtime_skip(self) -> None:
@@ -548,9 +548,11 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             'NORITO_BRIDGE_SEAL_CARGO_HOME="${MOBILE_SDK_CARGO_HOME:-$HOME/.cargo}"',
             'NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="${MOBILE_SDK_CARGO_INVOCATION_DIR:-$GITHUB_WORKSPACE}"',
             'NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR"',
-            'path: "NoritoBridge.xcframework.zip"',
-            "connect_norito_bridge_abi_version()",
-            '--disable-automatic-resolution',
+            'scripts/check_swift_release_consumers.py',
+            '--archive-sha256 "$archive_sha256"',
+            '--sdk-path "$GITHUB_WORKSPACE/IrohaSwift"',
+            '--archive-scratch "$RUNNER_TEMP/norito-bridge-archive-consumer-build"',
+            '--sdk-scratch "$RUNNER_TEMP/iroha-swift-sdk-release-consumer-build"',
         ):
             self.assertIn(marker, apple)
         self.assertLess(
@@ -559,7 +561,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         )
         self.assertLess(
             apple.index('"$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/validate_norito_bridge_archive.py'),
-            apple.index('swift build'),
+            apple.index('scripts/check_swift_release_consumers.py'),
         )
         for forbidden in ("--allow-dirty-source", "--local-integration", "--skip", "--clobber"):
             self.assertNotIn(forbidden, apple)

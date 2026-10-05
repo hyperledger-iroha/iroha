@@ -8,8 +8,9 @@ import XCTest
     private let stderrPipe: Pipe
     let baseURL: URL
 
-    init?() {
-      let candidates = ["python3", "python"]
+    init?(environment configuredEnvironment: [String: String]? = nil) {
+      let environment = configuredEnvironment ?? Self.makeEnvironment()
+      let candidates = Self.pythonLaunchConfigurations(environment: environment)
       var lastError: Error?
       var launchedProcess: Process?
       var stdout: Pipe?
@@ -18,9 +19,9 @@ import XCTest
 
       for candidate in candidates {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        proc.arguments = [candidate, "-m", "iroha_torii_client.mock", "--stdio"]
-        proc.environment = Self.makeEnvironment()
+        proc.executableURL = candidate.executableURL
+        proc.arguments = candidate.arguments
+        proc.environment = environment
         stdout = Pipe()
         stderr = Pipe()
         proc.standardOutput = stdout
@@ -109,19 +110,47 @@ import XCTest
       }
     }
 
-    private static func makeEnvironment() -> [String: String] {
-      var env = ProcessInfo.processInfo.environment
-      let repositoryRoot = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()  // ToriiClientTests.swift
+    fileprivate struct PythonLaunchConfiguration: Equatable {
+      let executableURL: URL
+      let arguments: [String]
+    }
+
+    fileprivate static func pythonLaunchConfigurations(
+      environment: [String: String]
+    ) -> [PythonLaunchConfiguration] {
+      // The mock is a standalone stdlib fixture; importing its package also
+      // loads SDK dependencies that the mock server does not consume.
+      let arguments = [mockScriptURL.path, "--stdio"]
+      if let configuredPython = environment["MOBILE_SDK_PYTHON_BINARY"] {
+        // An explicit interpreter is authoritative, including when it is invalid.
+        // Execute the path directly so spaces and shell characters stay literal.
+        guard configuredPython.hasPrefix("/") else { return [] }
+        return [
+          PythonLaunchConfiguration(
+            executableURL: URL(fileURLWithPath: configuredPython),
+            arguments: arguments
+          )
+        ]
+      }
+      return ["python3", "python"].map { candidate in
+        PythonLaunchConfiguration(
+          executableURL: URL(fileURLWithPath: "/usr/bin/env"),
+          arguments: [candidate] + arguments
+        )
+      }
+    }
+
+    fileprivate static var mockScriptURL: URL {
+      URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()  // IrohaSwiftTests
         .deletingLastPathComponent()  // Tests
         .deletingLastPathComponent()  // IrohaSwift
-      let pythonPath = repositoryRoot.appendingPathComponent("python").path
-      if let existing = env["PYTHONPATH"], !existing.isEmpty {
-        env["PYTHONPATH"] = "\(pythonPath):\(existing)"
-      } else {
-        env["PYTHONPATH"] = pythonPath
-      }
+        .deletingLastPathComponent()  // Repository root
+        .appendingPathComponent("python/iroha_torii_client/mock.py")
+    }
+
+    private static func makeEnvironment() -> [String: String] {
+      var env = ProcessInfo.processInfo.environment
       env["PYTHONUNBUFFERED"] = "1"
       return env
     }
@@ -202,6 +231,63 @@ import XCTest
   }
 
   final class ToriiMockProcessTests: XCTestCase {
+    func testPythonDiscoveryIsRetainedWhenNoInterpreterIsConfigured() {
+      let candidates = ToriiMockProcess.pythonLaunchConfigurations(environment: [:])
+      XCTAssertEqual(candidates.count, 2)
+      XCTAssertEqual(candidates.map(\.executableURL), [
+        URL(fileURLWithPath: "/usr/bin/env"), URL(fileURLWithPath: "/usr/bin/env")
+      ])
+      XCTAssertEqual(candidates.map(\.arguments), [
+        ["python3", ToriiMockProcess.mockScriptURL.path, "--stdio"],
+        ["python", ToriiMockProcess.mockScriptURL.path, "--stdio"]
+      ])
+    }
+
+    func testConfiguredPythonPathIsExecutedDirectlyWithoutSplitting() throws {
+      let path = "/private/tmp/Python runtime;$(false)/python3.12"
+      let candidates = ToriiMockProcess.pythonLaunchConfigurations(environment: [
+        "MOBILE_SDK_PYTHON_BINARY": path
+      ])
+      XCTAssertEqual(candidates.count, 1)
+      let candidate = try XCTUnwrap(candidates.first)
+      XCTAssertEqual(candidate.executableURL.path, path)
+      XCTAssertEqual(candidate.arguments, [ToriiMockProcess.mockScriptURL.path, "--stdio"])
+    }
+
+    func testMissingConfiguredPythonDoesNotSelectPathFallbacks() throws {
+      let path = "/private/tmp/nonexistent-torii-interpreter/python3.12"
+      let candidates = ToriiMockProcess.pythonLaunchConfigurations(environment: [
+        "MOBILE_SDK_PYTHON_BINARY": path
+      ])
+      XCTAssertEqual(candidates.count, 1)
+      XCTAssertEqual(try XCTUnwrap(candidates.first).executableURL.path, path)
+    }
+
+    func testMalformedConfiguredPythonDoesNotSelectPathFallbacks() {
+      for path in ["", "python3.12", "relative/python3.12"] {
+        XCTAssertTrue(ToriiMockProcess.pythonLaunchConfigurations(environment: [
+          "MOBILE_SDK_PYTHON_BINARY": path
+        ]).isEmpty, "unexpected fallback for explicit interpreter: \(path)")
+      }
+    }
+
+    func testStandaloneMockStartsWithoutImportingTheClientPackage() throws {
+      let temporary = FileManager.default.temporaryDirectory
+        .appendingPathComponent("iroha-swift-mock-package-\(UUID().uuidString)")
+      let package = temporary.appendingPathComponent("iroha_torii_client")
+      try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: temporary) }
+      try Data("raise RuntimeError('client package must not initialize for a stdlib mock')\n".utf8)
+        .write(to: package.appendingPathComponent("__init__.py"))
+      var environment = ProcessInfo.processInfo.environment
+      environment["PYTHONPATH"] = temporary.path
+      environment["PYTHONUNBUFFERED"] = "1"
+      let mock = try XCTUnwrap(ToriiMockProcess(environment: environment))
+      defer { mock.stop() }
+      XCTAssertEqual(mock.baseURL.scheme, "http")
+      XCTAssertEqual(mock.baseURL.host, "127.0.0.1")
+    }
+
     func testTerminateProcessReturnsPromptly() throws {
       let process = Process()
       process.executableURL = URL(fileURLWithPath: "/bin/sleep")

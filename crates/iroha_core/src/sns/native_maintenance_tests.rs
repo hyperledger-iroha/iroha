@@ -419,3 +419,73 @@ fn native_record_binding_rejects_scope_revision_config_and_key_substitution() {
     persist_alias_auto_renew_state(&mut transaction, &changed).unwrap();
     assert!(retained.authenticate_source_record(&transaction).is_err());
 }
+
+#[test]
+fn sns_source_inspection_refuses_foreign_incomplete_and_repeated_native_owners() {
+    for refusal in 0..3 {
+        let fixture = fixture(Quantity::from(2_u32), false, false);
+        let original = source(&fixture.state, EXPIRY - WINDOW);
+        let parent_height = fixture.state.committed_height();
+        let mut block;
+        let _recording;
+        if refusal == 1 {
+            block = Box::new(fixture.state.block(original.header()));
+            _recording = None;
+        } else {
+            let (actual, recorder, outputs, _) =
+                crate::state::run_empty_network_owner_fixture(&fixture.state, &original);
+            assert!(outputs.is_empty());
+            block = actual;
+            _recording = Some(recorder);
+        }
+        let refused = if refusal == 0 {
+            let foreign = source(&fixture.state, EXPIRY - WINDOW + 1);
+            block.finalize_sns_owned_sources_for_testing(&foreign)
+        } else {
+            if refusal == 2 {
+                block
+                    .finalize_sns_owned_sources_for_testing(&original)
+                    .unwrap();
+                assert_eq!(
+                    block
+                        .fastpq_source_inventory()
+                        .unwrap()
+                        .unwrap()
+                        .entries()
+                        .len(),
+                    1
+                );
+            }
+            block.finalize_sns_owned_sources_for_testing(&original)
+        };
+        assert!(refused.is_err(), "refusal {refusal}");
+        assert_eq!(
+            block
+                .verified_fastpq_source_inventory_for_capture()
+                .unwrap_err(),
+            "FASTPQ witness capture refuses a poisoned carrier",
+            "refusal {refusal}"
+        );
+        assert!(
+            !original.has_results(),
+            "the caller's proposal stays unpublished"
+        );
+        assert!(matches!(
+            block.commit().unwrap_err(),
+            crate::state::storage_transactions::TransactionsBlockError::ExecutionOutputCapacity
+        ));
+        drop(_recording);
+        assert_eq!(fixture.state.committed_height(), parent_height);
+        assert_eq!(
+            balance(fixture.state.view().world(), &fixture, &fixture.owner),
+            Quantity::from(2_u32)
+        );
+        assert_eq!(
+            record_by_selector(fixture.state.view().world(), &fixture.selector)
+                .unwrap()
+                .unwrap()
+                .expires_at_ms,
+            EXPIRY
+        );
+    }
+}

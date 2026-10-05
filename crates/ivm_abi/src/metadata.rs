@@ -7,7 +7,11 @@
 //! The metadata header encodes the VM version, the ABI-v1 `ZK` and `VECTOR`
 //! mode flags, an optional logical vector length, and a cycle limit.
 mod literal_table;
+mod manifest_projection;
 mod section_decode;
+#[cfg(test)]
+#[path = "metadata/native_allocation_tests.rs"]
+mod native_allocation_tests;
 pub use literal_table::{LiteralDirectory, ValidatedLiteral};
 
 use crate::error::VMError;

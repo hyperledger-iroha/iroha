@@ -334,6 +334,177 @@ class NoritoBridgeArchiveTests(unittest.TestCase):
         self.assertNotIn("allow_dirty_source", arguments)
         physical.assert_called_once_with(self.destination / archive_owner.ARCHIVE_ROOT, validator)
 
+    def test_consumer_requires_independent_trust_inputs_before_reading_archive(self) -> None:
+        with mock.patch.object(archive_owner, "validate_archive") as read:
+            for digest, commit in ((None, "a" * 40), ("A" * 64, "a" * 40),
+                                   ("a" * 64, None), ("a" * 64, "HEAD")):
+                with self.subTest(digest=digest, commit=commit):
+                    with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "requires"):
+                        archive_owner.authenticate_archive(
+                            self.root, self.archive, self.lockfile, consumer=True,
+                            expected_sha256=digest, expected_source_commit=commit,
+                        )
+            read.assert_not_called()
+        with mock.patch.object(archive_owner, "_extract_archive") as extract:
+            with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "SHA-256"):
+                archive_owner.authenticate_archive(
+                    self.root, self.archive, self.lockfile, consumer=True,
+                    expected_sha256="0" * 64, expected_source_commit="a" * 40,
+                )
+            extract.assert_not_called()
+
+    def test_consumer_installs_exact_archive_and_reauthenticates_final_destination(self) -> None:
+        commit = "a" * 40
+        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        def authenticate(root, lock, directory, *, consumer_source_commit):
+            self.assertEqual(consumer_source_commit, commit)
+            return self.native_fixture(root, lock, directory)
+        with mock.patch.object(archive_owner, "_validate_native_contents", side_effect=authenticate) as check:
+            result = archive_owner.authenticate_archive(
+                self.root, self.archive, self.lockfile, consumer=True,
+                expected_sha256=digest, expected_source_commit=commit,
+                install_directory=self.destination,
+            )
+        self.assertEqual(check.call_count, 2)
+        self.assertEqual(result["archive_sha256"], digest)
+        self.assertEqual(result["installed"], str(self.destination))
+        self.assertEqual(self.marker.read_bytes(), b"retained caller marker\n")
+        with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "existing path"):
+            archive_owner.authenticate_archive(
+                self.root, self.archive, self.lockfile, consumer=True,
+                expected_sha256=digest, expected_source_commit=commit,
+                install_directory=self.destination,
+            )
+
+    def test_consumer_checks_native_policy_with_recipient_tools_and_installer_inspector(self) -> None:
+        commit = "a" * 40
+        manifest = {"source_commit": commit, "embedded_source_commit": commit,
+                    "source_tree_dirty": False}
+        validator = SimpleNamespace(validate=mock.Mock(return_value=manifest))
+        inspector = SimpleNamespace(_validate_native_binaries=mock.Mock())
+        # A frozen older source inspector has no consumer-tool parameter. Only
+        # the trusted installed verifier may select local inspection tools.
+        def load(root, name):
+            if name == "validate_norito_bridge_xcframework.py":
+                self.assertEqual(root, self.root)
+                return validator
+            self.assertEqual(name, "archive_norito_xcframework.py")
+            self.assertEqual(root, ROOT)
+            return inspector
+        with mock.patch.object(archive_owner, "_load_native_owner", side_effect=load), \
+             mock.patch.object(archive_owner, "_consumer_source_identity", return_value=(commit, commit)) as source, \
+             mock.patch.object(archive_owner, "_consumer_developer_directory", return_value=self.base):
+            self.assertEqual(archive_owner._validate_native_contents(
+                self.root, self.lockfile, self.destination, consumer_source_commit=commit,
+            ), manifest)
+        self.assertEqual(source.call_count, 2)
+        self.assertFalse(validator.validate.call_args.kwargs["verify_repository_provenance"])
+        self.assertEqual(validator.validate.call_args.kwargs["lockfile_path"], self.lockfile)
+        self.assertEqual(validator.validate.call_args.kwargs["swift_loader"],
+                         self.root / "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift")
+        inspector._validate_native_binaries.assert_called_once_with(
+            self.destination / archive_owner.ARCHIVE_ROOT, validator, developer_dir=self.base,
+        )
+
+    def test_consumer_rejects_artifact_identity_and_native_policy_failures(self) -> None:
+        commit = "a" * 40
+        for change in ({"source_commit": "b" * 40}, {"embedded_source_commit": "b" * 40},
+                       {"source_tree_dirty": True}):
+            manifest = {"source_commit": commit, "embedded_source_commit": commit,
+                        "source_tree_dirty": False, **change}
+            validator = SimpleNamespace(validate=mock.Mock(return_value=manifest))
+            with self.subTest(change=change), \
+                 mock.patch.object(archive_owner, "_load_native_owner", return_value=validator), \
+                 mock.patch.object(archive_owner, "_consumer_source_identity", return_value=(commit, commit)):
+                with self.assertRaises(archive_owner.ArchiveValidationError):
+                    archive_owner._validate_native_contents(
+                        self.root, self.lockfile, self.destination, consumer_source_commit=commit,
+                    )
+        for failure in ("header mismatch", "slice digest mismatch", "lock mismatch", "Swift pin mismatch"):
+            validator = SimpleNamespace(validate=mock.Mock(side_effect=RuntimeError(failure)))
+            with self.subTest(failure=failure), \
+                 mock.patch.object(archive_owner, "_load_native_owner", return_value=validator), \
+                 mock.patch.object(archive_owner, "_consumer_source_identity", return_value=(commit, commit)):
+                with self.assertRaisesRegex(archive_owner.ArchiveValidationError, failure):
+                    archive_owner._validate_native_contents(
+                        self.root, self.lockfile, self.destination, consumer_source_commit=commit,
+                    )
+
+    def test_consumer_refuses_source_changes_during_native_inspection(self) -> None:
+        commit = "a" * 40
+        manifest = {"source_commit": commit, "embedded_source_commit": commit, "source_tree_dirty": False}
+        validator = SimpleNamespace(validate=mock.Mock(return_value=manifest))
+        inspector = SimpleNamespace(_validate_native_binaries=mock.Mock())
+        with mock.patch.object(archive_owner, "_load_native_owner", side_effect=(validator, inspector)), \
+             mock.patch.object(archive_owner, "_consumer_developer_directory", return_value=self.base), \
+             mock.patch.object(archive_owner, "_consumer_source_identity",
+                               side_effect=((commit, commit), ("b" * 40, commit))):
+            with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "source changed"):
+                archive_owner._validate_native_contents(
+                    self.root, self.lockfile, self.destination, consumer_source_commit=commit,
+                )
+
+    def test_unrelated_source_cannot_execute_its_own_validator(self) -> None:
+        with mock.patch.object(archive_owner, "_consumer_source_identity",
+                               side_effect=archive_owner.ArchiveValidationError("unrelated HEAD")), \
+             mock.patch.object(archive_owner, "_load_native_owner") as load:
+            with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "unrelated HEAD"):
+                archive_owner._validate_native_contents(
+                    self.root, self.lockfile, self.destination, consumer_source_commit="a" * 40,
+                )
+            load.assert_not_called()
+
+    def test_consumer_source_admission_uses_installer_policy_and_rejects_dirty_or_replaced_source(self) -> None:
+        commit = "a" * 40
+        policy = SimpleNamespace(validate_pin_relationship=mock.Mock(),
+                                 embedded_source_commit=mock.Mock(return_value=commit))
+        with mock.patch.object(archive_owner, "_consumer_git", side_effect=(commit.encode(), b"", b"", b"H source\0")), \
+             mock.patch.object(archive_owner, "_load_native_owner", return_value=policy) as load:
+            self.assertEqual(archive_owner._consumer_source_identity(self.root, commit), (commit, commit))
+        load.assert_called_once_with(ROOT, "check_mobile_sdk_artifact_pin_commit.py")
+        policy.validate_pin_relationship.assert_called_once_with(self.root, commit)
+        for status, refs in ((b" M changed\0", b""), (b"", b"refs/replace/aaaa\n")):
+            with self.subTest(status=status, refs=refs), \
+                 mock.patch.object(archive_owner, "_consumer_git", side_effect=(commit.encode(), status, refs)), \
+                 mock.patch.object(archive_owner, "_load_native_owner") as load:
+                with self.assertRaises(archive_owner.ArchiveValidationError):
+                    archive_owner._consumer_source_identity(self.root, commit)
+                load.assert_not_called()
+        policy.validate_pin_relationship.side_effect = RuntimeError("unrelated HEAD")
+        with mock.patch.object(archive_owner, "_consumer_git", side_effect=(commit.encode(), b"", b"", b"H source\0")), \
+             mock.patch.object(archive_owner, "_load_native_owner", return_value=policy):
+            with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "unrelated HEAD"):
+                archive_owner._consumer_source_identity(self.root, commit)
+
+    def test_consumer_rejects_hidden_index_changes_before_loading_source(self) -> None:
+        for entry in (b"h source\0", b"S source\0", b"s source\0"):
+            with self.subTest(entry=entry), \
+                 mock.patch.object(archive_owner, "_consumer_git", side_effect=(b"a" * 40, b"", b"", entry)), \
+                 mock.patch.object(archive_owner, "_load_native_owner") as load:
+                with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "index flags"):
+                    archive_owner._consumer_source_identity(self.root, "a" * 40)
+                load.assert_not_called()
+
+    def test_consumer_git_ignores_inherited_rust_and_git_configuration(self) -> None:
+        with mock.patch.dict(os.environ, {"GIT_DIR": "/untrusted", "RUSTUP_TOOLCHAIN": "missing"}), \
+             mock.patch.object(archive_owner.subprocess, "run", return_value=SimpleNamespace(stdout=b"ok")) as run:
+            self.assertEqual(archive_owner._consumer_git(self.root, "status"), b"ok")
+        self.assertEqual(run.call_args.args[0][0], "/usr/bin/git")
+        self.assertIn("--no-replace-objects", run.call_args.args[0])
+        self.assertNotIn("GIT_DIR", run.call_args.kwargs["env"])
+        self.assertNotIn("RUSTUP_TOOLCHAIN", run.call_args.kwargs["env"])
+
+    def test_consumer_developer_directory_uses_local_selection(self) -> None:
+        with mock.patch.dict(os.environ, {"DEVELOPER_DIR": str(self.base)}), \
+             mock.patch.object(archive_owner.subprocess, "run") as run:
+            self.assertEqual(archive_owner._consumer_developer_directory(), self.base)
+            run.assert_not_called()
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(archive_owner.subprocess, "run",
+                               return_value=SimpleNamespace(stdout=str(self.base) + "\n")) as run:
+            self.assertEqual(archive_owner._consumer_developer_directory(), self.base)
+            self.assertEqual(run.call_args.args[0], ["/usr/bin/xcode-select", "-p"])
+
     def test_cli_has_no_native_provenance_or_pin_skip(self) -> None:
         result = subprocess.run([sys.executable, "-I", "-S", "-B", str(SCRIPT), "--skip-provenance"],
                                 text=True, capture_output=True)

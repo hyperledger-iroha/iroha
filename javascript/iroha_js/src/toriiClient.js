@@ -12656,14 +12656,7 @@ async function parseGovernanceProposalRecord(payload) {
     proposalOperator = kind.validation_fee_policy.proposal_operator;
   } else if (kind.variant === "ValidationFeePayoutLifecycle") {
     proposalOperator = kind.validation_fee_payout_lifecycle.proposal_operator;
-  } else if (kind.variant === "KagemushaVerifierPolicyInstall") {
-    proposalOperator = kind.kagemusha_verifier_policy_install.proposal_operator;
-  } else if (kind.variant === "KagemushaVerifierReleaseInstall") {
-    proposalOperator = kind.kagemusha_verifier_release_install.proposal_operator;
-  } else if (kind.variant === "KagemushaVerifierReleaseActivate") {
-    proposalOperator = kind.kagemusha_verifier_release_activate.proposal_operator;
-  } else if (kind.variant === "KagemushaVerifierReleaseRetire") {
-    proposalOperator = kind.kagemusha_verifier_release_retire.proposal_operator;
+
   }
   if (proposalOperator !== null && proposalOperator !== proposer) {
     rejectType("governance proposal operator must match the retained proposer");
@@ -12763,46 +12756,6 @@ async function parseGovernanceProposalKind(payload, context) {
       return {
         variant,
         global_data_trigger_permission_governance: normalizeGovernanceProposalWireV1(
-          record,
-          context,
-        ).payload,
-      };
-    }
-    case "KagemushaVerifierPolicyInstall": {
-      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
-      return {
-        variant,
-        kagemusha_verifier_policy_install: normalizeGovernanceProposalWireV1(
-          record,
-          context,
-        ).payload,
-      };
-    }
-    case "KagemushaVerifierReleaseInstall": {
-      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
-      return {
-        variant,
-        kagemusha_verifier_release_install: normalizeGovernanceProposalWireV1(
-          record,
-          context,
-        ).payload,
-      };
-    }
-    case "KagemushaVerifierReleaseActivate": {
-      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
-      return {
-        variant,
-        kagemusha_verifier_release_activate: normalizeGovernanceProposalWireV1(
-          record,
-          context,
-        ).payload,
-      };
-    }
-    case "KagemushaVerifierReleaseRetire": {
-      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
-      return {
-        variant,
-        kagemusha_verifier_release_retire: normalizeGovernanceProposalWireV1(
           record,
           context,
         ).payload,

@@ -1,5 +1,7 @@
 //! Grouped Iroha Core integration tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "../../src/manifest_signing_test_support.rs"]
+mod manifest_signing_test_support;
 #[path = "../asset_total_amount.rs"]
 mod asset_total_amount;
 #[path = "../bench_repro.rs"]

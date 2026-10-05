@@ -691,7 +691,7 @@ pub struct GovernanceCapabilitiesV1 {
     pub supported_routes: Vec<String>,
 }
 const GOVERNANCE_APPROVAL_MODE_V1: &str = "PARLIAMENT_ATTEMPT_TIMED_OVN_V1";
-const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 14] = [
+const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 10] = [
     "DEPLOY_CONTRACT",
     "RUNTIME_UPGRADE",
     "SCCP_ROUTE_GOVERNANCE",
@@ -702,10 +702,6 @@ const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 14] = [
     "CONTRACT_LIFECYCLE_GOVERNANCE",
     "CONTRACT_EMERGENCY_HOLD",
     "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
-    "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
-    "KAGEMUSHA_VERIFIER_RELEASE_INSTALL",
-    "KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE",
-    "KAGEMUSHA_VERIFIER_RELEASE_RETIRE",
 ];
 /// GET `/v1/gov/capabilities` — return strict public governance readiness.
 ///
@@ -2404,7 +2400,7 @@ pub async fn handle_gov_contract_get(
         ));
     }
     if verified.abi_hash != manifest_abi_hash
-        || record.manifest.signature_payload() != verified.manifest.signature_payload()
+        || !record.manifest.same_signed_content(&verified.manifest)
     {
         return Err(governed_contract_invariant(
             "active contract manifest does not match its authenticated artifact metadata",

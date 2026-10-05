@@ -49,90 +49,111 @@ fn with_worker_from(
     crate::sumeragi::threads::sumeragi_thread_builder("sumeragi-publication-test")
         .spawn(move || {
             let chain = make_chain();
-            assert_eq!(chain.validators().len(), 4);
-            let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap().unwrap();
-            assert!(certificate.consensus_header().is_empty());
-            assert!(
-                certificate.commit_qc().is_empty(),
-                "genesis carries its executed result, never a fabricated quorum"
-            );
-            let crypto = Arc::new(BlsCrypto::new());
-            crypto
-                .admit_committee(
-                    chain
-                        .validators()
-                        .iter()
-                        .map(|(peer, pop)| (peer.public_key(), pop.as_slice())),
-                )
-                .unwrap();
-            let (events, mut receiver) = tokio::sync::broadcast::channel(1024);
-            let context = ExecutorContext {
-                state: Clone::clone(chain.state()),
-                native_context_archive: Arc::new(
-                    crate::query::native_context_archive::NativeContextArchive::open(
-                        chain.state().kura(),
-                        chain.state().ivm_execution_budget(),
-                        chain.state().kura().native_context_archive_max_bytes(),
-                    )
-                    .expect("original-pool native context archive"),
-                ),
-                queue: None,
-                staging: Staging::new(),
-                events,
-                genesis_account: chain.genesis_account().clone(),
+            with_worker_chain(
+                &chain,
                 consensus_mode,
-                applied: (chain.height(), chain.committed(chain.height()).core_hash()),
-                crypto: Some(Clone::clone(&crypto)),
-                applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(1, None)),
-                lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
-            };
-            let schedule = Arc::new(
-                crate::sumeragi::runtime_availability::NativeGlobalAvailability::new(
-                    Clone::clone(chain.state()),
-                    chain.instance(),
-                    Clone::clone(&crypto),
-                )
-                .unwrap(),
+                Arc::new(crate::sumeragi::lanes::merge::NoLanes),
+                test,
             );
-            let verifier = Arc::new(crate::sumeragi::attestation::NativePastaVerifier::new(
-                chain.instance(),
-                chain.network_id(),
-            ));
-            let blocks = KuraBlockStore::new(
-                Clone::clone(chain.kura()),
-                crypto,
-                1,
-                context.staging.clone(),
-                context.state.ivm_execution_budget(),
-                schedule,
-                verifier,
-            );
-            let mut worker = Worker {
-                payload_build: None,
-                signature_decode: None,
-                routing_refusal: None,
-                payload_refusal: None,
-                context: &context,
-                state: &context.state,
-                applied: context.applied,
-                live: None,
-                finishing: None,
-                results: BTreeMap::new(),
-                last_built: None,
-                queue: None,
-                recovery: None,
-                beacon: None,
-                archives: None,
-                pending_commit: None,
-                completed_replay: None,
-                attestation: None,
-                quarantine_context: None,
-            };
-            test(&chain, &mut worker, &blocks, &mut receiver);
         })
         .expect("spawn publication worker fixture")
         .join()
         .expect("publication worker fixture");
+}
+
+/// Borrow an actual signed chain and its actual lane source on the caller's
+/// Sumeragi fixture thread. Borrowed callbacks stay inside that original lifetime.
+pub(super) fn with_worker_chain(
+    chain: &CertifiedTestChain,
+    consensus_mode: ConsensusMode,
+    lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
+    test: impl FnOnce(
+        &CertifiedTestChain,
+        &mut Worker<'_>,
+        &KuraBlockStore,
+        &mut tokio::sync::broadcast::Receiver<EventBox>,
+    ),
+) {
+    assert_eq!(chain.validators().len(), 4);
+    let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap().unwrap();
+    assert!(certificate.consensus_header().is_empty());
+    assert!(
+        certificate.commit_qc().is_empty(),
+        "genesis carries its executed result, never a fabricated quorum"
+    );
+    let crypto = Arc::new(BlsCrypto::new());
+    crypto
+        .admit_committee(
+            chain
+                .validators()
+                .iter()
+                .map(|(peer, pop)| (peer.public_key(), pop.as_slice())),
+        )
+        .unwrap();
+    let (events, mut receiver) = tokio::sync::broadcast::channel(1024);
+    let context = ExecutorContext {
+        state: Clone::clone(chain.state()),
+        native_context_archive: Arc::new(
+            crate::query::native_context_archive::NativeContextArchive::open(
+                chain.state().kura(),
+                chain.state().ivm_execution_budget(),
+                chain.state().kura().native_context_archive_max_bytes(),
+            )
+            .expect("original-pool native context archive"),
+        ),
+        queue: None,
+        staging: Staging::new(),
+        events,
+        genesis_account: chain.genesis_account().clone(),
+        consensus_mode,
+        applied: (chain.height(), chain.committed(chain.height()).core_hash()),
+        crypto: Some(Clone::clone(&crypto)),
+        applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(1, None)),
+        lane_blocks,
+    };
+    let schedule = Arc::new(
+        crate::sumeragi::runtime_availability::NativeGlobalAvailability::new(
+            Clone::clone(chain.state()),
+            chain.instance(),
+            Clone::clone(&crypto),
+        )
+        .unwrap(),
+    );
+    let verifier = Arc::new(crate::sumeragi::attestation::NativePastaVerifier::new(
+        chain.instance(),
+        chain.network_id(),
+    ));
+    let blocks = KuraBlockStore::new(
+        Clone::clone(chain.kura()),
+        crypto,
+        1,
+        context.staging.clone(),
+        context.state.ivm_execution_budget(),
+        schedule,
+        verifier,
+    );
+    let mut worker = Worker {
+        payload_build: None,
+        signature_decode: None,
+        routing_refusal: None,
+        payload_refusal: None,
+        context: &context,
+        state: &context.state,
+        applied: context.applied,
+        live: None,
+        finishing: None,
+        results: BTreeMap::new(),
+        completed_payload: None,
+        queue: None,
+        recovery: None,
+        beacon: None,
+        archives: None,
+        pending_commit: None,
+        completed_replay: None,
+        attestation: None,
+        quarantine_context: None,
+    };
+    test(chain, &mut worker, &blocks, &mut receiver);
 }
 
 pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> AvailableBody {
@@ -150,9 +171,14 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
         let state_height = worker.state.view().height();
         assert!(block.admitted_to(&budget));
         // Pin only the refusal observations: unrelated MV reclamation must not change the
-        // baseline while this test measures the request's immediately refunded owners.
+        // baseline while this test measures the request's exact retained decode controls.
         let epoch = crossbeam_epoch::pin();
         let retained = budget.reserved_bytes();
+        let decoder_controls = norito::core::PreparedDecodeWorkspace::allocation_layouts()
+            .iter()
+            .map(core::alloc::Layout::size)
+            .sum::<usize>();
+        let mut original_decode_owner = None;
         for limits in [
             norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, 64),
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 1, 64),
@@ -191,7 +217,22 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
             assert_eq!(std::ptr::from_ref(block.source()), source);
             assert_eq!(block.payload().as_slice().as_ptr(), payload);
             assert!(block.admitted_to(&budget));
-            assert_eq!(budget.reserved_bytes(), retained);
+            // Refusal retains the two physical canonical controls for this exact
+            // original body; retry must reuse them rather than fund substitutes.
+            let attempt = worker.signature_decode.as_ref().unwrap();
+            assert_eq!(attempt.block_hash, hash);
+            assert_eq!(attempt.source, block);
+            assert_eq!(attempt.source.payload().as_slice().as_ptr(), payload);
+            assert!(attempt.decoder.belongs_to(&budget));
+            let decode_owner = (
+                std::ptr::from_ref(attempt.source.source()),
+                std::ptr::from_ref(&attempt.decoder),
+            );
+            assert_eq!(
+                *original_decode_owner.get_or_insert(decode_owner),
+                decode_owner
+            );
+            assert_eq!(budget.reserved_bytes(), retained + decoder_controls);
         }
         drop(epoch);
         assert!(matches!(
@@ -199,6 +240,7 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
             Some(ExecOutcome::Valid(_))
         ));
         assert!(!worker.results.contains_key(&hash));
+        assert!(worker.signature_decode.is_none());
         assert_eq!(std::ptr::from_ref(block.source()), source);
         assert_eq!(block.payload().as_slice().as_ptr(), payload);
         assert!(block.admitted_to(&budget));
@@ -286,7 +328,7 @@ fn original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry()
             let original_refusal: crate::execution_attempt::ExecutionDeferred =
                 original_allocation.clone().into();
             assert!(matches!(
-                worker.build(2, 0, 1 << 20),
+                worker.build(2, 0, 1 << 20, 100),
                 Err(PublicationError::Retryable(_))
             ));
             assert_eq!(
@@ -320,7 +362,7 @@ fn original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry()
             );
             assert_eq!(worker.state.view().height(), 1);
             assert!(worker.payload_build.is_none());
-            assert!(worker.last_built.is_none());
+            assert!(worker.completed_payload.is_none());
             assert!(worker.live.is_none());
             assert!(worker.finishing.is_none());
             assert!(worker.pending_commit.is_none());
@@ -328,7 +370,7 @@ fn original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry()
             assert!(events.try_recv().is_err());
             drop(blocking_owner);
             assert!(registration.poll_wait(&release, &mut context).is_ready());
-            let (Some(bytes), false) = worker.build(2, 0, 1 << 20).unwrap() else {
+            let (Some(bytes), false) = worker.build(2, 0, 1 << 20, 100).unwrap() else {
                 panic!("the exact original queued work retries after the original release");
             };
             assert!(worker.routing_refusal.is_none());
@@ -1118,7 +1160,7 @@ fn consuming_publication_failure_blocks_every_reexecution_path() {
         worker.discard(2, &[]);
         worker.reject(2, 0, qc.block_hash);
         assert!(matches!(
-            worker.build(2, 0, 1024),
+            worker.build(2, 0, 1024, 100),
             Err(PublicationError::RecoveryRequired(_))
         ));
         assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
@@ -1949,10 +1991,26 @@ fn quarantine_requires_the_exact_control_free_transaction_rejection_hash() {
         let block = proposal(chain, worker);
         let crypto = worker.context.crypto.as_ref().unwrap();
         let hash = block.hash(&**crypto);
-        worker.last_built = Some((2, 0, Vec::new()));
+        let (_, time) = iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(2_001));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time,
+        ));
+        let accepted = crate::tx::AcceptedTransaction::accept_with_time_source(
+            chain.tick(2_000),
+            &chain.network_id(),
+            Duration::from_secs(1),
+            chain.state().view().world().parameters().transaction(),
+            &iroha_config::parameters::actual::Crypto::default(),
+            &time,
+        )
+        .unwrap();
+        let original_input = accepted.hash_as_entrypoint();
+        queue.push(accepted, chain.state().view()).unwrap();
+        worker.queue = Some(Arc::clone(&queue));
         worker.reject(2, 0, hash);
         assert!(
-            worker.last_built.is_some(),
+            queue.queued_len() == 1 && queue.contains_entrypoint_hash(original_input),
             "no transaction verdict authorizes queue isolation"
         );
         worker.quarantine_context = Some(QuarantineContext {
@@ -1963,7 +2021,7 @@ fn quarantine_requires_the_exact_control_free_transaction_rejection_hash() {
         });
         worker.reject(2, 0, Hash32([201; 32]));
         assert!(
-            worker.last_built.is_some(),
+            queue.queued_len() == 1 && queue.contains_entrypoint_hash(original_input),
             "another proposal cannot consume the original queue selection"
         );
         let mut controlled = block.header().clone();
@@ -1979,7 +2037,7 @@ fn quarantine_requires_the_exact_control_free_transaction_rejection_hash() {
             "malformed control never authorizes transaction blame"
         );
         worker.reject(2, 0, hash);
-        assert!(worker.last_built.is_some());
+        assert!(queue.queued_len() == 1 && queue.contains_entrypoint_hash(original_input));
     });
 }
 
@@ -2712,7 +2770,7 @@ fn native_context_archive_failure_preserves_original_bytes_until_durable_acknowl
                 pointer
             );
             assert!(worker.execute(&block, qc.block_hash).is_none());
-            assert_eq!(worker.build(3, 0, 1 << 20).unwrap(), (None, false));
+            assert_eq!(worker.build(3, 0, 1 << 20, 100).unwrap(), (None, false));
             assert_eq!(worker.applied.0, 1);
             assert!(events.try_recv().is_err());
         }
@@ -2916,7 +2974,7 @@ fn original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_r
             let budget = worker.state.ivm_execution_budget();
             let charged = budget.reserved_bytes();
             assert!(matches!(
-                norito::with_decode_limits_scope(limits, || worker.build(2, 0, 1 << 20)),
+                norito::with_decode_limits_scope(limits, || worker.build(2, 0, 1 << 20, 100)),
                 Err(PublicationError::Retryable(_))
             ));
             assert_eq!(
@@ -2925,7 +2983,7 @@ fn original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_r
                 "the actual merge proposal must retain the original policy owner before diagnostics"
             );
             assert!(worker.payload_build.is_none());
-            assert!(worker.last_built.is_none());
+            assert!(worker.completed_payload.is_none());
             assert!(worker.live.is_none());
             assert!(worker.recovery.is_none());
             assert!(worker.results.is_empty());
@@ -2946,7 +3004,7 @@ fn original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_r
                     .get(),
                 &original_policy
             );
-            let (payload, _) = worker.build(2, 0, 1 << 20).unwrap();
+            let (payload, _) = worker.build(2, 0, 1 << 20, 100).unwrap();
             let payload = payload.expect("same queued original retries after caller scope removal");
             let block = super::super::payload::decode(payload.as_slice()).unwrap();
             assert!(

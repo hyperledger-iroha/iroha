@@ -15,16 +15,15 @@ use mv::storage::StorageReadOnly as _;
 use std::collections::BTreeMap;
 
 fn registry() -> KagemushaGovernedVerifierRegistryV1 {
-    let instruction: iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1 =
-        norito::decode_canonical(include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
-        )))
-        .expect("original canonical threshold-authenticated activation fixture");
-    instruction
-        .proposal
-        .successor()
-        .expect("exact first activation")
+    let (mut registry, manifest, receipt, attestation) =
+        crate::smartcontracts::isi::kagemusha::release_evidence_tests::release_evidence();
+    registry
+        .install_authenticated_release(&manifest, &receipt, &attestation)
+        .expect("original threshold-authenticated release evidence");
+    registry
+        .activate_standby(None, manifest.release_id)
+        .expect("exact first activation");
+    registry
 }
 fn network() -> NetworkId {
     NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(

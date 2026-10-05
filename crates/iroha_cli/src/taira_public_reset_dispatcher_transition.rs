@@ -1,7 +1,8 @@
 //! Reversible replacement of the fixed dispatcher after a sealed occupied deployment.
 //!
-//! This root-only owner changes exactly the dispatcher and five guard files. It
-//! does not acquire a new deployment lease, reset state, or interpret old inventories.
+//! This Linux owner changes the guest dispatcher and its four validator guards.
+//! The native Mac custodian remains independently admitted through the required
+//! signed host-pair capture and candidate.
 // The root transaction runs on Linux only; other platforms compile these items solely for their
 // unit tests, which do not reach every Linux entry point.
 #![cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]

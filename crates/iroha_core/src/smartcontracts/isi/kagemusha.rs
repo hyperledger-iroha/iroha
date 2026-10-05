@@ -20,6 +20,8 @@ pub mod ordinary_mint_publication;
 mod ordinary_mint_runtime;
 mod ordinary_mint_submission;
 #[cfg(test)]
+pub(crate) mod release_evidence_tests;
+#[cfg(test)]
 pub(crate) mod runtime_publication_tests;
 
 pub(crate) use authority::{
@@ -1114,9 +1116,12 @@ mod release_lifecycle_tests {
         let installer = source
             .split_once("    pub fn install_authenticated_release(")
             .expect("runtime installer")
-            .1;
+            .1
+            .split_once("\n    }\n")
+            .expect("closed runtime installer")
+            .0;
         let authorization = installer
-            .find(".authorize_monetary_release(Arc::clone(&release))")
+            .find("ordinary_mint_runtime::authorize_selected_monetary_family(")
             .expect("native monetary authorization");
         let publication = installer
             .find("self.lifecycle.register(release_id)?;")

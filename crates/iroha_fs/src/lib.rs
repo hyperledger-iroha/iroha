@@ -371,6 +371,21 @@ impl PrivateDirectory {
         self.inner.open_readonly(checked_name(name.as_ref())?)
     }
 
+    /// Retain one private child together with this directory's existing ancestor authority.
+    ///
+    /// This opens only the child descriptor. The returned reader shares the already-retained
+    /// ancestor handles and continues to reject changed paths, links and nonprivate custody.
+    ///
+    /// # Errors
+    /// Refuses invalid names, missing children, unsafe custody and native errors.
+    pub fn open_retained_private(&self, name: impl AsRef<OsStr>) -> io::Result<RetainedFile> {
+        Ok(RetainedFile {
+            inner: self
+                .inner
+                .open_retained(checked_name(name.as_ref())?, true, false)?,
+        })
+    }
+
     /// Publish this exact completed directory under an absent sibling name.
     ///
     /// Callers must validate and sync the complete tree first and drop all retained descendants.
@@ -431,6 +446,30 @@ impl ReaderDirectory {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         Ok(Self {
             inner: platform::Directory::open_reader(&absolute(path.as_ref())?)?,
+        })
+    }
+    /// Return this retained directory's absolute native path.
+    pub fn path(&self) -> &Path {
+        self.inner.path()
+    }
+    /// Retain one private child while sharing this reader's existing ancestor handles.
+    /// # Errors
+    /// Refuses invalid names, unsafe private custody, replaced paths and native errors.
+    pub fn open_retained_private(&self, name: impl AsRef<OsStr>) -> io::Result<RetainedFile> {
+        Ok(RetainedFile {
+            inner: self
+                .inner
+                .open_retained(checked_name(name.as_ref())?, true, false)?,
+        })
+    }
+    /// Retain one regular child while sharing this reader's existing ancestor handles.
+    /// # Errors
+    /// Refuses invalid names, foreign mutation, links, replaced paths and native errors.
+    pub fn open_retained_regular(&self, name: impl AsRef<OsStr>) -> io::Result<RetainedFile> {
+        Ok(RetainedFile {
+            inner: self
+                .inner
+                .open_retained(checked_name(name.as_ref())?, false, false)?,
         })
     }
     /// Recheck the original directory and all retained ancestors.

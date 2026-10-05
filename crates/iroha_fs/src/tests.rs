@@ -955,3 +955,124 @@ fn retained_directory_custody_keeps_native_child_and_ancestor_replacement_blocke
     retained.revalidate().unwrap();
     assert_eq!(retained.identity().unwrap(), identity);
 }
+
+#[cfg(unix)]
+#[test]
+fn retained_child_readers_fit_native_descriptor_limit() {
+    const CHILD_MARKER: &str = "IROHA_FS_RETAINED_CHILD_LIMIT_TEST";
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        // Isolate the real native limit from the parallel test runner. The
+        // executable path is a separate argument, never shell source text.
+        let result = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "ulimit -n 64; exec \"$1\" --exact tests::retained_child_readers_fit_native_descriptor_limit --nocapture",
+                "iroha-fs-retained-child-test",
+            ])
+            .arg(std::env::current_exe().unwrap())
+            .env(CHILD_MARKER, "1")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    let (_temporary, store) = store();
+    let mut nested = store.retain().unwrap();
+    for index in 0..12 {
+        nested = nested.ensure_child(format!("ancestor-{index}")).unwrap();
+    }
+    for index in 0..32 {
+        nested
+            .write_atomic(
+                format!("journal-{index}"),
+                b"opaque incident",
+                PublishMode::CreateNew,
+            )
+            .unwrap();
+    }
+    let mut retained = Vec::new();
+    for index in 0..32 {
+        retained.push(
+            nested
+                .open_retained_private(format!("journal-{index}"))
+                .unwrap(),
+        );
+    }
+    let path = nested.path().to_path_buf();
+    drop(nested);
+    drop(store);
+    for file in retained {
+        file.revalidate().unwrap();
+        let mut bytes = [0; 15];
+        read_exact_at(file.file(), &mut bytes, 0).unwrap();
+        assert_eq!(&bytes, b"opaque incident");
+    }
+    let reader = ReaderDirectory::open(path).unwrap();
+    let mut retained = Vec::new();
+    for index in 0..32 {
+        let file = if index % 2 == 0 {
+            reader
+                .open_retained_private(format!("journal-{index}"))
+                .unwrap()
+        } else {
+            reader
+                .open_retained_regular(format!("journal-{index}"))
+                .unwrap()
+        };
+        retained.push(file);
+    }
+    drop(reader);
+    for file in retained {
+        file.revalidate().unwrap();
+        let mut bytes = [0; 15];
+        read_exact_at(file.file(), &mut bytes, 0).unwrap();
+        assert_eq!(&bytes, b"opaque incident");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_child_readers_refuse_replaced_ancestor_and_foreign_child() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (temporary, store) = store();
+    let child = store.create_child("shared-readers").unwrap();
+    child
+        .write_atomic("record", b"original", PublishMode::CreateNew)
+        .unwrap();
+    let reader = ReaderDirectory::open(child.path()).unwrap();
+    let files = [
+        child.open_retained_private("record").unwrap(),
+        reader.open_retained_private("record").unwrap(),
+        reader.open_retained_regular("record").unwrap(),
+    ];
+    for bad in ["../record", "a/record", "", ".", ".."] {
+        assert!(child.open_retained_private(bad).is_err());
+        assert!(reader.open_retained_private(bad).is_err());
+        assert!(reader.open_retained_regular(bad).is_err());
+    }
+    let displaced = temporary.path().join("displaced-readers");
+    fs::rename(child.path(), &displaced).unwrap();
+    fs::create_dir(child.path()).unwrap();
+    fs::set_permissions(child.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(child.path().join("record"), b"foreign").unwrap();
+    fs::set_permissions(
+        child.path().join("record"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    for file in files {
+        assert!(file.revalidate().is_err());
+        let mut original = [0; 8];
+        read_exact_at(file.file(), &mut original, 0).unwrap();
+        assert_eq!(&original, b"original");
+    }
+    assert!(reader.open_retained_regular("record").is_err());
+    assert!(reader.open_retained_private("record").is_err());
+    assert!(child.open_retained_private("record").is_err());
+    assert_eq!(fs::read(child.path().join("record")).unwrap(), b"foreign");
+}

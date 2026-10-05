@@ -1061,7 +1061,7 @@ impl IVMHost for CoreHost {
                     vm,
                     Self::resolve_code_tlv_addr(vm, vm.register(10)),
                 )?;
-                crate::host::state_get_gas_quote(path_len)
+                reserve_available_syscall_gas_at_least(vm, crate::host::state_path_gas(path_len))?
             }
             syscalls::SYSCALL_STATE_LEN => {
                 let path_len = crate::host::quote_state_path_payload_len_at(
@@ -3071,7 +3071,7 @@ mod tests {
         assert_eq!(vm.register(12), syscalls::STATE_SCAN_MAX_ITEMS_V1);
     }
     #[test]
-    fn state_get_quote_minus_one_observes_no_state_or_guest_output() {
+    fn state_get_exact_value_minus_one_publishes_no_state_or_guest_output() {
         let mut host = CoreHost::new();
         host.insert_state_value("large", vec![0xabu8; syscalls::STATE_MAX_VALUE_BYTES]);
         let mut vm = IVM::new(u64::MAX);
@@ -3086,9 +3086,10 @@ mod tests {
         vm.load_program(&program).expect("load program");
         vm.set_register(10, key_ptr);
         vm.set_register(11, 0xfeed);
-        let quote = host
-            .prepare_syscall(syscalls::SYSCALL_STATE_GET, &vm)
-            .expect("quote bounded maximum value");
+        let quote = crate::host::state_value_gas(
+            norito::to_bytes(&key).expect("encode key").len(),
+            syscalls::STATE_MAX_VALUE_BYTES,
+        );
         vm.set_gas_limit(quote.saturating_sub(1));
         let error = vm
             .execute_syscall(&mut host, syscalls::SYSCALL_STATE_GET)
@@ -3096,12 +3097,12 @@ mod tests {
         assert_eq!(error, VMError::OutOfGas);
         assert_eq!(
             vm.remaining_gas(),
-            quote - 1,
-            "an unaffordable up-front quote performs no host work and is not debited"
+            0,
+            "an unaffordable exact response consumes its reserve before publishing output"
         );
         assert!(
             !host.access_log.read_keys.contains("large"),
-            "preparation must reject quote-minus-one before the host observes the state key"
+            "an unaffordable response must not publish the state read"
         );
         assert_eq!(
             vm.register(10),
@@ -3109,6 +3110,190 @@ mod tests {
             "STATE_GET must not allocate output"
         );
         assert_eq!(vm.register(11), 0xfeed, "STATE_GET must not mutate outputs");
+    }
+    #[test]
+    fn state_get_exact_value_gas_succeeds_and_refunds_in_every_lightweight_host() {
+        let path: StatePath = "small".parse().expect("state path");
+        let value = bytes_state_value_record(b"bounded value");
+        let path_gas =
+            crate::host::state_path_gas(norito::to_bytes(&path).expect("encode path").len());
+        for host_kind in 0..3 {
+            for present in [false, true] {
+                let actual = if present {
+                    crate::host::state_value_gas(
+                        norito::to_bytes(&path).expect("encode path").len(),
+                        value.len(),
+                    )
+                } else {
+                    path_gas
+                };
+                for available in [actual - 1, actual, actual + 7] {
+                    assert!(available < syscalls::STATE_MAX_VALUE_BYTES as u64);
+                    let mut host: Box<dyn IVMHost> = match host_kind {
+                        0 => Box::new(crate::host::DefaultHost::new()),
+                        1 => Box::new(CoreHost::new()),
+                        _ => {
+                            let key = iroha_crypto::KeyPair::from_seed(
+                                vec![0x73; 32],
+                                iroha_crypto::Algorithm::Ed25519,
+                            );
+                            Box::new(crate::mock_wsv::WsvHost::new_with_subject(
+                                crate::mock_wsv::MockWorldStateView::new(),
+                                crate::mock_wsv::AccountId::new(key.public_key().clone()),
+                            ))
+                        }
+                    };
+                    let mut vm = IVM::new(u64::MAX);
+                    let path_ptr = alloc_state_path(&mut vm, &path);
+                    if present {
+                        let value_ptr = alloc_state_value(&mut vm, &value);
+                        vm.set_register(10, path_ptr);
+                        vm.set_register(11, value_ptr);
+                        host.syscall(syscalls::SYSCALL_STATE_SET, &mut vm)
+                            .expect("seed the actual host state");
+                    }
+                    host.begin_tx(&crate::parallel::StateAccessSet::default())
+                        .expect("begin read transaction");
+                    vm.load_program(&assemble_state_value_read_program(path.as_ref()))
+                        .expect("load the canonical declared state program");
+                    vm.set_register(10, path_ptr);
+                    vm.set_register(11, 0xfeed);
+                    vm.set_gas_limit(available);
+                    let input_before = vm
+                        .alloc_input_tlv(&make_pointer_tlv(PointerType::Blob, b"before"))
+                        .expect("allocate input sentinel");
+                    let owned_copy_bytes_before =
+                        crate::mock_wsv::OWNED_STATE_READ_BYTES.with(std::cell::Cell::get);
+                    let result = vm.execute_syscall(host.as_mut(), syscalls::SYSCALL_STATE_GET);
+                    assert_eq!(
+                        crate::mock_wsv::OWNED_STATE_READ_BYTES.with(std::cell::Cell::get),
+                        owned_copy_bytes_before,
+                        "STATE_GET must borrow before its exact-cost preflight"
+                    );
+                    let log = host.finish_tx().expect("finish the read transaction");
+                    if available < actual {
+                        assert_eq!(result, Err(VMError::OutOfGas));
+                        assert_eq!(vm.register(10), path_ptr);
+                        assert_eq!(vm.register(11), 0xfeed);
+                        assert!(log.read_keys.is_empty());
+                        assert_eq!(vm.remaining_gas(), if present { 0 } else { available });
+                        let input_after = vm
+                            .alloc_input_tlv(&make_pointer_tlv(PointerType::Blob, b"after"))
+                            .expect("allocate input sentinel after refusal");
+                        let before_len = make_pointer_tlv(PointerType::Blob, b"before").len();
+                        assert_eq!(
+                            input_after,
+                            input_before + (before_len as u64).next_multiple_of(8)
+                        );
+                    } else {
+                        assert_eq!(result, Ok(()));
+                        assert_eq!(vm.remaining_gas(), available - actual);
+                        assert!(log.read_keys.contains(path.as_ref()));
+                        if present {
+                            let output = vm.validate_tlv(vm.register(10)).expect("state output");
+                            assert_eq!(output.type_id, PointerType::NoritoBytes);
+                            assert_eq!(output.payload, value.as_slice());
+                        } else {
+                            assert_eq!(vm.register(10), 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn mock_wsv_owned_read_counter_observes_the_real_copy_path() {
+        let mut wsv = crate::mock_wsv::MockWorldStateView::new();
+        let value = vec![0xab; 128];
+        wsv.sc_set("small", value.clone())
+            .expect("seed actual stored bytes");
+        let before = crate::mock_wsv::OWNED_STATE_READ_BYTES.with(std::cell::Cell::get);
+        assert!(wsv.sc_get("missing").is_none());
+        assert_eq!(
+            crate::mock_wsv::OWNED_STATE_READ_BYTES.with(std::cell::Cell::get),
+            before
+        );
+        let mut copied = wsv.sc_get("small").expect("owned stored value");
+        assert_eq!(copied, value);
+        assert_eq!(
+            crate::mock_wsv::OWNED_STATE_READ_BYTES.with(std::cell::Cell::get),
+            before + value.len()
+        );
+        copied[0] ^= 1;
+        assert_eq!(
+            wsv.sc_get("small").unwrap(),
+            value,
+            "the original owner is unchanged"
+        );
+    }
+    #[test]
+    fn mock_wsv_state_metadata_reads_borrow_the_stored_value() {
+        let key =
+            iroha_crypto::KeyPair::from_seed(vec![0x74; 32], iroha_crypto::Algorithm::Ed25519);
+        let mut wsv = crate::mock_wsv::MockWorldStateView::new();
+        wsv.sc_set("maximum", vec![0xab; syscalls::STATE_MAX_VALUE_BYTES])
+            .expect("seed the maximum bounded value");
+        let mut host = crate::mock_wsv::WsvHost::new_with_subject(
+            wsv,
+            crate::mock_wsv::AccountId::new(key.public_key().clone()),
+        );
+        for syscall in [syscalls::SYSCALL_STATE_HAS, syscalls::SYSCALL_STATE_LEN] {
+            let mut vm = IVM::new(u64::MAX);
+            let path: StatePath = "maximum".parse().expect("path");
+            let path_ptr = alloc_state_path(&mut vm, &path);
+            vm.load_program(&assemble_state_value_read_program(path.as_ref()))
+                .expect("load declared state program");
+            vm.set_register(10, path_ptr);
+            let available =
+                crate::host::state_path_gas(norito::to_bytes(&path).expect("encode path").len());
+            vm.set_gas_limit(available);
+            let before = crate::mock_wsv::OWNED_STATE_READ_BYTES.with(std::cell::Cell::get);
+            vm.execute_syscall(&mut host, syscall)
+                .expect("the original path-only gas suffices");
+            assert_eq!(vm.remaining_gas(), 0);
+            assert_eq!(
+                crate::mock_wsv::OWNED_STATE_READ_BYTES.with(std::cell::Cell::get),
+                before
+            );
+            assert_eq!(
+                vm.register(10),
+                if syscall == syscalls::SYSCALL_STATE_HAS {
+                    1
+                } else {
+                    syscalls::STATE_MAX_VALUE_BYTES as u64
+                }
+            );
+            if syscall == syscalls::SYSCALL_STATE_LEN {
+                assert_eq!(vm.register(11), 1);
+            }
+        }
+    }
+    #[test]
+    fn state_get_path_minimum_minus_one_keeps_gas_and_guest_outputs() {
+        let mut host = CoreHost::new();
+        host.insert_state_value("large", vec![0xab; syscalls::STATE_MAX_VALUE_BYTES]);
+        let mut vm = IVM::new(u64::MAX);
+        let key: StatePath = "large".parse().expect("state key");
+        let path_ptr = alloc_state_path(&mut vm, &key);
+        vm.load_program(&assemble_state_value_read_program(key.as_ref()))
+            .expect("load declared state program");
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, 0xfeed);
+        let available =
+            crate::host::state_path_gas(norito::to_bytes(&key).expect("encode path").len()) - 1;
+        vm.set_gas_limit(available);
+        assert_eq!(
+            vm.execute_syscall(&mut host, syscalls::SYSCALL_STATE_GET),
+            Err(VMError::OutOfGas)
+        );
+        assert_eq!(vm.remaining_gas(), available);
+        assert_eq!(vm.register(10), path_ptr);
+        assert_eq!(vm.register(11), 0xfeed);
+        assert!(host.access_log.read_keys.is_empty());
+        assert_eq!(
+            host.state_bytes(key.as_ref()).unwrap().len(),
+            syscalls::STATE_MAX_VALUE_BYTES
+        );
     }
     #[test]
     fn state_len_of_maximum_value_uses_only_the_path_quote() {

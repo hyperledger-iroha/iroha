@@ -258,6 +258,19 @@ fn shared_nested_runtime_slot_keeps_original_pool_through_cold_idle_and_warm_use
     assert_eq!(warm.memory.root(), root);
     assert_eq!(warm.remaining_gas(), GAS);
     assert_eq!(budget.reserved_bytes(), charged);
+    // Reusing the loaded row needs no new credit; a new invocation still
+    // requires its own register-log owner before any guest effect can run.
+    let before_invocation = warm.execution_summary();
+    assert!(matches!(
+        warm.run_with_host(&mut ivm::host::DefaultHost::new()),
+        Err(ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
+            requested_bytes,
+            limit_bytes: 0,
+        })) if requested_bytes > 0
+    ));
+    assert_eq!(warm.execution_summary(), before_invocation);
+    assert_eq!(budget.reserved_bytes(), charged);
+    budget.set_limit_bytes(LIMIT);
     assert_eq!(
         warm.run_with_host(&mut ivm::host::DefaultHost::new()),
         Ok(())
@@ -346,6 +359,19 @@ fn local_generic_runtime_slot_keeps_original_program_and_warm_reset() {
     assert_eq!(warm.register(9), 0);
     assert_eq!(warm.remaining_gas(), GAS);
     assert_eq!(warm.memory.heap_max_limit(), HEAP);
+    // Reusing the loaded row needs no new credit; a new invocation still
+    // requires its own register-log owner before any guest effect can run.
+    let before_invocation = warm.execution_summary();
+    assert!(matches!(
+        warm.run_with_host(&mut ivm::host::DefaultHost::new()),
+        Err(ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
+            requested_bytes,
+            limit_bytes: 0,
+        })) if requested_bytes > 0
+    ));
+    assert_eq!(warm.execution_summary(), before_invocation);
+    assert_eq!(budget.reserved_bytes(), charged);
+    budget.set_limit_bytes(LIMIT);
     assert_eq!(
         warm.run_with_host(&mut ivm::host::DefaultHost::new()),
         Ok(())
@@ -527,6 +553,10 @@ fn runtime_slot_shortage_declines_optional_retention_without_changing_completed_
         let mut declined = cache.checkout_generic_runtime(&summary, GAS, HEAP).unwrap();
         assert!(declined.backing.is_none());
         assert_eq!(budget.reserved_bytes(), mandatory);
+        // The artificial checkout shortage proved that only the optional row
+        // was declined. Restore the original pool limit for independently
+        // funded invocation work before comparing actual guest behavior.
+        budget.set_limit_bytes(LIMIT);
         if fault {
             declined.set_gas_limit(0);
         }

@@ -7,8 +7,8 @@
 //! newer block. Checkpoints let off-chain readers (Torii collections and the
 //! explorer) start a descending walk just above their target instead:
 //!
-//! * *sparse* checkpoints keep every [`HISTORY_CHECKPOINT_INTERVAL`]-th height,
-//!   so a cold read pays for at most that many extra blocks;
+//! * *sparse* checkpoints keep selected [`HISTORY_CHECKPOINT_INTERVAL`]-th heights
+//!   in finite native backing; a retained neighboring checkpoint shortens a cold walk;
 //! * *recent* entries keep the last [`RECENT_CAPACITY`] heights that walks
 //!   verified, so a reader paging downward starts one block above its target.
 //!
@@ -20,21 +20,24 @@
 //! Checkpoints are never persisted, decoded or consulted by consensus:
 //! on-chain readers keep walking from the tip, so metered work never depends
 //! on node-local state.
-use std::collections::{BTreeMap, VecDeque};
+mod finite;
+
+use iroha_allocation::AllocationBudget;
 
 use iroha_crypto::HashOf;
 use iroha_data_model::block::BlockHeader;
 use iroha_sumeragi::types::Hash32;
 use parking_lot::RwLock;
 
-/// Heights between consecutive sparse checkpoints; also the most extra blocks
-/// a cold off-chain read walks to reach its target.
+/// Heights between consecutive sparse checkpoint candidates. Eviction can require a longer
+/// authenticated walk, which remains subject to the reader's independent work limit.
 pub const HISTORY_CHECKPOINT_INTERVAL: u64 = 64;
 
 /// Recently verified heights kept for readers paging through history.
 pub const RECENT_CAPACITY: usize = 4096;
 
 /// Entries examined per lookup before falling back to the tip.
+#[cfg(test)]
 const LOOKUP_CANDIDATES: usize = 4;
 
 /// The authenticated native identity of one committed height.
@@ -48,25 +51,44 @@ pub struct HistoryCheckpoint {
     pub result: Hash32,
 }
 
-/// Sparse and recent identities by height.
+/// Fixed native sparse/recent identities in an independent node-cache pool.
 ///
-/// Memory grows by one sparse entry per [`HISTORY_CHECKPOINT_INTERVAL`]
-/// committed blocks (about 1.6 MiB per million blocks) plus at most
-/// [`RECENT_CAPACITY`] recent entries.
-#[derive(Debug, Default)]
+/// Full capacity evicts only optional least-recently-observed entries. Allocator refusal
+/// leaves this cache empty; no query, consensus, tip or authenticated identity changes.
 pub struct HistoryCheckpoints {
-    inner: RwLock<Entries>,
+    inner: RwLock<Option<finite::Storage>>,
 }
-
-#[derive(Debug, Default)]
-struct Entries {
-    sparse: BTreeMap<u64, HistoryCheckpoint>,
-    recent: BTreeMap<u64, HistoryCheckpoint>,
-    /// Recent heights in insertion order, for eviction.
-    recent_order: VecDeque<u64>,
+impl std::fmt::Debug for HistoryCheckpoints {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.debug_struct("HistoryCheckpoints")
+            .field("enabled", &self.inner.read().is_some())
+            .finish()
+    }
+}
+impl Default for HistoryCheckpoints {
+    fn default() -> Self {
+        Self::new(iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY.get())
+    }
 }
 
 impl HistoryCheckpoints {
+    /// Initialize complete fixed backing in its own finite pool before publication.
+    /// Invalid native layout or physical refusal declines this optional cache.
+    pub fn new(capacity: usize) -> Self {
+        let storage = (capacity != 0
+            && capacity
+                <= iroha_config::parameters::defaults::kura::MAX_HISTORY_CHECKPOINT_CACHE_CAPACITY)
+            .then(|| finite::Geometry::for_count(capacity))
+            .flatten()
+            .and_then(|geometry| {
+                let pool = AllocationBudget::new(geometry.backing_bytes);
+                finite::Storage::new(geometry, &pool).ok()
+            });
+        Self {
+            inner: RwLock::new(storage),
+        }
+    }
+
     /// Whether `height` keeps a sparse checkpoint.
     #[must_use]
     pub const fn is_checkpoint_height(height: u64) -> bool {
@@ -76,17 +98,8 @@ impl HistoryCheckpoints {
     /// Record an identity a reader just verified: as a recent entry, and as a
     /// sparse checkpoint when `height` is a checkpoint height.
     pub fn record(&self, height: u64, checkpoint: HistoryCheckpoint) {
-        let mut entries = self.inner.write();
-        if Self::is_checkpoint_height(height) {
-            entries.sparse.insert(height, checkpoint);
-        }
-        if entries.recent.insert(height, checkpoint).is_none() {
-            entries.recent_order.push_back(height);
-            if entries.recent_order.len() > RECENT_CAPACITY
-                && let Some(evicted) = entries.recent_order.pop_front()
-            {
-                entries.recent.remove(&evicted);
-            }
+        if let Some(entries) = self.inner.write().as_mut() {
+            entries.record(height, checkpoint, Self::is_checkpoint_height(height));
         }
     }
 
@@ -97,47 +110,27 @@ impl HistoryCheckpoints {
         if !Self::is_checkpoint_height(height) {
             return;
         }
-        let mut entries = self.inner.write();
-        if entries.sparse.get(&height) != Some(&checkpoint) {
-            entries.sparse.insert(height, checkpoint);
+        if let Some(entries) = self.inner.write().as_mut() {
+            entries.record_sparse(height, checkpoint);
         }
     }
 
     /// The nearest entries at or above `target` and at or below `ceiling`,
     /// nearest first; callers verify each against their hash journal.
     #[must_use]
-    pub fn candidates(&self, target: u64, ceiling: u64) -> Vec<(u64, HistoryCheckpoint)> {
-        if target > ceiling {
-            return Vec::new();
-        }
-        let entries = self.inner.read();
-        let mut found: Vec<(u64, HistoryCheckpoint)> = entries
-            .recent
-            .range(target..=ceiling)
-            .take(LOOKUP_CANDIDATES)
-            .chain(
-                entries
-                    .sparse
-                    .range(target..=ceiling)
-                    .take(LOOKUP_CANDIDATES),
-            )
-            .map(|(height, checkpoint)| (*height, *checkpoint))
-            .collect();
-        found.sort_by_key(|(height, _)| *height);
-        found.dedup();
-        found.truncate(LOOKUP_CANDIDATES);
-        found
+    pub(crate) fn candidates(&self, target: u64, ceiling: u64) -> finite::Candidates {
+        self.inner
+            .read()
+            .as_ref()
+            .map_or_else(finite::Candidates::default, |entries| {
+                entries.candidates(target, ceiling)
+            })
     }
 
     /// Drop `checkpoint` at `height` after it contradicted a hash journal.
     pub fn forget(&self, height: u64, checkpoint: &HistoryCheckpoint) {
-        let mut entries = self.inner.write();
-        if entries.sparse.get(&height) == Some(checkpoint) {
-            entries.sparse.remove(&height);
-        }
-        if entries.recent.get(&height) == Some(checkpoint) {
-            entries.recent.remove(&height);
-            entries.recent_order.retain(|recent| *recent != height);
+        if let Some(entries) = self.inner.write().as_mut() {
+            entries.forget(height, checkpoint);
         }
     }
 
@@ -145,20 +138,28 @@ impl HistoryCheckpoints {
     #[cfg(test)]
     #[must_use]
     pub fn sparse_len(&self) -> usize {
-        self.inner.read().sparse.len()
+        self.inner
+            .read()
+            .as_ref()
+            .map_or(0, finite::Storage::sparse_len)
     }
 
     /// Number of recent entries.
     #[cfg(test)]
     #[must_use]
     pub fn recent_len(&self) -> usize {
-        self.inner.read().recent.len()
+        self.inner
+            .read()
+            .as_ref()
+            .map_or(0, finite::Storage::recent_len)
     }
 
     /// Forget every entry, as after a restart without the startup walk.
     #[cfg(test)]
     pub fn clear(&self) {
-        *self.inner.write() = Entries::default();
+        if let Some(entries) = self.inner.write().as_mut() {
+            entries.clear();
+        }
     }
 }
 
@@ -173,6 +174,20 @@ mod tests {
             iroha_hash: HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])),
             core_hash: Hash32([byte; 32]),
             result: Hash32([byte.wrapping_add(1); 32]),
+        }
+    }
+
+    #[test]
+    fn checkpoint_cache_rejects_invalid_counts_without_native_backing() {
+        for count in [
+            0,
+            iroha_config::parameters::defaults::kura::MAX_HISTORY_CHECKPOINT_CACHE_CAPACITY + 1,
+            usize::MAX,
+        ] {
+            let cache = HistoryCheckpoints::new(count);
+            cache.record_sparse(HISTORY_CHECKPOINT_INTERVAL, checkpoint(1));
+            assert_eq!(cache.sparse_len(), 0);
+            assert!(cache.candidates(1, HISTORY_CHECKPOINT_INTERVAL).is_empty());
         }
     }
 

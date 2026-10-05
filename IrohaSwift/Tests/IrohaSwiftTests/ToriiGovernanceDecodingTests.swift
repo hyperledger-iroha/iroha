@@ -353,7 +353,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         XCTAssertEqual(kagemushaPayload.authorityPolicy.authoritySetId, Data(repeating: 7, count: 32))
         XCTAssertEqual(kagemushaPayload.authorityPolicy.threshold, 2)
         XCTAssertEqual(kagemushaPayload.authorityPolicy.authorizedSigners, signers)
-        XCTAssertNoThrow(try ToriiParliamentProposalV1(validating: kagemusha))
+        XCTAssertThrowsError(try ToriiParliamentProposalV1(validating: kagemusha))
     }
 
     func testKagemushaPolicyInstallRejectsNoncanonicalOrNoninitialPayloads() throws {
@@ -839,17 +839,45 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             from: JSONSerialization.data(withJSONObject: hardware)))
     }
 
-    func testKagemushaReleaseInstallDecodesExactFixture() throws {
+    private func releaseEvidenceField<T: Decodable>(
+        _ type: T.Type, data: Data, field: String
+    ) throws -> T {
+        _ = try governanceValidatedProposalJSON(data)
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let payload = try XCTUnwrap(fixture["payload"] as? [String: Any])
+        let value = try XCTUnwrap(payload[field])
+        let encoded = try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
+        return try JSONDecoder().decode(type, from: encoded)
+    }
+
+    private func releaseInstallEvidence(_ data: Data) throws -> (
+        expectedPredecessor: ToriiGovernanceKagemushaGovernedVerifierRegistryV1,
+        manifest: ToriiGovernanceKagemushaReleaseManifestV1,
+        receipt: ToriiGovernanceKagemushaInternalValidationReceiptV1,
+        attestation: ToriiGovernanceKagemushaReleaseAttestationV1
+    ) {
+        (
+            try releaseEvidenceField(ToriiGovernanceKagemushaGovernedVerifierRegistryV1.self,
+                                     data: data, field: "expected_predecessor"),
+            try releaseEvidenceField(ToriiGovernanceKagemushaReleaseManifestV1.self,
+                                     data: data, field: "manifest"),
+            try releaseEvidenceField(ToriiGovernanceKagemushaInternalValidationReceiptV1.self,
+                                     data: data, field: "receipt"),
+            try releaseEvidenceField(ToriiGovernanceKagemushaReleaseAttestationV1.self,
+                                     data: data, field: "attestation")
+        )
+    }
+
+    func testKagemushaReleaseInstallEvidenceDecodesExactFixture() throws {
         let fixture = try kagemushaReleaseInstallFixture()
-        let proposal = try ToriiParliamentProposalV1(validating: fixture)
-        guard case .kagemushaVerifierReleaseInstall(let release) = proposal.kind else {
-            return XCTFail("expected KagemushaVerifierReleaseInstall")
-        }
+        XCTAssertThrowsError(try ToriiParliamentProposalV1(validating: fixture))
+        let release = try releaseInstallEvidence(fixture)
         XCTAssertNotNil(release.expectedPredecessor.authorityPolicy)
         XCTAssertNil(release.expectedPredecessor.activeReleaseId)
         XCTAssertTrue(release.expectedPredecessor.releases.isEmpty)
         XCTAssertEqual(release.manifest.version, 1)
-        XCTAssertEqual(release.manifest.networkId, release.networkId)
+        XCTAssertEqual(release.manifest.networkId, try releaseEvidenceField(
+            NetworkId.self, data: fixture, field: "network_id"))
         XCTAssertEqual(release.manifest.purpose, .production)
         XCTAssertEqual(release.manifest.releaseId.bytes.count, 32)
         XCTAssertEqual(release.manifest.helperProtocols.count, 7)
@@ -976,13 +1004,6 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             payload["manifest"] = manifest
             fixture["payload"] = payload
         }
-        let ungovernedPredecessor = try mutatedKagemushaReleaseInstallFixture { fixture in
-            var payload = fixture["payload"] as! [String: Any]
-            var predecessor = payload["expected_predecessor"] as! [String: Any]
-            predecessor["authority_policy"] = NSNull()
-            payload["expected_predecessor"] = predecessor
-            fixture["payload"] = payload
-        }
         let inexactNumber = try mutatedKagemushaReleaseInstallFixture { fixture in
             var payload = fixture["payload"] as! [String: Any]
             var receipt = payload["receipt"] as! [String: Any]
@@ -1020,12 +1041,11 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             ("short digest", shortDigest),
             ("retired artifact role", retiredArtifactRole),
             ("missing unit value", missingUnitValue),
-            ("ungoverned predecessor", ungovernedPredecessor),
             ("inexact integer", inexactNumber),
             ("invalid P-256 point", invalidP256Key),
             ("high-S P-256 signature", highSSignature),
         ] {
-            XCTAssertThrowsError(try ToriiParliamentProposalV1(validating: data), name)
+            XCTAssertThrowsError(try releaseInstallEvidence(data), name)
         }
     }
 
@@ -1049,22 +1069,25 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         return try JSONSerialization.data(withJSONObject: fixture, options: [.sortedKeys])
     }
 
-    func testKagemushaReleaseActivateDecodesExactFixture() throws {
-        let proposal = try ToriiParliamentProposalV1(validating: kagemushaReleaseActivateFixture())
-        guard case .kagemushaVerifierReleaseActivate(let activation) = proposal.kind else {
-            return XCTFail("expected KagemushaVerifierReleaseActivate")
-        }
-        XCTAssertNotNil(activation.expectedPredecessor.authorityPolicy)
-        XCTAssertNil(activation.expectedPredecessor.activeReleaseId)
-        XCTAssertEqual(activation.expectedPredecessor.releases.count, 1)
-        XCTAssertEqual(activation.expectedPredecessor.releases[0].status, .standby)
+    func testKagemushaReleaseActivateEvidenceKeepsTheStandbyRegistry() throws {
+        let fixture = try kagemushaReleaseActivateFixture()
+        XCTAssertThrowsError(try ToriiParliamentProposalV1(validating: fixture))
+        let registry = try releaseEvidenceField(
+            ToriiGovernanceKagemushaGovernedVerifierRegistryV1.self,
+            data: fixture, field: "expected_predecessor"
+        )
+        XCTAssertNotNil(registry.authorityPolicy)
+        XCTAssertNil(registry.activeReleaseId)
+        XCTAssertEqual(registry.releases.count, 1)
+        XCTAssertEqual(registry.releases[0].status, .standby)
         XCTAssertEqual(
-            activation.successorReleaseId,
-            activation.expectedPredecessor.releases[0].releaseId
+            try releaseEvidenceField(ToriiGovernanceKagemushaBytes32V1.self,
+                                     data: fixture, field: "successor_release_id"),
+            registry.releases[0].releaseId
         )
     }
 
-    func testKagemushaReleaseActivateRejectsMalformedAndStaleTargets() throws {
+    func testRetiredKagemushaReleaseActivateRejectsAllPayloadShapes() throws {
         let extraPayloadField = try mutatedKagemushaReleaseActivateFixture { fixture in
             var payload = fixture["payload"] as! [String: Any]
             payload["retired"] = true

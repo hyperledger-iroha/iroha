@@ -9,6 +9,7 @@ import type {
   ToriiBrowserExplorerBlock,
   ToriiBrowserExplorerInstruction,
   ToriiBrowserExplorerTransaction,
+  ToriiBrowserExplorerTransactionDetail,
 } from "./dist/toriiBrowserExplorerTypes.js";
 export type {
   ToriiBrowserExplorerAssetDefinition,
@@ -16,6 +17,8 @@ export type {
   ToriiBrowserExplorerInstruction,
   ToriiBrowserExplorerInstructionBox,
   ToriiBrowserExplorerTransaction,
+  ToriiBrowserExplorerTransactionDetail,
+  ToriiBrowserExplorerTransactionRejection,
 } from "./dist/toriiBrowserExplorerTypes.js";
 import type { SubscriptionActionResponse, SubscriptionAuthorityActionRequest, SubscriptionCancelActionRequest, SubscriptionChargeActionRequest, SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse, SubscriptionUsageDraft, SubscriptionUsageRequest } from "./dist/subscriptionTypes.js";
 import type { SorafsOrderbookSignedTransaction, SorafsOrderbookSubmissionReceipt, SorafsOrderbookTransactionSubmitOptions } from "./dist/sorafsOrderbookSubmission.js";
@@ -4716,22 +4719,6 @@ export type ToriiGovernanceProposalKind =
   | Readonly<{
       variant: "GlobalDataTriggerPermissionGovernance";
       global_data_trigger_permission_governance: ToriiGovernanceGlobalDataTriggerPermissionProposal;
-    }>
-  | Readonly<{
-      variant: "KagemushaVerifierPolicyInstall";
-      kagemusha_verifier_policy_install: ToriiGovernanceKagemushaVerifierPolicyInstallProposal;
-    }>
-  | Readonly<{
-      variant: "KagemushaVerifierReleaseInstall";
-      kagemusha_verifier_release_install: ToriiGovernanceKagemushaVerifierReleaseInstallProposal;
-    }>
-  | Readonly<{
-      variant: "KagemushaVerifierReleaseActivate";
-      kagemusha_verifier_release_activate: ToriiGovernanceKagemushaVerifierReleaseActivateProposal;
-    }>
-  | Readonly<{
-      variant: "KagemushaVerifierReleaseRetire";
-      kagemusha_verifier_release_retire: ToriiGovernanceKagemushaVerifierReleaseRetireProposal;
     }>;
 
 export interface ToriiGovernanceProposalRecord {
@@ -4919,11 +4906,7 @@ export type ParliamentProposalTagV1 =
   | "SorafsProviderGovernance"
   | "ContractLifecycleGovernance"
   | "ContractEmergencyHold"
-  | "GlobalDataTriggerPermissionGovernance"
-  | "KagemushaVerifierPolicyInstall"
-  | "KagemushaVerifierReleaseInstall"
-  | "KagemushaVerifierReleaseActivate"
-  | "KagemushaVerifierReleaseRetire";
+  | "GlobalDataTriggerPermissionGovernance";
 
 export const PARLIAMENT_PROPOSAL_KINDS_V1: ReadonlyArray<ParliamentProposalTagV1>;
 
@@ -5141,22 +5124,6 @@ export type ParliamentProposalV1 =
   | Readonly<{
       kind: "GlobalDataTriggerPermissionGovernance";
       payload: ToriiGovernanceGlobalDataTriggerPermissionProposal;
-    }>
-  | Readonly<{
-      kind: "KagemushaVerifierPolicyInstall";
-      payload: ToriiGovernanceKagemushaVerifierPolicyInstallProposal;
-    }>
-  | Readonly<{
-      kind: "KagemushaVerifierReleaseInstall";
-      payload: ToriiGovernanceKagemushaVerifierReleaseInstallProposal;
-    }>
-  | Readonly<{
-      kind: "KagemushaVerifierReleaseActivate";
-      payload: ToriiGovernanceKagemushaVerifierReleaseActivateProposal;
-    }>
-  | Readonly<{
-      kind: "KagemushaVerifierReleaseRetire";
-      payload: ToriiGovernanceKagemushaVerifierReleaseRetireProposal;
     }>;
 
 export type ParliamentLifecycleTransitionV1 =
@@ -10441,12 +10408,12 @@ export declare class ToriiBrowserClient {
   getExplorerTransaction(
     hash: string,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<ToriiBrowserExplorerTransactionDetail>;
   getExplorerInstruction(
     transactionHash: string,
     index: number,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<ToriiBrowserExplorerInstruction>;
   getExplorerInstructionContractView(
     transactionHash: string,
     index: number,

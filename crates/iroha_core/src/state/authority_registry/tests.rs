@@ -54,7 +54,16 @@ fn check_schema(schema: Schema) {
 fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     // The declaration macro also emits a no-`..` typed destructure. Adding an
     // actual field without a role fails Rust compilation before this test runs.
-    assert_eq!(WORLD_FIELDS.len(), 314);
+    assert_eq!(WORLD_FIELDS.len(), 315);
+    let Role::Canonical(Canonical::Cell(Schema::Norito { nominal_name, .. })) =
+        fields()["world.sumeragi_amx_participant"].role
+    else {
+        panic!("original native AMX participant must retain its typed canonical owner");
+    };
+    assert_eq!(
+        nominal_name(),
+        norito::schema::identity::nominal_name::<crate::sumeragi::amx::RetainedNativeAmx>(),
+    );
     assert_eq!(super::runtime::RUNTIME_FIELDS.len(), 10);
     assert_eq!(
         STATE_FIELDS.len(),

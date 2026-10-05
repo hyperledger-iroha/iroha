@@ -1363,42 +1363,6 @@ async fn core_info_handlers_ok() {
         torii_body_bytes(resp, "health body").await.as_ref(),
         b"Healthy"
     );
-    // The separate public wallet route advertises the universal V1 capability.
-    let resp = crate::utils::with_current_response_format(
-        crate::utils::ResponseFormat::Json,
-        super::handler_kagemusha_readiness(
-            State(app),
-            HeaderMap::new(),
-            "/v1/kagemusha/readiness".parse().expect("readiness URI"),
-            crate::loopback_connect_info(),
-        ),
-    )
-    .await
-    .expect("wallet capability response");
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let health = decode_torii_json(resp, "capability body", "decode capability payload").await;
-    assert_eq!(
-        health
-            .get("kagemusha_handoff_capability")
-            .and_then(norito::json::Value::as_str),
-        Some("kagemusha_handoff_v1")
-    );
-    assert_eq!(
-        health
-            .get("wire_version")
-            .and_then(norito::json::Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        health
-            .get("device_lifecycle_version")
-            .and_then(norito::json::Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        health.get("ready").and_then(norito::json::Value::as_bool),
-        Some(true)
-    );
 }
 #[tokio::test]
 async fn time_handlers_ok() {

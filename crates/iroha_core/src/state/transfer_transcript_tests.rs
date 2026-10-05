@@ -457,36 +457,100 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
         configured_lane_catalog: catalog,
         ..Default::default()
     };
-    // Admit the original lane catalog and its exact incarnations at construction,
-    // before any transcript borrows its frozen runtime cut.
-    use crate::sumeragi::{
-        startup,
-        test_chain::{CertifiedTestChain, TestChainConfig},
+    // Physical catalogs do not grant execution-lane incarnations. Install the
+    // actual native fixed-lane policy through signed genesis and advance its
+    // activation with genuine committed work before borrowing a frozen source.
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig, fixture_validators};
+    use iroha_data_model::sumeragi_lanes::{
+        SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
     };
     let mut config = TestChainConfig::new(world_batch, 0);
     config.nexus = Some(nexus);
-    let genesis_authority = AccountId::new(config.genesis_key.public_key().clone());
-    let mode = config.consensus_mode;
-    let prepared =
-        CertifiedTestChain::prepare(config).expect("prepare the original three-lane genesis");
-    let state_batch = Arc::try_unwrap(prepared.state)
-        .unwrap_or_else(|_| panic!("the original unpublished batch State is unique"));
-    startup::apply_genesis(
-        &state_batch,
-        prepared.genesis.block().clone(),
-        &genesis_authority,
-        mode.into(),
-        None,
-    )
-    .expect("apply the original three-lane genesis before capturing active sources");
-    assert_eq!(state_batch.committed_height(), 1);
+    let policy = SumeragiLanePolicy {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
+        anchor_freshness: 16,
+        max_merge_blocks: 8,
+        stall_window: 100,
+        lane_params: Default::default(),
+        fixed: [second_lane, rejected_lane]
+            .into_iter()
+            .map(|lane| SumeragiFixedLane {
+                lane,
+                dataspace: DataSpaceId::UNIVERSAL,
+                committee: fixture_validators()
+                    .into_iter()
+                    .map(|(peer, pop)| SumeragiLaneMember { peer, pop })
+                    .collect(),
+            })
+            .collect(),
+        routes: Vec::new(),
+        autoscale: None,
+    };
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            policy.into_custom_parameter(),
+        ));
+    let mut native_chain = CertifiedTestChain::start(config)
+        .expect("apply the original physical catalog and native lane policy in signed genesis");
+    assert_eq!(native_chain.height(), 1);
+    {
+        let state = native_chain.state();
+        let parent = state
+            .view()
+            .latest_block()
+            .expect("completed original State read")
+            .expect("original signed genesis parent");
+        let header = BlockHeader::new(
+            nonzero!(2_u64),
+            Some(parent.hash()),
+            None,
+            u64::try_from(parent.header().creation_time().as_millis())
+                .unwrap()
+                .checked_add(1)
+                .unwrap(),
+            0,
+        );
+        assert!(state.lane_incarnation_at_height(second_lane, 2).is_some());
+        let mut inactive = state.block(header);
+        let events = inactive.world.external_event_buf.len();
+        let fragments = inactive.committed_fragment_count();
+        {
+            let mut tx = inactive.transaction_for_fastpq_testing(second_call_hash);
+            tx.current_lane_id = Some(second_lane);
+            let result = Transfer::asset_quantity(alice_asset_id.clone(), 2_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut tx);
+            assert!(
+                matches!(result,
+                    Err(Error::InvariantViolation(message))
+                        if message.contains("no frozen active incarnation")
+                ),
+                "a configured physical lane cannot grant pending native activation"
+            );
+            assert_eq!(
+                tx.world.assets().get(&alice_asset_id).unwrap().0,
+                Quantity::from(10_u32)
+            );
+            assert!(tx.world.assets().get(&bob_asset_id).is_none());
+        }
+        assert_eq!(inactive.world.external_event_buf.len(), events);
+        assert_eq!(inactive.committed_fragment_count(), fragments);
+    }
+    native_chain.commit(Vec::new());
+    native_chain.commit(Vec::new());
+    let state_batch = native_chain.state();
+    assert_eq!(state_batch.committed_height(), 3);
     let parent = state_batch
         .view()
         .latest_block()
         .expect("completed original State read")
-        .expect("original three-lane parent");
+        .expect("actual activated native lane parent");
+    let height = u64::try_from(state_batch.committed_height())
+        .unwrap()
+        .checked_add(1)
+        .unwrap();
     let batch_header = BlockHeader::new(
-        nonzero!(2_u64),
+        NonZeroU64::new(height).unwrap(),
         Some(parent.hash()),
         None,
         u64::try_from(parent.header().creation_time().as_millis())
@@ -497,10 +561,34 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     );
     for lane in [first_lane, second_lane, rejected_lane] {
         assert!(
-            state_batch.lane_incarnation_at_height(lane, 2).is_some(),
-            "each attempted source follows its original active physical incarnation"
+            state_batch
+                .lane_incarnation_at_height(lane, height)
+                .is_some(),
+            "each attempted source follows its original physical incarnation"
         );
+        if lane != first_lane {
+            assert!(
+                state_batch
+                    .view()
+                    .world()
+                    .sumeragi_lanes()
+                    .lane(lane)
+                    .unwrap()
+                    .admits_anchor(height - 1),
+                "native execution authority is genuinely active"
+            );
+        }
     }
+    let native_incarnation = iroha_crypto::Hash::from_marked_bytes(
+        state_batch
+            .view()
+            .world()
+            .sumeragi_lanes()
+            .lane(second_lane)
+            .unwrap()
+            .incarnation,
+    )
+    .expect("actual retained native incarnation");
     let mut block_batch = state_batch.block(batch_header);
     let batch_start_fragments = block_batch.committed_fragment_count();
     let mut first_delta = DetachedStateTransactionDelta::default();
@@ -671,6 +759,15 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     let captured_sources = block_batch.captured_fastpq_transcript_sources().unwrap();
     assert!(captured_sources.contains_key(&call_hash));
     assert!(captured_sources.contains_key(&second_call_hash));
+    assert_eq!(
+        captured_sources[&second_call_hash].route(),
+        iroha_data_model::fastpq::FastpqSourceRouteV1::Lane(
+            iroha_data_model::fastpq::FastpqSourceLaneV1 {
+                lane_id: second_lane,
+                lane_incarnation: native_incarnation,
+            },
+        )
+    );
     assert!(
         !captured_sources.contains_key(&rejected_call_hash),
         "rejected and dropped attempts must not publish source captures"

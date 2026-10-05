@@ -166,6 +166,25 @@ fn assert_live(f: &Fixture, new: bool) {
         b"sealed predecessor remains unchanged"
     );
 }
+
+fn checked_transition_boundaries(action: Action) -> usize {
+    let f = fixture();
+    if matches!(action, Action::Rollback) {
+        run(&f, Action::Apply).unwrap();
+    }
+    let calls = Cell::new(0);
+    storage::transition(&f.plan, &f.bytes, &f.root, &f.guards, action, || {
+        calls.set(calls.get() + 1);
+        Ok(())
+    })
+    .unwrap();
+    assert_live(&f, matches!(action, Action::Apply));
+    assert!(
+        calls.get() > 0,
+        "completed transition must expose checked mutation boundaries"
+    );
+    calls.get()
+}
 #[test]
 fn dispatcher_transition_apply_and_rollback_preserve_exact_original_bytes() {
     let f = fixture();
@@ -227,7 +246,9 @@ fn dispatcher_transition_completed_replays_do_not_republish() {
 }
 #[test]
 fn dispatcher_transition_interrupted_publication_resumes_every_checked_boundary() {
-    for cut in 1..=14 {
+    // Census the complete native transition, then inject every observed boundary;
+    // the independently captured Mac guard is not a fifth guest publication.
+    for cut in 1..=checked_transition_boundaries(Action::Apply) {
         let f = fixture();
         let calls = Cell::new(0);
         let result =
@@ -241,27 +262,31 @@ fn dispatcher_transition_interrupted_publication_resumes_every_checked_boundary(
             "cut {cut} did not interrupt, calls {}",
             calls.get()
         );
+        assert_eq!(calls.get(), cut);
         run(&f, Action::Apply).unwrap_or_else(|e| panic!("cut {cut}: {e:#}"));
         assert_live(&f, true);
     }
 }
 #[test]
 fn dispatcher_transition_rollback_from_every_partial_guard_publication() {
-    for cut in 1..=14 {
+    for cut in 1..=checked_transition_boundaries(Action::Apply) {
         let f = fixture();
         let calls = Cell::new(0);
-        let _ = storage::transition(&f.plan, &f.bytes, &f.root, &f.guards, Action::Apply, || {
-            let n = calls.get() + 1;
-            calls.set(n);
-            need(n != cut, "injected crash")
-        });
+        let interrupted =
+            storage::transition(&f.plan, &f.bytes, &f.root, &f.guards, Action::Apply, || {
+                let n = calls.get() + 1;
+                calls.set(n);
+                need(n != cut, "injected crash")
+            });
+        assert!(interrupted.is_err(), "cut {cut} did not interrupt");
+        assert_eq!(calls.get(), cut);
         run(&f, Action::Rollback).unwrap_or_else(|e| panic!("cut {cut}: {e:#}"));
         assert_live(&f, false);
     }
 }
 #[test]
 fn dispatcher_transition_interrupted_rollback_resumes() {
-    for cut in 1..=13 {
+    for cut in 1..=checked_transition_boundaries(Action::Rollback) {
         let f = fixture();
         run(&f, Action::Apply).unwrap();
         let calls = Cell::new(0);
@@ -282,6 +307,7 @@ fn dispatcher_transition_interrupted_rollback_resumes() {
             "cut {cut} did not interrupt, calls {}",
             calls.get()
         );
+        assert_eq!(calls.get(), cut);
         run(&f, Action::Rollback).unwrap_or_else(|e| panic!("cut {cut}: {e:#}"));
         assert_live(&f, false);
     }
@@ -458,7 +484,6 @@ fn dispatcher_transition_accepts_only_complete_occupied_rollback() {
     f.plan.predecessor.completed_next_step = 5;
     f.plan.predecessor.sealed_forward_ordinal = 49;
     let (lease, mut progress, mut terminal) = sealed_records(&f.plan);
-    progress.touched_hosts.pop();
     progress.sealed = false;
     progress.rolling_back = true;
     progress.last_rollback_rank = 1;
@@ -937,6 +962,23 @@ fn dispatcher_transition_requires_native_aarch64_elf_header() {
 fn dispatcher_transition_prepare_reuses_current_typed_split_source_bindings() {
     let config_commit = "a".repeat(40);
     let daemon_commit = "b".repeat(40);
+    let hosts = crate::taira_public_reset::host_pair::fixture_pair();
+    let native_edge = crate::taira_public_reset::host_pair::fixture_native_edge_capture(
+        &hosts,
+        crate::taira_public_reset::EdgeAdmittedReleaseV1 {
+            commit: config_commit.clone(),
+            release_root: format!(
+                "{}/.local/share/iroha/taira/edge/releases/{config_commit}",
+                hosts.native_edge.owner_home
+            ),
+            cli_sha256: "e".repeat(64),
+            config_sha256: "f".repeat(64),
+        },
+        &"1".repeat(64),
+        &"2".repeat(64),
+        &"3".repeat(32),
+        &crate::taira_public_reset::sample_inventory_fixture().next_genesis_hash,
+    );
     let mut validators = Vec::new();
     for slug in &SLUGS[..4] {
         let service = format!("/srv/taira/{slug}");
@@ -1000,14 +1042,10 @@ fn dispatcher_transition_prepare_reuses_current_typed_split_source_bindings() {
     }
     let value = norito::json!({
         "schema": "iroha.taira.dispatcher-current-runtime.v1",
-        "host_identity_sha256": ("d".repeat(64)),
+        "host_identity_sha256": (hosts.validator_guest.endpoint.host_identity_sha256.clone()),
+        "hosts": (json::to_value(&hosts).unwrap()),
         "validators": validators,
-        "edge": {
-            "commit": config_commit,
-            "release_root": (format!("/srv/taira/edge/releases/{config_commit}")),
-            "cli_sha256": ("e".repeat(64)),
-            "config_sha256": ("f".repeat(64)),
-        },
+        "native_edge": (json::to_value(&native_edge).unwrap()),
     });
     let typed: prepare::CurrentRuntime = json::from_value(value.clone()).unwrap();
     prepare::validate_runtime(&typed).unwrap();

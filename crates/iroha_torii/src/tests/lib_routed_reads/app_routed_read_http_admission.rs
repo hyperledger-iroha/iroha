@@ -184,14 +184,24 @@ mod app_routed_read_http_admission_tests {
             let resolved = app_routed_read_http_endpoint(entry.route.stable_route_id()).unwrap();
             assert_eq!(resolved.endpoint, entry.endpoint);
             assert_eq!(resolved.decoder, entry.decoder);
-            assert_eq!(entry.decoder.typed_request_name(), Some("ListQuery"));
+            assert!(matches!(
+                entry.decoder,
+                AppRoutedReadHttpDecoder::None
+                    | AppRoutedReadHttpDecoder::Query("ListQuery")
+                    | AppRoutedReadHttpDecoder::Json("ListQuery")
+            ));
             assert!(
                 APP_ROUTED_READ_HTTP_ENDPOINTS_V1
                     .iter()
                     .all(|routed| routed.route.stable_route_id() != entry.route.stable_route_id())
             );
         }
-        for pair in APP_LOCAL_COLLECTION_HTTP_ROUTES_V1.chunks_exact(2) {
+        let collections: Vec<_> = APP_LOCAL_COLLECTION_HTTP_ROUTES_V1
+            .iter()
+            .filter(|entry| entry.decoder != AppRoutedReadHttpDecoder::None)
+            .collect();
+        assert_eq!(collections.len(), 32);
+        for pair in collections.chunks_exact(2) {
             assert_eq!(pair[0].endpoint, pair[1].endpoint);
             assert_eq!(
                 pair[0].decoder,
@@ -199,7 +209,23 @@ mod app_routed_read_http_admission_tests {
             );
             assert_eq!(pair[1].decoder, AppRoutedReadHttpDecoder::Json("ListQuery"));
         }
-        assert_eq!(ids.len(), 32);
+        let details: Vec<_> = APP_LOCAL_COLLECTION_HTTP_ROUTES_V1
+            .iter()
+            .filter(|entry| entry.decoder == AppRoutedReadHttpDecoder::None)
+            .map(|entry| entry.route.stable_route_id())
+            .collect();
+        assert_eq!(details, [
+            route_catalog::application_api::EXPLORER_BLOCKS_BY_IDENTIFIER_GET.stable_route_id(),
+            route_catalog::application_api::EXPLORER_TRANSACTIONS_BY_HASH_GET.stable_route_id(),
+            route_catalog::application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET.stable_route_id(),
+            route_catalog::application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET.stable_route_id(),
+            route_catalog::application_api::EXPLORER_HEALTH_GET.stable_route_id(),
+            route_catalog::application_api::EXPLORER_DOMAINS_BY_DOMAIN_ID_GET.stable_route_id(),
+            route_catalog::application_api::EXPLORER_ASSETS_BY_ASSET_ID_GET.stable_route_id(),
+            route_catalog::application_api::EXPLORER_NFTS_BY_NFT_ID_GET.stable_route_id(),
+            route_catalog::application_api::EXPLORER_RWAS_BY_RWA_ID_GET.stable_route_id(),
+        ]);
+        assert_eq!(ids.len(), 41);
     }
 
     #[tokio::test]
@@ -298,7 +324,9 @@ mod app_routed_read_http_admission_tests {
         admission._fanout_memory = Some(QueryFanoutMemoryReservation::new(response_only));
         assert!(matches!(
             admission.response_body_budget(),
-            Err(Error::Query(iroha_data_model::ValidationFail::InternalError(_)))
+            Err(Error::Query(
+                iroha_data_model::ValidationFail::InternalError(_)
+            ))
         ));
         admission._fanout_memory = None;
         assert!(admission.response_body_budget().is_err());

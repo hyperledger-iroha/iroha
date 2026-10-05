@@ -2958,6 +2958,15 @@ def declared_shipping_targets(repo: Path) -> tuple[ShippingTarget, ...]:
 
     validate_trusted_release_surface(repo)
     catalog = workspace_catalog(repo)
+    return _declared_shipping_targets_from_catalog(repo, catalog)
+
+
+
+def _declared_shipping_targets_from_catalog(
+    repo: Path, catalog: WorkspaceCatalog
+) -> tuple[ShippingTarget, ...]:
+    """Analyze declarations using an explicit catalog, without release admission or Cargo."""
+
     docker_targets: list[ShippingTarget] = []
     for invocation in docker_publish_invocations(repo):
         relative = Path(invocation.dockerfile)
@@ -3006,6 +3015,17 @@ def shipping_profiles(repo: Path) -> tuple[ShippingProfile, ...]:
     # manifests or configuration, including during baseline package discovery.
     targets = declared_shipping_targets(repo)
     catalog = workspace_catalog(repo)
+    return _shipping_profiles_from_catalog(repo, catalog, targets)
+
+
+
+def _shipping_profiles_from_catalog(
+    repo: Path,
+    catalog: WorkspaceCatalog,
+    targets: tuple[ShippingTarget, ...],
+) -> tuple[ShippingProfile, ...]:
+    """Aggregate explicit declaration results without claiming release qualification."""
+
     missing = set(BASELINE_PACKAGES).difference(catalog.package_features)
     if missing:
         raise RuntimeError(f"missing baseline shipping packages: {sorted(missing)}")

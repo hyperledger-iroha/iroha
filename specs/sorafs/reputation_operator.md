@@ -586,8 +586,9 @@ cd java/iroha_android && \
 cd IrohaSwift && \
   swift test --filter SorafsReputationClientTests
 
-dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
-  --filter FullyQualifiedName~SoraFsReputationClientTests
+dotnet build csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj -c Release
+dotnet csharp/tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net8.0/Hyperledger.Iroha.Sdk.Tests.dll \
+  -method '*SoraFsReputationClientTests*' -noLogo -noColor
 
 python3 -m pytest -q \
   scripts/tests/run_sorafs_reputation_rollout_evidence_test.py

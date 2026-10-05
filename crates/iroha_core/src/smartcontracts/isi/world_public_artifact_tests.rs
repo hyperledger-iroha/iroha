@@ -28,6 +28,8 @@ mod public_artifact_tests {
         assert!(stx.world.contract_code_uploads.get(&SmartContractCodeUploadKey::new(ALICE_ID.clone(), private_upload)).is_some());
     });
     world_test!(contract_manifest_is_immutable_for_registered_code_hash {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         blank_test_state_transaction!(state, block, stx);
         bootstrap_alice_account(&mut stx);
         let signer_one = checked_keypair_with_algorithm(Algorithm::Ed25519);
@@ -48,14 +50,14 @@ mod public_artifact_tests {
         stx.world.contract_code.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), artifact);
         let first_manifest = unsigned_manifest
             .clone()
-            .try_signed(&signer_one)
+            .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &signer_one)
             .expect("first signed manifest");
         { let scoped_manifest = first_manifest.clone(); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute(&authority, &mut stx, "first manifest registration");
         { let scoped_manifest = first_manifest.clone(); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute(&authority, &mut stx, "identical manifest registration is idempotent");
         let differently_signed_manifest = unsigned_manifest.clone()
-            .try_signed(&signer_two)
+            .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &signer_two)
             .expect("second signed manifest");
         { let scoped_manifest = differently_signed_manifest; smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute(&authority, &mut stx, "another authorized signer reuses the immutable manifest");
@@ -63,14 +65,14 @@ mod public_artifact_tests {
         let developer = AccountId::new(developer_key.public_key().clone());
         Register::account(Account::new(developer.clone()))
             .expect_execute(&ALICE_ID, &mut stx, "register independent ordinary developer");
-        { let scoped_manifest = unsigned_manifest.clone().try_signed(&developer_key).expect("developer provenance"); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
+        { let scoped_manifest = unsigned_manifest.clone().try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &developer_key).expect("developer provenance"); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute(&developer, &mut stx, "an independent developer shares identical content");
         let error = { let scoped_manifest = first_manifest.clone(); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute_err(&developer, &mut stx, "existing content never bypasses submitter signature ownership");
         assert!(matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("manifest signer is not authorised")), "unexpected artifact failure: {error:?}");
         let mut changed = unsigned_manifest;
         changed.abi_hash = Some(Hash::new(b"substituted ABI"));
-        let error = { let scoped_manifest = changed.try_signed(&developer_key).expect("changed content signature"); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
+        let error = { let scoped_manifest = changed.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &developer_key).expect("changed content signature"); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute_err(&developer, &mut stx, "valid signatures cannot replace immutable artifact semantics");
         assert!(matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("manifest payload does not match")), "unexpected artifact failure: {error:?}");
         assert_eq!(
@@ -79,6 +81,8 @@ mod public_artifact_tests {
         );
     });
     world_test!(contract_binding_mutations_require_runtime_lifecycle_authority {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         blank_test_state_transaction!(state, block, stx);
         Register::account(Account::new(ALICE_ID.clone()))
             .expect_execute(&ALICE_ID, &mut stx, "seed authority");
@@ -166,7 +170,7 @@ mod public_artifact_tests {
         assert!(stx.world.contract_code.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_none());
         register_bytes
             .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode re-registration");
-        let register_manifest = { let scoped_manifest = manifest.signed(&ALICE_KEYPAIR); scode::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } };
+        let register_manifest = { let scoped_manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"); scode::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } };
         let error = register_manifest
             .clone()
             .expect_execute_err(&attacker, &mut stx, "manifest registration requires the submitting account signature");

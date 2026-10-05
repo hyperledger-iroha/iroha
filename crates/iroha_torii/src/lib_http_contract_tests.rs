@@ -772,154 +772,6 @@ mod matched_route_metadata_tests {
 }
 
 #[cfg(test)]
-mod kagemusha_cache_policy_tests {
-    use super::enforce_kagemusha_cache_policy;
-    use axum::{
-        Router,
-        body::Body,
-        extract::Path,
-        http::{Request, StatusCode, header},
-        response::IntoResponse as _,
-        routing::{get, post},
-    };
-    use tower::ServiceExt as _;
-    #[tokio::test]
-    async fn every_operation_status_outcome_is_no_store() {
-        let router = Router::new()
-            .route(
-                "/v1/kagemusha/operations/{operation_id}",
-                get(|Path(operation_id): Path<String>| async move {
-                    match operation_id.as_str() {
-                        "invalid" => StatusCode::BAD_REQUEST,
-                        "missing" => StatusCode::NOT_FOUND,
-                        "inconsistent" => StatusCode::SERVICE_UNAVAILABLE,
-                        _ => StatusCode::OK,
-                    }
-                }),
-            )
-            .route(
-                "/v1/kagemusha/readiness",
-                get(|| async move {
-                    (
-                        [(header::CACHE_CONTROL, "public, max-age=86400")],
-                        StatusCode::OK,
-                    )
-                        .into_response()
-                }),
-            )
-            .route(
-                "/v1/kagemusha/top-up",
-                post(|| async {
-                    (
-                        [(header::CACHE_CONTROL, "public, max-age=86400")],
-                        StatusCode::ACCEPTED,
-                    )
-                }),
-            )
-            .route(
-                "/v1/kagemusha/redeem",
-                post(|| async {
-                    (
-                        [(header::CACHE_CONTROL, "public, max-age=86400")],
-                        StatusCode::SERVICE_UNAVAILABLE,
-                    )
-                }),
-            )
-            .route("/health", get(|| async { StatusCode::NOT_FOUND }))
-            .layer(axum::middleware::from_fn(enforce_kagemusha_cache_policy));
-        for (operation_id, status) in [
-            ("known", StatusCode::OK),
-            ("invalid", StatusCode::BAD_REQUEST),
-            ("missing", StatusCode::NOT_FOUND),
-            ("inconsistent", StatusCode::SERVICE_UNAVAILABLE),
-        ] {
-            let response = router
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(format!("/v1/kagemusha/operations/{operation_id}"))
-                        .body(Body::empty())
-                        .expect("request"),
-                )
-                .await
-                .expect("response");
-            assert_eq!(response.status(), status, "operation_id={operation_id}");
-            assert_eq!(
-                response.headers().get(header::CACHE_CONTROL),
-                Some(&axum::http::HeaderValue::from_static("no-store")),
-                "operation_id={operation_id}"
-            );
-        }
-        let response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/kagemusha/readiness")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL),
-            Some(&axum::http::HeaderValue::from_static(
-                "private, max-age=0, must-revalidate"
-            ))
-        );
-        let response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/kagemusha/readiness?asset_definition_id=legacy")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL),
-            Some(&axum::http::HeaderValue::from_static(
-                "private, max-age=0, must-revalidate"
-            ))
-        );
-        for (path, status) in [
-            ("/v1/kagemusha/top-up", StatusCode::ACCEPTED),
-            ("/v1/kagemusha/redeem", StatusCode::SERVICE_UNAVAILABLE),
-        ] {
-            let response = router
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(axum::http::Method::POST)
-                        .uri(path)
-                        .body(Body::empty())
-                        .expect("request"),
-                )
-                .await
-                .expect("response");
-            assert_eq!(response.status(), status, "path={path}");
-            assert_eq!(
-                response.headers().get(header::CACHE_CONTROL),
-                Some(&axum::http::HeaderValue::from_static("no-store")),
-                "path={path}"
-            );
-        }
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/health")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
-    }
-}
-
-#[cfg(test)]
 mod content_type_utf8_tests {
     use super::{normalize_json_content_type, normalize_json_response_content_type};
     use axum::http::{HeaderMap, HeaderValue, header::CONTENT_TYPE};
@@ -1142,7 +994,7 @@ mod response_negotiation_middleware_tests {
         let handler_calls = Arc::clone(&calls);
         let router = Router::new()
             .route(
-                "/readiness",
+                route_catalog::core::RESOURCE_NAMES_STATE.path(),
                 get(move || {
                     let calls = Arc::clone(&handler_calls);
                     async move {
@@ -1153,7 +1005,7 @@ mod response_negotiation_middleware_tests {
             )
             .layer(axum::middleware::from_fn(capture_response_format));
         let mut request = Request::builder()
-            .uri("/readiness")
+            .uri(route_catalog::core::RESOURCE_NAMES_STATE.path())
             .header(header::ACCEPT, "image/png")
             .header(header::IF_NONE_MATCH, "\"stale-validator\"")
             .body(Body::empty())
@@ -1161,7 +1013,7 @@ mod response_negotiation_middleware_tests {
         request
             .extensions_mut()
             .insert(MatchedRouteMetadata::from_descriptor(
-                route_catalog::kagemusha::READINESS,
+                route_catalog::core::RESOURCE_NAMES_STATE,
             ));
         let response = router.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);

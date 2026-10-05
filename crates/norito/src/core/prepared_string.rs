@@ -3,10 +3,10 @@
 use super::{Error, read_len_dyn_slice, record_slice_access};
 
 /// One length/body/UTF-8 kernel; archived reads keep their original access order.
-pub(super) fn string_payload<'a>(
-    bytes: &'a [u8],
+pub(super) fn string_payload(
+    bytes: &[u8],
     before_utf8: impl FnOnce(&[u8]),
-) -> Result<(&'a str, usize), Error> {
+) -> Result<(&str, usize), Error> {
     let (length, prefix) = read_len_dyn_slice(bytes)?;
     let end = prefix.checked_add(length).ok_or(Error::LengthMismatch)?;
     let raw = bytes.get(prefix..end).ok_or(Error::LengthMismatch)?;

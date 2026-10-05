@@ -54,6 +54,14 @@ fn operator(
     method: &axum::http::Method,
     uri: &axum::http::Uri,
 ) -> Result<AccountId, AxResponse> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     let deny = || {
         (
             StatusCode::UNAUTHORIZED,
@@ -69,6 +77,7 @@ fn operator(
         uri,
         &[],
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => Ok(verified.account),
         Ok(None) | Err(_) => Err(deny()),

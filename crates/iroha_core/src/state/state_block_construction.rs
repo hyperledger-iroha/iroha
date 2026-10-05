@@ -216,7 +216,6 @@ impl State {
                 kagemusha_v1_runtime_verifier: kagemusha_v1_runtime_verifier
                     .take()
                     .expect("prepared State input"),
-                kagemusha_registry_transition_authorization: None,
                 settlement_engine: settlement_engine.take().expect("prepared State input"),
                 chain_id: chain_id.take().expect("prepared State input"),
                 network_id: self.network_id,

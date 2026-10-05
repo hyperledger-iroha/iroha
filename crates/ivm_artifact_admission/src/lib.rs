@@ -28,13 +28,17 @@ use ivm_abi::{
 #[cfg(test)]
 use norito::NoritoSerialize;
 use std::fmt::Write as _;
+mod admitted_program;
 mod policy;
+pub use admitted_program::AdmittedProgram;
 /// Maximum executable-image bytes admitted by IVM code memory.
 pub const MAX_CONTRACT_IMAGE_BYTES: u64 = ivm_abi::metadata::MAX_PROGRAM_IMAGE_BYTES_V1 as u64;
 use decoded::DecodedOp;
 /// Admission outputs derived from the artifact itself.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct VerifiedContractArtifact {
+    // Only the native verifier creates the immutable executable range seal.
+    admitted_program: admitted_program::AdmittedProgramSeal,
     /// Validated fixed-header execution metadata.
     pub metadata: ProgramMetadata,
     /// Fixed metadata header length in artifact bytes.
@@ -165,6 +169,12 @@ fn verified_from_parts(
         provenance: None,
     };
     VerifiedContractArtifact {
+        admitted_program: admitted_program::AdmittedProgramSeal::new(
+            &parsed.metadata,
+            parsed.header_len,
+            parsed.code_offset,
+            code_hash,
+        ),
         metadata: parsed.metadata,
         header_len: parsed.header_len,
         code_offset: parsed.code_offset,

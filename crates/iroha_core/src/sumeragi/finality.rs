@@ -513,13 +513,25 @@ mod tests {
             retried.export_checkpoint(checkpoint.tip()).unwrap(),
             checkpoint
         );
-        let completed = norito::with_decode_limits_scope(limits(8 * 1024 * 1024), || {
-            let inner = norito::with_decode_limits_scope(limits(0), read).unwrap_err();
-            ProofError::from(inner)
-        });
+        let (retained, retried_with_outer) =
+            norito::with_decode_limits_scope(limits(8 * 1024 * 1024), || {
+                let inner = norito::with_decode_limits_scope(limits(0), read).unwrap_err();
+                let retained = ProofError::from(inner);
+                assert!(
+                    matches!(&retained, ProofError::Deferred(local) if local == &expected),
+                    "the original inner refusal survives its caller scope: {retained:?}"
+                );
+                (retained, read().unwrap())
+            });
         assert!(
-            matches!(&completed, ProofError::Deferred(local) if local == &expected),
-            "the captured original admission refusal survives scope retirement: {completed:?}"
+            matches!(&retained, ProofError::Deferred(local) if local == &expected),
+            "the captured original refusal survives all caller scopes: {retained:?}"
+        );
+        assert_eq!(
+            retried_with_outer
+                .export_checkpoint(checkpoint.tip())
+                .unwrap(),
+            checkpoint
         );
         // A new canonical attempt cannot borrow the retired attempt's opaque origin.
         let reintroduced = norito::with_decode_limits_scope(limits(8 * 1024 * 1024), || {

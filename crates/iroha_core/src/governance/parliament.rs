@@ -16,7 +16,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    io::{self, Write},
 };
 
 use iroha_config::parameters::actual::{Governance, ParliamentTimedOvn};
@@ -27,25 +26,24 @@ use iroha_data_model::{
         AssignmentId, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
         BodyElectionAttemptId, BodyElectionAttemptStatusV1, BodyInstanceId, BodyInstanceStatusV1,
         DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceAttemptV1,
-        GovernanceCertificateV1, GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1,
-        GovernanceStageV1, MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1,
-        MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1, MAX_PARLIAMENT_BALLOT_RETRIES_V1,
-        MAX_PARLIAMENT_BODY_TARGET_SEATS_V1, MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1,
-        MAX_PARLIAMENT_CITIZENS_V1, MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
-        MAX_PARLIAMENT_SORTITION_RETRIES_V1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
-        ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, ParliamentBallotAttemptV1,
+        GovernanceCertificateV1, GovernanceExpectedHeadV1, GovernanceStageV1,
+        MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1, MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1,
+        MAX_PARLIAMENT_BALLOT_RETRIES_V1, MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
+        MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1, MAX_PARLIAMENT_CITIZENS_V1,
+        MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, MAX_PARLIAMENT_SORTITION_RETRIES_V1,
+        MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1, ParliamentAggregateOutcomeV1,
+        ParliamentAggregateTallyV1, ParliamentBallotAttemptV1,
         ParliamentBallotCertificateBindingV1, ParliamentBallotFailureKindV1, ParliamentBody,
         ParliamentBodyCertificateBindingV1, ParliamentBodyInstanceV1, ParliamentNoResultKindV1,
         ParliamentPublicFindingCertificateBindingV1, ParliamentSeatAssignmentV1, ProposalContentId,
         ProposalKind, RiskTierV1, SortitionRequestId, SortitionRequestV1, TleKeySessionId,
         TleSessionId, parliament_assignment_plan_root_v1, parliament_ballot_failure_root_v1,
         parliament_ballot_result_root_v1, parliament_candidate_root_v1,
-        parliament_execution_failure_root_v1, parliament_expected_head_root_v1,
-        parliament_public_finding_endorsement_root_v1, parliament_quorum_seats_v1,
-        parliament_roster_root_v1, parliament_timed_ovn_required_chunk_blocks_v1,
+        parliament_execution_failure_root_v1, parliament_public_finding_endorsement_root_v1,
+        parliament_quorum_seats_v1, parliament_roster_root_v1,
+        parliament_timed_ovn_required_chunk_blocks_v1,
     },
     isi::governance::ParliamentSortitionRequestRegistrationV1,
-    kagemusha::KagemushaGovernedVerifierRegistryV1,
 };
 use norito::{
     codec::{Decode, Encode},
@@ -65,233 +63,6 @@ use super::{
 /// exposing an independently tunable consensus parameter.
 pub(crate) const MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1: u32 =
     MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1;
-
-/// One-use authorization for one exact KAGEMUSHA registry transition.
-///
-/// The due-certificate reducer creates this value after checking its retained
-/// proposal and predecessor. Transaction apply moves it to the block; State
-/// consumes it at the final publication boundary. It is intentionally not
-/// cloneable or serializable, so neither a caller nor a restored snapshot can
-/// manufacture an independent registry-write capability.
-pub(crate) struct KagemushaRegistryTransitionAuthorizationV1 {
-    certificate_digest: [u8; 32],
-    proposal_id: [u8; 32],
-    attempt_id: GovernanceAttemptId,
-    effect_preimage_hash: [u8; 32],
-    expected_head: GovernanceExpectedHeadV1,
-    enact_at_height: u64,
-    network_id: NetworkId,
-}
-
-const KAGEMUSHA_REGISTRY_TOKEN_CERTIFICATE_DOMAIN_V1: &[u8] =
-    b"iroha:state:kagemusha-registry-transition-token:certificate:v1";
-
-struct KagemushaRegistryCertificateDigestWriter<'a>(&'a mut blake3::Hasher);
-
-impl Write for KagemushaRegistryCertificateDigestWriter<'_> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.update(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-/// Hash the exact canonical certificate frame without retaining an encoded copy.
-pub(crate) fn kagemusha_registry_certificate_digest_v1(
-    certificate: &GovernanceCertificateV1,
-) -> Result<[u8; 32], norito::Error> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(
-        &u64::try_from(KAGEMUSHA_REGISTRY_TOKEN_CERTIFICATE_DOMAIN_V1.len())
-            .expect("fixed KAGEMUSHA certificate domain length fits u64")
-            .to_le_bytes(),
-    );
-    hasher.update(KAGEMUSHA_REGISTRY_TOKEN_CERTIFICATE_DOMAIN_V1);
-    // TODO: Fund any scratch allocated inside certificate serializers through
-    // the aggregate execution reservation before complete State-root admission.
-    norito::core::write_canonical_to_writer(
-        certificate,
-        &mut KagemushaRegistryCertificateDigestWriter(&mut hasher),
-    )?;
-    Ok(*hasher.finalize().as_bytes())
-}
-
-fn kagemusha_registry_successor_for_proposal_v1(
-    proposal: &crate::state::GovernanceProposalRecord,
-    network_id: NetworkId,
-    predecessor: &KagemushaGovernedVerifierRegistryV1,
-) -> Result<KagemushaGovernedVerifierRegistryV1, &'static str> {
-    match &proposal.kind {
-        ProposalKind::KagemushaVerifierPolicyInstall(payload) => {
-            payload.validate()?;
-            if payload.network_id != network_id
-                || payload.proposal_operator != proposal.proposer
-                || &payload.expected_predecessor != predecessor
-            {
-                return Err("KAGEMUSHA policy proposal differs from the registry predecessor");
-            }
-            let mut successor = predecessor.clone();
-            successor.initialize_authority_policy(payload.authority_policy.clone())?;
-            Ok(successor)
-        }
-        ProposalKind::KagemushaVerifierReleaseInstall(payload) => {
-            if payload.network_id != network_id
-                || payload.proposal_operator != proposal.proposer
-                || &payload.expected_predecessor != predecessor
-            {
-                return Err("KAGEMUSHA release proposal differs from the registry predecessor");
-            }
-            payload.successor()
-        }
-        ProposalKind::KagemushaVerifierReleaseActivate(payload) => {
-            if payload.network_id != network_id
-                || payload.proposal_operator != proposal.proposer
-                || &payload.expected_predecessor != predecessor
-            {
-                return Err("KAGEMUSHA activation proposal differs from the registry predecessor");
-            }
-            payload.successor()
-        }
-        ProposalKind::KagemushaVerifierReleaseRetire(payload) => {
-            if payload.network_id != network_id
-                || payload.proposal_operator != proposal.proposer
-                || &payload.expected_predecessor != predecessor
-            {
-                return Err("KAGEMUSHA retirement proposal differs from the registry predecessor");
-            }
-            payload.successor()
-        }
-        _ => Err("KAGEMUSHA registry token requires an exact typed proposal"),
-    }
-}
-
-impl KagemushaRegistryTransitionAuthorizationV1 {
-    /// Issue one transition from a certified exact-due Parliament attempt.
-    pub(crate) fn issue(
-        attempt: &ParliamentAttemptStateV1,
-        proposal: &crate::state::GovernanceProposalRecord,
-        certificate: &GovernanceCertificateV1,
-        network_id: NetworkId,
-        current_height: u64,
-        observed_head: GovernanceExpectedHeadV1,
-        registry: &KagemushaGovernedVerifierRegistryV1,
-    ) -> Result<Self, &'static str> {
-        let _ = kagemusha_registry_successor_for_proposal_v1(proposal, network_id, registry)?;
-        let expected_head = GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
-            subject_id: proposal
-                .kind
-                .governed_subject_id_v1()
-                .map_err(|_| "KAGEMUSHA registry token has an unencodable subject")?,
-            version: u64::from(registry.version),
-            head_root: parliament_expected_head_root_v1(registry),
-        });
-        if proposal.status != crate::state::GovernanceProposalStatus::Proposed
-            || certificate.validate().is_err()
-            || certificate.enact_at_height != current_height
-            || certificate.expected_head != expected_head
-            || observed_head != expected_head
-            || certificate.proposal_content_id != attempt.proposal_content_id()
-            || certificate.governance_attempt_id != attempt.attempt().id
-            || certificate.effect_preimage_hash != proposal.kind.effect_preimage_hash_v1()
-            || *certificate.proposal_content_id.as_bytes() != proposal.kind.fingerprint()
-            || attempt.certificate() != Some(certificate)
-            || attempt.attempt().status != GovernanceAttemptStatusV1::Certified
-            || attempt.validate().is_err()
-            || attempt
-                .validate_proposal_bindings_v1(&proposal.kind)
-                .is_err()
-        {
-            return Err("KAGEMUSHA registry token differs from the exact certified due effect");
-        }
-        Ok(Self {
-            certificate_digest: kagemusha_registry_certificate_digest_v1(certificate)
-                .map_err(|_| "KAGEMUSHA registry certificate cannot be canonically hashed")?,
-            proposal_id: *certificate.proposal_content_id.as_bytes(),
-            attempt_id: certificate.governance_attempt_id,
-            effect_preimage_hash: certificate.effect_preimage_hash,
-            expected_head: certificate.expected_head,
-            enact_at_height: certificate.enact_at_height,
-            network_id,
-        })
-    }
-
-    /// Check that the same certified effect and registry transition survived to State commit.
-    pub(crate) fn validate_for_state_commit(
-        &self,
-        network_id: NetworkId,
-        block_height: u64,
-        predecessor: &KagemushaGovernedVerifierRegistryV1,
-        successor: &KagemushaGovernedVerifierRegistryV1,
-        proposal: Option<&crate::state::GovernanceProposalRecord>,
-        attempt: Option<&ParliamentAttemptStateV1>,
-    ) -> Result<(), &'static str> {
-        let proposal =
-            proposal.ok_or("KAGEMUSHA registry proposal disappeared before State commit")?;
-        let attempt =
-            attempt.ok_or("KAGEMUSHA registry attempt disappeared before State commit")?;
-        let certificate = attempt
-            .certificate()
-            .ok_or("KAGEMUSHA registry certificate disappeared before State commit")?;
-        if self.network_id != network_id
-            || self.enact_at_height != block_height
-            || proposal.status != crate::state::GovernanceProposalStatus::Enacted
-            || self.proposal_id != proposal.kind.fingerprint()
-            || self.effect_preimage_hash != proposal.kind.effect_preimage_hash_v1()
-            || certificate.proposal_content_id.as_bytes() != &self.proposal_id
-            || certificate.governance_attempt_id != self.attempt_id
-            || certificate.effect_preimage_hash != self.effect_preimage_hash
-            || certificate.expected_head != self.expected_head
-            || certificate.enact_at_height != self.enact_at_height
-            || attempt.attempt().status != GovernanceAttemptStatusV1::Enacted
-            || attempt.terminal_height() != Some(block_height)
-            || certificate.validate().is_err()
-            || attempt.validate().is_err()
-            || attempt
-                .validate_proposal_bindings_v1(&proposal.kind)
-                .is_err()
-        {
-            return Err(
-                "KAGEMUSHA registry token no longer matches the certified State transition",
-            );
-        }
-        if kagemusha_registry_certificate_digest_v1(certificate)
-            .map_err(|_| "KAGEMUSHA registry certificate cannot be canonically hashed")?
-            != self.certificate_digest
-        {
-            return Err("KAGEMUSHA registry certificate changed before State commit");
-        }
-        let expected_successor =
-            kagemusha_registry_successor_for_proposal_v1(proposal, network_id, predecessor)?;
-        let expected_head = GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
-            subject_id: proposal
-                .kind
-                .governed_subject_id_v1()
-                .map_err(|_| "KAGEMUSHA registry token has an unencodable subject")?,
-            version: u64::from(predecessor.version),
-            head_root: parliament_expected_head_root_v1(predecessor),
-        });
-        if self.expected_head != expected_head {
-            return Err("KAGEMUSHA registry token predecessor head changed before State commit");
-        }
-        if successor != &expected_successor {
-            return Err("KAGEMUSHA registry token successor differs from the certified payload");
-        }
-        Ok(())
-    }
-
-    /// Exact proposal identity retained by the certificate.
-    pub(crate) fn proposal_id(&self) -> [u8; 32] {
-        self.proposal_id
-    }
-
-    /// Exact attempt identity retained by the certificate.
-    pub(crate) fn attempt_id(&self) -> GovernanceAttemptId {
-        self.attempt_id
-    }
-}
 
 pub(crate) fn hidden_ballot_population_meets_anonymity_floor_v1(count: usize) -> bool {
     u32::try_from(count).is_ok_and(|count| count >= MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
@@ -737,11 +508,7 @@ pub(crate) fn parliament_attempt_policy_v1(
         ProposalKind::RuntimeUpgrade(_)
         | ProposalKind::MusubiRegistryGovernance(_)
         | ProposalKind::SorafsProviderGovernance(_)
-        | ProposalKind::GlobalDataTriggerPermissionGovernance(_)
-        | ProposalKind::KagemushaVerifierPolicyInstall(_)
-        | ProposalKind::KagemushaVerifierReleaseInstall(_)
-        | ProposalKind::KagemushaVerifierReleaseActivate(_)
-        | ProposalKind::KagemushaVerifierReleaseRetire(_) => &[
+        | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => &[
             ParliamentBody::RulesCommittee,
             ParliamentBody::AgendaCouncil,
             ParliamentBody::InterestPanel,

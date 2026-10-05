@@ -186,9 +186,7 @@ use crate::sorafs::{
 };
 #[cfg(feature = "app_api")]
 use crate::{
-    explorer::{
-        ExplorerInstructionDto, ExplorerInstructionKind, ExplorerInstructionsPage, metadata_to_json,
-    },
+    explorer::{ExplorerInstructionKind, metadata_to_json},
     utils::JsonValueBody,
 };
 use crate::{json_entry, json_object, json_value};
@@ -201,6 +199,7 @@ use crate::{json_entry, json_object, json_value};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DataspaceReadVisibility {
     visible_dataspaces: BTreeSet<DataSpaceId>,
+    fixed_scope: Option<crate::stream_control::FixedScopeOwner>,
     can_read_all: bool,
     exact_account: Option<AccountId>,
 }
@@ -209,6 +208,7 @@ impl DataspaceReadVisibility {
     pub(crate) fn new(visible_dataspaces: BTreeSet<DataSpaceId>, can_read_all: bool) -> Self {
         Self {
             visible_dataspaces,
+            fixed_scope: None,
             can_read_all,
             exact_account: None,
         }
@@ -220,6 +220,7 @@ impl DataspaceReadVisibility {
     pub(crate) fn exact_account(dataspaces: BTreeSet<DataSpaceId>, account: AccountId) -> Self {
         Self {
             visible_dataspaces: dataspaces,
+            fixed_scope: None,
             can_read_all: false,
             exact_account: Some(account),
         }
@@ -233,6 +234,7 @@ impl DataspaceReadVisibility {
     pub(crate) fn all() -> Self {
         Self {
             visible_dataspaces: BTreeSet::new(),
+            fixed_scope: None,
             can_read_all: true,
             exact_account: None,
         }
@@ -245,6 +247,26 @@ impl DataspaceReadVisibility {
 
     pub(crate) const fn can_read_all(&self) -> bool {
         self.can_read_all
+    }
+
+    pub(crate) fn from_fixed_scope(
+        scope: crate::stream_control::FixedScopeOwner,
+        can_read_all: bool,
+    ) -> Self {
+        Self {
+            visible_dataspaces: BTreeSet::new(),
+            fixed_scope: Some(scope),
+            can_read_all,
+            exact_account: None,
+        }
+    }
+
+    fn dataspace_ids(&self) -> impl Iterator<Item = &DataSpaceId> {
+        self.visible_dataspaces.iter().chain(
+            self.fixed_scope
+                .iter()
+                .flat_map(|scope| scope.as_slice().iter()),
+        )
     }
 
     /// Return whether this current visibility still contains the scope that
@@ -262,12 +284,17 @@ impl DataspaceReadVisibility {
             return false;
         }
         admitted
-            .visible_dataspaces
-            .is_subset(&self.visible_dataspaces)
+            .dataspace_ids()
+            .all(|id| self.allows_dataspace(*id))
     }
 
     pub(crate) fn allows_dataspace(&self, dataspace_id: DataSpaceId) -> bool {
-        self.can_read_all || self.visible_dataspaces.contains(&dataspace_id)
+        self.can_read_all
+            || self.visible_dataspaces.contains(&dataspace_id)
+            || self
+                .fixed_scope
+                .as_ref()
+                .is_some_and(|scope| scope.as_slice().binary_search(&dataspace_id).is_ok())
     }
 
     fn domain_dataspace(world: &impl WorldReadOnly, domain_id: &DomainId) -> Option<DataSpaceId> {
@@ -381,11 +408,11 @@ impl DataspaceReadVisibility {
         hasher.update(DOMAIN);
         hasher.update([u8::from(self.can_read_all)]);
         hasher.update(
-            u32::try_from(self.visible_dataspaces.len())
+            u32::try_from(self.dataspace_ids().count())
                 .expect("configured dataspace count fits u32")
                 .to_be_bytes(),
         );
-        for dataspace in &self.visible_dataspaces {
+        for dataspace in self.dataspace_ids() {
             hasher.update(dataspace.as_u64().to_be_bytes());
         }
         hasher.finalize().into()
@@ -3319,6 +3346,8 @@ impl MaybeTelemetry {
 
                 native_context_archive_max_bytes:
                     iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+                history_checkpoint_cache_capacity:
+                    iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
                 block_hash_history_bytes:
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
                 transaction_history_bytes:
@@ -4528,12 +4557,19 @@ where
     let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
         // A cancelled HTTP future detaches blocking work. Retain the optional
         // admission permit in the physical worker until that work really ends.
+        let owner = admission.as_ref().and_then(|admission| admission._fanout_memory.as_ref())
+            .filter(|reservation| reservation.admission.is_some())
+            .map(crate::history_producer::HistoryProducerOwner::from_reservation)
+            .transpose()?;
         let _admission = admission;
-        work()
+        Ok(match owner {
+            Some(owner) => owner.scope(work),
+            None => work(), // Separate native proof owners cannot grant query allocation authority.
+        })
     });
     crate::panic_recovery::join_recoverable(worker)
         .await
-        .map_err(|_| query_internal_error(worker_failure))
+        .map_err(|_| query_internal_error(worker_failure))?
 }
 
 /// GET /v1/zk/proofs — list proofs with filters
@@ -5800,7 +5836,17 @@ where
         // the HTTP future detaches the blocking task; it must not free capacity
         // while CPU or file work is still running.
         let _admission = admission;
-        work()
+        if _admission
+            ._fanout_memory
+            .as_ref()
+            .is_some_and(|reservation| reservation.admission.is_some())
+        {
+            crate::history_producer::HistoryProducerOwner::from_admission(&_admission)?.scope(work)
+        } else {
+            // Native proof workers have a different physical owner; their response-only
+            // token cannot grant a query producer or install a query allocation scope.
+            work()
+        }
     });
     crate::panic_recovery::join_recoverable(worker)
         .await
@@ -17863,7 +17909,7 @@ fn exact_multisig_contract_call_target_with_world<W: iroha_core::state::WorldRea
     let code = world.contract_code().get(&artifact_id)?;
     let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
     let stored_manifest = world.contract_manifests().get(&artifact_id)?;
-    if stored_manifest.signature_payload() != prepared.manifest().signature_payload() {
+    if !stored_manifest.same_signed_content(prepared.manifest()) {
         return None;
     }
     let descriptor = prepared.entrypoint_descriptor(&contract_entrypoint)?;
@@ -18154,7 +18200,7 @@ fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldRe
     let code = world.contract_code().get(&artifact_id)?;
     let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
     let stored_manifest = world.contract_manifests().get(&artifact_id)?;
-    if stored_manifest.signature_payload() != prepared.manifest().signature_payload() {
+    if !stored_manifest.same_signed_content(prepared.manifest()) {
         return None;
     }
     let descriptor = prepared.entrypoint_descriptor(&parsed.contract_entrypoint)?;
@@ -26811,7 +26857,7 @@ fn prepare_contract_call(
                 ),
             )
         })?;
-    if manifest.signature_payload() != program.prepared_contract().manifest().signature_payload() {
+    if !manifest.same_signed_content(program.prepared_contract().manifest()) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
                 "stored manifest does not match the verified contract artifact".into(),
@@ -31123,7 +31169,10 @@ fn check_history_retention(rows: usize, maximum: u64) -> Result<()> {
     }
     Ok(())
 }
-struct HistoryReadBudget { work_left: u64, bytes_left: u64 }
+struct HistoryReadBudget {
+    work_left: u64,
+    bytes_left: u64,
+}
 impl HistoryReadBudget {
     fn new() -> Self {
         let work_left = app_query_limits().max_fetch_size;
@@ -31131,7 +31180,9 @@ impl HistoryReadBudget {
     }
     fn read(&mut self, state: &CoreState, height: NonZeroUsize) -> Result<SharedSignedBlock> {
         // Off-chain read: authenticate from the nearest history checkpoint, not signed genesis.
-        let carrier = state.read_executed_carrier_from_checkpoints(height, self.work_left, self.bytes_left)
+        let owner = crate::history_producer::HistoryProducerOwner::current()?;
+        let carrier = state.read_executed_carrier_from_checkpoints(
+            height, self.work_left, self.bytes_left, &owner.canonical_history_budget())
             .map_err(crate::canonical_history::query_attempt_error)?;
         self.work_left = self.work_left.checked_sub(carrier.work_items()).ok_or_else(history_capacity_error)?;
         self.bytes_left = self.bytes_left.checked_sub(carrier.wire_bytes()).ok_or_else(history_capacity_error)?;
@@ -33549,7 +33600,7 @@ struct HistoryVisibilityReads {
 }
 struct HistoryVisibilityReadState {
     budget: HistoryReadBudget,
-    blocks: BTreeMap<usize, SharedSignedBlock>,
+    block: Option<(usize, SharedSignedBlock)>,
     error: Option<Error>,
 }
 impl HistoryVisibilityReads {
@@ -33562,7 +33613,7 @@ impl HistoryVisibilityReads {
             anchor,
             reads: std::sync::Mutex::new(HistoryVisibilityReadState {
                 budget: HistoryReadBudget::new(),
-                blocks: BTreeMap::new(),
+                block: None,
                 error: None,
             }),
         }
@@ -33594,14 +33645,11 @@ impl HistoryVisibilityReads {
                 .ok()
                 .and_then(NonZeroUsize::new)
                 .ok_or_else(|| conversion_error("visibility height exceeds host range".into()))?;
-            if !reads.blocks.contains_key(&height.get()) {
+            if reads.block.as_ref().is_none_or(|(cached_height, _)| *cached_height != height.get()) {
                 let block = reads.budget.read(&self.state, height)?;
-                reads.blocks.insert(height.get(), block);
+                reads.block = Some((height.get(), block));
             }
-            let block = reads
-                .blocks
-                .get(&height.get())
-                .expect("inserted authenticated carrier");
+            let (_, block) = reads.block.as_ref().expect("retained authenticated carrier");
             if expected.is_some_and(|hash| hash != block.hash()) {
                 return Err(conversion_error(
                     "visibility carrier differs from the projected source".into(),
@@ -33644,7 +33692,7 @@ impl HistoryVisibilityReads {
                 "visibility history prefix changed during projection".into(),
             ));
         }
-        for (height, block) in reads.blocks {
+        if let Some((height, block)) = reads.block {
             if self.state.committed_block_hash_at_height(height as u64) != Some(block.hash()) {
                 return Err(conversion_error(
                     "visibility carrier changed during projection".into(),
@@ -36316,6 +36364,7 @@ mod explorer_lookup_tests {
             current_entrypoint: None,
             instruction_index: 0,
             block_emitted: false,
+            owner: crate::history_producer::HistoryProducerOwner::for_test(),
         }
     }
 
@@ -36656,7 +36705,7 @@ mod explorer_lookup_tests {
             &block,
         ));
         assert_eq!(
-            crate::explorer::ExplorerBlockDto::from_block_with_visibility(&block, |index| {
+            crate::explorer_history::HistoryBlockRow::from_block(&block, |index| {
                 visibility.allows_external_entrypoint(&block, index)
             })
             .transactions_total,
@@ -36689,7 +36738,7 @@ mod explorer_lookup_tests {
             &block,
         ));
         assert_eq!(
-            crate::explorer::ExplorerBlockDto::from_block_with_visibility(&block, |index| {
+            crate::explorer_history::HistoryBlockRow::from_block(&block, |index| {
                 visibility.allows_external_entrypoint(&block, index)
             })
             .transactions_total,
@@ -36723,30 +36772,30 @@ mod explorer_lookup_tests {
         let third: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "third".to_owned()).into();
         let (state, _) = build_state_with_transactions(vec![vec![first, second], vec![third]]);
         let mut blocks = explorer_pending_for_state(&state);
-        assert!(blocks.next_payload(ExplorerStreamKind::Blocks, &visibility).is_some());
-        assert!(blocks.next_payload(ExplorerStreamKind::Blocks, &visibility).is_none());
+        assert!(blocks.next_payload(ExplorerStreamKind::Blocks, &visibility).unwrap().is_some());
+        assert!(blocks.next_payload(ExplorerStreamKind::Blocks, &visibility).unwrap().is_none());
         let mut transactions = explorer_pending_for_state(&state);
         assert!(
             transactions
-                .next_payload(ExplorerStreamKind::Transactions, &visibility)
+                .next_payload(ExplorerStreamKind::Transactions, &visibility).unwrap()
                 .is_some()
         );
         assert_eq!(transactions.entrypoint_index, 1);
         assert!(
             transactions
-                .next_payload(ExplorerStreamKind::Transactions, &visibility)
+                .next_payload(ExplorerStreamKind::Transactions, &visibility).unwrap()
                 .is_some()
         );
         assert_eq!(transactions.entrypoint_index, 2);
         assert!(
             transactions
-                .next_payload(ExplorerStreamKind::Transactions, &visibility)
+                .next_payload(ExplorerStreamKind::Transactions, &visibility).unwrap()
                 .is_none()
         );
         let mut instructions = explorer_pending_for_state(&state);
         assert!(
             instructions
-                .next_payload(ExplorerStreamKind::Instructions, &visibility)
+                .next_payload(ExplorerStreamKind::Instructions, &visibility).unwrap()
                 .is_some()
         );
         assert_eq!(instructions.entrypoint_index, 1);
@@ -36754,21 +36803,21 @@ mod explorer_lookup_tests {
         assert!(instructions.current_entrypoint.is_some());
         assert!(
             instructions
-                .next_payload(ExplorerStreamKind::Instructions, &visibility)
+                .next_payload(ExplorerStreamKind::Instructions, &visibility).unwrap()
                 .is_some()
         );
         assert_eq!(instructions.entrypoint_index, 1);
         assert_eq!(instructions.instruction_index, 2);
         assert!(
             instructions
-                .next_payload(ExplorerStreamKind::Instructions, &visibility)
+                .next_payload(ExplorerStreamKind::Instructions, &visibility).unwrap()
                 .is_some()
         );
         assert_eq!(instructions.entrypoint_index, 2);
         assert_eq!(instructions.instruction_index, 1);
         assert!(
             instructions
-                .next_payload(ExplorerStreamKind::Instructions, &visibility)
+                .next_payload(ExplorerStreamKind::Instructions, &visibility).unwrap()
                 .is_none()
         );
         assert!(instructions.current_entrypoint.is_none());
@@ -36833,16 +36882,16 @@ mod explorer_lookup_tests {
             cursor: None,
             limit: 1,
         };
-        let (items, pagination) = collect_transaction_summaries(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_transaction_summaries(
             state.as_ref(),
             &visibility,
             &filters,
             &first_query,
             collection,
-        )
+        ))
         .expect("first visible transaction page");
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].hash, hashes[0].to_string());
+        assert_eq!(items[0].entrypoint_hash.to_string(), hashes[0].to_string());
         assert!(pagination.has_more);
         let cursor = pagination.next_cursor.expect("visible continuation");
         let decoded = crate::explorer::decode_explorer_history_cursor(
@@ -36854,7 +36903,7 @@ mod explorer_lookup_tests {
         .expect("decode transaction history cursor");
         assert_eq!(decoded.position.entrypoint_hash, Some(hashes[2]));
 
-        let (items, pagination) = collect_transaction_summaries(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_transaction_summaries(
             state.as_ref(),
             &visibility,
             &filters,
@@ -36863,10 +36912,10 @@ mod explorer_lookup_tests {
                 limit: 1,
             },
             collection,
-        )
+        ))
         .expect("second visible transaction page");
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].hash, hashes[2].to_string());
+        assert_eq!(items[0].entrypoint_hash.to_string(), hashes[2].to_string());
         assert!(!pagination.has_more);
         assert!(pagination.next_cursor.is_none());
     }
@@ -36909,21 +36958,21 @@ mod explorer_lookup_tests {
             cursor: None,
             limit: 1,
         };
-        let (_, baseline_page) = collect_transaction_summaries(
+        let (_, baseline_page) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_transaction_summaries(
             baseline.as_ref(),
             &visibility,
             &filters,
             &query,
             collection,
-        )
+        ))
         .expect("baseline transaction page");
-        let (_, hidden_page) = collect_transaction_summaries(
+        let (_, hidden_page) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_transaction_summaries(
             with_hidden.as_ref(),
             &visibility,
             &filters,
             &query,
             collection,
-        )
+        ))
         .expect("transaction page with hidden insertion");
         let filter_digest = transaction_history_filter_digest(collection, &filters);
         let baseline_cursor = crate::explorer::decode_explorer_history_cursor(
@@ -37010,16 +37059,16 @@ mod explorer_lookup_tests {
             cursor: None,
             limit: 1,
         };
-        let (items, pagination) = collect_instruction_history(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
             state.as_ref(),
             &visibility,
             &filters,
             &first_query,
             collection,
-        )
+        ))
         .expect("first visible instruction page");
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].transaction_hash, hashes[0].to_string());
+        assert_eq!(items[0].transaction.entrypoint_hash.to_string(), hashes[0].to_string());
         assert!(pagination.has_more);
         let cursor = pagination.next_cursor.expect("visible continuation");
         let decoded = crate::explorer::decode_explorer_history_cursor(
@@ -37032,7 +37081,7 @@ mod explorer_lookup_tests {
         assert_eq!(decoded.position.entrypoint_hash, Some(hashes[2]));
         assert_eq!(decoded.position.instruction_index, 0);
 
-        let (items, pagination) = collect_instruction_history(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
             state.as_ref(),
             &visibility,
             &filters,
@@ -37041,10 +37090,10 @@ mod explorer_lookup_tests {
                 limit: 1,
             },
             collection,
-        )
+        ))
         .expect("second visible instruction page");
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].transaction_hash, hashes[2].to_string());
+        assert_eq!(items[0].transaction.entrypoint_hash.to_string(), hashes[2].to_string());
         assert!(!pagination.has_more);
         assert!(pagination.next_cursor.is_none());
     }
@@ -37068,16 +37117,16 @@ mod explorer_lookup_tests {
             cursor: None,
             limit: 2,
         };
-        let (items, pagination) = collect_instruction_history(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
             state.as_ref(),
             &DataspaceReadVisibility::all_for_tests(),
             &filters,
             &first_query,
             crate::explorer::ExplorerHistoryCollection::Instructions,
-        )
+        ))
         .expect("instruction collection should succeed");
         assert_eq!(
-            items.iter().map(|item| item.index).collect::<Vec<_>>(),
+            items.iter().map(|item| item.instruction_index).collect::<Vec<_>>(),
             vec![0, 1]
         );
         assert!(pagination.has_more);
@@ -37085,17 +37134,17 @@ mod explorer_lookup_tests {
             cursor: pagination.next_cursor,
             limit: 2,
         };
-        let (items, pagination) = collect_instruction_history(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
             state.as_ref(),
             &DataspaceReadVisibility::all_for_tests(),
             &filters,
             &second_query,
             crate::explorer::ExplorerHistoryCollection::Instructions,
-        )
+        ))
         .expect("cursor continuation should succeed");
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].index, 2);
-        assert_eq!(items[0].transaction_hash, target_hash.to_string());
+        assert_eq!(items[0].instruction_index, 2);
+        assert_eq!(items[0].transaction.entrypoint_hash.to_string(), target_hash.to_string());
         assert!(!pagination.has_more);
         assert!(pagination.next_cursor.is_none());
     }
@@ -37126,42 +37175,42 @@ mod explorer_lookup_tests {
             cursor: None,
             limit: 10,
         };
-        let (items, pagination) = collect_instruction_history(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
             state.as_ref(),
             &DataspaceReadVisibility::all_for_tests(),
             &filters,
             &query,
             crate::explorer::ExplorerHistoryCollection::Instructions,
-        )
+        ))
         .expect("batch instruction history");
         assert!(!pagination.has_more);
         assert_eq!(
-            items.iter().map(|item| item.index).collect::<Vec<_>>(),
+            items.iter().map(|item| item.instruction_index).collect::<Vec<_>>(),
             vec![0, 1]
         );
-        let (latest, pagination) = collect_instruction_history(
+        let (latest, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
             state.as_ref(),
             &DataspaceReadVisibility::all_for_tests(),
             &filters,
             &query,
             crate::explorer::ExplorerHistoryCollection::LatestInstructions,
-        )
+        ))
         .expect("latest batch instruction history");
         assert!(!pagination.has_more);
         assert_eq!(
-            latest.iter().map(|item| item.index).collect::<Vec<_>>(),
+            latest.iter().map(|item| item.instruction_index).collect::<Vec<_>>(),
             vec![0, 1]
         );
         let detail =
-            find_instruction_detail(
+            crate::history_producer::HistoryProducerOwner::for_test().scope(|| find_instruction_detail(
                 state.as_ref(),
                 state.committed_height() as u64,
                 &DataspaceReadVisibility::all_for_tests(),
                 target_hash.to_string(),
                 1,
-            )
+            ))
             .expect("second batch instruction detail");
-        assert_eq!(detail.index, 1);
+        assert_eq!(detail.instruction_index, 1);
     }
     routing_test! { sync explorer_instruction_history_transaction_hash_index_miss_returns_empty_page
         let instructions = vec![dm::Log::new(dm::Level::INFO, "indexed-miss".to_owned()).into()];
@@ -37179,13 +37228,13 @@ mod explorer_lookup_tests {
             cursor: None,
             limit: 10,
         };
-        let (items, pagination) = collect_instruction_history(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
             state.as_ref(),
             &DataspaceReadVisibility::all_for_tests(),
             &filters,
             &query,
             crate::explorer::ExplorerHistoryCollection::Instructions,
-        )
+        ))
         .expect("instruction collection should succeed");
         assert!(items.is_empty());
         assert!(!pagination.has_more);
@@ -37207,19 +37256,19 @@ mod explorer_lookup_tests {
             cursor: None,
             limit: 2,
         };
-        let (items, pagination) = collect_transaction_summaries(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_transaction_summaries(
             state.as_ref(),
             &DataspaceReadVisibility::all_for_tests(),
             &filters,
             &query,
             crate::explorer::ExplorerHistoryCollection::LatestTransactions,
-        )
+        ))
         .expect("latest transaction collection should succeed");
         assert_eq!(items.len(), 2);
         assert!(pagination.has_more);
         let expected: std::collections::BTreeSet<String> =
             hashes.into_iter().map(|hash| hash.to_string()).collect();
-        let actual: Vec<String> = items.into_iter().map(|item| item.hash).collect();
+        let actual: Vec<String> = items.into_iter().map(|item| item.entrypoint_hash.to_string()).collect();
         for hash in actual {
             assert!(expected.contains(&hash));
         }
@@ -37244,20 +37293,20 @@ mod explorer_lookup_tests {
             cursor: None,
             limit: 2,
         };
-        let (items, pagination) = collect_instruction_history(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
             state.as_ref(),
             &DataspaceReadVisibility::all_for_tests(),
             &filters,
             &query,
             crate::explorer::ExplorerHistoryCollection::LatestInstructions,
-        )
+        ))
         .expect("latest instruction collection should succeed");
         assert_eq!(items.len(), 2);
         assert!(pagination.has_more);
-        assert_eq!(items[0].index, 0);
-        assert_eq!(items[1].index, 1);
-        assert_eq!(items[0].transaction_hash, target_hash.to_string());
-        assert_eq!(items[1].transaction_hash, target_hash.to_string());
+        assert_eq!(items[0].instruction_index, 0);
+        assert_eq!(items[1].instruction_index, 1);
+        assert_eq!(items[0].transaction.entrypoint_hash.to_string(), target_hash.to_string());
+        assert_eq!(items[1].transaction.entrypoint_hash.to_string(), target_hash.to_string());
     }
     #[test]
     fn explorer_latest_instruction_history_transaction_hash_index_miss_returns_empty() {
@@ -37277,13 +37326,13 @@ mod explorer_lookup_tests {
             cursor: None,
             limit: 10,
         };
-        let (items, pagination) = collect_instruction_history(
+        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
             state.as_ref(),
             &DataspaceReadVisibility::all_for_tests(),
             &filters,
             &query,
             crate::explorer::ExplorerHistoryCollection::LatestInstructions,
-        )
+        ))
         .expect("latest instruction collection should succeed");
         assert!(items.is_empty());
         assert!(!pagination.has_more);
@@ -37453,32 +37502,32 @@ mod explorer_lookup_tests {
         ];
         let (state, target_hash) = build_state_with_single_transaction(instructions);
         let max_height = state.committed_height() as u64;
-        let tx = find_transaction_detail(
+        let tx = crate::history_producer::HistoryProducerOwner::for_test().scope(|| find_transaction_detail(
             state.as_ref(),
             max_height,
             &DataspaceReadVisibility::all_for_tests(),
             target_hash.to_string(),
-        )
+        ))
         .expect("transaction detail should resolve");
-        assert_eq!(tx.hash, target_hash.to_string());
+        assert_eq!(tx.0.entrypoint_hash.to_string(), target_hash.to_string());
         let instruction =
-            find_instruction_detail(
+            crate::history_producer::HistoryProducerOwner::for_test().scope(|| find_instruction_detail(
                 state.as_ref(),
                 max_height,
                 &DataspaceReadVisibility::all_for_tests(),
                 target_hash.to_string(),
                 1,
-            )
+            ))
             .expect("instruction detail should resolve");
-        assert_eq!(instruction.index, 1);
+        assert_eq!(instruction.instruction_index, 1);
         let missing =
-            find_instruction_detail(
+            crate::history_producer::HistoryProducerOwner::for_test().scope(|| find_instruction_detail(
                 state.as_ref(),
                 max_height,
                 &DataspaceReadVisibility::all_for_tests(),
                 target_hash.to_string(),
                 42,
-            );
+            ));
         assert!(
             missing.is_err(),
             "invalid instruction index should return not found"
@@ -38436,132 +38485,169 @@ enum ExplorerStreamKind {
 app_api_items! {
 pub fn handle_v1_explorer_blocks_stream(
     source: Arc<iroha_core::state::State>,
-    events: EventsSender,
-    visibility: ToriiDataspaceReadContext,
-) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    explorer_stream(source, events, visibility, ExplorerStreamKind::Blocks)
+    visibility: crate::stream_control::ExplorerReadContext,
+    app: crate::SharedAppState,
+) -> Response {
+    explorer_stream(source, visibility, ExplorerStreamKind::Blocks, app_query_limits().max_fetch_size, move || {
+        let reservation = crate::try_acquire_new_query_fanout_memory(&app)
+            .map_err(|_| crate::native_projection_response::capacity())?;
+        crate::history_producer::HistoryProducerOwner::from_reservation(&reservation)
+    })
 }
 pub fn handle_v1_explorer_transactions_stream(
     source: Arc<iroha_core::state::State>,
-    events: EventsSender,
-    visibility: ToriiDataspaceReadContext,
-) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    explorer_stream(source, events, visibility, ExplorerStreamKind::Transactions)
+    visibility: crate::stream_control::ExplorerReadContext,
+    app: crate::SharedAppState,
+) -> Response {
+    explorer_stream(source, visibility, ExplorerStreamKind::Transactions, app_query_limits().max_fetch_size, move || {
+        let reservation = crate::try_acquire_new_query_fanout_memory(&app)
+            .map_err(|_| crate::native_projection_response::capacity())?;
+        crate::history_producer::HistoryProducerOwner::from_reservation(&reservation)
+    })
 }
 pub fn handle_v1_explorer_instructions_stream(
     source: Arc<iroha_core::state::State>,
-    events: EventsSender,
-    visibility: ToriiDataspaceReadContext,
-) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    explorer_stream(source, events, visibility, ExplorerStreamKind::Instructions)
+    visibility: crate::stream_control::ExplorerReadContext,
+    app: crate::SharedAppState,
+) -> Response {
+    explorer_stream(source, visibility, ExplorerStreamKind::Instructions, app_query_limits().max_fetch_size, move || {
+        let reservation = crate::try_acquire_new_query_fanout_memory(&app)
+            .map_err(|_| crate::native_projection_response::capacity())?;
+        crate::history_producer::HistoryProducerOwner::from_reservation(&reservation)
+    })
 }
 fn explorer_stream(
     source: Arc<iroha_core::state::State>,
-    events: EventsSender,
-    visibility: ToriiDataspaceReadContext,
+    visibility: crate::stream_control::ExplorerReadContext,
     kind: ExplorerStreamKind,
-) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    let mut keepalive_interval = tokio::time::interval(Duration::from_secs(15));
-    keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut authorization_interval =
-        tokio::time::interval(STREAM_AUTHORIZATION_CHECK_INTERVAL);
-    authorization_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    maximum_backlog: u64,
+    acquire: impl Fn() -> Result<crate::history_producer::HistoryProducerOwner> + Send + 'static,
+) -> Response {
+    // A new stream follows canonical successors of the committed State visible at admission.
+    // It never receives/clones arbitrary pipeline events before acquiring a block owner.
+    let next_height = visibility.admitted_height().checked_add(1);
+    let control = visibility.owner().clone();
+    let now = tokio::time::Instant::now();
     let stream = stream::unfold(
         ExplorerStreamState {
-            rx: events.subscribe(),
-            source,
-            pending: None,
-            kind,
-            keepalive_interval,
-            authorization_interval,
-            last_block_height: None,
-            terminal: false,
-            visibility,
+            source, pending: None, kind, keepalive_at: now, authorization_at: now,
+            next_height, maximum_backlog, terminal: false, visibility, acquire,
         },
         |mut state| async move {
-            use tokio::sync::broadcast::error::RecvError;
-            if state.terminal {
-                return None;
-            }
+            if state.terminal { return None; }
             loop {
-                if !state.visibility.authorization_is_current() {
-                    state.pending = None;
-                    state.terminal = true;
-                    return Some((Ok(stream_authorization_revoked_event()), state));
-                }
+                let visibility = match state.visibility.current_visibility() {
+                    Ok(visibility) => visibility,
+                    Err(crate::Error::AppUnauthorized { .. }) => {
+                        state.pending = None; state.terminal = true;
+                        return Some((Ok::<_, Infallible>(axum::body::Bytes::from_static(EXPLORER_STREAM_REVOKED)), state));
+                    }
+                    Err(_) => {
+                        state.pending = None; state.terminal = true;
+                        return Some((Ok(axum::body::Bytes::from_static(EXPLORER_STREAM_HISTORY_UNAVAILABLE)), state));
+                    }
+                };
                 if let Some(pending) = state.pending.as_mut() {
-                    let visibility = state.visibility.current_visibility();
-                    if let Some(payload) = pending.next_payload(state.kind, &visibility) {
-                        let ev = SseEvent::default().data(payload);
-                        return Some((Ok(ev), state));
-                    }
-                    state.pending = None;
-                }
-                tokio::select! {
-                    recv = state.rx.recv() => {
-                        match recv {
-                            Ok(event) => {
-                                if let Some(height) = committed_block_height(&event) {
-                                    if !explorer_height_is_new(state.last_block_height, height) {
-                                        continue;
-                                    }
-                                    match explorer_pending_block(&state.source, height) {
-                                        Ok(pending) => {
-                                            state.last_block_height = Some(height);
-                                            state.pending = Some(pending);
-                                        }
-                                        Err(error) => {
-                                            iroha_logger::warn!(%error, "Explorer finalized history read failed");
-                                            state.terminal = true;
-                                            return Some((Ok(stream_error_event("stream_history_unavailable",
-                                                "Canonical Explorer history is unavailable or exceeds its serving limits.", None)), state));
-                                        }
-                                    }
-                                }
-                            }
-                            Err(RecvError::Lagged(dropped_messages)) => {
-                                state.pending = None;
-                                state.terminal = true;
-                                let ev = stream_error_event(
-                                    "stream_lagged",
-                                    "The Explorer stream lost buffered blocks and cannot replay them.",
-                                    Some(dropped_messages),
-                                );
-                                return Some((Ok(ev), state));
-                            }
-                            Err(RecvError::Closed) => return None,
-                        }
-                    }
-                    _ = state.keepalive_interval.tick() => {
-                        let ev = SseEvent::default().comment("keepalive");
-                        return Some((Ok(ev), state));
-                    }
-                    _ = state.authorization_interval.tick() => {
-                        if !state.visibility.authorization_is_current() {
+                    match pending.next_payload(state.kind, &visibility) {
+                        Ok(Some(payload)) => return Some((Ok(payload), state)),
+                        Ok(None) => state.pending = None,
+                        Err(error) => {
+                            iroha_logger::warn!(%error, "Explorer stream projection refused");
                             state.pending = None;
                             state.terminal = true;
-                            return Some((Ok(stream_authorization_revoked_event()), state));
+                            return Some((Ok(axum::body::Bytes::from_static(EXPLORER_STREAM_HISTORY_UNAVAILABLE)), state));
                         }
+                    }
+                }
+                let Some(height) = state.next_height else {
+                    state.terminal = true;
+                    return Some((Ok(axum::body::Bytes::from_static(EXPLORER_STREAM_HISTORY_UNAVAILABLE)), state));
+                };
+                // Sleep is !Unpin. Pin it inside this physical future, never in the
+                // movable unfold state returned after an item. No timer Box is created.
+                let source = state.source.clone();
+                let committed = source.wait_for_committed_height(height);
+                let keepalive = tokio::time::sleep_until(state.keepalive_at);
+                let authorization = tokio::time::sleep_until(state.authorization_at);
+                tokio::pin!(committed, keepalive, authorization);
+                tokio::select! {
+                    _ = &mut committed => {
+                        let current_height = u64::try_from(source.committed_height()).unwrap_or(u64::MAX);
+                        if explorer_backlog_is_lagged(height, current_height, state.maximum_backlog) {
+                            state.terminal = true;
+                            return Some((Ok(axum::body::Bytes::from_static(EXPLORER_STREAM_LAGGED)), state));
+                        }
+                        let owner = match (state.acquire)() {
+                            Ok(owner) => owner,
+                            Err(_) => {
+                                state.terminal = true;
+                                return Some((Ok(axum::body::Bytes::from_static(EXPLORER_STREAM_HISTORY_UNAVAILABLE)), state));
+                            }
+                        };
+                        // Admission moves into the physical decoder. Cancellation cannot
+                        // refund it while the source or its result still owns backing.
+                        let worker_source = source.clone();
+                        let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
+                            owner.scope(|| explorer_pending_block(&worker_source, height, owner.clone()))
+                        });
+                        match crate::panic_recovery::join_recoverable(worker).await {
+                            Ok(Ok(pending)) => {
+                                state.next_height = height.checked_add(1);
+                                state.pending = Some(pending);
+                            }
+                            _ => {
+                                state.terminal = true;
+                                return Some((Ok(axum::body::Bytes::from_static(EXPLORER_STREAM_HISTORY_UNAVAILABLE)), state));
+                            }
+                        }
+                    }
+                    _ = &mut keepalive => {
+                        state.keepalive_at = next_explorer_timer_deadline(state.keepalive_at, Duration::from_secs(15));
+                        return Some((Ok(axum::body::Bytes::from_static(b": keepalive\n\n")), state));
+                    }
+                    _ = &mut authorization => {
+                        state.authorization_at = next_explorer_timer_deadline(state.authorization_at, STREAM_AUTHORIZATION_CHECK_INTERVAL);
                     }
                 }
             }
         },
     );
-    Sse::new(stream)
+    let source = http_body_util::StreamBody::new(stream.map(|item| {
+        item.map(hyper::body::Frame::data).map_err(|never| match never {})
+    }));
+    let body = match control.body(source) {
+        Ok(body) => body,
+        Err(_) => return crate::native_projection_response::capacity().into_response(),
+    };
+    let mut response = Response::new(body);
+    response.headers_mut().insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/event-stream"));
+    response.headers_mut().insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-cache"));
+    response
 }
-struct ExplorerStreamState {
-    rx: tokio::sync::broadcast::Receiver<EventBox>,
+const EXPLORER_STREAM_REVOKED: &[u8] = b"event: stream_error\ndata: {\"code\":\"stream_authorization_revoked\",\"message\":\"Stream authorization was revoked.\",\"replay_available\":false}\n\n";
+const EXPLORER_STREAM_HISTORY_UNAVAILABLE: &[u8] = b"event: stream_error\ndata: {\"code\":\"stream_history_unavailable\",\"message\":\"Canonical Explorer history is unavailable or exceeds its serving limits.\",\"replay_available\":false}\n\n";
+const EXPLORER_STREAM_LAGGED: &[u8] = b"event: stream_error\ndata: {\"code\":\"stream_lagged\",\"message\":\"The Explorer stream exceeded its bounded canonical backlog and cannot replay it.\",\"replay_available\":false}\n\n";
+struct ExplorerStreamState<F> {
     source: Arc<iroha_core::state::State>,
     pending: Option<ExplorerPendingBlock>,
     kind: ExplorerStreamKind,
-    keepalive_interval: tokio::time::Interval,
-    authorization_interval: tokio::time::Interval,
-    last_block_height: Option<u64>,
+    keepalive_at: tokio::time::Instant,
+    authorization_at: tokio::time::Instant,
+    next_height: Option<u64>,
+    maximum_backlog: u64,
     terminal: bool,
-    visibility: ToriiDataspaceReadContext,
+    visibility: crate::stream_control::ExplorerReadContext,
+    acquire: F,
 }
-fn explorer_height_is_new(last_block_height: Option<u64>, height: u64) -> bool {
-    last_block_height.is_none_or(|last_height| height > last_height)
+fn explorer_backlog_is_lagged(next_height: u64, current_height: u64, maximum: u64) -> bool {
+    current_height.checked_sub(next_height).is_some_and(|pending| pending >= maximum)
+}
+fn next_explorer_timer_deadline(previous: tokio::time::Instant, interval: Duration) -> tokio::time::Instant {
+    let now = tokio::time::Instant::now();
+    let elapsed = now.saturating_duration_since(previous);
+    let step = interval.as_nanos();
+    let remainder = u64::try_from(elapsed.as_nanos() % step).expect("fixed Explorer intervals fit u64");
+    now + interval - Duration::from_nanos(remainder)
 }
 struct ExplorerPendingBlock {
     block: SharedSignedBlock,
@@ -38570,37 +38656,24 @@ struct ExplorerPendingBlock {
     current_entrypoint: Option<(usize, HashOf<TransactionEntrypoint>)>,
     instruction_index: usize,
     block_emitted: bool,
+    owner: crate::history_producer::HistoryProducerOwner,
 }
-fn explorer_pending_block(source: &iroha_core::state::State, height: u64) -> Result<ExplorerPendingBlock> {
-    let height_usize: usize = match height.try_into() {
-        Ok(value) => value,
-        Err(_) => {
-            iroha_logger::warn!(
-                height,
-                "failed to emit explorer SSE payload: block height exceeds host pointer width"
-            );
-            return Err(conversion_error("invalid Explorer carrier height".into()));
-        }
-    };
-    let Some(nonzero_height) = NonZeroUsize::new(height_usize) else {
-        iroha_logger::warn!(
-            height,
-            "failed to emit explorer SSE payload: block height must be at least 1"
-        );
-        return Err(conversion_error("invalid Explorer carrier height".into()));
-    };
+fn explorer_pending_block(
+    source: &iroha_core::state::State,
+    height: u64,
+    owner: crate::history_producer::HistoryProducerOwner,
+) -> Result<ExplorerPendingBlock> {
+    let height_usize = usize::try_from(height).ok().and_then(NonZeroUsize::new)
+        .ok_or_else(|| conversion_error("invalid Explorer carrier height".into()))?;
     let maximum = app_query_limits().max_fetch_size;
-    let carrier = source.read_finalized_execution_carrier(
-        nonzero_height, maximum,
+    let carrier = source.read_executed_carrier_from_checkpoints(
+        height_usize, maximum,
         iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(maximum),
+        &owner.canonical_history_budget(),
     ).map_err(crate::canonical_history::query_attempt_error)?;
     Ok(ExplorerPendingBlock {
-        block: carrier.into_block(),
-        height,
-        entrypoint_index: 0,
-        current_entrypoint: None,
-        instruction_index: 0,
-        block_emitted: false,
+        block: carrier.into_block(), height, entrypoint_index: 0,
+        current_entrypoint: None, instruction_index: 0, block_emitted: false, owner,
     })
 }
 impl ExplorerPendingBlock {
@@ -38608,119 +38681,63 @@ impl ExplorerPendingBlock {
         &mut self,
         kind: ExplorerStreamKind,
         visibility: &DataspaceReadVisibility,
-    ) -> Option<String> {
-        match kind {
+    ) -> Result<Option<axum::body::Bytes>> {
+        let owner = self.owner.clone();
+        owner.scope(|| match kind {
             ExplorerStreamKind::Blocks => self.next_block_payload(visibility),
             ExplorerStreamKind::Transactions => self.next_transaction_payload(visibility),
             ExplorerStreamKind::Instructions => self.next_instruction_payload(visibility),
-        }
+        })
     }
-    fn next_block_payload(&mut self, visibility: &DataspaceReadVisibility) -> Option<String> {
-        if self.block_emitted {
-            return None;
-        }
+    fn next_block_payload(&mut self, visibility: &DataspaceReadVisibility) -> Result<Option<axum::body::Bytes>> {
+        if self.block_emitted { return Ok(None); }
         self.block_emitted = true;
-        let dto = crate::explorer::ExplorerBlockDto::from_block_with_visibility(
-            &self.block,
-            |index| visibility.allows_external_entrypoint(&self.block, index),
+        let row = crate::explorer_history::HistoryBlockRow::from_block(
+            &self.block, |index| visibility.allows_external_entrypoint(&self.block, index),
         );
-        match norito::json::to_json(&dto) {
-            Ok(body) => Some(body),
-            Err(error) => {
-                iroha_logger::warn!(
-                    height = self.height,
-                    %error,
-                    "failed to serialize explorer block SSE payload"
-                );
-                None
-            }
-        }
+        self.owner.sse_data(&row).map(Some)
     }
-    fn next_transaction_payload(
-        &mut self,
-        visibility: &DataspaceReadVisibility,
-    ) -> Option<String> {
+    fn next_transaction_payload(&mut self, visibility: &DataspaceReadVisibility) -> Result<Option<axum::body::Bytes>> {
         while self.entrypoint_index < self.block.network_entrypoint_count() {
             let index = self.entrypoint_index;
-            self.entrypoint_index = self.entrypoint_index.saturating_add(1);
-            if !visibility.allows_external_entrypoint(&self.block, index) {
-                continue;
-            }
-            let Some((entrypoint_hash, transaction, result)) =
-                external_signed_transaction_result_at(&self.block, index)
-            else {
-                continue;
+            self.entrypoint_index += 1;
+            if !visibility.allows_external_entrypoint(&self.block, index) { continue; }
+            let Some((entrypoint_hash, _, _)) = external_signed_transaction_result_at(&self.block, index) else { continue; };
+            let row = crate::explorer_history::HistoryTransactionRow {
+                block: self.block.clone(), entrypoint_index: index, entrypoint_hash,
             };
-            let dto = crate::explorer::transaction_summary_dto_with_hash(
-                transaction,
-                entrypoint_hash,
-                self.height,
-                result,
-            );
-            match norito::json::to_json(&dto) {
-                Ok(body) => return Some(body),
-                Err(error) => iroha_logger::warn!(
-                    height = self.height,
-                    %error,
-                    "failed to serialize explorer transaction SSE payload"
-                ),
-            }
+            return self.owner.sse_data(&row).map(Some);
         }
-        None
+        Ok(None)
     }
-    fn next_instruction_payload(
-        &mut self,
-        visibility: &DataspaceReadVisibility,
-    ) -> Option<String> {
+    fn next_instruction_payload(&mut self, visibility: &DataspaceReadVisibility) -> Result<Option<axum::body::Bytes>> {
         loop {
             if self.current_entrypoint.is_none() {
                 while self.entrypoint_index < self.block.network_entrypoint_count() {
                     let index = self.entrypoint_index;
-                    self.entrypoint_index = self.entrypoint_index.saturating_add(1);
-                    if !visibility.allows_external_entrypoint(&self.block, index) {
-                        continue;
-                    }
-                    let Some((entrypoint_hash, _)) =
-                        network_signed_transaction_at(&self.block, index)
-                    else {
-                        continue;
-                    };
+                    self.entrypoint_index += 1;
+                    if !visibility.allows_external_entrypoint(&self.block, index) { continue; }
+                    let Some((entrypoint_hash, _)) = network_signed_transaction_at(&self.block, index) else { continue; };
                     self.current_entrypoint = Some((index, entrypoint_hash));
                     break;
                 }
             }
-            let (entrypoint_index, entrypoint_hash) = self.current_entrypoint?;
-            let (_, transaction, result) = external_signed_transaction_result_at(&self.block, entrypoint_index)?;
-            let Some(instruction) = transaction
-                .instructions()
-                .explicit_instructions()
-                .nth(self.instruction_index)
-            else {
-                self.current_entrypoint = None;
-                self.instruction_index = 0;
-                continue;
+            let Some((entrypoint_index, entrypoint_hash)) = self.current_entrypoint else { return Ok(None); };
+            let Some((_, transaction, _)) = external_signed_transaction_result_at(&self.block, entrypoint_index) else {
+                return Err(conversion_error("invalid authenticated Explorer entrypoint".into()));
             };
-            let instruction_index = self.instruction_index;
-            self.instruction_index = self.instruction_index.saturating_add(1);
-            let kind = crate::explorer::instruction_kind(instruction);
-            let index = u32::try_from(instruction_index).unwrap_or(u32::MAX);
-            let dto = crate::explorer::instruction_dto_with_kind_and_hash(
-                transaction,
-                entrypoint_hash,
-                self.height,
-                result,
-                instruction,
-                kind,
-                index,
-            );
-            match norito::json::to_json(&dto) {
-                Ok(body) => return Some(body),
-                Err(error) => iroha_logger::warn!(
-                    height = self.height,
-                    %error,
-                    "failed to serialize explorer instruction SSE payload"
-                ),
+            if transaction.instructions().explicit_instructions().nth(self.instruction_index).is_none() {
+                self.current_entrypoint = None; self.instruction_index = 0; continue;
             }
+            let instruction_index = u32::try_from(self.instruction_index)
+                .map_err(|_| conversion_error("Explorer instruction index exceeds native range".into()))?;
+            self.instruction_index += 1;
+            let row = crate::explorer_history::HistoryInstructionRow {
+                transaction: crate::explorer_history::HistoryTransactionRow {
+                    block: self.block.clone(), entrypoint_index, entrypoint_hash,
+                }, instruction_index,
+            };
+            return self.owner.sse_data(&row).map(Some);
         }
     }
 }
@@ -41275,22 +41292,24 @@ mod sse_stream_tests {
         assert!(terminal.is_none());
     }
     routing_test! { async explorer_sse_lag_is_machine_readable_and_terminal
-        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
-        let sse = handle_v1_explorer_blocks_stream(
-            Arc::new(iroha_core::state::State::new_for_testing(
-                iroha_core::state::World::new(), Kura::blank_kura_for_testing(),
-                iroha_core::query::store::LiveQueryStore::start_test(),
-            )),
-            events.clone(),
-            ToriiDataspaceReadContext::all_for_tests(),
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "initial".to_owned()).into();
+        let (mut chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])], None, None,
         );
-        let mut body = sse.into_response().into_body();
-        events
-            .send(queued_transaction_event(0x51))
-            .expect("send first");
-        events
-            .send(queued_transaction_event(0x52))
-            .expect("send second");
+        let source = Arc::clone(chain.state());
+        let response = explorer_stream(
+            source, crate::stream_control::ExplorerReadContext::all_for_tests_at(u64::try_from(chain.state().committed_height()).unwrap()), ExplorerStreamKind::Blocks, 1,
+            || Ok(crate::history_producer::HistoryProducerOwner::for_test()),
+        );
+        let key = checked_explorer_lookup_keypair(0x20, Algorithm::Ed25519, "explorer input authority");
+        for message in ["successor one", "successor two"] {
+            let transaction = dm::TransactionBuilder::new(
+                chain.network_id(), dm::AccountId::new(key.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ).with_instructions([dm::Log::new(dm::Level::INFO, message.to_owned())]).sign(key.private_key());
+            crate::test_utils::commit_native_accepted_inputs(&mut chain, vec![AcceptedTransaction::new_unchecked(Cow::Owned(transaction))]);
+        }
+        let mut body = response.into_body();
         let mut error_frame = next_sse_chunk(&mut body).await;
         if !error_frame.contains("event: stream_error") {
             error_frame = next_sse_chunk(&mut body).await;
@@ -41298,15 +41317,59 @@ mod sse_stream_tests {
         assert!(error_frame.contains("event: stream_error"));
         assert!(error_frame.contains("\"code\":\"stream_lagged\""));
         let terminal = timeout(Duration::from_secs(1), body.frame())
-            .await
-            .expect("terminal Explorer stream should not hang");
+            .await.expect("terminal Explorer stream should not hang");
         assert!(terminal.is_none());
     }
-    routing_test! { sync explorer_stream_deduplicates_committed_and_applied_heights
-        assert!(explorer_height_is_new(None, 7));
-        assert!(!explorer_height_is_new(Some(7), 7));
-        assert!(!explorer_height_is_new(Some(8), 7));
-        assert!(explorer_height_is_new(Some(7), 8));
+    routing_test! { async explorer_stream_does_not_subscribe_to_unbounded_event_graphs
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let response = explorer_stream(
+            Arc::new(iroha_core::state::State::new_for_testing(
+                iroha_core::state::World::new(), Kura::blank_kura_for_testing(),
+                iroha_core::query::store::LiveQueryStore::start_test(),
+            )), crate::stream_control::ExplorerReadContext::all_for_tests_at(0), ExplorerStreamKind::Blocks, 1,
+            || panic!("no canonical committed successor exists"),
+        );
+        assert_eq!(events.receiver_count(), 0);
+        assert!(events.send(queued_transaction_event(0x51)).is_err());
+        let mut body = response.into_body();
+        assert_eq!(next_sse_chunk(&mut body).await, ": keepalive\n\n");
+        assert!(timeout(Duration::from_millis(25), body.frame()).await.is_err());
+    }
+    routing_test! { async explorer_stream_emits_both_canonical_successors_in_order
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "initial".to_owned()).into();
+        let (mut chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])], None, None,
+        );
+        let initial = u64::try_from(chain.state().committed_height()).unwrap();
+        let response = explorer_stream(
+            Arc::clone(chain.state()), crate::stream_control::ExplorerReadContext::all_for_tests_at(initial), ExplorerStreamKind::Blocks, 2,
+            || Ok(crate::history_producer::HistoryProducerOwner::for_test()),
+        );
+        let key = checked_explorer_lookup_keypair(0x20, Algorithm::Ed25519, "explorer input authority");
+        for message in ["successor one", "successor two"] {
+            let transaction = dm::TransactionBuilder::new(
+                chain.network_id(), dm::AccountId::new(key.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ).with_instructions([dm::Log::new(dm::Level::INFO, message.to_owned())]).sign(key.private_key());
+            crate::test_utils::commit_native_accepted_inputs(&mut chain, vec![AcceptedTransaction::new_unchecked(Cow::Owned(transaction))]);
+        }
+        let mut body = response.into_body();
+        for height in [initial + 1, initial + 2] {
+            let mut frame = next_sse_chunk(&mut body).await;
+            if frame == ": keepalive\n\n" { frame = next_sse_chunk(&mut body).await; }
+            assert!(frame.starts_with("data: "), "{frame}");
+            let payload = frame.split_once("data: ").unwrap().1.trim();
+            let payload: norito::json::Value = norito::json::from_str(payload).unwrap();
+            assert_eq!(payload.get("height").and_then(norito::json::Value::as_u64), Some(height));
+        }
+        assert!(timeout(Duration::from_millis(25), body.frame()).await.is_err(), "no successor may be repeated or omitted");
+    }
+    routing_test! { sync explorer_stream_traverses_bounded_canonical_successors
+        assert!(!explorer_backlog_is_lagged(7, 7, 1));
+        assert!(explorer_backlog_is_lagged(7, 8, 1));
+        assert!(!explorer_backlog_is_lagged(7, 8, 2));
+        assert!(explorer_backlog_is_lagged(7, 9, 2));
+        assert!(!explorer_backlog_is_lagged(8, 7, 1));
     }
     routing_test! { async resume_rejection_uses_native_sse_error_contract
         let response = stream_resume_unsupported_response();
@@ -52974,10 +53037,12 @@ fn with_explorer_response_byte_budget<T>(
     work: impl FnOnce() -> Result<T, Error>,
 ) -> Result<T, Error> {
     if byte_budget == 0 { return Err(explorer_response_capacity_error()); }
-    norito::with_decode_limits_scope(
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    let context = norito::core::DecodeBudgetContext::try_new_owned(
         norito::DecodeLimits::new(byte_budget, byte_budget, byte_budget, byte_budget, norito::core::MAX_VALUE_NESTING_DEPTH),
-        work,
-    )
+        owner.response_metadata(),
+    ).map_err(|_| explorer_response_capacity_error())?;
+    owner.scope(|| context.with(work))
 }
 /// Count the borrowed canonical payload before allocating its one exact response body.
 /// Call inside `with_explorer_response_byte_budget` while selected references still exist.
@@ -52985,9 +53050,8 @@ fn bounded_explorer_json_response<T: norito::json::JsonSerialize + ?Sized>(
     payload: &T,
     byte_budget: usize,
 ) -> Result<AxResponse, Error> {
-    let encoded = norito::json::to_json_bounded_boxed(payload, byte_budget)
-        .map_err(|_| explorer_response_capacity_error())?;
-    Ok(([(header::CONTENT_TYPE, "application/json")], axum::body::Bytes::from(encoded.into_vec())).into_response())
+    crate::history_producer::HistoryProducerOwner::current()?
+        .json_with_limit(payload, byte_budget)
 }
 fn explorer_response_capacity_error() -> Error {
     Error::AppServiceUnavailable {
@@ -52995,60 +53059,27 @@ fn explorer_response_capacity_error() -> Error {
         message: "Explorer response exceeded the retained query byte capacity".to_owned(),
     }
 }
-/// Retain a quantity only after charging its exact native-digit backing to this response phase.
-fn explorer_clone_quantity(quantity: &Quantity) -> Result<Quantity, Error> {
-    let layout = quantity
-        .admission_clone_layout()
-        .map_err(|_| explorer_response_capacity_error())?;
-    norito::core::reserve_decode_allocation(layout.size())
-        .map_err(|_| explorer_response_capacity_error())?;
-    quantity
-        .try_clone_for_admission()
-        .map_err(|_| explorer_response_capacity_error())
-}
 #[cfg(test)]
 mod explorer_response_byte_budget_tests {
     use super::*;
-    #[test]
-    fn retained_quantity_clone_requires_its_exact_response_allocation() {
-        let quantity = Quantity::from(u64::MAX);
-        let exact = quantity.admission_clone_layout().unwrap().size();
-        let limits = |bytes| {
-            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, 32)
-        };
-        let (cloned, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
-            explorer_clone_quantity(&quantity)
-        });
-        assert_eq!(cloned.unwrap(), quantity);
-        assert_eq!(usage.total_allocated_bytes(), exact);
-        let (refused, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
-            explorer_clone_quantity(&quantity)
-        });
-        assert!(refused.is_err());
-        assert_eq!(usage.total_allocated_bytes(), 0);
-        let (zero, usage) = norito::core::with_decode_limits_measured(limits(0), || {
-            explorer_clone_quantity(&Quantity::zero())
-        });
-        assert_eq!(zero.unwrap(), Quantity::zero());
-        assert_eq!(usage.total_allocated_bytes(), 0);
-    }
     #[tokio::test]
     async fn selected_records_and_exact_response_share_one_phase() {
         let payload=vec![1_u32,2,3,4];
         let encoded=norito::json::to_json(&payload).unwrap();
         let retained=core::mem::size_of_val(payload.as_slice());
         let exact=retained+encoded.len();
-        let response=with_explorer_response_byte_budget(exact, || {
+        let owner=crate::history_producer::HistoryProducerOwner::for_test();
+        let response=owner.scope(|| with_explorer_response_byte_budget(exact, || {
             norito::core::reserve_decode_allocation(retained).map_err(|_| explorer_response_capacity_error())?;
             bounded_explorer_json_response(&payload,exact)
-        }).unwrap();
+        })).unwrap();
         assert_eq!(response.headers()[header::CONTENT_TYPE],"application/json");
         let body=axum::body::to_bytes(response.into_body(),exact).await.unwrap();
         assert_eq!(body.as_ref(),encoded.as_bytes());
-        assert!(with_explorer_response_byte_budget(exact-1, || {
+        assert!(owner.scope(|| with_explorer_response_byte_budget(exact-1, || {
             norito::core::reserve_decode_allocation(retained).map_err(|_| explorer_response_capacity_error())?;
             bounded_explorer_json_response(&payload,exact)
-        }).is_err(),"selection and output must not each spend an independent phase budget");
+        })).is_err(),"selection and output must not each spend an independent phase budget");
     }
 }
 pub(crate) async fn handle_v1_explorer_accounts_admitted(
@@ -53186,21 +53217,19 @@ fn handle_v1_explorer_asset_definitions_sync(
     .map_err(explorer_world_cursor_error)?;
     // Enrich the governance voting asset definition with locked/circulating supply figures.
     // (Other assets default to null for these fields.)
+    let zero_locked_quantity = Quantity::zero();
     if page.items.iter().any(|item| item.id == voting_asset_id) {
-        use iroha_primitives::numeric::Quantity;
         // Borrow the committed key instead of cloning the escrow controller to build a lookup ID.
         let escrow_asset_id = world.assets_by_account().get(bond_escrow_account)
             .and_then(|assets| assets.iter().find(|asset| asset.definition() == voting_asset_id
                 && matches!(asset.scope(), dm::asset::AssetBalanceScope::Global)));
         if visibility.can_read_all || escrow_asset_id.is_some_and(|id| visibility.allows_asset(&world, id)) {
-            let zero_locked = Quantity::zero();
             let locked = escrow_asset_id.and_then(|id| world.assets().get(id))
-                .map_or(&zero_locked, |value| value.as_ref());
+                .map_or(&zero_locked_quantity, |value| value.as_ref());
             for item in &mut page.items {
                 if item.id == voting_asset_id {
-                    let circulating = explorer_circulating_quantity(item.total_quantity, locked)?;
-                    item.locked_quantity = Some(explorer_clone_quantity(locked)?);
-                    item.circulating_quantity = Some(circulating);
+                    item.locked_quantity = Some(locked);
+                    item.circulating_quantity = Some(explorer_circulating_quantity(item.total_quantity, locked)?);
                     break;
                 }
             }
@@ -53337,7 +53366,9 @@ pub async fn handle_v1_explorer_blocks(
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
 ) -> Result<AxResponse, Error> {
-    handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination)
+    crate::history_producer::HistoryProducerOwner::for_test().scope(|| {
+handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination)
+    })
 }
 
 pub(crate) async fn handle_v1_explorer_blocks_admitted(
@@ -53374,7 +53405,7 @@ fn handle_v1_explorer_blocks_sync(
             (scope.snapshot_height > 0)
                 .then(|| crate::explorer::ExplorerHistoryPosition::block(scope.snapshot_height))
         });
-        let mut items = Vec::with_capacity(scope.limit);
+        let mut items = crate::history_producer::HistoryProducerOwner::current()?.selected(scope.limit)?;
         let mut scanned = 0_usize;
         while items.len() < scope.limit && scanned < EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1 {
             let Some(position) = next_position else {
@@ -53385,14 +53416,7 @@ fn handle_v1_explorer_blocks_sync(
             })?;
             let nonzero_height = NonZeroUsize::new(height_usize)
                 .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-            let dto = explorer_optional_block_body(state.block_by_height(nonzero_height))?
-                .map(|block| {
-                    crate::explorer::ExplorerBlockDto::from_block_with_visibility(&block, |index| {
-                        visibility.allows_external_entrypoint(&block, index)
-                    })
-                })
-                .or_else(|| explorer_hash_only_block_dto(state.as_ref(), nonzero_height))
-                .ok_or_else(explorer_not_found)?;
+            let dto = explorer_history_block_row(state.as_ref(), nonzero_height, &visibility)?;
             items.push(dto);
             scanned = scanned.saturating_add(1);
             next_position = position
@@ -53407,11 +53431,11 @@ fn handle_v1_explorer_blocks_sync(
             &scope,
             next_position,
         )?;
-        let body = crate::explorer::ExplorerBlocksPage {
+        let body = crate::explorer_history::HistoryPage {
             pagination: pagination_meta,
             items,
         };
-        Ok(JsonBody(body).into_response())
+        crate::history_producer::HistoryProducerOwner::current()?.json(&body)
     })();
     record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
     response
@@ -53515,19 +53539,19 @@ routing_test! { async explorer_blocks_falls_back_to_hash_only_committed_journal
 app_api_items! {
 pub async fn handle_v1_explorer_health(
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
-    let response = (|| -> Result<AxResponse, Error> {
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    let response = owner.scope(|| -> Result<AxResponse, Error> {
         let head_height = state.committed_height() as u64;
         let body = crate::explorer::ExplorerHealthDto {
             head_height,
-            head_created_at: latest_block_created_at(kura.as_ref(), head_height, &state.ivm_execution_budget())?,
-            sampled_at: crate::explorer::now_rfc3339(),
+            head_created_at: latest_block_created_at(state.as_ref(), head_height)?,
+            sampled_at: crate::explorer_history::HistoryTime(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| explorer_response_capacity_error())?),
         };
-        Ok(JsonBody(body).into_response())
-    })();
+        owner.json(&body)
+    });
     record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_HEALTH, started, &response);
     response
 }
@@ -53642,7 +53666,7 @@ pub async fn handle_v1_explorer_metrics(
         ));
     }
     let dto = explorer_network_metrics_snapshot(state, kura, &telemetry).await?;
-    Ok(JsonBody(dto).into_response())
+    crate::history_producer::HistoryProducerOwner::current()?.json(&dto)
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn explorer_network_metrics_snapshot(
@@ -53668,7 +53692,7 @@ async fn explorer_network_metrics_snapshot(
         })
     };
     let execution_budget = state.ivm_execution_budget();
-    let block_created_at = latest_block_created_at(kura.as_ref(), finalized_block, &execution_budget)?;
+    let block_created_at = latest_block_created_at(state.as_ref(), finalized_block)?;
     let avg_block_time = average_block_time_ms(kura.as_ref(), finalized_block, 20, &execution_budget)?
         .map(|ms| crate::explorer::ExplorerDurationDto { ms });
     Ok(crate::explorer::ExplorerNetworkMetricsDto {
@@ -53686,13 +53710,12 @@ async fn explorer_network_metrics_snapshot(
     })
 }
 fn latest_block_created_at(
-    kura: &Kura,
+    state: &CoreState,
     height: u64,
-    execution_budget: &iroha_core::state::AllocationBudget,
-) -> Result<Option<String>> {
+) -> Result<Option<crate::explorer_history::HistoryTime>> {
     let Some(height) = nonzero_height(height) else { return Ok(None); };
-    let block = kura.get_block(height, execution_budget).map_err(crate::canonical_history::kura_attempt_error)?;
-    Ok(block.map(|block| crate::explorer::block_created_at(block.header().creation_time())))
+    let block = HistoryReadBudget::new().read(state, height)?;
+    Ok(Some(crate::explorer_history::HistoryTime(block.header().creation_time())))
 }
 fn average_block_time_ms(
     kura: &Kura,
@@ -53849,40 +53872,40 @@ fn explorer_history_meta(
 fn transaction_history_filter_digest(
     collection: crate::explorer::ExplorerHistoryCollection,
     filters: &ExplorerTransactionFilters,
-) -> [u8; 32] {
-    crate::explorer::explorer_history_filter_digest(
+) -> Result<[u8; 32]> {
+    Ok(crate::explorer::explorer_history_filter_digest(
         collection,
         &[
-            filters.authority.as_ref().map(ToString::to_string),
-            filters.block.map(|height| height.to_string()),
+            filters.authority.as_ref().map(crate::explorer::explorer_history_key_text).transpose().map_err(explorer_history_cursor_error)?,
+            filters.block.map(crate::explorer::explorer_history_scalar_text).transpose().map_err(explorer_history_cursor_error)?,
             filters.status.map(|status| match status {
-                ExplorerTransactionStatusFilter::Committed => "committed".to_owned(),
-                ExplorerTransactionStatusFilter::Rejected => "rejected".to_owned(),
-            }),
-            filters.asset_id.as_ref().map(ToString::to_string),
+                ExplorerTransactionStatusFilter::Committed => crate::explorer::explorer_history_literal_text("committed"),
+                ExplorerTransactionStatusFilter::Rejected => crate::explorer::explorer_history_literal_text("rejected"),
+            }).transpose().map_err(explorer_history_cursor_error)?,
+            filters.asset_id.as_ref().map(crate::explorer::explorer_history_key_text).transpose().map_err(explorer_history_cursor_error)?,
         ],
-    )
+    ))
 }
 
 fn instruction_history_filter_digest(
     collection: crate::explorer::ExplorerHistoryCollection,
     filters: &ExplorerInstructionFilters,
-) -> [u8; 32] {
-    crate::explorer::explorer_history_filter_digest(
+) -> Result<[u8; 32]> {
+    Ok(crate::explorer::explorer_history_filter_digest(
         collection,
         &[
-            filters.account.as_ref().map(ToString::to_string),
-            filters.authority.as_ref().map(ToString::to_string),
-            filters.transaction_hash.as_ref().map(ToString::to_string),
+            filters.account.as_ref().map(crate::explorer::explorer_history_key_text).transpose().map_err(explorer_history_cursor_error)?,
+            filters.authority.as_ref().map(crate::explorer::explorer_history_key_text).transpose().map_err(explorer_history_cursor_error)?,
+            filters.transaction_hash.as_ref().map(crate::explorer::explorer_history_key_text).transpose().map_err(explorer_history_cursor_error)?,
             filters.status.map(|status| match status {
-                ExplorerTransactionStatusFilter::Committed => "committed".to_owned(),
-                ExplorerTransactionStatusFilter::Rejected => "rejected".to_owned(),
-            }),
-            filters.block.map(|height| height.to_string()),
-            filters.kind.map(|kind| kind.as_str().to_owned()),
-            filters.asset_id.as_ref().map(ToString::to_string),
+                ExplorerTransactionStatusFilter::Committed => crate::explorer::explorer_history_literal_text("committed"),
+                ExplorerTransactionStatusFilter::Rejected => crate::explorer::explorer_history_literal_text("rejected"),
+            }).transpose().map_err(explorer_history_cursor_error)?,
+            filters.block.map(crate::explorer::explorer_history_scalar_text).transpose().map_err(explorer_history_cursor_error)?,
+            filters.kind.map(|kind| crate::explorer::explorer_history_literal_text(kind.as_str())).transpose().map_err(explorer_history_cursor_error)?,
+            filters.asset_id.as_ref().map(crate::explorer::explorer_history_key_text).transpose().map_err(explorer_history_cursor_error)?,
         ],
-    )
+    ))
 }
 }
 app_api_items! {
@@ -53897,9 +53920,11 @@ pub async fn handle_v1_explorer_transactions(
     status: Option<ExplorerTransactionStatusFilter>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
 ) -> Result<AxResponse, Error> {
-    handle_v1_explorer_transactions_sync(
+    crate::history_producer::HistoryProducerOwner::for_test().scope(|| {
+handle_v1_explorer_transactions_sync(
         state, telemetry, visibility, pagination, authority, block, status, asset_id,
     )
+    })
 }
 pub(crate) async fn handle_v1_explorer_transactions_admitted(
     state: Arc<CoreState>,
@@ -53954,11 +53979,11 @@ fn handle_v1_explorer_transactions_sync(
             &pagination,
             crate::explorer::ExplorerHistoryCollection::Transactions,
         )?;
-        let page = crate::explorer::ExplorerTransactionsPage {
+        let page = crate::explorer_history::HistoryPage {
             pagination: pagination_meta,
             items,
         };
-        Ok(JsonBody(page).into_response())
+        crate::history_producer::HistoryProducerOwner::current()?.json(&page)
     })();
     record_explorer_endpoint_result(
         &telemetry,
@@ -54021,12 +54046,12 @@ fn handle_v1_explorer_transactions_latest_sync(
             &pagination,
             crate::explorer::ExplorerHistoryCollection::LatestTransactions,
         )?;
-        let body = crate::explorer::ExplorerLatestTransactionsResponse {
-            sampled_at: crate::explorer::now_rfc3339(),
+        let body = crate::explorer_history::LatestHistoryPage {
+            sampled_at: crate::explorer_history::HistoryTime(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| explorer_response_capacity_error())?),
             pagination: pagination_meta,
             items,
         };
-        Ok(JsonBody(body).into_response())
+        crate::history_producer::HistoryProducerOwner::current()?.json(&body)
     })();
     record_explorer_endpoint_result(
         &telemetry,
@@ -54054,7 +54079,9 @@ pub async fn handle_v1_explorer_instructions(
     pagination: crate::explorer::ExplorerCursorQuery,
     query: ExplorerInstructionQuery,
 ) -> Result<AxResponse, Error> {
-    handle_v1_explorer_instructions_sync(state, telemetry, visibility, pagination, query)
+    crate::history_producer::HistoryProducerOwner::for_test().scope(|| {
+handle_v1_explorer_instructions_sync(state, telemetry, visibility, pagination, query)
+    })
 }
 pub(crate) async fn handle_v1_explorer_instructions_admitted(
     state: Arc<CoreState>,
@@ -54115,11 +54142,11 @@ fn handle_v1_explorer_instructions_sync(
             &pagination,
             crate::explorer::ExplorerHistoryCollection::Instructions,
         )?;
-        let page = ExplorerInstructionsPage {
+        let page = crate::explorer_history::HistoryPage {
             pagination: pagination_meta,
             items,
         };
-        Ok(JsonBody(page).into_response())
+        crate::history_producer::HistoryProducerOwner::current()?.json(&page)
     })();
     record_explorer_endpoint_result(
         &telemetry,
@@ -54188,12 +54215,12 @@ fn handle_v1_explorer_instructions_latest_sync(
             &pagination,
             crate::explorer::ExplorerHistoryCollection::LatestInstructions,
         )?;
-        let body = crate::explorer::ExplorerLatestInstructionsResponse {
-            sampled_at: crate::explorer::now_rfc3339(),
+        let body = crate::explorer_history::LatestHistoryPage {
+            sampled_at: crate::explorer_history::HistoryTime(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| explorer_response_capacity_error())?),
             pagination: pagination_meta,
             items,
         };
-        Ok(JsonBody(body).into_response())
+        crate::history_producer::HistoryProducerOwner::current()?.json(&body)
     })();
     record_explorer_endpoint_result(
         &telemetry,
@@ -54203,7 +54230,22 @@ fn handle_v1_explorer_instructions_latest_sync(
     );
     response
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_transaction_detail(
+    state: Arc<CoreState>, telemetry: MaybeTelemetry, visibility: DataspaceReadVisibility,
+    identifier: String,
+) -> Result<AxResponse, Error> {
+    crate::history_producer::HistoryProducerOwner::for_test().scope(||
+        handle_v1_explorer_transaction_detail_sync(state, telemetry, visibility, identifier))
+}
+pub(crate) async fn handle_v1_explorer_transaction_detail_admitted(
+    state: Arc<CoreState>, telemetry: MaybeTelemetry, visibility: DataspaceReadVisibility,
+    identifier: String, admission: crate::QueryAdmissionPermit,
+) -> Result<AxResponse, Error> {
+    run_admitted_blocking(admission, "Explorer detail worker failed", move ||
+        handle_v1_explorer_transaction_detail_sync(state, telemetry, visibility, identifier)).await
+}
+fn handle_v1_explorer_transaction_detail_sync(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
@@ -54214,7 +54256,7 @@ pub async fn handle_v1_explorer_transaction_detail(
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTION_DETAIL);
         let dto = find_transaction_detail(state.as_ref(), max_height, &visibility, identifier)?;
-        Ok(JsonBody(dto).into_response())
+        crate::history_producer::HistoryProducerOwner::current()?.json(&dto)
     })();
     record_explorer_endpoint_result(
         &telemetry,
@@ -54224,7 +54266,24 @@ pub async fn handle_v1_explorer_transaction_detail(
     );
     response
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_instruction_detail(
+    state: Arc<CoreState>, telemetry: MaybeTelemetry, visibility: DataspaceReadVisibility,
+    hash: String,
+    index: u64,
+) -> Result<AxResponse, Error> {
+    crate::history_producer::HistoryProducerOwner::for_test().scope(||
+        handle_v1_explorer_instruction_detail_sync(state, telemetry, visibility, hash, index))
+}
+pub(crate) async fn handle_v1_explorer_instruction_detail_admitted(
+    state: Arc<CoreState>, telemetry: MaybeTelemetry, visibility: DataspaceReadVisibility,
+    hash: String,
+    index: u64, admission: crate::QueryAdmissionPermit,
+) -> Result<AxResponse, Error> {
+    run_admitted_blocking(admission, "Explorer detail worker failed", move ||
+        handle_v1_explorer_instruction_detail_sync(state, telemetry, visibility, hash, index)).await
+}
+fn handle_v1_explorer_instruction_detail_sync(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
@@ -54236,7 +54295,7 @@ pub async fn handle_v1_explorer_instruction_detail(
         let max_height = state.committed_height() as u64;
         record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTION_DETAIL);
         let dto = find_instruction_detail(state.as_ref(), max_height, &visibility, hash, index)?;
-        Ok(JsonBody(dto).into_response())
+        crate::history_producer::HistoryProducerOwner::current()?.json(&dto)
     })();
     record_explorer_endpoint_result(
         &telemetry,
@@ -54344,12 +54403,12 @@ fn collect_transaction_summaries(
     collection: crate::explorer::ExplorerHistoryCollection,
 ) -> Result<
     (
-        Vec<crate::explorer::ExplorerTransactionDto>,
+        Vec<crate::explorer_history::HistoryTransactionRow>,
         crate::explorer::ExplorerHistoryCursorMeta,
     ),
     Error,
 > {
-    let filter_digest = transaction_history_filter_digest(collection, filters);
+    let filter_digest = transaction_history_filter_digest(collection, filters)?;
     let scope = resolve_explorer_history_request(
         state,
         visibility,
@@ -54371,7 +54430,7 @@ fn collect_transaction_summaries(
         ));
     }
     let mut read_budget = HistoryReadBudget::new();
-    let mut out = Vec::with_capacity(scope.limit);
+    let mut out = crate::history_producer::HistoryProducerOwner::current()?.selected(scope.limit)?;
     let mut scanned_blocks = 0_usize;
     let mut scanned_candidates = 0_usize;
     let mut inspected_entrypoints = 0_usize;
@@ -54435,12 +54494,9 @@ fn collect_transaction_summaries(
                 external_signed_transaction_result_at(block_ref, entrypoint_index)
                 && filters.matches(tx, height, result)
             {
-                out.push(crate::explorer::transaction_summary_dto_with_hash(
-                    tx,
-                    entrypoint_hash,
-                    height,
-                    result,
-                ));
+                out.push(crate::explorer_history::HistoryTransactionRow {
+                    block: block.clone(), entrypoint_index, entrypoint_hash,
+                });
             }
         }
         scan_position = next_block_position;
@@ -54459,12 +54515,12 @@ fn collect_instruction_history(
     collection: crate::explorer::ExplorerHistoryCollection,
 ) -> Result<
     (
-        Vec<ExplorerInstructionDto>,
+        Vec<crate::explorer_history::HistoryInstructionRow>,
         crate::explorer::ExplorerHistoryCursorMeta,
     ),
     Error,
 > {
-    let filter_digest = instruction_history_filter_digest(collection, filters);
+    let filter_digest = instruction_history_filter_digest(collection, filters)?;
     let scope = resolve_explorer_history_request(
         state,
         visibility,
@@ -54510,7 +54566,7 @@ fn collect_instruction_history(
         ));
     }
     let mut read_budget = HistoryReadBudget::new();
-    let mut out = Vec::with_capacity(scope.limit);
+    let mut out = crate::history_producer::HistoryProducerOwner::current()?.selected(scope.limit)?;
     let mut scanned_blocks = 0_usize;
     let mut scanned_candidates = 0_usize;
     let mut inspected_entrypoints = 0_usize;
@@ -54643,15 +54699,12 @@ fn collect_instruction_history(
                 let index = u32::try_from(idx).map_err(|_| {
                     conversion_error("instruction index exceeds Explorer response width".into())
                 })?;
-                out.push(crate::explorer::instruction_dto_with_kind_and_hash(
-                    tx,
-                    entrypoint_hash,
-                    height,
-                    result,
-                    instruction,
-                    kind,
-                    index,
-                ));
+                out.push(crate::explorer_history::HistoryInstructionRow {
+                    transaction: crate::explorer_history::HistoryTransactionRow {
+                        block: block.clone(), entrypoint_index, entrypoint_hash,
+                    },
+                    instruction_index: index,
+                });
             }
         }
         scan_position = next_block_position;
@@ -54664,7 +54717,7 @@ fn find_transaction_detail(
     start_height: u64,
     visibility: &DataspaceReadVisibility,
     identifier: String,
-) -> Result<crate::explorer::ExplorerTransactionDetailDto, Error> {
+) -> Result<crate::explorer_history::HistoryTransactionDetail, Error> {
     if start_height == 0 {
         return Err(explorer_not_found());
     }
@@ -54683,7 +54736,7 @@ fn find_instruction_detail(
     visibility: &DataspaceReadVisibility,
     identifier: String,
     index: u64,
-) -> Result<ExplorerInstructionDto, Error> {
+) -> Result<crate::explorer_history::HistoryInstructionRow, Error> {
     if start_height == 0 {
         return Err(explorer_not_found());
     }
@@ -54713,7 +54766,7 @@ fn transaction_detail_at_height(
     height: u64,
     visibility: &DataspaceReadVisibility,
     target: HashOf<TransactionEntrypoint>,
-) -> Result<Option<crate::explorer::ExplorerTransactionDetailDto>, Error> {
+) -> Result<Option<crate::explorer_history::HistoryTransactionDetail>, Error> {
     let Some(nonzero_height) = nonzero_height(height) else {
         return Ok(None);
     };
@@ -54726,11 +54779,8 @@ fn transaction_detail_at_height(
             continue;
         }
         if signed_transaction_carrier_matches_indexed_identity(&entrypoint_hash, &tx, &target) {
-            return Ok(Some(crate::explorer::transaction_detail_dto_with_hash(
-                tx,
-                entrypoint_hash,
-                height,
-                result,
+            return Ok(Some(crate::explorer_history::HistoryTransactionDetail(
+                crate::explorer_history::HistoryTransactionRow { block: block.clone(), entrypoint_index, entrypoint_hash }
             )));
         }
     }
@@ -54742,7 +54792,7 @@ fn instruction_detail_at_height(
     visibility: &DataspaceReadVisibility,
     target: HashOf<TransactionEntrypoint>,
     lookup_index: usize,
-) -> Result<Option<ExplorerInstructionDto>, Error> {
+) -> Result<Option<crate::explorer_history::HistoryInstructionRow>, Error> {
     let Some(nonzero_height) = nonzero_height(height) else {
         return Ok(None);
     };
@@ -54762,17 +54812,10 @@ fn instruction_detail_at_height(
             .explicit_instructions()
             .nth(lookup_index)
             .ok_or_else(explorer_not_found)?;
-        let kind = crate::explorer::instruction_kind(instruction);
-        let index_u32 = u32::try_from(lookup_index).unwrap_or(u32::MAX);
-        return Ok(Some(crate::explorer::instruction_dto_with_kind_and_hash(
-            tx,
-            entrypoint_hash,
-            height,
-            result,
-            instruction,
-            kind,
-            index_u32,
-        )));
+        return Ok(Some(crate::explorer_history::HistoryInstructionRow {
+            transaction: crate::explorer_history::HistoryTransactionRow { block: block.clone(), entrypoint_index, entrypoint_hash },
+            instruction_index: u32::try_from(lookup_index).map_err(|_| explorer_scan_capacity_error())?,
+        }));
     }
     Ok(None)
 }
@@ -54785,6 +54828,8 @@ pub async fn handle_v1_explorer_account_detail(
     if !visibility.allows_account(&world, &account_id) {
         return Err(explorer_not_found());
     }
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    owner.scope(|| {
     let dto = world
         .account(&account_id)
         .map(|entry| {
@@ -54798,7 +54843,8 @@ pub async fn handle_v1_explorer_account_detail(
             )
         })
         .map_err(|_| explorer_not_found())?;
-    crate::json_ok(dto)
+    owner.json(&dto)
+    })
 }
 pub async fn handle_v1_explorer_account_qr(
     state: Arc<CoreState>,
@@ -54827,6 +54873,8 @@ pub async fn handle_v1_explorer_domain_detail(
     if !visibility.allows_domain(&world, &domain_id) {
         return Err(explorer_not_found());
     }
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    owner.scope(|| {
     let dto = world
         .domain(&domain_id)
         .map(|domain| {
@@ -54836,7 +54884,8 @@ pub async fn handle_v1_explorer_domain_detail(
             )
         })
         .map_err(|_| explorer_not_found())?;
-    crate::json_ok(dto)
+    owner.json(&dto)
+    })
 }
 #[cfg(test)]
 pub async fn handle_v1_explorer_asset_definition_detail(
@@ -54844,6 +54893,8 @@ pub async fn handle_v1_explorer_asset_definition_detail(
     visibility: DataspaceReadVisibility,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
+    let owner = crate::history_producer::HistoryProducerOwner::for_test();
+    owner.scope(|| {
     let world = state.world_view();
     if !visibility.allows_asset_definition(&world, &definition_id) {
         return Err(explorer_not_found());
@@ -54860,23 +54911,22 @@ pub async fn handle_v1_explorer_asset_definition_detail(
             &visibility,
         ),
     );
+    let zero_locked_quantity = Quantity::zero();
     if definition_id == governance.voting_asset_id {
-        use iroha_primitives::numeric::Quantity;
         let escrow_asset_id = AssetId::new(
             definition_id.clone(),
             governance.bond_escrow_account.clone(),
         );
         if visibility.allows_asset(&world, &escrow_asset_id) {
-            let locked = match world.asset(&escrow_asset_id) {
-                Ok(entry) => entry.value().as_ref().clone(),
-                Err(_) => Quantity::zero(),
-            };
-            let circulating = explorer_circulating_quantity(definition.total_quantity(), &locked)?;
+            let locked = world.assets().get(&escrow_asset_id)
+                .map_or(&zero_locked_quantity, |value| value.as_ref());
+            let circulating = explorer_circulating_quantity(definition.total_quantity(), locked)?;
             dto.locked_quantity = Some(locked);
             dto.circulating_quantity = Some(circulating);
         }
     }
-    crate::json_ok(dto)
+    owner.json(&dto)
+    })
 }
 /// First-release ceiling for holder rows examined by one explorer distribution snapshot.
 const EXPLORER_SNAPSHOT_MAX_EXAMINED_HOLDERS_V1: usize = 65_536;
@@ -56263,11 +56313,14 @@ pub async fn handle_v1_explorer_asset_detail(
     if !visibility.allows_asset(&world, &asset_id) {
         return Err(explorer_not_found());
     }
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    owner.scope(|| {
     let dto = world
         .asset(&asset_id)
         .map(crate::explorer::ExplorerAssetDto::from_entry)
         .map_err(|_| explorer_not_found())?;
-    crate::json_ok(dto)
+    owner.json(&dto)
+    })
 }
 pub async fn handle_v1_explorer_nft_detail(
     state: Arc<CoreState>,
@@ -56278,11 +56331,14 @@ pub async fn handle_v1_explorer_nft_detail(
     if !visibility.allows_nft(&world, &nft_id) {
         return Err(explorer_not_found());
     }
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    owner.scope(|| {
     let dto = world
         .nft(&nft_id)
         .map(crate::explorer::ExplorerNftDto::from_entry)
         .map_err(|_| explorer_not_found())?;
-    crate::json_ok(dto)
+    owner.json(&dto)
+    })
 }
 pub async fn handle_v1_explorer_rwa_detail(
     state: Arc<CoreState>,
@@ -56293,11 +56349,14 @@ pub async fn handle_v1_explorer_rwa_detail(
     if !visibility.allows_rwa(&world, &rwa_id) {
         return Err(explorer_not_found());
     }
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    owner.scope(|| {
     let dto = world
         .rwa(&rwa_id)
         .map(crate::explorer::ExplorerRwaDto::from_entry)
         .map_err(|_| explorer_not_found())?;
-    crate::json_ok(dto)
+    owner.json(&dto)
+    })
 }
 /// Explorer can display an explicitly absent body as journal metadata, but never
 /// treats allocation refusal or a contradictory body as missing history.
@@ -56348,21 +56407,27 @@ enum ExplorerBlockIdentifier {
     Height(NonZeroUsize),
     Hash(HashOf<BlockHeader>),
 }
-fn explorer_hash_only_block_dto(
-    state: &CoreState,
-    height: NonZeroUsize,
-) -> Option<crate::explorer::ExplorerBlockDto> {
-    let height_u64 = u64::try_from(height.get()).ok()?;
-    let hash = state.committed_block_hash_at_height(height_u64)?;
-    let prev_block_hash = height_u64
-        .checked_sub(1)
-        .filter(|height| *height > 0)
-        .and_then(|height| state.committed_block_hash_at_height(height));
-    Some(crate::explorer::ExplorerBlockDto::from_hash_only(
-        height_u64,
-        hash,
-        prev_block_hash,
-    ))
+fn explorer_history_block_row(
+    state: &CoreState, height: NonZeroUsize, visibility: &DataspaceReadVisibility,
+) -> Result<crate::explorer_history::HistoryBlockRow, Error> {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    use iroha_data_model::query::error::{CanonicalHistoryError, QueryExecutionFail};
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    let read = state.read_canonical_history_block(height, &owner.canonical_history_budget());
+    match read {
+        Ok(block) => Ok(crate::explorer_history::HistoryBlockRow::from_block(&block,
+            |index| visibility.allows_external_entrypoint(&block, index))),
+        Err(ExecutionAttemptError::Rejected(QueryExecutionFail::CanonicalHistory(CanonicalHistoryError::BodyUnavailable { .. }))) => {
+            let height = height.get() as u64;
+            let hash = state.committed_block_hash_at_height(height).ok_or_else(explorer_not_found)?;
+            Ok(crate::explorer_history::HistoryBlockRow {
+                hash, height, created_at: crate::explorer_history::HistoryBlockTime(None),
+                prev_block_hash: height.checked_sub(1).filter(|height| *height > 0).and_then(|height| state.committed_block_hash_at_height(height)),
+                transactions_hash: None, transactions_rejected: 0, transactions_total: 0,
+            })
+        }
+        Err(error) => Err(crate::canonical_history::query_attempt_error(error)),
+    }
 }
 fn parse_block_identifier(raw: &str) -> Result<ExplorerBlockIdentifier, Error> {
     let trimmed = raw.trim();
@@ -56381,7 +56446,22 @@ fn parse_block_identifier(raw: &str) -> Result<ExplorerBlockIdentifier, Error> {
         HashOf::<BlockHeader>::from_untyped_unchecked(hash),
     ))
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_block_detail(
+    state: Arc<CoreState>, telemetry: MaybeTelemetry, visibility: DataspaceReadVisibility,
+    identifier: String,
+) -> Result<AxResponse, Error> {
+    crate::history_producer::HistoryProducerOwner::for_test().scope(||
+        handle_v1_explorer_block_detail_sync(state, telemetry, visibility, identifier))
+}
+pub(crate) async fn handle_v1_explorer_block_detail_admitted(
+    state: Arc<CoreState>, telemetry: MaybeTelemetry, visibility: DataspaceReadVisibility,
+    identifier: String, admission: crate::QueryAdmissionPermit,
+) -> Result<AxResponse, Error> {
+    run_admitted_blocking(admission, "Explorer detail worker failed", move ||
+        handle_v1_explorer_block_detail_sync(state, telemetry, visibility, identifier)).await
+}
+fn handle_v1_explorer_block_detail_sync(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
@@ -56395,31 +56475,13 @@ pub async fn handle_v1_explorer_block_detail(
             matches!(&lookup, ExplorerBlockIdentifier::Height(_)),
             "explorer block hash lookup",
         )?;
-        let dto = match lookup {
-            ExplorerBlockIdentifier::Height(height) => explorer_optional_block_body(state.block_by_height(height))?
-                .map(|block| {
-                    crate::explorer::ExplorerBlockDto::from_block_with_visibility(
-                        block.as_ref(),
-                        |index| visibility.allows_external_entrypoint(block.as_ref(), index),
-                    )
-                })
-                .or_else(|| explorer_hash_only_block_dto(state.as_ref(), height)),
-            ExplorerBlockIdentifier::Hash(hash) => explorer_optional_block_body(state.block_by_hash(hash))?
-                .map(|block| {
-                    crate::explorer::ExplorerBlockDto::from_block_with_visibility(
-                        block.as_ref(),
-                        |index| visibility.allows_external_entrypoint(block.as_ref(), index),
-                    )
-                })
-                .or_else(|| {
-                    state
-                        .block_height_by_hash(hash)
-                        .or_else(|| state.committed_block_height_for_hash(hash))
-                        .and_then(|height| explorer_hash_only_block_dto(state.as_ref(), height))
-                }),
-        }
-        .ok_or_else(explorer_not_found)?;
-        Ok(JsonBody(dto).into_response())
+        let height = match lookup {
+            ExplorerBlockIdentifier::Height(height) => height,
+            ExplorerBlockIdentifier::Hash(hash) => state.committed_block_height_for_hash(hash)
+                .ok_or_else(explorer_not_found)?,
+        };
+        let dto = explorer_history_block_row(state.as_ref(), height, &visibility)?;
+        crate::history_producer::HistoryProducerOwner::current()?.json(&dto)
     })();
     record_explorer_endpoint_result(
         &telemetry,

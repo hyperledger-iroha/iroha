@@ -306,6 +306,12 @@ fn original_cold_da_refunds_follow_all_rebuild_and_rewind_writers() {
     // Direct success/refusal and retained replacement success/refusal/unwind all
     // read the same genuine signed genesis through the cold Kura owner.
     for mode in 0..5 {
+        // Retired State generations use the process-wide epoch collector. Pin
+        // before this fixture creates its original pool so another thread cannot
+        // refund those generations into the cold-DA waiter while writers remain
+        // held. The synchronous Kura scratch owner still exercises the actual
+        // refund batch and every physical-release assertion below.
+        let retirement_pin = crossbeam_epoch::pin();
         let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
             .expect("genuine signed root for cold DA reconstruction");
         let state = chain.state();
@@ -402,6 +408,9 @@ fn original_cold_da_refunds_follow_all_rebuild_and_rewind_writers() {
         );
         drop(pending);
         registration.cancel();
+        // No refund waiter remains armed when unrelated State generations can
+        // finish their actual epoch retirement.
+        drop(retirement_pin);
         if failed {
             state.ensure_da_indexes_hydrated().unwrap();
         }

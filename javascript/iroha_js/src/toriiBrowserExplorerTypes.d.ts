@@ -18,9 +18,27 @@ export interface ToriiBrowserExplorerTransaction {
 }
 
 export interface ToriiBrowserExplorerInstructionBox {
-  encoded: string;
+  /** Registered native instruction wire identifier. */
+  wire_id: string;
+  /** Lowercase SHA-256 of the exact decoded InstructionBox frame, without a prefix. */
   framed_sha256: string;
-  json: unknown;
+  /** Canonical padded base64 of one native Norito InstructionBox frame. */
+  instruction: string;
+}
+
+export interface ToriiBrowserExplorerTransactionRejection {
+  /** Canonical padded base64 of one native Norito TransactionRejectionReason frame. */
+  reason: string;
+  message: string;
+}
+
+export interface ToriiBrowserExplorerTransactionDetail extends ToriiBrowserExplorerTransaction {
+  rejection_reason: ToriiBrowserExplorerTransactionRejection | null;
+  executable_payload: unknown;
+  metadata: unknown;
+  nonce: number | null;
+  signature: string;
+  time_to_live: { ms: number } | null;
 }
 
 export interface ToriiBrowserExplorerInstruction {

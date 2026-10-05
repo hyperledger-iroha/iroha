@@ -108,8 +108,9 @@ Gas enforcement (CoreHost)
 - `JSON_GET_JSON` quotes heap-backed JSON input against the owned HEAP/INPUT payload bound and
   reserves that same HEAP-capable result bound plus its sum handle, so a valid field beyond the
   fixed INPUT arena cannot be rejected during preparation or exceed its pre-dispatch quote.
-- Host-state-dependent public-input and WSV ZK read results reserve the available syscall gas,
-  compute and preflight their exact encoded cost, and only then allocate the result. This keeps
+- Host-state-dependent durable-state, public-input, and WSV ZK read results reserve
+  the available syscall gas, compute and preflight their exact encoded cost, and
+  only then allocate the result. This keeps
   valid HEAP-sized responses inside the dispatcher quote without mutating registers on
   insufficient gas.
 - ISI syscalls charge extra gas using the native ISI schedule (`iroha_core::gas::meter_instruction`).
@@ -365,9 +366,13 @@ Durable state
   Generic programs have no authenticated contract namespace, so every durable
   state syscall is rejected during admission and again before host dispatch.
 - State gas is deterministic and byte-counted: present reads and writes charge
-  the `NoritoBytes` payload length, misses and tombstones charge only the fixed
-  base, and key enumeration adds the returned-key count plus encoded result
-  bytes.
+  the fixed base plus the encoded path and `NoritoBytes` value payload lengths.
+  Misses and tombstones charge the base plus the encoded path length. Key
+  enumeration adds the returned-key count plus encoded result bytes. `STATE_GET` preparation reserves the caller's remaining gas after checking
+  the path-only minimum. The host checks the exact path-plus-value cost before
+  copying a value, recording the read, or publishing a response; unused gas is
+  refunded. A small value or a miss does not require gas for a maximum-size value.
+  The 512 KiB value limit remains mandatory.
 - The development/test `DurableStateOverlay` is not the ledger state backend.
   Its restart file is a direct regular Norito JSON file capped at 30 MiB and is
   admitted before parse. The retained overlay is capped at 4,096 entries,

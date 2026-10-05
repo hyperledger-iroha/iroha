@@ -1359,10 +1359,55 @@ impl DriverHandle {
     }
 }
 
-/// A running driver instance: its handle and threads.
+/// Owns the physical joins before any protocol worker can start. Retirement from
+/// a worker callback hands off its handles without waiting on that same worker.
+struct DriverJoiner {
+    workers: mpsc::SyncSender<Vec<JoinHandle<()>>>,
+    thread: JoinHandle<()>,
+}
+
+impl DriverJoiner {
+    fn start() -> std::io::Result<Self> {
+        let (workers, receive) = mpsc::sync_channel::<Vec<JoinHandle<()>>>(1);
+        let thread = super::threads::sumeragi_thread_builder("sumeragi-join").spawn(move || {
+            if let Ok(threads) = receive.recv() {
+                for thread in threads {
+                    let _ = thread.join();
+                }
+            }
+        })?;
+        Ok(Self { workers, thread })
+    }
+
+    fn finish(self, threads: Vec<JoinHandle<()>>, on_worker: bool) {
+        let Self { workers, thread } = self;
+        if let Err(mpsc::SendError(threads)) = workers.send(threads) {
+            // The private receiver has no backend calls before this one handoff.
+            // If it nevertheless stopped, never panic or self-join during unwind.
+            iroha_logger::error!("sumeragi joining control stopped before receiving workers");
+            if !on_worker {
+                for thread in threads {
+                    let _ = thread.join();
+                }
+            }
+        }
+        drop(workers);
+        if !on_worker {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// A running driver instance: its handle and owned worker joins.
+///
+/// Dropping the owner requests shutdown even when delivery handles remain. A
+/// caller outside the instance waits for every worker. A callback on an instance
+/// worker transfers all physical joins to the prestarted joiner, allowing that
+/// callback and the event loop to return before their threads can be joined.
 pub struct RunningDriver {
     handle: DriverHandle,
     threads: Vec<JoinHandle<()>>,
+    joiner: Option<DriverJoiner>,
 }
 
 impl RunningDriver {
@@ -1372,12 +1417,30 @@ impl RunningDriver {
     }
 
     /// Stop the event loop and wait for every thread of the instance.
-    pub fn shutdown(self) {
+    ///
+    /// Called by an instance worker, shutdown transfers its joins to the original
+    /// joining control instead of blocking the callback needed to finish them.
+    pub fn shutdown(mut self) {
+        self.stop_and_join();
+    }
+
+    fn stop_and_join(&mut self) {
+        let Some(joiner) = self.joiner.take() else {
+            return;
+        };
         let _ = self.handle.inputs.send(Input::Stop);
-        drop(self.handle);
-        for thread in self.threads {
-            let _ = thread.join();
-        }
+        let current = std::thread::current().id();
+        let on_worker = self
+            .threads
+            .iter()
+            .any(|thread| thread.thread().id() == current);
+        joiner.finish(std::mem::take(&mut self.threads), on_worker);
+    }
+}
+
+impl Drop for RunningDriver {
+    fn drop(&mut self) {
+        self.stop_and_join();
     }
 }
 
@@ -1490,7 +1553,17 @@ where
         });
         let (sender, rx) = mpsc::channel();
         let inputs = DriverInputs { sender, wake };
-        let mut threads = Vec::new();
+        // Create the joiner before any worker. Declaring this owner before the
+        // worker channels also closes those channels before its Drop on a spawn
+        // error, so partially started workers can be joined instead of detached.
+        let mut running = RunningDriver {
+            handle: DriverHandle {
+                shared: Arc::clone(&shared),
+                inputs: inputs.clone(),
+            },
+            threads: Vec::new(),
+            joiner: Some(DriverJoiner::start()?),
+        };
         let (persist_tx, persist_rx) = mpsc::channel::<(u64, Write)>();
         {
             let (records, bodies, crypto) = (
@@ -1500,7 +1573,7 @@ where
             );
             let tx = inputs.clone();
             let gate = Arc::clone(&shared.node_gate);
-            threads.push(
+            running.threads.push(
                 super::threads::sumeragi_thread_builder("sumeragi-persist").spawn(move || {
                     let _exit = ExitGuard {
                         worker: Worker::Persist,
@@ -1526,7 +1599,7 @@ where
             let (mut executor, blocks) = (self.executor, Arc::clone(&self.blocks));
             let tx = inputs.clone();
             let gate = Arc::clone(&shared.node_gate);
-            threads.push(
+            running.threads.push(
                 super::threads::sumeragi_thread_builder("sumeragi-exec").spawn(move || {
                     let _exit = ExitGuard {
                         worker: Worker::Exec,
@@ -1557,7 +1630,7 @@ where
             );
             let tx = inputs.clone();
             let gate = Arc::clone(&shared.node_gate);
-            threads.push(
+            running.threads.push(
                 super::threads::sumeragi_thread_builder("sumeragi-serve").spawn(move || {
                     let _exit = ExitGuard {
                         worker: Worker::Serve,
@@ -1586,7 +1659,7 @@ where
         {
             let (clock, net, observer) = (self.clock, net, self.observer);
             let shared = Arc::clone(&shared);
-            threads.push(
+            running.threads.push(
                 super::threads::sumeragi_thread_builder("sumeragi-loop").spawn(move || {
                     shared.wake.bind_current();
                     let _guard = LoopGuard {
@@ -1639,15 +1712,14 @@ where
                 })?,
             );
         }
-        let handle = DriverHandle { shared, inputs };
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(RunningDriver { handle, threads }),
+            Ok(Ok(())) => Ok(running),
             Ok(Err(error)) => {
-                RunningDriver { handle, threads }.shutdown();
+                running.shutdown();
                 Err(error)
             }
             Err(_) => {
-                RunningDriver { handle, threads }.shutdown();
+                running.shutdown();
                 Err(DriverError::Config(ConfigError::InvalidInit(
                     "event loop died",
                 )))

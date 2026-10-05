@@ -87,6 +87,14 @@ fn authenticate_body(
     uri: &Uri,
     body: &[u8],
 ) -> Result<AccountId, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     let verified = crate::app_auth::verify_canonical_network_request(
         &app.state,
         app.state.network_id_ref(),
@@ -95,6 +103,7 @@ fn authenticate_body(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     )?
     .ok_or_else(|| Error::AppUnauthorized {
         code: "canonical_authentication_required",

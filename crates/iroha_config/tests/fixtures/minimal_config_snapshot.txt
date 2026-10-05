@@ -710,6 +710,7 @@ Root {
         ),
         native_context_archive_max_bytes: 16777216,
         blocks_in_memory: 1024,
+        history_checkpoint_cache_capacity: 8192,
         block_hash_history_bytes: Bytes(
             268435456,
         ),

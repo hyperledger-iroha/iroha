@@ -343,6 +343,16 @@ pub(super) mod tests {
             Ok(())
         })
         .expect("commit bounded channel-query fixture");
+        let nexus = state.nexus_snapshot();
+        let mut configuration =
+            crate::sumeragi::test_chain::TestChainConfig::new(state.world, NOW * 1_000);
+        configuration.genesis_key = settlement.clone();
+        configuration.pipeline = state.pipeline;
+        configuration.governance = Some(state.gov);
+        configuration.nexus = Some(nexus);
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(configuration)
+            .expect("authenticate the bounded query's actual durable history");
+        let state = chain.state();
         let view = state.view();
         let unbounded_channel = read_channel(view.world(), receipt.channel_id)
             .expect("read valid unbounded channel")

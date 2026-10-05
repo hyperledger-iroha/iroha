@@ -27,7 +27,9 @@ _PROVIDER_ID = "10" * 32
 _PROVIDER_OWNER = (
     "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 )
-_COMPLETION_SIGNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+_COMPLETION_SIGNER = (
+    "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+)
 _POLICY_ID = "21" * 32
 _PREDECESSOR_DIGEST = "32" * 32
 _POLICY_DIGEST = "43" * 32
@@ -68,10 +70,11 @@ def _authority(
     revision: int = 2,
     predecessor_digest: str | None = _PREDECESSOR_DIGEST,
     provider_owner: str = _PROVIDER_OWNER,
+    completion_signer: str = _COMPLETION_SIGNER,
 ) -> ProviderIngestCompletionAuthorityV1:
     return ProviderIngestCompletionAuthorityV1(
         provider_owner=provider_owner,
-        completion_signer=_COMPLETION_SIGNER,
+        completion_signer=completion_signer,
         signer_policy=ProviderIngestCompletionSignerPolicyV1(
             policy_id=_POLICY_ID,
             revision=revision,
@@ -81,12 +84,15 @@ def _authority(
     )
 
 
-def _completion() -> CompleteReplicationOrderInstruction:
+def _completion(
+    *,
+    completion_signer: str = _COMPLETION_SIGNER,
+) -> CompleteReplicationOrderInstruction:
     return CompleteReplicationOrderInstruction(
         _ORDER_ID,
         _PROVIDER_ID,
         27,
-        _authority(),
+        _authority(completion_signer=completion_signer),
         3,
         ProviderIngestFinalizedAnchorV1(height=41, block_hash=_BLOCK_HASH),
     )
@@ -348,3 +354,59 @@ def test_replication_payloads_convert_to_native_instructions() -> None:
         ).to_json()
         == encoded[2]
     )
+
+    assert (
+        _completion(completion_signer=_PROVIDER_OWNER).to_instruction().to_json()
+        != encoded[2]
+    ), "native completion bytes must bind the independently selected signer"
+
+
+def test_completion_authority_preserves_independent_signer() -> None:
+    authority = _authority()
+    assert authority.provider_owner != authority.completion_signer
+    assert authority.provider_owner == _PROVIDER_OWNER
+    assert authority.completion_signer == _COMPLETION_SIGNER
+    assert set(authority.to_payload()) == {
+        "provider_owner",
+        "completion_signer",
+        "signer_policy",
+    }
+    assert (
+        ProviderIngestCompletionAuthorityV1.from_payload(authority.to_payload())
+        == authority
+    )
+    changed = _authority(completion_signer=_PROVIDER_OWNER)
+    assert changed.provider_owner == authority.provider_owner
+    assert changed.signer_policy == authority.signer_policy
+    assert changed != authority
+    assert changed.to_payload() != authority.to_payload()
+
+
+def test_completion_authority_requires_schema_closed_three_fields() -> None:
+    retired = _authority().to_payload()
+    retired.pop("completion_signer")
+    with pytest.raises(ValueError, match="completion_signer"):
+        ProviderIngestCompletionAuthorityV1.from_payload(retired)
+    substituted = {**retired, "signer": _COMPLETION_SIGNER}
+    with pytest.raises(ValueError, match="must contain exactly"):
+        ProviderIngestCompletionAuthorityV1.from_payload(substituted)
+    extended = {**_authority().to_payload(), "relayer": _COMPLETION_SIGNER}
+    with pytest.raises(ValueError, match="must contain exactly"):
+        ProviderIngestCompletionAuthorityV1.from_payload(extended)
+    with pytest.raises(TypeError):
+        ProviderIngestCompletionAuthorityV1(  # type: ignore[call-arg]
+            provider_owner=_PROVIDER_OWNER,
+            signer_policy=_authority().signer_policy,
+        )
+
+
+@pytest.mark.parametrize(
+    "signer",
+    [None, 7, "", "merchant@bank", "00" * 32, f" {_COMPLETION_SIGNER}"],
+)
+def test_completion_authority_refuses_invalid_signer(signer: object) -> None:
+    with pytest.raises(ValueError, match="completion_signer.*exact canonical I105"):
+        _authority(completion_signer=signer)  # type: ignore[arg-type]
+    payload = {**_authority().to_payload(), "completion_signer": signer}
+    with pytest.raises(ValueError, match="completion_signer.*exact canonical I105"):
+        ProviderIngestCompletionAuthorityV1.from_payload(payload)

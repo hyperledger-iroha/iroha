@@ -9787,7 +9787,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
         let state_quote = match number {
             ivm::syscalls::SYSCALL_STATE_GET => {
                 let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
-                Some(ivm::host::state_get_gas_quote(path_len))
+                Some(ivm::host::reserve_available_syscall_gas_at_least(
+                    vm,
+                    ivm::host::state_path_gas(path_len),
+                )?)
             }
             ivm::syscalls::SYSCALL_STATE_LEN => {
                 let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
@@ -9958,6 +9961,26 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
+            }
+            ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
+                if self.fastpq_batch_entries.is_some() {
+                    return Err(ivm::VMError::PermissionDenied);
+                }
+                for (register, pointer_type) in [
+                    (10, PointerType::AccountId),
+                    (11, PointerType::AccountId),
+                    (12, PointerType::AssetDefinitionId),
+                    (13, PointerType::Quantity),
+                    (14, PointerType::DataSpaceId),
+                ] {
+                    vm.ensure_public_register(register)?;
+                    quote_tlv_payload_len_at(vm, vm.register(register), pointer_type)?;
+                }
+                // Either balance policy queues one native asset transfer. It has
+                // a fixed instruction charge and publishes no VM return bytes;
+                // reserving the generic host-output envelope would reject calls
+                // that can pay for their complete execution.
+                Some(crate::gas::BASE_TRANSFER)
             }
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN
             | ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => Some(ivm::gas::G_FASTPQ_BATCH),
@@ -13419,6 +13442,8 @@ seiyaku PrivilegedBinding {
     include!("host/axt_unanchored_admission_tests.rs");
     #[test]
     fn register_contract_manifest_syscall_queues_instruction() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let mut vm = ivm::IVM::new(1_000);
         let kp = checked_keypair();
         let authority = AccountId::of(kp.public_key().clone());
@@ -13444,7 +13469,7 @@ seiyaku PrivilegedBinding {
                 error_types: None,
                 provenance: None,
             }
-            .signed(&kp),
+            .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest"),
         };
         let payload = norito::to_bytes(&request).expect("encode request to Norito");
         let decoded: scode::RegisterSmartContractCode =
@@ -15304,6 +15329,11 @@ seiyaku StaleRuntimeBinding {
         account_id: AccountId,
         permission_name: &str,
     ) {
+        assert_ne!(
+            permission_name,
+            "CanInvokeContractEntrypoint",
+            "scoped contract permissions require an exact deployed address and selector"
+        );
         let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
@@ -15342,6 +15372,55 @@ seiyaku StaleRuntimeBinding {
         block
             .commit_world_overlay_for_testing()
             .expect("commit contract permission grant block");
+    }
+    /// Grant only the exact deployed address and selector consumed by a host fixture.
+    fn grant_contract_entrypoint_to_account(
+        state: &State,
+        authority: &AccountId,
+        account_id: AccountId,
+        contract: &ContractAddress,
+        entrypoint: &str,
+    ) {
+        assert!(
+            !entrypoint.is_empty() && entrypoint.trim() == entrypoint,
+            "fixture entrypoint selectors must use a non-empty canonical spelling"
+        );
+        let permission: Permission = CanInvokeContractEntrypoint {
+            contract: contract.clone(),
+            entrypoint: entrypoint.to_owned(),
+        }
+        .into();
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next entrypoint grant height must fit in u64 and be non-zero");
+        let mut block = state.block(BlockHeader::new(
+            next_height,
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        ));
+        let mut tx = block.transaction();
+        if tx.world.account(&account_id).is_err() {
+            Register::account(Account::new(account_id.clone()))
+                .execute(authority, &mut tx)
+                .expect("register exact entrypoint permission holder account");
+        }
+        if !tx
+            .world
+            .account_permissions
+            .get(&account_id)
+            .is_some_and(|permissions| permissions.contains(&permission))
+        {
+            Grant::account_permission(permission, account_id)
+                .execute(authority, &mut tx)
+                .expect("grant exact deployed contract entrypoint permission");
+        }
+        tx.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit exact deployed contract entrypoint permission grant");
     }
     fn grant_asset_ops_to_account(state: &State, authority: &AccountId, account_id: AccountId) {
         grant_named_permission_to_account(state, authority, account_id, "AssetOps");
@@ -17764,6 +17843,202 @@ seiyaku OpaqueInstructionSubmission {
         assert_eq!(host.queued, vec![expected]);
     }
     #[test]
+    fn transfer_asset_scoped_vm_completes_below_generic_response_quote() {
+        let authority = fixture_account("alice");
+        let destination = fixture_account("bob");
+        let owning_domain = fixture_domain_id();
+        let asset_def = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
+            "rose".parse().unwrap(),
+        );
+        let amount = Quantity::from(5_u32);
+        let dataspace = DataSpaceId::new(7);
+        let instructions = [
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 13, 17, 0),
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 14, 18, 0),
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).expect("syscall fits"),
+            ),
+        ];
+        let code: Vec<u8> = instructions
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        for balance_policy in [
+            AssetBalancePolicy::Global,
+            AssetBalancePolicy::DataspaceRestricted,
+        ] {
+            let state = scoped_transfer_state(
+                &authority,
+                &destination,
+                asset_def.clone(),
+                "rose",
+                balance_policy,
+                Some(owning_domain.clone()),
+            );
+            let view = state.view();
+            let mut host = local_contract_host(authority.clone());
+            host.set_query_state(&view);
+            let mut vm = IVM::new(1_000);
+            vm.load_program(&build_authenticated_test_contract_program(&code, 0, false))
+                .expect("load authenticated scoped-transfer probe");
+            prepare_scoped_transfer_syscall(
+                &mut vm,
+                &authority,
+                &destination,
+                &asset_def,
+                &amount,
+                dataspace,
+            );
+            assert_eq!(
+                host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+                Ok(crate::gas::BASE_TRANSFER)
+            );
+            assert!(
+                ivm::host::conservative_syscall_gas_quote(
+                    ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED,
+                    &vm
+                ) > vm.remaining_gas()
+            );
+            let operands = [10, 11, 12, 13, 14].map(|register| vm.register(register));
+            for (index, pointer) in operands.into_iter().enumerate() {
+                vm.set_register(14 + index, pointer);
+            }
+            vm.run_with_host(&mut host)
+                .expect("complete scoped transfer and protected return");
+            let scope = match balance_policy {
+                AssetBalancePolicy::Global => AssetBalanceScope::Global,
+                AssetBalancePolicy::DataspaceRestricted => AssetBalanceScope::Dataspace(dataspace),
+            };
+            let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
+                AssetId::with_scope(asset_def.clone(), authority.clone(), scope),
+                amount.clone(),
+                destination.clone(),
+            )));
+            assert_eq!(
+                crate::gas::meter_instruction(&expected),
+                crate::gas::BASE_TRANSFER
+            );
+            assert_eq!(host.queued, vec![expected]);
+            assert_eq!(authenticated_test_probe_result(&vm), operands[0]);
+            assert_eq!(vm.output_used_len(), 0, "transfer publishes no VM response");
+            assert!(vm.remaining_gas() > 0);
+            assert!(host.fastpq_batch_entries.is_none());
+            assert!(host.durable_state_overlay.is_empty());
+        }
+    }
+    #[test]
+    fn transfer_asset_scoped_vm_debits_exact_gas_before_queue_mutation() {
+        let authority = fixture_account("alice");
+        let destination = fixture_account("bob");
+        let asset_def =
+            AssetDefinitionId::derive_from_components(fixture_domain_id(), "xor".parse().unwrap());
+        let amount = Quantity::from(5_u32);
+        let instructions = [
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 13, 17, 0),
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 14, 18, 0),
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).expect("syscall fits"),
+            ),
+        ];
+        let gas_before_syscall = authenticated_test_probe_setup_gas()
+            + instructions
+                .iter()
+                .map(|&word| ivm::gas::cost_of(word).unwrap())
+                .sum::<u64>();
+        let code: Vec<u8> = instructions
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        let state = scoped_transfer_state(
+            &authority,
+            &destination,
+            asset_def.clone(),
+            "xor",
+            AssetBalancePolicy::Global,
+            None,
+        );
+        let view = state.view();
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
+            AssetId::of(asset_def.clone(), authority.clone()),
+            amount.clone(),
+            destination.clone(),
+        )));
+        for available in [crate::gas::BASE_TRANSFER - 1, crate::gas::BASE_TRANSFER] {
+            let mut host = local_contract_host(authority.clone());
+            host.set_query_state(&view);
+            let mut vm = IVM::new(gas_before_syscall + available);
+            vm.load_program(&build_authenticated_test_contract_program(&code, 0, false))
+                .expect("load authenticated exact-budget scoped-transfer probe");
+            prepare_scoped_transfer_syscall(
+                &mut vm,
+                &authority,
+                &destination,
+                &asset_def,
+                &amount,
+                DataSpaceId::new(7),
+            );
+            let operands = [10, 11, 12, 13, 14].map(|register| vm.register(register));
+            for (index, pointer) in operands.into_iter().enumerate() {
+                vm.set_register(14 + index, pointer);
+            }
+            // The exact budget completes only the syscall; it intentionally has
+            // no gas for the protected-return epilogue. One less gas must refuse
+            // the syscall itself, before the native instruction is queued.
+            assert_eq!(vm.run_with_host(&mut host), Err(ivm::VMError::OutOfGas));
+            assert_eq!(vm.remaining_gas(), 0);
+            if available == crate::gas::BASE_TRANSFER {
+                assert_eq!(host.queued, vec![expected.clone()]);
+            } else {
+                assert!(
+                    host.queued.is_empty(),
+                    "short gas must not queue a transfer"
+                );
+            }
+            assert_eq!(vm.output_used_len(), 0);
+            assert!(host.durable_state_overlay.is_empty());
+        }
+    }
+    #[test]
+    fn transfer_asset_scoped_quote_rejects_invalid_shapes_and_active_batch() {
+        let authority = fixture_account("alice");
+        let destination = fixture_account("bob");
+        let asset_def =
+            AssetDefinitionId::derive_from_components(fixture_domain_id(), "xor".parse().unwrap());
+        let amount = Quantity::from(5_u32);
+        let mut host = local_contract_host(authority.clone());
+        let mut vm = IVM::new(1_000);
+        prepare_scoped_transfer_syscall(
+            &mut vm,
+            &authority,
+            &destination,
+            &asset_def,
+            &amount,
+            DataSpaceId::new(7),
+        );
+        assert_eq!(
+            host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+            Ok(crate::gas::BASE_TRANSFER)
+        );
+        host.fastpq_batch_entries = Some(Vec::new());
+        assert_eq!(
+            host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+            Err(ivm::VMError::PermissionDenied)
+        );
+        host.fastpq_batch_entries = None;
+        let pointer = store_tlv(&mut vm, PointerType::Name, b"not-a-dataspace");
+        vm.set_register(14, pointer);
+        assert_eq!(
+            host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        assert_eq!(vm.remaining_gas(), 1_000, "quote must not debit gas");
+        assert!(host.queued.is_empty());
+        assert!(host.durable_state_overlay.is_empty());
+    }
+    #[test]
     fn transfer_v1_syscall_rejects_outside_an_active_batch() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
@@ -20032,6 +20307,8 @@ seiyaku Callee {
     }
     #[test]
     fn registered_manifest_cannot_relabel_effectful_entrypoint_as_view() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller = install_contract(
@@ -20098,7 +20375,7 @@ seiyaku EffectfulView {
             .expect("effectful entrypoint descriptor");
         descriptor.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::View;
         malicious_manifest.provenance = None;
-        malicious_manifest = malicious_manifest.signed(&fixture_signing_keypair(&authority));
+        malicious_manifest = malicious_manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture_signing_keypair(&authority)).expect("sign bounded fixture manifest");
         let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
@@ -21285,10 +21562,6 @@ seiyaku Callee {
                             .into(),
                     )
                 );
-                assert!(permissions.insert(Permission::new(
-                    iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
-                    Json::new(()),
-                )));
                 world
                     .account_permissions_mut_for_testing()
                     .insert(authority.clone(), permissions);

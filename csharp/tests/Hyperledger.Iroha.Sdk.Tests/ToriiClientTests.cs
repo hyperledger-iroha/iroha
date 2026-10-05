@@ -51,6 +51,9 @@ public sealed partial class ToriiClientTests
         IrohaHash.Hash(Convert.FromBase64String(MultisigTransactionPayloadBase64)));
     private static readonly string ExplorerInstructionAuthorityAccountId = TestAccountId(0x4C);
     private static readonly string ExplorerInstructionAccountId = TestAccountId(0x4D);
+    // Transport-shape fixture only; native frame parity is verified separately.
+    private const string ExplorerInstructionFrameBase64 = "AQIDBA==";
+    private const string ExplorerInstructionFrameSha256 = "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a";
     private static readonly string ExplorerDirectoryAccountId = TestAccountId(0x5B);
     private static readonly string ExplorerAssetAccountId = TestAccountId(0x5C);
     private static readonly string ExplorerTopHolderAccountId = TestAccountId(0x5D);
@@ -3211,14 +3214,8 @@ public sealed partial class ToriiClientTests
             node => new ToriiExplorerRwa { Metadata = node },
             dto => dto.Metadata);
         AssertSnapshot(
-            node => new ToriiExplorerTransactionRejection { Json = node },
-            dto => dto.Json);
-        AssertSnapshot(
             node => new ToriiExplorerTransactionDetail { Metadata = node },
             dto => dto.Metadata);
-        AssertSnapshot(
-            node => new ToriiExplorerInstructionJson { Payload = node },
-            dto => dto.Payload);
         var manifestSource = UaidManifestRecordObject().Manifest;
         var manifestDto = new ToriiUaidManifestRecord { Manifest = manifestSource };
         manifestSource["issued_ms"] = 1;
@@ -4112,8 +4109,7 @@ public sealed partial class ToriiClientTests
                   "executable": "Instructions",
                   "status": "Rejected",
                   "rejection_reason": {
-                    "encoded": "0x01",
-                    "json": { "kind": "ValidationFail" },
+                    "reason": "AQ==",
                     "message": "validation failed"
                   },
                   "metadata": { "trace": "abc" },
@@ -4132,7 +4128,7 @@ public sealed partial class ToriiClientTests
         Assert.Equal("Rejected", transaction.Status);
         Assert.NotNull(transaction.RejectionReason);
         Assert.Equal("validation failed", transaction.RejectionReason!.Message);
-        Assert.Equal("ValidationFail", transaction.RejectionReason.Json!["kind"]!.GetValue<string>());
+        Assert.Equal("AQ==", transaction.RejectionReason.Reason);
         Assert.Equal("abc", transaction.Metadata!["trace"]!.GetValue<string>());
         Assert.Equal((ulong)9, transaction.Nonce);
         Assert.Equal((ulong)5000, transaction.TimeToLive!.Milliseconds);
@@ -4523,15 +4519,7 @@ public sealed partial class ToriiClientTests
                       "authority": "{{ExplorerInstructionAuthorityAccountId}}",
                       "created_at": "2026-03-29T05:00:00Z",
                       "kind": "Transfer",
-                      "box": {
-                        "encoded": "0x11",
-                        "json": {
-                          "kind": "Transfer",
-                          "payload": { "object": "asset" },
-                          "wire_id": "iroha.transfer",
-                          "encoded": "11"
-                        }
-                      },
+                      "box": {"wire_id":"iroha.transfer","framed_sha256":"9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a","instruction":"AQIDBA=="},
                       "transaction_hash": "{{ToriiTransactionHashHex}}",
                       "transaction_status": "Committed",
                       "block": 12,
@@ -4578,15 +4566,7 @@ public sealed partial class ToriiClientTests
                       "authority": "{{ExplorerInstructionAuthorityAccountId}}",
                       "created_at": "2026-03-29T07:59:00Z",
                       "kind": "Transfer",
-                      "box": {
-                        "encoded": "0x33",
-                        "json": {
-                          "kind": "Transfer",
-                          "payload": { "object": "asset" },
-                          "wire_id": "iroha.transfer",
-                          "encoded": "33"
-                        }
-                      },
+                      "box": {"wire_id":"iroha.transfer","framed_sha256":"9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a","instruction":"AQIDBA=="},
                       "transaction_hash": "{{ToriiTransactionHashHex}}",
                       "transaction_status": "Committed",
                       "block": 14,
@@ -4678,17 +4658,9 @@ public sealed partial class ToriiClientTests
             Kind = "Transfer",
             InstructionBox = new ToriiExplorerInstructionBox
             {
-                Encoded = "0x11",
-                Json = new ToriiExplorerInstructionJson
-                {
-                    Kind = "Transfer",
-                    Payload = new JsonObject
-                    {
-                        ["object"] = "asset",
-                    },
-                    WireId = "iroha.transfer",
-                    Encoded = "11",
-                },
+                WireId = "iroha.transfer",
+                FramedSha256 = ExplorerInstructionFrameSha256,
+                Instruction = ExplorerInstructionFrameBase64,
             },
             TransactionHash = ToriiTransactionHashHex,
             TransactionStatus = "Committed",
@@ -4724,15 +4696,7 @@ public sealed partial class ToriiClientTests
                   "authority": "{{ExplorerInstructionAuthorityAccountId}}",
                   "created_at": "2026-03-29T06:00:00Z",
                   "kind": "SetKeyValue",
-                  "box": {
-                    "encoded": "0x22",
-                    "json": {
-                      "kind": "SetKeyValue",
-                      "payload": { "object": "domain", "key": "flag" },
-                      "wire_id": "iroha.set_key_value",
-                      "encoded": "22"
-                    }
-                  },
+                  "box": {"wire_id":"iroha.set_key_value","framed_sha256":"9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a","instruction":"AQIDBA=="},
                   "transaction_hash": "{{ToriiTransactionHashHex}}",
                   "transaction_status": "Rejected",
                   "block": 13,
@@ -4747,8 +4711,9 @@ public sealed partial class ToriiClientTests
         Assert.Equal("SetKeyValue", instruction.Kind);
         Assert.Equal(ToriiTransactionHashHex, instruction.TransactionHash);
         Assert.Equal("Rejected", instruction.TransactionStatus);
-        Assert.Equal("iroha.set_key_value", instruction.InstructionBox.Json!.WireId);
-        Assert.Equal("domain", instruction.InstructionBox.Json.Payload!["object"]!.GetValue<string>());
+        Assert.Equal("iroha.set_key_value", instruction.InstructionBox.WireId);
+        Assert.Equal(ExplorerInstructionFrameBase64, instruction.InstructionBox.Instruction);
+        Assert.Equal(ExplorerInstructionFrameSha256, instruction.InstructionBox.FramedSha256);
         Assert.Equal((uint)2, instruction.Index);
         Assert.Equal("/v1/explorer/instructions/tx-detail/2", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
@@ -4814,16 +4779,16 @@ public sealed partial class ToriiClientTests
         yield return new object[]
         {
             "transaction-detail",
-            "rejection_reason.encoded",
-            "0x1",
-            "exact hex string",
+            "rejection_reason.reason",
+            "AQ",
+            "canonical base64",
         };
         yield return new object[]
         {
             "transaction-detail",
-            "rejection_reason.encoded",
-            "0X01",
-            "exact hex string",
+            "rejection_reason.reason",
+            "AR==",
+            "canonical base64",
         };
         yield return new object[]
         {
@@ -4842,16 +4807,16 @@ public sealed partial class ToriiClientTests
         yield return new object[]
         {
             "instructions-latest",
-            "items[0].box.encoded",
-            "0xzz",
-            "exact hex string",
+            "items[0].box.instruction",
+            "AQ",
+            "canonical base64",
         };
         yield return new object[]
         {
             "instructions-latest",
-            "items[0].box.encoded",
-            "0X22",
-            "exact hex string",
+            "items[0].box.instruction",
+            "AR==",
+            "canonical base64",
         };
         yield return new object[]
         {
@@ -4884,16 +4849,16 @@ public sealed partial class ToriiClientTests
         yield return new object[]
         {
             "instruction-detail",
-            "box.json",
+            "box.instruction",
             null!,
             "must not be null",
         };
         yield return new object[]
         {
             "instruction-detail",
-            "box.json.encoded",
+            "box.framed_sha256",
             "0x22",
-            "even-length hex string",
+            "32-byte hex string",
         };
         yield return new object[]
         {
@@ -4906,7 +4871,7 @@ public sealed partial class ToriiClientTests
 
     [Theory]
     [MemberData(nameof(InvalidExplorerResponseFields))]
-    public async Task ExplorerResponsesRejectNonExactHashesAndEncodedFields(
+    public async Task ExplorerResponsesRejectNonExactHashesAndFrameFields(
         string operation,
         string field,
         object? value,
@@ -5010,7 +4975,7 @@ public sealed partial class ToriiClientTests
     [Theory]
     [InlineData("blocks", "hash", "{\"hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}")]
     [InlineData("transactions", "hash", "{\"hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}")]
-    [InlineData("instructions", "box.json.kind", "{\"box\":{\"json\":{\"kind\":\"SetKeyValue\",\"kind\":\"Mint\"}}}")]
+    [InlineData("instructions", "box.wire_id", "{\"box\":{\"wire_id\":\"iroha.set_key_value\",\"wire_id\":\"iroha.mint\"}}")]
     public async Task ExplorerSseStreamsRejectDuplicateJsonDataBeforeConverterCollapse(
         string operation,
         string expectedField,
@@ -5077,11 +5042,11 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "instructions", "index", ExplorerSsePayloadMissingFieldJson("instructions", "index"), "must not be null" };
         yield return new object[] { "instructions", "index", ExplorerSsePayloadJson("instructions", "index", -1), "unsigned integer" };
         yield return new object[] { "instructions", "box", ExplorerSsePayloadJson("instructions", "box", null), "must not be null" };
-        yield return new object[] { "instructions", "box.encoded", ExplorerSsePayloadJson("instructions", "box.encoded", "0X22"), "exact hex string" };
-        yield return new object[] { "instructions", "box.json", ExplorerSsePayloadJson("instructions", "box.json", null), "must not be null" };
-        yield return new object[] { "instructions", "box.json.kind", ExplorerSsePayloadJson("instructions", "box.json.kind", " SetKeyValue"), "surrounding whitespace" };
-        yield return new object[] { "instructions", "box.json.wire_id", ExplorerSsePayloadJson("instructions", "box.json.wire_id", "iroha\u0001set"), "control characters" };
-        yield return new object[] { "instructions", "box.json.encoded", ExplorerSsePayloadJson("instructions", "box.json.encoded", "0x22"), "even-length hex string" };
+        yield return new object[] { "instructions", "box.instruction", ExplorerSsePayloadJson("instructions", "box.instruction", "AR=="), "canonical base64" };
+        yield return new object[] { "instructions", "box.instruction", ExplorerSsePayloadJson("instructions", "box.instruction", null), "must not be null" };
+        yield return new object[] { "instructions", "box.wire_id", ExplorerSsePayloadJson("instructions", "box.wire_id", " SetKeyValue"), "surrounding whitespace" };
+        yield return new object[] { "instructions", "box.wire_id", ExplorerSsePayloadJson("instructions", "box.wire_id", "iroha\u0001set"), "control characters" };
+        yield return new object[] { "instructions", "box.framed_sha256", ExplorerSsePayloadJson("instructions", "box.framed_sha256", "0x22"), "32-byte hex string" };
     }
 
     [Theory]
@@ -5115,13 +5080,12 @@ public sealed partial class ToriiClientTests
         yield return new object?[] { "transactions", "Executable", "Instructions\u0001" };
         yield return new object?[] { "transactions", "Status", "" };
 
-        yield return new object?[] { "instruction-json", "Kind", " SetKeyValue" };
-        yield return new object?[] { "instruction-json", "WireId", "iroha\u0001set" };
-        yield return new object?[] { "instruction-json", "Encoded", "0x22" };
-        yield return new object?[] { "instruction-json", "Encoded", "abc" };
-
-        yield return new object?[] { "instruction-box", "Encoded", "0X22" };
-        yield return new object?[] { "instruction-box", "Json", null };
+        yield return new object?[] { "instruction-box", "WireId", "iroha\u0001set" };
+        yield return new object?[] { "instruction-box", "FramedSha256", "0x22" };
+        yield return new object?[] { "instruction-box", "FramedSha256", new string('A', 64) };
+        yield return new object?[] { "instruction-box", "Instruction", "AQ" };
+        yield return new object?[] { "instruction-box", "Instruction", "AR==" };
+        yield return new object?[] { "instruction-box", "Instruction", null };
 
         yield return new object?[] { "instructions", "Authority", "merchant@sora" };
         yield return new object?[] { "instructions", "CreatedAt", "" };
@@ -5147,8 +5111,8 @@ public sealed partial class ToriiClientTests
 
     public static IEnumerable<object?[]> InvalidDirectExplorerTransactionDetailMetadata()
     {
-        yield return new object?[] { "rejection", "Encoded", "0X01" };
-        yield return new object?[] { "rejection", "Encoded", "0x1" };
+        yield return new object?[] { "rejection", "Reason", "AQ" };
+        yield return new object?[] { "rejection", "Reason", "AR==" };
         yield return new object?[] { "rejection", "Message", "" };
         yield return new object?[] { "rejection", "Message", "validation failed\u0001" };
 
@@ -5199,7 +5163,7 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "transaction-detail", "authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "transaction-detail", "signature", ExplorerSignatureHex[..127], "even-length hex string" };
         yield return new object[] { "transaction-detail", "nonce", "9", "unsigned integer" };
-        yield return new object[] { "transaction-detail", "rejection_reason.encoded", "0X01", "exact hex string" };
+        yield return new object[] { "transaction-detail", "rejection_reason.reason", "AR==", "canonical base64" };
         yield return new object[] { "transaction-detail", "time_to_live.ms", "5000", "unsigned integer" };
         yield return new object[] { "instructions-page", "items", MissingExplorerField, "items" };
         yield return new object[] { "instructions-page", "items[0].authority", "merchant@sora", "canonical I105" };
@@ -5212,7 +5176,7 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "instructions-latest", "items", MissingExplorerField, "items" };
         yield return new object[] { "instructions-latest", "items[0].authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "instructions-latest", "items[0].created_at", MissingExplorerField, "must not be null" };
-        yield return new object[] { "instructions-latest", "items[0].box.encoded", "0X22", "exact hex string" };
+        yield return new object[] { "instructions-latest", "items[0].box.instruction", "AR==", "canonical base64" };
         yield return new object[] { "instructions-latest", "items[0].box", MissingExplorerField, "must not be null" };
         yield return new object[] { "instructions-latest", "items[0].block", MissingExplorerField, "must not be null" };
     }
@@ -9013,7 +8977,7 @@ data: {"authority":"{{ExplorerTransactionAuthorityAccountId}}","hash":"{{ToriiTr
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent($$$"""
-data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2026-03-29T00:00:00Z","kind":"Transfer","box":{"encoded":"0x11","json":{"kind":"Transfer","payload":{},"wire_id":"iroha.transfer","encoded":"11"}},"transaction_hash":"{{{ToriiTransactionHashHex}}}","transaction_status":"Committed","block":1,"index":0}
+data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2026-03-29T00:00:00Z","kind":"Transfer","box":{"wire_id":"iroha.transfer","framed_sha256":"9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a","instruction":"AQIDBA=="},"transaction_hash":"{{{ToriiTransactionHashHex}}}","transaction_status":"Committed","block":1,"index":0}
 
 """),
             };
@@ -9041,7 +9005,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Content = new StringContent($$$"""
                     : keepalive
 
-                    data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2026-03-29T04:05:06Z","kind":"SetKeyValue","box":{"encoded":"0x1234","json":{"kind":"SetKeyValue","payload":{"object":"domain","key":"flag","value":{"enabled":true}},"wire_id":"iroha.set_key_value","encoded":"1234"}},"transaction_hash":"{{{ToriiTransactionHashHex}}}","transaction_status":"Committed","block":7,"index":2}
+                    data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2026-03-29T04:05:06Z","kind":"SetKeyValue","box":{"wire_id":"iroha.set_key_value","framed_sha256":"9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a","instruction":"AQIDBA=="},"transaction_hash":"{{{ToriiTransactionHashHex}}}","transaction_status":"Committed","block":7,"index":2}
 
                     """),
             };
@@ -9061,14 +9025,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal(ExplorerInstructionAuthorityAccountId, typed.Authority);
         Assert.Equal("2026-03-29T04:05:06Z", typed.CreatedAt);
         Assert.Equal("SetKeyValue", typed.Kind);
-        Assert.Equal("0x1234", typed.InstructionBox.Encoded);
-        Assert.NotNull(typed.InstructionBox.Json);
-        Assert.Equal("SetKeyValue", typed.InstructionBox.Json!.Kind);
-        Assert.Equal("iroha.set_key_value", typed.InstructionBox.Json.WireId);
-        Assert.Equal("1234", typed.InstructionBox.Json.Encoded);
-        Assert.Equal("domain", typed.InstructionBox.Json.Payload!["object"]!.GetValue<string>());
-        Assert.Equal("flag", typed.InstructionBox.Json.Payload!["key"]!.GetValue<string>());
-        Assert.True(typed.InstructionBox.Json.Payload!["value"]!["enabled"]!.GetValue<bool>());
+        Assert.Equal(ExplorerInstructionFrameBase64, typed.InstructionBox.Instruction);
+        Assert.Equal(ExplorerInstructionFrameSha256, typed.InstructionBox.FramedSha256);
+        Assert.Equal("iroha.set_key_value", typed.InstructionBox.WireId);
         Assert.Equal(ToriiTransactionHashHex, typed.TransactionHash);
         Assert.Equal("Committed", typed.TransactionStatus);
         Assert.Equal((ulong)7, typed.Block);
@@ -18938,33 +18897,17 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Executable = "Instructions",
                 Status = RequiredStringValue(value),
             },
-            ("instruction-json", "Kind") => new ToriiExplorerInstructionJson
+            ("instruction-box", "WireId") => ValidExplorerInstructionBox() with
             {
-                Kind = RequiredStringValue(value),
-                WireId = "iroha.set_key_value",
-                Encoded = "22",
-            },
-            ("instruction-json", "WireId") => new ToriiExplorerInstructionJson
-            {
-                Kind = "SetKeyValue",
                 WireId = RequiredStringValue(value),
-                Encoded = "22",
             },
-            ("instruction-json", "Encoded") => new ToriiExplorerInstructionJson
+            ("instruction-box", "FramedSha256") => ValidExplorerInstructionBox() with
             {
-                Kind = "SetKeyValue",
-                WireId = "iroha.set_key_value",
-                Encoded = RequiredStringValue(value),
+                FramedSha256 = RequiredStringValue(value),
             },
-            ("instruction-box", "Encoded") => new ToriiExplorerInstructionBox
+            ("instruction-box", "Instruction") => ValidExplorerInstructionBox() with
             {
-                Encoded = RequiredStringValue(value),
-                Json = ValidExplorerInstructionJson(),
-            },
-            ("instruction-box", "Json") => new ToriiExplorerInstructionBox
-            {
-                Encoded = "22",
-                Json = (ToriiExplorerInstructionJson?)value,
+                Instruction = (string?)value!,
             },
             ("instructions", "Authority") => new ToriiExplorerInstruction
             {
@@ -19044,18 +18987,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new ToriiExplorerInstructionBox
         {
-            Encoded = "22",
-            Json = ValidExplorerInstructionJson(),
-        };
-    }
-
-    private static ToriiExplorerInstructionJson ValidExplorerInstructionJson()
-    {
-        return new ToriiExplorerInstructionJson
-        {
-            Kind = "SetKeyValue",
             WireId = "iroha.set_key_value",
-            Encoded = "22",
+            FramedSha256 = ExplorerInstructionFrameSha256,
+            Instruction = ExplorerInstructionFrameBase64,
         };
     }
 
@@ -19066,14 +19000,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         object? constructed = (operation, propertyName) switch
         {
-            ("rejection", "Encoded") => new ToriiExplorerTransactionRejection
+            ("rejection", "Reason") => new ToriiExplorerTransactionRejection
             {
-                Encoded = RequiredStringValue(value),
+                Reason = RequiredStringValue(value),
                 Message = "validation failed",
             },
             ("rejection", "Message") => new ToriiExplorerTransactionRejection
             {
-                Encoded = "0x01",
+                Reason = "AQ==",
                 Message = RequiredStringValue(value),
             },
             ("detail", "Authority") => ValidExplorerTransactionDetail() with
@@ -19120,11 +19054,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Status = "Committed",
             RejectionReason = new ToriiExplorerTransactionRejection
             {
-                Encoded = "0x01",
-                Json = new JsonObject
-                {
-                    ["kind"] = "ValidationFail",
-                },
+                Reason = "AQ==",
                 Message = "validation failed",
             },
             Metadata = new JsonObject
@@ -23710,25 +23640,22 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             case "time_to_live.ms":
                 ((JsonObject)target["time_to_live"]!)["ms"] = JsonValueForExplorer(value);
                 break;
-            case "rejection_reason.encoded":
-                ((JsonObject)target["rejection_reason"]!)["encoded"] = JsonValueForExplorer(value);
+            case "rejection_reason.reason":
+                ((JsonObject)target["rejection_reason"]!)["reason"] = JsonValueForExplorer(value);
                 break;
             case "items[0].transaction_hash":
             case "transaction_hash":
                 target["transaction_hash"] = JsonValueForExplorer(value);
                 break;
-            case "items[0].box.encoded":
-            case "box.encoded":
-                ((JsonObject)target["box"]!)["encoded"] = JsonValueForExplorer(value);
+            case "items[0].box.instruction":
+            case "box.instruction":
+                ((JsonObject)target["box"]!)["instruction"] = JsonValueForExplorer(value);
                 break;
             case "box":
                 target["box"] = JsonValueForExplorer(value);
                 break;
-            case "box.json":
-                ((JsonObject)target["box"]!)["json"] = JsonValueForExplorer(value);
-                break;
-            case "box.json.encoded":
-                ((JsonObject)((JsonObject)target["box"]!)["json"]!)["encoded"] = JsonValueForExplorer(value);
+            case "box.framed_sha256":
+                ((JsonObject)target["box"]!)["framed_sha256"] = JsonValueForExplorer(value);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown explorer response field.");
@@ -23855,20 +23782,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             case "box":
                 payload["box"] = JsonValueForExplorer(value);
                 break;
-            case "box.encoded":
-                ((JsonObject)payload["box"]!)["encoded"] = JsonValueForExplorer(value);
+            case "box.instruction":
+                ((JsonObject)payload["box"]!)["instruction"] = JsonValueForExplorer(value);
                 break;
-            case "box.json":
-                ((JsonObject)payload["box"]!)["json"] = JsonValueForExplorer(value);
+            case "box.wire_id":
+                ((JsonObject)payload["box"]!)["wire_id"] = JsonValueForExplorer(value);
                 break;
-            case "box.json.kind":
-                ((JsonObject)((JsonObject)payload["box"]!)["json"]!)["kind"] = JsonValueForExplorer(value);
-                break;
-            case "box.json.wire_id":
-                ((JsonObject)((JsonObject)payload["box"]!)["json"]!)["wire_id"] = JsonValueForExplorer(value);
-                break;
-            case "box.json.encoded":
-                ((JsonObject)((JsonObject)payload["box"]!)["json"]!)["encoded"] = JsonValueForExplorer(value);
+            case "box.framed_sha256":
+                ((JsonObject)payload["box"]!)["framed_sha256"] = JsonValueForExplorer(value);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown explorer SSE field.");
@@ -23945,11 +23866,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var transaction = ExplorerTransactionJsonObject();
         transaction["rejection_reason"] = new JsonObject
         {
-            ["encoded"] = "0x01",
-            ["json"] = new JsonObject
-            {
-                ["kind"] = "ValidationFail",
-            },
+            ["reason"] = "AQ==",
             ["message"] = "validation failed",
         };
         transaction["metadata"] = new JsonObject
@@ -23974,18 +23891,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["kind"] = "SetKeyValue",
             ["box"] = new JsonObject
             {
-                ["encoded"] = "0x22",
-                ["json"] = new JsonObject
-                {
-                    ["kind"] = "SetKeyValue",
-                    ["payload"] = new JsonObject
-                    {
-                        ["object"] = "domain",
-                        ["key"] = "flag",
-                    },
-                    ["wire_id"] = "iroha.set_key_value",
-                    ["encoded"] = "22",
-                },
+                ["wire_id"] = "iroha.set_key_value",
+                ["framed_sha256"] = ExplorerInstructionFrameSha256,
+                ["instruction"] = ExplorerInstructionFrameBase64,
             },
             ["transaction_hash"] = ToriiTransactionHashHex,
             ["transaction_status"] = "Committed",

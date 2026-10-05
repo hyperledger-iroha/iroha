@@ -192,26 +192,6 @@ const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] = &[
     "transaction_dispatch_outcome_unknown",
     "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
 ];
-const KAGEMUSHA_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
-    "kagemusha_auth_header_unsupported",
-    "PRTRY:QUEUE_GOVERNANCE_REJECTED",
-    "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
-    "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
-    "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
-];
-const KAGEMUSHA_COMMAND_CONFLICT_REJECT_CODES: &[&str] = &[
-    "idempotency_key_conflict",
-    "operation_id_conflict",
-    "kagemusha_operation_retry_exhausted",
-    "PRTRY:ALREADY_COMMITTED",
-    "PRTRY:ALREADY_ENQUEUED",
-    "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT",
-];
-const KAGEMUSHA_COMMAND_RATE_LIMIT_REJECT_CODES: &[&str] = &[
-    "PRTRY:QUEUE_FULL",
-    "PRTRY:QUEUE_LATENCY",
-    "PRTRY:QUEUE_RATE",
-];
 fn transaction_submission_bad_request_reject_codes() -> Vec<&'static str> {
     let mut codes = vec!["invalid_transaction_payload"];
     codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
@@ -527,10 +507,6 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/accounts/{account_id}/history/query"
                     | "/v1/contracts/activity/query"
                     | "/v1/contracts/events/query"
-                    | "/v1/kagemusha/ordinary/current-wallet"
-                    | "/v1/kagemusha/ordinary/mint-issuer-purpose"
-                    | "/v1/kagemusha/ordinary/top-up/credit"
-                    | "/v1/kagemusha/ordinary/top-up/finality"
                     | "/v1/ledger/authority-originals"
                     | "/v1/explorer/accounts/query"
                     | "/v1/explorer/asset-definitions/query"
@@ -787,9 +763,7 @@ fn collect_component_refs(value: &Value, refs: &mut BTreeSet<String>) {
             if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
                 let component = reference
                     .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
-                    .unwrap_or_else(|| {
-                        panic!("KAGEMUSHA schema has a non-component reference: {reference}")
-                    });
+                    .unwrap_or_else(|| panic!("schema has a non-component reference: {reference}"));
                 refs.insert(component.to_owned());
             }
             for value in object.values() {

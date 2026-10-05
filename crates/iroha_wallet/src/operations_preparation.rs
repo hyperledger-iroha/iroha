@@ -261,6 +261,7 @@ impl Retained {
         self.request.selection()
     }
     pub(super) fn read(journal: &Journal, config: &Config) -> Result<Self> {
+        journal.verify_native_inventory()?;
         let request: Request = journal
             .read_native(NativeRecord::Request)?
             .ok_or_else(|| eyre!("native journal requires its original preparation record"))?;

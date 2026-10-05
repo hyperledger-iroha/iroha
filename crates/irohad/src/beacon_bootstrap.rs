@@ -108,6 +108,54 @@ impl std::fmt::Display for Error {
         })
     }
 }
+impl Error {
+    /// Return a fixed coarse class without formatting, moving or exposing an error payload.
+    /// These codes are meaningful only with the independently authenticated worker Source.
+    fn public_command_exit_code(&self) -> i32 {
+        match self {
+            Self::InvalidInput => 70,
+            Self::InvalidCustody => 71,
+            Self::Crypto => 72,
+            Self::Height => 73,
+            Self::Deadline => 74,
+            Self::Io => 75,
+            Self::Session(_) => 76,
+            Self::LocalDkg(_) => 77,
+            Self::Journal(_) => 78,
+            Self::GenesisBundle(_) => 79,
+            Self::Export(_) => 80,
+            Self::Attempt(_) => 81,
+            Self::PendingAttempt(_) => 82,
+        }
+    }
+}
+
+#[cfg(test)]
+mod public_command_exit_tests {
+    use super::Error;
+
+    #[test]
+    fn native_public_command_error_codes_borrow_owned_payloads() {
+        let original_classes = [
+            Error::InvalidInput,
+            Error::InvalidCustody,
+            Error::Crypto,
+            Error::Height,
+            Error::Deadline,
+            Error::Io,
+        ];
+        for (error, code) in original_classes.iter().zip(70..=75) {
+            assert_eq!(error.public_command_exit_code(), code);
+            assert_eq!(error.public_command_exit_code(), code);
+            assert!(![0, 1, 2, 101].contains(&code));
+        }
+        // Repeated access proves that a non-Copy, owned error is not consumed.
+        let owned = Error::GenesisBundle(eyre::eyre!("synthetic diagnostic payload"));
+        assert_eq!(owned.public_command_exit_code(), 79);
+        assert_eq!(owned.public_command_exit_code(), 79);
+    }
+}
+
 impl From<seat_attempt::AttemptError> for Error {
     fn from(error: seat_attempt::AttemptError) -> Self {
         Self::Attempt(error)
@@ -594,7 +642,7 @@ pub(crate) fn dispatch_if_requested() -> bool {
     };
     if let Err(error) = result {
         eprintln!("{error}");
-        std::process::exit(1);
+        std::process::exit(error.public_command_exit_code());
     }
     true
 }

@@ -95,10 +95,10 @@ mod initial_publication_admission {
                 }),
                 [],
             );
-            let asset = AssetDefinitionId::derive_from_components(
-                DomainId::parse_fully_qualified("app.native-musubi-publication").unwrap(),
-                "fee".parse().unwrap(),
-            );
+            let asset = AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+            )
+            .unwrap();
             let mut config = TestChainConfig::new(world, NOW * 1_000);
             let mut nexus = Nexus::default();
             nexus.fees.base_fee = 1_u32.into();
@@ -260,6 +260,13 @@ mod initial_publication_admission {
                 .sign(key(seed).private_key());
             let before = self.balance(seed);
             let sink = self.balance(SINK);
+            let supply = self
+                .chain
+                .state()
+                .view()
+                .world()
+                .asset_total_amount(&self.asset)
+                .unwrap();
             let applied = self.chain.commit_at(time, vec![signed.clone()])[0];
             let block = self.chain.committed(self.chain.height());
             assert_eq!(block.block().network_entrypoint_count(), 1);
@@ -271,7 +278,21 @@ mod initial_publication_admission {
             assert_eq!(result.is_ok(), applied);
             let fee = before.checked_sub(&self.balance(seed)).unwrap();
             assert!(fee <= Quantity::from(2_u32));
-            assert_eq!(self.balance(SINK), sink.checked_add(&fee).unwrap());
+            assert_eq!(
+                self.balance(SINK),
+                sink,
+                "native Nexus fees burn the payer asset without crediting the configured sink"
+            );
+            assert_eq!(
+                self.chain
+                    .state()
+                    .view()
+                    .world()
+                    .asset_total_amount(&self.asset)
+                    .unwrap(),
+                supply.checked_sub(&fee).unwrap(),
+                "the actual charged fee is removed from the original asset supply"
+            );
             if applied {
                 assert_eq!(
                     fee,

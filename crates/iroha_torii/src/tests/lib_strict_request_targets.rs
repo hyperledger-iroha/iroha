@@ -52,21 +52,6 @@ fn sorafs_test_router(counter: Arc<AtomicUsize>) -> Router {
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(axum::middleware::from_fn(enforce_strict_request_target))
 }
-fn kagemusha_operation_test_router(counter: Arc<AtomicUsize>) -> Router {
-    Router::new()
-        .route(
-            route_catalog::kagemusha::OPERATION.path(),
-            get(move || {
-                let counter = Arc::clone(&counter);
-                async move {
-                    counter.fetch_add(1, Ordering::SeqCst);
-                    StatusCode::NO_CONTENT
-                }
-            }),
-        )
-        .fallback(|| async { StatusCode::NOT_FOUND })
-        .layer(axum::middleware::from_fn(enforce_strict_request_target))
-}
 fn operator_credential_test_router(counter: Arc<AtomicUsize>) -> Router {
     Router::new()
         .route(
@@ -203,45 +188,6 @@ async fn trailing_slash_and_empty_wildcard_tail_do_not_alias_resources() {
         .oneshot(
             Request::builder()
                 .uri("/v1/files/bundle/object")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert_eq!(counter.load(Ordering::SeqCst), 1);
-}
-#[tokio::test]
-async fn kagemusha_operation_id_rejects_percent_encoded_alias_before_handler_execution() {
-    let counter = Arc::new(AtomicUsize::new(0));
-    let router = kagemusha_operation_test_router(Arc::clone(&counter));
-    let canonical_id = "11".repeat(32);
-    let encoded_id = format!("%31{}", &canonical_id[1..]);
-    let response = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kagemusha/operations/{encoded_id}"))
-                .header(header::ACCEPT, "application/json")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("collect response")
-        .to_bytes();
-    let envelope: ErrorEnvelope = norito::json::from_slice(&body).expect("typed JSON error");
-    assert_eq!(envelope.code(), "request_path_invalid");
-    assert_eq!(counter.load(Ordering::SeqCst), 0);
-    let response = router
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kagemusha/operations/{canonical_id}"))
                 .body(Body::empty())
                 .expect("request"),
         )

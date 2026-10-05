@@ -1,7 +1,7 @@
 //! Native ownership, exact ordinary execution and closed component boundaries.
 
 use super::*;
-use crate::{IVM, execution_memory::ExecutionMemoryLease};
+use crate::{IVM, TraceMode, execution_memory::ExecutionMemoryLease};
 use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::{
     cell::Cell,
@@ -37,6 +37,25 @@ fn parent(budget: &AllocationBudget) -> ExecutionMemoryLease {
 }
 fn word(bytes: &[u8; 16]) -> u64 {
     u64::from_le_bytes(bytes[..8].try_into().unwrap())
+}
+
+fn executed_child_calls(contract: &PreparedContract, ordinary: &IVM) -> usize {
+    ordinary
+        .trace_pcs()
+        .iter()
+        .filter(|pc| {
+            let relative_pc = pc.checked_sub(contract.instruction_entry_pc()).unwrap();
+            let instructions = contract.decoded();
+            let index = instructions
+                .binary_search_by_key(&relative_pc, |instruction| instruction.pc)
+                .unwrap();
+            let instruction = instructions[index].inst;
+            let opcode = crate::instruction::wide::opcode(instruction);
+            opcode == crate::instruction::wide::control::JALS
+                || (opcode == crate::instruction::wide::control::JAL
+                    && crate::instruction::wide::rd(instruction) == 1)
+        })
+        .count()
 }
 
 #[test]
@@ -91,6 +110,7 @@ fn actual_compiled_root_captures_staged_gas_store_initialization_return_and_padd
     let mut ordinary = IVM::new(10_000);
     ordinary.load_prepared(&contract).unwrap();
     ordinary.select_entrypoint("main").unwrap();
+    ordinary.set_trace_mode(TraceMode::PcOnly);
     ordinary.run().unwrap();
     assert_eq!(ordinary.public_call_result_word(0), Ok(0));
     let budget = budget();
@@ -101,7 +121,24 @@ fn actual_compiled_root_captures_staged_gas_store_initialization_return_and_padd
     assert_eq!(output.remaining_gas(), ordinary.remaining_gas());
     assert_eq!(output.cycles(), ordinary.get_cycle_count());
     assert_eq!(output.cycles(), 64);
-    assert_eq!(output.instructions(), 10);
+    // The compiler may emit a shorter equivalent root. Each native fetch must
+    // still match the actual ordinary interpreter's instruction observation.
+    assert!(!ordinary.trace_pcs().is_empty());
+    assert_eq!(output.instructions(), ordinary.trace_pcs().len());
+    for (index, pc) in ordinary.trace_pcs().iter().enumerate() {
+        let window = if index + 1 == output.instructions() {
+            MAX_STEPS
+        } else {
+            index
+        };
+        let clocks = instruction_clocks(window).unwrap();
+        let packet = &output.packets()[clocks[0] as usize];
+        assert!(packet.enabled());
+        assert_eq!(packet.space(), Some(PacketSpace::Owner));
+        assert_eq!(packet.index(), 32);
+        assert_eq!(word(packet.before()), *pc);
+        assert_eq!(word(packet.after()), *pc);
+    }
     assert_eq!(output.packets().len(), PACKET_SLOTS);
     assert_eq!(output.initial_gas(), 10_000);
     assert_eq!(
@@ -254,19 +291,56 @@ fn private_selector_arguments_unsupported_results_and_nonzk_profiles_are_closed_
 #[test]
 fn child_calls_are_local_component_refusal_and_do_not_change_ordinary_validity() {
     let contract = contract(
-        "seiyaku Child { fn leaf() { } view fn main() { leaf(); } }",
+        // A private body with two live call sites cannot be moved into its sole
+        // caller. Check actual executed call opcodes before testing refusal.
+        "seiyaku Child { fn leaf() { } view fn main() { leaf(); leaf(); } }",
         64,
     );
     let mut ordinary = IVM::new(10_000);
     ordinary.load_prepared(&contract).unwrap();
     ordinary.select_entrypoint("main").unwrap();
+    ordinary.set_trace_mode(TraceMode::PcOnly);
     ordinary.run().unwrap();
+    assert_eq!(ordinary.public_call_result_word(0), Ok(0));
+    assert_eq!(executed_child_calls(&contract, &ordinary), 2);
     let budget = budget();
     let mut parent = parent(&budget);
     assert!(matches!(
         NativeInvocation::run_public_leaf_root(contract, "main", 10_000, &mut parent, &budget),
         Err(CaptureError::Unsupported)
     ));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn inlined_private_helper_is_an_actual_leaf_and_matches_ordinary_execution() {
+    let contract = contract(
+        "seiyaku Child { fn leaf() { } view fn main() { leaf(); } }",
+        64,
+    );
+    let mut ordinary = IVM::new(10_000);
+    ordinary.load_prepared(&contract).unwrap();
+    ordinary.select_entrypoint("main").unwrap();
+    ordinary.set_trace_mode(TraceMode::PcOnly);
+    ordinary.run().unwrap();
+    assert_eq!(ordinary.public_call_result_word(0), Ok(0));
+    assert_eq!(executed_child_calls(&contract, &ordinary), 0);
+    let budget = budget();
+    let mut parent = parent(&budget);
+    let output =
+        NativeInvocation::run_public_leaf_root(contract, "main", 10_000, &mut parent, &budget)
+            .unwrap();
+    assert_eq!(output.instructions(), ordinary.trace_pcs().len());
+    assert_eq!(output.remaining_gas(), ordinary.remaining_gas());
+    assert_eq!(output.cycles(), ordinary.get_cycle_count());
+    assert_eq!(parent.remaining_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        NativeInvocation::allocation_plan()
+            .unwrap()
+            .requested_bytes()
+    );
+    drop(output);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

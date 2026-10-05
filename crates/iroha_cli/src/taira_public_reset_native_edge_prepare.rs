@@ -7,38 +7,15 @@
 use super::*;
 use host_pair::{
     NativeEdgeCandidateClaimsV1, NativeEdgeCaptureClaimsV1, NativeEdgeCompletionProvenanceV1,
-    NativeFileIdentityV1, NativeNginxMasterV1, NativeObservedFileV1, NativeOwnedPublicationV1,
-    NativePublicFileV1, ResetHostPairV1, SignedNativeEdgeCandidateV1, SignedNativeEdgeCaptureV1,
+    NativeFileIdentityV1, NativeObservedFileV1, NativeOwnedPublicationV1, NativePublicFileV1,
+    ResetHostPairV1, SignedNativeEdgeCandidateV1, SignedNativeEdgeCaptureV1,
 };
 use iroha_crypto::KeyPair;
 use iroha_fs::OwnerDirectory;
-use std::{
-    ffi::OsString,
-    time::{Duration, Instant},
-};
 
 const REQUEST_SCHEMA: &str = "iroha.taira.public-reset.native-edge-prepare-request.v1";
 const MAX_REQUEST: u64 = 128 * 1024;
 const MAX_PUBLIC_PLAN: u64 = 1024 * 1024;
-const MAX_OBSERVATION: usize = 64 * 1024;
-const OWNER_WRAPPER: &str = r#"import json, sys
-sys.path.insert(0, sys.argv[1])
-import taira_native_nginx_apply as owner
-try:
-    data = sys.stdin.buffer.read(1048577)
-    if not data or len(data) > 1048576: raise RuntimeError('inspection_input_bound')
-    if sys.argv[2] == 'inspect':
-        result = owner.inspect_owned_publication(json.loads(data))
-    elif sys.argv[2] == 'validate-plan':
-        owner.validate_plan(json.loads(data))
-        result = {}
-    else: raise RuntimeError('inspection_action')
-    wire = json.dumps(result, sort_keys=True, separators=(',', ':')).encode()
-    if len(wire) > 65536: raise RuntimeError('inspection_output_bound')
-    sys.stdout.buffer.write(wire)
-except Exception:
-    raise SystemExit(1)
-"#;
 
 /// Prepare public native records without changing nginx, validators or ledger state.
 #[derive(clap::Args, Debug)]
@@ -94,16 +71,7 @@ struct PrepareRequestV1 {
 }
 
 /// Sole maintained owner output; private-main content has no representation here.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct OwnerObservationV1 {
-    schema: String,
-    owned_publication: NativeOwnedPublicationV1,
-    nginx: NativeObservedFileV1,
-    main_configuration: NativeObservedFileV1,
-    master: NativeNginxMasterV1,
-    phase: String,
-}
+type OwnerObservationV1 = native_edge_protocol::NativeOwnerObservationV1;
 
 struct RetainedInput {
     parent: OwnerDirectory,
@@ -257,54 +225,27 @@ fn validate_selected_refs(request: &PrepareRequestV1) -> Result<()> {
     Ok(())
 }
 
-fn run_owner(action: &str, request: &[u8], directory: &Path) -> Result<Vec<u8>> {
-    use host::ProcessRunner as _;
+fn run_owner(
+    host: &host_pair::ResetHostV1,
+    action: &str,
+    request: &[u8],
+    directory: &Path,
+) -> Result<Vec<u8>> {
+    use std::os::unix::fs::PermissionsExt as _;
     let scratch = tempfile::Builder::new()
         .prefix(".native-edge-inspect-")
+        .permissions(fs::Permissions::from_mode(0o700))
         .tempdir_in(directory)?;
-    let root = OwnerDirectory::open(scratch.path())?;
-    let sources = root.publish_private_child(
-        "owner",
-        &[
-            (
-                "taira_native_nginx_check.py",
-                include_bytes!("../../../scripts/taira_native_nginx_check.py"),
-            ),
-            (
-                "taira_native_nginx_apply.py",
-                include_bytes!("../../../scripts/taira_native_nginx_apply.py"),
-            ),
-        ],
-    )?;
-    sources.revalidate()?;
-    let result = host::RealProcessRunner.run(&host::ProcessSpec::public_input(
-        PathBuf::from("/usr/bin/python3"),
-        vec![
-            OsString::from("-B"),
-            OsString::from("-I"),
-            OsString::from("-c"),
-            OsString::from(OWNER_WRAPPER),
-            sources.path().into(),
-            OsString::from(action),
-        ],
-        request.to_vec(),
-        Instant::now() + Duration::from_secs(60),
-    ))?;
-    sources.revalidate()?;
-    if !result.status.success()
-        || !result.stderr.is_empty()
-        || result.stdout.len() > MAX_OBSERVATION
-    {
-        return Err(eyre!(
-            "maintained native nginx owner refused read-only capture"
-        ));
-    }
-    Ok(result.stdout)
+    host::inspect_native_owner_inputs(host, action, request, scratch.path())
 }
 
-fn inspect_owner(request: &[u8], directory: &Path) -> Result<OwnerObservationV1> {
+fn inspect_owner(
+    host: &host_pair::ResetHostV1,
+    request: &[u8],
+    directory: &Path,
+) -> Result<OwnerObservationV1> {
     let observed: OwnerObservationV1 =
-        json::from_slice(&run_owner("inspect", request, directory)?)?;
+        json::from_slice(&run_owner(host, "inspect", request, directory)?)?;
     if observed.schema != "iroha.taira.native-nginx-owned-publication-inspection.v1"
         || observed.phase != "awaiting_readiness"
     {
@@ -315,7 +256,12 @@ fn inspect_owner(request: &[u8], directory: &Path) -> Result<OwnerObservationV1>
     Ok(observed)
 }
 
-fn validate_new_plan(current: &[u8], proposed: &[u8], directory: &Path) -> Result<()> {
+fn validate_new_plan(
+    host: &host_pair::ResetHostV1,
+    current: &[u8],
+    proposed: &[u8],
+    directory: &Path,
+) -> Result<()> {
     let incumbent: Value = json::from_slice(current)?;
     let plan: Value = json::from_slice(proposed)?;
     let current = incumbent
@@ -344,7 +290,9 @@ fn validate_new_plan(current: &[u8], proposed: &[u8], directory: &Path) -> Resul
             "new native nginx plan changes the captured host, namespace, master or predecessor"
         ));
     }
-    if run_owner("validate-plan", proposed, directory)? != b"{}" {
+    if json::from_slice::<Value>(&run_owner(host, "validate-plan", proposed, directory)?)?
+        != norito::json!({})
+    {
         return Err(eyre!(
             "maintained native nginx owner refused the proposed plan"
         ));
@@ -600,7 +548,7 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
         native.owner_uid,
         MAX_PUBLIC_PLAN,
     )?;
-    let observed = inspect_owner(&observed_raw, parent_path)?;
+    let observed = inspect_owner(native, &observed_raw, parent_path)?;
     pins.push(RetainedInput::metadata(&observed.nginx, native.owner_uid)?);
     pins.push(RetainedInput::metadata(
         &observed.main_configuration,
@@ -618,7 +566,7 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
         native.owner_uid,
         MAX_PUBLIC_PLAN,
     )?;
-    validate_new_plan(&observed_raw, &proposed, parent_path)?;
+    validate_new_plan(native, &observed_raw, &proposed, parent_path)?;
     for reference in [
         &request.forwarding_plan,
         &request.forwarding_identity_receipt,
@@ -748,7 +696,7 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
     }
     revalidate_pinned(&request_pin, "native prepare request")?;
     validate_source_closure(&revision)?;
-    if inspect_owner(&observed_raw, parent_path)? != observed {
+    if inspect_owner(native, &observed_raw, parent_path)? != observed {
         return Err(eyre!(
             "native nginx ownership changed before signed publication"
         ));

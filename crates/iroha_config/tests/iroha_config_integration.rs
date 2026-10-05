@@ -23,6 +23,8 @@ mod kaigi_authorization_config_v1;
 mod kura_retention_hard_cut;
 #[path = "minamoto_profile.rs"]
 mod minamoto_profile;
+#[path = "native_context_archive_limit.rs"]
+mod native_context_archive_limit;
 #[path = "network_scion_hard_cut.rs"]
 mod network_scion_hard_cut;
 #[path = "nexus_staking_bounds.rs"]

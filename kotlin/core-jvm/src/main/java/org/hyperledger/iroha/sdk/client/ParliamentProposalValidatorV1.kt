@@ -40,6 +40,7 @@ internal object ParliamentProposalValidatorV1 {
         val proposal = objectValue(JsonParser.parse(text), "proposal")
         exact(proposal, setOf("kind", "payload"), "proposal")
         val kind = text(proposal["kind"], "proposal.kind")
+        require(kind in ParliamentApiV1.PROPOSAL_KINDS) { "proposal.kind is unknown or retired" }
         val payload = objectValue(proposal["payload"], "proposal.payload")
         when (kind) {
             "DeployContract" -> deployContract(payload)
@@ -52,10 +53,6 @@ internal object ParliamentProposalValidatorV1 {
             "ContractLifecycleGovernance" -> contractLifecycle(payload)
             "ContractEmergencyHold" -> contractEmergencyHold(payload)
             "GlobalDataTriggerPermissionGovernance" -> globalDataTriggerPermission(payload)
-            "KagemushaVerifierPolicyInstall" -> kagemushaVerifierPolicyInstall(payload)
-            "KagemushaVerifierReleaseInstall" -> KagemushaVerifierProposalValidatorV1.install(payload)
-            "KagemushaVerifierReleaseActivate" -> KagemushaVerifierProposalValidatorV1.activate(payload)
-            "KagemushaVerifierReleaseRetire" -> KagemushaVerifierProposalValidatorV1.retire(payload)
             else -> throw IllegalArgumentException("proposal.kind is unknown or retired")
         }
         return proposal

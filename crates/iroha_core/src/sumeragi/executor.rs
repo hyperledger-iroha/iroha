@@ -331,6 +331,7 @@ enum Request {
         u64,
         u64,
         u32,
+        u32,
         mpsc::SyncSender<Result<(Option<PayloadBytes>, bool), PublicationError>>,
     ),
     BuildControl(
@@ -606,6 +607,15 @@ impl Executor for StateExecutor {
                 .call(|reply| Request::Execute(block.clone(), *block_hash, reply))
                 .unwrap_or_else(|| Some(ExecOutcome::Failed("executor thread stopped".into()))),
         };
+        iroha_logger::debug!(
+            instance = ?block.header().instance.0,
+            height = block.header().height,
+            view = block.header().origin_view,
+            block_hash = ?block_hash.0,
+            parent_hash = ?block.header().parent_hash.0,
+            ?outcome,
+            "sumeragi: original native execution answer"
+        );
         // The core reports only `LocalFault::ExecutorFailed { height }` and retries; the
         // local reason is logged here, once per failed answer.
         if let Some(ExecOutcome::Failed(reason)) = &outcome {
@@ -651,9 +661,9 @@ impl Executor for StateExecutor {
         height: u64,
         view: u64,
         max_bytes: u32,
-        _exec_budget_ms: u32,
+        exec_budget_ms: u32,
     ) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
-        self.call(|reply| Request::Build(height, view, max_bytes, reply))
+        self.call(|reply| Request::Build(height, view, max_bytes, exec_budget_ms, reply))
             .unwrap_or_else(|| {
                 Err(PublicationError::RecoveryRequired(
                     "payload builder stopped".into(),
@@ -825,16 +835,17 @@ struct QuarantineContext {
     pulse_context: iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
 }
 
+mod payload_owner;
+use payload_owner::{CompletedPayload, OriginalPayloadScope};
+
 struct GlobalPayloadSource {
     block: SignedBlock,
     attest: bool,
-    hashes: Vec<iroha_crypto::HashOf<TransactionEntrypoint>>,
+    pending_inputs: Option<crate::queue::PendingPayloadLease>,
 }
 
 struct GlobalPayloadBuild {
-    height: u64,
-    view: u64,
-    max_bytes: u32,
+    scope: OriginalPayloadScope,
     job: super::driver::payload_build::PayloadBuild<GlobalPayloadSource>,
 }
 
@@ -865,8 +876,8 @@ struct Worker<'s> {
             ExecOutcome,
         ),
     >,
-    /// The transactions of the last payload this node built, for the quarantine.
-    last_built: Option<(u64, u64, Vec<iroha_crypto::HashOf<TransactionEntrypoint>>)>,
+    /// One original nonempty funded output, reusable only while its genuine input lease lives.
+    completed_payload: Option<CompletedPayload>,
     queue: Option<Arc<Queue>>,
     /// The process-lifetime partial owner; view changes never replace it.
     beacon: Option<super::epoch_beacon::producer::NativeBeaconProducer>,
@@ -895,7 +906,7 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
         live: None,
         finishing: None,
         results: BTreeMap::new(),
-        last_built: None,
+        completed_payload: None,
         queue: context.queue.clone(),
         recovery: None,
         beacon: None,
@@ -905,13 +916,26 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
         attestation: None,
         quarantine_context: None,
     };
-    while let Ok(request) = requests.recv() {
+    loop {
+        let request = match worker.payload_storage_wait() {
+            Some(wait) => match requests.recv_timeout(wait) {
+                Ok(request) => request,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            },
+            None => match requests.recv() {
+                Ok(request) => request,
+                Err(_) => break,
+            },
+        };
         worker.serve(request);
     }
 }
 
 impl<'s> Worker<'s> {
     fn serve(&mut self, request: Request) {
+        // Every request observes actual source/Queue withdrawal before retained bytes can lend.
+        self.payload_storage_wait();
         match request {
             Request::TakeFinalizedFastpqSource(native, reply) => {
                 let _ = reply.send(self.take_finalized_fastpq_source(native));
@@ -1023,8 +1047,8 @@ impl<'s> Worker<'s> {
             Request::Replay(block, qc, reply) => {
                 let _ = reply.send(self.replay(&block, &qc));
             }
-            Request::Build(height, view, max_bytes, reply) => {
-                let _ = reply.send(self.build(height, view, max_bytes));
+            Request::Build(height, view, max_bytes, exec_budget_ms, reply) => {
+                let _ = reply.send(self.build(height, view, max_bytes, exec_budget_ms));
             }
             Request::BuildControl(context, reply) => {
                 let _ = reply.send(self.build_control_witness(&context));
@@ -1052,7 +1076,11 @@ impl<'s> Worker<'s> {
                 let _ = reply.send(self.attach_attestation(verifier, custody, publisher));
             }
             Request::Reject(height, view, block_hash) => self.reject(height, view, block_hash),
-            Request::AttachQueue(queue) => self.queue = Some(queue),
+            Request::AttachQueue(queue) => {
+                self.completed_payload = None;
+                self.payload_build = None;
+                self.queue = Some(queue);
+            }
             Request::AttachFinalizedArchives(archives, reply) => {
                 let _ = reply.send(self.bind_finalized_archives(archives));
             }
@@ -1175,6 +1203,16 @@ impl<'s> Worker<'s> {
             });
         }
         if !self.parent_applied(block) {
+            iroha_logger::debug!(
+                instance = ?block.header().instance.0,
+                height = block.header().height,
+                view = block.header().origin_view,
+                block_hash = ?block_hash.0,
+                parent_hash = ?block.header().parent_hash.0,
+                applied_height = self.applied.0,
+                applied_hash = ?self.applied.1.0,
+                "sumeragi: original native execution awaits its applied parent"
+            );
             return None;
         }
         let outcome = execution_report(self.run_execution(block, block_hash));
@@ -1252,6 +1290,7 @@ impl<'s> Worker<'s> {
         block_hash: Hash32,
         finish: impl FnOnce(&mut Self) -> Result<Option<Hash32>, PublicationError>,
     ) -> Result<Option<Hash32>, PublicationError> {
+        self.retire_completed_payload(block.header().height);
         if self.publication_pending() {
             return Err(PublicationError::Retryable(
                 "the original prepared publication is still retained".into(),
@@ -1797,6 +1836,7 @@ impl<'s> Worker<'s> {
     }
 
     fn discard(&mut self, height: u64, keep: &[Hash32]) {
+        self.retire_completed_payload(height);
         if self.recovery.is_some() || self.publication_pending() {
             return;
         }
@@ -2488,14 +2528,33 @@ impl<'s> Worker<'s> {
         height: u64,
         view: u64,
         max_bytes: u32,
+        exec_budget_ms: u32,
+    ) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
+        // The inner body acquires and retires its original State view and Queue
+        // guards before same-pool refund callbacks can reenter either owner.
+        let budget = self.state.ivm_execution_budget();
+        budget.with_deferred_refund_notifications(|_| {
+            self.build_with_original_refund_scope(height, view, max_bytes, exec_budget_ms)
+        })
+    }
+
+    /// Borrow current source ownership inside the original operation pool's refund scope.
+    fn build_with_original_refund_scope(
+        &mut self,
+        height: u64,
+        view: u64,
+        max_bytes: u32,
+        exec_budget_ms: u32,
     ) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
         if let Some(reason) = &self.recovery {
+            self.completed_payload = None;
             return Err(PublicationError::RecoveryRequired(reason.clone()));
         }
         if self.pending_commit.is_some()
             || self.publication_pending()
             || height != self.applied.0.saturating_add(1)
         {
+            self.completed_payload = None;
             iroha_logger::debug!(
                 height,
                 view,
@@ -2507,30 +2566,76 @@ impl<'s> Worker<'s> {
             return Ok((None, false));
         }
         if self.payload_build.as_ref().is_some_and(|build| {
-            (build.height, build.view, build.max_bytes) != (height, view, max_bytes)
+            !build
+                .scope
+                .matches_request(height, view, max_bytes, exec_budget_ms)
         }) {
             self.payload_build = None;
         }
-        if self.payload_build.is_some() {
-            return self.finish_payload_build();
-        }
-        // A fresh attempt reacquires from the same committed parent and queued work.
+        // Proven input withdrawal retires storage even if an unrelated source probe
+        // subsequently refuses. This expiry-only check creates no lending authority.
+        self.partial_payload_expiry_wait();
         self.payload_refusal = None;
-        let parent = self
-            .state
-            .view()
-            .latest_block()
-            .map_err(|error| match error {
-                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
-                    self.payload_refusal =
-                        Some(payload::PayloadError::RoutingDeferred(original.clone()));
-                    PublicationError::Deferred(original.into())
+        let original_generation = self.state.state_view_generation();
+        let current_view = match self.state.try_view_once() {
+            Ok(view) => view,
+            Err(crate::state::StateViewError::Busy(release)) => {
+                return Err(PublicationError::Deferred(
+                    PublicationDeferral::StateViewBusy(release),
+                ));
+            }
+            Err(error) => {
+                self.completed_payload = None;
+                return Err(PublicationError::Retryable(error.to_string()));
+            }
+        };
+        // Certified lane blocks come first: they reserve their share of the block's capacity
+        // (`specs/sumeragi_lanes.md` §4.2).
+        let merges = match lanes::merge::propose(&current_view, &*self.context.lane_blocks, height)
+        {
+            Ok(merges) => {
+                self.routing_refusal = None;
+                merges
+            }
+            Err(error) => {
+                if let crate::execution_attempt::ExecutionAttemptError::Deferred(reason) = &error {
+                    self.routing_refusal = Some(reason.clone());
                 }
-                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
-                    PublicationError::Retryable(error.to_string())
+                let reason = format!("lane storage during payload selection: {error}");
+                if matches!(
+                    error.io_kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) {
+                    return Err(PublicationError::Retryable(reason));
                 }
-            })?;
+                self.recovery = Some(reason.clone());
+                return Err(PublicationError::RecoveryRequired(reason));
+            }
+        };
+        // Original lane policy/refusal custody is resolved before the canonical read.
+        // Every successful build and lend then authenticates the complete physical parent.
+        let parent = {
+            match std::num::NonZeroUsize::new(current_view.height()) {
+                Some(height) => current_view
+                    .canonical_history()
+                    .executed_block(height, |_, _| Ok(()))
+                    .map(Some),
+                None => Ok(None),
+            }
+        }
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                self.payload_refusal =
+                    Some(payload::PayloadError::RoutingDeferred(original.clone()));
+                PublicationError::Deferred(original.into())
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                self.completed_payload = None;
+                PublicationError::Retryable(error.to_string())
+            }
+        })?;
         let Some(parent) = parent else {
+            self.completed_payload = None;
             iroha_logger::debug!(
                 height,
                 view,
@@ -2538,41 +2643,50 @@ impl<'s> Worker<'s> {
             );
             return Ok((None, false));
         };
-        let Some(scheduled) = self.scheduled(height) else {
+        let schedule = current_view.world().consensus_schedule();
+        if schedule.ready(height).is_err() {
+            self.completed_payload = None;
             iroha_logger::debug!(
                 height,
                 view,
                 "sumeragi: payload selection has no authenticated scheduled authority"
             );
             return Ok((None, false));
+        }
+        let scheduled = ScheduledAuthority {
+            schedule: schedule.clone(),
+            height,
         };
         let boundary_attestation = height == scheduled.epoch.authorization.last_height;
-        let Some(queue) = &self.queue else {
+        if self.queue.is_none() {
+            self.completed_payload = None;
             return Ok((None, boundary_attestation));
-        };
+        }
+        let scope = OriginalPayloadScope::capture(
+            &current_view,
+            original_generation,
+            height,
+            view,
+            max_bytes,
+            exec_budget_ms,
+        );
+        if self.retained_payload_build_is_current(scope, &parent, &current_view, &merges)? {
+            return self.finish_payload_build();
+        }
+        if merges.merges.is_empty() {
+            if let Some(original) =
+                self.reusable_completed_payload(scope, &parent, &current_view)?
+            {
+                return Ok(original);
+            }
+        } else {
+            // Newly available mandatory lane work withdraws Queue-only reuse authority.
+            self.completed_payload = None;
+        }
+        let queue = self.queue.as_ref().expect("original queue checked above");
         let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX);
-        // Certified lane blocks come first: they reserve their share of the block's capacity
-        // (`specs/sumeragi_lanes.md` §4.2).
-        let merges =
-            match lanes::merge::propose(&self.state.view(), &*self.context.lane_blocks, height) {
-                Ok(merges) => merges,
-                Err(error) => {
-                    if let crate::execution_attempt::ExecutionAttemptError::Deferred(reason) =
-                        &error
-                    {
-                        self.routing_refusal = Some(reason.clone());
-                    }
-                    let reason = format!("lane storage during payload selection: {error}");
-                    if matches!(
-                        error.io_kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                    ) {
-                        return Err(PublicationError::Retryable(reason));
-                    }
-                    self.recovery = Some(reason.clone());
-                    return Err(PublicationError::RecoveryRequired(reason));
-                }
-            };
+        let selection: Option<crate::queue::PendingPayloadSelection> =
+            queue.begin_pending_payload_selection(self.state, original_generation);
         let mut selected = match payload::select(
             self.state,
             queue,
@@ -2607,6 +2721,20 @@ impl<'s> Worker<'s> {
             cadence: Duration::from_millis(scheduled.params.block_time_ms),
         };
         while !selected.is_empty() || !merges.merges.is_empty() {
+            // Every selected Queue input retains its original admission receipt,
+            // including mixed sources. Completed reuse still requires Queue-only work.
+            let pending_inputs = match selection {
+                Some(selection) => queue
+                    .capture_pending_payload_lease(
+                        self.state,
+                        selection,
+                        &current_view,
+                        &selected,
+                        &self.state.ivm_execution_budget(),
+                    )
+                    .map_err(payload_owner::lease_admission_error)?,
+                None => None,
+            };
             let block =
                 match payload::assemble_with_merges(self.state, assembly, &selected, &merges) {
                     Ok(block) => {
@@ -2642,13 +2770,11 @@ impl<'s> Worker<'s> {
                 Ok(length) if length <= max_bytes => {
                     let source = GlobalPayloadSource {
                         attest: boundary_attestation || attestation_required(&block),
-                        hashes: selected.iter().map(|tx| tx.hash_as_entrypoint()).collect(),
+                        pending_inputs,
                         block,
                     };
                     self.payload_build = Some(GlobalPayloadBuild {
-                        height,
-                        view,
-                        max_bytes: max_bytes as u32,
+                        scope,
                         job: super::driver::payload_build::PayloadBuild::new(
                             source,
                             self.state.ivm_execution_budget(),
@@ -2676,12 +2802,7 @@ impl<'s> Worker<'s> {
     }
 
     fn finish_payload_build(&mut self) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
-        let GlobalPayloadBuild {
-            height,
-            view,
-            max_bytes,
-            job,
-        } = self.payload_build.take().ok_or_else(|| {
+        let GlobalPayloadBuild { scope, job } = self.payload_build.take().ok_or_else(|| {
             PublicationError::RecoveryRequired("payload source disappeared".into())
         })?;
         match job.finish(
@@ -2690,22 +2811,24 @@ impl<'s> Worker<'s> {
         ) {
             Ok((source, payload)) => {
                 iroha_logger::debug!(
-                    height,
-                    view,
+                    height = scope.height,
+                    view = scope.view,
                     bytes = payload.as_slice().len(),
                     "sumeragi: original funded payload build completed"
                 );
-                self.last_built = Some((height, view, source.hashes));
-                Ok((Some(payload), source.attest))
+                let attest = source.attest;
+                let pending_inputs = if source.block.lane_merge().is_none() {
+                    source.pending_inputs
+                } else {
+                    // A selected-input receipt cannot authorize completed lane reuse.
+                    None
+                };
+                self.retain_completed_payload(scope, pending_inputs, &payload, attest);
+                Ok((Some(payload), attest))
             }
             Err((job, error)) => {
                 let retry = error.is_local_refusal();
-                self.payload_build = Some(GlobalPayloadBuild {
-                    height,
-                    view,
-                    max_bytes,
-                    job,
-                });
+                self.payload_build = Some(GlobalPayloadBuild { scope, job });
                 let reason = format!("canonical payload admission: {error:?}");
                 Err(if retry {
                     PublicationError::Retryable(reason)
@@ -2719,6 +2842,13 @@ impl<'s> Worker<'s> {
     /// Retain queue ownership after a rejected proposal until the offending original
     /// transaction can be proved without forging a replacement native source header.
     fn reject(&mut self, height: u64, view: u64, block_hash: Hash32) {
+        if self
+            .completed_payload
+            .as_ref()
+            .is_some_and(|original| original.scope.height == height && original.scope.view == view)
+        {
+            self.completed_payload = None;
+        }
         if self.recovery.is_some() || self.publication_pending() {
             return;
         }

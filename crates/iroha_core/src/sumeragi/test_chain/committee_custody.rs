@@ -142,17 +142,27 @@ impl CertifiedTestChain {
 
     /// Resolve historical and prospective certificates from independently authenticated State.
     pub(super) fn certificate_context(&self, height: u64) -> ValidatorEpochContextV1 {
-        if height <= self.tip.0 {
-            self.committed(height).commitment().schedule.current.clone()
+        // An independently owned Worker can replay or publish this same original
+        // State without advancing this fixture executor's local bookkeeping tip.
+        // Resolve both historical seats and the sole successor from that actual
+        // published parent, never from an invented context or stale seat index.
+        let view = self.state.view();
+        let parent_height =
+            u64::try_from(view.height()).expect("bounded original published height");
+        if height <= parent_height {
+            super::committed_block(&view, height)
+                .expect("a genuinely published fixture height")
+                .commitment()
+                .schedule
+                .current
+                .clone()
         } else {
             assert_eq!(
                 height,
-                self.tip.0 + 1,
+                parent_height + 1,
                 "only the actual successor may be certified"
             );
-            self.state
-                .view()
-                .world()
+            view.world()
                 .consensus_schedule()
                 .ready(height)
                 .expect("the exact successor is authorized")

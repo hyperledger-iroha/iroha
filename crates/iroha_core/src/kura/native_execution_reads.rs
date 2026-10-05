@@ -69,6 +69,7 @@ pub(crate) struct NativeFrameRead<'kura> {
     height: u64,
     hash: HashOf<BlockHeader>,
     wire_len: u64,
+    journals: StableCanonicalBlockStoreMetadata,
 }
 impl NativeFrameRead<'_> {
     /// Exact occupied slot length to admit before any body allocation or I/O.
@@ -91,6 +92,7 @@ impl NativeFrameRead<'_> {
                 height,
                 hash,
                 wire_len,
+                journals,
             } = self;
             if admitted_wire_len != wire_len {
                 return Err(Error::CanonicalBlockWireMismatch { height });
@@ -101,6 +103,10 @@ impl NativeFrameRead<'_> {
             let _canonical = kura.canonical_chain_lock.lock();
             kura.ensure_canonical_storage_not_poisoned()?;
             let mut store = kura.block_store.lock();
+            let before = kura.native_frame_journal_binding(&mut store)?;
+            if !Kura::native_frame_journal_objects_unchanged(&journals, &before) {
+                return Err(Error::CanonicalBlockWireMismatch { height });
+            }
             let count = store.read_exact_durable_index_count()?;
             if height > count {
                 return Ok(None);
@@ -141,6 +147,10 @@ impl NativeFrameRead<'_> {
                 || confirmed.start != slot.start
                 || confirmed.length != slot.length
                 || Kura::read_durable_hash_at_height(&mut store, height)? != Some(hash)
+                || !Kura::native_frame_journal_images_unchanged(
+                    &before,
+                    &kura.native_frame_journal_binding(&mut store)?,
+                )
             {
                 return Err(Error::CanonicalBlockWireMismatch { height });
             }
@@ -149,6 +159,64 @@ impl NativeFrameRead<'_> {
     }
 }
 impl Kura {
+    /// Bind each retained original journal descriptor to its regular direct pathname.
+    /// Missing, replaced, linked or special paths refuse before frame allocation or I/O.
+    fn native_frame_journal_binding(
+        &self,
+        store: &mut BlockStore,
+    ) -> Result<StableCanonicalBlockStoreMetadata> {
+        let journals = self.canonical_block_store_metadata(&store.path_to_blockchain)?;
+        let bind = |expected: &StableSidecarMetadata, file: &FileWrap| -> Result<()> {
+            let opened = secure_file_metadata::from_file(&file.file)
+                .map_err(|error| Error::IO(error, file.path.clone()))?;
+            if !opened.is_file() || !Self::sidecar_file_metadata_unchanged(&expected.file, &opened)
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "native journal pathname differs from its opened original",
+                    ),
+                    file.path.clone(),
+                ));
+            }
+            Ok(())
+        };
+        bind(&journals.data, store.ensure_data_file()?)?;
+        bind(&journals.index, store.ensure_index_file()?)?;
+        bind(&journals.hashes, store.ensure_hashes_file()?)?;
+        Ok(journals)
+    }
+
+    /// A later append may grow the same journals and replace the durable marker,
+    /// but it cannot replace any original journal captured by this source owner.
+    fn native_frame_journal_objects_unchanged(
+        captured: &StableCanonicalBlockStoreMetadata,
+        current: &StableCanonicalBlockStoreMetadata,
+    ) -> bool {
+        let same = |left: &StableSidecarMetadata, right: &StableSidecarMetadata| {
+            left.canonical_path == right.canonical_path
+                && Self::sidecar_metadata_same_object(&left.file, &right.file)
+                && Self::sidecar_directory_binding_unchanged(&left.directory, &right.directory)
+        };
+        same(&captured.data, &current.data)
+            && same(&captured.index, &current.index)
+            && same(&captured.hashes, &current.hashes)
+    }
+
+    /// No journal bytes or path bindings may change during one fenced read.
+    fn native_frame_journal_images_unchanged(
+        before: &StableCanonicalBlockStoreMetadata,
+        after: &StableCanonicalBlockStoreMetadata,
+    ) -> bool {
+        Self::stable_sidecar_file_binding_unchanged(&before.data, &after.data)
+            && Self::stable_sidecar_file_binding_unchanged(&before.index, &after.index)
+            && Self::stable_sidecar_file_binding_unchanged(&before.hashes, &after.hashes)
+            && Self::stable_sidecar_file_binding_unchanged(
+                &before.commit_marker,
+                &after.commit_marker,
+            )
+    }
+
     /// Capture an exact native slot length without decoding or accepting any local certificate.
     /// No sidecar finality format, cache fallback, repair or directory creation is consulted.
     pub(crate) fn native_frame_read(
@@ -164,6 +232,12 @@ impl Kura {
         let _canonical = self.canonical_chain_lock.lock();
         self.ensure_canonical_storage_not_poisoned()?;
         let mut store = self.block_store.lock();
+        if store.path_to_blockchain.as_os_str().is_empty() {
+            // The explicit non-durable store has no native frame or journal pathname.
+            // Its empty boundary cannot authorize any retained decoded block.
+            return Ok(None);
+        }
+        let journals = self.native_frame_journal_binding(&mut store)?;
         if height > store.read_exact_durable_index_count()? {
             return Ok(None);
         }
@@ -182,6 +256,7 @@ impl Kura {
             height,
             hash,
             wire_len,
+            journals,
         }))
     }
 
@@ -223,6 +298,30 @@ mod native_execution_read_tests {
             test_chain::{CertifiedTestChain, TestChainConfig},
         },
     };
+
+    #[test]
+    fn native_empty_durable_and_explicit_non_durable_stores_have_no_original_frame() {
+        let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        let hash = chain.committed(1).block_hash();
+        for non_durable in [false, true] {
+            let kura = Kura::blank_kura_for_testing();
+            if non_durable {
+                *kura.block_store.lock() = BlockStore::new(Path::new(""));
+            }
+            let mut store = kura.block_store.lock();
+            assert_eq!(store.read_exact_durable_index_count().unwrap(), 0);
+            drop(store);
+            kura.reset_canonical_query_reads_for_test();
+            for height in [1, 2, u64::MAX] {
+                assert!(kura.native_frame_read(height, hash).unwrap().is_none());
+            }
+            assert!(matches!(
+                kura.native_frame_read(0, hash),
+                Err(Error::CanonicalBlockWireMismatch { height: 0 })
+            ));
+            assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
+        }
+    }
 
     #[test]
     fn native_original_frame_admission_preserves_cumulative_allocation_on_both_stores() {
@@ -575,6 +674,122 @@ mod native_execution_read_tests {
             receipt.block()
         ));
     }
+    #[test]
+    fn native_read_refuses_changed_original_journal_paths_before_body_io_and_retries_after_restore()
+    {
+        struct ChangedJournal {
+            path: PathBuf,
+            original: PathBuf,
+        }
+        impl Drop for ChangedJournal {
+            fn drop(&mut self) {
+                if std::fs::symlink_metadata(&self.path).is_ok() {
+                    std::fs::remove_file(&self.path).unwrap();
+                }
+                std::fs::rename(&self.original, &self.path).unwrap();
+            }
+        }
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        let original = chain.committed(2);
+        let wire = original.block().encode_wire().unwrap();
+        let budget = chain.state().ivm_execution_budget();
+        let directory = Kura::canonical_storage_path(&chain.kura().store_root());
+        for journal in [DATA_FILE_NAME, INDEX_FILE_NAME, HASHES_FILE_NAME] {
+            for kind in ["missing", "same-bytes-replacement", "fifo", "symlink"] {
+                #[cfg(not(unix))]
+                if matches!(kind, "fifo" | "symlink") {
+                    continue;
+                }
+                let source = chain
+                    .kura()
+                    .native_frame_read(2, original.block_hash())
+                    .unwrap()
+                    .unwrap();
+                let path = directory.join(journal);
+                let saved = path.with_extension("native-original");
+                std::fs::rename(&path, &saved).unwrap();
+                let changed = ChangedJournal {
+                    path,
+                    original: saved,
+                };
+                match kind {
+                    "missing" => {}
+                    "same-bytes-replacement" => {
+                        std::fs::copy(&changed.original, &changed.path).unwrap();
+                    }
+                    #[cfg(unix)]
+                    "fifo" => assert!(
+                        std::process::Command::new("mkfifo")
+                            .arg(&changed.path)
+                            .status()
+                            .unwrap()
+                            .success()
+                    ),
+                    #[cfg(unix)]
+                    "symlink" => {
+                        std::os::unix::fs::symlink(&changed.original, &changed.path).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                chain.kura().reset_canonical_query_reads_for_test();
+                let reserved = budget.reserved_bytes();
+                assert!(
+                    source.read(wire.len() as u64, &budget).is_err(),
+                    "{journal}: {kind}"
+                );
+                assert!(
+                    chain
+                        .kura()
+                        .native_frame_read(2, original.block_hash())
+                        .is_err(),
+                    "a fresh owner cannot adopt {journal}: {kind}"
+                );
+                assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+                assert_eq!(budget.reserved_bytes(), reserved);
+                drop(changed);
+                let retry = chain
+                    .kura()
+                    .native_frame_read(2, original.block_hash())
+                    .unwrap()
+                    .unwrap()
+                    .read(wire.len() as u64, &budget)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(retry.as_slice(), wire);
+                assert_eq!(
+                    chain.kura().canonical_query_reads_for_test(),
+                    (1, wire.len() as u64)
+                );
+                drop(retry);
+                assert_eq!(budget.reserved_bytes(), reserved);
+            }
+        }
+    }
+
+    #[test]
+    fn native_original_journal_binding_allows_an_authenticated_append_before_read() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        let original = chain.committed(2);
+        let wire = original.block().encode_wire().unwrap();
+        // The immutable source borrows Kura rather than the mutable chain handle.
+        let kura = chain.kura().clone();
+        let source = kura
+            .native_frame_read(2, original.block_hash())
+            .unwrap()
+            .unwrap();
+        chain.commit(Vec::new());
+        let bytes = source
+            .read(wire.len() as u64, &chain.state().ivm_execution_budget())
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes.as_slice(), wire);
+        assert_eq!(chain.height(), 3);
+    }
+
     #[test]
     fn native_metadata_is_untrusted_and_cannot_expand_an_admitted_read() {
         let mut chain =

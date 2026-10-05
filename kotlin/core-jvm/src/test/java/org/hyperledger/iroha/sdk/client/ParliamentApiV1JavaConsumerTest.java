@@ -58,11 +58,12 @@ final class ParliamentApiV1JavaConsumerTest {
   }
 
   @Test
-  void governedReleaseFixturesUseTheKotlinParserAndRejectNestedMutations() throws Exception {
+  void retiredReleaseFixturesAreRejectedByTheKotlinParser() throws Exception {
     String install = "kagemusha_verifier_release_install_v1.json";
     byte[] installBytes = Files.readAllBytes(fixturePath(install));
-    assertEquals("KagemushaVerifierReleaseInstall",
-        ParliamentApiV1.Proposal.fromJson(installBytes).getKind());
+    assertEquals("proposal.kind is unknown or retired",
+        assertThrows(IllegalArgumentException.class,
+            () -> ParliamentApiV1.Proposal.fromJson(installBytes)).getMessage());
     Map<String, Object> installPayload = objectValue(objectValue(installBytes).get("payload"));
     objectValue(installPayload.get("manifest")).put("retired_alias", true);
     assertThrows(IllegalArgumentException.class,
@@ -71,8 +72,9 @@ final class ParliamentApiV1JavaConsumerTest {
 
     String activate = "kagemusha_verifier_release_activate_v1.json";
     byte[] activateBytes = Files.readAllBytes(fixturePath(activate));
-    assertEquals("KagemushaVerifierReleaseActivate",
-        ParliamentApiV1.Proposal.fromJson(activateBytes).getKind());
+    assertEquals("proposal.kind is unknown or retired",
+        assertThrows(IllegalArgumentException.class,
+            () -> ParliamentApiV1.Proposal.fromJson(activateBytes)).getMessage());
     Map<String, Object> activatePayload = objectValue(objectValue(activateBytes).get("payload"));
     Map<String, Object> predecessor = objectValue(activatePayload.get("expected_predecessor"));
     List<?> releases = (List<?>) predecessor.get("releases");
@@ -83,10 +85,11 @@ final class ParliamentApiV1JavaConsumerTest {
   }
 
   @Test
-  void governedStandbyRetirementUsesTheKotlinParserAndRejectsReplay() throws Exception {
+  void retiredStandbyRetirementIsRejectedByTheKotlinParser() throws Exception {
     byte[] original = Files.readAllBytes(fixturePath("kagemusha_verifier_release_retire_v1.json"));
-    assertEquals("KagemushaVerifierReleaseRetire",
-        ParliamentApiV1.Proposal.fromJson(original).getKind());
+    assertEquals("proposal.kind is unknown or retired",
+        assertThrows(IllegalArgumentException.class,
+            () -> ParliamentApiV1.Proposal.fromJson(original)).getMessage());
     Map<String, Object> payload = objectValue(objectValue(original).get("payload"));
     Map<String, Object> predecessor = objectValue(payload.get("expected_predecessor"));
     List<?> rows = (List<?>) predecessor.get("releases");

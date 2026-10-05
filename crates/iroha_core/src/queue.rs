@@ -4,6 +4,7 @@
 //! updates. Lane/dataspace routing is delegated to a pluggable router so the
 //! queue can expose the actual Nexus assignments instead of single-lane
 //! placeholders.
+mod payload_leases;
 mod router;
 use crate::state::LaneLifecycleError;
 #[cfg(feature = "telemetry")]
@@ -94,6 +95,7 @@ use mv::storage::StorageReadOnly;
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
+pub(crate) use payload_leases::{PendingPayloadLease, PendingPayloadSelection};
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
     RoutingPlan, RoutingResolveError, TransactionRoutingView, evaluate_policy_plan_with_catalog,
@@ -861,6 +863,8 @@ pub struct Queue {
     txs_per_user: DashMap<AccountId, usize>,
     /// Lock to synchronize push and remove operations
     push_remove_lock: PublicationMutex,
+    /// Checked original-owner generation; every successful input insertion/removal advances it.
+    pending_ownership_generation: AtomicU64,
     /// Serializes complete Nexus revalidation passes while their per-hash queue fences are
     /// released between the initial catalog rebuild and stable owner observations.
     nexus_revalidation_lock: parking_lot::Mutex<()>,
@@ -1629,6 +1633,9 @@ impl Queue {
         telemetry: Option<&StateTelemetry>,
     ) -> Option<Arc<CheckedTransaction<'static>>> {
         let removed = self.txs.remove(&hash).map(|(_, tx)| tx);
+        if removed.is_some() {
+            self.advance_pending_ownership_generation(hash);
+        }
         self.remove_pending_kagemusha_operation_locked(hash);
         self.remove_pending_sccp_exempt_locked(hash);
         self.fee_admission_reservations.lock().release(&hash);
@@ -2950,6 +2957,7 @@ impl Queue {
                 accepted_work_validation_fault: AtomicBool::new(false),
                 emergency_fast_startup: AtomicBool::new(false),
                 push_remove_lock: PublicationMutex::default(),
+                pending_ownership_generation: AtomicU64::new(0),
                 nexus_revalidation_lock: parking_lot::Mutex::new(()),
                 #[cfg(test)]
                 pending_hash_state_view_handoff: parking_lot::Mutex::new(None),
@@ -4639,6 +4647,7 @@ impl Queue {
             let signed_transaction_hash =
                 crate::tx::exact_signed_transaction_hash(checked.as_accepted().entrypoint());
             self.txs.insert(hash, Arc::new(checked));
+            self.advance_pending_ownership_generation(hash);
             self.track_active_transaction();
             self.routing_plans.insert(hash, routing_plan.clone());
             self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
@@ -6309,6 +6318,8 @@ pub mod tests {
             fsync_interval: kura_defaults::FSYNC_INTERVAL,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+            history_checkpoint_cache_capacity:
+                iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:

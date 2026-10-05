@@ -830,6 +830,19 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     let block = trigger_component_block(&state, 2);
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
+    // This authenticated global component callback explicitly carries the same
+    // universal dataspace that the real internal output producer captures.
+    assert!(matches!(
+        crate::executor::root_scope::execution_root_scope(&mut stx),
+        Ok(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    ));
+    assert!(crate::executor::root_scope::captured_dataspace(&mut stx).is_err());
+    stx.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
+    stx.world.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
+    assert_eq!(
+        crate::executor::root_scope::captured_dataspace(&mut stx).unwrap(),
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL
+    );
     let evt = ExecuteTriggerEvent {
         trigger_id: trigger_id.clone(),
         authority: ALICE_ID.clone(),
@@ -1940,9 +1953,104 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         header,
         vec![Mint::asset_quantity(1_u32, asset_id.clone()).into()],
     );
-    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
-    builder.push_transaction(signed);
-    let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+    let signed_hash = signed.hash();
+    let source = {
+        let (parent, cadence, max_clock_drift, limits) = {
+            let view = state.view();
+            let parent = view
+                .latest_block()
+                .expect("completed original Network trigger parent read")
+                .expect("original Network trigger parent");
+            let height = parent.header().height().get().checked_add(1).unwrap();
+            let cadence = Duration::from_millis(
+                view.world()
+                    .consensus_schedule()
+                    .ready(height)
+                    .expect("original schedule authorizes the Network trigger successor")
+                    .params
+                    .block_time_ms,
+            );
+            (
+                parent,
+                cadence,
+                view.world().parameters().sumeragi().max_clock_drift(),
+                view.world().parameters().transaction(),
+            )
+        };
+        let time = parent
+            .header()
+            .creation_time()
+            .checked_add(cadence)
+            .unwrap()
+            .max(
+                signed
+                    .creation_time()
+                    .checked_add(Duration::from_millis(1))
+                    .unwrap(),
+            );
+        let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(time);
+        let accepted = AcceptedTransaction::accept_with_time_source(
+            signed,
+            state.network_id_ref(),
+            max_clock_drift,
+            limits,
+            state.crypto().as_ref(),
+            &time_source,
+        )
+        .expect("accept the original signed Mint source");
+        crate::sumeragi::payload::assemble(
+            &state,
+            crate::sumeragi::payload::Assembly {
+                parent: &parent,
+                view: 0,
+                cadence,
+            },
+            &[accepted],
+        )
+        .expect("assemble actual committed routing and source-bound execution context")
+    };
+    assert_eq!(
+        source.external_transactions().next().unwrap().hash(),
+        signed_hash
+    );
+    assert!(!source.has_results());
+    // Removing the context from the actual proposal must still refuse before Mint
+    // or its registered Data callback. The positive fixture obtains that context
+    // from the production assembler rather than supplying its own route constants.
+    {
+        let mut missing = source.clone();
+        missing.set_execution_context(None);
+        assert_ne!(missing.hash(), source.hash());
+        assert_eq!(
+            missing.external_transactions().next().unwrap().hash(),
+            signed_hash
+        );
+        let (mut refused, _recording) = ValidBlock::start_component_execution(&missing, &state)
+            .expect("record the original missing-context negative before effects");
+        let fragments = refused.committed_fragment_count();
+        refused
+            .reserve_ordinary_execution_outputs(&missing)
+            .expect("retain the original contextless source for admission refusal");
+        assert!(matches!(
+            refused.execute_ordinary_output_plan(&missing, None),
+            Err(super::ExecutionOutputAttemptError::Owner(reason))
+                if reason == "Network source has an invalid execution context"
+        ));
+        assert_eq!(refused.committed_fragment_count(), fragments);
+        assert!(refused.retained_execution_outputs_for_test().is_err());
+        assert!(
+            refused
+                .world
+                .map_account(&BOB_ID, |account| account
+                    .value()
+                    .metadata()
+                    .get(&flag_key)
+                    .cloned())
+                .unwrap()
+                .is_none()
+        );
+        assert!(refused.world.assets.get(&asset_id).is_none());
+    }
     let (mut state_block, _recording) = ValidBlock::start_component_execution(&source, &state)
         .expect("capture original signed Mint source before any effects");
     state_block

@@ -1,10 +1,10 @@
 # Compile-time and code-bloat optimization goals
 
 Separate compilation owners while preserving all features, canonical wire
-formats, deterministic execution and runtime behavior. Consumers use the actual
-owner directly: this first release has no compatibility aliases or fallback
-implementations. Leave Sumeragi to its separate owner and inspect SCCP before
-changing adjacent code.
+formats, deterministic execution and runtime behavior. First-release consumers
+use actual owners directly; retired implementations and compatibility shims are
+removed. Leave Sumeragi to its separate owner and inspect SCCP before changing
+adjacent code.
 
 | Goal | Status | Completion criteria |
 | --- | --- | --- |
@@ -16,52 +16,53 @@ changing adjacent code.
 | O6: Complete current-source validation | In progress | Norito/IVM-only, feature, dependency and target guards, focused tests and applicable workspace lint/test gates pass on the current candidate; unresolved external failures are recorded. |
 | O7: Measure improvements | In progress | One warm same-package check records actual timing, source/toolchain and competing load against the September 27 observation; further extraction requires measured benefit. |
 
-The merge is closed, but final current-candidate qualification remains open.
-Feature hygiene passes all 65 tests on its recorded cut. All 21 configured
-dependency boundaries pass locked offline resolution on the current post-Journal
-cut, with 119 manifests, 113 workspace members and all 141 protected inputs
-unchanged. Reviewed exact source costs are applied without unused allowance.
-The five post-Journal source guards pass with 464 protected inputs unchanged;
-all 72 dependency metrics match their reviewed limits. The compiler source guard
-seals 308 fixture includes and 616 test names; all 43 Python source-reader
-controls pass with 323 captured inputs unchanged. Surface/toolchain inherit
-workspace lints and Surface public APIs are documented. The shared ABI argument
-and numeric codec extraction is applied; VM decoding, gas and memory custody
-remain in IVM.
-On its recorded coherent source cut, the full default-library run passed
-4,841 Model, 210 ABI and 33 Surface
-tests with 24,823 captured source inputs unchanged, retaining the 135 original
-Model ignores and no filtering. The new codec, const-name and distinct-supply
-Mint/Burn regressions pass. All 13 strict style findings have source repairs;
-fresh strict checks and direct IVM/SDK consumer validation remain pending.
-A subsequent AssetId JSON serializer source change requires fresh Model and
-dependent native validation.
-Shared operation journaling and its Foundation CI routing are implemented, and
-all 88 selection controls pass. Native Journal/Wallet qualification remains
-pending.
-The recorded normal Core ZK check retains its exact
-default-feature/source scope; current
-strict Core ZK, toolchain, Wallet runtime, Privacy regressions and final
-workspace checks remain open. These component results do not complete O1,
-O2, O6 or O7.
+The ownership changes are implemented. Current-source qualification remains
+open. IVM and its artifact admission use the compiler-free
+ABI/surface owners; compiler tools belong to Kotodama. Static argument/numeric
+encoding belongs to `ivm_abi`, while VM decoding, gas and memory custody remain in
+IVM. Privacy and timed-OVN verification have state-free owners; Core retains
+committed-state reads and authenticated authority. Thin executables own build
+metadata. Shared operation journaling has one owner consumed directly by Wallet,
+SCCP, services and daemon, with signing and finality retained by consumers.
 
-The implementation separates compiler, Core ZK, Privacy, timed-OVN, SDK and
-service ownership. Target guards admit 105 declared binaries and 23
-defaults under the unchanged 24-default ceiling; the 21 configured dependency
-boundaries and Norito/IVM-only constraints remain required. SDK Native custody
-and genuine production proving remain mandatory even with SDK defaults disabled. Earlier component passes
-remain scoped to their recorded source cuts; subsequent source changes require
-fresh qualification. The earlier ordinary Privacy suite ended with 52 failures;
-none may be removed, ignored or replaced with a narrower successful subset.
+The current manifest inventory contains 127 source manifests and 121 workspace
+members, with the inactive Wayland patch still protected. On the recorded cut, the source-cost
+ratchet matches all 72 measurements exactly. All 21 locked offline dependency
+boundaries, feature hygiene, the legacy-codec guard and all 253 checker controls
+pass on their recorded input cuts. Shipping Oracle denials and the
+sole aggregate-model test exception remain intact. These source and resolver
+checks do not qualify a native release. The reviewed ratchet includes the model’s
+live Pasta field/hash dependency and the proof crate’s development-only timing
+dependency. The daemon’s unused direct Sumeragi edge is removed; Core retains
+consensus ownership. Subsequent selected input changes require requalification.
+
+The compiler fixture seal is current: 308 includes and 616 test names, with all
+43 Python source-reader controls passing on their recorded finite input cut.
+Foundation CI selection passes all 88 controls. After the two reviewed Norito
+lint repairs, Journal strict lint and all 11 unfiltered ordinary tests pass on
+their recorded cut. All 1,489 protected source, generated and traversal
+inputs, invocation and executable custody remain unchanged. Wallet's shared
+retained reader now audits the fixed native namespace before record decoding,
+signing or HTTP. Its prospective macOS registry contains 216 cases and retains
+all 191 earlier names and 15 custody controls; native qualification remains open.
+Wallet, direct IVM/SDK and Core ZK validation remain required. Earlier
+Model/ABI/surface and other component passes retain their source, feature and
+artifact scope.
+
+All 52 previously failed ordinary Privacy cases remain ordinary tests. They
+must pass in the current harness, followed by its complete unfiltered ordinary
+suite with the original ignores retained. A prepared runtime schedule, source
+inventory or successful focused subset does not satisfy O2. The other chat's
+full Core run and its failure repairs own Core-wide qualification.
 
 The September 27 baseline checked `irohad`, `iroha_cli` and `iroha_kagami`
 without incremental compilation after a data-model edit: 526 seconds overall,
 including Torii 187.0, data model 126.1 and Core 119.5 seconds. A warm check on a
-different source and toolchain is an observation, not a causal speedup or memory
-measurement. Final timing requires a qualified current candidate.
+different source and toolchain is an observation; it does not establish a causal
+speedup or memory reduction. Final timing requires a qualified current candidate.
 
 The [ownership and validation note](../docs/validation/compile-bloat-ownership.md)
-records component evidence and remaining checks. Pinned Mac/Linux resource
-qualification remains roadmap A5: measured introduced-unit limits, the model
-reduction target and the release memory ceiling require actual supported-runner
-measurements. Source moves and debug component checks do not satisfy those gates.
+records the boundaries and remaining checks. Roadmap A5 separately requires
+pinned Mac/Linux measurements for introduced units, the 25% model-reduction
+target and the 13-GiB release memory ceiling. Source moves and debug component
+checks do not satisfy those resource gates.

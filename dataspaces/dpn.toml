@@ -5,4 +5,4 @@ name = "dpn"
 network = "https://taira.sora.org"
 owner_key = "~/.iroha/keys/dpn-owner.key"
 account_alias = "admin"
-max_fee = "0" # Set a deliberate spending cap before paid registration.
+max_fee = "25000" # Total testnet deployment cap, in the parent's fee asset.

@@ -224,6 +224,8 @@ fn assert_contract_trigger_metadata(
 #[test]
 #[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_triggers_and_deactivate_removes() {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let (state, authority, kp) = setup_state();
     let contract_address = contract_address(&authority, 0);
     let contract_subject = contract_address.subject_id();
@@ -285,7 +287,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     }
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
-    let manifest = manifest.signed(&kp);
+    let manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
     {
         let scoped_manifest = manifest;
         RegisterSmartContractCode {
@@ -383,6 +385,8 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
 }
 #[test]
 fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let (state, authority, kp) = setup_state();
     let foreign = AccountId::new(
         KeyPair::try_random()
@@ -449,7 +453,7 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
     {
-        let scoped_manifest = manifest.signed(&kp);
+        let scoped_manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         RegisterSmartContractCode {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                 iroha_model_base::topology::DataSpaceId::UNIVERSAL,
@@ -494,6 +498,8 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes_them() {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let (state, authority, kp) = setup_state();
     let contract_address = contract_address(&authority, 0);
     let contract_subject = contract_address.subject_id();
@@ -579,7 +585,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     }
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
-    let manifest = manifest.signed(&kp);
+    let manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
     {
         let scoped_manifest = manifest;
         RegisterSmartContractCode {
@@ -726,6 +732,8 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
 #[test]
 #[allow(clippy::too_many_lines)]
 fn activate_registers_cross_contract_manifest_trigger_callback() {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let (state, authority, kp) = setup_state();
     let target_address = contract_address(&authority, 0);
     let source_address = contract_address(&authority, 1);
@@ -781,7 +789,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     .execute(&authority, &mut stx)
     .expect("register target bytes");
     {
-        let scoped_manifest = target_manifest.signed(&kp);
+        let scoped_manifest = target_manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         RegisterSmartContractCode {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                 iroha_model_base::topology::DataSpaceId::UNIVERSAL,
@@ -857,7 +865,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     .execute(&authority, &mut stx)
     .expect("register source bytes");
     {
-        let scoped_manifest = source_manifest.signed(&kp);
+        let scoped_manifest = source_manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         RegisterSmartContractCode {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                 iroha_model_base::topology::DataSpaceId::UNIVERSAL,
@@ -921,6 +929,8 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
 }
 #[test]
 fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let (state, authority, kp) = setup_state();
     let source_address = contract_address(&authority, 0);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
@@ -979,7 +989,7 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     .execute(&authority, &mut stx)
     .expect("register source bytes");
     {
-        let scoped_manifest = source_manifest.signed(&kp);
+        let scoped_manifest = source_manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         RegisterSmartContractCode {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                 iroha_model_base::topology::DataSpaceId::UNIVERSAL,
@@ -1008,6 +1018,8 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
 }
 #[test]
 fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let (state, authority, kp) = setup_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
@@ -1064,7 +1076,7 @@ seiyaku Test {{
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
     {
-        let scoped_manifest = manifest.signed(&kp);
+        let scoped_manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         RegisterSmartContractCode {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                 iroha_model_base::topology::DataSpaceId::UNIVERSAL,

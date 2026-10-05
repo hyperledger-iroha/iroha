@@ -19,16 +19,23 @@ public sealed class KagemushaReleaseGovernanceV1Tests
             Encoding.UTF8.GetBytes(proposal.ToJsonString())));
 
     [Fact]
-    public void ReleaseKindsOccupyTheExactFirstReleaseFixtureIndices()
+    public void CurrentProposalFixtureExcludesRetiredKagemushaKinds()
     {
         using var fixture = JsonDocument.Parse(Fixture("parliament_api_v1.json"));
         var kinds = fixture.RootElement.GetProperty("proposal_kinds").EnumerateArray()
             .Select(static item => item.GetString()).ToArray();
-        Assert.Equal("KagemushaVerifierPolicyInstall", kinds[10]);
-        Assert.Equal("KagemushaVerifierReleaseInstall", kinds[11]);
-        Assert.Equal("KagemushaVerifierReleaseActivate", kinds[12]);
-        Assert.Equal("KagemushaVerifierReleaseRetire", kinds[13]);
-        Assert.Equal(14, kinds.Length);
+        Assert.Equal(10, kinds.Length);
+        Assert.Equal(10, kinds.Distinct().Count());
+        foreach (var retired in new[]
+        {
+            "KagemushaVerifierPolicyInstall",
+            "KagemushaVerifierReleaseInstall",
+            "KagemushaVerifierReleaseActivate",
+            "KagemushaVerifierReleaseRetire",
+        })
+        {
+            Assert.DoesNotContain(retired, kinds);
+        }
     }
 
     [Fact]

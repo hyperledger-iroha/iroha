@@ -6,7 +6,6 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { sha256 } from "@noble/hashes/sha2";
-import { ed25519 } from "@noble/curves/ed25519";
 
 import { crc64Xz } from "../src/crc64Xz.js";
 import {
@@ -80,22 +79,6 @@ const NETWORK_ID = NetworkId.fromBytes(Uint8Array.from([
 ])).toString();
 const KAGEMUSHA_SIGNER =
   "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
-const KAGEMUSHA_SIGNER_B = `ed0120${Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 7))).toString("hex").toUpperCase()}`;
-
-function kagemushaMultihash(code, payload) {
-  const varint = (value) => {
-    const bytes = [];
-    let remaining = value;
-    do {
-      const next = remaining & 0x7f;
-      remaining = Math.floor(remaining / 0x80);
-      bytes.push(remaining === 0 ? next : next | 0x80);
-    } while (remaining !== 0);
-    return Buffer.from(bytes);
-  };
-  const body = Buffer.from(payload);
-  return Buffer.concat([varint(code), varint(body.length)]).toString("hex") + body.toString("hex").toUpperCase();
-}
 const ACCOUNTS = Object.freeze([
   "treasury",
   "vault",
@@ -443,7 +426,7 @@ test("timed-OVN corpus transitions preflight one through 32 records per chunk", 
   }
 });
 
-test("attempt drafts admit all fourteen exact proposal wire variants", () => {
+test("attempt drafts admit all ten exact proposal wire variants", () => {
   const proposals = parliamentProposalFixtures();
   assert.deepEqual(
     proposals.map((proposal) => (
@@ -460,10 +443,6 @@ test("attempt drafts admit all fourteen exact proposal wire variants", () => {
       "ContractLifecycleGovernance",
       "ContractEmergencyHold",
       "GlobalDataTriggerPermissionGovernance",
-      "KagemushaVerifierPolicyInstall",
-      "KagemushaVerifierReleaseInstall",
-      "KagemushaVerifierReleaseActivate",
-    "KagemushaVerifierReleaseRetire",
     ],
   );
   const musubi = buildParliamentAttemptDraftRequestV1(proposals[5], 1).proposal;
@@ -474,66 +453,20 @@ test("attempt drafts admit all fourteen exact proposal wire variants", () => {
   const retrospective = buildParliamentAttemptDraftRequestV1(proposals[7], 1).proposal;
   assert.equal(retrospective.payload.action.action, "CompleteEmergencyHoldRetrospective");
   assert.deepEqual(retrospective.payload.action.payload.retrospective_finding_root, Array(32).fill(0x45));
-  const release = buildParliamentAttemptDraftRequestV1(proposals[11], 1).proposal;
-  const firstDigestByte = release.payload.manifest.release_id[0];
-  proposals[11].payload.manifest.release_id[0] ^= 0xff;
-  assert.equal(release.payload.manifest.release_id[0], firstDigestByte);
 });
 
-test("Kagemusha verifier policy install rejects malformed registry, signers, and thresholds", () => {
-  const valid = parliamentProposalFixtures()[10];
-  const reject = (mutate, pattern) => {
-    const proposal = structuredClone(valid);
-    mutate(proposal.payload);
-    assert.throws(() => buildParliamentAttemptDraftRequestV1(proposal, 0), pattern);
-  };
-  reject((payload) => { payload.expected_predecessor.releases = [{}]; }, /exact empty V1 verifier registry/u);
-  reject((payload) => { payload.expected_predecessor.authority_policy = {}; }, /exact empty V1 verifier registry/u);
-  reject((payload) => { payload.authority_policy.authority_set_id = Array(32).fill(0); }, /must not be all zero/u);
-  reject((payload) => { payload.authority_policy.threshold = 0; }, /positive JSON safe integer/u);
-  reject((payload) => { payload.authority_policy.threshold = 2; }, /must not exceed signer count/u);
-  reject((payload) => { payload.authority_policy.authorized_signers = []; }, /1\.\.32 keys/u);
-  reject((payload) => { payload.authority_policy.authorized_signers = [KAGEMUSHA_SIGNER, KAGEMUSHA_SIGNER]; }, /strictly ordered and unique/u);
-  reject((payload) => { payload.authority_policy.authorized_signers = [KAGEMUSHA_SIGNER_B, KAGEMUSHA_SIGNER].sort().reverse(); }, /strictly ordered and unique/u);
-  reject((payload) => { payload.authority_policy.authorized_signers = [KAGEMUSHA_SIGNER.toLowerCase()]; }, /canonical public-key multihash/u);
-  reject((payload) => { payload.authority_policy.authorized_signers = [`ed0120${"00".repeat(32)}`]; }, /public key/u);
-  reject((payload) => { payload.authority_policy.legacy = true; }, /unsupported fields/u);
-});
-
-test("Kagemusha release drafts reject omitted evidence and non-standby activation", () => {
-  for (const [index, mutate, pattern] of [
-    [11, (payload) => { delete payload.receipt.evidence_closure; }, /missing required field/u],
-    [11, (payload) => { payload.manifest.enabled_profiles[0].future = true; }, /unknown field/u],
-    [12, (payload) => { payload.expected_predecessor.releases = []; }, /exactly one standby release/u],
-    [12, (payload) => { payload.successor_release_id = Array(32).fill(0); }, /sole standby release/u],
-  ]) {
-    const proposal = structuredClone(parliamentProposalFixtures()[index]);
-    mutate(proposal.payload);
-    assert.throws(() => buildParliamentAttemptDraftRequestV1(proposal, 0), pattern);
+test("retired Kagemusha proposal kinds reject at the current draft boundary", () => {
+  for (const proposal of retiredParliamentProposalFixtures()) {
+    assert.ok(!PARLIAMENT_PROPOSAL_KINDS_V1.includes(proposal.kind));
+    assert.throws(
+      () => buildParliamentAttemptDraftRequestV1(proposal, 0),
+      /unsupported V1 proposal variant/u,
+    );
   }
-});
-
-test("Kagemusha signer admission enforces algorithm lengths and SM2 payload framing", () => {
-  const rejectSigner = (signer, pattern) => {
-    const proposal = structuredClone(parliamentProposalFixtures()[10]);
-    proposal.payload.authority_policy.authorized_signers = [signer];
-    assert.throws(() => buildParliamentAttemptDraftRequestV1(proposal, 0), pattern);
-  };
-  for (const [code, expectedLength] of [
-    [0xe7, 33], [0xea, 48], [0xeb, 96], [0xee, 1952],
-    [0x1200, 64], [0x1201, 64], [0x1202, 64], [0x1203, 128], [0x1204, 128],
-  ]) {
-    rejectSigner(kagemushaMultihash(code, Buffer.alloc(expectedLength - 1, 1)), /public-key payload length/u);
-  }
-  rejectSigner(kagemushaMultihash(0xe7, Buffer.alloc(33, 4)), /secp256k1 public-key envelope/u);
-  rejectSigner(kagemushaMultihash(0xee, Buffer.alloc(1952)), /all-zero ML-DSA public key/u);
-  rejectSigner(kagemushaMultihash(0x1306, Buffer.alloc(65, 4)), /SM2 public-key payload/u);
-  rejectSigner(kagemushaMultihash(0x1306, Buffer.from([0, 2, 0xff, 0xff, ...Buffer.alloc(65, 4)])), /UTF-8 SM2 distinguished ID/u);
-  rejectSigner(kagemushaMultihash(0x1306, Buffer.from([0, 0, ...Buffer.alloc(65, 2)])), /SM2 public-key payload/u);
 });
 
 test("effect-bound proposal drafts require an explicit canonical operator", () => {
-  for (const index of [0, 1, 7, 10, 11, 12]) {
+  for (const index of [0, 1, 3, 4, 7]) {
     const proposal = structuredClone(parliamentProposalFixtures()[index]);
     delete proposal.payload.proposal_operator;
     assert.throws(
@@ -563,10 +496,10 @@ test("Parliament declarations expose the closed wire union and tuple newtypes", 
     proposalDeclarations,
     /kind: "GlobalDataTriggerPermissionGovernance";/u,
   );
-  assert.match(proposalDeclarations, /kind: "KagemushaVerifierPolicyInstall";/u);
-  assert.match(proposalDeclarations, /kind: "KagemushaVerifierReleaseInstall";/u);
-  assert.match(proposalDeclarations, /kind: "KagemushaVerifierReleaseActivate";/u);
-  assert.match(proposalDeclarations, /kind: "KagemushaVerifierReleaseRetire";/u);
+  assert.doesNotMatch(proposalDeclarations, /kind: "KagemushaVerifierPolicyInstall";/u);
+  assert.doesNotMatch(proposalDeclarations, /kind: "KagemushaVerifierReleaseInstall";/u);
+  assert.doesNotMatch(proposalDeclarations, /kind: "KagemushaVerifierReleaseActivate";/u);
+  assert.doesNotMatch(proposalDeclarations, /kind: "KagemushaVerifierReleaseRetire";/u);
   assert.doesNotMatch(proposalDeclarations, /payload: Record<string, unknown>/u);
 });
 
@@ -1302,10 +1235,6 @@ test("ToriiClient typed proposal reads use the strict local V1 parser", async ()
     "ContractLifecycleGovernance",
     "ContractEmergencyHold",
     "GlobalDataTriggerPermissionGovernance",
-    "KagemushaVerifierPolicyInstall",
-    "KagemushaVerifierReleaseInstall",
-    "KagemushaVerifierReleaseActivate",
-    "KagemushaVerifierReleaseRetire",
   ]);
 
   const malformed = structuredClone(parliamentProposalFixtures()[0]);
@@ -1324,7 +1253,7 @@ test("ToriiClient typed proposal reads use the strict local V1 parser", async ()
     /unsupported fields/u,
   );
 
-  for (const index of [0, 1, 7, 10, 11, 12]) {
+  for (const index of [0, 1, 3, 4, 7]) {
     const operatorBoundKind = parliamentProposalFixtures()[index];
     client.getGovernanceProposal = async () => ({
       found: true,
@@ -1340,6 +1269,23 @@ test("ToriiClient typed proposal reads use the strict local V1 parser", async ()
       client.getGovernanceProposalTyped(PROPOSAL_ID),
       /operator must match the retained proposer/u,
     );
+  }
+});
+
+test("ToriiClient typed proposal reads reject retired Kagemusha variants", async () => {
+  const client = new ToriiClient("https://example.invalid");
+  for (const kind of retiredParliamentProposalFixtures()) {
+    client.getGovernanceProposal = async () => ({
+      found: true,
+      proposal: {
+        proposer: kind.payload.proposal_operator,
+        kind,
+        created_height: 1,
+        status: "Proposed",
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(client.getGovernanceProposalTyped(PROPOSAL_ID), /unsupported proposal variant/u);
   }
 });
 
@@ -1487,6 +1433,12 @@ function parliamentProposalFixtures() {
         action: { action: "grant", value: null },
       },
     },
+  ];
+}
+
+function retiredParliamentProposalFixtures() {
+  const treasury = ACCOUNTS[0];
+  return [
     {
       kind: "KagemushaVerifierPolicyInstall",
       payload: {
