@@ -267,14 +267,17 @@ SDK Native custody and genuine production proving are mandatory even with SDK
 defaults disabled; assembly tools remain explicit `dev-tools` targets. FASTPQ
 uses the existing STARK feature. The current manifest inventory has 127 source
 manifests and 121 workspace members, protecting the inactive Wayland patch.
-On the recorded cut, the source-cost ratchet matches all 72 measurements exactly; all 21
-locked offline boundaries, feature hygiene, the legacy-codec guard and all 253
-checker controls pass on their recorded input cuts. Shipping Oracle
-denials and the sole aggregate-model test exception remain intact. Native
-qualification remains separate. The model’s live Pasta field/hash dependency
-and proof crate’s development-only timing dependency account for the reviewed
-cost changes. The unused direct daemon Sumeragi edge is removed; Core retains
-consensus ownership. Subsequent selected input changes require requalification.
+On the current recorded manifest cut, all 72 source-cost measurements match
+exactly; all 21 locked offline boundaries, feature hygiene, the legacy-codec guard
+and 309 checker controls pass. Shipping Oracle denials and the sole aggregate-model
+test exception remain intact. The reviewed cost changes include the model’s live
+Pasta field/hash dependency, direct allocation-owner dependencies and the proof
+crate’s development-only timing dependency. The unused direct daemon Sumeragi
+edge is removed; Core retains consensus ownership. Later Model/Torii repairs leave
+the graph unchanged. The vendor Tokio test feature refreshes the manifest
+fingerprint with every cost limit unchanged. Resolved metadata requires canonical
+`deps` and rejects malformed entries. Native qualification and requalification of changed selected
+inputs remain required.
 
 ABI argument-record and static numeric encoding belong to `ivm_abi`; consumers
 import the owner directly. IVM retains decoding, gas and memory custody.
@@ -284,13 +287,15 @@ feature scope. Current strict Core ZK, toolchain, direct IVM/SDK, Wallet and
 workspace validation remain open. The 52 failed ordinary Privacy cases remain
 ordinary tests and require current regressions followed by the full suite.
 
-After the reviewed Norito lint repairs, the shared Journal owner passes strict
-lint and all 11 unfiltered ordinary cases on its recorded cut, with no
-ignores and all 1,489 protected source/generated/traversal inputs, invocation and
-executable custody unchanged. Wallet now rejects unknown native journal material
-in its shared retained reader before record decoding, signing or HTTP. Its
-prospective macOS inventory contains 216 cases, retaining all 191 earlier names
-and 15 custody controls; native qualification remains open.
+Norito passes 581 ordinary tests, the original ignored snapshot utility and eight
+public heap controls on its recorded cut, before later Model/Torii changes.
+Journal strict lint and all 11 unfiltered ordinary tests pass on their current
+selected inputs, with zero ignores. Strict lint preserves 1,476 protected inputs;
+the test interval preserves all 1,490 inputs, invocation, tools and executable
+custody.
+Wallet rejects unknown native material in its shared retained reader before
+decoding, signing or HTTP. Its prospective macOS inventory retains all 191 earlier
+names and 15 custody controls across 216 cases; native qualification remains open.
 Foundation CI selection passes all 88 controls. The compiler fixture seal is
 current: 308 includes and 616 test names, with all 43 source-reader controls
 passing on their finite recorded cut. These reader tests do not qualify compiled

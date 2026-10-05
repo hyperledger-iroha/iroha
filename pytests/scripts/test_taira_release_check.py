@@ -22,14 +22,15 @@ from unittest.mock import MagicMock, patch
 
 # Exact current-source native census. Both scopes retain the closed MV/Concread
 # ownership suite, including funded replacement/snapshot and deletion controls.
+# Prepared signature custody and exact parent activation add six Core controls.
 # Linux additionally selects OpenSSH descriptor custody. All platforms select
 # the same genuine four-peer beacon workload.
 EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1748 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1781 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1754 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1787 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -363,6 +364,9 @@ class BeaconGateTests(unittest.TestCase):
 
     def test_partial_publication_refusal_controls_are_required_in_both_scopes(self):
         assert_native_coverage(self, ['native publication custody', 'native witness admission'])
+
+    def test_prepared_signature_custody_and_parent_activation_are_required_in_both_scopes(self):
+        assert_native_coverage(self, ['native publication custody', 'native driver scheduling'])
 
     def test_actual_publication_controls_are_unique_and_focused_in_both_scopes(self):
         assert_native_coverage(self, ['native original publication', 'native pending original execution'])

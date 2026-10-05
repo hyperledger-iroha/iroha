@@ -13442,8 +13442,7 @@ seiyaku PrivilegedBinding {
     include!("host/axt_unanchored_admission_tests.rs");
     #[test]
     fn register_contract_manifest_syscall_queues_instruction() {
-        let manifest_signing =
-            crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let mut vm = ivm::IVM::new(1_000);
         let kp = checked_keypair();
         let authority = AccountId::of(kp.public_key().clone());
@@ -13469,7 +13468,12 @@ seiyaku PrivilegedBinding {
                 error_types: None,
                 provenance: None,
             }
-            .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest"),
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &kp,
+            )
+            .expect("sign bounded fixture manifest"),
         };
         let payload = norito::to_bytes(&request).expect("encode request to Norito");
         let decoded: scode::RegisterSmartContractCode =
@@ -15330,8 +15334,7 @@ seiyaku StaleRuntimeBinding {
         permission_name: &str,
     ) {
         assert_ne!(
-            permission_name,
-            "CanInvokeContractEntrypoint",
+            permission_name, "CanInvokeContractEntrypoint",
             "scoped contract permissions require an exact deployed address and selector"
         );
         let next_height = u64::try_from((state.view().height() + 1).max(2))
@@ -17878,7 +17881,8 @@ seiyaku OpaqueInstructionSubmission {
                 Some(owning_domain.clone()),
             );
             let view = state.view();
-            let mut host = local_contract_host(authority.clone());
+            let mut host = CoreHostImpl::new(authority.clone());
+            host.set_local_contract_debug_execution();
             host.set_query_state(&view);
             let mut vm = IVM::new(1_000);
             vm.load_program(&build_authenticated_test_contract_program(&code, 0, false))
@@ -17967,7 +17971,8 @@ seiyaku OpaqueInstructionSubmission {
             destination.clone(),
         )));
         for available in [crate::gas::BASE_TRANSFER - 1, crate::gas::BASE_TRANSFER] {
-            let mut host = local_contract_host(authority.clone());
+            let mut host = CoreHostImpl::new(authority.clone());
+            host.set_local_contract_debug_execution();
             host.set_query_state(&view);
             let mut vm = IVM::new(gas_before_syscall + available);
             vm.load_program(&build_authenticated_test_contract_program(&code, 0, false))
@@ -17988,10 +17993,12 @@ seiyaku OpaqueInstructionSubmission {
             // no gas for the protected-return epilogue. One less gas must refuse
             // the syscall itself, before the native instruction is queued.
             assert_eq!(vm.run_with_host(&mut host), Err(ivm::VMError::OutOfGas));
-            assert_eq!(vm.remaining_gas(), 0);
             if available == crate::gas::BASE_TRANSFER {
+                assert_eq!(vm.remaining_gas(), 0);
                 assert_eq!(host.queued, vec![expected.clone()]);
             } else {
+                // Refusing the unaffordable quote precedes its debit and native queue mutation.
+                assert_eq!(vm.remaining_gas(), available);
                 assert!(
                     host.queued.is_empty(),
                     "short gas must not queue a transfer"
@@ -20307,8 +20314,7 @@ seiyaku Callee {
     }
     #[test]
     fn registered_manifest_cannot_relabel_effectful_entrypoint_as_view() {
-        let manifest_signing =
-            crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller = install_contract(
@@ -20375,7 +20381,13 @@ seiyaku EffectfulView {
             .expect("effectful entrypoint descriptor");
         descriptor.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::View;
         malicious_manifest.provenance = None;
-        malicious_manifest = malicious_manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture_signing_keypair(&authority)).expect("sign bounded fixture manifest");
+        malicious_manifest = malicious_manifest
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &fixture_signing_keypair(&authority),
+            )
+            .expect("sign bounded fixture manifest");
         let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)

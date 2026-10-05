@@ -414,7 +414,7 @@ impl Identity {
 }
 /// Source-bound exact collection/ledger/leaf owners retained through every refusal.
 ///
-/// The enclosing owner must keep the original ChargedBuffer alive through this
+/// The enclosing owner must keep the original `ChargedBuffer` alive through this
 /// attempt. Prepared spans are inline and all byte leaves use the sole signature
 /// record walk. This funds signatures only; other block/result children remain
 /// separate preparation obligations.

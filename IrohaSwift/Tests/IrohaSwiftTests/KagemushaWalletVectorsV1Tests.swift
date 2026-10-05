@@ -126,12 +126,20 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
 
   func testDigestVectorsRecomputeEveryRole() throws {
     let vectors = try objects(loadFixture(), "digests")
-    XCTAssertEqual(KagemushaWalletDigestRoleV1.allCases.count, 62)
+    // Rust's current ALL table has 55 SHA-256 roles; step-relation values use Poseidon.
+    XCTAssertEqual(KagemushaWalletDigestRoleV1.allCases.count, 55)
+    XCTAssertEqual(vectors.count, KagemushaWalletDigestRoleV1.allCases.count)
     XCTAssertEqual(
       Set(try vectors.map { try string($0, "role") }),
       Set(KagemushaWalletDigestRoleV1.allCases.map(\.rawValue)))
-    // Roles of the pre-split revision are gone, not aliased.
-    for retired in ["dependencies", "credit-status-statement"] {
+    XCTAssertEqual(
+      try vectors.map { try string($0, "role") },
+      KagemushaWalletDigestRoleV1.allCases.map(\.rawValue))
+    // Pre-split and superseded SHA-256 roles are gone; current step values use Poseidon.
+    for retired in [
+      "dependencies", "credit-status-statement", "credit", "proof", "step-proof", "payment",
+      "blacklist-leaf", "blacklist-node", "quota-window", "quota-node",
+    ] {
       XCTAssertNil(KagemushaWalletDigestRoleV1(rawValue: retired), retired)
     }
     for vector in vectors {
@@ -708,7 +716,22 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
     XCTAssertTrue(isCanonicalFieldElement(Data(belowModulus), modulus: Self.fieldModulus))
 
     let domains = try objects(encodings, "domains")
-    XCTAssertEqual(domains.count, 12)
+    // The current Rust Poseidon table, in declaration order (poseidon.rs).
+    let expectedDomains = [
+      ("core", "kgwcore1"), ("rest", "kgwrest1"), ("statement", "kgwstmt1"),
+      ("credit_id", "kgwcrdt1"), ("send_chain", "kgwschn1"), ("recv_chain", "kgwrchn1"),
+      ("consumed_credit_leaf", "kgwccrd1"), ("pending_outgoing_leaf", "kgwpout1"),
+      ("load_recovery_leaf", "kgwload1"), ("redeem_recovery_leaf", "kgwrdm_1"),
+      ("fee_claim_leaf", "kgwfee_1"), ("quota_usage_leaf", "kgwquse1"),
+      ("credit_digest_leaf", "kgwcdig1"), ("sparse_empty_leaf", "kgwsmte1"),
+      ("sparse_node", "kgwsmtn1"), ("blacklist_leaf", "kgwblkl1"),
+      ("blacklist_node", "kgwblkn1"), ("quota_window_leaf", "kgwqwin1"),
+      ("quota_node", "kgwqwnd1"), ("proof_digest", "kgwprf_1"),
+      ("step_proof_digest", "kgwstep1"), ("payment_digest", "kgwpay_1"),
+    ]
+    XCTAssertEqual(domains.count, expectedDomains.count)
+    XCTAssertEqual(try domains.map { try string($0, "use") }, expectedDomains.map { $0.0 })
+    XCTAssertEqual(try domains.map { try string($0, "ascii") }, expectedDomains.map { $0.1 })
     XCTAssertEqual(Set(try domains.map { try string($0, "use") }).count, domains.count)
     XCTAssertEqual(Set(try domains.map { try string($0, "ascii") }).count, domains.count)
     for domain in domains {
@@ -732,10 +755,10 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
     let feeClaim = try fieldElements(encodings, "fee_claim_leaf")
     let creditDigest = try fieldElements(encodings, "credit_digest_leaf")
     let lists: [(String, [Data], Int)] = [
-      ("send_statement", send, 29), ("receive_statement", receive, 29), ("core", core, 29),
-      ("rest", rest, 19), ("send_chain", sendChain, 10), ("recv_chain", recvChain, 6),
-      ("consumed_credit_leaf", consumed, 4), ("pending_outgoing_leaf", pending, 9),
-      ("fee_claim_leaf", feeClaim, 5), ("credit_digest_leaf", creditDigest, 5),
+      ("send_statement", send, 28), ("receive_statement", receive, 28), ("core", core, 32),
+      ("rest", rest, 13), ("send_chain", sendChain, 9), ("recv_chain", recvChain, 5),
+      ("consumed_credit_leaf", consumed, 3), ("pending_outgoing_leaf", pending, 8),
+      ("fee_claim_leaf", feeClaim, 4), ("credit_digest_leaf", creditDigest, 3),
     ]
     for (name, items, count) in lists {
       XCTAssertEqual(items.count, count, name)
@@ -743,9 +766,7 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
         XCTAssertTrue(isCanonicalFieldElement(item, modulus: Self.fieldModulus), name)
       }
     }
-    guard send.count == 29, receive.count == 29, core.count == 29, rest.count == 19,
-      sendChain.count == 10, recvChain.count == 6, feeClaim.count == 5, creditDigest.count == 5
-    else { return }
+    guard lists.allSatisfy({ $0.1.count == $0.2 }) else { return }
 
     // Statement items are the limb rule applied to the exact 440-byte statement transcript.
     XCTAssertEqual(
@@ -759,35 +780,46 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
     func digestLimbs(_ role: String) throws -> [Data] {
       try fieldDigestLimbs(hexData(string(XCTUnwrap(digests[role], role), "digest_hex")))
     }
-    let credit = Array(send[18..<20])
-    let sendDescriptor = Array(send[18..<27])
-    XCTAssertEqual(credit, try digestLimbs("credit"))
-    XCTAssertEqual(Array(send[25..<27]), try digestLimbs("request"))
-    XCTAssertEqual(Array(receive[18..<20]), credit)
-    XCTAssertEqual(receive[22], send[23])
+    // A credit identity and Payment digest each occupy one canonical Poseidon field.
+    let poseidon = try object(fixture, "poseidon")
+    let creditID = try object(object(poseidon, "credit_id"), "poseidon")
+    let credit = [try hexData(string(creditID, "digest_hex"))]
+    let paymentDigest = try hexData(string(object(poseidon, "payment_digest"), "digest_hex"))
+    let sendDescriptor = Array(send[18..<26])
+    XCTAssertEqual(Array(send[18..<19]), credit)
+    XCTAssertEqual(Array(send[24..<26]), try digestLimbs("request"))
+    XCTAssertEqual(Array(receive[18..<19]), credit)
+    XCTAssertEqual(receive[21], send[22])
     XCTAssertEqual(sendChain, [Data(count: 32)] + sendDescriptor)
-    XCTAssertEqual(Array(recvChain.dropFirst()), Array(receive[18..<23]))
+    XCTAssertEqual(Array(recvChain.dropFirst()), Array(receive[18..<22]))
     XCTAssertEqual(pending, sendDescriptor)
-    XCTAssertEqual(consumed, credit + [receive[22], receive[10]])
-    XCTAssertEqual(Array(feeClaim.prefix(3)), credit + [send[24]])
+    XCTAssertEqual(consumed, credit + [receive[21], receive[10]])
+    XCTAssertEqual(Array(feeClaim.prefix(2)), credit + [send[23]])
     XCTAssertEqual(Array(feeClaim.suffix(2)), try digestLimbs("fee-schedule"))
-    XCTAssertEqual(Array(creditDigest.prefix(2)), credit)
-    XCTAssertEqual(Array(creditDigest[2..<4]), try digestLimbs("payment"))
-    XCTAssertEqual(creditDigest[4], Data(count: 32))
+    XCTAssertEqual(Array(creditDigest.prefix(1)), credit)
+    XCTAssertEqual(creditDigest[1], paymentDigest)
+    XCTAssertEqual(creditDigest[2], Data(count: 32))
 
-    // The receiver's successor core and rest agree with its Receive statement.
+    // Scheme and asset moved into the core; every step opens them, while rest holds policies.
     XCTAssertEqual(core[0], receive[9])
-    XCTAssertEqual(Array(core[1..<3]), Array(send[20..<22]))
-    XCTAssertEqual(Array(core[3..<5]), Array(receive[7..<9]))
-    XCTAssertEqual(core[7], receive[10])
-    XCTAssertEqual(core[9], receive[11])
-    XCTAssertEqual(Array(rest[0..<2]), Array(receive[3..<5]))
-    XCTAssertEqual(Array(rest[2..<4]), Array(receive[5..<7]))
+    XCTAssertEqual(Array(core[5..<7]), Array(send[19..<21]))
+    XCTAssertEqual(Array(core[7..<9]), Array(receive[7..<9]))
+    XCTAssertEqual(core[11], receive[10])
+    XCTAssertEqual(core[13], receive[11])
+    XCTAssertEqual(Array(core[1..<3]), Array(receive[3..<5]))
+    XCTAssertEqual(Array(core[3..<5]), Array(receive[5..<7]))
+    XCTAssertEqual(core[22], receive[12])
+    XCTAssertEqual(core[10], receive[13])
+    XCTAssertEqual(try hexData(string(state, "commitment_hex")), receive[16])
     let stateFrame = try XCTUnwrap(noritoDecodeFrame(hexData(string(state, "state_hex"))))
     XCTAssertEqual(
       stateFrame.header.schema,
       noritoSchemaHash(
         forTypeName: "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletStateV1"))
+    XCTAssertEqual(stateFrame.header.flags, NoritoHeader.compactLen)
+    let decodedState = try stateFieldElements(stateFrame.payload)
+    XCTAssertEqual(decodedState.core, core)
+    XCTAssertEqual(decodedState.rest, rest)
   }
 
   // MARK: Text
@@ -1050,7 +1082,8 @@ private func fieldElements(_ value: [String: Any], _ key: String) throws -> [Dat
 /// version; relation, scheme, asset and credential limbs; successor lifecycle, sequence and
 /// `next_load`; enabled controls; lineage `burned_total`; lineage pending-outgoing root,
 /// predecessor and successor as one element each; the effect tag; and the effect's elements
-/// zero-filled to 11. Only the Send (3) and Receive (4) effects the vectors carry are mirrored.
+/// zero-filled to 10. Only the Send (3) and Receive (4) effects the vectors carry are mirrored.
+/// SHA-256 values contribute two limbs; the Poseidon `credit_id` contributes one element.
 private func statementFieldElements(_ transcript: Data) throws -> [Data] {
   let bytes = [UInt8](transcript)
   guard bytes.count == 440 else { throw WalletFixtureFailure.malformed("statement length") }
@@ -1081,20 +1114,80 @@ private func statementFieldElements(_ transcript: Data) throws -> [Data] {
   items += [lifecycle, sequence, nextLoad, controls, burned].map(fieldInteger)
   items += [lineageRoot, predecessor, successor].map { Data($0) }
   items.append(fieldInteger(tag))
-  // Field widths of each mirrored effect; a 32-byte field is a digest (two limbs).
-  let layouts: [UInt8: [Int]] = [3: [32, 32, 16, 16, 16, 32, 8, 8], 4: [32, 32, 16]]
+  let layouts: [UInt8: [FieldEncoding]] = [
+    3: [.poseidon, .digest, .integer(16), .integer(16), .integer(16), .digest,
+      .integer(8), .integer(8)],
+    4: [.poseidon, .digest, .integer(16)],
+  ]
   guard let layout = layouts[tag[0]] else { throw WalletFixtureFailure.malformed("effect tag") }
   var cursor = 0
   var effect: [Data] = []
-  for width in layout {
-    let field = Array(union[cursor..<(cursor + width)])
-    cursor += width
-    effect += width == 32 ? fieldDigestLimbs(Data(field)) : [fieldInteger(field)]
+  for encoding in layout {
+    let field = Array(union[cursor..<(cursor + encoding.width)])
+    cursor += encoding.width
+    effect += try encodedFieldElements(field, encoding)
   }
-  guard union[cursor...].allSatisfy({ $0 == 0 }), effect.count <= 11 else {
+  guard union[cursor...].allSatisfy({ $0 == 0 }), effect.count <= 10 else {
     throw WalletFixtureFailure.malformed("effect fill")
   }
-  return items + effect + Array(repeating: Data(count: 32), count: 11 - effect.count)
+  return items + effect + Array(repeating: Data(count: 32), count: 10 - effect.count)
+}
+
+/// Current Rust element kinds: integers, two-limb SHA-256 values and one-field Poseidon values.
+private enum FieldEncoding {
+  case integer(Int)
+  case digest
+  case poseidon
+
+  var width: Int {
+    switch self {
+    case .integer(let width): width
+    case .digest, .poseidon: 32
+    }
+  }
+}
+
+private func encodedFieldElements(_ field: [UInt8], _ encoding: FieldEncoding) throws -> [Data] {
+  guard field.count == encoding.width else {
+    throw WalletFixtureFailure.malformed("field width")
+  }
+  switch encoding {
+  case .integer: return [fieldInteger(field)]
+  case .digest: return fieldDigestLimbs(Data(field))
+  case .poseidon:
+    guard KagemushaWalletWireV1.isCanonicalFieldValue(Data(field)) else {
+      throw WalletFixtureFailure.malformed("Poseidon field")
+    }
+    return [Data(field)]
+  }
+}
+
+/// Re-derive every core/rest element from the current compact Norito state record.
+/// Rust state.rs owns these field orders: scheme/asset and blacklist age are core fields.
+private func stateFieldElements(_ payload: Data) throws -> (core: [Data], rest: [Data]) {
+  let bytes = [UInt8](payload)
+  guard let state = compactFields(bytes, 0..<bytes.count), state.count == 3,
+    Array(bytes[state[0]]) == le16(1)
+  else { throw WalletFixtureFailure.malformed("state fields") }
+  let coreLayout: [FieldEncoding] = [
+    .integer(4), .digest, .digest, .digest, .digest,
+    .integer(16), .integer(16), .integer(16), .integer(16), .integer(16), .integer(16),
+    .poseidon, .poseidon, .poseidon, .poseidon, .poseidon, .poseidon, .poseidon,
+    .integer(4), .poseidon, .integer(8), .poseidon,
+    .integer(8), .integer(8), .integer(8), .integer(8), .integer(8), .poseidon,
+  ]
+  let restLayout: [FieldEncoding] = [
+    .integer(4), .integer(8), .digest, .digest, .digest, .digest, .integer(8), .digest,
+  ]
+  func elements(_ range: Range<Int>, _ layout: [FieldEncoding]) throws -> [Data] {
+    guard let fields = compactFields(bytes, range), fields.count == layout.count else {
+      throw WalletFixtureFailure.malformed("state layout")
+    }
+    return try zip(fields, layout).flatMap { range, encoding in
+      try encodedFieldElements(Array(bytes[range]), encoding)
+    }
+  }
+  return (try elements(state[1], coreLayout), try elements(state[2], restLayout))
 }
 
 // MARK: - Fixture and assertion helpers

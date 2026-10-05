@@ -63,7 +63,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 318)
+        self.assertEqual(len(names), 324)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
@@ -89,6 +89,16 @@ class NativeInventoryTests(unittest.TestCase):
                 ('sumeragi/executor.rs', 'sumeragi/executor_publication_tests.rs', 'publication_tests', 'sumeragi::executor::publication_tests'),
                 (
                     'replay_completion_retirement_keeps_exact_source_and_original_pool_retry',
+                    'original_prepared_signature_owner_survives_refusal_validation_publication_apply_and_replay',
+                    'explicit_signature_preparation_rejection_retires_only_its_original_source',
+                    'later_canonical_child_allocator_refusal_keeps_the_original_prepared_signature_owner',
+                )),
+            'native driver scheduling': (
+                ('sumeragi/driver/tests/mod.rs', 'sumeragi/driver/tests/sched.rs', 'sched', 'sumeragi::driver::tests::sched'),
+                (
+                    'successor_build_waits_for_core_parent_activation_and_keeps_empty_readiness',
+                    'successor_build_activation_preserves_arrival_and_rejects_another_height_or_view',
+                    'activated_build_withdrawal_cancels_original_running_and_empty_owners',
                 )),
             'native completed replay identity': (
                 ('sumeragi/executor/replay.rs', 'sumeragi/executor/replay/tests.rs', 'tests', 'sumeragi::executor::replay::tests'),

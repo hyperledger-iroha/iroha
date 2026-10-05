@@ -89,15 +89,19 @@ fn header_block_original_first_field_enclosing_cause_keeps_same_source_and_retry
     use norito::core::{
         DecodeAttemptErrorKind, DecodeLimits, DecodeResourceError, with_decode_limits_scope,
     };
-    // The complete SignedBlock walk reaches its empty signature sequence before
-    // BlockPayload/header. Its original fixed-u64 count occupies eight bytes.
-    // The standalone physical control separately reaches the header's height.
+    // The prepared canonical frame checks its complete uncompressed payload
+    // before entering the SignedBlock field walk. The empty first signature
+    // sequence is still eight bytes, but the enclosing refusal names the full
+    // original payload. The standalone control separately reaches header height.
     let original = header_block(0, Some(digest()));
     assert_eq!(
         norito::core::encoded_payload_len(&original.signatures).unwrap(),
         std::mem::size_of::<u64>()
     );
     let wire = original.encode_wire().unwrap();
+    let (_, framed) = borrow_framed_signed_block_payload(&wire).unwrap();
+    let payload_length = norito::core::Header::read(framed).unwrap().length;
+    assert!(payload_length > std::mem::size_of::<u64>() as u64);
     let pool = AllocationBudget::new(1 << 20);
     let (source, span) = source_for(&original, &pool);
     let floor = pool.reserved_bytes();
@@ -127,7 +131,7 @@ fn header_block_original_first_field_enclosing_cause_keeps_same_source_and_retry
     assert_eq!(
         cause.into_error().decode_resource_error(),
         Some(DecodeResourceError::FieldLengthExceeded {
-            length: std::mem::size_of::<u64>() as u64,
+            length: payload_length,
             limit: 1
         })
     );

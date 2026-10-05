@@ -1358,7 +1358,7 @@ fn original_authenticated_native_amx_mv_cell_refusal_keeps_original_cut_graph_an
     let pointer = std::ptr::from_ref(original.canonical().unwrap());
     let budget = roots.participants[0].state().ivm_execution_budget();
     let retained_bytes = budget.reserved_bytes();
-    let ordinary = norito::json::to_json(slot).unwrap();
+    let ordinary = norito::json::to_json(slot.get()).unwrap();
     let original_leaf_start = ordinary.find("\"blocks\":").unwrap() + "\"blocks\":".len();
     for limit in [
         original_leaf_start,

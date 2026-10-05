@@ -194,11 +194,11 @@ fn raw(value: BlockHeader) -> RawHeader {
         creation_time_ms: value.creation_time_ms,
         view_change_index: value.view_change_index,
         confidential_features: value.confidential_features.map(|d| RawDigest {
-            vk_set_hash: d.vk_set_hash.map(|bytes| RawBytes(bytes.to_vec())),
+            vk_set_hash: d.vk_set_hash.map(|bytes| RawBytes(bare(&bytes))),
             poseidon_params_id: d.poseidon_params_id,
             pedersen_params_id: d.pedersen_params_id,
             conf_rules_version: d.conf_rules_version,
-            zk_policy_hash: d.zk_policy_hash.map(|bytes| RawBytes(bytes.to_vec())),
+            zk_policy_hash: d.zk_policy_hash.map(|bytes| RawBytes(bare(&bytes))),
         }),
         execution_context_hash: value.execution_context_hash,
         global_beacon_pulse_hash: value.global_beacon_pulse_hash,

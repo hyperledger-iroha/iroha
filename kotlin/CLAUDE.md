@@ -134,14 +134,15 @@ All mutable collections and byte arrays are copied on construction and access. U
 
 JUnit 5 with `@ParameterizedTest` / `@MethodSource` for data-driven tests. Test companion objects provide argument lists via `@JvmStatic` methods.
 
-The wallet's separate `:kagemusha-wallet-android:testDebugHostNative` task requires
-an explicitly rebuilt host bridge in one canonical `IROHA_NATIVE_LIBRARY_PATH`
-directory. Its sole ordered `host-native` case uses the main wallet JNI owner,
-checks ABI 25/signer contract 7 and actual startup phase 1/selection revocation
-phase 5 refusal when no genuine Native root is registered, then verifies the
-managed Core-open fence. Phase 6 does not execute after phase 1 refuses. Keep
-client test JNI doubles out of this classpath, retain missing-symbol failures,
-and never treat this host test as root/account, release or physical-device admission.
+The separate `:client-android:testDebugHostNative` task requires an explicitly
+rebuilt host bridge in one absolute `IROHA_NATIVE_LIBRARY_PATH` directory.
+It runs the tagged Java software-key-manager and explicit-chain-context cases,
+plus the shared SoraFS reference-validator cases. Missing native artifacts or
+capabilities fail; host JNI execution is separate from Android/device qualification.
+
+The current wallet module declares managed platform, payment-key and backup-rule
+unit tests. Its Rust `KagemushaWalletPlatformV1` JNI adapter and provider-open call
+remain TODO; there is no wallet host-JNI test task or native execution claim.
 
 ## Version Catalog
 

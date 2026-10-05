@@ -784,7 +784,12 @@ def resolved_package_ids(
     root_names: Sequence[str],
     workspace: bool,
 ) -> frozenset[str]:
-    """Return the resolved transitive closure for selected package roots."""
+    """Return selected roots' closure from canonical Cargo ``deps`` entries.
+
+    Normal, build and development kinds present in the supplied resolve graph
+    all count. Missing or malformed canonical entries refuse instead of using
+    Cargo's redundant package-ID-only ``dependencies`` field.
+    """
 
     packages = metadata.get("packages")
     resolve = metadata.get("resolve")
@@ -823,14 +828,40 @@ def resolved_package_ids(
             raise ValueError(f"resolved root or dependency `{package_id}` has no node")
         closure.add(package_id)
         node = node_map[package_id]
+        # Cargo still emits redundant `dependencies` IDs, but only `deps`
+        # carries the canonical names and kinds. Never infer a missing graph.
         dependencies = node.get("deps")
-        if isinstance(dependencies, list):
-            queue.extend(dependency["pkg"] for dependency in dependencies)
-        else:
-            legacy = node.get("dependencies", [])
-            if not isinstance(legacy, list):
-                raise ValueError(f"resolved node `{package_id}` dependencies are invalid")
-            queue.extend(legacy)
+        if not isinstance(dependencies, list):
+            raise ValueError(f"resolved node `{package_id}` deps must be a list")
+        for index, dependency in enumerate(dependencies):
+            location = f"resolved node `{package_id}` deps[{index}]"
+            if not isinstance(dependency, dict):
+                raise ValueError(f"{location} must be an object")
+            name = dependency.get("name")
+            dependency_id = dependency.get("pkg")
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"{location} name must be a nonempty string")
+            if not isinstance(dependency_id, str) or not dependency_id:
+                raise ValueError(f"{location} pkg must be a nonempty string")
+            kinds = dependency.get("dep_kinds")
+            if not isinstance(kinds, list) or not kinds:
+                raise ValueError(f"{location} dep_kinds must be a nonempty list")
+            for kind_index, description in enumerate(kinds):
+                kind_location = f"{location} dep_kinds[{kind_index}]"
+                if not isinstance(description, dict):
+                    raise ValueError(f"{kind_location} must be an object")
+                if "kind" not in description or description["kind"] not in (
+                    None, "build", "dev"
+                ):
+                    raise ValueError(f"{kind_location} kind must be null, build or dev")
+                if "target" not in description:
+                    raise ValueError(f"{kind_location} target is required")
+                target = description["target"]
+                if target is not None and (not isinstance(target, str) or not target):
+                    raise ValueError(f"{kind_location} target must be null or a nonempty string")
+            # This diagnostic metadata closure retains every resolved kind.
+            # The separate feature-boundary tree controls root-dev selection.
+            queue.append(dependency_id)
     return frozenset(closure)
 
 

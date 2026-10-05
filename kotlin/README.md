@@ -411,20 +411,13 @@ required, absolute `IROHA_NATIVE_LIBRARY_PATH` directory. Missing libraries
 fail before execution; a missing native capability fails the test. Its results
 are never reused from Gradle's test cache. This host JNI task does not qualify
 Android native artifacts, StrongBox, or physical devices.
-It covers the software key manager, explicit chain-context codecs, and
-coordinator adapter fixtures that require the canonical Rust address validator.
-The adapter's scripted endpoints remain mapping controls, not native coordinator
-or hardware qualification.
+It covers the software key manager, explicit chain-context codecs, and shared
+SoraFS reference validators through the current canonical Kotlin/native API.
 
-The separate `:kagemusha-wallet-android:testDebugHostNative` task uses the wallet's
-main JNI implementation and the same explicit canonical host-library directory.
-It checks ABI 25, signer contract 7, actual initial startup phase 1 and selection
-revocation phase 5 against an absent independently registered Native root.
-Missing symbols or libraries fail; phase 6 is not exercised after phase 1 refuses.
-A later Core-open assertion checks the managed startup fence. The task excludes
-scripted client test JNI classes, disables result reuse, and is excluded from
-ordinary managed tests through its `host-native` tag. It creates no account,
-release, monetary or hardware authority and grants no device qualification.
+The wallet module currently declares managed platform, payment-key and backup-rule
+unit tests. They check the private platform-upcall descriptors and direct adapter
+behavior. The Rust `KagemushaWalletPlatformV1` JNI adapter and native provider-open
+call remain TODO, so the module has no host-JNI test task or native execution claim.
 
 ### Java transaction metadata
 

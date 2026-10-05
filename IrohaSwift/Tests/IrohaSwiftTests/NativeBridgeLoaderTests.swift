@@ -48,6 +48,16 @@ final class NativeBridgeLoaderTests: XCTestCase {
     }
     #endif
 
+    func testRetiredKagemushaExportsAreNotRequiredForAdmission() {
+        XCTAssertTrue(NoritoBridgeLoader.hasRequiredExports(resolving: { symbol in
+            !symbol.hasPrefix("connect_norito_kagemusha_")
+        }))
+    }
+
+    func testRetiredKagemushaStatusIsUnknown() {
+        XCTAssertEqual(NativeBridgeError.fromStatus(-311), .unknown(-311))
+    }
+
     func testEveryCurrentMlDsaExportIsRequiredForAdmission() {
         XCTAssertEqual(NoritoBridgeLoader.mldsaRequiredSymbols, [
             "soranet_mldsa_parameters",

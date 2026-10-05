@@ -12313,6 +12313,37 @@ seiyaku Privacy {
     fn smart_contract_code_instruction_json_roundtrip() {
         let signing_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
             .expect("fixture seed keypair");
+        let max_frame_bytes = usize::try_from(
+            iroha_data_model::parameter::system::TransactionParameters::default()
+                .max_tx_bytes
+                .get(),
+        )
+        .expect("canonical transaction byte ceiling");
+        let signer_bytes = signing_key.public_key().retained_allocation_layout().size();
+        let cumulative_bytes = max_frame_bytes
+            .checked_add(signer_bytes)
+            .expect("finite manifest allocation allowance");
+        let physical_bytes = cumulative_bytes
+            .checked_add(norito::core::DecodeBudgetContext::allocation_layout().size())
+            .expect("finite manifest physical allowance");
+        let pool = iroha_allocation::AllocationBudget::new(physical_bytes);
+        let mut grant = pool
+            .try_reserve_bytes(physical_bytes)
+            .expect("fund original manifest codec allowance");
+        let context = norito::core::DecodeBudgetContext::from_reservation(
+            norito::DecodeLimits::new(
+                max_frame_bytes,
+                max_frame_bytes,
+                max_frame_bytes,
+                cumulative_bytes,
+                norito::core::MAX_VALUE_NESTING_DEPTH,
+            ),
+            &mut grant,
+        )
+        .expect("retain original manifest accounting");
+        let _signer_backing = grant
+            .try_partition_bytes(signer_bytes)
+            .expect("retain original compact signer backing");
         let manifest = ContractManifest {
             seiyaku_name: None,
             code_hash: Some(Hash::prehashed(sample_hash(0xAA))),
@@ -12370,14 +12401,30 @@ seiyaku Privacy {
             error_messages: None,
             error_types: None,
             provenance: None,
-        }
-        .signed(&signing_key);
+        };
+        let frame_bytes = context
+            .with(|| {
+                let _canonical =
+                    norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+                norito::core::encoded_frame_len_bounded(
+                    &manifest.signature_payload(),
+                    max_frame_bytes,
+                )
+            })
+            .expect("count canonical manifest payload");
+        let frame = grant
+            .try_partition_bytes(frame_bytes)
+            .expect("admit exact canonical manifest payload");
+        let manifest = manifest
+            .try_signed(&context, frame_bytes, &signing_key)
+            .expect("sign fixture manifest");
+        drop(frame);
         let instruction: InstructionBox = Box::new(RegisterSmartContractCode {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                 DataSpaceId::new(u64::MAX),
                 manifest.code_hash.expect("fixture manifest hash"),
             ),
-            manifest: manifest.clone(),
+            manifest,
         })
         .into_instruction_box();
         let json_value = instruction_to_json_value(&instruction)

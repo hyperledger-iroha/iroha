@@ -9772,8 +9772,7 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_metadata_conflict_rejected_even_if_state_matches() {
-        let manifest_signing =
-            crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::{
             smart_contract::manifest::ContractManifest,
             transaction::{Executable, TransactionBuilder},
@@ -9810,7 +9809,12 @@ pub mod tests {
                 error_types: None,
                 provenance: None,
             }
-            .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest"),
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &fixture.keypair,
+            )
+            .expect("sign bounded fixture manifest"),
         );
         tx1.apply();
         let _ = block1.commit_world_overlay_for_testing();
@@ -9838,7 +9842,12 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
+        .try_signed(
+            manifest_signing.context(),
+            manifest_signing.max_frame_bytes(),
+            &fixture.keypair,
+        )
+        .expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -9870,8 +9879,7 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_abi_and_code_hash_match() {
-        let manifest_signing =
-            crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
@@ -9901,7 +9909,12 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
+        .try_signed(
+            manifest_signing.context(),
+            manifest_signing.max_frame_bytes(),
+            &fixture.keypair,
+        )
+        .expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -9922,8 +9935,7 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_hashes() {
-        let manifest_signing =
-            crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         let fixture = IvmAdmissionFixture::new();
         let prog = minimal_ivm_contract_program();
@@ -9946,7 +9958,12 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
+        .try_signed(
+            manifest_signing.context(),
+            manifest_signing.max_frame_bytes(),
+            &fixture.keypair,
+        )
+        .expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -9964,8 +9981,7 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_code_hash() {
-        let manifest_signing =
-            crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         let fixture = IvmAdmissionFixture::new();
         let prog = minimal_ivm_contract_program();
@@ -9988,7 +10004,12 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
+        .try_signed(
+            manifest_signing.context(),
+            manifest_signing.max_frame_bytes(),
+            &fixture.keypair,
+        )
+        .expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -10006,8 +10027,7 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_state_conflict_rejected_even_if_metadata_matches() {
-        let manifest_signing =
-            crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::{
             smart_contract::manifest::ContractManifest,
             transaction::{Executable, TransactionBuilder},
@@ -10046,7 +10066,12 @@ pub mod tests {
                 error_types: None,
                 provenance: None,
             }
-            .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest"),
+            .try_signed(
+                manifest_signing.context(),
+                manifest_signing.max_frame_bytes(),
+                &fixture.keypair,
+            )
+            .expect("sign bounded fixture manifest"),
         );
         tx1.apply();
         let _ = block1.commit_world_overlay_for_testing();
@@ -10072,7 +10097,12 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
+        .try_signed(
+            manifest_signing.context(),
+            manifest_signing.max_frame_bytes(),
+            &fixture.keypair,
+        )
+        .expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -10215,8 +10245,7 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_lookup_in_state() {
-        let manifest_signing =
-            crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
@@ -10249,7 +10278,12 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
+        .try_signed(
+            manifest_signing.context(),
+            manifest_signing.max_frame_bytes(),
+            &fixture.keypair,
+        )
+        .expect("sign bounded fixture manifest");
         tx1.world.contract_manifests.insert(
             ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             manifest.clone(),

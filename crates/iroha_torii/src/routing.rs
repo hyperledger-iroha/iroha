@@ -16,6 +16,11 @@ mod public_lane_rewards;
 #[cfg(feature = "app_api")]
 use public_lane_rewards::collect_pending_public_lane_rewards;
 
+/// Funded bounded signing support shared by Torii's nonshipping contract fixtures.
+#[cfg(test)]
+#[path = "manifest_signing_test_support.rs"]
+pub(crate) mod manifest_signing_test_support;
+
 #[cfg(test)]
 #[allow(unused_macro_rules)]
 macro_rules! routing_test {
@@ -20658,7 +20663,11 @@ mod multisig_selector_tests {
             verified.code_hash, code_hash,
             "verified code hash must match stored bytes"
         );
-        let manifest = verified.manifest.signed(authority_keypair);
+        let signing = manifest_signing_test_support::ManifestSigningFixture::new(1);
+        let manifest = verified
+            .manifest
+            .try_signed(signing.context(), signing.max_frame_bytes(), authority_keypair)
+            .expect("funded canonical contract fixture manifest");
         register_manifest(authority,contract_address.dataspace_id().expect("test contract dataspace"), manifest, &mut stx).expect("register manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),
@@ -41983,6 +41992,7 @@ mod validation_fee_torii_ingress_tests {
         let mut config = TestChainConfig::new(test_world(&user, &recipient, &fee_asset), 1_000);
         config.genesis_key = key.clone();
         let artifacts = [payout_contract_artifact(), pool_contract_artifact()];
+        let signing = manifest_signing_test_support::ManifestSigningFixture::new(artifacts.len());
         for (code, manifest) in &artifacts {
             let artifact_id =
                 ContractArtifactId::new(DataSpaceId::UNIVERSAL, manifest.code_hash.unwrap());
@@ -41996,7 +42006,10 @@ mod validation_fee_torii_ingress_tests {
             config.genesis_instructions.push(
                 RegisterSmartContractCode {
                     artifact_id,
-                    manifest: manifest.clone().signed(&key),
+                    manifest: manifest
+                        .clone()
+                        .try_signed(signing.context(), signing.max_frame_bytes(), &key)
+                        .expect("funded canonical validation-fee genesis manifest"),
                 }
                 .into(),
             );

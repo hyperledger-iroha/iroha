@@ -133,6 +133,9 @@ NATIVE_CORE_TEST_OWNERS = (
         'original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry',
         'original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_retry',
         'replay_completion_retirement_keeps_exact_source_and_original_pool_retry',
+        'original_prepared_signature_owner_survives_refusal_validation_publication_apply_and_replay',
+        'explicit_signature_preparation_rejection_retires_only_its_original_source',
+        'later_canonical_child_allocator_refusal_keeps_the_original_prepared_signature_owner',
     )),
     ('native completed replay identity', 'sumeragi/executor/replay.rs', 'sumeragi/executor/replay/tests.rs', 'tests', 'sumeragi::executor::replay::tests', (
         'completed_replay_rejects_altered_certificate_and_source_without_losing_exact_retry',
@@ -357,6 +360,9 @@ NATIVE_CORE_TEST_OWNERS = (
         'application_control_ingress_has_a_hard_protocol_cap',
         'control_worker_unwind_requires_recovery_and_cannot_invent_empty',
         'due_control_build_progresses_under_replenished_drive_and_partial_ingress',
+        'successor_build_waits_for_core_parent_activation_and_keeps_empty_readiness',
+        'successor_build_activation_preserves_arrival_and_rejects_another_height_or_view',
+        'activated_build_withdrawal_cancels_original_running_and_empty_owners',
     )),
     ('native driver kernel', 'sumeragi/driver/tests/mod.rs', 'sumeragi/driver/tests/kernel.rs', 'kernel', 'sumeragi::driver::tests::kernel', (
         'kernel_refuses_unfunded_waiter_before_constructing_consensus',
