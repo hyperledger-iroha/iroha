@@ -108,6 +108,9 @@ pub(super) struct H {
     pub w: u64,
     /// The core's commit-attestation authority (§3.7; default: authority for every key).
     pub attestor: FakeAttestor,
+    /// Start the core with [`crate::crypto::Attestation::none`] instead of `attestor`: an
+    /// application that flags nothing and holds no attestation authority (§3.7 A1).
+    pub no_attestation: bool,
 }
 
 impl H {
@@ -166,6 +169,7 @@ impl H {
             last_build: None,
             w: W,
             attestor: FakeAttestor::new(),
+            no_attestation: false,
         };
         h.install_keys();
         h.restart();
@@ -264,12 +268,17 @@ impl H {
             .iter()
             .map(|s| -> std::sync::Arc<dyn Signer> { std::sync::Arc::new(s.clone()) })
             .collect();
+        let attestation = if self.no_attestation {
+            crate::crypto::Attestation::none()
+        } else {
+            fake_attestation_ext(self.attestor.clone())
+        };
         let (core, actions) = Core::new(
             self.local,
             init,
             signers,
             Box::new(self.v.crypto.clone()),
-            fake_attestation_ext(self.attestor.clone()),
+            attestation,
             self.budget.clone(),
             self.now,
         )
@@ -700,7 +709,8 @@ impl H {
 
     // ---- message construction -----------------------------------------------------------
 
-    /// A fresh block of the current height first proposed in `view` by `L(h, view)`.
+    /// A fresh unflagged block of the current height first proposed in `view` by `L(h, view)`
+    /// (the harness application flags nothing, epoch boundaries included; see [`H::flagged`]).
     pub fn block(&self, view: u64, payload: &[u8]) -> AvailableBody {
         let topo = &self.core.topo;
         let header = BlockHeader {
@@ -716,7 +726,7 @@ impl H {
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: topo.leader(view),
             skipped_leaders: topo.skipped_leader_keys(&self.committee(), view),
-            attest: self.height() == self.config(self.height()).epoch.last_height,
+            attest: false,
         };
         self.author(header, payload)
     }
@@ -1033,7 +1043,7 @@ impl H {
         }
     }
 
-    /// A block of any height with an explicit parent and proposer.
+    /// An unflagged block of any height with an explicit parent and proposer.
     pub fn block_at(
         &self,
         height: u64,
@@ -1055,7 +1065,7 @@ impl H {
                 payload_len: u32::try_from(payload.len()).unwrap(),
                 proposer,
                 skipped_leaders: Vec::new(),
-                attest: height == self.config(height).epoch.last_height,
+                attest: false,
             },
             payload,
         )

@@ -380,7 +380,6 @@ test("browser graph audit derives every explicit browser-conditioned package exp
     { target: "./dist/nft.js", subpaths: ["./nft"] },
     { target: "./dist/public/address.js", subpaths: ["./address"] },
     { target: "./dist/browser.js", subpaths: ["./browser"] },
-    { target: "./dist/public/kagemusha.js", subpaths: ["./kagemusha"] },
     {
       target: "./dist/privacyCapabilities.js",
       subpaths: ["./privacy-capabilities"],
@@ -569,7 +568,7 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
   );
   // Includes the shared Torii query core (query/*, toriiErrors.js,
   // toriiEventStream.js, toriiClientEncoding.js).
-  assert.equal(Object.keys(result.metafile.inputs).length, 116);
+  assert.equal(Object.keys(result.metafile.inputs).length, 114);
   assertSplitByteInventory(result, metrics);
   assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
     "./sumeragiTyped.js",
@@ -612,7 +611,7 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
 
 test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
-    ["toriiClient.js", { modules: 137 }],
+    ["toriiClient.js", { modules: 135 }],
     ["transactionCodec.js (browser)", { modules: 65 }],
     ["nexusApp.js (browser)", { modules: 74 }],
     ["canonicalRequest.js (browser)", { modules: 47 }],

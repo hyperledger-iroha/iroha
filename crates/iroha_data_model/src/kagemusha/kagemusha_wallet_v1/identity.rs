@@ -20,15 +20,11 @@ use super::{
         kagemusha_wallet_preimage_v1, kagemusha_wallet_signed_object_digest_v1,
         kagemusha_wallet_verify_signature_v1,
     },
-    encode_frame_v1, invalid_v1, overflow_v1, require_nonzero_v1, require_scheme_v1,
-    require_version_v1,
+    encode_frame_v1, invalid_v1,
+    keys::{KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1},
+    overflow_v1, require_nonzero_v1, require_scheme_v1, require_version_v1,
 };
-use crate::{
-    account::AccountId,
-    asset::AssetDefinitionId,
-    kagemusha::{KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1},
-    nexus::AxtAssetIncarnationV1,
-};
+use crate::{account::AccountId, asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};
 
 #[cfg(test)]
 #[path = "identity_tests.rs"]

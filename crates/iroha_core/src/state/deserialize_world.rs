@@ -683,857 +683,11 @@ impl SoracloudInrouPersistedStateV1<'_> {
             }
         }
 
-        use iroha_data_model::soracloud::{
-            SoraRolloutStageV1, SoraServiceConfigMutationV1,
-            SoraServiceLifecycleActionV1 as ServiceAction, SoraServiceSecretMutationV1,
-            SoracloudFhePolicyVersionLifecycleV1,
-        };
-        for (service_name, deployment) in service_deployments.iter() {
-            let history = service_audit_events
-                .iter()
-                .filter_map(|(_sequence, event)| {
-                    (&event.service_name == service_name).then_some(event)
-                })
-                .collect::<Vec<_>>();
-            let Some(first_event) = history.first().copied() else {
-                return Err(invalid_soracloud_state(
-                    "soracloud_service_audit_events",
-                    format!("service `{service_name}` has no authoritative lifecycle history"),
-                ));
-            };
-            if first_event.action != ServiceAction::Deploy {
-                return Err(invalid_soracloud_state(
-                    "soracloud_service_audit_events",
-                    format!("service `{service_name}` lifecycle history must begin with Deploy"),
-                ));
-            }
-
-            let mut active_version: Option<String> = None;
-            let mut process_generation = 0_u64;
-            let mut config_generation = 0_u64;
-            let mut secret_generation = 0_u64;
-            let mut folded_configs = std::collections::BTreeMap::new();
-            let mut folded_secrets = std::collections::BTreeMap::new();
-            let mut process_started_sequence = 0_u64;
-            let mut admitted_versions = std::collections::BTreeSet::new();
-            let mut folded_rollout = None;
-            let mut folded_service_lease = None;
-
-            for event in &history {
-                let process_changed = matches!(
-                    event.action,
-                    ServiceAction::Deploy | ServiceAction::Upgrade | ServiceAction::Rollback
-                );
-                let expected_process_generation = if process_changed {
-                    process_generation.checked_add(1).ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_service_audit_events",
-                            format!("service `{service_name}` process generation overflows u64"),
-                        )
-                    })?
-                } else {
-                    process_generation
-                };
-                if event.process_generation != expected_process_generation {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_service_audit_events",
-                        format!(
-                            "service `{service_name}` event {} has process_generation {}, expected {expected_process_generation}",
-                            event.sequence, event.process_generation
-                        ),
-                    ));
-                }
-
-                let config_changed = !event.config_mutations.is_empty();
-                let expected_config_generation = if config_changed {
-                    config_generation.checked_add(1).ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_service_audit_events",
-                            format!("service `{service_name}` config generation overflows u64"),
-                        )
-                    })?
-                } else {
-                    config_generation
-                };
-                if event.config_generation != expected_config_generation {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_service_audit_events",
-                        format!(
-                            "service `{service_name}` event {} config generation must advance exactly when a committed config delta is present",
-                            event.sequence
-                        ),
-                    ));
-                }
-                for mutation in &event.config_mutations {
-                    match mutation {
-                        SoraServiceConfigMutationV1::Upsert(entry) => {
-                            folded_configs.insert(entry.config_name.clone(), entry.clone());
-                        }
-                        SoraServiceConfigMutationV1::Delete(config_name) => {
-                            if folded_configs.remove(config_name).is_none() {
-                                return Err(invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    format!(
-                                        "service `{service_name}` event {} deletes absent config `{config_name}`",
-                                        event.sequence
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                }
-                if iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
-                    &folded_configs,
-                ) != event.config_snapshot_hash
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_service_audit_events",
-                        format!(
-                            "service `{service_name}` event {} config snapshot hash does not match replayed committed deltas",
-                            event.sequence
-                        ),
-                    ));
-                }
-
-                let secret_changed = !event.secret_mutations.is_empty();
-                let expected_secret_generation = if secret_changed {
-                    secret_generation.checked_add(1).ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_service_audit_events",
-                            format!("service `{service_name}` secret generation overflows u64"),
-                        )
-                    })?
-                } else {
-                    secret_generation
-                };
-                if event.secret_generation != expected_secret_generation {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_service_audit_events",
-                        format!(
-                            "service `{service_name}` event {} secret generation must advance exactly when a committed secret delta is present",
-                            event.sequence
-                        ),
-                    ));
-                }
-                for mutation in &event.secret_mutations {
-                    match mutation {
-                        SoraServiceSecretMutationV1::Upsert(entry) => {
-                            folded_secrets.insert(entry.secret_name.clone(), entry.clone());
-                        }
-                        SoraServiceSecretMutationV1::Delete(secret_name) => {
-                            if folded_secrets.remove(secret_name).is_none() {
-                                return Err(invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    format!(
-                                        "service `{service_name}` event {} deletes absent secret `{secret_name}`",
-                                        event.sequence
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                }
-                if iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
-                    &folded_secrets,
-                ) != event.secret_snapshot_hash
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_service_audit_events",
-                        format!(
-                            "service `{service_name}` event {} secret snapshot hash does not match replayed committed deltas",
-                            event.sequence
-                        ),
-                    ));
-                }
-
-                match event.action {
-                    ServiceAction::Deploy => {
-                        if active_version.is_some() || event.sequence != first_event.sequence {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` must contain exactly one initial Deploy event"
-                                ),
-                            ));
-                        }
-                    }
-                    ServiceAction::Upgrade | ServiceAction::Rollback => {
-                        if event.from_version.as_ref() != active_version.as_ref() {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` event {} does not continue the exact active-version history",
-                                    event.sequence
-                                ),
-                            ));
-                        }
-                    }
-                    _ => {
-                        if active_version.as_deref() != Some(event.to_version.as_str()) {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` event {} does not bind the active revision at that sequence",
-                                    event.sequence
-                                ),
-                            ));
-                        }
-                    }
-                }
-
-                match event.action {
-                    ServiceAction::Deploy | ServiceAction::Upgrade => {
-                        if !admitted_versions.insert(event.to_version.clone()) {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` revision `{}` has more than one admission event",
-                                    event.to_version
-                                ),
-                            ));
-                        }
-                        active_version = Some(event.to_version.clone());
-                        folded_rollout = event.rollout_state.clone();
-                        if event.action == ServiceAction::Upgrade {
-                            let rollout = folded_rollout.as_ref().expect(
-                                "Upgrade action field validation requires an exact rollout state",
-                            );
-                            let candidate_bundle = service_revisions
-                                .get(&(
-                                    service_name.as_ref().to_owned(),
-                                    rollout.candidate_version.clone(),
-                                ))
-                                .expect("event target revision was validated above");
-                            let policy = &candidate_bundle.service.rollout;
-                            let expected_traffic = if policy.canary_percent == 0 {
-                                100
-                            } else {
-                                policy.canary_percent
-                            };
-                            if rollout.canary_percent != policy.canary_percent
-                                || rollout.traffic_percent != expected_traffic
-                                || rollout.health_failures != 0
-                                || rollout.max_health_failures
-                                    != policy.automatic_rollback_failures.get()
-                                || rollout.health_window_secs != policy.health_window_secs.get()
-                            {
-                                return Err(invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    "upgrade audit rollout state must exactly match its admitted candidate policy",
-                                ));
-                            }
-                        }
-                    }
-                    ServiceAction::Rollout => {
-                        let previous = folded_rollout.as_ref().ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                "rollout progress has no preceding candidate rollout",
-                            )
-                        })?;
-                        let next = event.rollout_state.as_ref().expect(
-                            "Rollout action field validation requires an exact rollout state",
-                        );
-                        if previous.stage != SoraRolloutStageV1::Canary
-                            || previous.rollout_handle != next.rollout_handle
-                            || previous.baseline_version != next.baseline_version
-                            || previous.candidate_version != next.candidate_version
-                            || previous.canary_percent != next.canary_percent
-                            || previous.max_health_failures != next.max_health_failures
-                            || previous.health_window_secs != next.health_window_secs
-                            || previous.created_sequence != next.created_sequence
-                        {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                "rollout progress must continue the exact immutable candidate rollout",
-                            ));
-                        }
-                        let healthy_transition = next.traffic_percent >= previous.traffic_percent
-                            && next.health_failures == 0;
-                        let unhealthy_transition = next.traffic_percent == previous.traffic_percent
-                            && next.health_failures == previous.health_failures.saturating_add(1)
-                            && next.stage == SoraRolloutStageV1::Canary
-                            && next.health_failures < next.max_health_failures;
-                        if !healthy_transition && !unhealthy_transition {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                "rollout progress does not describe one canonical healthy or unhealthy step",
-                            ));
-                        }
-                        folded_rollout = Some(next.clone());
-                    }
-                    ServiceAction::Rollback => {
-                        if let Some(next) = event.rollout_state.as_ref() {
-                            let previous = folded_rollout.as_ref().ok_or_else(|| {
-                                invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    "automatic rollback has no preceding candidate rollout",
-                                )
-                            })?;
-                            if previous.stage != SoraRolloutStageV1::Canary
-                                || previous.rollout_handle != next.rollout_handle
-                                || previous.baseline_version != next.baseline_version
-                                || previous.candidate_version != next.candidate_version
-                                || previous.canary_percent != next.canary_percent
-                                || previous.max_health_failures != next.max_health_failures
-                                || previous.health_window_secs != next.health_window_secs
-                                || previous.created_sequence != next.created_sequence
-                                || next.traffic_percent != 0
-                                || next.health_failures
-                                    != previous.health_failures.saturating_add(1)
-                                || next.health_failures < next.max_health_failures
-                            {
-                                return Err(invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    "automatic rollback must be the exact threshold-crossing rollout transition",
-                                ));
-                            }
-                            folded_rollout = Some(next.clone());
-                        } else {
-                            folded_rollout = None;
-                        }
-                        active_version = Some(event.to_version.clone());
-                    }
-                    _ => {}
-                }
-
-                match event.action {
-                    ServiceAction::Deploy | ServiceAction::Upgrade => {
-                        let event_bundle = service_revisions
-                            .get(&(service_name.as_ref().to_owned(), event.to_version.clone()))
-                            .ok_or_else(|| {
-                                invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    "lease admission target has no retained bundle",
-                                )
-                            })?;
-                        let mut prior_deployment = deployment.clone();
-                        prior_deployment.service_lease = folded_service_lease.clone();
-                        let existing =
-                            (event.action == ServiceAction::Upgrade).then_some(&prior_deployment);
-                        let expected = crate::smartcontracts::isi::soracloud::build_http_service_lease_state(
-                            event_bundle,
-                            existing,
-                            event.block_height,
-                            event.action == ServiceAction::Upgrade,
-                        )
-                        .map_err(|error| {
-                            invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` lease admission transition is invalid: {error}"
-                                ),
-                            )
-                        })?;
-                        let expected_commitment = expected.as_ref().map(
-                            iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1,
-                        );
-                        if event.service_lease_commitment != expected_commitment {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` event {} must retain the exact writer-derived post-admission lease economics",
-                                    event.sequence
-                                ),
-                            ));
-                        }
-                        folded_service_lease = expected;
-                    }
-                    ServiceAction::Rollback if event.rollout_state.is_none() => {
-                        let event_bundle = service_revisions
-                            .get(&(service_name.as_ref().to_owned(), event.to_version.clone()))
-                            .ok_or_else(|| {
-                                invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    "explicit rollback target has no retained bundle",
-                                )
-                            })?;
-                        let mut prior_deployment = deployment.clone();
-                        prior_deployment.service_lease = folded_service_lease.clone();
-                        let expected = crate::smartcontracts::isi::soracloud::build_http_service_lease_state(
-                            event_bundle,
-                            Some(&prior_deployment),
-                            event.block_height,
-                            false,
-                        )
-                        .map_err(|error| {
-                            invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` rollback lease transition is invalid: {error}"
-                                ),
-                            )
-                        })?;
-                        let expected_commitment = expected.as_ref().map(
-                            iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1,
-                        );
-                        if event.service_lease_commitment != expected_commitment {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` explicit rollback must retain exact writer-derived lease economics"
-                                ),
-                            ));
-                        }
-                        folded_service_lease = expected;
-                    }
-                    ServiceAction::LeaseUsage | ServiceAction::LeaseReportingEpochRollover => {
-                        let prior = folded_service_lease.as_ref().ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` lease usage has no replayed hosted-service lease"
-                                ),
-                            )
-                        })?;
-                        let usage = event.lease_usage.as_ref().ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                "lease accounting event is missing its validated usage input",
-                            )
-                        })?;
-                        let assignment_bundle = service_revisions
-                            .get(&(
-                                service_name.as_ref().to_owned(),
-                                usage.assignment.service_version.clone(),
-                            ))
-                            .ok_or_else(|| {
-                                invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    "lease reporter assignment references no retained revision",
-                                )
-                            })?;
-                        if !lease_usage_assignment_version_is_writer_reachable(
-                            &usage.assignment.service_version,
-                            usage.finalize_reporter,
-                            &event.to_version,
-                            folded_rollout.as_ref(),
-                        ) || assignment_bundle.service.execution_plane
-                            != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
-                            || assignment_bundle.container.runtime
-                                != iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
-                            || usage.assignment.placement.replica_slot
-                                > assignment_bundle.service.replicas.get()
-                            || usage.assignment.placement_reconciled_at_ms
-                                > event.block_timestamp_ms
-                        {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                "lease reporter assignment was not writer-reachable for the retained Inrou revision and event transition",
-                            ));
-                        }
-                        let expected = replay_soracloud_service_lease_usage(
-                            prior,
-                            usage,
-                            event.lease_reporting_epoch_rollover.as_ref(),
-                            event.block_height,
-                            deployment.accounted_storage_bytes().map_err(|error| {
-                                invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    format!(
-                                        "service `{service_name}` accounted storage is invalid: {error}"
-                                    ),
-                                )
-                            })?,
-                        )
-                        .map_err(|message| {
-                            invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` lease usage event {} is not live-replayable: {message}",
-                                    event.sequence
-                                ),
-                            )
-                        })?;
-                        let expected_commitment =
-                            iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1(
-                                &expected,
-                            );
-                        if event.service_lease_commitment != Some(expected_commitment) {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` lease usage event {} must commit its exact replayed post-state",
-                                    event.sequence
-                                ),
-                            ));
-                        }
-                        folded_service_lease = Some(expected);
-                    }
-                    _ => {
-                        if event.service_lease_commitment.is_some() {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                "non-lease transition must not replace hosted-service lease state",
-                            ));
-                        }
-                    }
-                }
-
-                if matches!(
-                    event.action,
-                    ServiceAction::StateMutation | ServiceAction::FheJobRun
-                ) {
-                    let event_bundle = service_revisions
-                        .get(&(service_name.as_ref().to_owned(), event.to_version.clone()))
-                        .expect("event target revision was validated above");
-                    let binding_name = event
-                        .binding_name
-                        .as_ref()
-                        .expect("state-producing action field validation requires binding_name");
-                    let state_key = event
-                        .state_key
-                        .as_deref()
-                        .expect("state-producing action field validation requires state_key");
-                    let binding = event_bundle
-                        .service
-                        .state_bindings
-                        .iter()
-                        .find(|binding| &binding.binding_name == binding_name)
-                        .ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` state-producing event {} references an undeclared binding",
-                                    event.sequence
-                                ),
-                            )
-                        })?;
-                    if !state_key.starts_with(&binding.key_prefix)
-                        || (event.action == ServiceAction::FheJobRun
-                            && binding.encryption
-                                != iroha_data_model::soracloud::SoraStateEncryptionV1::FheCiphertext)
-                    {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_service_audit_events",
-                            format!(
-                                "service `{service_name}` state-producing event {} does not satisfy its exact retained binding",
-                                event.sequence
-                            ),
-                        ));
-                    }
-                    if event.action == ServiceAction::FheJobRun {
-                        let policy_name = event.policy_name.as_ref().expect(
-                            "FHE job action field validation requires an exact policy name",
-                        );
-                        let policy_digest = event.policy_snapshot_hash.expect(
-                            "FHE job action field validation requires an exact policy digest",
-                        );
-                        let exact_policy_exists = deployment
-                            .fhe_policy_records
-                            .get(policy_name)
-                            .is_some_and(|record| {
-                                record.versions.values().any(|version| {
-                                    version.material.material_digest == policy_digest
-                                })
-                            });
-                        if !exact_policy_exists {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` FHE job event {} references no retained governed policy material",
-                                    event.sequence
-                                ),
-                            ));
-                        }
-                    }
-                }
-
-                if process_changed {
-                    process_started_sequence = event.sequence;
-                }
-                process_generation = event.process_generation;
-                config_generation = event.config_generation;
-                secret_generation = event.secret_generation;
-            }
-
-            let exact_revision_count =
-                usize::try_from(deployment.revision_count).map_err(|error| {
-                    invalid_soracloud_state(
-                        "soracloud_service_audit_events",
-                        format!(
-                            "service `{service_name}` revision count does not fit usize: {error}"
-                        ),
-                    )
-                })?;
-            if admitted_versions.len() != exact_revision_count
-                || service_revisions.iter().any(|((name, version), _bundle)| {
-                    name.as_str() == service_name.as_ref() && !admitted_versions.contains(version)
-                })
-                || active_version.as_deref() != Some(deployment.current_service_version.as_str())
-                || process_generation != deployment.process_generation
-                || process_started_sequence != deployment.process_started_sequence
-                || config_generation != deployment.config_generation
-                || secret_generation != deployment.secret_generation
-                || folded_configs != deployment.service_configs
-                || folded_secrets != deployment.service_secrets
-                || folded_service_lease != deployment.service_lease
-                || folded_rollout.as_ref() != deployment.last_rollout.as_ref()
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_service_audit_events",
-                    format!(
-                        "service `{service_name}` lifecycle history must exactly reconstruct its revisions, active process, material generations, and rollout head"
-                    ),
-                ));
-            }
-
-            let mut expected_fhe_event_sequences = std::collections::BTreeSet::new();
-            for (policy_name, policy) in &deployment.fhe_policy_records {
-                let versions = policy.versions.iter().collect::<Vec<_>>();
-                let mut previous_admission_sequence = 0_u64;
-                for (index, (_version, state)) in versions.iter().enumerate() {
-                    let expected_action = if index == 0 {
-                        ServiceAction::FhePolicyRegister
-                    } else {
-                        ServiceAction::FhePolicyRotate
-                    };
-                    let matches = history
-                        .iter()
-                        .filter(|event| {
-                            event.action == expected_action
-                                && event.policy_name.as_ref() == Some(policy_name)
-                                && event.policy_snapshot_hash
-                                    == Some(state.material.material_digest)
-                                && event.governance_tx_hash
-                                    == Some(state.admitted_by_transaction_hash)
-                        })
-                        .copied()
-                        .collect::<Vec<_>>();
-                    if matches.len() != 1 || matches[0].sequence <= previous_admission_sequence {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_service_audit_events",
-                            format!(
-                                "service `{service_name}` FHE policy `{policy_name}` version {} must have one ordered exact admission event",
-                                state.material.version
-                            ),
-                        ));
-                    }
-                    let admission_event = matches[0];
-                    expected_fhe_event_sequences.insert(admission_event.sequence);
-                    previous_admission_sequence = admission_event.sequence;
-                    match state.lifecycle {
-                        SoracloudFhePolicyVersionLifecycleV1::Superseded => {
-                            let Some((_next_version, next_state)) = versions.get(index + 1) else {
-                                return Err(invalid_soracloud_state(
-                                    "soracloud_service_deployments",
-                                    "superseded FHE policy version has no successor",
-                                ));
-                            };
-                            if state.deactivated_by_transaction_hash
-                                != Some(next_state.admitted_by_transaction_hash)
-                            {
-                                return Err(invalid_soracloud_state(
-                                    "soracloud_service_deployments",
-                                    "superseded FHE policy version must be deactivated by its exact successor admission",
-                                ));
-                            }
-                        }
-                        SoracloudFhePolicyVersionLifecycleV1::Revoked => {
-                            let deactivation_hash = state
-                                .deactivated_by_transaction_hash
-                                .expect("revoked FHE policy validation requires deactivation hash");
-                            let revoke_matches = history
-                                .iter()
-                                .filter(|event| {
-                                    event.action == ServiceAction::FhePolicyRevoke
-                                        && event.sequence > admission_event.sequence
-                                        && event.policy_name.as_ref() == Some(policy_name)
-                                        && event.policy_snapshot_hash
-                                            == Some(state.material.material_digest)
-                                        && event.governance_tx_hash == Some(deactivation_hash)
-                                })
-                                .copied()
-                                .collect::<Vec<_>>();
-                            if revoke_matches.len() != 1 {
-                                return Err(invalid_soracloud_state(
-                                    "soracloud_service_audit_events",
-                                    format!(
-                                        "service `{service_name}` revoked FHE policy `{policy_name}` must have one exact revocation event"
-                                    ),
-                                ));
-                            }
-                            expected_fhe_event_sequences.insert(revoke_matches[0].sequence);
-                        }
-                        SoracloudFhePolicyVersionLifecycleV1::Active => {}
-                    }
-                }
-            }
-            if history.iter().any(|event| {
-                matches!(
-                    event.action,
-                    ServiceAction::FhePolicyRegister
-                        | ServiceAction::FhePolicyRotate
-                        | ServiceAction::FhePolicyRevoke
-                ) && !expected_fhe_event_sequences.contains(&event.sequence)
-            }) {
-                return Err(invalid_soracloud_state(
-                    "soracloud_service_audit_events",
-                    format!("service `{service_name}` has an orphaned FHE policy lifecycle event"),
-                ));
-            }
-            for job_event in history
-                .iter()
-                .filter(|event| event.action == ServiceAction::FheJobRun)
-            {
-                let policy_name = job_event
-                    .policy_name
-                    .as_ref()
-                    .expect("FHE job field validation requires policy_name");
-                let policy_digest = job_event
-                    .policy_snapshot_hash
-                    .expect("FHE job field validation requires policy_snapshot_hash");
-                let policy = deployment
-                    .fhe_policy_records
-                    .get(policy_name)
-                    .expect("earlier FHE job validation resolved the policy record");
-                let version_state = policy
-                    .versions
-                    .values()
-                    .find(|state| state.material.material_digest == policy_digest)
-                    .expect("earlier FHE job validation resolved the policy material");
-                let admission_action = if version_state.material.version.get() == 1 {
-                    ServiceAction::FhePolicyRegister
-                } else {
-                    ServiceAction::FhePolicyRotate
-                };
-                let admission_sequence = history
-                    .iter()
-                    .find(|event| {
-                        event.action == admission_action
-                            && event.policy_name.as_ref() == Some(policy_name)
-                            && event.policy_snapshot_hash == Some(policy_digest)
-                            && event.governance_tx_hash
-                                == Some(version_state.admitted_by_transaction_hash)
-                    })
-                    .map(|event| event.sequence)
-                    .expect("FHE lifecycle reverse closure resolved the admission event");
-                let deactivation_sequence =
-                    version_state
-                        .deactivated_by_transaction_hash
-                        .map(|deactivation_hash| {
-                            history
-                                .iter()
-                                .find(|event| {
-                                    matches!(
-                                        event.action,
-                                        ServiceAction::FhePolicyRotate
-                                            | ServiceAction::FhePolicyRevoke
-                                    ) && event.policy_name.as_ref() == Some(policy_name)
-                                        && event.governance_tx_hash == Some(deactivation_hash)
-                                })
-                                .map(|event| event.sequence)
-                                .expect(
-                                    "FHE lifecycle reverse closure resolved the deactivation event",
-                                )
-                        });
-                if admission_sequence >= job_event.sequence
-                    || deactivation_sequence.is_some_and(|sequence| job_event.sequence >= sequence)
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_service_audit_events",
-                        format!(
-                            "service `{service_name}` FHE job event {} must bind policy material active at that exact sequence",
-                            job_event.sequence
-                        ),
-                    ));
-                }
-            }
-
-            let rollover_events = history
-                .iter()
-                .filter(|event| event.action == ServiceAction::LeaseReportingEpochRollover)
-                .copied()
-                .collect::<Vec<_>>();
-            if let Some(lease) = deployment.service_lease.as_ref() {
-                if lease.lease_started_height != first_event.block_height {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_service_deployments",
-                        format!(
-                            "service `{service_name}` hosted-service lease incarnation must begin at its sole Deploy event"
-                        ),
-                    ));
-                }
-                let mut reporting_epoch = 1_u64;
-                let mut settled_egress_bytes = 0_u128;
-                for event in &rollover_events {
-                    let rollover = event.lease_reporting_epoch_rollover.as_ref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_service_audit_events",
-                            format!(
-                                "service `{service_name}` reporting-epoch rollover event {} is missing its validated payload",
-                                event.sequence
-                            ),
-                        )
-                    })?;
-                    if !lease_rollover_extends_settlement_chain(
-                        rollover,
-                        lease.lease_started_height,
-                        reporting_epoch,
-                        settled_egress_bytes,
-                    ) {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_service_audit_events",
-                            format!(
-                                "service `{service_name}` reporting-epoch rollover history is not one exact settlement chain"
-                            ),
-                        ));
-                    }
-                    reporting_epoch = rollover.new_reporting_epoch;
-                    settled_egress_bytes = rollover.settled_egress_bytes;
-                }
-                if let Some(latest_event) = rollover_events.last() {
-                    let latest_rollover = latest_event
-                        .lease_reporting_epoch_rollover
-                        .as_ref()
-                        .ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_service_audit_events",
-                                format!(
-                                    "service `{service_name}` latest reporting-epoch rollover event is missing its validated payload"
-                                ),
-                            )
-                        })?;
-                    let retains_exact_opener =
-                        lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
-                            checkpoint.reporting_epoch == latest_rollover.new_reporting_epoch
-                                && checkpoint.assignment.service_version
-                                    == latest_rollover.active_service_version
-                                && checkpoint.assignment.placement.replica_slot
-                                    == latest_rollover.replica_slot
-                                && checkpoint.assignment.placement.placement_incarnation
-                                    == latest_rollover.placement_incarnation
-                                && checkpoint.assignment.placement.validator_account_id
-                                    == latest_rollover.reporter_account_id
-                        });
-                    if !retains_exact_opener {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_service_audit_events",
-                            format!(
-                                "service `{service_name}` current reporting epoch must retain the exact reporter checkpoint opened by its latest rollover"
-                            ),
-                        ));
-                    }
-                }
-                if reporting_epoch != lease.reporting_epoch
-                    || settled_egress_bytes != lease.settled_egress_bytes
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_service_audit_events",
-                        format!(
-                            "service `{service_name}` reporting-epoch audit history must exactly reconstruct lease settlement state"
-                        ),
-                    ));
-                }
-            } else if !rollover_events.is_empty() {
-                return Err(invalid_soracloud_state(
-                    "soracloud_service_audit_events",
-                    format!(
-                        "service `{service_name}` has lease rollover events without a hosted-service lease"
-                    ),
-                ));
-            }
-        }
+        validate_soracloud_service_deployment_history(
+            &service_revisions,
+            &service_deployments,
+            &service_audit_events,
+        )?;
 
         let training_job_audit_events = self.training_job_audit_events.view();
         for (sequence, event) in training_job_audit_events.iter() {
@@ -2503,817 +1657,15 @@ impl SoracloudInrouPersistedStateV1<'_> {
 
         let runtime_receipts = self.runtime_receipts.view();
         let agent_apartments = self.agent_apartments.view();
-        for (key, apartment) in agent_apartments.iter() {
-            apartment.validate().map_err(|error| {
-                invalid_soracloud_state("soracloud_agent_apartments", error.to_string())
-            })?;
-            if key.as_str() != apartment.manifest.apartment_name.as_ref() {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "storage key must match the embedded apartment_name",
-                ));
-            }
-            let accounted_bytes = apartment
-                .persistent_state
-                .key_sizes
-                .values()
-                .try_fold(0_u64, |total, bytes| total.checked_add(*bytes))
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "persistent-state byte accounting overflows u64",
-                    )
-                })?;
-            if accounted_bytes != apartment.persistent_state.total_bytes
-                || accounted_bytes > apartment.manifest.state_quota_bytes.get()
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "persistent-state total_bytes must equal exact key-size accounting within the manifest quota",
-                ));
-            }
-            let deployed_event = agent_apartment_audit_events
-                .get(&apartment.deployed_sequence)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "agent apartment is missing its exact deployment audit event",
-                    )
-                })?;
-            if deployed_event.action
-                != iroha_data_model::soracloud::SoraAgentApartmentActionV1::Deploy
-                || deployed_event.apartment_name != apartment.manifest.apartment_name
-                || deployed_event.manifest_hash != apartment.manifest_hash
-                || deployed_event.restart_count != 0
-                || apartment.lease_started_height != deployed_event.block_height
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "agent apartment deployment projection is inconsistent",
-                ));
-            }
-            let renewed_event = agent_apartment_audit_events
-                .iter()
-                .filter_map(|(_sequence, event)| {
-                    (event.apartment_name == apartment.manifest.apartment_name
-                        && event.block_height == apartment.last_renewed_height
-                        && matches!(
-                            event.action,
-                            iroha_data_model::soracloud::SoraAgentApartmentActionV1::Deploy
-                                | iroha_data_model::soracloud::SoraAgentApartmentActionV1::LeaseRenew
-                        ))
-                    .then_some(event)
-                })
-                .last()
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "agent apartment is missing its exact last-renewed audit event",
-                    )
-                })?;
-            let expected_renew_action = if renewed_event.sequence == apartment.deployed_sequence {
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::Deploy
-            } else {
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::LeaseRenew
-            };
-            if renewed_event.action != expected_renew_action
-                || renewed_event.apartment_name != apartment.manifest.apartment_name
-                || renewed_event.lease_expires_height != apartment.lease_expires_height
-                || renewed_event.manifest_hash != apartment.manifest_hash
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "agent apartment must exactly match its last-renewed audit projection",
-                ));
-            }
-            let expected_process_generation = u64::from(apartment.restart_count)
-                .checked_add(1)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "agent process generation overflows u64",
-                    )
-                })?;
-            if apartment.process_generation != expected_process_generation {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "process_generation must equal restart_count + 1",
-                ));
-            }
-            if apartment.restart_count == 0 {
-                if apartment.last_restart_sequence.is_some()
-                    || apartment.last_restart_reason.is_some()
-                    || apartment.process_started_sequence != apartment.deployed_sequence
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "never-restarted apartment must retain its deployment process generation",
-                    ));
-                }
-            } else {
-                let restart_sequence = apartment.last_restart_sequence.ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "restarted apartment is missing last_restart_sequence",
-                    )
-                })?;
-                let restart_event = agent_apartment_audit_events
-                    .get(&restart_sequence)
-                    .ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartments",
-                            "restarted apartment is missing its exact restart audit event",
-                        )
-                    })?;
-                if restart_event.action
-                    != iroha_data_model::soracloud::SoraAgentApartmentActionV1::Restart
-                    || restart_event.apartment_name != apartment.manifest.apartment_name
-                    || restart_event.restart_count != apartment.restart_count
-                    || restart_event.reason.as_deref() != apartment.last_restart_reason.as_deref()
-                    || apartment.process_started_sequence != restart_sequence
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "agent apartment restart projection is inconsistent",
-                    ));
-                }
-            }
-            let latest_direct_event = agent_apartment_audit_events
-                .iter()
-                .filter_map(|(sequence, event)| {
-                    (event.apartment_name == apartment.manifest.apartment_name)
-                        .then_some((*sequence, event))
-                })
-                .max_by_key(|(sequence, _event)| *sequence)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "agent apartment has no authoritative audit history",
-                    )
-                })?;
-            if latest_direct_event.1.lease_expires_height != apartment.lease_expires_height
-                || latest_direct_event.1.manifest_hash != apartment.manifest_hash
-                || latest_direct_event.1.restart_count != apartment.restart_count
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "agent apartment must match its latest direct audit projection",
-                ));
-            }
-            let latest_activity_sequence = agent_apartment_audit_events
-                .iter()
-                .filter_map(|(sequence, event)| {
-                    let direct = event.apartment_name == apartment.manifest.apartment_name;
-                    let sender_enqueue = event.action
-                        == iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageEnqueued
-                        && event.from_apartment.as_deref() == Some(key.as_str());
-                    (direct || sender_enqueue).then_some(*sequence)
-                })
-                .max();
-            if latest_activity_sequence != Some(apartment.last_active_sequence) {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "last_active_sequence must equal the latest audit event that mutated the apartment",
-                ));
-            }
-            let run_count =
-                u32::try_from(apartment.autonomy_run_history.len()).map_err(|error| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        format!("autonomy run count does not fit u32: {error}"),
-                    )
-                })?;
-            let mut spent_budget = 0_u64;
-            let mut last_checkpoint_sequence = None;
-            for run in &apartment.autonomy_run_history {
-                spent_budget = spent_budget.checked_add(run.budget_units).ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "autonomy run budget accounting overflows u64",
-                    )
-                })?;
-                last_checkpoint_sequence = Some(
-                    last_checkpoint_sequence.map_or(run.approved_sequence, |current: u64| {
-                        current.max(run.approved_sequence)
-                    }),
-                );
-                let expected_run_id = format!("{key}:autonomy:{}", run.approved_sequence);
-                let expected_commitment =
-                    iroha_data_model::soracloud::derive_agent_autonomy_request_commitment(
-                        key,
-                        &run.artifact_hash,
-                        run.provenance_hash.as_deref(),
-                        run.budget_units,
-                        &run.run_id,
-                        &run.run_label,
-                        run.workflow_input_json.as_deref(),
-                        run.approved_process_generation,
-                    );
-                let event = agent_apartment_audit_events
-                    .get(&run.approved_sequence)
-                    .ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartments",
-                            "autonomy run is missing its exact approval audit event",
-                        )
-                    })?;
-                let expected_payload_hash = run
-                    .workflow_input_json
-                    .as_ref()
-                    .map(|payload| Hash::new(payload.as_bytes()));
-                let expected_checkpoint_key =
-                    crate::smartcontracts::isi::soracloud::autonomy_checkpoint_key(
-                        key,
-                        &run.run_id,
-                    );
-                let expected_checkpoint_size =
-                    crate::smartcontracts::isi::soracloud::autonomy_checkpoint_value_size(
-                        &run.artifact_hash,
-                        run.provenance_hash.as_deref(),
-                        &run.run_label,
-                        run.budget_units,
-                        run.workflow_input_json.as_deref(),
-                    );
-                if run.run_id != expected_run_id
-                    || run.request_commitment != expected_commitment
-                    || run.approved_process_generation > apartment.process_generation
-                    || event.action
-                        != iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunApproved
-                    || event.apartment_name != apartment.manifest.apartment_name
-                    || event.request_id.as_deref() != Some(run.run_id.as_str())
-                    || event.run_id.as_deref() != Some(run.run_id.as_str())
-                    || event.artifact_hash.as_deref() != Some(run.artifact_hash.as_str())
-                    || event.provenance_hash.as_deref() != run.provenance_hash.as_deref()
-                    || event.run_label.as_deref() != Some(run.run_label.as_str())
-                    || event.budget_units != Some(run.budget_units)
-                    || event.payload_hash != expected_payload_hash
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "autonomy run must exactly match its canonical identity, commitment, and approval event",
-                    ));
-                }
-                if apartment
-                    .persistent_state
-                    .key_sizes
-                    .get(&expected_checkpoint_key)
-                    != Some(&expected_checkpoint_size)
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "autonomy run must retain its exact writer-derived checkpoint key and byte size",
-                    ));
-                }
-            }
-            if apartment.persistent_state.key_sizes.len() != apartment.autonomy_run_history.len()
-                || apartment.checkpoint_count != run_count
-                || apartment.last_checkpoint_sequence != last_checkpoint_sequence
-                || apartment
-                    .autonomy_budget_remaining_units
-                    .checked_add(spent_budget)
-                    != Some(apartment.autonomy_budget_ceiling_units)
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "autonomy history must exactly match checkpoint keys, byte accounting, and budget projections",
-                ));
-            }
-            for request in apartment.pending_wallet_requests.values() {
-                let event = agent_apartment_audit_events
-                    .get(&request.created_sequence)
-                    .ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartments",
-                            "pending wallet request is missing its creation audit event",
-                        )
-                    })?;
-                if event.action
-                    != iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendRequested
-                    || event.apartment_name != apartment.manifest.apartment_name
-                    || event.request_id.as_deref() != Some(request.request_id.as_str())
-                    || event.asset_definition.as_deref() != Some(request.asset_definition.as_str())
-                    || event.amount.as_ref() != Some(&request.amount)
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "pending wallet request must exactly match its creation audit event",
-                    ));
-                }
-            }
-            let mut approved_wallet_request_ids = std::collections::BTreeSet::new();
-            let mut projected_wallet_daily_spend =
-                BTreeMap::<String, (String, u64, Quantity)>::new();
-            for (_sequence, event) in agent_apartment_audit_events.iter().filter(
-                |(_sequence, event)| {
-                    event.apartment_name == apartment.manifest.apartment_name
-                        && event.action
-                            == iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendApproved
-                },
-            ) {
-                let request_id = event.request_id.as_deref().ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartment_audit_events",
-                        "wallet-spend approval is missing request_id",
-                    )
-                })?;
-                if !approved_wallet_request_ids.insert(request_id.to_owned()) {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartment_audit_events",
-                        "wallet request_id must not be approved more than once",
-                    ));
-                }
-                let asset_definition = event.asset_definition.as_deref().ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartment_audit_events",
-                        "wallet-spend approval is missing asset_definition",
-                    )
-                })?;
-                let amount = event.amount.as_ref().ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartment_audit_events",
-                        "wallet-spend approval is missing amount",
-                    )
-                })?;
-                let day_bucket = crate::smartcontracts::isi::soracloud::wallet_day_bucket(
-                    event.block_timestamp_ms,
-                );
-                let aggregate_key = format!("{asset_definition}:{day_bucket}");
-                if let Some((_asset, _day, spent)) =
-                    projected_wallet_daily_spend.get_mut(&aggregate_key)
-                {
-                    *spent = spent.checked_add(amount).map_err(|error| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartments",
-                            format!("wallet daily-spend projection overflows: {error}"),
-                        )
-                    })?;
-                } else {
-                    projected_wallet_daily_spend.insert(
-                        aggregate_key,
-                        (asset_definition.to_owned(), day_bucket, amount.clone()),
-                    );
-                }
-            }
-            if apartment.wallet_daily_spend.len() != projected_wallet_daily_spend.len() {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartments",
-                    "wallet_daily_spend must equal the complete approved-event projection",
-                ));
-            }
-            for (aggregate_key, (asset_definition, day_bucket, spent)) in
-                projected_wallet_daily_spend
-            {
-                let entry = apartment
-                    .wallet_daily_spend
-                    .get(&aggregate_key)
-                    .ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartments",
-                            "wallet_daily_spend is missing an approved-event aggregate",
-                        )
-                    })?;
-                if entry.asset_definition != asset_definition
-                    || entry.day_bucket != day_bucket
-                    || entry.spent != spent
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "wallet_daily_spend entry does not equal its approved-event aggregate",
-                    ));
-                }
-            }
-            for message in &apartment.mailbox_queue {
-                let event = agent_apartment_audit_events
-                    .get(&message.enqueued_sequence)
-                    .ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartments",
-                            "queued apartment message is missing its enqueue audit event",
-                        )
-                    })?;
-                if event.action
-                    != iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageEnqueued
-                    || event.apartment_name != apartment.manifest.apartment_name
-                    || event.request_id.as_deref() != Some(message.message_id.as_str())
-                    || event.from_apartment.as_deref() != Some(message.from_apartment.as_str())
-                    || event.to_apartment.as_deref() != Some(key.as_str())
-                    || event.channel.as_deref() != Some(message.channel.as_str())
-                    || event.payload_hash != Some(message.payload_hash)
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "queued apartment message must exactly match its enqueue audit event",
-                    ));
-                }
-            }
-            for rule in apartment.artifact_allowlist.values() {
-                let event = agent_apartment_audit_events
-                    .get(&rule.added_sequence)
-                    .ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartments",
-                            "artifact allowlist rule is missing its audit event",
-                        )
-                    })?;
-                if event.action
-                    != iroha_data_model::soracloud::SoraAgentApartmentActionV1::ArtifactAllowed
-                    || event.apartment_name != apartment.manifest.apartment_name
-                    || event.artifact_hash.as_deref() != Some(rule.artifact_hash.as_str())
-                    || event.provenance_hash.as_deref() != rule.provenance_hash.as_deref()
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "artifact allowlist rule must exactly match its audit event",
-                    ));
-                }
-            }
-            for capability in &apartment.revoked_policy_capabilities {
-                if !agent_apartment_audit_events
-                    .iter()
-                    .any(|(_sequence, event)| {
-                        event.action
-                        == iroha_data_model::soracloud::SoraAgentApartmentActionV1::PolicyRevoked
-                        && event.apartment_name == apartment.manifest.apartment_name
-                        && event.capability.as_deref() == Some(capability.as_str())
-                    })
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_agent_apartments",
-                        "revoked apartment capability is missing its authoritative audit event",
-                    ));
-                }
-            }
-        }
-        for event in agent_apartment_audit_events
-            .iter()
-            .map(|(_sequence, event)| event)
-        {
-            let apartment = agent_apartments
-                .get(&event.apartment_name.to_string())
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_agent_apartment_audit_events",
-                        "agent-apartment audit event has no authoritative apartment record",
-                    )
-                })?;
-            if event.manifest_hash != apartment.manifest_hash {
-                return Err(invalid_soracloud_state(
-                    "soracloud_agent_apartment_audit_events",
-                    "agent-apartment audit manifest hash must match its immutable apartment manifest",
-                ));
-            }
-            match event.action {
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::PolicyRevoked => {
-                    let capability = event.capability.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "policy-revoked audit event is missing capability",
-                        )
-                    })?;
-                    if !apartment.revoked_policy_capabilities.contains(capability) {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "policy-revoked audit capability is absent from the monotonic revoked set",
-                        ));
-                    }
-                }
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::ArtifactAllowed => {
-                    let artifact_hash = event.artifact_hash.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "artifact-allowed audit event is missing artifact_hash",
-                        )
-                    })?;
-                    let current_rule = apartment.artifact_allowlist.get(artifact_hash).ok_or_else(
-                        || {
-                            invalid_soracloud_state(
-                                "soracloud_agent_apartment_audit_events",
-                                "artifact-allowed audit hash is absent from the retained allowlist",
-                            )
-                        },
-                    )?;
-                    if current_rule.added_sequence < event.sequence
-                        || (current_rule.added_sequence == event.sequence
-                            && current_rule.provenance_hash.as_deref()
-                                != event.provenance_hash.as_deref())
-                    {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "artifact-allowed audit event is newer than or inconsistent with the retained rule",
-                        ));
-                    }
-                }
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunApproved => {
-                    if !apartment
-                        .autonomy_run_history
-                        .iter()
-                        .any(|run| run.approved_sequence == event.sequence)
-                    {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "autonomy-run approval has no retained run-history record",
-                        ));
-                    }
-                }
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunExecuted => {
-                    let run_id = event.run_id.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "autonomy-run execution is missing run_id",
-                        )
-                    })?;
-                    let run = apartment
-                        .autonomy_run_history
-                        .iter()
-                        .find(|run| run.run_id == run_id)
-                        .ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_agent_apartment_audit_events",
-                                "autonomy-run execution has no exact retained approved run",
-                            )
-                        })?;
-                    let execution_count = agent_apartment_audit_events
-                        .iter()
-                        .filter(|(_sequence, candidate)| {
-                            candidate.action
-                                == iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunExecuted
-                                && candidate.apartment_name == event.apartment_name
-                                && candidate.run_id.as_deref() == Some(run_id)
-                        })
-                        .count();
-                    if execution_count != 1 {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "each approved autonomy run can retain at most one authoritative execution outcome",
-                        ));
-                    }
-                    let outcome_shape_matches = match event.succeeded {
-                        Some(true) => event.reason.is_none(),
-                        Some(false) => event
-                            .reason
-                            .as_ref()
-                            .is_some_and(|reason| !reason.trim().is_empty()),
-                        None => false,
-                    };
-                    if event.sequence <= run.approved_sequence
-                        || event.request_id.as_deref() != Some(run.run_id.as_str())
-                        || event.artifact_hash.as_deref() != Some(run.artifact_hash.as_str())
-                        || event.provenance_hash.as_deref() != run.provenance_hash.as_deref()
-                        || event.run_label.as_deref() != Some(run.run_label.as_str())
-                        || event.budget_units != Some(run.budget_units)
-                        || !outcome_shape_matches
-                        || event.asset_definition.is_some()
-                        || event.amount.is_some()
-                        || event.capability.is_some()
-                        || event.from_apartment.is_some()
-                        || event.to_apartment.is_some()
-                        || event.channel.is_some()
-                        || event.payload_hash.is_some()
-                    {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "autonomy-run execution must exactly bind its retained approval and writer-produced outcome shape",
-                        ));
-                    }
-                    if let Some(receipt_id) = event.runtime_receipt_id {
-                        let receipt = runtime_receipts.get(&receipt_id).ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_agent_apartment_audit_events",
-                                "successful autonomy execution references no authoritative runtime receipt",
-                            )
-                        })?;
-                        let receipt_link_count = agent_apartment_audit_events
-                            .iter()
-                            .filter(|(_sequence, candidate)| {
-                                candidate.action
-                                    == iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunExecuted
-                                    && candidate.runtime_receipt_id == Some(receipt_id)
-                            })
-                            .count();
-                        if event.succeeded != Some(true)
-                            || receipt.mailbox_message_id.is_some()
-                            || receipt.emitted_sequence >= event.sequence
-                            || event.service_name.as_deref() != Some(receipt.service_name.as_ref())
-                            || event.service_version.as_deref()
-                                != Some(receipt.service_version.as_str())
-                            || event.handler_name.as_deref() != Some(receipt.handler_name.as_ref())
-                            || receipt_link_count != 1
-                        {
-                            return Err(invalid_soracloud_state(
-                                "soracloud_agent_apartment_audit_events",
-                                "successful autonomy execution must uniquely bind a prior local-read receipt and its exact service revision/handler",
-                            ));
-                        }
-                    } else if event.succeeded != Some(false) {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "only failed autonomy execution may omit an authoritative runtime receipt",
-                        ));
-                    }
-                }
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendRequested => {
-                    let request_id = event.request_id.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "wallet-spend request audit event is missing request_id",
-                        )
-                    })?;
-                    let asset_definition = event.asset_definition.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "wallet-spend request audit event is missing asset_definition",
-                        )
-                    })?;
-                    let amount = event.amount.as_ref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "wallet-spend request audit event is missing amount",
-                        )
-                    })?;
-                    let expected_request_id =
-                        format!("{}:wallet:{}", event.apartment_name, event.sequence);
-                    let retained_pending = apartment
-                        .pending_wallet_requests
-                        .get(request_id)
-                        .is_some_and(|request| {
-                            request.created_sequence == event.sequence
-                                && request.asset_definition == asset_definition
-                                && &request.amount == amount
-                        });
-                    let later_approval = agent_apartment_audit_events.iter().any(
-                        |(sequence, candidate)| {
-                            *sequence > event.sequence
-                                && candidate.action
-                                    == iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendApproved
-                                && candidate.apartment_name == event.apartment_name
-                                && candidate.request_id.as_deref() == Some(request_id)
-                                && candidate.asset_definition.as_deref()
-                                    == Some(asset_definition)
-                                && candidate.amount.as_ref() == Some(amount)
-                        },
-                    );
-                    if request_id != expected_request_id || !(retained_pending || later_approval) {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "wallet-spend request must have its canonical id and remain pending or resolve to an exact later approval",
-                        ));
-                    }
-                }
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendApproved => {
-                    let request_id = event.request_id.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "wallet-spend approval audit event is missing request_id",
-                        )
-                    })?;
-                    let asset_definition = event.asset_definition.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "wallet-spend approval audit event is missing asset_definition",
-                        )
-                    })?;
-                    let amount = event.amount.as_ref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "wallet-spend approval audit event is missing amount",
-                        )
-                    })?;
-                    let auto_approved_id =
-                        format!("{}:wallet:{}", event.apartment_name, event.sequence);
-                    let matching_request = agent_apartment_audit_events.iter().any(
-                        |(sequence, candidate)| {
-                            *sequence < event.sequence
-                                && candidate.action
-                                    == iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendRequested
-                                && candidate.apartment_name == event.apartment_name
-                                && candidate.request_id.as_deref() == Some(request_id)
-                                && candidate.asset_definition.as_deref()
-                                    == Some(asset_definition)
-                            && candidate.amount.as_ref() == Some(amount)
-                        },
-                    );
-                    if apartment.pending_wallet_requests.contains_key(request_id)
-                        || (request_id != auto_approved_id && !matching_request)
-                    {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "wallet-spend approval must consume pending state and be canonical auto-approval or resolve an exact prior request",
-                        ));
-                    }
-                }
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageEnqueued => {
-                    let request_id = event.request_id.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "message-enqueued audit event is missing request_id",
-                        )
-                    })?;
-                    let from_apartment = event.from_apartment.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "message-enqueued audit event is missing from_apartment",
-                        )
-                    })?;
-                    let to_apartment = event.to_apartment.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "message-enqueued audit event is missing to_apartment",
-                        )
-                    })?;
-                    let channel = event.channel.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "message-enqueued audit event is missing channel",
-                        )
-                    })?;
-                    let payload_hash = event.payload_hash.ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "message-enqueued audit event is missing payload_hash",
-                        )
-                    })?;
-                    if agent_apartments.get(&from_apartment.to_owned()).is_none() {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "message-enqueued audit sender has no authoritative apartment record",
-                        ));
-                    }
-                    let expected_message_id = format!("{to_apartment}:mail:{}", event.sequence);
-                    let retained_queued = apartment.mailbox_queue.iter().any(|message| {
-                        message.message_id == request_id
-                            && message.enqueued_sequence == event.sequence
-                            && message.from_apartment == from_apartment
-                            && message.channel == channel
-                            && message.payload_hash == payload_hash
-                    });
-                    let later_acknowledgement = agent_apartment_audit_events.iter().any(
-                        |(sequence, candidate)| {
-                            *sequence > event.sequence
-                                && candidate.action
-                                    == iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageAcknowledged
-                                && candidate.apartment_name == event.apartment_name
-                                && candidate.request_id.as_deref() == Some(request_id)
-                                && candidate.from_apartment.as_deref() == Some(from_apartment)
-                                && candidate.to_apartment.as_deref() == Some(to_apartment)
-                                && candidate.channel.as_deref() == Some(channel)
-                                && candidate.payload_hash == Some(payload_hash)
-                        },
-                    );
-                    if to_apartment != event.apartment_name.as_ref()
-                        || request_id != expected_message_id
-                        || !(retained_queued || later_acknowledgement)
-                    {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "message enqueue must have canonical routing/id and remain queued or resolve to an exact later acknowledgement",
-                        ));
-                    }
-                }
-                iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageAcknowledged => {
-                    let request_id = event.request_id.as_deref().ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "message-acknowledged audit event is missing request_id",
-                        )
-                    })?;
-                    let matching_enqueue = agent_apartment_audit_events.iter().any(
-                        |(sequence, candidate)| {
-                            *sequence < event.sequence
-                                && candidate.action
-                                    == iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageEnqueued
-                                && candidate.apartment_name == event.apartment_name
-                                && candidate.request_id.as_deref() == Some(request_id)
-                                && candidate.from_apartment == event.from_apartment
-                                && candidate.to_apartment == event.to_apartment
-                                && candidate.channel == event.channel
-                            && candidate.payload_hash == event.payload_hash
-                        },
-                    );
-                    let acknowledgement_count = agent_apartment_audit_events
-                        .iter()
-                        .filter(|(_sequence, candidate)| {
-                            candidate.action
-                                == iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageAcknowledged
-                                && candidate.apartment_name == event.apartment_name
-                                && candidate.request_id.as_deref() == Some(request_id)
-                        })
-                        .count();
-                    if !matching_enqueue
-                        || acknowledgement_count != 1
-                        || apartment
-                            .mailbox_queue
-                            .iter()
-                            .any(|message| message.message_id == request_id)
-                    {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_agent_apartment_audit_events",
-                            "message acknowledgement must uniquely consume an exact prior enqueue",
-                        ));
-                    }
-                }
-                _ => {}
-            }
-        }
+        validate_soracloud_agent_apartment_records(
+            &agent_apartments,
+            &agent_apartment_audit_events,
+        )?;
+        validate_soracloud_agent_apartment_history(
+            &agent_apartments,
+            &agent_apartment_audit_events,
+            &runtime_receipts,
+        )?;
 
         let hf_sources = self.hf_sources.view();
         for (key, source) in hf_sources.iter() {
@@ -4030,6 +2382,1694 @@ impl SoracloudInrouPersistedStateV1<'_> {
         }
         Ok(())
     }
+}
+
+/// Validate each retained service lifecycle using the caller-held authoritative views.
+#[allow(
+    clippy::too_many_lines,
+    reason = "moved original first-release restore validation remains an ordered fail-closed boundary over the caller-held views"
+)]
+#[inline(never)]
+fn validate_soracloud_service_deployment_history(
+    service_revisions: &StorageView<'_, (String, String), SoraDeploymentBundleV1>,
+    service_deployments: &StorageView<'_, Name, SoraServiceDeploymentStateV1>,
+    service_audit_events: &StorageView<'_, u64, SoraServiceAuditEventV1>,
+) -> Result<(), json::Error> {
+    use iroha_data_model::soracloud::{
+        SoraRolloutStageV1, SoraServiceConfigMutationV1,
+        SoraServiceLifecycleActionV1 as ServiceAction, SoraServiceSecretMutationV1,
+        SoracloudFhePolicyVersionLifecycleV1,
+    };
+    for (service_name, deployment) in service_deployments.iter() {
+        let history = service_audit_events
+            .iter()
+            .filter_map(|(_sequence, event)| (&event.service_name == service_name).then_some(event))
+            .collect::<Vec<_>>();
+        let Some(first_event) = history.first().copied() else {
+            return Err(invalid_soracloud_state(
+                "soracloud_service_audit_events",
+                format!("service `{service_name}` has no authoritative lifecycle history"),
+            ));
+        };
+        if first_event.action != ServiceAction::Deploy {
+            return Err(invalid_soracloud_state(
+                "soracloud_service_audit_events",
+                format!("service `{service_name}` lifecycle history must begin with Deploy"),
+            ));
+        }
+
+        let mut active_version: Option<String> = None;
+        let mut process_generation = 0_u64;
+        let mut config_generation = 0_u64;
+        let mut secret_generation = 0_u64;
+        let mut folded_configs = std::collections::BTreeMap::new();
+        let mut folded_secrets = std::collections::BTreeMap::new();
+        let mut process_started_sequence = 0_u64;
+        let mut admitted_versions = std::collections::BTreeSet::new();
+        let mut folded_rollout = None;
+        let mut folded_service_lease = None;
+
+        for event in &history {
+            let process_changed = matches!(
+                event.action,
+                ServiceAction::Deploy | ServiceAction::Upgrade | ServiceAction::Rollback
+            );
+            let expected_process_generation = if process_changed {
+                process_generation.checked_add(1).ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_service_audit_events",
+                        format!("service `{service_name}` process generation overflows u64"),
+                    )
+                })?
+            } else {
+                process_generation
+            };
+            if event.process_generation != expected_process_generation {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_audit_events",
+                    format!(
+                        "service `{service_name}` event {} has process_generation {}, expected {expected_process_generation}",
+                        event.sequence, event.process_generation
+                    ),
+                ));
+            }
+
+            let config_changed = !event.config_mutations.is_empty();
+            let expected_config_generation = if config_changed {
+                config_generation.checked_add(1).ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_service_audit_events",
+                        format!("service `{service_name}` config generation overflows u64"),
+                    )
+                })?
+            } else {
+                config_generation
+            };
+            if event.config_generation != expected_config_generation {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_audit_events",
+                    format!(
+                        "service `{service_name}` event {} config generation must advance exactly when a committed config delta is present",
+                        event.sequence
+                    ),
+                ));
+            }
+            for mutation in &event.config_mutations {
+                match mutation {
+                    SoraServiceConfigMutationV1::Upsert(entry) => {
+                        folded_configs.insert(entry.config_name.clone(), entry.clone());
+                    }
+                    SoraServiceConfigMutationV1::Delete(config_name) => {
+                        if folded_configs.remove(config_name).is_none() {
+                            return Err(invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                format!(
+                                    "service `{service_name}` event {} deletes absent config `{config_name}`",
+                                    event.sequence
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+            if iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                &folded_configs,
+            ) != event.config_snapshot_hash
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_audit_events",
+                    format!(
+                        "service `{service_name}` event {} config snapshot hash does not match replayed committed deltas",
+                        event.sequence
+                    ),
+                ));
+            }
+
+            let secret_changed = !event.secret_mutations.is_empty();
+            let expected_secret_generation = if secret_changed {
+                secret_generation.checked_add(1).ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_service_audit_events",
+                        format!("service `{service_name}` secret generation overflows u64"),
+                    )
+                })?
+            } else {
+                secret_generation
+            };
+            if event.secret_generation != expected_secret_generation {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_audit_events",
+                    format!(
+                        "service `{service_name}` event {} secret generation must advance exactly when a committed secret delta is present",
+                        event.sequence
+                    ),
+                ));
+            }
+            for mutation in &event.secret_mutations {
+                match mutation {
+                    SoraServiceSecretMutationV1::Upsert(entry) => {
+                        folded_secrets.insert(entry.secret_name.clone(), entry.clone());
+                    }
+                    SoraServiceSecretMutationV1::Delete(secret_name) => {
+                        if folded_secrets.remove(secret_name).is_none() {
+                            return Err(invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                format!(
+                                    "service `{service_name}` event {} deletes absent secret `{secret_name}`",
+                                    event.sequence
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+            if iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                &folded_secrets,
+            ) != event.secret_snapshot_hash
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_audit_events",
+                    format!(
+                        "service `{service_name}` event {} secret snapshot hash does not match replayed committed deltas",
+                        event.sequence
+                    ),
+                ));
+            }
+
+            match event.action {
+                ServiceAction::Deploy => {
+                    if active_version.is_some() || event.sequence != first_event.sequence {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` must contain exactly one initial Deploy event"
+                            ),
+                        ));
+                    }
+                }
+                ServiceAction::Upgrade | ServiceAction::Rollback => {
+                    if event.from_version.as_ref() != active_version.as_ref() {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` event {} does not continue the exact active-version history",
+                                event.sequence
+                            ),
+                        ));
+                    }
+                }
+                _ => {
+                    if active_version.as_deref() != Some(event.to_version.as_str()) {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` event {} does not bind the active revision at that sequence",
+                                event.sequence
+                            ),
+                        ));
+                    }
+                }
+            }
+
+            match event.action {
+                ServiceAction::Deploy | ServiceAction::Upgrade => {
+                    if !admitted_versions.insert(event.to_version.clone()) {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` revision `{}` has more than one admission event",
+                                event.to_version
+                            ),
+                        ));
+                    }
+                    active_version = Some(event.to_version.clone());
+                    folded_rollout = event.rollout_state.clone();
+                    if event.action == ServiceAction::Upgrade {
+                        let rollout = folded_rollout.as_ref().expect(
+                            "Upgrade action field validation requires an exact rollout state",
+                        );
+                        let candidate_bundle = service_revisions
+                            .get(&(
+                                service_name.as_ref().to_owned(),
+                                rollout.candidate_version.clone(),
+                            ))
+                            .expect("event target revision was validated above");
+                        let policy = &candidate_bundle.service.rollout;
+                        let expected_traffic = if policy.canary_percent == 0 {
+                            100
+                        } else {
+                            policy.canary_percent
+                        };
+                        if rollout.canary_percent != policy.canary_percent
+                            || rollout.traffic_percent != expected_traffic
+                            || rollout.health_failures != 0
+                            || rollout.max_health_failures
+                                != policy.automatic_rollback_failures.get()
+                            || rollout.health_window_secs != policy.health_window_secs.get()
+                        {
+                            return Err(invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                "upgrade audit rollout state must exactly match its admitted candidate policy",
+                            ));
+                        }
+                    }
+                }
+                ServiceAction::Rollout => {
+                    let previous = folded_rollout.as_ref().ok_or_else(|| {
+                        invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            "rollout progress has no preceding candidate rollout",
+                        )
+                    })?;
+                    let next = event
+                        .rollout_state
+                        .as_ref()
+                        .expect("Rollout action field validation requires an exact rollout state");
+                    if previous.stage != SoraRolloutStageV1::Canary
+                        || previous.rollout_handle != next.rollout_handle
+                        || previous.baseline_version != next.baseline_version
+                        || previous.candidate_version != next.candidate_version
+                        || previous.canary_percent != next.canary_percent
+                        || previous.max_health_failures != next.max_health_failures
+                        || previous.health_window_secs != next.health_window_secs
+                        || previous.created_sequence != next.created_sequence
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            "rollout progress must continue the exact immutable candidate rollout",
+                        ));
+                    }
+                    let healthy_transition = next.traffic_percent >= previous.traffic_percent
+                        && next.health_failures == 0;
+                    let unhealthy_transition = next.traffic_percent == previous.traffic_percent
+                        && next.health_failures == previous.health_failures.saturating_add(1)
+                        && next.stage == SoraRolloutStageV1::Canary
+                        && next.health_failures < next.max_health_failures;
+                    if !healthy_transition && !unhealthy_transition {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            "rollout progress does not describe one canonical healthy or unhealthy step",
+                        ));
+                    }
+                    folded_rollout = Some(next.clone());
+                }
+                ServiceAction::Rollback => {
+                    if let Some(next) = event.rollout_state.as_ref() {
+                        let previous = folded_rollout.as_ref().ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                "automatic rollback has no preceding candidate rollout",
+                            )
+                        })?;
+                        if previous.stage != SoraRolloutStageV1::Canary
+                            || previous.rollout_handle != next.rollout_handle
+                            || previous.baseline_version != next.baseline_version
+                            || previous.candidate_version != next.candidate_version
+                            || previous.canary_percent != next.canary_percent
+                            || previous.max_health_failures != next.max_health_failures
+                            || previous.health_window_secs != next.health_window_secs
+                            || previous.created_sequence != next.created_sequence
+                            || next.traffic_percent != 0
+                            || next.health_failures != previous.health_failures.saturating_add(1)
+                            || next.health_failures < next.max_health_failures
+                        {
+                            return Err(invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                "automatic rollback must be the exact threshold-crossing rollout transition",
+                            ));
+                        }
+                        folded_rollout = Some(next.clone());
+                    } else {
+                        folded_rollout = None;
+                    }
+                    active_version = Some(event.to_version.clone());
+                }
+                _ => {}
+            }
+
+            match event.action {
+                ServiceAction::Deploy | ServiceAction::Upgrade => {
+                    let event_bundle = service_revisions
+                        .get(&(service_name.as_ref().to_owned(), event.to_version.clone()))
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                "lease admission target has no retained bundle",
+                            )
+                        })?;
+                    let mut prior_deployment = deployment.clone();
+                    prior_deployment.service_lease = folded_service_lease.clone();
+                    let existing =
+                        (event.action == ServiceAction::Upgrade).then_some(&prior_deployment);
+                    let expected = crate::smartcontracts::isi::soracloud::build_http_service_lease_state(
+                        event_bundle,
+                        existing,
+                        event.block_height,
+                        event.action == ServiceAction::Upgrade,
+                    )
+                    .map_err(|error| {
+                        invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` lease admission transition is invalid: {error}"
+                            ),
+                        )
+                    })?;
+                    let expected_commitment = expected.as_ref().map(
+                        iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1,
+                    );
+                    if event.service_lease_commitment != expected_commitment {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` event {} must retain the exact writer-derived post-admission lease economics",
+                                event.sequence
+                            ),
+                        ));
+                    }
+                    folded_service_lease = expected;
+                }
+                ServiceAction::Rollback if event.rollout_state.is_none() => {
+                    let event_bundle = service_revisions
+                        .get(&(service_name.as_ref().to_owned(), event.to_version.clone()))
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                "explicit rollback target has no retained bundle",
+                            )
+                        })?;
+                    let mut prior_deployment = deployment.clone();
+                    prior_deployment.service_lease = folded_service_lease.clone();
+                    let expected = crate::smartcontracts::isi::soracloud::build_http_service_lease_state(
+                        event_bundle,
+                        Some(&prior_deployment),
+                        event.block_height,
+                        false,
+                    )
+                    .map_err(|error| {
+                        invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` rollback lease transition is invalid: {error}"
+                            ),
+                        )
+                    })?;
+                    let expected_commitment = expected.as_ref().map(
+                        iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1,
+                    );
+                    if event.service_lease_commitment != expected_commitment {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` explicit rollback must retain exact writer-derived lease economics"
+                            ),
+                        ));
+                    }
+                    folded_service_lease = expected;
+                }
+                ServiceAction::LeaseUsage | ServiceAction::LeaseReportingEpochRollover => {
+                    let prior = folded_service_lease.as_ref().ok_or_else(|| {
+                        invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` lease usage has no replayed hosted-service lease"
+                            ),
+                        )
+                    })?;
+                    let usage = event.lease_usage.as_ref().ok_or_else(|| {
+                        invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            "lease accounting event is missing its validated usage input",
+                        )
+                    })?;
+                    let assignment_bundle = service_revisions
+                        .get(&(
+                            service_name.as_ref().to_owned(),
+                            usage.assignment.service_version.clone(),
+                        ))
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                "lease reporter assignment references no retained revision",
+                            )
+                        })?;
+                    if !lease_usage_assignment_version_is_writer_reachable(
+                        &usage.assignment.service_version,
+                        usage.finalize_reporter,
+                        &event.to_version,
+                        folded_rollout.as_ref(),
+                    ) || assignment_bundle.service.execution_plane
+                        != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
+                        || assignment_bundle.container.runtime
+                            != iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
+                        || usage.assignment.placement.replica_slot
+                            > assignment_bundle.service.replicas.get()
+                        || usage.assignment.placement_reconciled_at_ms > event.block_timestamp_ms
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            "lease reporter assignment was not writer-reachable for the retained Inrou revision and event transition",
+                        ));
+                    }
+                    let expected = replay_soracloud_service_lease_usage(
+                        prior,
+                        usage,
+                        event.lease_reporting_epoch_rollover.as_ref(),
+                        event.block_height,
+                        deployment.accounted_storage_bytes().map_err(|error| {
+                            invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                format!(
+                                    "service `{service_name}` accounted storage is invalid: {error}"
+                                ),
+                            )
+                        })?,
+                    )
+                    .map_err(|message| {
+                        invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` lease usage event {} is not live-replayable: {message}",
+                                event.sequence
+                            ),
+                        )
+                    })?;
+                    let expected_commitment =
+                        iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1(
+                            &expected,
+                        );
+                    if event.service_lease_commitment != Some(expected_commitment) {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` lease usage event {} must commit its exact replayed post-state",
+                                event.sequence
+                            ),
+                        ));
+                    }
+                    folded_service_lease = Some(expected);
+                }
+                _ => {
+                    if event.service_lease_commitment.is_some() {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            "non-lease transition must not replace hosted-service lease state",
+                        ));
+                    }
+                }
+            }
+
+            if matches!(
+                event.action,
+                ServiceAction::StateMutation | ServiceAction::FheJobRun
+            ) {
+                let event_bundle = service_revisions
+                    .get(&(service_name.as_ref().to_owned(), event.to_version.clone()))
+                    .expect("event target revision was validated above");
+                let binding_name = event
+                    .binding_name
+                    .as_ref()
+                    .expect("state-producing action field validation requires binding_name");
+                let state_key = event
+                    .state_key
+                    .as_deref()
+                    .expect("state-producing action field validation requires state_key");
+                let binding = event_bundle
+                    .service
+                    .state_bindings
+                    .iter()
+                    .find(|binding| &binding.binding_name == binding_name)
+                    .ok_or_else(|| {
+                        invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` state-producing event {} references an undeclared binding",
+                                event.sequence
+                            ),
+                        )
+                    })?;
+                if !state_key.starts_with(&binding.key_prefix)
+                    || (event.action == ServiceAction::FheJobRun
+                        && binding.encryption
+                            != iroha_data_model::soracloud::SoraStateEncryptionV1::FheCiphertext)
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_service_audit_events",
+                        format!(
+                            "service `{service_name}` state-producing event {} does not satisfy its exact retained binding",
+                            event.sequence
+                        ),
+                    ));
+                }
+                if event.action == ServiceAction::FheJobRun {
+                    let policy_name = event
+                        .policy_name
+                        .as_ref()
+                        .expect("FHE job action field validation requires an exact policy name");
+                    let policy_digest = event
+                        .policy_snapshot_hash
+                        .expect("FHE job action field validation requires an exact policy digest");
+                    let exact_policy_exists = deployment
+                        .fhe_policy_records
+                        .get(policy_name)
+                        .is_some_and(|record| {
+                            record
+                                .versions
+                                .values()
+                                .any(|version| version.material.material_digest == policy_digest)
+                        });
+                    if !exact_policy_exists {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` FHE job event {} references no retained governed policy material",
+                                event.sequence
+                            ),
+                        ));
+                    }
+                }
+            }
+
+            if process_changed {
+                process_started_sequence = event.sequence;
+            }
+            process_generation = event.process_generation;
+            config_generation = event.config_generation;
+            secret_generation = event.secret_generation;
+        }
+
+        let exact_revision_count = usize::try_from(deployment.revision_count).map_err(|error| {
+            invalid_soracloud_state(
+                "soracloud_service_audit_events",
+                format!("service `{service_name}` revision count does not fit usize: {error}"),
+            )
+        })?;
+        if admitted_versions.len() != exact_revision_count
+            || service_revisions.iter().any(|((name, version), _bundle)| {
+                name.as_str() == service_name.as_ref() && !admitted_versions.contains(version)
+            })
+            || active_version.as_deref() != Some(deployment.current_service_version.as_str())
+            || process_generation != deployment.process_generation
+            || process_started_sequence != deployment.process_started_sequence
+            || config_generation != deployment.config_generation
+            || secret_generation != deployment.secret_generation
+            || folded_configs != deployment.service_configs
+            || folded_secrets != deployment.service_secrets
+            || folded_service_lease != deployment.service_lease
+            || folded_rollout.as_ref() != deployment.last_rollout.as_ref()
+        {
+            return Err(invalid_soracloud_state(
+                "soracloud_service_audit_events",
+                format!(
+                    "service `{service_name}` lifecycle history must exactly reconstruct its revisions, active process, material generations, and rollout head"
+                ),
+            ));
+        }
+
+        let mut expected_fhe_event_sequences = std::collections::BTreeSet::new();
+        for (policy_name, policy) in &deployment.fhe_policy_records {
+            let versions = policy.versions.iter().collect::<Vec<_>>();
+            let mut previous_admission_sequence = 0_u64;
+            for (index, (_version, state)) in versions.iter().enumerate() {
+                let expected_action = if index == 0 {
+                    ServiceAction::FhePolicyRegister
+                } else {
+                    ServiceAction::FhePolicyRotate
+                };
+                let matches = history
+                    .iter()
+                    .filter(|event| {
+                        event.action == expected_action
+                            && event.policy_name.as_ref() == Some(policy_name)
+                            && event.policy_snapshot_hash == Some(state.material.material_digest)
+                            && event.governance_tx_hash == Some(state.admitted_by_transaction_hash)
+                    })
+                    .copied()
+                    .collect::<Vec<_>>();
+                if matches.len() != 1 || matches[0].sequence <= previous_admission_sequence {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_service_audit_events",
+                        format!(
+                            "service `{service_name}` FHE policy `{policy_name}` version {} must have one ordered exact admission event",
+                            state.material.version
+                        ),
+                    ));
+                }
+                let admission_event = matches[0];
+                expected_fhe_event_sequences.insert(admission_event.sequence);
+                previous_admission_sequence = admission_event.sequence;
+                match state.lifecycle {
+                    SoracloudFhePolicyVersionLifecycleV1::Superseded => {
+                        let Some((_next_version, next_state)) = versions.get(index + 1) else {
+                            return Err(invalid_soracloud_state(
+                                "soracloud_service_deployments",
+                                "superseded FHE policy version has no successor",
+                            ));
+                        };
+                        if state.deactivated_by_transaction_hash
+                            != Some(next_state.admitted_by_transaction_hash)
+                        {
+                            return Err(invalid_soracloud_state(
+                                "soracloud_service_deployments",
+                                "superseded FHE policy version must be deactivated by its exact successor admission",
+                            ));
+                        }
+                    }
+                    SoracloudFhePolicyVersionLifecycleV1::Revoked => {
+                        let deactivation_hash = state
+                            .deactivated_by_transaction_hash
+                            .expect("revoked FHE policy validation requires deactivation hash");
+                        let revoke_matches = history
+                            .iter()
+                            .filter(|event| {
+                                event.action == ServiceAction::FhePolicyRevoke
+                                    && event.sequence > admission_event.sequence
+                                    && event.policy_name.as_ref() == Some(policy_name)
+                                    && event.policy_snapshot_hash
+                                        == Some(state.material.material_digest)
+                                    && event.governance_tx_hash == Some(deactivation_hash)
+                            })
+                            .copied()
+                            .collect::<Vec<_>>();
+                        if revoke_matches.len() != 1 {
+                            return Err(invalid_soracloud_state(
+                                "soracloud_service_audit_events",
+                                format!(
+                                    "service `{service_name}` revoked FHE policy `{policy_name}` must have one exact revocation event"
+                                ),
+                            ));
+                        }
+                        expected_fhe_event_sequences.insert(revoke_matches[0].sequence);
+                    }
+                    SoracloudFhePolicyVersionLifecycleV1::Active => {}
+                }
+            }
+        }
+        if history.iter().any(|event| {
+            matches!(
+                event.action,
+                ServiceAction::FhePolicyRegister
+                    | ServiceAction::FhePolicyRotate
+                    | ServiceAction::FhePolicyRevoke
+            ) && !expected_fhe_event_sequences.contains(&event.sequence)
+        }) {
+            return Err(invalid_soracloud_state(
+                "soracloud_service_audit_events",
+                format!("service `{service_name}` has an orphaned FHE policy lifecycle event"),
+            ));
+        }
+        for job_event in history
+            .iter()
+            .filter(|event| event.action == ServiceAction::FheJobRun)
+        {
+            let policy_name = job_event
+                .policy_name
+                .as_ref()
+                .expect("FHE job field validation requires policy_name");
+            let policy_digest = job_event
+                .policy_snapshot_hash
+                .expect("FHE job field validation requires policy_snapshot_hash");
+            let policy = deployment
+                .fhe_policy_records
+                .get(policy_name)
+                .expect("earlier FHE job validation resolved the policy record");
+            let version_state = policy
+                .versions
+                .values()
+                .find(|state| state.material.material_digest == policy_digest)
+                .expect("earlier FHE job validation resolved the policy material");
+            let admission_action = if version_state.material.version.get() == 1 {
+                ServiceAction::FhePolicyRegister
+            } else {
+                ServiceAction::FhePolicyRotate
+            };
+            let admission_sequence = history
+                .iter()
+                .find(|event| {
+                    event.action == admission_action
+                        && event.policy_name.as_ref() == Some(policy_name)
+                        && event.policy_snapshot_hash == Some(policy_digest)
+                        && event.governance_tx_hash
+                            == Some(version_state.admitted_by_transaction_hash)
+                })
+                .map(|event| event.sequence)
+                .expect("FHE lifecycle reverse closure resolved the admission event");
+            let deactivation_sequence =
+                version_state
+                    .deactivated_by_transaction_hash
+                    .map(|deactivation_hash| {
+                        history
+                            .iter()
+                            .find(|event| {
+                                matches!(
+                                    event.action,
+                                    ServiceAction::FhePolicyRotate | ServiceAction::FhePolicyRevoke
+                                ) && event.policy_name.as_ref() == Some(policy_name)
+                                    && event.governance_tx_hash == Some(deactivation_hash)
+                            })
+                            .map(|event| event.sequence)
+                            .expect("FHE lifecycle reverse closure resolved the deactivation event")
+                    });
+            if admission_sequence >= job_event.sequence
+                || deactivation_sequence.is_some_and(|sequence| job_event.sequence >= sequence)
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_audit_events",
+                    format!(
+                        "service `{service_name}` FHE job event {} must bind policy material active at that exact sequence",
+                        job_event.sequence
+                    ),
+                ));
+            }
+        }
+
+        let rollover_events = history
+            .iter()
+            .filter(|event| event.action == ServiceAction::LeaseReportingEpochRollover)
+            .copied()
+            .collect::<Vec<_>>();
+        if let Some(lease) = deployment.service_lease.as_ref() {
+            if lease.lease_started_height != first_event.block_height {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_deployments",
+                    format!(
+                        "service `{service_name}` hosted-service lease incarnation must begin at its sole Deploy event"
+                    ),
+                ));
+            }
+            let mut reporting_epoch = 1_u64;
+            let mut settled_egress_bytes = 0_u128;
+            for event in &rollover_events {
+                let rollover = event.lease_reporting_epoch_rollover.as_ref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_service_audit_events",
+                        format!(
+                            "service `{service_name}` reporting-epoch rollover event {} is missing its validated payload",
+                            event.sequence
+                        ),
+                    )
+                })?;
+                if !lease_rollover_extends_settlement_chain(
+                    rollover,
+                    lease.lease_started_height,
+                    reporting_epoch,
+                    settled_egress_bytes,
+                ) {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_service_audit_events",
+                        format!(
+                            "service `{service_name}` reporting-epoch rollover history is not one exact settlement chain"
+                        ),
+                    ));
+                }
+                reporting_epoch = rollover.new_reporting_epoch;
+                settled_egress_bytes = rollover.settled_egress_bytes;
+            }
+            if let Some(latest_event) = rollover_events.last() {
+                let latest_rollover = latest_event
+                    .lease_reporting_epoch_rollover
+                    .as_ref()
+                    .ok_or_else(|| {
+                        invalid_soracloud_state(
+                            "soracloud_service_audit_events",
+                            format!(
+                                "service `{service_name}` latest reporting-epoch rollover event is missing its validated payload"
+                            ),
+                        )
+                    })?;
+                let retains_exact_opener =
+                    lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
+                        checkpoint.reporting_epoch == latest_rollover.new_reporting_epoch
+                            && checkpoint.assignment.service_version
+                                == latest_rollover.active_service_version
+                            && checkpoint.assignment.placement.replica_slot
+                                == latest_rollover.replica_slot
+                            && checkpoint.assignment.placement.placement_incarnation
+                                == latest_rollover.placement_incarnation
+                            && checkpoint.assignment.placement.validator_account_id
+                                == latest_rollover.reporter_account_id
+                    });
+                if !retains_exact_opener {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_service_audit_events",
+                        format!(
+                            "service `{service_name}` current reporting epoch must retain the exact reporter checkpoint opened by its latest rollover"
+                        ),
+                    ));
+                }
+            }
+            if reporting_epoch != lease.reporting_epoch
+                || settled_egress_bytes != lease.settled_egress_bytes
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_audit_events",
+                    format!(
+                        "service `{service_name}` reporting-epoch audit history must exactly reconstruct lease settlement state"
+                    ),
+                ));
+            }
+        } else if !rollover_events.is_empty() {
+            return Err(invalid_soracloud_state(
+                "soracloud_service_audit_events",
+                format!(
+                    "service `{service_name}` has lease rollover events without a hosted-service lease"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate apartment records without reacquiring their authoritative audit view.
+#[allow(
+    clippy::too_many_lines,
+    reason = "moved original first-release restore validation remains an ordered fail-closed boundary over the caller-held views"
+)]
+#[inline(never)]
+fn validate_soracloud_agent_apartment_records(
+    agent_apartments: &StorageView<'_, String, SoraAgentApartmentRecordV1>,
+    agent_apartment_audit_events: &StorageView<'_, u64, SoraAgentApartmentAuditEventV1>,
+) -> Result<(), json::Error> {
+    for (key, apartment) in agent_apartments.iter() {
+        apartment.validate().map_err(|error| {
+            invalid_soracloud_state("soracloud_agent_apartments", error.to_string())
+        })?;
+        if key.as_str() != apartment.manifest.apartment_name.as_ref() {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                "storage key must match the embedded apartment_name",
+            ));
+        }
+        let accounted_bytes = apartment
+            .persistent_state
+            .key_sizes
+            .values()
+            .try_fold(0_u64, |total, bytes| total.checked_add(*bytes))
+            .ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "persistent-state byte accounting overflows u64",
+                )
+            })?;
+        if accounted_bytes != apartment.persistent_state.total_bytes
+            || accounted_bytes > apartment.manifest.state_quota_bytes.get()
+        {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                "persistent-state total_bytes must equal exact key-size accounting within the manifest quota",
+            ));
+        }
+        let deployed_event = agent_apartment_audit_events
+            .get(&apartment.deployed_sequence)
+            .ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "agent apartment is missing its exact deployment audit event",
+                )
+            })?;
+        if deployed_event.action != iroha_data_model::soracloud::SoraAgentApartmentActionV1::Deploy
+            || deployed_event.apartment_name != apartment.manifest.apartment_name
+            || deployed_event.manifest_hash != apartment.manifest_hash
+            || deployed_event.restart_count != 0
+            || apartment.lease_started_height != deployed_event.block_height
+        {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                "agent apartment deployment projection is inconsistent",
+            ));
+        }
+        let renewed_event = agent_apartment_audit_events
+            .iter()
+            .filter_map(|(_sequence, event)| {
+                (event.apartment_name == apartment.manifest.apartment_name
+                    && event.block_height == apartment.last_renewed_height
+                    && matches!(
+                        event.action,
+                        iroha_data_model::soracloud::SoraAgentApartmentActionV1::Deploy
+                            | iroha_data_model::soracloud::SoraAgentApartmentActionV1::LeaseRenew
+                    ))
+                .then_some(event)
+            })
+            .last()
+            .ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "agent apartment is missing its exact last-renewed audit event",
+                )
+            })?;
+        let expected_renew_action = if renewed_event.sequence == apartment.deployed_sequence {
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::Deploy
+        } else {
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::LeaseRenew
+        };
+        if renewed_event.action != expected_renew_action
+            || renewed_event.apartment_name != apartment.manifest.apartment_name
+            || renewed_event.lease_expires_height != apartment.lease_expires_height
+            || renewed_event.manifest_hash != apartment.manifest_hash
+        {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                "agent apartment must exactly match its last-renewed audit projection",
+            ));
+        }
+        let expected_process_generation = u64::from(apartment.restart_count)
+            .checked_add(1)
+            .ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "agent process generation overflows u64",
+                )
+            })?;
+        if apartment.process_generation != expected_process_generation {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                "process_generation must equal restart_count + 1",
+            ));
+        }
+        if apartment.restart_count == 0 {
+            if apartment.last_restart_sequence.is_some()
+                || apartment.last_restart_reason.is_some()
+                || apartment.process_started_sequence != apartment.deployed_sequence
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "never-restarted apartment must retain its deployment process generation",
+                ));
+            }
+        } else {
+            let restart_sequence = apartment.last_restart_sequence.ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "restarted apartment is missing last_restart_sequence",
+                )
+            })?;
+            let restart_event = agent_apartment_audit_events
+                .get(&restart_sequence)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartments",
+                        "restarted apartment is missing its exact restart audit event",
+                    )
+                })?;
+            if restart_event.action
+                != iroha_data_model::soracloud::SoraAgentApartmentActionV1::Restart
+                || restart_event.apartment_name != apartment.manifest.apartment_name
+                || restart_event.restart_count != apartment.restart_count
+                || restart_event.reason.as_deref() != apartment.last_restart_reason.as_deref()
+                || apartment.process_started_sequence != restart_sequence
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "agent apartment restart projection is inconsistent",
+                ));
+            }
+        }
+        let latest_direct_event = agent_apartment_audit_events
+            .iter()
+            .filter_map(|(sequence, event)| {
+                (event.apartment_name == apartment.manifest.apartment_name)
+                    .then_some((*sequence, event))
+            })
+            .max_by_key(|(sequence, _event)| *sequence)
+            .ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "agent apartment has no authoritative audit history",
+                )
+            })?;
+        if latest_direct_event.1.lease_expires_height != apartment.lease_expires_height
+            || latest_direct_event.1.manifest_hash != apartment.manifest_hash
+            || latest_direct_event.1.restart_count != apartment.restart_count
+        {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                "agent apartment must match its latest direct audit projection",
+            ));
+        }
+        let latest_activity_sequence = agent_apartment_audit_events
+            .iter()
+            .filter_map(|(sequence, event)| {
+                let direct = event.apartment_name == apartment.manifest.apartment_name;
+                let sender_enqueue = event.action
+                    == iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageEnqueued
+                    && event.from_apartment.as_deref() == Some(key.as_str());
+                (direct || sender_enqueue).then_some(*sequence)
+            })
+            .max();
+        if latest_activity_sequence != Some(apartment.last_active_sequence) {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                "last_active_sequence must equal the latest audit event that mutated the apartment",
+            ));
+        }
+        let run_count = u32::try_from(apartment.autonomy_run_history.len()).map_err(|error| {
+            invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                format!("autonomy run count does not fit u32: {error}"),
+            )
+        })?;
+        let mut spent_budget = 0_u64;
+        let mut last_checkpoint_sequence = None;
+        for run in &apartment.autonomy_run_history {
+            spent_budget = spent_budget.checked_add(run.budget_units).ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "autonomy run budget accounting overflows u64",
+                )
+            })?;
+            last_checkpoint_sequence = Some(
+                last_checkpoint_sequence.map_or(run.approved_sequence, |current: u64| {
+                    current.max(run.approved_sequence)
+                }),
+            );
+            let expected_run_id = format!("{key}:autonomy:{}", run.approved_sequence);
+            let expected_commitment =
+                iroha_data_model::soracloud::derive_agent_autonomy_request_commitment(
+                    key,
+                    &run.artifact_hash,
+                    run.provenance_hash.as_deref(),
+                    run.budget_units,
+                    &run.run_id,
+                    &run.run_label,
+                    run.workflow_input_json.as_deref(),
+                    run.approved_process_generation,
+                );
+            let event = agent_apartment_audit_events
+                .get(&run.approved_sequence)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartments",
+                        "autonomy run is missing its exact approval audit event",
+                    )
+                })?;
+            let expected_payload_hash = run
+                .workflow_input_json
+                .as_ref()
+                .map(|payload| Hash::new(payload.as_bytes()));
+            let expected_checkpoint_key =
+                crate::smartcontracts::isi::soracloud::autonomy_checkpoint_key(key, &run.run_id);
+            let expected_checkpoint_size =
+                crate::smartcontracts::isi::soracloud::autonomy_checkpoint_value_size(
+                    &run.artifact_hash,
+                    run.provenance_hash.as_deref(),
+                    &run.run_label,
+                    run.budget_units,
+                    run.workflow_input_json.as_deref(),
+                );
+            if run.run_id != expected_run_id
+                || run.request_commitment != expected_commitment
+                || run.approved_process_generation > apartment.process_generation
+                || event.action
+                    != iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunApproved
+                || event.apartment_name != apartment.manifest.apartment_name
+                || event.request_id.as_deref() != Some(run.run_id.as_str())
+                || event.run_id.as_deref() != Some(run.run_id.as_str())
+                || event.artifact_hash.as_deref() != Some(run.artifact_hash.as_str())
+                || event.provenance_hash.as_deref() != run.provenance_hash.as_deref()
+                || event.run_label.as_deref() != Some(run.run_label.as_str())
+                || event.budget_units != Some(run.budget_units)
+                || event.payload_hash != expected_payload_hash
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "autonomy run must exactly match its canonical identity, commitment, and approval event",
+                ));
+            }
+            if apartment
+                .persistent_state
+                .key_sizes
+                .get(&expected_checkpoint_key)
+                != Some(&expected_checkpoint_size)
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "autonomy run must retain its exact writer-derived checkpoint key and byte size",
+                ));
+            }
+        }
+        if apartment.persistent_state.key_sizes.len() != apartment.autonomy_run_history.len()
+            || apartment.checkpoint_count != run_count
+            || apartment.last_checkpoint_sequence != last_checkpoint_sequence
+            || apartment
+                .autonomy_budget_remaining_units
+                .checked_add(spent_budget)
+                != Some(apartment.autonomy_budget_ceiling_units)
+        {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                "autonomy history must exactly match checkpoint keys, byte accounting, and budget projections",
+            ));
+        }
+        for request in apartment.pending_wallet_requests.values() {
+            let event = agent_apartment_audit_events
+                .get(&request.created_sequence)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartments",
+                        "pending wallet request is missing its creation audit event",
+                    )
+                })?;
+            if event.action
+                != iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendRequested
+                || event.apartment_name != apartment.manifest.apartment_name
+                || event.request_id.as_deref() != Some(request.request_id.as_str())
+                || event.asset_definition.as_deref() != Some(request.asset_definition.as_str())
+                || event.amount.as_ref() != Some(&request.amount)
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "pending wallet request must exactly match its creation audit event",
+                ));
+            }
+        }
+        let mut approved_wallet_request_ids = std::collections::BTreeSet::new();
+        let mut projected_wallet_daily_spend = BTreeMap::<String, (String, u64, Quantity)>::new();
+        for (_sequence, event) in agent_apartment_audit_events.iter().filter(
+            |(_sequence, event)| {
+                event.apartment_name == apartment.manifest.apartment_name
+                    && event.action
+                        == iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendApproved
+            },
+        ) {
+            let request_id = event.request_id.as_deref().ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartment_audit_events",
+                    "wallet-spend approval is missing request_id",
+                )
+            })?;
+            if !approved_wallet_request_ids.insert(request_id.to_owned()) {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartment_audit_events",
+                    "wallet request_id must not be approved more than once",
+                ));
+            }
+            let asset_definition = event.asset_definition.as_deref().ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartment_audit_events",
+                    "wallet-spend approval is missing asset_definition",
+                )
+            })?;
+            let amount = event.amount.as_ref().ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartment_audit_events",
+                    "wallet-spend approval is missing amount",
+                )
+            })?;
+            let day_bucket = crate::smartcontracts::isi::soracloud::wallet_day_bucket(
+                event.block_timestamp_ms,
+            );
+            let aggregate_key = format!("{asset_definition}:{day_bucket}");
+            if let Some((_asset, _day, spent)) =
+                projected_wallet_daily_spend.get_mut(&aggregate_key)
+            {
+                *spent = spent.checked_add(amount).map_err(|error| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartments",
+                        format!("wallet daily-spend projection overflows: {error}"),
+                    )
+                })?;
+            } else {
+                projected_wallet_daily_spend.insert(
+                    aggregate_key,
+                    (asset_definition.to_owned(), day_bucket, amount.clone()),
+                );
+            }
+        }
+        if apartment.wallet_daily_spend.len() != projected_wallet_daily_spend.len() {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartments",
+                "wallet_daily_spend must equal the complete approved-event projection",
+            ));
+        }
+        for (aggregate_key, (asset_definition, day_bucket, spent)) in projected_wallet_daily_spend {
+            let entry = apartment
+                .wallet_daily_spend
+                .get(&aggregate_key)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartments",
+                        "wallet_daily_spend is missing an approved-event aggregate",
+                    )
+                })?;
+            if entry.asset_definition != asset_definition
+                || entry.day_bucket != day_bucket
+                || entry.spent != spent
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "wallet_daily_spend entry does not equal its approved-event aggregate",
+                ));
+            }
+        }
+        for message in &apartment.mailbox_queue {
+            let event = agent_apartment_audit_events
+                .get(&message.enqueued_sequence)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartments",
+                        "queued apartment message is missing its enqueue audit event",
+                    )
+                })?;
+            if event.action
+                != iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageEnqueued
+                || event.apartment_name != apartment.manifest.apartment_name
+                || event.request_id.as_deref() != Some(message.message_id.as_str())
+                || event.from_apartment.as_deref() != Some(message.from_apartment.as_str())
+                || event.to_apartment.as_deref() != Some(key.as_str())
+                || event.channel.as_deref() != Some(message.channel.as_str())
+                || event.payload_hash != Some(message.payload_hash)
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "queued apartment message must exactly match its enqueue audit event",
+                ));
+            }
+        }
+        for rule in apartment.artifact_allowlist.values() {
+            let event = agent_apartment_audit_events
+                .get(&rule.added_sequence)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartments",
+                        "artifact allowlist rule is missing its audit event",
+                    )
+                })?;
+            if event.action
+                != iroha_data_model::soracloud::SoraAgentApartmentActionV1::ArtifactAllowed
+                || event.apartment_name != apartment.manifest.apartment_name
+                || event.artifact_hash.as_deref() != Some(rule.artifact_hash.as_str())
+                || event.provenance_hash.as_deref() != rule.provenance_hash.as_deref()
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "artifact allowlist rule must exactly match its audit event",
+                ));
+            }
+        }
+        for capability in &apartment.revoked_policy_capabilities {
+            if !agent_apartment_audit_events
+                .iter()
+                .any(|(_sequence, event)| {
+                    event.action
+                        == iroha_data_model::soracloud::SoraAgentApartmentActionV1::PolicyRevoked
+                        && event.apartment_name == apartment.manifest.apartment_name
+                        && event.capability.as_deref() == Some(capability.as_str())
+                })
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartments",
+                    "revoked apartment capability is missing its authoritative audit event",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate apartment history against the same retained apartments and receipts.
+#[allow(
+    clippy::too_many_lines,
+    reason = "moved original first-release restore validation remains an ordered fail-closed boundary over the caller-held views"
+)]
+#[inline(never)]
+fn validate_soracloud_agent_apartment_history(
+    agent_apartments: &StorageView<'_, String, SoraAgentApartmentRecordV1>,
+    agent_apartment_audit_events: &StorageView<'_, u64, SoraAgentApartmentAuditEventV1>,
+    runtime_receipts: &StorageView<'_, Hash, SoraRuntimeReceiptV1>,
+) -> Result<(), json::Error> {
+    for event in agent_apartment_audit_events
+        .iter()
+        .map(|(_sequence, event)| event)
+    {
+        let apartment = agent_apartments
+            .get(&event.apartment_name.to_string())
+            .ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_agent_apartment_audit_events",
+                    "agent-apartment audit event has no authoritative apartment record",
+                )
+            })?;
+        if event.manifest_hash != apartment.manifest_hash {
+            return Err(invalid_soracloud_state(
+                "soracloud_agent_apartment_audit_events",
+                "agent-apartment audit manifest hash must match its immutable apartment manifest",
+            ));
+        }
+        match event.action {
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::PolicyRevoked => {
+                let capability = event.capability.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "policy-revoked audit event is missing capability",
+                    )
+                })?;
+                if !apartment.revoked_policy_capabilities.contains(capability) {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "policy-revoked audit capability is absent from the monotonic revoked set",
+                    ));
+                }
+            }
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::ArtifactAllowed => {
+                let artifact_hash = event.artifact_hash.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "artifact-allowed audit event is missing artifact_hash",
+                    )
+                })?;
+                let current_rule =
+                    apartment
+                        .artifact_allowlist
+                        .get(artifact_hash)
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_agent_apartment_audit_events",
+                                "artifact-allowed audit hash is absent from the retained allowlist",
+                            )
+                        })?;
+                if current_rule.added_sequence < event.sequence
+                    || (current_rule.added_sequence == event.sequence
+                        && current_rule.provenance_hash.as_deref()
+                            != event.provenance_hash.as_deref())
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "artifact-allowed audit event is newer than or inconsistent with the retained rule",
+                    ));
+                }
+            }
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunApproved => {
+                if !apartment
+                    .autonomy_run_history
+                    .iter()
+                    .any(|run| run.approved_sequence == event.sequence)
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "autonomy-run approval has no retained run-history record",
+                    ));
+                }
+            }
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunExecuted => {
+                let run_id = event.run_id.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "autonomy-run execution is missing run_id",
+                    )
+                })?;
+                let run = apartment
+                    .autonomy_run_history
+                    .iter()
+                    .find(|run| run.run_id == run_id)
+                    .ok_or_else(|| {
+                        invalid_soracloud_state(
+                            "soracloud_agent_apartment_audit_events",
+                            "autonomy-run execution has no exact retained approved run",
+                        )
+                    })?;
+                let execution_count = agent_apartment_audit_events
+                    .iter()
+                    .filter(|(_sequence, candidate)| {
+                        candidate.action
+                            == iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunExecuted
+                            && candidate.apartment_name == event.apartment_name
+                            && candidate.run_id.as_deref() == Some(run_id)
+                    })
+                    .count();
+                if execution_count != 1 {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "each approved autonomy run can retain at most one authoritative execution outcome",
+                    ));
+                }
+                let outcome_shape_matches = match event.succeeded {
+                    Some(true) => event.reason.is_none(),
+                    Some(false) => event
+                        .reason
+                        .as_ref()
+                        .is_some_and(|reason| !reason.trim().is_empty()),
+                    None => false,
+                };
+                if event.sequence <= run.approved_sequence
+                    || event.request_id.as_deref() != Some(run.run_id.as_str())
+                    || event.artifact_hash.as_deref() != Some(run.artifact_hash.as_str())
+                    || event.provenance_hash.as_deref() != run.provenance_hash.as_deref()
+                    || event.run_label.as_deref() != Some(run.run_label.as_str())
+                    || event.budget_units != Some(run.budget_units)
+                    || !outcome_shape_matches
+                    || event.asset_definition.is_some()
+                    || event.amount.is_some()
+                    || event.capability.is_some()
+                    || event.from_apartment.is_some()
+                    || event.to_apartment.is_some()
+                    || event.channel.is_some()
+                    || event.payload_hash.is_some()
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "autonomy-run execution must exactly bind its retained approval and writer-produced outcome shape",
+                    ));
+                }
+                if let Some(receipt_id) = event.runtime_receipt_id {
+                    let receipt = runtime_receipts.get(&receipt_id).ok_or_else(|| {
+                        invalid_soracloud_state(
+                            "soracloud_agent_apartment_audit_events",
+                            "successful autonomy execution references no authoritative runtime receipt",
+                        )
+                    })?;
+                    let receipt_link_count = agent_apartment_audit_events
+                        .iter()
+                        .filter(|(_sequence, candidate)| {
+                            candidate.action
+                                == iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunExecuted
+                                && candidate.runtime_receipt_id == Some(receipt_id)
+                        })
+                        .count();
+                    if event.succeeded != Some(true)
+                        || receipt.mailbox_message_id.is_some()
+                        || receipt.emitted_sequence >= event.sequence
+                        || event.service_name.as_deref() != Some(receipt.service_name.as_ref())
+                        || event.service_version.as_deref()
+                            != Some(receipt.service_version.as_str())
+                        || event.handler_name.as_deref() != Some(receipt.handler_name.as_ref())
+                        || receipt_link_count != 1
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_agent_apartment_audit_events",
+                            "successful autonomy execution must uniquely bind a prior local-read receipt and its exact service revision/handler",
+                        ));
+                    }
+                } else if event.succeeded != Some(false) {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "only failed autonomy execution may omit an authoritative runtime receipt",
+                    ));
+                }
+            }
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendRequested => {
+                let request_id = event.request_id.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "wallet-spend request audit event is missing request_id",
+                    )
+                })?;
+                let asset_definition = event.asset_definition.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "wallet-spend request audit event is missing asset_definition",
+                    )
+                })?;
+                let amount = event.amount.as_ref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "wallet-spend request audit event is missing amount",
+                    )
+                })?;
+                let expected_request_id =
+                    format!("{}:wallet:{}", event.apartment_name, event.sequence);
+                let retained_pending = apartment
+                    .pending_wallet_requests
+                    .get(request_id)
+                    .is_some_and(|request| {
+                        request.created_sequence == event.sequence
+                            && request.asset_definition == asset_definition
+                            && &request.amount == amount
+                    });
+                let later_approval = agent_apartment_audit_events.iter().any(
+                    |(sequence, candidate)| {
+                        *sequence > event.sequence
+                            && candidate.action
+                                == iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendApproved
+                            && candidate.apartment_name == event.apartment_name
+                            && candidate.request_id.as_deref() == Some(request_id)
+                            && candidate.asset_definition.as_deref()
+                                == Some(asset_definition)
+                            && candidate.amount.as_ref() == Some(amount)
+                    },
+                );
+                if request_id != expected_request_id || !(retained_pending || later_approval) {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "wallet-spend request must have its canonical id and remain pending or resolve to an exact later approval",
+                    ));
+                }
+            }
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendApproved => {
+                let request_id = event.request_id.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "wallet-spend approval audit event is missing request_id",
+                    )
+                })?;
+                let asset_definition = event.asset_definition.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "wallet-spend approval audit event is missing asset_definition",
+                    )
+                })?;
+                let amount = event.amount.as_ref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "wallet-spend approval audit event is missing amount",
+                    )
+                })?;
+                let auto_approved_id =
+                    format!("{}:wallet:{}", event.apartment_name, event.sequence);
+                let matching_request = agent_apartment_audit_events.iter().any(
+                    |(sequence, candidate)| {
+                        *sequence < event.sequence
+                            && candidate.action
+                                == iroha_data_model::soracloud::SoraAgentApartmentActionV1::WalletSpendRequested
+                            && candidate.apartment_name == event.apartment_name
+                            && candidate.request_id.as_deref() == Some(request_id)
+                            && candidate.asset_definition.as_deref()
+                                == Some(asset_definition)
+                        && candidate.amount.as_ref() == Some(amount)
+                    },
+                );
+                if apartment.pending_wallet_requests.contains_key(request_id)
+                    || (request_id != auto_approved_id && !matching_request)
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "wallet-spend approval must consume pending state and be canonical auto-approval or resolve an exact prior request",
+                    ));
+                }
+            }
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageEnqueued => {
+                let request_id = event.request_id.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "message-enqueued audit event is missing request_id",
+                    )
+                })?;
+                let from_apartment = event.from_apartment.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "message-enqueued audit event is missing from_apartment",
+                    )
+                })?;
+                let to_apartment = event.to_apartment.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "message-enqueued audit event is missing to_apartment",
+                    )
+                })?;
+                let channel = event.channel.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "message-enqueued audit event is missing channel",
+                    )
+                })?;
+                let payload_hash = event.payload_hash.ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "message-enqueued audit event is missing payload_hash",
+                    )
+                })?;
+                if agent_apartments.get(&from_apartment.to_owned()).is_none() {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "message-enqueued audit sender has no authoritative apartment record",
+                    ));
+                }
+                let expected_message_id = format!("{to_apartment}:mail:{}", event.sequence);
+                let retained_queued = apartment.mailbox_queue.iter().any(|message| {
+                    message.message_id == request_id
+                        && message.enqueued_sequence == event.sequence
+                        && message.from_apartment == from_apartment
+                        && message.channel == channel
+                        && message.payload_hash == payload_hash
+                });
+                let later_acknowledgement = agent_apartment_audit_events.iter().any(
+                    |(sequence, candidate)| {
+                        *sequence > event.sequence
+                            && candidate.action
+                                == iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageAcknowledged
+                            && candidate.apartment_name == event.apartment_name
+                            && candidate.request_id.as_deref() == Some(request_id)
+                            && candidate.from_apartment.as_deref() == Some(from_apartment)
+                            && candidate.to_apartment.as_deref() == Some(to_apartment)
+                            && candidate.channel.as_deref() == Some(channel)
+                            && candidate.payload_hash == Some(payload_hash)
+                    },
+                );
+                if to_apartment != event.apartment_name.as_ref()
+                    || request_id != expected_message_id
+                    || !(retained_queued || later_acknowledgement)
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "message enqueue must have canonical routing/id and remain queued or resolve to an exact later acknowledgement",
+                    ));
+                }
+            }
+            iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageAcknowledged => {
+                let request_id = event.request_id.as_deref().ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "message-acknowledged audit event is missing request_id",
+                    )
+                })?;
+                let matching_enqueue = agent_apartment_audit_events.iter().any(
+                    |(sequence, candidate)| {
+                        *sequence < event.sequence
+                            && candidate.action
+                                == iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageEnqueued
+                            && candidate.apartment_name == event.apartment_name
+                            && candidate.request_id.as_deref() == Some(request_id)
+                            && candidate.from_apartment == event.from_apartment
+                            && candidate.to_apartment == event.to_apartment
+                            && candidate.channel == event.channel
+                        && candidate.payload_hash == event.payload_hash
+                    },
+                );
+                let acknowledgement_count = agent_apartment_audit_events
+                    .iter()
+                    .filter(|(_sequence, candidate)| {
+                        candidate.action
+                            == iroha_data_model::soracloud::SoraAgentApartmentActionV1::MessageAcknowledged
+                            && candidate.apartment_name == event.apartment_name
+                            && candidate.request_id.as_deref() == Some(request_id)
+                    })
+                    .count();
+                if !matching_enqueue
+                    || acknowledgement_count != 1
+                    || apartment
+                        .mailbox_queue
+                        .iter()
+                        .any(|message| message.message_id == request_id)
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_agent_apartment_audit_events",
+                        "message acknowledgement must uniquely consume an exact prior enqueue",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn lease_usage_assignment_version_is_writer_reachable(

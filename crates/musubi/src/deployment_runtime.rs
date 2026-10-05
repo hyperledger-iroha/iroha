@@ -796,7 +796,8 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         let temporary = TempDir::new()?;
         let config = config();
         let root = temporary.path().join("absent-deployments");
-        let runtime = DeploymentRuntime::new(config.clone(), root.clone());
+        let runtime =
+            DeploymentRuntime::new(config.clone(), root.clone(), temporary.path().join("cache"));
         let alias: ContractAlias = "Counter::universal".parse()?;
         assert!(runtime.current_deployment(&alias).is_err());
         assert!(!root.exists());

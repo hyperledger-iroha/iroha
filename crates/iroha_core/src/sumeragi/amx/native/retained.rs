@@ -187,11 +187,14 @@ impl JsonSerialize for RetainedNativeAmx {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"value\":")?;
-        self.canonical().json_serialize_to(out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"value\":")?;
+            self.canonical().json_serialize_to(out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 

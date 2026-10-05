@@ -100,22 +100,26 @@ public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   case request = "request"
   /// Credit identity over the Request body transcript.
   case credit = "credit"
-  /// Positional Send verification dependencies.
-  case dependencies = "dependencies"
   /// Transition statement.
   case statement = "statement"
-  /// Transition or CreditStatus proof bytes.
+  /// The Ω‖σ `proof_digest` domain of Send, Unload and Retiring.
   case proof = "proof"
+  /// The distinct σ-only `proof_digest` domain of every other operation.
+  case stepProof = "step-proof"
+  /// Exact bytes of one lineage proof Ω with its public outputs.
+  case lineage = "lineage"
   /// Provider commit receipt transcript.
   case receiptBody = "receipt-body"
   /// Provider commit receipt digest.
   case receipt = "receipt"
   /// Complete state package.
   case `package` = "package"
-  /// Complete canonical Payment.
+  /// Complete canonical compact Payment.
   case payment = "payment"
-  /// Read-only CreditStatus statement.
-  case creditStatusStatement = "credit-status-statement"
+  /// Compressed credit-digest opening carried by a CreditStatus.
+  case creditOpening = "credit-opening"
+  /// Read-only CreditStatus of a folded head.
+  case creditStatus = "credit-status"
   /// Delivery evidence.
   case credited = "credited"
   /// Provider operation identity.
@@ -128,6 +132,8 @@ public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   case marker = "marker"
   /// Local completion record frame.
   case completion = "completion"
+  /// Durable fold record of one self-verified Ω.
+  case fold = "fold"
   /// Signed load voucher transcript.
   case voucherBody = "voucher-body"
   /// Load voucher digest.
@@ -168,13 +174,15 @@ public enum KagemushaWalletMessageKindV1: UInt32, CaseIterable, Sendable {
   case sessionControl = 5
   /// Nonmonetary policy data.
   case policyData = 6
+  /// Ω of the payer's folded head, sent only after an authenticated Offer.
+  case lineage = 7
 
   /// Maximum complete canonical envelope frame of this kind, header and padding included.
   public var maximumFrameBytes: Int {
     switch self {
     case .offer, .sessionControl:
       KagemushaWalletWireV1.sessionMaximumBytes
-    case .request, .payment, .credited, .policyData:
+    case .request, .payment, .credited, .policyData, .lineage:
       KagemushaWalletWireV1.messageMaximumBytes
     }
   }
@@ -184,7 +192,7 @@ public enum KagemushaWalletMessageKindV1: UInt32, CaseIterable, Sendable {
     switch self {
     case .offer, .sessionControl:
       KagemushaWalletWireV1.sessionTextMaximumBytes
-    case .request, .payment, .credited, .policyData:
+    case .request, .payment, .credited, .policyData, .lineage:
       KagemushaWalletWireV1.messageTextMaximumBytes
     }
   }
@@ -195,31 +203,35 @@ public enum KagemushaWalletMessageKindV1: UInt32, CaseIterable, Sendable {
   var versionFieldPath: [Int] {
     switch self {
     case .offer, .request: [0, 0, 0]
-    case .payment, .credited, .sessionControl, .policyData: [0, 0]
+    case .payment, .credited, .sessionControl, .policyData, .lineage: [0, 0]
     }
   }
 
-  /// Field path, from the variant fields, to the scheme checked at decode (design C5): the body
-  /// scheme of Offer and Request, the Request body scheme of Payment, the receiver credential
-  /// body scheme of Credited, and the message's own scheme field otherwise.
+  /// Field path, from the variant fields, to the scheme checked at decode (wire record §3.4):
+  /// the body scheme of Offer and Request, the carried signed Request body's scheme of Payment
+  /// (`{version, request: {body, signature}, …}`), Ω's public scheme of Lineage
+  /// (`{version, lineage: {public: {version, scheme_id, …}, proof}}`), and the message's own
+  /// scheme field otherwise (Credited `{version, scheme_id, evidence}`, SessionControl and
+  /// PolicyData).
   var schemeFieldPath: [Int] {
     switch self {
     case .offer, .request: [0, 0, 1]
-    case .payment: [0, 1, 0, 1]
-    case .credited: [0, 3, 0, 1]
-    case .sessionControl, .policyData: [0, 1]
+    case .payment, .lineage: [0, 1, 0, 1]
+    case .credited, .sessionControl, .policyData: [0, 1]
     }
   }
 }
 
-/// One canonical envelope frame whose header, versions, per-kind bound and scheme were checked.
+/// One canonical envelope frame whose header, versions and per-kind bound were checked.
 ///
+/// ``KagemushaWalletWireV1/validateEnvelope(_:expectedSchemeID:)`` also checked ``schemeID``
+/// against the expected scheme; ``KagemushaWalletWireV1/inspectEnvelope(_:)`` did not.
 /// Structural only: the caller must still run the typed decoder, `validate()` and signature
 /// verification before acting on the message.
 public struct KagemushaWalletEnvelopeFrameV1: Equatable, Sendable {
   /// Message kind selected by the envelope's wire tag.
   public let kind: KagemushaWalletMessageKindV1
-  /// Scheme identity checked at decode (32 bytes).
+  /// Scheme identity the frame names at its decode-time scheme field (32 bytes).
   public let schemeID: Data
   /// Complete canonical frame bytes.
   public let canonicalBytes: Data
@@ -235,7 +247,8 @@ public enum KagemushaWalletWireV1 {
   public static let textPrefix = "kgm1:"
   /// Maximum complete canonical envelope frame for Offer and SessionControl.
   public static let sessionMaximumBytes = 2_048
-  /// Maximum complete canonical envelope frame for Request, Payment, Credited and PolicyData.
+  /// Maximum complete canonical envelope frame for Request, Payment, Credited, PolicyData and
+  /// Lineage.
   public static let messageMaximumBytes = 10_000
   /// Maximum complete `kgm1:` text of a session-bounded envelope (2_736).
   public static let sessionTextMaximumBytes = constantTextMaximumBytes(sessionMaximumBytes)
@@ -475,12 +488,9 @@ public enum KagemushaWalletWireV1 {
 
   /// Validate one canonical envelope frame for `expectedSchemeID` (design §0 order).
   ///
-  /// Rejects, in order: a frame above the largest bound (before any parsing); a Norito header
-  /// that is malformed, has nonzero padding or a CRC64 mismatch (`frame.header`); another
-  /// schema hash than the envelope frame name's (`frame.schema`); flags other than
-  /// `COMPACT_LEN` (`frame.flags`); padding other than the envelope's 16-byte payload alignment
-  /// (`frame.padding`); a malformed field layout; another envelope or message version; an
-  /// unknown message tag; a frame above its kind's bound; and another scheme.
+  /// Rejects, in order: a frame above the largest bound (before any parsing); an expected
+  /// scheme that is not 32 bytes; then everything ``inspectEnvelope(_:)`` rejects; and finally
+  /// another scheme.
   ///
   /// - Throws: ``KagemushaWalletWireErrorV1``.
   public static func validateEnvelope(
@@ -493,6 +503,32 @@ public enum KagemushaWalletWireV1 {
     }
     guard expectedSchemeID.count == digestBytes else {
       throw KagemushaWalletWireErrorV1.invalidField("expected_scheme_id")
+    }
+    let envelope = try inspectEnvelope(frame)
+    guard envelope.schemeID == expectedSchemeID else {
+      throw KagemushaWalletWireErrorV1.schemeMismatch(field: "envelope.scheme_id")
+    }
+    return envelope
+  }
+
+  /// Validate one canonical envelope frame without the expected-scheme check.
+  ///
+  /// This is the structural check a carrier applies before handing a complete bounded message
+  /// to the wallet, and the check a receiver applies to an Offer of an unknown scheme before
+  /// answering UnsupportedScheme (wire record §3.4). It rejects, in order: a frame above the
+  /// largest bound (before any parsing); a Norito header that is malformed, has nonzero padding
+  /// or a CRC64 mismatch (`frame.header`); another schema hash than the envelope frame name's
+  /// (`frame.schema`); flags other than `COMPACT_LEN` (`frame.flags`); padding other than the
+  /// envelope's 16-byte payload alignment (`frame.padding`); a malformed field layout; another
+  /// envelope or message version; an unknown message tag; a frame above its kind's bound; and a
+  /// scheme field that is not 32 bytes. The returned ``KagemushaWalletEnvelopeFrameV1/schemeID``
+  /// is the scheme the frame names, not one the caller trusts.
+  ///
+  /// - Throws: ``KagemushaWalletWireErrorV1``.
+  public static func inspectEnvelope(_ frame: Data) throws -> KagemushaWalletEnvelopeFrameV1 {
+    guard frame.count <= messageMaximumBytes else {
+      throw KagemushaWalletWireErrorV1.encodedSizeExceeded(
+        actual: frame.count, maximum: messageMaximumBytes)
     }
     let canonical = Data(frame)
     guard let decoded = noritoDecodeFrame(canonical) else {
@@ -558,11 +594,8 @@ public enum KagemushaWalletWireV1 {
     guard schemeRange.count == digestBytes else {
       throw KagemushaWalletWireErrorV1.invalidField("envelope.scheme_id")
     }
-    let schemeID = Data(payload[schemeRange])
-    guard schemeID == expectedSchemeID else {
-      throw KagemushaWalletWireErrorV1.schemeMismatch(field: "envelope.scheme_id")
-    }
-    return KagemushaWalletEnvelopeFrameV1(kind: kind, schemeID: schemeID, canonicalBytes: canonical)
+    return KagemushaWalletEnvelopeFrameV1(
+      kind: kind, schemeID: Data(payload[schemeRange]), canonicalBytes: canonical)
   }
 
   /// Strictly decode `kgm1:` text and validate the envelope frame it carries.

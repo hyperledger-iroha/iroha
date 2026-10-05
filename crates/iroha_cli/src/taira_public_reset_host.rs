@@ -27,15 +27,15 @@ pub(super) use write_canary::CoreWriteTransport;
 
 use super::executor_model::{ExecutionStep, RecoveryProgress, ResetTransport};
 use super::{
-    AccountOnboardingPlanRequestV1, AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1, EdgeV1,
-    EndpointV1, InventoryV1, PUBLIC_ROOT, PinnedArtifact, PriorValidatorServiceStateV1,
-    RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome, TrustedKeyV1,
-    ValidatorV1, artifact, authorization_semantic_sha256, ensure_authorization_current,
-    ensure_pinned_unchanged, now_unix_ms, open_pinned_regular, pin_owner_private_file,
-    read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex, validate_inventory,
-    validate_owner_private_dir, validate_validator_genesis_config,
-    validate_validator_operator_config, validator_operator_public_key,
-    verify_execution_authorization,
+    AccountOnboardingPlanRequestV1, AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1,
+    BUILD_TARGET, EdgeV1, EndpointV1, InventoryV1, PUBLIC_ROOT, PinnedArtifact,
+    PriorValidatorServiceStateV1, RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1,
+    RecoveryOutcome, TrustedKeyV1, ValidatorV1, artifact, authorization_semantic_sha256,
+    ensure_authorization_current, ensure_pinned_unchanged, host_pair, now_unix_ms,
+    open_pinned_regular, pin_owner_private_file, read_pinned_bytes, read_private_json,
+    revalidate_pinned, sha256_hex, validate_inventory, validate_owner_private_dir,
+    validate_validator_genesis_config, validate_validator_operator_config,
+    validator_operator_public_key, verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, ensure, eyre};
@@ -415,7 +415,6 @@ struct HostRequestV1 {
     trusted_key_base64: String,
     trusted_key_sha256: String,
     action_deadline_unix_ms: u64,
-    #[norito(required)]
     phase_checkpoints: Vec<super::host_pair::SignedHostPhaseV1>,
     artifact_role: String,
     artifact_sha256: String,
@@ -16675,7 +16674,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         };
         let receipt = self.bootstrap_and_dispatch_edge(&inventory.edge, action, timeout_secs)?;
         if action == HostAction::EdgeVerify {
-            let native = json::json!({ "schema": "iroha.taira.public-reset.native-edge-ready.v1", "receipt": receipt });
+            let native = norito::json!({ "schema": "iroha.taira.public-reset.native-edge-ready.v1", "receipt": receipt });
             self.retain_phase(super::host_pair::HostPhaseV1::NativeEdgeReady, &native)?;
             let public = self.verify_public_frontier(timeout_secs)?;
             self.retain_phase(super::host_pair::HostPhaseV1::DeploymentProven, &public)?;
@@ -21426,6 +21425,26 @@ pub(super) mod tests {
             .expect("canonical lowercase boot UUID");
         assert!(validate_boot_id("01234567-89AB-cdef-0123-456789abcdef").is_err());
         assert!(validate_boot_id("0123456789abcdef0123456789abcdef").is_err());
+    }
+
+    #[test]
+    fn host_request_requires_explicit_phase_checkpoint_field() {
+        let request = sample_request();
+        let canonical = json::to_vec(&request).expect("canonical host request");
+        let decoded: HostRequestV1 = json::from_slice(&canonical).expect("current host request");
+        assert!(decoded.phase_checkpoints.is_empty());
+        assert_eq!(json::to_vec(&decoded).unwrap(), canonical);
+
+        let mut missing = json::to_value(&request).unwrap();
+        missing.as_object_mut().unwrap().remove("phase_checkpoints");
+        let error = json::from_value::<HostRequestV1>(missing).unwrap_err();
+        assert!(error.to_string().contains("phase_checkpoints"));
+
+        let mut null = json::to_value(&request).unwrap();
+        null.as_object_mut()
+            .unwrap()
+            .insert("phase_checkpoints".into(), json::Value::Null);
+        assert!(json::from_value::<HostRequestV1>(null).is_err());
     }
 
     #[test]

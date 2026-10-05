@@ -278,7 +278,7 @@ fn revalidate_regular_commitment_file(
 /// Propagates [`DaSpoolError`] when the spool directory cannot be read.
 pub fn load_commitment_store(spool_dir: &Path) -> Result<DaCommitmentStore, DaSpoolError> {
     match load_commitment_bundle(spool_dir)? {
-        Some(bundle) => Ok(DaCommitmentStore::from_bundle(&bundle.commitments)),
+        Some(bundle) => Ok(DaCommitmentStore::from_bundle(bundle.commitments())),
         None => Ok(DaCommitmentStore::default()),
     }
 }
@@ -491,10 +491,10 @@ mod tests {
         let bundle = load_commitment_bundle(dir.path())
             .expect("load bundle")
             .expect("bundle present");
-        assert_eq!(bundle.commitments.len(), 2);
+        assert_eq!(bundle.commitments().len(), 2);
         // Sorted by lane then sequence, so record_b should come first.
-        assert_eq!(bundle.commitments[0].lane_id, LaneId::new(1));
-        assert_eq!(bundle.commitments[0].sequence, 1);
+        assert_eq!(bundle.commitments()[0].lane_id, LaneId::new(1));
+        assert_eq!(bundle.commitments()[0].sequence, 1);
     }
     #[test]
     fn ignores_commitment_schedule_sidecars() {
@@ -517,7 +517,7 @@ mod tests {
         let bundle = load_commitment_bundle(dir.path())
             .expect("load bundle")
             .expect("bundle present");
-        assert_eq!(bundle.commitments, vec![record]);
+        assert_eq!(bundle.commitments(), vec![record]);
         assert!(
             schedule_path.exists(),
             "sidecar should be left for its owner"

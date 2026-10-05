@@ -8,7 +8,8 @@
 //! - [`poseidon`]: the RP57 width-3 Pow5 permutation lane (37 rows and 148
 //!   cells per permutation, the M8 layout) and the KAGEMUSHA
 //!   domain/arity-prefixed sponge on it, bit for bit
-//!   [`iroha_pasta::poseidon`] and `kagemusha_v1_poseidon::hash`;
+//!   [`iroha_pasta::poseidon`] and the `kagemusha_v1_poseidon` vectors of
+//!   `fixtures/native_prover/kats_v1.json`;
 //! - [`range`]: running-sum range checks against a `2^b`-row table, and
 //!   checked `u128`/`u64` add, subtract and compare whose overflow or
 //!   underflow has no satisfying assignment;

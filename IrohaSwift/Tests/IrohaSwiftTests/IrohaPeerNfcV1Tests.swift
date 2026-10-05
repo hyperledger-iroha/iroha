@@ -147,7 +147,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         let request = try message(kind: .request, byte: 0x51, count: 260)
         let payment = try message(kind: .payment, byte: 0x52, count: 530)
-        let acknowledgement = try message(kind: .acknowledgement, byte: 0x53, count: 200)
+        let acknowledgement = try message(kind: .credited, byte: 0x53, count: 200)
         var receiver = try IrohaPeerNfcReceiverSessionV1(
             sessionID: sessionID,
             receiveRequest: request.encoded,
@@ -290,10 +290,10 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             maximumReadChunkBytes: 128,
             maximumWriteChunkBytes: 128
         )
-        let policy = IrohaPeerNfcProfilePolicyV1(profile: .kagemushaV1)
+        let policy = IrohaPeerNfcProfilePolicyV1(profile: .kagemushaWalletV1)
         let request = try message(kind: .request, byte: 0x51, count: 260)
         let payment = try message(kind: .payment, byte: 0x52, count: 530)
-        let acknowledgement = try message(kind: .acknowledgement, byte: 0x53, count: 200)
+        let acknowledgement = try message(kind: .credited, byte: 0x53, count: 200)
         let begin = IrohaPeerNfcCommandV1.beginPayment(
             sessionID: sessionID,
             requestCanonicalHash: request.canonicalHash,
@@ -415,7 +415,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         let receiver = try IrohaPeerNfcReceiverSessionV1(
             sessionID: sessionID,
             receiveRequest: request.encoded,
-            profilePolicy: .init(profile: .kagemushaV1),
+            profilePolicy: .init(profile: .kagemushaWalletV1),
             limits: limits
         )
         guard case .requiresDurableAdmission(let context) =
@@ -424,7 +424,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
                 requestCanonicalHash: request.canonicalHash,
                 paymentHeader: payment.header.bytes
             )) else {
-            return XCTFail("current KagemushaV1 BEGIN must require durable admission")
+            return XCTFail("current wallet BEGIN must require durable admission")
         }
         let encoded = try IrohaPeerNfcDurablePaymentAdmissionV1(
             context: context,
@@ -444,7 +444,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         let request = try message(kind: .request, byte: 0x61, count: 100)
         let payment = try message(kind: .payment, byte: 0x62, count: 300)
-        let acknowledgement = try message(kind: .acknowledgement, byte: 0x63, count: 100)
+        let acknowledgement = try message(kind: .credited, byte: 0x63, count: 100)
         var receiver = try readyReceiver(
             request: request,
             payment: payment,
@@ -487,7 +487,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         let request = try message(kind: .request, byte: 0x71, count: 140)
         let payment = try message(kind: .payment, byte: 0x72, count: 490)
-        let acknowledgement = try message(kind: .acknowledgement, byte: 0x73, count: 200)
+        let acknowledgement = try message(kind: .credited, byte: 0x73, count: 200)
         let checkpoint = try IrohaPeerNfcSenderCheckpointV1(
             sessionID: sessionID,
             receiveRequest: request.encoded,
@@ -597,7 +597,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         let request = try message(kind: .request, byte: 0x81, count: 420)
         let payment = try message(kind: .payment, byte: 0x82, count: 820)
-        let acknowledgement = try message(kind: .acknowledgement, byte: 0x83, count: 200)
+        let acknowledgement = try message(kind: .credited, byte: 0x83, count: 200)
         var receiver = try IrohaPeerNfcReceiverSessionV1(
             sessionID: sessionID,
             receiveRequest: request.encoded,
@@ -714,28 +714,28 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
     }
 
-    func testKagemushaV1SessionStaysSingleProfile() throws {
-        let kagemushaV1Payment = try message(
-            profile: .kagemushaV1,
+    func testWalletSessionStaysSingleProfile() throws {
+        let walletPayment = try message(
+            profile: .kagemushaWalletV1,
             kind: .payment,
             byte: 0x92,
             count: 360
         )
 
         let request = try message(
-            profile: .kagemushaV1,
+            profile: .kagemushaWalletV1,
             kind: .request,
             byte: 0x94,
             count: 120
         )
-        let payment = kagemushaV1Payment
+        let payment = walletPayment
         let acknowledgement = try message(
-            profile: .kagemushaV1,
-            kind: .acknowledgement,
+            profile: .kagemushaWalletV1,
+            kind: .credited,
             byte: 0x93,
             count: 140
         )
-        let policy = IrohaPeerNfcProfilePolicyV1(profile: .kagemushaV1)
+        let policy = IrohaPeerNfcProfilePolicyV1(profile: .kagemushaWalletV1)
         let limits = IrohaPeerNfcLimitsV1(
             maximumReadChunkBytes: 240,
             maximumWriteChunkBytes: 240
@@ -760,17 +760,17 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         }
         guard case .send(let commit) = try reducer.nextAction(observing: receiver.status()),
               case .requiresDurableCommit(let context) = try receiver.prepareCommit(commit) else {
-            return XCTFail("expected KagemushaV1 COMMIT")
+            return XCTFail("expected wallet COMMIT")
         }
-        XCTAssertEqual(context.identity.profile, .kagemushaV1)
-        XCTAssertEqual(context.payment.profile, .kagemushaV1)
+        XCTAssertEqual(context.identity.profile, .kagemushaWalletV1)
+        XCTAssertEqual(context.payment.profile, .kagemushaWalletV1)
         let record = try IrohaPeerNfcDurableAcknowledgementV1(
             context: context,
             acknowledgement: acknowledgement.encoded,
             limits: limits
         )
-        XCTAssertEqual(record.paymentProfile, .kagemushaV1)
-        XCTAssertEqual(record.acknowledgement.profile, .kagemushaV1)
+        XCTAssertEqual(record.paymentProfile, .kagemushaWalletV1)
+        XCTAssertEqual(record.acknowledgement.profile, .kagemushaWalletV1)
         XCTAssertEqual(
             try IrohaPeerNfcDurableAcknowledgementV1.decode(record.encoded, limits: limits),
             record
@@ -785,9 +785,9 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         try receiver.installDurableAcknowledgement(record)
         let status = try receiver.status()
-        XCTAssertEqual(status.identity.profile, .kagemushaV1)
-        XCTAssertEqual(status.paymentProfile, .kagemushaV1)
-        XCTAssertEqual(status.acknowledgementProfile, .kagemushaV1)
+        XCTAssertEqual(status.identity.profile, .kagemushaWalletV1)
+        XCTAssertEqual(status.paymentProfile, .kagemushaWalletV1)
+        XCTAssertEqual(status.acknowledgementProfile, .kagemushaWalletV1)
         XCTAssertEqual(try IrohaPeerNfcStatusV1.decode(status.encode()), status)
     }
 
@@ -803,7 +803,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         let request = try message(kind: .request, byte: 0xA1, count: 880)
         let payment = try message(kind: .payment, byte: 0xA2, count: 1_100)
         let acknowledgement = try message(
-            kind: .acknowledgement,
+            kind: .credited,
             byte: 0xA3,
             count: 200
         )
@@ -883,7 +883,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             count: 1_330
         )
         let acknowledgement = try message(
-            kind: .acknowledgement,
+            kind: .credited,
             byte: 0xB3,
             count: 200
         )
@@ -896,7 +896,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
 
         let result = try await IrohaPeerNfcReaderExchangeV1.run(
-            profilePolicy: .init(profile: .kagemushaV1),
+            profilePolicy: .init(profile: .kagemushaWalletV1),
             limits: limits,
             transceive: { command in
                 try await loopback.transceive(command)
@@ -974,7 +974,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
             do {
                 _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                    profilePolicy: .init(profile: .kagemushaV1),
+                    profilePolicy: .init(profile: .kagemushaWalletV1),
                     limits: IrohaPeerNfcLimitsV1(
                         maximumReadChunkBytes: 240,
                         maximumWriteChunkBytes: 240
@@ -1011,18 +1011,24 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
     }
 
-    func testDefaultNfcLimitCarriesExactMaximumKagemushaV1IPM() throws {
+    func testDefaultNfcLimitCarriesExactMaximumWalletIPM() throws {
         let request = try message(
             kind: .request,
             byte: 0xBC,
             count: 100
         )
-        let payment = try message(
+        let payment = try IrohaPeerWireMessageV1(
+            profile: .kagemushaWalletV1,
             kind: .payment,
-            byte: 0xBD,
-            count: 7_504
+            schemaVersion: 1,
+            canonicalPayload: irohaPeerWalletStructuralEnvelopeV1(
+                kind: .payment,
+                frameBytes: IrohaPeerWireLimitsV1.maximumWalletProfileBytes,
+                filler: { Data(repeating: 0xBD, count: $0) }
+            )
         )
         XCTAssertEqual(payment.encoded.count, IrohaPeerNfcV1.maximumMessageBytes)
+        XCTAssertEqual(IrohaPeerNfcV1.maximumMessageBytes, 10_084)
 
         let receiver = try readyReceiver(
             request: request,
@@ -1039,14 +1045,18 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         }
         XCTAssertEqual(context.payment, payment)
 
-        XCTAssertThrowsError(try message(
+        XCTAssertThrowsError(try IrohaPeerWireMessageV1(
+            profile: .kagemushaWalletV1,
             kind: .payment,
-            byte: 0xBE,
-            count: 7_505
+            schemaVersion: 1,
+            canonicalPayload: irohaPeerWalletStructuralEnvelopeV1(
+                kind: .payment,
+                frameBytes: IrohaPeerWireLimitsV1.maximumWalletProfileBytes + 1
+            )
         )) {
             XCTAssertEqual(
                 $0 as? IrohaPeerWireMessageErrorV1,
-                .canonicalLengthOutOfRange(actual: 7_553, maximum: 7_552)
+                .canonicalLengthOutOfRange(actual: 10_001, maximum: 10_000)
             )
         }
     }
@@ -1072,7 +1082,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .kagemushaV1),
+                profilePolicy: .init(profile: .kagemushaWalletV1),
                 maximumActions: 6,
                 transceive: { command in
                     try await probe.transceive(command)
@@ -1126,7 +1136,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .kagemushaV1),
+                profilePolicy: .init(profile: .kagemushaWalletV1),
                 maximumActions: 2 + request.encoded.count,
                 transceive: { command in
                     try await probe.transceive(command)
@@ -1160,7 +1170,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         let payment = try message(kind: .payment, byte: 0xC1, count: 40)
         let acknowledgement = try message(
-            kind: .acknowledgement,
+            kind: .credited,
             byte: 0xC2,
             count: 40
         )
@@ -1185,7 +1195,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
                 restoredCheckpoint: checkpoint.encoded,
-                profilePolicy: .init(profile: .kagemushaV1),
+                profilePolicy: .init(profile: .kagemushaWalletV1),
                 limits: limits,
                 maximumActions: 2,
                 transceive: { command in
@@ -1219,7 +1229,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         let payment = try message(kind: .payment, byte: 0xC4, count: 40)
         let acknowledgement = try message(
-            kind: .acknowledgement,
+            kind: .credited,
             byte: 0xC5,
             count: 40
         )
@@ -1241,7 +1251,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .kagemushaV1),
+                profilePolicy: .init(profile: .kagemushaWalletV1),
                 limits: limits,
                 maximumActions: actionsBeforeAcknowledgementPersistence,
                 transceive: { command in
@@ -1283,7 +1293,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         let payment = try message(kind: .payment, byte: 0xD2, count: 400)
         let acknowledgement = try message(
-            kind: .acknowledgement,
+            kind: .credited,
             byte: 0xD3,
             count: 200
         )
@@ -1304,7 +1314,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             maximumActions: Int = IrohaPeerNfcReaderExchangeV1.defaultMaximumActions
         ) async throws -> IrohaPeerNfcReaderExchangeResultV1 {
             try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .kagemushaV1),
+                profilePolicy: .init(profile: .kagemushaWalletV1),
                 limits: limits,
                 maximumActions: maximumActions,
                 transceive: { command in
@@ -1366,7 +1376,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         let payment = try message(kind: .payment, byte: 0xD5, count: 400)
         let acknowledgement = try message(
-            kind: .acknowledgement,
+            kind: .credited,
             byte: 0xD6,
             count: 200
         )
@@ -1385,7 +1395,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .kagemushaV1),
+                profilePolicy: .init(profile: .kagemushaWalletV1),
                 limits: limits,
                 transceive: { command in
                     try await loopback.transceive(command)
@@ -1410,7 +1420,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         XCTAssertNil(
             try IrohaPeerNfcSenderCheckpointV1.decode(
                 paymentOnlyCheckpoint,
-                profilePolicy: .init(profile: .kagemushaV1),
+                profilePolicy: .init(profile: .kagemushaWalletV1),
                 limits: limits
             ).durableAcknowledgement
         )
@@ -1419,7 +1429,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         let result = try await IrohaPeerNfcReaderExchangeV1.run(
             restoredCheckpoint: paymentOnlyCheckpoint,
-            profilePolicy: .init(profile: .kagemushaV1),
+            profilePolicy: .init(profile: .kagemushaWalletV1),
             limits: limits,
             transceive: { command in
                 try await loopback.transceive(command)
@@ -1454,7 +1464,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             count: 780
         )
         let acknowledgement = try message(
-            kind: .acknowledgement,
+            kind: .credited,
             byte: 0xC3,
             count: 200
         )
@@ -1479,7 +1489,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             ) async throws -> IrohaPeerNfcReaderExchangeResultV1 {
                 try await IrohaPeerNfcReaderExchangeV1.run(
                     restoredCheckpoint: restoredCheckpoint,
-                    profilePolicy: .init(profile: .kagemushaV1),
+                    profilePolicy: .init(profile: .kagemushaWalletV1),
                     limits: limits,
                     transceive: { command in
                         try await loopback.transceive(command)
@@ -1579,7 +1589,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         XCTAssertThrowsError(try IrohaPeerNfcDurableAcknowledgementV1(
             context: IrohaPeerNfcCommitContextV1(
                 identity: try identity(for: request),
-                profilePolicy: .init(profile: .kagemushaV1),
+                profilePolicy: .init(profile: .kagemushaWalletV1),
                 payment: payment
             ),
             acknowledgement: payment.encoded
@@ -1593,14 +1603,14 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
     }
 
     private func message(
-        profile: IrohaPeerPayloadProfile = .kagemushaV1,
+        profile: IrohaPeerPayloadProfile = .kagemushaWalletV1,
         kind: IrohaPeerPayloadKind,
         byte: UInt8,
         count: Int
     ) throws -> IrohaPeerWireMessageV1 {
         let payload = Data(repeating: byte, count: count)
-        let canonicalPayload = profile == .kagemushaV1
-            ? irohaPeerKagemushaStructuralArchiveV1(kind: kind, payload: payload)
+        let canonicalPayload = profile == .kagemushaWalletV1
+            ? irohaPeerWalletStructuralEnvelopeV1(kind: kind, payload: payload)
             : payload
         return try IrohaPeerWireMessageV1(
             profile: profile,
@@ -1856,7 +1866,7 @@ private struct IrohaPeerNfcTransactionalCheckpointStoreSnapshotV1: Sendable {
 private actor IrohaPeerNfcTransactionalCheckpointStoreV1 {
     private let payment: IrohaPeerWireMessageV1
     private let limits: IrohaPeerNfcLimitsV1
-    private let profilePolicy = IrohaPeerNfcProfilePolicyV1(profile: .kagemushaV1)
+    private let profilePolicy = IrohaPeerNfcProfilePolicyV1(profile: .kagemushaWalletV1)
     private var encodedCheckpoint: Data?
     private var failNextLoadOrCreate: Bool
     private var failNextUpdate: Bool

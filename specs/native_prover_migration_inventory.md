@@ -100,7 +100,7 @@ criteria).
 | `sorafs_manifest::pop_credentials::zk` (own `poseidon-primitives` Poseidon, `zk.rs:100-115`) | halo2-axiom | P V H | SoraFS PoP credentials (irohad runtime provider). Live: unknown | M2(a). TODO: PoP Poseidon KATs |
 | `iroha_js_host` (`kaigi_proof_v1.rs`, OsRng; `confidential_wallet.rs` through `iroha_core_zk`) | halo2-axiom | P | npm package | M2(b)(c), caller RNG |
 | `xtask` `vote_tally.rs` (feature `dev-vote-fixture`) | halo2-axiom | P | Fixture only | M2(d) |
-| `iroha_plonk_oracle` (imports `halo2_axiom`, not `halo2_proofs`) | halo2-axiom, halo2-base, snark-verifier (halo2-ecc transitively) | P V T H | None (test only, `publish = false`). Reads `iroha_core_zk/src/prover_golden_tests.rs` at run time (TODO: the table moves into `kats_v1.json`) | Deleted M7 |
+| `iroha_plonk_oracle` (imports `halo2_axiom`, not `halo2_proofs`) | halo2-axiom, halo2-base, snark-verifier (halo2-ecc transitively) | P V T H | None (test only, `publish = false`). Reads no other crate's sources: the `iroha_core_zk` KAGEMUSHA golden table is pinned in `kats_v1.json` (`golden_proofs.iroha_core_zk_kagemusha`) and carried over unchanged | Deleted M7 |
 
 ## Other Pasta and halo2 implementations (not the vendored stack)
 
@@ -137,12 +137,11 @@ criteria).
 | Swift `Halo2Transcript.swift`, `Halo2EvaluationDomain.swift`, `Halo2VestaHashToCurve.swift` | Independent Blake2b `Halo2-Transcript` `Challenge255` transcript, FFT domain (`omega`), and Vesta hash-to-curve. Must match `blake2b_transcript`, the FFT omega and `generators` | Cross-check against `kats_v1.json` (M1a) |
 | Swift `ConfidentialProver`, `ConfidentialNote`, `KagemushaNoritoV1`, `VerifyingKeyBackendTag` | Through the bridge; backend label `halo2/ipa` | M2(c), M5 fixtures |
 | Kotlin `core-jvm`/`client-android` (privacy native bridge, `KagemushaNoritoV1`, VK registry); Java `iroha_android` (retiring) | Through the bridge; labels | M2(c), M5 fixtures |
-| C# (`Zk/VerifyingKeyBackendTag.cs`, `Privacy/ConfidentialProver.cs`, `Kaigi`, `Kagemusha`) | Through the bridge; labels | M2(b)(c), M5 fixtures |
-| JavaScript `iroha_js` (`kaigiScalarV1.js` Pasta Fp checks, `kagemusha.js`) | `iroha_js_host` napi | M2(b)(c) |
+| C# (`Zk/VerifyingKeyBackendTag.cs`, `Privacy/ConfidentialProver.cs`, `Kaigi`) | Through the bridge; labels | M2(b)(c), M5 fixtures |
+| JavaScript `iroha_js` (`kaigiScalarV1.js` Pasta Fp checks) | `iroha_js_host` napi | M2(b)(c) |
 | Python `iroha_python` and `iroha_torii_client` | `iroha_python_rs`; KAGEMUSHA release schemas | M2(c), M5 |
 | `fuzz/Cargo.toml`, `crates/fastpq_prover/fuzz/Cargo.toml` | Vendored path dependencies and the halo2-lib patch | Step 7 |
-| `scripts/cargo_fuzz_locked_cargo.sh`, `scripts/norito_bridge_source_seal.py`, `scripts/check_ivm_only.py`, `scripts/tests/run_kagemusha_real_proof_guarded_test.py`, `pytests/scripts/norito_bridge_source_seal_reviewed_vendor_test.py`, `pytests/scripts/workspace_release_gate_test.py` | Name vendored paths or packages | Step 7, M7 |
-| `scripts/verify_kagemusha_v1_release_evidence.py` | Checks Pasta scalar canonicity of native profiles, `HALO2_K = 16`, and the Eq/Ep protocol digests of KAGEMUSHA release evidence | M5 (native descriptors and digests) |
+| `scripts/cargo_fuzz_locked_cargo.sh`, `scripts/norito_bridge_source_seal.py`, `scripts/check_ivm_only.py`, `pytests/scripts/norito_bridge_source_seal_reviewed_vendor_test.py`, `pytests/scripts/workspace_release_gate_test.py` | Name vendored paths or packages | Step 7, M7 |
 | `ci/dependency_budget.json`, `scripts/check_release_feature_graph.py` (`proofs-halo2`, `zk-halo2`, `zk-halo2-ipa`), source-token guards in `pr.yml` | Pin the current graph and features. TODO: the baseline does not yet count the `iroha_pasta` and `iroha_plonk_oracle` members (`--write-baseline` after review); `iroha_plonk_oracle` should be a `forbidden_packages` entry of the shipping configurations | Update in each migrating change |
 | CI for the release-only oracle suites and `fixtures/native_prover/verify_kats_v1.py` | None yet. TODO: a nightly workflow running `cargo test --locked --release -p iroha_pasta -p iroha_plonk_oracle -- --include-ignored` on x86_64 and aarch64, and a `pytests/scripts` wrapper for the verifier | M0 exit (x86_64 run) |
 

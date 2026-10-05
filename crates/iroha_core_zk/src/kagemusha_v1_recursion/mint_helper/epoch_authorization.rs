@@ -2,9 +2,7 @@
 
 use super::*;
 use halo2_base::gates::GateChip;
-use iroha_data_model::isi::kagemusha_v1::{
-    BeaconEpochBindingV1, KagemushaMintFinalityEpochAuthorizationV1,
-};
+use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, ValidatorEpochAuthorizationV1};
 
 const AUTHORIZATION_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-finality-epoch-authorization";
 
@@ -65,7 +63,7 @@ pub(super) fn constrain_epoch_authorization<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     sha: &mut PastaSha256JobsV1<F>,
-    value: Option<&KagemushaMintFinalityEpochAuthorizationV1>,
+    value: Option<&ValidatorEpochAuthorizationV1>,
     enabled: AssignedValue<F>,
 ) -> Result<AssignedEpochAuthorization<F>, String> {
     let gate = range.gate();
@@ -243,20 +241,17 @@ pub(super) fn constrain_authorization_successor<F: KagemushaPoseidonFieldV1>(
 mod tests {
     use super::*;
     use halo2_proofs::dev::MockProver;
-    use iroha_data_model::isi::kagemusha_v1::{
-        InstalledBeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
+    use iroha_data_model::sumeragi::epoch::{
+        InstalledBeaconEpochBindingV1, ValidatorEpochDecisionV1,
     };
 
-    fn authorization_pair() -> (
-        KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochAuthorizationV1,
-    ) {
+    fn authorization_pair() -> (ValidatorEpochAuthorizationV1, ValidatorEpochAuthorizationV1) {
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(
             iroha_crypto::Hash::new(b"authorization circuit fixture"),
         ));
-        let current = KagemushaMintFinalityEpochAuthorizationV1 {
+        let current = ValidatorEpochAuthorizationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
             epoch: 3,
@@ -266,13 +261,13 @@ mod tests {
             authority_id: [0x41; 32],
             previous_authorization_id: [0x42; 32],
             transition_id: [0; 32],
-            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+            decision: ValidatorEpochDecisionV1::Retain,
             beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
                 session_id: [0x43; 32],
                 transcript_hash: [0x44; 32],
             }),
         };
-        let next = KagemushaMintFinalityEpochAuthorizationV1 {
+        let next = ValidatorEpochAuthorizationV1 {
             epoch: 4,
             first_height: 401,
             last_height: 500,
@@ -284,8 +279,8 @@ mod tests {
     }
 
     fn circuit(
-        current: &KagemushaMintFinalityEpochAuthorizationV1,
-        next: &KagemushaMintFinalityEpochAuthorizationV1,
+        current: &ValidatorEpochAuthorizationV1,
+        next: &ValidatorEpochAuthorizationV1,
     ) -> KagemushaMintCertificateEqCircuitV1 {
         let mut builder = mint_certificate_builder::<Fp>();
         let range = builder.range_chip();

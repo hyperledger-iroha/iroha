@@ -9,6 +9,9 @@ use crate::sumeragi::{
     payload,
     schedule::{ChainParamsRecord, ScheduleOutcome, ScheduledConfig, ScheduledSlot},
 };
+use iroha_data_model::sumeragi::epoch::{
+    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochDecisionV1,
+};
 use iroha_data_model::{
     NetworkId,
     block::{
@@ -17,9 +20,6 @@ use iroha_data_model::{
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
     },
     consensus::{GlobalThresholdBeaconChainAnchorV1, GlobalThresholdBeaconPulseContextV1},
-    isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
-    },
     parameter::system::{ConsensusMode, SumeragiNposParameters},
     sumeragi::epoch::{ValidatorCommitteeMemberV1, ValidatorEpochBoundaryV1},
     transaction::signed::TransactionResult,
@@ -461,9 +461,9 @@ fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock
                         transcript_hash: record.transcript_hash,
                     }),
                     if retain {
-                        KagemushaMintFinalityEpochDecisionV1::Retain
+                        ValidatorEpochDecisionV1::Retain
                     } else {
-                        KagemushaMintFinalityEpochDecisionV1::Activate
+                        ValidatorEpochDecisionV1::Activate
                     },
                     if retain { [0; 32] } else { [height as u8; 32] },
                 );

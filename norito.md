@@ -1311,3 +1311,27 @@ serializer ignores the write error. The framed helper includes the canonical
 header and alignment padding. Arbitrary work before a serializer emits bytes
 remains subject to the caller's source-specific work checks. Wire layouts and
 canonical comparisons are unchanged.
+
+### Complete callable schema body
+
+`ivm_abi::call::CallSchemaV1` has one CS1 body: magic `43533100`, a fixed
+little-endian `u64` count, then complete preorder nodes. The Norito header
+advertises the layout flags used by child strings, string vectors and the
+length-prefixed complete error descriptor; the decoder does not guess flags.
+Node tags are Struct=0, Tuple=1, Option=2, Result=3, List=4, Leaf=5, Unit=6,
+Error=7, StateCursor=8, StateRoot=9, Pointer=10 and SecretNumeric=11. Struct
+payloads are canonical String followed by Vec<String> in declaration order;
+Tuple uses `u32`, List uses `u8`, Leaf/StateCursor use one-byte public kind
+ordinals 0..13, and Pointer/SecretNumeric use `u16`. Zero-field nodes have no
+payload. Inline children retain all nominal identities, roles and constraints.
+
+The borrowed writer does not construct a second encoded graph. The decoder
+charges the original sequence/cumulative-element budget and the actual node
+Vec layout before reserving it, charges capacity excess, and uses the original
+canonical String, Vec<String> and error decoders with their active allocation,
+UTF-8, field and nesting limits. It validates the complete bounded forest before
+publication. Native allocator refusal remains distinct from malformed wire.
+Generic per-node enum wrappers and the previous vector body are retired; no
+alternate decoder remains. This changes the authenticated V1 semantic ABI hash,
+so all native artifact captures and generated ABI hash material must be produced
+from the changed compiler before their mandatory consumers pass.

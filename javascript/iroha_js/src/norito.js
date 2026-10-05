@@ -419,9 +419,6 @@ const SUBMIT_BALLOT_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "zk::SubmitBallot");
 const FINALIZE_ELECTION_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "zk::" + TEXT_FINALIZE_ELECTION);
 const REGISTER_VERIFYING_KEY_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "verifying_keys::" + TEXT_REGISTER_VERIFYING_KEY);
 const UPDATE_VERIFYING_KEY_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "verifying_keys::" + TEXT_UPDATE_VERIFYING_KEY);
-const TOP_UP_KAGEMUSHA_WIRE_ID = "iroha.kagemusha.v1.top_up";
-const TOP_UP_KAGEMUSHA_INNER_TYPE_NAME =
-  `${TEXT_IROHA_DATA_MODEL_ISI}kagemusha_v1::TopUpKagemushaV1`;
 const RETAIL_INSTRUCTION_NAMES_V1 = Object.freeze([
   "ActivateRetailDailyLimitV1",
   "BindRetailIdentityV1",
@@ -531,7 +528,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     `${TEXT_IROHA_DATA_MODEL_ISI}verifying_keys::${TEXT_REGISTER_VERIFYING_KEY}`,
   [UPDATE_VERIFYING_KEY_WIRE_ID]:
     `${TEXT_IROHA_DATA_MODEL_ISI}verifying_keys::${TEXT_UPDATE_VERIFYING_KEY}`,
-  [TOP_UP_KAGEMUSHA_WIRE_ID]: TOP_UP_KAGEMUSHA_INNER_TYPE_NAME,
   ...Object.fromEntries(RETAIL_INSTRUCTION_NAMES_V1.map((name, index) => [
     RETAIL_INSTRUCTION_WIRE_IDS_V1[index],
     `${TEXT_IROHA_DATA_MODEL_ISI}retail_daily_limit::${name}`,
@@ -710,7 +706,7 @@ function rejectRetiredGenericZkInstruction(instruction) {
   }
   for (const variant of RETIRED_GENERIC_ZK_VARIANTS) {
     if (Object.prototype.hasOwnProperty.call(instruction.zk, variant)) {
-      rejectType(`zk.${variant} is retired in ABI V1; use the typed KAGEMUSHA flow`);
+      rejectType(`zk.${variant} is retired in ABI V1`);
     }
   }
 }

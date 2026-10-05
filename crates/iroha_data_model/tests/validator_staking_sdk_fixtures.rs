@@ -17,9 +17,8 @@ use iroha_data_model::{
     },
     isi::{
         kagemusha_v1::{
-            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-            KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-            KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityValidatorKeysV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
+            KagemushaMintFinalityValidatorKeysV1,
         },
         staking::{PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer},
     },
@@ -35,6 +34,10 @@ use iroha_data_model::{
         ValidatorCommitteePreparationV1, ValidatorCommitteeTransitionV1,
     },
     parameter::system::SumeragiNposParameters,
+    sumeragi::epoch::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochAuthorizationV1,
+        ValidatorEpochDecisionV1,
+    },
 };
 use iroha_model_base::{peer::PeerId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
@@ -169,7 +172,7 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
     let peers = peers();
     let genesis_authority = authority(network_id, &peers, 0);
     let successor_authority = authority(network_id, &peers, 1);
-    let genesis_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+    let genesis_authorization = ValidatorEpochAuthorizationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         epoch: 0,
@@ -180,7 +183,7 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         beacon: BeaconEpochBindingV1::Bootstrap,
         previous_authorization_id: [0; 32],
         transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+        decision: ValidatorEpochDecisionV1::Genesis,
     };
     let session = dkg_session(network_id);
     let transcript = dkg_transcript(session, &peers);
@@ -188,7 +191,7 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         session_id: session.session_id,
         transcript_hash: [0x58; 32],
     };
-    let activation = KagemushaMintFinalityEpochAuthorizationV1 {
+    let activation = ValidatorEpochAuthorizationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         epoch: 2,
@@ -199,7 +202,7 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         beacon: BeaconEpochBindingV1::Installed(installed),
         previous_authorization_id: [0x59; 32],
         transition_id: [0x5a; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Activate,
+        decision: ValidatorEpochDecisionV1::Activate,
     };
     let preparation = ValidatorCommitteePreparationV1 {
         version: 1,

@@ -29,15 +29,19 @@ impl<T: JsonSerialize> json::FastJsonWrite for CursorKeyValues<'_, T> {
         output: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         output.begin_container()?;
-        output.push('[')?;
-        for (index, value) in self.0.iter().enumerate() {
-            if index != 0 {
-                output.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push('[')?;
+            for (index, value) in self.0.iter().enumerate() {
+                if index != 0 {
+                    output.push(',')?;
+                }
+                value.json_serialize_to(output)?;
             }
-            value.json_serialize_to(output)?;
-        }
-        output.push(']')?;
+            output.push(']')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }
@@ -297,5 +301,31 @@ mod tests {
             digest(&["ab", "c"], 1024).unwrap(),
             digest(&["a", "bc"], 1024).unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod service_depth_tests {
+    //! Owning checked service writers keep the caller depth on exact refusals.
+    use super::*;
+    use crate::service_checked_writer_test_support::{RefusingLeaf, audit, byte_refusal, error};
+    use norito::json::{BoundedJsonError, FastJsonWrite};
+
+    #[test]
+    fn original_cursor_keys_keep_borrowed_non_fast_leaf_and_refusal_depth() {
+        let values = [1_u64, 7];
+        let source = CursorKeyValues(&values);
+        audit("[1,7]", |sink| source.write_json_to(sink));
+        assert_eq!(source.0.as_ptr(), values.as_ptr());
+        let values = [RefusingLeaf {
+            visits: std::cell::Cell::new(0),
+        }];
+        let source = CursorKeyValues(&values);
+        byte_refusal(|sink| source.write_json_to(sink));
+        assert_eq!(values[0].visits.get(), 0);
+        error(BoundedJsonError::Unsupported, |sink| {
+            source.write_json_to(sink)
+        });
+        assert_eq!(values[0].visits.get(), 1);
     }
 }

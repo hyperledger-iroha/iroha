@@ -4,7 +4,7 @@ import Security
 // iPhone platform adapter of the KAGEMUSHA wallet Advance provider (G2 design rev 2, iOS;
 // specs/kagemusha_single_design_proposal.md §§1.2, 2.2, 2.3, 4.2).
 //
-// The Rust provider (`crates/iroha_core_zk/src/kagemusha_v1_state/wallet_advance_v1`) owns
+// The Rust provider (`crates/iroha_core_zk/src/kagemusha_wallet_advance_v1`) owns
 // custody bytes, marker selection, reconciliation, the role-checked signer, low-S
 // normalization and the monotonic clock. This adapter supplies only what its
 // `KagemushaWalletPlatformV1` trait needs from the phone: the Secure Enclave payment key
@@ -16,10 +16,11 @@ import Security
 // query; every other error is unavailable and never read as absence.
 //
 // TODO(G2-bridge): connect_norito_bridge registers this adapter as the C vtable behind the
-// Rust `KagemushaWalletPlatformV1` (wallet_advance_v1/platform.rs). The vtable-facing methods
-// stay internal so app code reaches the payment key and the anchor only through the Rust
-// provider: `keySign` with arbitrary bytes would bypass the role-checked receipt signer. The
-// bridge obtains the custody root path (which verifies the canary) before any storage answer.
+// Rust `KagemushaWalletPlatformV1` (kagemusha_wallet_advance_v1/platform.rs). The
+// vtable-facing methods stay internal so app code reaches the payment key and the anchor only
+// through the Rust provider: `keySign` with arbitrary bytes would bypass the role-checked
+// receipt signer. The bridge obtains the custody root path (which verifies the canary) before
+// any storage answer.
 //
 // TODO(G2-iOS): device tests: Secure Enclave key generation and signing under
 // kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly (the error domain and code of a signature
@@ -252,7 +253,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   /// team sharing a group reaches the payment key or the anchor through a default group.
   let accessGroup: String
   let system: KagemushaWalletAppleSystemV1
-  let appAttest: any KagemushaAppAttestServiceV1
+  let appAttest: any KagemushaWalletAppAttestServiceV1
   private let generationLock = NSLock()
   private let rootStateLock = NSLock()
   private var rootVerified = false
@@ -268,7 +269,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   ///     main bundle identifier it names the app's own keychain access group.
   /// - Throws: ``KagemushaWalletAppleConfigurationErrorV1``.
   public convenience init(
-    appAttest: any KagemushaAppAttestServiceV1, applicationIdentifierPrefix: String
+    appAttest: any KagemushaWalletAppAttestServiceV1, applicationIdentifierPrefix: String
   ) throws {
     let group = try KagemushaWalletApplePlatformV1.keychainAccessGroup(
       applicationIdentifierPrefix: applicationIdentifierPrefix,
@@ -282,14 +283,14 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   /// - Throws: ``KagemushaWalletAppleConfigurationErrorV1``.
   public convenience init(applicationIdentifierPrefix: String) throws {
     try self.init(
-      appAttest: KagemushaAppleAppAttestServiceV1(),
+      appAttest: KagemushaWalletAppleAppAttestServiceV1(),
       applicationIdentifierPrefix: applicationIdentifierPrefix)
   }
   #endif
   #endif
 
   init(
-    appAttest: any KagemushaAppAttestServiceV1, accessGroup: String,
+    appAttest: any KagemushaWalletAppAttestServiceV1, accessGroup: String,
     system: KagemushaWalletAppleSystemV1
   ) {
     self.appAttest = appAttest

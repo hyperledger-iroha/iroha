@@ -168,14 +168,6 @@ test(
     const health = await client.getHealth();
     assert.ok(health, "health snapshot should be present");
 
-    const kagemushaReadiness = await client.getKagemushaReadiness();
-    assert.deepEqual(kagemushaReadiness, {
-      kagemusha_handoff_capability: "kagemusha_handoff_v1",
-      wire_version: 1,
-      device_lifecycle_version: 1,
-      ready: true,
-    });
-
     const metricsText = await client.getMetrics({ asText: true });
     assert.equal(typeof metricsText, "string");
     assert.notEqual(metricsText.length, 0);
@@ -4856,17 +4848,6 @@ function shouldSkipTriggerEndpoints(error) {
     isUnexpectedNotFoundError(error) ||
     (/trigger/i.test(message) &&
       (/disabled/i.test(message) || /unexpected status 503/i.test(message)))
-  );
-}
-
-function isKagemushaApiUnavailableError(error) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const message = error.message ?? "";
-  return (
-    /unexpected status 404/i.test(message) ||
-    (/offline/i.test(message) && /disabled/i.test(message))
   );
 }
 

@@ -1,7 +1,6 @@
 [package]
 name = "connect_norito_bridge"
 autobins = false
-build = "build.rs"
 version.workspace = true
 edition = "2024"
 
@@ -21,11 +20,6 @@ required-features = ["dev-tools"]
 [[bin]]
 name = "swift_parity_regen"
 path = "src/bin/swift_parity_regen.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
-name = "kagemusha_sender_release_parser"
-path = "src/bin/kagemusha_sender_release_parser.rs"
 required-features = ["dev-tools"]
 
 [features]

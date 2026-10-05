@@ -14,6 +14,7 @@ use super::{
     KAGEMUSHA_WALLET_FEE_SCHEDULE_MAX_BYTES_V1, KAGEMUSHA_WALLET_QUOTA_SHARE_MAX_BYTES_V1,
     KAGEMUSHA_WALLET_SCHEME_POLICY_MAX_BYTES_V1, KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1,
     WalletResult, WalletVersionsV1, decode_frame_v1,
+    digest::WalletFieldItemsV1,
     digest::{
         KagemushaWalletDigestRoleV1 as Role, KagemushaWalletSignerOutputV1, WalletTranscriptV1,
         kagemusha_wallet_digest_v1, kagemusha_wallet_freeze_signature_v1,
@@ -27,13 +28,22 @@ use super::{
         KagemushaWalletCredentialV1, KagemushaWalletSchemeV1, KagemushaWalletSignerCertificateV1,
         KagemushaWalletSignerRoleV1,
     },
-    invalid_v1, overflow_v1, require_nonzero_v1, require_scheme_v1, require_version_v1,
+    invalid_v1,
+    keys::KagemushaDeviceSignatureV1,
+    overflow_v1,
+    poseidon::{
+        KAGEMUSHA_WALLET_BLACKLIST_LEAF_DOMAIN_V1, KAGEMUSHA_WALLET_BLACKLIST_NODE_DOMAIN_V1,
+        KAGEMUSHA_WALLET_QUOTA_NODE_DOMAIN_V1, KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1,
+        poseidon_items_v1,
+    },
+    require_canonical_field_v1, require_nonzero_field_v1, require_nonzero_v1, require_scheme_v1,
+    require_version_v1,
     state::{
-        KagemushaWalletEffectV1, KagemushaWalletPolicyStateV1, KagemushaWalletPolicyUpdateKindV1,
-        KagemushaWalletQuotaUsageLeafV1, KagemushaWalletStateV1,
+        KagemushaWalletEffectV1, KagemushaWalletPolicyUpdateKindV1,
+        KagemushaWalletQuotaUsageLeafV1, KagemushaWalletStateCoreV1, KagemushaWalletStateRestV1,
+        KagemushaWalletStateV1,
     },
 };
-use crate::kagemusha::KagemushaDeviceSignatureV1;
 
 #[cfg(test)]
 #[path = "policy_tests.rs"]
@@ -49,8 +59,6 @@ pub const KAGEMUSHA_WALLET_FEE_SCHEDULE_BODY_TRANSCRIPT_BYTES_V1: usize =
 pub const KAGEMUSHA_WALLET_FEE_BASIS_POINTS_DENOMINATOR_V1: u32 = 10_000;
 /// Exact `blacklist-body` transcript bytes.
 pub const KAGEMUSHA_WALLET_BLACKLIST_BODY_TRANSCRIPT_BYTES_V1: usize = 2 + 32 + 8 + 8 + 4 + 2 * 32;
-/// Exact `blacklist-leaf` transcript bytes: `lower || upper`.
-pub const KAGEMUSHA_WALLET_BLACKLIST_LEAF_TRANSCRIPT_BYTES_V1: usize = 64;
 /// Fixed depth of the blacklist gap tree.
 pub const KAGEMUSHA_WALLET_BLACKLIST_TREE_DEPTH_V1: usize = 16;
 /// Gap leaves of the fixed-depth blacklist tree.
@@ -61,8 +69,6 @@ pub const KAGEMUSHA_WALLET_BLACKLIST_ENTRIES_MAX_V1: u32 = KAGEMUSHA_WALLET_BLAC
 pub const KAGEMUSHA_WALLET_BLACKLIST_SENTINEL_LOW_V1: [u8; 32] = [0x00; 32];
 /// Upper sentinel of the gap sequence; never a valid entry.
 pub const KAGEMUSHA_WALLET_BLACKLIST_SENTINEL_HIGH_V1: [u8; 32] = [0xff; 32];
-/// Exact `quota-window` transcript bytes: `u8 kind || LE64 start || LE64 end || LE128 limit`.
-pub const KAGEMUSHA_WALLET_QUOTA_WINDOW_TRANSCRIPT_BYTES_V1: usize = 1 + 8 + 8 + 16;
 /// Fixed depth of the quota windows tree.
 pub const KAGEMUSHA_WALLET_QUOTA_TREE_DEPTH_V1: usize = 6;
 /// Window slots of one quota share.
@@ -641,28 +647,36 @@ pub struct KagemushaWalletBlacklistEntryV1 {
     pub account_digest: [u8; 32],
 }
 
-/// Gap leaf `H("blacklist-leaf", lower || upper)`.
+/// Gap leaf `P(kgwblkl1, limbs(lower) || limbs(upper))` (§7): the two 32-byte account digests
+/// as four 128-bit limbs.
 #[must_use]
 pub fn kagemusha_wallet_blacklist_leaf_v1(lower: &[u8; 32], upper: &[u8; 32]) -> [u8; 32] {
-    kagemusha_wallet_digest_v1(
-        Role::BlacklistLeaf,
-        &WalletTranscriptV1::with_capacity(KAGEMUSHA_WALLET_BLACKLIST_LEAF_TRANSCRIPT_BYTES_V1)
+    poseidon_items_v1(
+        KAGEMUSHA_WALLET_BLACKLIST_LEAF_DOMAIN_V1,
+        &WalletFieldItemsV1::with_capacity(4)
             .digest(lower)
             .digest(upper)
             .finish(),
     )
 }
 
-/// Tree node `H("blacklist-node", left || right)`.
-#[must_use]
-pub fn kagemusha_wallet_blacklist_node_v1(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    kagemusha_wallet_digest_v1(
-        Role::BlacklistNode,
-        &WalletTranscriptV1::with_capacity(64)
-            .digest(left)
-            .digest(right)
-            .finish(),
-    )
+/// Tree node `P(kgwblkn1, [left, right])` over canonical children.
+///
+/// # Errors
+///
+/// Rejects a noncanonical child.
+pub fn kagemusha_wallet_blacklist_node_v1(
+    left: &[u8; 32],
+    right: &[u8; 32],
+) -> WalletResult<[u8; 32]> {
+    require_canonical_field_v1("blacklist.node", left)?;
+    require_canonical_field_v1("blacklist.node", right)?;
+    Ok(blacklist_node_v1(left, right))
+}
+
+/// Tree node over children that are canonical by construction.
+fn blacklist_node_v1(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    poseidon_items_v1(KAGEMUSHA_WALLET_BLACKLIST_NODE_DOMAIN_V1, &[*left, *right])
 }
 
 /// Validate entry order: strictly ascending, at most the maximum, no sentinel value.
@@ -695,7 +709,7 @@ fn blacklist_padding_v1() -> [[u8; 32]; KAGEMUSHA_WALLET_BLACKLIST_TREE_DEPTH_V1
         &KAGEMUSHA_WALLET_BLACKLIST_SENTINEL_HIGH_V1,
     );
     for depth in 0..KAGEMUSHA_WALLET_BLACKLIST_TREE_DEPTH_V1 {
-        padding[depth + 1] = kagemusha_wallet_blacklist_node_v1(&padding[depth], &padding[depth]);
+        padding[depth + 1] = blacklist_node_v1(&padding[depth], &padding[depth]);
     }
     padding
 }
@@ -731,7 +745,7 @@ fn blacklist_levels_v1(
     {
         let next = level
             .chunks(2)
-            .map(|pair| kagemusha_wallet_blacklist_node_v1(&pair[0], pair.get(1).unwrap_or(pad)))
+            .map(|pair| blacklist_node_v1(&pair[0], pair.get(1).unwrap_or(pad)))
             .collect();
         levels.push(level);
         level = next;
@@ -740,10 +754,11 @@ fn blacklist_levels_v1(
     Ok((levels, padding))
 }
 
-/// Gap-tree root of a sorted entry list: fixed depth 16 over 65,536 gap leaves.
+/// Gap-tree root of a sorted entry list: a Poseidon tree of fixed depth 16 over 65,536 gap
+/// leaves (§7); one canonical σ-field value.
 ///
 /// Gap `i` lies between the sorted sentinels `s_0 = 00..00`, the entries, and
-/// `s_{n+1} = FF..FF`; unused leaves are `H("blacklist-leaf", FF..FF || FF..FF)`.
+/// `s_{n+1} = FF..FF`; unused leaves are the gap leaf of `FF..FF || FF..FF`.
 ///
 /// # Errors
 ///
@@ -771,16 +786,16 @@ pub struct KagemushaWalletBlacklistGapOpeningV1 {
     pub lower: [u8; 32],
     /// Upper entry or sentinel of the gap.
     pub upper: [u8; 32],
-    /// Sibling digests from the leaf level upward.
+    /// Sibling σ-field values from the leaf level upward.
     pub siblings: [[u8; 32]; KAGEMUSHA_WALLET_BLACKLIST_TREE_DEPTH_V1],
 }
 
 impl KagemushaWalletBlacklistGapOpeningV1 {
-    /// Recompute the tree root along the sibling path.
+    /// Recompute the Poseidon tree root along the sibling path.
     ///
     /// # Errors
     ///
-    /// Rejects a leaf index outside the tree.
+    /// Rejects a leaf index outside the tree and a noncanonical sibling.
     pub fn root(&self) -> WalletResult<[u8; 32]> {
         if self.leaf_index >= KAGEMUSHA_WALLET_BLACKLIST_LEAVES_V1 {
             return Err(invalid_v1("blacklist.leaf_index"));
@@ -789,9 +804,9 @@ impl KagemushaWalletBlacklistGapOpeningV1 {
         let mut position = self.leaf_index;
         for sibling in &self.siblings {
             node = if position & 1 == 0 {
-                kagemusha_wallet_blacklist_node_v1(&node, sibling)
+                kagemusha_wallet_blacklist_node_v1(&node, sibling)?
             } else {
-                kagemusha_wallet_blacklist_node_v1(sibling, &node)
+                kagemusha_wallet_blacklist_node_v1(sibling, &node)?
             };
             position >>= 1;
         }
@@ -831,7 +846,7 @@ pub struct KagemushaWalletBlacklistBodyV1 {
     pub issued_at_ms: u64,
     /// Number of entries, at most [`KAGEMUSHA_WALLET_BLACKLIST_ENTRIES_MAX_V1`].
     pub entry_count: u32,
-    /// Gap-tree root ([`kagemusha_wallet_blacklist_root_v1`]).
+    /// Gap-tree root ([`kagemusha_wallet_blacklist_root_v1`]), a canonical σ-field value.
     pub entries_root: [u8; 32],
     /// Certificate digest of the RegulatoryPolicy-role signer.
     pub signer_certificate: [u8; 32],
@@ -868,12 +883,12 @@ impl KagemushaWalletBlacklistBodyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects another version, zero bindings, version zero (the implicit default), and too
-    /// many entries.
+    /// Rejects another version, zero bindings, a noncanonical root, version zero (the implicit
+    /// default), and too many entries.
     pub fn validate(&self) -> WalletResult<()> {
         require_version_v1("blacklist.version", self.version)?;
         require_nonzero_v1("blacklist.scheme_id", &self.scheme_id)?;
-        require_nonzero_v1("blacklist.entries_root", &self.entries_root)?;
+        require_nonzero_field_v1("blacklist.entries_root", &self.entries_root)?;
         require_nonzero_v1("blacklist.signer_certificate", &self.signer_certificate)?;
         if self.list_version == 0 {
             return Err(invalid_v1("blacklist.list_version"));
@@ -1472,21 +1487,16 @@ pub struct KagemushaWalletQuotaWindowV1 {
 }
 
 impl KagemushaWalletQuotaWindowV1 {
-    /// Exact `quota-window` leaf transcript.
+    /// Window leaf elements: kind tag, start, end, limit (4).
     #[must_use]
-    pub fn transcript(&self) -> Vec<u8> {
-        WalletTranscriptV1::with_capacity(KAGEMUSHA_WALLET_QUOTA_WINDOW_TRANSCRIPT_BYTES_V1)
-            .u8(self.kind.tag())
-            .u64(self.start_ms)
-            .u64(self.end_ms)
-            .u128(self.limit)
-            .finish()
+    pub fn field_items(&self) -> Vec<[u8; 32]> {
+        quota_window_items_v1(self.kind.tag(), self.start_ms, self.end_ms, self.limit)
     }
 
-    /// Window leaf `H("quota-window", transcript)`.
+    /// Window leaf `P(kgwqwin1, elements)` (§7).
     #[must_use]
-    pub fn leaf_digest(&self) -> [u8; 32] {
-        kagemusha_wallet_digest_v1(Role::QuotaWindow, &self.transcript())
+    pub fn leaf_value(&self) -> [u8; 32] {
+        poseidon_items_v1(KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1, &self.field_items())
     }
 
     /// Validate the window's fields.
@@ -1531,28 +1541,41 @@ impl KagemushaWalletQuotaWindowV1 {
     }
 }
 
-/// Empty window slot `H("quota-window", 33 zero bytes)`.
+/// Elements of one window slot.
+fn quota_window_items_v1(kind: u8, start_ms: u64, end_ms: u64, limit: u128) -> Vec<[u8; 32]> {
+    WalletFieldItemsV1::with_capacity(4)
+        .integer(u128::from(kind))
+        .integer(u128::from(start_ms))
+        .integer(u128::from(end_ms))
+        .integer(limit)
+        .finish()
+}
+
+/// Empty window slot: the window leaf of four zero elements, `P(kgwqwin1, [0, 0, 0, 0])`.
 #[must_use]
 pub fn kagemusha_wallet_quota_empty_window_leaf_v1() -> [u8; 32] {
-    kagemusha_wallet_digest_v1(
-        Role::QuotaWindow,
-        &[0; KAGEMUSHA_WALLET_QUOTA_WINDOW_TRANSCRIPT_BYTES_V1],
+    poseidon_items_v1(
+        KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1,
+        &quota_window_items_v1(0, 0, 0, 0),
     )
 }
 
-/// Tree node `H("quota-node", left || right)`.
-#[must_use]
-pub fn kagemusha_wallet_quota_node_v1(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    kagemusha_wallet_digest_v1(
-        Role::QuotaNode,
-        &WalletTranscriptV1::with_capacity(64)
-            .digest(left)
-            .digest(right)
-            .finish(),
-    )
+/// Tree node `P(kgwqwnd1, [left, right])` over canonical children.
+///
+/// # Errors
+///
+/// Rejects a noncanonical child.
+pub fn kagemusha_wallet_quota_node_v1(left: &[u8; 32], right: &[u8; 32]) -> WalletResult<[u8; 32]> {
+    require_canonical_field_v1("quota_share.node", left)?;
+    require_canonical_field_v1("quota_share.node", right)?;
+    Ok(poseidon_items_v1(
+        KAGEMUSHA_WALLET_QUOTA_NODE_DOMAIN_V1,
+        &[*left, *right],
+    ))
 }
 
-/// Windows root: fixed depth 6 over 64 slots, windows first, empty slots after.
+/// Windows root: a Poseidon tree of fixed depth 6 over 64 slots, windows first, empty slots
+/// after (§7); one canonical σ-field value.
 ///
 /// # Errors
 ///
@@ -1568,13 +1591,15 @@ pub fn kagemusha_wallet_quota_windows_root_v1(
         .map(|slot| {
             windows
                 .get(slot)
-                .map_or(empty, KagemushaWalletQuotaWindowV1::leaf_digest)
+                .map_or(empty, KagemushaWalletQuotaWindowV1::leaf_value)
         })
         .collect();
     while level.len() > 1 {
         level = level
             .chunks_exact(2)
-            .map(|pair| kagemusha_wallet_quota_node_v1(&pair[0], &pair[1]))
+            .map(|pair| {
+                poseidon_items_v1(KAGEMUSHA_WALLET_QUOTA_NODE_DOMAIN_V1, &[pair[0], pair[1]])
+            })
             .collect();
     }
     level
@@ -1604,7 +1629,7 @@ pub struct KagemushaWalletQuotaShareBodyV1 {
     pub issued_at_ms: u64,
     /// Expiry in Unix milliseconds; after `issued_at_ms`.
     pub expires_at_ms: u64,
-    /// Windows root ([`kagemusha_wallet_quota_windows_root_v1`]).
+    /// Windows root ([`kagemusha_wallet_quota_windows_root_v1`]), a canonical σ-field value.
     pub windows_root: [u8; 32],
     /// Number of windows, `1..=64`.
     pub window_count: u32,
@@ -1646,14 +1671,14 @@ impl KagemushaWalletQuotaShareBodyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects another version, zero bindings, share id zero (the implicit default), an
-    /// expiry not after issuance, and a window count outside `1..=64`.
+    /// Rejects another version, zero bindings, a noncanonical root, share id zero (the implicit
+    /// default), an expiry not after issuance, and a window count outside `1..=64`.
     pub fn validate(&self) -> WalletResult<()> {
         require_version_v1("quota_share.version", self.version)?;
         require_nonzero_v1("quota_share.scheme_id", &self.scheme_id)?;
         require_nonzero_v1("quota_share.asset_digest", &self.asset_digest)?;
         require_nonzero_v1("quota_share.wallet_id", &self.wallet_id)?;
-        require_nonzero_v1("quota_share.windows_root", &self.windows_root)?;
+        require_nonzero_field_v1("quota_share.windows_root", &self.windows_root)?;
         require_nonzero_v1("quota_share.signer_certificate", &self.signer_certificate)?;
         if self.share_id == 0 {
             return Err(invalid_v1("quota_share.share_id"));
@@ -2361,12 +2386,20 @@ impl KagemushaWalletPolicyUpdateV1<'_> {
 }
 
 /// Successor policy fields of one `RefreshPolicy` transition.
+///
+/// `core` and `rest` are the predecessor's with the update applied to the policy fields
+/// (credential digest, enabled controls, policy epoch, blacklist version, root and issue time,
+/// quota windows root, lease and accepted-time floor in the core; scheme policy, fee schedule,
+/// blacklist, quota share and time anchor in the rest). Sequence, balance, ordinals, chains,
+/// map roots and nonce are unchanged: the transition owner advances them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KagemushaWalletPolicyRefreshV1 {
     /// Successor credential digest; it changes only for a replacement credential.
     pub credential_digest: [u8; 32],
-    /// Successor policy state.
-    pub policy: KagemushaWalletPolicyStateV1,
+    /// Successor core policy fields.
+    pub core: KagemushaWalletStateCoreV1,
+    /// Successor rest policy fields.
+    pub rest: KagemushaWalletStateRestV1,
     /// `RefreshPolicy` effect binding the update and the successor floor.
     pub effect: KagemushaWalletEffectV1,
 }
@@ -2391,9 +2424,10 @@ impl KagemushaWalletStateV1 {
         update: KagemushaWalletPolicyUpdateV1<'_>,
     ) -> WalletResult<KagemushaWalletPolicyRefreshV1> {
         self.validate()?;
-        let old = self.policy;
-        let mut policy = old;
-        let mut credential_digest = self.credential_digest;
+        let old_core = self.core;
+        let old_rest = self.rest;
+        let mut core = old_core;
+        let mut rest = old_rest;
         let (digest, signed_time_ms) = match update {
             KagemushaWalletPolicyUpdateV1::Credential {
                 previous,
@@ -2401,9 +2435,9 @@ impl KagemushaWalletStateV1 {
             } => {
                 self.validate_for_credential(previous)?;
                 replacement.validate_replacement_of(previous)?;
-                credential_digest = replacement.credential_digest();
-                policy.lease_expires_at_ms = replacement.body.lease_expires_at_ms;
-                (credential_digest, replacement.body.issued_at_ms)
+                core.credential_digest = replacement.credential_digest();
+                core.lease_expires_at_ms = replacement.body.lease_expires_at_ms;
+                (core.credential_digest, replacement.body.issued_at_ms)
             }
             KagemushaWalletPolicyUpdateV1::SchemePolicy {
                 policy: scheme_policy,
@@ -2412,74 +2446,88 @@ impl KagemushaWalletStateV1 {
                 require_scheme_v1(
                     "scheme_policy.scheme_id",
                     &scheme_policy.body.scheme_id,
-                    &self.scheme_id,
+                    &old_core.scheme_id,
                 )?;
-                if scheme_policy.body.asset_digest != self.asset_digest {
+                if scheme_policy.body.asset_digest != old_core.asset_digest {
                     return Err(invalid_v1("scheme_policy.asset_digest"));
                 }
-                if scheme_policy.body.policy_epoch <= old.policy_epoch {
+                if scheme_policy.body.policy_epoch <= old_core.policy_epoch {
                     return Err(invalid_v1("scheme_policy.policy_epoch"));
                 }
-                policy.scheme_policy = scheme_policy.scheme_policy_digest();
-                policy.policy_epoch = scheme_policy.body.policy_epoch;
-                policy.enabled_controls =
-                    scheme_policy.body.enabled_controls & old.regulatory_policy.permitted_controls;
-                policy.fee_schedule = scheme_policy.body.fee_schedule;
-                (policy.scheme_policy, old.accepted_time_floor_ms)
+                rest.scheme_policy = scheme_policy.scheme_policy_digest();
+                core.policy_epoch = scheme_policy.body.policy_epoch;
+                core.enabled_controls =
+                    scheme_policy.body.enabled_controls & old_rest.permitted_controls;
+                rest.fee_schedule = scheme_policy.body.fee_schedule;
+                (rest.scheme_policy, old_core.accepted_time_floor_ms)
             }
             KagemushaWalletPolicyUpdateV1::Blacklist { list } => {
                 list.validate()?;
-                require_scheme_v1("blacklist.scheme_id", &list.body.scheme_id, &self.scheme_id)?;
-                if list.body.list_version <= old.blacklist_version {
+                require_scheme_v1(
+                    "blacklist.scheme_id",
+                    &list.body.scheme_id,
+                    &old_core.scheme_id,
+                )?;
+                if list.body.list_version <= old_core.blacklist_version {
                     return Err(invalid_v1("blacklist.list_version"));
                 }
-                policy.blacklist = list.blacklist_digest();
-                policy.blacklist_version = list.body.list_version;
-                policy.blacklist_root = list.body.entries_root;
-                policy.blacklist_issued_at_ms = list.body.issued_at_ms;
-                (policy.blacklist, list.body.issued_at_ms)
+                rest.blacklist = list.blacklist_digest();
+                core.blacklist_version = list.body.list_version;
+                core.blacklist_root = list.body.entries_root;
+                core.blacklist_issued_at_ms = list.body.issued_at_ms;
+                (rest.blacklist, list.body.issued_at_ms)
             }
             KagemushaWalletPolicyUpdateV1::QuotaShare { share, usage } => {
                 share.validate()?;
-                share.require_wallet(&self.scheme_id, &self.asset_digest, &self.wallet_id)?;
-                if share.body.share_id <= old.quota_share_id {
+                share.require_wallet(
+                    &old_core.scheme_id,
+                    &old_core.asset_digest,
+                    &old_core.wallet_id,
+                )?;
+                if share.body.share_id <= old_rest.quota_share_id {
                     return Err(invalid_v1("quota_share.share_id"));
                 }
                 share.validate_against_usage(usage)?;
-                policy.quota_share = share.quota_share_digest();
-                policy.quota_share_id = share.body.share_id;
-                policy.quota_windows_root = share.body.windows_root;
-                (policy.quota_share, share.body.issued_at_ms)
+                rest.quota_share = share.quota_share_digest();
+                rest.quota_share_id = share.body.share_id;
+                core.quota_windows_root = share.body.windows_root;
+                (rest.quota_share, share.body.issued_at_ms)
             }
             KagemushaWalletPolicyUpdateV1::TimeAnchor { anchor } => {
                 anchor.validate()?;
                 require_scheme_v1(
                     "time_anchor.scheme_id",
                     &anchor.body.scheme_id,
-                    &self.scheme_id,
+                    &old_core.scheme_id,
                 )?;
-                if anchor.body.wallet_id != self.wallet_id {
+                if anchor.body.wallet_id != old_core.wallet_id {
                     return Err(invalid_v1("time_anchor.wallet_id"));
                 }
                 // Re-committing the held anchor would repeat the earlier transition's
                 // operation ID (§4.1); every other update kind strictly increases.
                 let anchor_digest = anchor.time_anchor_digest();
-                if anchor_digest == old.time_anchor {
+                if anchor_digest == old_rest.time_anchor {
                     return Err(invalid_v1("time_anchor.unchanged"));
                 }
-                policy.time_anchor = anchor_digest;
-                (policy.time_anchor, anchor.body.issuer_time_ms)
+                rest.time_anchor = anchor_digest;
+                (rest.time_anchor, anchor.body.issuer_time_ms)
             }
         };
-        policy.accepted_time_floor_ms = old.accepted_time_floor_ms.max(signed_time_ms);
-        policy.validate()?;
+        core.accepted_time_floor_ms = old_core.accepted_time_floor_ms.max(signed_time_ms);
+        Self {
+            version: self.version,
+            core,
+            rest,
+        }
+        .validate_controls()?;
         Ok(KagemushaWalletPolicyRefreshV1 {
-            credential_digest,
-            policy,
+            credential_digest: core.credential_digest,
+            core,
+            rest,
             effect: KagemushaWalletEffectV1::RefreshPolicy {
                 update_kind: update.kind(),
                 update: digest,
-                accepted_time_floor_ms: policy.accepted_time_floor_ms,
+                accepted_time_floor_ms: core.accepted_time_floor_ms,
             },
         })
     }
@@ -2501,10 +2549,12 @@ impl KagemushaWalletStateV1 {
         now: &KagemushaWalletMonotonicReadingV1,
         receiver_accepted_time_ms: u64,
     ) -> WalletResult<KagemushaWalletTimeIntervalV1> {
-        let policy = &self.policy;
-        let floor = policy.accepted_time_floor_ms.max(receiver_accepted_time_ms);
+        let floor = self
+            .core
+            .accepted_time_floor_ms
+            .max(receiver_accepted_time_ms);
         let Some(anchored) = anchored else {
-            if policy.send_requires_time_anchor() {
+            if self.send_requires_time_anchor() {
                 return Err(invalid_v1("time_anchor.missing"));
             }
             return KagemushaWalletTimeIntervalV1::new(floor, floor);
@@ -2513,16 +2563,15 @@ impl KagemushaWalletStateV1 {
         require_scheme_v1(
             "time_anchor.scheme_id",
             &anchor.body.scheme_id,
-            &self.scheme_id,
+            &self.core.scheme_id,
         )?;
-        if anchor.body.wallet_id != self.wallet_id {
+        if anchor.body.wallet_id != self.core.wallet_id {
             return Err(invalid_v1("time_anchor.wallet_id"));
         }
-        if anchor.time_anchor_digest() != policy.time_anchor {
-            return Err(invalid_v1("policy.time_anchor"));
+        if anchor.time_anchor_digest() != self.rest.time_anchor {
+            return Err(invalid_v1("state.rest.time_anchor"));
         }
-        let interval =
-            anchored.interval_at(now, policy.regulatory_policy.time_anchor_max_response_ms)?;
+        let interval = anchored.interval_at(now, self.rest.time_anchor_max_response_ms)?;
         let lower = floor.max(interval.lower_ms);
         KagemushaWalletTimeIntervalV1::new(lower, interval.upper_ms.max(lower))
     }
@@ -2534,12 +2583,10 @@ impl KagemushaWalletStateV1 {
     ///
     /// Rejects a Send after the lease deadline.
     pub fn check_lease(&self, interval: &KagemushaWalletTimeIntervalV1) -> WalletResult<()> {
-        if self
-            .policy
-            .is_active(KAGEMUSHA_WALLET_CONTROL_ATTESTATION_LEASE_V1)
-            && interval.deadline_passed(self.policy.lease_expires_at_ms)
+        if self.is_active(KAGEMUSHA_WALLET_CONTROL_ATTESTATION_LEASE_V1)
+            && interval.deadline_passed(self.core.lease_expires_at_ms)
         {
-            return Err(invalid_v1("policy.lease_expired"));
+            return Err(invalid_v1("state.lease_expired"));
         }
         Ok(())
     }
@@ -2547,7 +2594,9 @@ impl KagemushaWalletStateV1 {
     /// Blacklist check for a Send to `recipient_account_digest` (§7, design C6).
     ///
     /// Enforced only while the control is active and a list is held; returns the gap opening
-    /// that witnesses non-membership, or `None` when the control is not enforced.
+    /// that witnesses non-membership, or `None` when the control is not enforced. The list
+    /// issue time and maximum age are core fields, so `σ_send` enforces the age rule too
+    /// (owner answer Q5).
     ///
     /// # Errors
     ///
@@ -2559,27 +2608,27 @@ impl KagemushaWalletStateV1 {
         recipient_account_digest: &[u8; 32],
         interval: &KagemushaWalletTimeIntervalV1,
     ) -> WalletResult<Option<KagemushaWalletBlacklistGapOpeningV1>> {
-        let policy = &self.policy;
-        if !policy.is_active(KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1) || policy.blacklist_version == 0
+        if !self.is_active(KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1)
+            || self.core.blacklist_version == 0
         {
             return Ok(None);
         }
         let list = list.ok_or_else(|| invalid_v1("blacklist.missing"))?;
-        if list.blacklist_digest() != policy.blacklist {
-            return Err(invalid_v1("policy.blacklist"));
+        if list.blacklist_digest() != self.rest.blacklist {
+            return Err(invalid_v1("state.rest.blacklist"));
         }
-        let max_age_ms = policy.regulatory_policy.blacklist_max_age_ms;
+        let max_age_ms = self.core.blacklist_max_age_ms;
         if max_age_ms > 0 {
             let age_ms = interval
                 .upper_ms
-                .checked_sub(policy.blacklist_issued_at_ms)
+                .checked_sub(self.core.blacklist_issued_at_ms)
                 .ok_or_else(|| overflow_v1("blacklist.age"))?;
             if age_ms > max_age_ms {
                 return Err(invalid_v1("blacklist.age"));
             }
         }
         let opening = list.gap_opening(recipient_account_digest)?;
-        opening.verify(&policy.blacklist_root, recipient_account_digest)?;
+        opening.verify(&self.core.blacklist_root, recipient_account_digest)?;
         Ok(Some(opening))
     }
 
@@ -2602,16 +2651,19 @@ impl KagemushaWalletStateV1 {
         interval: &KagemushaWalletTimeIntervalV1,
         gross: u128,
     ) -> WalletResult<Vec<KagemushaWalletQuotaUsageLeafV1>> {
-        let policy = &self.policy;
-        if !policy.is_active(KAGEMUSHA_WALLET_CONTROL_QUOTAS_V1) {
+        if !self.is_active(KAGEMUSHA_WALLET_CONTROL_QUOTAS_V1) {
             return Ok(Vec::new());
         }
         let share = share.ok_or_else(|| invalid_v1("quota_share.missing"))?;
-        if policy.quota_share_id == 0 || share.quota_share_digest() != policy.quota_share {
-            return Err(invalid_v1("policy.quota_share"));
+        if self.rest.quota_share_id == 0 || share.quota_share_digest() != self.rest.quota_share {
+            return Err(invalid_v1("state.rest.quota_share"));
         }
         share.validate()?;
-        share.require_wallet(&self.scheme_id, &self.asset_digest, &self.wallet_id)?;
+        share.require_wallet(
+            &self.core.scheme_id,
+            &self.core.asset_digest,
+            &self.core.wallet_id,
+        )?;
         share.charge_send(interval, gross, usage)
     }
 }

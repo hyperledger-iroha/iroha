@@ -5,16 +5,14 @@
 //! its immutable funded guard before releasing these borrows and beginning execution.
 
 use super::*;
-use iroha_data_model::isi::kagemusha_v1::{
-    KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-    KagemushaMintFinalityEpochDecisionV1,
-};
+use iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1;
+use iroha_data_model::sumeragi::epoch::{ValidatorEpochAuthorizationV1, ValidatorEpochDecisionV1};
 
 /// A complete checked boundary decision that still borrows its selecting prestate.
 pub(super) struct BoundaryInputs<'a> {
     pub(super) current: &'a ValidatorEpochContextV1,
     pub(super) selection_anchor: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
-    pub(super) authorization: KagemushaMintFinalityEpochAuthorizationV1,
+    pub(super) authorization: ValidatorEpochAuthorizationV1,
     pub(super) authority: &'a KagemushaMintFinalityAuthorityGenerationV1,
     pub(super) committee: &'a [iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1],
     pub(super) entropy: BoundaryEntropy,
@@ -159,7 +157,7 @@ pub(super) fn boundary_inputs<'a>(
                 }
                 (
                     preparation.last_height,
-                    KagemushaMintFinalityEpochDecisionV1::Activate,
+                    ValidatorEpochDecisionV1::Activate,
                     id,
                     &credentials.authority,
                     preparation.committee.as_slice(),
@@ -168,7 +166,7 @@ pub(super) fn boundary_inputs<'a>(
             } else {
                 (
                     preparation.last_height,
-                    KagemushaMintFinalityEpochDecisionV1::RetainAndCancel,
+                    ValidatorEpochDecisionV1::RetainAndCancel,
                     id,
                     &current.authority,
                     current.committee.as_slice(),
@@ -180,14 +178,14 @@ pub(super) fn boundary_inputs<'a>(
                 height
                     .checked_add(policy.epoch_length_blocks)
                     .ok_or("retained epoch end overflows")?,
-                KagemushaMintFinalityEpochDecisionV1::Retain,
+                ValidatorEpochDecisionV1::Retain,
                 [0; 32],
                 &current.authority,
                 current.committee.as_slice(),
                 entropy.beacon,
             )
         };
-    if decision != KagemushaMintFinalityEpochDecisionV1::Activate {
+    if decision != ValidatorEpochDecisionV1::Activate {
         #[cfg(all(test, sumeragi_core_mutation = "HC103"))]
         if current.committee.iter().any(|seat| {
             selection_pop(
@@ -208,7 +206,7 @@ pub(super) fn boundary_inputs<'a>(
             return Err("retained beacon does not cover the next epoch".into());
         }
     }
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+    let authorization = ValidatorEpochAuthorizationV1 {
         version: 1,
         network_id: current.network_id,
         epoch: next_epoch,

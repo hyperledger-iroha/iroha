@@ -53,6 +53,10 @@ pub(in crate::state) mod frozen_escrows;
 #[path = "complete/frozen_nfts_rwas.rs"]
 mod frozen_nfts_rwas;
 mod frozen_repo_agreements;
+#[path = "complete/frozen_trigger_actions.rs"]
+mod frozen_trigger_actions;
+#[path = "complete/frozen_trigger_contracts.rs"]
+mod frozen_trigger_contracts;
 
 #[path = "complete/frozen_assets.rs"]
 pub(in crate::state) mod frozen_assets;

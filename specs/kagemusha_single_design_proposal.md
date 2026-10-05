@@ -1,9 +1,14 @@
 # KAGEMUSHA — final implementation draft
 
-Status: **canonical implementation target, revision 2026-10-04**. This revision
-adopts the owner-approved split-lineage architecture: a step proof on the
-payment path and a local background lineage fold (§§1.1, 3). It replaces the
-2026-10-03 revision, which replaced revision 6 and its decision menu.
+Status: **canonical implementation target, revision 2026-10-05**. This revision
+applies the owner answers of 2026-10-05: the hash families, `credit_id` and
+`proof_digest` (§§3, 4.1, 5.1), the state core and head commitment (§3), the
+credit-digest tree (§3), receiver matching and credential continuity (§§3.2,
+5.1, 5.2), verifying-key selection (§3.2) and proof caps (§8). It amends the
+2026-10-04 revision, which adopted the owner-approved split-lineage
+architecture: a step proof on the payment path and a local background lineage
+fold (§§1.1, 3). That revision replaced the 2026-10-03 revision, which replaced
+revision 6 and its decision menu.
 Implement and integrate this design for the
 POC and production. The [verification checklist](kagemusha_evidence_gate.md) records
 results; it does not authorize, prohibit or delay use or deployment.
@@ -253,31 +258,57 @@ sent and received credits (`credit_id`, counterparty wallet and amount; for a
 send also its ordinal, fee and Request digest). Neither contains a Payment
 digest.
 
+**Hash families.** `H` is the role-separated SHA-256 hash of the [wallet wire
+record](kagemusha_wallet_wire_v1.md). `P(d, x)` is the RP57 Poseidon
+`iroha_pasta::poseidon::hash_with_domain` with domain word `d` over the Pasta
+field Fp, the Vesta scalar field in which σ is proved; its value is one
+canonical Fp element. `P_bytes(d, b)` is `P` over the byte length of `b`
+followed by `b` split into 31-byte little-endian chunks, the last one
+zero-filled. Two hash families apply:
+
+- **Poseidon.** `P` for every value a step relation computes or opens:
+  `credit_id` (§5.1), the state commitment and rest digest, the chains, σ's
+  public-input encoding of its statement, and the roots, leaves and openings of
+  every state map, of the blacklist and quota-window trees (§7) and of the
+  credit-digest tree. `P_bytes` for the large-input digests: `proof_digest` in
+  both its domains (§4.1) and the Payment digest (§5.1).
+- **SHA-256.** `H` for every other digest, including the small hardware-signed
+  bodies: the receipt body and the statement transcript that it binds.
+
+A SHA-256 value enters a `P` preimage as two 128-bit limbs, a `P` value as one
+element. Native code, the data model included, computes `P` values with
+`iroha_pasta`; the packing rule, every `P` domain and every element list are
+pinned with shared native and in-circuit vectors (§3.2).
+
 Each `wallet_id` is enrolled for one scheme and asset incarnation (§2.2) and
 owns one private state:
 
 ```text
 lifecycle: Active | Retiring
-wallet_id, credential digest
+scheme_id, asset_digest, wallet_id, credential digest
 balance, burned_total
 sequence, next_send, next_load, next_redeem
 send_chain, recv_chain
 consumed_credit_root
-pending_outgoing_root, load/redeem and fee-claim recovery roots
+pending_outgoing_root, load/redeem recovery root, fee-claim recovery root
 regulatory_policy, enabled_controls, quota share/windows, quota_usage_root,
-blacklist version/root, lease expiry, accepted time/epoch information
+blacklist version/root/issue time, lease expiry, accepted time/epoch information
 state nonce, state commitment
 ```
 
-The state commitment is two-level: `H(core, rest_digest)`. The core holds every
-field that a step proof reads, changes or carries: lifecycle, `wallet_id`,
-credential digest, balance, burned_total, sequence, next_send, next_load,
-next_redeem, send_chain, recv_chain; the consumed-credit, pending-outgoing,
-load/redeem-recovery, fee-claim-recovery and quota-usage roots; the
-enabled-controls mask, quota share/windows root, blacklist version/root, lease
-expiry, policy epoch and accepted-time floor; and the state nonce. The rest
-digest commits the remaining fields (including the regulatory policy body and
-time anchor). No σ opens the rest digest; Λ opens it. A σ constrains a map root
+The state commitment (the head commitment) is one canonical Fp value with two
+levels: `P(core ‖ P(rest))`, under distinct core and rest domains. The core
+holds every field that a step proof reads, changes or carries:
+lifecycle, `scheme_id`, `asset_digest`, `wallet_id`, credential digest,
+balance, burned_total, sequence, next_send, next_load, next_redeem, send_chain,
+recv_chain; the consumed-credit, pending-outgoing, load/redeem-recovery,
+fee-claim-recovery and quota-usage roots; the enabled-controls mask, quota
+share/windows root, blacklist version, root and issue time, the regulatory
+policy's maximum blacklist age, lease expiry, policy epoch and accepted-time
+floor; and the state nonce. Load and redeem recovery share one map and root,
+keyed by `(kind, ordinal)`. The rest digest commits the remaining fields
+(including the rest of the regulatory policy body and the time anchor). No σ
+opens the rest digest; Λ opens it. A σ constrains a map root
 only where an enabled control reads or updates it (§7). It carries the other
 successor roots as witnesses. Advance requires each of them to equal the root
 recomputed from the authenticated store (§4.2), and Λ constrains every root
@@ -293,7 +324,10 @@ and the predecessor head, so no state commitment contains a Payment digest.
 The full canonical Payment digest is bound by the Receive receipt (§4.1). Λ_recv
 inserts `credit_id → (Payment digest, burned flag)` into the lineage-level
 *credit-digest root*, which Ω exposes and CreditStatus opens (§§3.2, 5.1); that
-root is not part of the state commitment. The wallet retains each credit's
+root is not part of the state commitment. The credit-digest tree is a
+depth-256 sparse Merkle `P` tree keyed by the bits of the canonical `credit_id`
+encoding. Its opening is compressed: a presence bitmap marks the non-default
+siblings, and only those siblings are carried. The wallet retains each credit's
 Payment digest with its Receive record. The consumed-credit map is never pruned
 or reset within an incarnation. There is no exclusive
 receive slot; multiple incoming and committed outgoing payments are allowed.
@@ -309,8 +343,8 @@ commitment independent of the proof and receipt that will certify it.
 ### 3.1 State packages
 
 A public package is `(statement, σ, τ)`, plus Ω(pred) when its operation
-consumes it. The statement binds scheme, relation identity, wallet credential
-digest, asset, operation, sequence, predecessor and successor state
+consumes it. The statement binds scheme, the scheme's relation identity (§3.2),
+wallet credential digest, asset, operation, sequence, predecessor and successor state
 commitments, and the operation's public effect. Sensitive openings and private
 history are witnesses. `τ` is the provider's durable commit receipt bound to the
 exact statement and proof digest.
@@ -387,13 +421,15 @@ check runs.
 - *[σ, before Advance]:* checked balance arithmetic against
   `balance − burned_total`, where `burned_total` is Ω(pred)'s when σ consumes
   Ω(pred); positive amounts; one-time ordinals; one sequence advance;
-  lifecycle; the `wallet_id` and credential-digest binding and their
-  continuity; Request/credit identity; counterparty and exact amount/fee
-  binding; distinct payer and receiver wallets; the policy epoch and
+  lifecycle; the scheme, asset, `wallet_id` and credential-digest binding and
+  their continuity; Request/credit identity, with the Request's receiver
+  matched by `wallet_id`, not by credential digest; counterparty and exact
+  amount/fee binding; distinct payer and receiver wallets; the policy epoch and
   accepted-time window; the enabled-controls mask; the chain append.
 - *[σ_send, before Advance, only while the control is enabled]:* blacklist
-  nonmembership; the touched quota windows and usage update; lease expiry and
-  time-window arithmetic, all against head-committed roots and fields (§7).
+  nonmembership and the maximum blacklist age; the touched quota windows and
+  usage update; lease expiry and time-window arithmetic, all against
+  head-committed roots and fields (§7).
 - *[native, inside the serialized Advance section]:* consumed-credit
   nonmembership and insertion, and every root update, against stores
   authenticated by the expected head, with each successor root equal to the one
@@ -408,6 +444,10 @@ check runs.
   - every signature it owns: the Request and receiver credential only in
     Λ_recv; load vouchers in Λ_load; certificates, credentials, and policy,
     list, time and credential updates in the step that consumes them;
+  - credential continuity: a renewal's replacement credential, and the
+    receiver credential of a Request that Λ_recv verifies, bind the wallet's
+    `wallet_id` and `payment_key`, so a Request quoted before a renewal stays
+    receivable after it (§5.1);
   - exact map membership and nonmembership updates and every root transition,
     unchanged unrelated fields (opening the rest digest) and exact operation
     effects from §§5–7;
@@ -437,9 +477,12 @@ a package carrying Ω(pred), natively and in Λ, checks before mutation:
   ordinal is the one σ_send consumes; and the Payment's carried credential
   digest and `payment_key` equal Ω's.
 
-A mismatch is rejected before mutation. Each consumer selects σ's verifying key
-by operation tag and, for Send, by `Ω.enabled_controls`, from the pinned
-artifact manifest; Λ uses the same allowlist. σ_send's statement binds the
+A mismatch is rejected before mutation. Statements and Ω carry one
+scheme-level relation identity, not one per relation. Each consumer selects σ's
+verifying key from the verifying-key allowlist by operation tag and, for Send,
+by `Ω.enabled_controls`; Λ uses the same allowlist. G1 defines the allowlist,
+with one entry per selector; its digest is the `verifying_key_set_digest` that
+the relation identity binds. σ_send's statement binds the
 enabled-controls mask, and its relation checks that mask against the core; a
 σ_send whose relation omits a check for an enabled control is rejected. Every Λ
 that consumes an Ω constrains every deferred value of that Ω. Native verifiers
@@ -520,7 +563,7 @@ and does not erase historical quota usage.
 ### 3.3 Stable offline verification
 
 Freeze the step relations, the lineage relation, the transport wrap, their
-operation-tag verifying-key allowlist and their verification interface for the
+verifying-key allowlist (§3.2) and their verification interface for the
 lifetime of a scheme. Existing offline wallets verify future payments in that
 scheme using the same material. Implementation optimizations preserve that
 interface and semantics. A breaking relation is a different scheme. Moving value to it uses a voluntary
@@ -550,10 +593,11 @@ The signed receipt binds the scheme, wallet, provider-contract identity,
 sequence, operation ID, old/new commitments, statement digest, proof digest
 and recovery capsule digest. The operation tag fixes the `proof_digest` domain
 (§3.1). For Send, Unload and Retiring,
-`proof_digest = H("proof", LE32 len(Ω) ‖ Ω ‖ LE32 len(σ) ‖ σ)` over Ω(pred) and
-σ. Bootstrap, Load, Receive, ArchiveSent and RefreshPolicy use a distinct
-σ-only domain over `LE32 len(σ) ‖ σ`. A Receive receipt also binds the full
-canonical Payment digest. σ_recv's statement and successor commitment never
+`proof_digest = P_bytes(proof domain, LE32 len(Ω) ‖ Ω ‖ LE32 len(σ) ‖ σ)` over
+Ω(pred) and σ. Bootstrap, Load, Receive, ArchiveSent and RefreshPolicy use
+`P_bytes` under a distinct σ-only domain over `LE32 len(σ) ‖ σ`. Either value is
+one canonical Fp element (§3). A Receive receipt also binds the full canonical
+Payment digest (§5.1). σ_recv's statement and successor commitment never
 contain that digest or any value derived from it (§3), so σ_recv can be
 precomputed at Request signing. Λ_recv constrains the receipt's Payment digest
 in-circuit against the Payment it verifies and inserts it into the credit-digest
@@ -663,9 +707,10 @@ to use or integration. A failed durable commit cannot truthfully return success.
 ### 5.1 Messages
 
 Every message binds the scheme, asset, wallet identities and canonical format.
-`credit_id = H("credit", Request body)` uses a distinct hash domain. The
-*Request body* is the canonical signed Request fields, with their dependencies
-(receiver credential, fee schedule, certificates) bound by digest.
+`credit_id = P(kgwcrdt1, Request body)` is one canonical Fp value (§3). The
+*Request body* is the canonical signed Request fields as 24 elements in
+request-body order, with their dependencies (receiver credential, fee schedule,
+certificates) bound by digest.
 Request fields bind both wallet IDs, payer send ordinal `s`, receiver credential,
 amount, signed fee schedule and exact fee, regulatory policy references, the
 receiver's authenticated accepted time (§7) and a fresh 256-bit nonce. The
@@ -677,7 +722,7 @@ the monetary interpretation.
 | Offer | Payer advertises its next `s`, amount and supported scheme, and carries its `CredentialV1` (at most 1,024 bytes); its payment key signs the Offer. It is an authenticated session hint, with no debit or credit authority. The receiver verifies the credential natively and authenticates the Offer with it. A delivery retry also opens with an Offer, so the receiver always holds the payer's credential. After the Offer, the payer may send a Lineage message (§8) carrying Ω of its folded head. The receiver verifies it only after an authenticated Offer, rate-limits it, and checks Ω's `wallet_id`, credential digest and `payment_key` against the Offer's credential. |
 | Request | Receiver signs a nonmonetary setup quote containing the exact fields above. It creates no state transition, receiver ordinal or reserved receive slot. The payer verifies its signature and the receiver credential natively before proving Send (below). |
 | Payment | From a folded head, the payer verifies the Request and the applicable Send policy and checks `s == next_send`. It may prove σ_send *speculatively*, after verifying the Request and before the payer confirms; a declined speculative σ_send is discarded and never signed. It natively verifies σ_send and uses the Ω(pred) recorded as self-verified at fold time (§3.1), which is not re-verified on the payment path. It then permanently subtracts `amount + fee`, increments `next_send`, appends to `send_chain` and inserts the credit descriptor in its pending outbox. It commits and retains the full canonical Payment before first release. Payment contains the signed Request body, the payer's `payment_key` and credential digest (both equal to Ω(pred)'s), and the Send package {statement, Ω(pred), σ_send, τ_send}. The receiver's credential, fee schedule and certificates are bound by digest in the Request body, which the receiver holds. |
-| Receive | On a device class whose published lineage budget is met (§5.3), the receiver natively verifies before mutation: the payer credential from the session's Offer, whose digest equals Payment's credential digest, σ_send's statement and `Ω(pred).credential`; Ω(pred), including the decide; the §3.2 consumer checks; σ_send, τ_send and its own bound identity; and the Request it signed. If Payment's Ω(pred) is byte-identical to a Lineage Ω that the receiver already verified in this session, that verification is reused; otherwise it verifies Ω(pred) in full. It proves σ_recv (precomputed at Request signing, re-proved if its head changed), whose statement and successor commitment exclude the Payment digest (§3), and adds exactly `amount`. In the serialized Advance (§4.2) it checks nonmembership and inserts `credit_id → (amount, receive sequence)` into the permanent consumed-credit map; the Receive receipt also binds the full canonical Payment digest. Show complete only after durable completion. Λ_recv later proves the incoming objects, the map update and the receipt's Payment digest in-circuit and records the digest in the credit-digest root, or takes the burn branch (§3.2). |
+| Receive | On a device class whose published lineage budget is met (§5.3), the receiver natively verifies before mutation: the payer credential from the session's Offer, whose digest equals Payment's credential digest, σ_send's statement and `Ω(pred).credential`; Ω(pred), including the decide; the §3.2 consumer checks; σ_send and τ_send; its own bound identity, matched by the Request's receiver `wallet_id` and the `payment_key` of the Request's receiver credential, never by credential-digest equality, so that credential may be an earlier one of this incarnation; and the Request it signed. If Payment's Ω(pred) is byte-identical to a Lineage Ω that the receiver already verified in this session, that verification is reused; otherwise it verifies Ω(pred) in full. It proves σ_recv (precomputed at Request signing, re-proved if its head changed), whose statement and successor commitment exclude the Payment digest (§3), and adds exactly `amount`. In the serialized Advance (§4.2) it checks nonmembership and inserts `credit_id → (amount, receive sequence)` into the permanent consumed-credit map; the Receive receipt also binds the full canonical Payment digest. Show complete only after durable completion. Λ_recv later proves the incoming objects, the map update and the receipt's Payment digest in-circuit and records the digest in the credit-digest root, or takes the burn branch (§3.2). |
 | Credited | Optional delivery evidence, in one of two forms. (i) The receiver's Receive package {statement, σ_recv, τ_recv}, whose receipt binds the exact Payment digest; its status is *credited, unfolded*. (ii) A read-only `CreditStatus` against a folded receiver head `h` that covers the credit: {statement(h), proof_digest(h), τ(h), Ω(h), compressed opening of `credit_id → (Payment digest, burned flag)` in Ω(h)'s credit-digest root}, with no σ and no Ω(pred); its status is *credited* or *burned*. Credited advances no state. The receiver need not retain it. A payer keeps Credited evidence it consumed as a fold witness until its ArchiveSent step is folded (§4.1). |
 | ArchiveSent | Payer verifies matching Credited evidence (credited or burned) and proves removal of the matching pending outgoing descriptor. It may delete the delivered Payment bytes only after a durable Ω covers the ArchiveSent step on its archive branch (§3.2), and never the copies a fee claim still needs (§6.2). Balance, quotas and consumed-credit entries stay unchanged. |
 
@@ -692,13 +737,17 @@ natively at Receive, and its Λ_recv verifies the signature and credential
 in-circuit.
 
 The Receive receipt and CreditStatus bind the digest of the **entire canonical
-Payment**, including its proofs and provider receipt. Conflicting bytes for a
-consumed credit are rejected. A proof of absence or a generic signed
+Payment**, including its proofs and provider receipt. This Payment digest is
+`P_bytes`, under its own domain, of the Payment transcript ([wire
+record](kagemusha_wallet_wire_v1.md)), which binds every part of the canonical
+Payment and binds Ω(pred) and σ_send through `proof_digest`. Conflicting bytes
+for a consumed credit are rejected. A proof of absence or a generic signed
 acknowledgement is not evidence of credit. A CreditStatus verifier decides
 Ω(h), checks τ(h) under `Ω(h).payment_key` over the carried statement and
 `proof_digest`, checks that the statement's successor is `Ω(h).head` and that
-Ω(h)'s wallet and credential digest match the Request's receiver, and checks
-the opening. CreditStatus therefore cannot invent an accepted credit. Its
+`Ω(h).wallet_id` and `Ω(h).payment_key` equal the Request's receiver wallet and
+the `payment_key` of the Request's receiver credential (credential digests are
+not compared), and checks the opening. CreditStatus therefore cannot invent an accepted credit. Its
 budget is the 10,000-byte Credited bound (§8). It carries no σ, so it is
 expected to be smaller than Payment. ArchiveSent verifies all that evidence
 natively before Advance and in-circuit in Λ_archive. If the in-circuit check
@@ -727,8 +776,10 @@ unrelated sends, receives and cleanup.
   Declining a screen or disconnecting does not produce a monetary refusal.
   Preserve the payer's outbox for later delivery. No timeout or negative reply
   permits refund, retargeting or any restoration of the debit.
-- Receive does not depend on a still-open Request or the receiver's old head.
-  Delayed valid Payments remain receivable after other payments. Malformed,
+- Receive does not depend on a still-open Request, the receiver's old head or
+  the receiver credential that was current when the Request was signed. A
+  Request quoted before a renewal stays receivable after it (§3.2). Delayed
+  valid Payments remain receivable after other payments. Malformed,
   unauthenticated or wrong-recipient objects are rejected without mutation;
   rejection is not a value-return authorization.
 - Lost Credited evidence only leaves delivery unconfirmed at the payer.
@@ -922,14 +973,15 @@ policy and list changes; they never reanchor time (below).
 | Attestation lease | Require renewal before a future Send after the signed expiry. Accepted balance and already committed exchanges remain owned and recoverable. | Renewal is the configured online requirement. |
 
 While a control is enabled, σ_send enforces it against the head-committed
-blacklist root, quota-usage root and quota share/windows, accepted-time floor
-and lease fields. Every receiver therefore verifies the control before
-completion: it selects σ_send's verifying key by Ω(pred)'s enabled-controls mask
-(§3.2). The blacklist and quota-share structures are Poseidon trees whose roots
-the regulatory-policy signer signs; the quota-usage tree is the wallet's own
-Poseidon tree. Native checks against authenticated stores also run inside the
-serialized Advance section (§4.2 step 2). Controls are off by default and then
-add nothing to σ beyond the check that the enabled-controls mask is empty.
+blacklist root, issue time and maximum list age, quota-usage root and quota
+share/windows, accepted-time floor and lease fields. Every receiver therefore
+verifies the control before completion: it selects σ_send's verifying key by
+Ω(pred)'s enabled-controls mask (§3.2). The blacklist gap tree and the quota
+share's window tree are `P` trees (§3) whose roots the regulatory-policy signer
+signs; the quota-usage tree is the wallet's own `P` tree. Native checks against
+authenticated stores also run inside the serialized Advance section (§4.2 step
+2). Controls are off by default and then add nothing to σ beyond the check that
+the enabled-controls mask is empty.
 
 Blacklisting a former payer does not taint downstream value. No ancestor lookup
 can become an implicit blacklist. A restriction on the current holder must be
@@ -989,13 +1041,8 @@ unauthenticated extension can change the canonical Payment digest while
 preserving its authorization.
 
 The [wallet wire record](kagemusha_wallet_wire_v1.md) records the G1 field
-layouts, transcripts and bounds of the pre-split design. Until G1 regenerates
-it and its vectors for split lineage, this document governs wherever they
-differ: package shapes and Ω(pred) (§3.1); `proof_digest` (§4.1); the §3 core,
-`burned_total`, chains and two-level commitment; the consumed-credit leaf, the
-Receive effect and the σ_recv statement, which exclude the Payment digest (§3);
-the Offer, Payment, Lineage and Credited layouts (§5.1); and proof caps, which
-follow the measured σ and Ω sizes. TODO(G1): update the wire record.
+layouts, transcripts, bounds and vectors of this design. Where it marks an
+item TODO(G1), this document governs.
 
 Text transport is `kgm1:` plus unpadded base64url; text/framing expansion is
 additional carrier overhead, not hidden in the binary budget.
@@ -1008,8 +1055,15 @@ additional carrier overhead, not hidden in the binary budget.
 
 Payment uses the compact §5.1 layout: the signed Request body, the payer's
 `payment_key` and credential digest, and {statement, Ω(pred), σ_send, τ_send},
-with Ω in single-parity transport form. If the measured Ω cannot keep Payment
-within 10,000 bytes, any fallback layout or bound requires a new owner decision.
+with Ω in single-parity transport form. The σ and Ω byte caps are the exact
+proof lengths that the frozen artifact allowlist (§3.2) records. Under R9 they
+satisfy `|Ω| + |σ_send| ≤ 10,000 − F_payment`, where `|Ω|` is the Ω
+transport-proof length, `|σ_send|` the largest σ_send length in the allowlist,
+and `F_payment` every other byte of the largest valid Payment (about 1,615
+bytes, so about 8,385 bytes for both proofs; the wire record pins it). Until
+the artifacts freeze, G1 enforces only the frame bound. If the measured Ω
+cannot keep Payment within 10,000 bytes, any fallback layout or bound requires
+a new owner decision.
 The same applies if CreditStatus cannot keep Credited within 10,000 bytes, for
 example a fallback in which Credited carries only the Receive package. A
 Lineage message is smaller than the Payment that carries the same Ω.
@@ -1144,6 +1198,12 @@ genuine multi-hop proofs and physical carriers. It also covers:
   key or credential digest in Payment;
 - a tampered deferred value, a mixed history, a wrong relation identity, and a
   wrong VK for the operation tag or enabled-controls mask;
+- shared native and in-circuit vectors for `P`, the `P_bytes` packing
+  (including empty input and 31-byte chunk boundaries) and every element list
+  (§3), and a σ_send whose held blacklist exceeds the maximum list age;
+- a Request quoted before the receiver's credential renewal and received after
+  it, with CreditStatus matched by `wallet_id` and `payment_key`, and a
+  receiver credential with another `payment_key`, which is rejected;
 - a σ successor root that differs from the authenticated store, a stale native
   store against the head roots, and a receipt that fails self-verification;
 - crash and restore between commit and fold, and fold-witness loss;

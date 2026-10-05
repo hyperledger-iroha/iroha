@@ -1452,16 +1452,16 @@ fn validate_commitment_bundle_with_policy(
         &DaCommitmentRecord,
     ) -> Result<(), DaCommitmentValidationError>,
 ) -> Result<(), DaCommitmentValidationError> {
-    if bundle.version != DaCommitmentBundle::VERSION_V1 {
+    if bundle.version() != DaCommitmentBundle::VERSION_V1 {
         return Err(DaCommitmentValidationError::UnsupportedVersion {
-            version: bundle.version,
+            version: bundle.version(),
         });
     }
-    validate_commitment_bundle_len(bundle.commitments.len())?;
+    validate_commitment_bundle_len(bundle.commitments().len())?;
     let mut seen_keys = BTreeSet::new();
     let mut seen_manifests = BTreeSet::new();
     let mut seen_tickets = BTreeSet::new();
-    for record in &bundle.commitments {
+    for record in bundle.commitments() {
         if record
             .manifest_hash
             .as_bytes()
@@ -1503,9 +1503,10 @@ fn validate_commitment_bundle_with_policy(
         }
         validate_record_policy(record)?;
     }
-    let mut canonical = bundle.commitments.clone();
+    // Ordering scratch is a separate untrusted graph, not an extracted admitted owner.
+    let mut canonical = bundle.commitments().to_vec();
     canonical.sort();
-    if let Some(index) = first_commitment_order_mismatch(&bundle.commitments, &canonical) {
+    if let Some(index) = first_commitment_order_mismatch(bundle.commitments(), &canonical) {
         return Err(DaCommitmentValidationError::NonCanonicalOrder { index });
     }
     Ok(())
@@ -2660,8 +2661,10 @@ mod tests {
     #[test]
     fn validate_commitment_bundle_rejects_unsupported_version() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
-        let mut bundle = DaCommitmentBundle::new(vec![merkle_record(0)]);
-        bundle.version = DaCommitmentBundle::VERSION_V1 + 1;
+        let bundle = DaCommitmentBundle::from_untrusted_parts(
+            DaCommitmentBundle::VERSION_V1 + 1,
+            vec![merkle_record(0)],
+        );
         let err = validate_commitment_bundle(&bundle, &lane_config)
             .expect_err("unsupported commitment bundle version must fail");
         assert!(matches!(
@@ -2727,14 +2730,14 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x23; 32]);
         second.storage_ticket = StorageTicketId::new([0x56; 32]);
         let canonical = vec![first.clone(), second.clone()];
-        let reversed = DaCommitmentBundle {
-            version: DaCommitmentBundle::VERSION_V1,
-            commitments: vec![second, first],
-        };
+        let reversed = DaCommitmentBundle::from_untrusted_parts(
+            DaCommitmentBundle::VERSION_V1,
+            vec![second, first],
+        );
         let err = validate_commitment_bundle(&reversed, &lane_config)
             .expect_err("non-canonical commitment bundle order must fail");
         assert_eq!(
-            first_commitment_order_mismatch(&reversed.commitments, &canonical),
+            first_commitment_order_mismatch(reversed.commitments(), &canonical),
             Some(0)
         );
         assert!(matches!(
@@ -2752,7 +2755,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x25; 32]);
         second.storage_ticket = StorageTicketId::new([0x58; 32]);
         let bundle = DaCommitmentBundle::new(vec![second, first.clone()]);
-        assert_eq!(bundle.commitments[0], first);
+        assert_eq!(bundle.commitments()[0], first);
         validate_commitment_bundle(&bundle, &lane_config)
             .expect("constructor-canonicalized commitment bundle must validate");
     }

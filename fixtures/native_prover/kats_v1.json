@@ -918,7 +918,7 @@
           "sha256": "850f41a1d817065712bf3bba88892df986ed5f63065b1bbbb3e264607641ca81"
         }
       ],
-      "source": "crates/iroha_core_zk/src/prover_golden_tests.rs",
+      "source": "pinned here, never regenerated: recorded from crates/iroha_core_zk/src/prover_golden_tests.rs at oracle_baseline.repository_head",
       "transcript": "KAGEMUSHA PoseidonTranscript<C, NativeLoader, _, 3, 2, 8, 57>; recovery seed [7; 32]; folded generator appended"
     },
     "vendored_halo2_axiom": {
@@ -1374,8 +1374,8 @@
         }
       ]
     },
-    "production_anchors": "none yet: no iroha_core_zk test pins a KAGEMUSHA hash value (the module is pub(crate)). These vectors come from the oracle reproduction (construction below, built from the same halo2-base and snark-verifier types as production), whose sponge is anchored by the confidential_v3_poseidon production anchors. TODO: an iroha_core_zk test asserts these vectors and the empty replay root",
-    "reproduces": "iroha_core_zk::kagemusha_v1_poseidon::hash::<F>(domain, inputs)"
+    "production_anchors": "the vendored sponge (construction below) is anchored by the confidential_v3_poseidon production anchors; iroha_pasta::poseidon::hash_with_domain (iroha_plonk_oracle tests/pasta_parity, with the empty replay root), the iroha_plonk_gadgets sponge chip and iroha_kagemusha_proof (tests/digest_parity.rs in each) assert every vector",
+    "reproduces": "the KAGEMUSHA domain hash hash::<F>(domain, inputs) on the vendored sponge; natively iroha_pasta::poseidon::hash_with_domain::<F>(domain, inputs)"
   },
   "oracle_baseline": {
     "blake2b_simd_version": "1.0.4",
@@ -2773,6 +2773,6 @@
     },
     "squeeze": "snark-verifier Poseidon sponge over the buffered elements (initial capacity 2^64, pad 1 then 0s, an extra permutation when the buffer length is a multiple of the rate); challenge = state[1]",
     "transcript": "snark_verifier::system::halo2::transcript::halo2::PoseidonTranscript<C, NativeLoader, _, 3, 2, 8, 57>::new::<0>",
-    "users": "iroha_core_zk KAGEMUSHA_IPA_POSEIDON_{WIDTH,RATE,FULL_ROUNDS,PARTIAL_ROUNDS,SECURE_MDS}_V1 = 3, 2, 8, 57, 0"
+    "users": "iroha_plonk TranscriptV1::KagemushaPoseidonRp57 in oracle mode (spec section 6.2): width 3, rate 2, 8 full and 57 partial rounds, MDS 0"
   }
 }

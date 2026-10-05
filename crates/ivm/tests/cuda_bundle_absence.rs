@@ -130,7 +130,7 @@ fn direct_refusals_preserve_every_family_and_no_work_contract() {
         &mut signatures
     ));
     assert_eq!(signatures, [true; 2]);
-    assert_eq!(ivm::ed25519_verify_cuda(&[0; 64], &[0; 32], &[0; 32]), None);
+    assert_eq!(ivm::ed25519_verify_cuda(&[0; 64], &[0; 64], &[0; 32]), None);
 
     let mut hi = [2, 1, 2];
     let mut lo = [7, 9, 3];

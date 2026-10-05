@@ -25,7 +25,9 @@
 //! # The key
 //!
 //! [`ProvingKey`] owns the verifying key, the descriptor binding, the
-//! finalized constraint system, the fixed and permutation (`sigma`) columns
+//! selector-substituted constraint system and its selector plan
+//! ([`KeyConstraintSystem`]; the selector columns live once, as the last
+//! fixed columns), the fixed and permutation (`sigma`) columns
 //! in evaluation and coefficient form, the masks `l_0`, `l_last` and
 //! `l_active = 1 - l_last - l_blind`, the fixed-coset cache and optional
 //! commitment-key tables, and the digest of the copy mapping it was built
@@ -49,7 +51,10 @@ use ff::{BatchInvert, Field, PrimeField, WithSmallOrderMulGroup};
 use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain};
 
 use super::{DescriptorBinding, KeyError, check_shape, vk::VerifyingKey};
-use crate::{cs::FinalizedConstraintSystem, pcs::ipa::commit::CommitmentTables};
+use crate::{
+    cs::{ConstraintSystem, FinalizedConstraintSystem, SelectorPlan},
+    pcs::ipa::commit::CommitmentTables,
+};
 
 /// The exact quotient cosets of a circuit (see the module documentation).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -224,15 +229,19 @@ impl<F: PastaField> QuotientDomain<F> {
 /// cosets ahead of time.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CosetCachePolicy {
-    /// Evaluate every fixed, `sigma` and mask polynomial on every coset at
-    /// key generation.
+    /// Evaluate every fixed and `sigma` polynomial on every coset at key
+    /// generation. The masks are never cached: [`ProvingKey::coset_masks`]
+    /// computes them per coset from their closed forms.
     #[default]
     Eager,
     /// Keep no cache; [`ProvingKey::coset_values`] evaluates on demand.
     OnDemand,
 }
 
-/// A polynomial the coset cache holds.
+/// A polynomial of the proving key evaluated on the quotient cosets
+/// ([`ProvingKey::coset_values`]): a fixed or `sigma` polynomial (cached
+/// under [`CosetCachePolicy::Eager`]) or a mask (never cached; computed per
+/// coset by [`ProvingKey::coset_masks`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CosetPolynomial {
     /// Fixed column `i` (selector columns included).
@@ -261,6 +270,38 @@ pub struct CosetMasks<F> {
     pub l_active: Vec<F>,
 }
 
+/// The constraint system a proving key keeps: the selector-substituted
+/// system and its selector plan. The selector columns themselves are not
+/// kept twice: they are the key's last fixed columns
+/// ([`ProvingKey::selector_values`]), so no accessor here can return them
+/// empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyConstraintSystem<F> {
+    cs: ConstraintSystem<F>,
+    plan: SelectorPlan,
+}
+
+impl<F> KeyConstraintSystem<F> {
+    /// Splits a finalized system into the kept system and its selector
+    /// columns.
+    pub(crate) fn split(finalized: FinalizedConstraintSystem<F>) -> (Self, Vec<Vec<F>>) {
+        let (cs, columns, plan) = finalized.into_parts();
+        (Self { cs, plan }, columns)
+    }
+
+    /// The constraint system after substitution (no selector nodes remain).
+    #[must_use]
+    pub const fn constraint_system(&self) -> &ConstraintSystem<F> {
+        &self.cs
+    }
+
+    /// The selector plan.
+    #[must_use]
+    pub const fn selector_plan(&self) -> &SelectorPlan {
+        &self.plan
+    }
+}
+
 /// The masks in evaluation and coefficient form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Masks<F> {
@@ -274,7 +315,7 @@ struct Masks<F> {
 pub struct ProvingKey<C: PastaCurve> {
     vk: VerifyingKey<C>,
     binding: DescriptorBinding,
-    finalized: FinalizedConstraintSystem<C::ScalarExt>,
+    constraint_system: KeyConstraintSystem<C::ScalarExt>,
     domain: FftDomain<C::ScalarExt>,
     quotient: QuotientDomain<C::ScalarExt>,
     fixed_values: Vec<Vec<C::ScalarExt>>,
@@ -317,7 +358,7 @@ impl<C: PastaCurve> ProvingKey<C> {
     pub(crate) fn new(
         vk: VerifyingKey<C>,
         binding: DescriptorBinding,
-        finalized: FinalizedConstraintSystem<C::ScalarExt>,
+        constraint_system: KeyConstraintSystem<C::ScalarExt>,
         fixed_values: Vec<Vec<C::ScalarExt>>,
         permutation_values: Vec<Vec<C::ScalarExt>>,
         copy_digest: [u8; 32],
@@ -384,7 +425,7 @@ impl<C: PastaCurve> ProvingKey<C> {
         let mut key = Self {
             vk,
             binding,
-            finalized,
+            constraint_system,
             domain,
             quotient,
             fixed_values,
@@ -571,13 +612,22 @@ impl<C: PastaCurve> ProvingKey<C> {
         &self.binding
     }
 
-    /// The finalized constraint system (selectors substituted). Its
-    /// selector columns were moved into the key's fixed columns
-    /// ([`Self::fixed_values`] from the descriptor's selector
-    /// `first_column`), so its own `selector_columns()` is empty.
+    /// The selector-substituted constraint system and its selector plan.
+    /// The selector column values are [`Self::selector_values`].
     #[must_use]
-    pub fn constraint_system(&self) -> &FinalizedConstraintSystem<C::ScalarExt> {
-        &self.finalized
+    pub fn constraint_system(&self) -> &KeyConstraintSystem<C::ScalarExt> {
+        &self.constraint_system
+    }
+
+    /// The selector columns in evaluation form: the fixed columns from the
+    /// descriptor's selector `first_column` on (empty when the descriptor's
+    /// `first_column` is out of range, which a validated key never has).
+    #[must_use]
+    pub fn selector_values(&self) -> &[Vec<C::ScalarExt>] {
+        usize::try_from(self.binding.descriptor().selectors.first_column)
+            .ok()
+            .and_then(|first| self.fixed_values.get(first..))
+            .unwrap_or(&[])
     }
 
     /// The size-`n` FFT domain.

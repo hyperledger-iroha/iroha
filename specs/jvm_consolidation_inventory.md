@@ -485,3 +485,47 @@ every former issue/complete/expire builder assertion through Kotlin's typed API
 and adds mandatory-signer/retired-layout controls. Canonical fixture regeneration
 and combined Kotlin/Swift/Java validation remain required for this source change;
 no new fixture hashes or runtime qualification are implied.
+
+## Java peer-carrier and KAGEMUSHA duplicate retirement (first release)
+
+The `java/iroha_android` peer carriers are removed. Kotlin owns them for both JVM
+languages: K `offline/IrohaPeerWireV1.kt` (payload kind/profile, content
+encoding, compression policy, limits, canonical payload and wire message),
+`IrohaPeerNfcV1.kt`, `IrohaPeerQRV1.kt` (frame, codec, clock, scan
+limits/result/session)
+and `IrohaPeerNearbyV1.kt` (roles and the verified-IPM1 session), plus KA
+`offline/IrohaPeerAndroidNfcV1.kt`. The fifteen J `offline/IrohaPeer*.java`
+classes, JA `offline/IrohaPeerAndroidNfcV1.java` and its two Android resources
+(`iroha_peer_transport_strings.xml`, `iroha_peer_nfc_v1_aids.xml`, both already
+shipped by `client-android`) have no replacement facade. The JA manifest no
+longer repeats the peer-transport permissions and features: `client-android`
+declares them and is an `api` dependency, so the merged manifest is unchanged.
+The unused Nearby Play Services dependency and the `androidTest` asset source
+for `fixtures/offline` are removed with them.
+
+The old-KAGEMUSHA Java surface is deleted without migration, because its
+protocol is retired: J `offline/Kagemusha{Norito,Wire,WirePayloadKind,Wallet,
+HardwareProvider,EnrolledOpenChallengeCodec,CoreCoordinatorFrame,
+CoreCoordinatorArchive}V1.java`, `offline/IrohaPeerKagemushaAdapterV1.java`,
+`client/KagemushaToriiClientV1.java`, `client/KagemushaToriiModelsV1.java`,
+`model/instructions/TopUpKagemushaV1Instruction.java`, and JA
+`offline/Kagemusha{CoreCoordinatorBridge,DeviceLifecycleBridge,
+NativeCoreCoordinatorAdapter}V1.java`. These classes forwarded to the retired
+Kotlin codec, wallet and coordinator. Their suites are removed with them, and
+the `fixtures/offline/kagemusha_*` files are no longer Gradle test inputs. The
+KAGEMUSHA wallet wire V1 (`specs/kagemusha_wallet_wire_v1.md`) has a single
+owner, K `offline/KagemushaWalletWireV1.kt`, which Java consumers call
+directly.
+
+Assertion preservation: the generic NFC APDU round-trip, non-canonical
+extended-APDU rejection and single no-data encoding checks of the former
+`IrohaPeerNfcV1AdversarialTests` now run as the Java-source consumer
+`kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/offline/IrohaPeerNfcJavaConsumerTest.java`.
+Its message-tag check asserts the current seven wallet-envelope kinds rather than
+the retired three-message vocabulary. Nearby Java-source coverage stays in
+`IrohaPeerNearbyJavaConsumerTest.java`. The Java Taira profile names the Digital
+Shekel asset `DIGITAL_SHEKEL_ASSET_*`, matching Swift and C#.
+
+This records source retirement. The remaining Java Gradle failures predate it
+and are tracked with their own owners; physical NFC/Nearby qualification is
+separate.

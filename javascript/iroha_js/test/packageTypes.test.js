@@ -299,7 +299,6 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "index.d.ts",
     "browser.d.ts",
     "ivm-artifact.d.ts",
-    "kagemusha.d.ts",
     "kotodama-compiler.d.ts",
     "privacy-capabilities.d.ts",
     "repo-agreement.d.ts",
@@ -307,7 +306,6 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "dist/index.js",
     "dist/atomicPrivateSettlement.js",
     "dist/ivmArtifact.js",
-    "dist/kagemusha.js",
     "dist/kotodamaCompiler/browser.js",
     "dist/kotodamaCompiler/index.js",
     "dist/nexusApp.js",
@@ -345,9 +343,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
   for (const requiredPath of [
     "index.d.ts",
     "atomic-private-settlement.d.ts",
-    "kagemusha.d.ts",
     "dist/atomicPrivateSettlement.js",
-    "dist/kagemusha.js",
     "dist/tairaTestnetProfile.js",
     ...PORTABLE_RECIPES,
     ...requiredHelperPaths,
@@ -433,11 +429,6 @@ test("runtime namespace declarations expose exactly their module exports", async
 
 test("public facades exclude internal codecs while retaining their declared owners", async () => {
   const noritoImplementation = await import("../src/norito.js");
-  const kagemushaImplementation = await import("../src/kagemusha.js");
-  const publicKagemusha = await import("../src/public/kagemusha.js");
-  assert.deepEqual(Object.keys(publicKagemusha), ["Kagemusha"]);
-  assert.equal(publicKagemusha.Kagemusha, kagemushaImplementation.Kagemusha);
-  assert.equal(typeof kagemushaImplementation._encodeRedemptionRequestV1, "function");
   for (const rootTarget of ["../src/index.js", "../dist/index.js"]) {
     const { Norito } = await import(rootTarget);
     for (const internal of [
@@ -738,11 +729,9 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
   const indexOfSubpath = (subpath) => Object.keys(packageJson.exports).indexOf(subpath);
   const noritoIndex = indexOfSubpath("./norito");
   const cryptoIndex = indexOfSubpath("./crypto");
-  const kagemushaIndex = indexOfSubpath("./kagemusha");
   const browserIndex = indexOfSubpath("./browser");
   assert.notEqual(noritoIndex, -1);
   assert.notEqual(cryptoIndex, -1);
-  assert.notEqual(kagemushaIndex, -1);
   assert.notEqual(browserIndex, -1);
   const { tempRoot } = createPackedLayout({ includeNodeTypes: true });
   try {
@@ -756,11 +745,10 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       [
         ...imports,
         `import * as RootSdk from ${JSON.stringify(PACKAGE_NAME)};`,
-        `import { Crypto, Norito, NumericV1, Kagemusha, SorafsOrderbookSubmissionAmbiguousError, Torii, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type CanonicalRequestAuth, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsOrderbookSubmissionReceipt, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { Crypto, Norito, NumericV1, SorafsOrderbookSubmissionAmbiguousError, Torii, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type CanonicalRequestAuth, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsOrderbookSubmissionReceipt, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
         `import { buildSetAssetTransferBlacklistInstruction, buildSetAssetTransferControlInstruction, type AssetTransferControlWindow, type AssetTransferLimitInput, type SetAssetTransferBlacklistInstruction, type SetAssetTransferControlInstruction } from ${JSON.stringify(PACKAGE_NAME)};`,
         `import { decodePrivacyExact12CapabilityManifestV1, getPrivacyExact12CapabilityManifestV1, type PrivacyExact12CapabilityManifestV1 } from ${JSON.stringify(`${PACKAGE_NAME}/privacy-capabilities`)};`,
         "type Expect<T extends true> = T;",
-        "const kagemushaWireVersion: 1 = Kagemusha.wireVersion;",
         'const algorithm: CryptoAlgorithm = "ed25519";',
         "const cancelAssetLockMaxLockIdUtf8BytesV1: 4096 = CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1;",
         'const cancelAssetLock: CancelAssetLockInstruction = buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: "15" });',
@@ -899,12 +887,10 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "void Norito.noritoEncodeGameValueV1;",
         "// @ts-expect-error NFT codecs belong to the NFT package subpath.",
         "void Norito.noritoEncodeNftMarketValueV1;",
-        "// @ts-expect-error the Torii encoder is not a public wallet export.",
-        `void export${kagemushaIndex}._encodeRedemptionRequestV1;`,
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
         `void [${bindings.join(", ")}];`,
-        "void algorithm; void kagemushaWireVersion; void cancelAssetLock; void toriiConstructor; void orderbookReceipt; void orderbookAmbiguity; void encodeInstruction; void validateFrame; void exact12Decoder; void generateKeyPair; void privacyManifest; void privacyCommittedHeight; void privacyNodeResult; void privacyProofSystems; void privacyEngines; void retiredPrivacyProofSystem; void caseShiftedPrivacyProofSystem; void paddedPrivacyProofSystem; void retiredPrivacyEngine; void caseShiftedPrivacyEngine; void confusablePrivacyEngine; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
+        "void algorithm; void cancelAssetLock; void toriiConstructor; void orderbookReceipt; void orderbookAmbiguity; void encodeInstruction; void validateFrame; void exact12Decoder; void generateKeyPair; void privacyManifest; void privacyCommittedHeight; void privacyNodeResult; void privacyProofSystems; void privacyEngines; void retiredPrivacyProofSystem; void caseShiftedPrivacyProofSystem; void paddedPrivacyProofSystem; void retiredPrivacyEngine; void caseShiftedPrivacyEngine; void confusablePrivacyEngine; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
       ].join("\n"),
       "utf8",
     );

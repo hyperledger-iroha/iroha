@@ -104,7 +104,7 @@ def _b64url(value: bytes) -> str:
 
 def _key_command(private_pem: bytes, openssl: Path, arguments: list[str],
                  message: bytes = b"") -> bytes:
-    """Keep private PEM in the protected worker; OpenSSL CLI is public-only."""
+    """Keep private PEM in this process; OpenSSL CLI is public-only."""
     require(openssl.is_absolute() and openssl.is_file(), "Google OAuth crypto environment absent")
     require(arguments in (["pkey", "-pubout", "-outform", "DER", "-in"],
                           ["dgst", "-sha256", "-sign"]),

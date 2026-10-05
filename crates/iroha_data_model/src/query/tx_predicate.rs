@@ -3043,7 +3043,6 @@ mod checked_container_cleanup_tests {
     //! Original owning writer refusal and nested-depth controls.
     use super::*;
     use crate::checked_container_refusal_controls::audit_write;
-    use norito::json::JsonSerialize as _;
 
     #[test]
     fn original_predicate_expression_checked_container_retains_both_levels_and_exact_error() {

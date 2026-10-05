@@ -24,8 +24,8 @@ MAX_SOURCE_FILES = 4096
 MAX_SOURCE_FILE_BYTES = 16 * 1024 * 1024
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_CHECKSUM_BYTES = 1024 * 1024
-PACKAGE_RECIPE_SHA256 = "473023ed32183d6547a9137ff8e9b5dd7fb4abafe6eb8beeb7af8e44993579f1"
-BUILD_RECIPE_SHA256 = "fea416111f12c6acef162441228917411ac1553a462c4a310d67697117df9ce4"
+PACKAGE_RECIPE_SHA256 = "468607aa05533e5e60ad65ae07846c2db36d82509b93c6fb7f7ba5d6475b849d"
+BUILD_RECIPE_SHA256 = "e57da7145ee2e69fe88d2167689fb86cbcd97d6edc80d9e35b0a3758671814b5"
 ENGINE_RECIPE_SHA256 = "54fc313b8b4da1c4953a2c68bce5a357d8b52be39b35f3f2fab8ca6a2bf80550"
 ENGINE_CONTRACT_SHA256 = "ffe14c863ca7c189dfea331fb1c832cd15092ce6369955f3af50021ab4446d8c"
 CHECKSUM_MEMBER = "native/iroha_js_host.checksums.json"
@@ -41,7 +41,7 @@ _SOURCE_NAME = re.compile(r"src/(?:public/|kotodamaCompiler/|petal/|query/)?[A-Z
 # mandatory even when a purported complete census omits the same package file.
 REQUIRED_OUTPUTS = frozenset((
     "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
-    "ivmArtifact.js", "kagemusha.js", "native.js", "nativeArtifactHash.js",
+    "ivmArtifact.js", "native.js", "nativeArtifactHash.js",
     "numericV1.js", "strictLosslessJson.js", "boundedByteSnapshot.js", "validationFeeTrust.js", "sorafsOrderbookPreflight.js", "sorafsOrderbookSubmission.js",
     "sorafsOrderbookSubmission.d.ts", "smartContractDeploymentSubmit.js", "sumeragiTyped.js",
     "tairaTestnetProfile.js", "toriiBrowserClient.js", "toriiClient.js", "toriiOptional.js",

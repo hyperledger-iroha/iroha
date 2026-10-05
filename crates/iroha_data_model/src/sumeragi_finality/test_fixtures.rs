@@ -33,7 +33,7 @@ use iroha_sumeragi::{
     crypto::Signer,
     types::{Bitmap, ChainParams},
 };
-use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
+use std::{num::NonZeroU64, time::Duration};
 
 // Only fixed public fixture keys enter this signer; it is never deployment custody.
 struct FixtureSigner<'a> {

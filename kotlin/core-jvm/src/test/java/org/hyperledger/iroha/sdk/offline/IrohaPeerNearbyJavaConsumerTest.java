@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
@@ -23,14 +24,14 @@ import org.junit.jupiter.api.Test;
 
 /** Java consumers authenticate and exchange verified Kotlin IPM1 values without a second channel. */
 final class IrohaPeerNearbyJavaConsumerTest {
-  private static final IrohaPeerPayloadProfile PROFILE = IrohaPeerPayloadProfile.KAGEMUSHA_V1;
+  private static final IrohaPeerPayloadProfile PROFILE = IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1;
   private static final Ed25519PrivateKeyParameters SENDER_SIGNER =
       new Ed25519PrivateKeyParameters(bytes(32, 7), 0);
   private static final Ed25519PrivateKeyParameters RECEIVER_SIGNER =
       new Ed25519PrivateKeyParameters(bytes(32, 8), 0);
 
   @Test
-  void javaExchangesSharedRequestPaymentAcknowledgementThroughAuthenticatedTypedSessions()
+  void javaExchangesSharedRequestPaymentCreditedThroughAuthenticatedTypedSessions()
       throws IOException {
     final Fixtures fixtures = Fixtures.load();
     try (SessionPair pair = new SessionPair(fixtures)) {
@@ -41,26 +42,27 @@ final class IrohaPeerNearbyJavaConsumerTest {
       assertTrue(pair.receiverKey.isDestroyed());
 
       final IrohaPeerWireMessageV1 request = exchange(pair.receiver, pair.sender, fixtures.request, 0);
-      final KagemushaPaymentRequestV1 requestShape =
-          KagemushaNoritoV1.decodePaymentRequestShapeExact(request.getCanonicalPayload().getBytes());
-      assertArrayEquals(fixtures.request.getCanonicalPayload().getBytes(),
-          KagemushaNoritoV1.encodePaymentRequestShape(requestShape));
+      final byte[] requestEnvelope = request.getCanonicalPayload().getBytes();
+      assertArrayEquals(fixtures.request.getCanonicalPayload().getBytes(), requestEnvelope);
+      assertEquals(KagemushaWalletMessageKindV1.REQUEST,
+          KagemushaWalletWireV1.inspectEnvelope(requestEnvelope).kind);
 
       final IrohaPeerWireMessageV1 payment = exchange(pair.sender, pair.receiver, fixtures.payment, 0);
-      final KagemushaPaymentV1 paymentShape = KagemushaNoritoV1.decodePaymentShapeExact(
-          payment.getCanonicalPayload().getBytes(), requestShape);
-      assertArrayEquals(fixtures.payment.getCanonicalPayload().getBytes(),
-          KagemushaNoritoV1.encodePaymentShape(paymentShape, requestShape));
+      final byte[] paymentEnvelope = payment.getCanonicalPayload().getBytes();
+      assertArrayEquals(fixtures.payment.getCanonicalPayload().getBytes(), paymentEnvelope);
+      KagemushaWalletWireV1.requireExchangeBinding(requestEnvelope, paymentEnvelope);
 
-      final IrohaPeerWireMessageV1 acknowledgement =
-          exchange(pair.receiver, pair.sender, fixtures.acknowledgement, 1);
-      final KagemushaAcknowledgementV1 acknowledgementShape =
-          KagemushaNoritoV1.decodeAcknowledgementShapeExact(
-              acknowledgement.getCanonicalPayload().getBytes(), requestShape, paymentShape);
-      assertArrayEquals(fixtures.acknowledgement.getCanonicalPayload().getBytes(),
-          KagemushaNoritoV1.encodeAcknowledgementShape(
-              acknowledgementShape, requestShape, paymentShape));
-      // These are transport authentication and canonical shape checks, not monetary proof validation.
+      final IrohaPeerWireMessageV1 credited =
+          exchange(pair.receiver, pair.sender, fixtures.credited, 1);
+      final byte[] creditedEnvelope = credited.getCanonicalPayload().getBytes();
+      assertArrayEquals(fixtures.credited.getCanonicalPayload().getBytes(), creditedEnvelope);
+      KagemushaWalletWireV1.requireExchangeBinding(
+          requestEnvelope, paymentEnvelope, creditedEnvelope);
+      assertThrows(IllegalArgumentException.class,
+          () -> KagemushaWalletWireV1.requireExchangeBinding(
+              requestEnvelope, creditedEnvelope, paymentEnvelope));
+      // These are transport authentication and structural envelope checks, not monetary proof
+      // validation.
     }
   }
 
@@ -144,7 +146,7 @@ final class IrohaPeerNearbyJavaConsumerTest {
       assertArrayEquals(senderHello, pair.sender.getLocalHello().encode());
       assertArrayEquals(receiverHello, pair.receiver.getLocalHello().encode());
       exchange(pair.sender, pair.receiver, fixtures.payment, 0);
-      exchange(pair.receiver, pair.sender, fixtures.acknowledgement, 0);
+      exchange(pair.receiver, pair.sender, fixtures.credited, 0);
     }
   }
 
@@ -174,7 +176,7 @@ final class IrohaPeerNearbyJavaConsumerTest {
       assertFalse(authenticated.receiver.isAuthenticated());
       assertThrows(IllegalStateException.class, () -> authenticated.receiver.open(record));
       assertThrows(IllegalStateException.class,
-          () -> authenticated.receiver.seal(fixtures.acknowledgement));
+          () -> authenticated.receiver.seal(fixtures.credited));
     }
   }
 
@@ -267,43 +269,50 @@ final class IrohaPeerNearbyJavaConsumerTest {
   private static final class Fixtures {
     private final IrohaPeerWireMessageV1 request;
     private final IrohaPeerWireMessageV1 payment;
-    private final IrohaPeerWireMessageV1 acknowledgement;
+    private final IrohaPeerWireMessageV1 credited;
 
     private Fixtures(Map<?, ?> root) {
       assertEquals(1, ((Number) root.get("fixture_version")).intValue());
-      request = message(root, "payment_request", IrohaPeerPayloadKind.REQUEST);
-      payment = message(root, "payment", IrohaPeerPayloadKind.PAYMENT);
-      acknowledgement = message(root, "acknowledgement", IrohaPeerPayloadKind.ACKNOWLEDGEMENT);
+      final List<?> envelopes = (List<?>) root.get("envelopes");
+      request = message(envelopes, "Request", IrohaPeerPayloadKind.REQUEST);
+      payment = message(envelopes, "Payment", IrohaPeerPayloadKind.PAYMENT);
+      credited = message(envelopes, "Credited::Receive", IrohaPeerPayloadKind.CREDITED);
     }
 
     private static Fixtures load() throws IOException {
       Path root = Paths.get("").toAbsolutePath().normalize();
       while (root != null) {
-        final Path fixture = root.resolve("fixtures/offline/kagemusha_v1.json");
+        final Path fixture = root.resolve("fixtures/kagemusha/wallet_v1_vectors.json");
         if (Files.isRegularFile(fixture)) {
           return new Fixtures((Map<?, ?>) JsonParser.parse(
               new String(Files.readAllBytes(fixture), StandardCharsets.UTF_8)));
         }
         root = root.getParent();
       }
-      throw new IOException("Shared fixtures/offline/kagemusha_v1.json was not found");
+      throw new IOException("Shared fixtures/kagemusha/wallet_v1_vectors.json was not found");
     }
 
     private static IrohaPeerWireMessageV1 message(
-        Map<?, ?> root, String section, IrohaPeerPayloadKind kind) {
-      final Map<?, ?> record = (Map<?, ?>) root.get(section);
-      assertEquals(kind.getCode(), ((Number) record.get("ipm1_kind")).intValue());
-      final String hex = (String) record.get("norito_hex");
-      assertEquals(0, hex.length() % 2);
-      final byte[] canonical = new byte[hex.length() / 2];
-      for (int index = 0; index < canonical.length; index++) {
-        final int high = Character.digit(hex.charAt(index * 2), 16);
-        final int low = Character.digit(hex.charAt(index * 2 + 1), 16);
-        assertTrue(high >= 0 && low >= 0);
-        canonical[index] = (byte) ((high << 4) | low);
+        List<?> envelopes, String variant, IrohaPeerPayloadKind kind) {
+      for (final Object entry : envelopes) {
+        final Map<?, ?> record = (Map<?, ?>) entry;
+        if (!variant.equals(record.get("variant"))) {
+          continue;
+        }
+        assertEquals(kind.getCode(), ((Number) record.get("tag")).intValue());
+        final String hex = (String) record.get("canonical_hex");
+        assertEquals(0, hex.length() % 2);
+        final byte[] canonical = new byte[hex.length() / 2];
+        for (int index = 0; index < canonical.length; index++) {
+          final int high = Character.digit(hex.charAt(index * 2), 16);
+          final int low = Character.digit(hex.charAt(index * 2 + 1), 16);
+          assertTrue(high >= 0 && low >= 0);
+          canonical[index] = (byte) ((high << 4) | low);
+        }
+        assertEquals(canonical.length, ((Number) record.get("frame_len")).intValue());
+        return new IrohaPeerWireMessageV1(new IrohaPeerCanonicalPayload(PROFILE, kind, 1, canonical));
       }
-      assertEquals(canonical.length, ((Number) record.get("raw_bytes")).intValue());
-      return new IrohaPeerWireMessageV1(new IrohaPeerCanonicalPayload(PROFILE, kind, 1, canonical));
+      throw new AssertionError("wallet envelope vector " + variant + " was not found");
     }
   }
 }

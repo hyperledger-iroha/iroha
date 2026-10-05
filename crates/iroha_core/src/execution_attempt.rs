@@ -178,7 +178,7 @@ pub(crate) fn prepared_signature_block_attempt_error<E>(
     };
     use iroha_data_model::block::commit_certificate::CertificateCustodyError;
     use iroha_data_model::block::{BlockSignatureCustodyError, PreparedSignatureBlockError};
-    use iroha_data_model::da::commitment::DaProofPolicyCustodyError;
+    use iroha_data_model::da::commitment::{DaCommitmentCustodyError, DaProofPolicyCustodyError};
     use norito::core::{PreparedDecodeError, PreparedDecodeScopeError};
     fn buffer(error: ChargedBufferError) -> ExecutionDeferred {
         match error {
@@ -199,12 +199,14 @@ pub(crate) fn prepared_signature_block_attempt_error<E>(
         PreparedSignatureBlockError::Frame(original)
         | PreparedSignatureBlockError::Certificate(CertificateCustodyError::Decode(original))
         | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Decode(original))
+        | PreparedSignatureBlockError::Commitments(DaCommitmentCustodyError::Decode(original))
         | PreparedSignatureBlockError::Decode(PreparedDecodeError::Codec(original))
         | PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
             BlockSignatureCustodyError::Decode(original),
         )) => canonical_decode_attempt_error(original, |error| rejected(error.to_string())),
         PreparedSignatureBlockError::Certificate(CertificateCustodyError::Admission(original))
-        | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Admission(original)) => {
+        | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Admission(original))
+        | PreparedSignatureBlockError::Commitments(DaCommitmentCustodyError::Admission(original)) => {
             ExecutionAttemptError::Deferred(original.into())
         }
         PreparedSignatureBlockError::Certificate(CertificateCustodyError::Buffer(
@@ -217,6 +219,12 @@ pub(crate) fn prepared_signature_block_attempt_error<E>(
             ChargedBufferFromChargeError::Allocator { .. },
         ))
         | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Control(
+            SharedFromChargeError::Allocator { .. },
+        ))
+        | PreparedSignatureBlockError::Commitments(DaCommitmentCustodyError::Buffer(
+            ChargedBufferFromChargeError::Allocator { .. },
+        ))
+        | PreparedSignatureBlockError::Commitments(DaCommitmentCustodyError::Control(
             SharedFromChargeError::Allocator { .. },
         )) => ExecutionAttemptError::Deferred(ExecutionDeferral::AllocationUnavailable.into()),
         PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
@@ -581,6 +589,120 @@ mod tests {
             matches!(prepared_signature_block_attempt_error(PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Decode(cause)),|_|panic!("original caller refusal cannot become invalid policy")),ExecutionAttemptError::<String>::Deferred(reason) if reason.reason()==ExecutionDeferral::ActiveMemoryCapacity)
         );
         drop(occupied);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn prepared_commitment_attempt_preserves_original_generated_capacity_and_enclosing_cause_through_retry()
+     {
+        use iroha_allocation::{AllocationBudget, ChargedBuffer};
+        use iroha_data_model::{
+            block::PreparedSignatureBlockError,
+            da::commitment::{
+                DaCommitmentBundle, DaCommitmentCustodyError, PreparedDaCommitmentBundle,
+            },
+        };
+        use norito::core::{
+            DecodeAttemptErrorKind, DecodeFlagsGuard, DecodeLimits, SequenceSpan,
+            with_decode_limits_scope,
+        };
+        let _flags = DecodeFlagsGuard::enter(0);
+        let value = DaCommitmentBundle::default();
+        let mut bytes = Vec::new();
+        norito::core::SerializePayload::serialize(
+            &value,
+            &mut norito::core::Encoder::for_buffer(&mut bytes),
+        )
+        .unwrap();
+        let pool = AllocationBudget::new(bytes.len());
+        let mut source = ChargedBuffer::new(bytes.len(), &pool).unwrap();
+        source.append(&bytes).unwrap();
+        let pointer = source.as_slice().as_ptr();
+        let hash = iroha_crypto::Hash::new(source.as_slice());
+        let mut pending = PreparedDaCommitmentBundle::from_source(
+            &source,
+            SequenceSpan {
+                start: 0,
+                end: bytes.len(),
+            },
+            &pool,
+        )
+        .unwrap();
+        let original = pending.prepare(&source).unwrap_err();
+        let DaCommitmentCustodyError::Admission(original) = original else {
+            panic!("actual original immutable control capacity must refuse");
+        };
+        let retained = prepared_signature_block_attempt_error(
+            PreparedSignatureBlockError::Commitments(DaCommitmentCustodyError::Admission(
+                original.clone(),
+            )),
+            |_| panic!("actual commitment pool refusal must defer"),
+        );
+        let ExecutionAttemptError::<String>::Deferred(retained) = retained else {
+            panic!("actual original refusal owner");
+        };
+        assert_eq!(retained.allocation_refusal(), Some(&original));
+        assert_eq!(retained.reason(), ExecutionDeferral::ActiveMemoryCapacity);
+        pool.set_limit_bytes(
+            bytes.len()
+                + DaCommitmentBundle::allocation_layout().size()
+                + pending.payload_layouts().unwrap()[1].size(),
+        );
+        pending.prepare(&source).unwrap();
+        let admitted = pending
+            .finish(&source)
+            .unwrap_or_else(|_| panic!("same original source retry"));
+        assert!(admitted.admitted_to(&pool));
+        assert_eq!(admitted, value);
+        drop(admitted);
+        assert_eq!(pool.reserved_bytes(), bytes.len());
+        // The sole generated walk first reads the u16 version field. A caller
+        // total-allocation ceiling of one refuses that exact two-byte field
+        // before the empty commitment count or any ordinary owning graph.
+        let caller = DecodeLimits::new(4096, 4096, 4096, 1, 64);
+        let protocol = DecodeLimits::new(4096, 4096, 4096, 4096, 64);
+        let cause = with_decode_limits_scope(caller, || {
+            norito::core::classify_decode_attempt(|| {
+                with_decode_limits_scope(
+                    protocol,
+                    || match PreparedDaCommitmentBundle::from_source(
+                        &source,
+                        SequenceSpan {
+                            start: 0,
+                            end: bytes.len(),
+                        },
+                        &pool,
+                    ) {
+                        Err(DaCommitmentCustodyError::Decode(original)) => {
+                            Err::<(), _>(original.into_error())
+                        }
+                        other => panic!(
+                            "same generated original field must preserve enclosing refusal: {}",
+                            other.is_err()
+                        ),
+                    },
+                )
+            })
+        })
+        .unwrap_err();
+        assert_eq!(cause.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+        assert_eq!(
+            std::error::Error::source(&cause)
+                .expect("retained original error source")
+                .downcast_ref::<norito::Error>()
+                .expect("actual sole Norito error")
+                .decode_resource_error(),
+            Some(norito::core::DecodeResourceError::TotalAllocationExceeded {
+                attempted: std::mem::size_of::<u16>() as u64,
+                limit: 1,
+            })
+        );
+        assert!(
+            matches!(prepared_signature_block_attempt_error(PreparedSignatureBlockError::Commitments(DaCommitmentCustodyError::Decode(cause)),|_|panic!("original caller refusal cannot invalidate commitment bytes")),ExecutionAttemptError::<String>::Deferred(reason) if reason.reason()==ExecutionDeferral::ActiveMemoryCapacity)
+        );
+        assert_eq!(source.as_slice().as_ptr(), pointer);
+        assert_eq!(iroha_crypto::Hash::new(source.as_slice()), hash);
+        drop(source);
         assert_eq!(pool.reserved_bytes(), 0);
     }
 

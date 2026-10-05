@@ -9,7 +9,7 @@ import android.os.Looper
 import java.io.Closeable
 import java.io.IOException
 
-/** ISO/IEC 7816 status words used by the KAGEMUSHA V1 Android boundary. */
+/** ISO/IEC 7816 status words used by the Iroha peer NFC V1 Android boundary. */
 enum class IrohaPeerNfcStatusWordV1(val code: Int) {
     SUCCESS(0x9000),
     STORAGE_FAILURE(0x6581),
@@ -84,7 +84,7 @@ object IrohaPeerIsoDepLimitsV1 {
 class IrohaPeerNfcAmbiguousTransceiveExceptionV1(cause: IOException) :
     IOException("NFC command response is unknown", cause), IrohaPeerNfcAmbiguousResponseErrorV1
 
-/** Exact ISO SELECT AID envelope used before the KAGEMUSHA command inventory. */
+/** Exact ISO SELECT AID envelope used before the Iroha peer NFC command inventory. */
 internal object IrohaPeerNfcAidSelectionV1 {
     private val prefix = byteArrayOf(0x00, 0xa4.toByte(), 0x04, 0x00)
     private val success = byteArrayOf(0x90.toByte(), 0x00)

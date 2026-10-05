@@ -96,8 +96,8 @@ pub const RECOVERY_PERSONA: &[u8; 16] = b"PIPA-v1-Recovery";
 /// bytes drawn from the caller's derivation to the context inside this crate.
 pub const RECOVERY_KEY_PERSONA: &[u8; 16] = b"PIPA-v1-RecovKey";
 /// The purpose label a recovery-seed derivation should use for prover
-/// randomness (for example `KagemushaRecoverySeedV1::rng(RECOVERY_PURPOSE,
-/// context)`).
+/// randomness (for example `seed.rng(RECOVERY_PURPOSE, context)` of a
+/// caller-held secret recovery seed).
 pub const RECOVERY_PURPOSE: &[u8] = b"iroha_plonk:pipa-v1:prover-randomness";
 
 /// Proving failed.
@@ -294,9 +294,9 @@ enum Source<'a> {
 ///   distinct streams for distinct witnesses and statements; an OS generator
 ///   that fails is an error ([`ProverError::Entropy`]), never a fallback;
 /// - [`ProverRandomness::recovery`]: a deterministic stream for a recovery
-///   seed (for example `KagemushaRecoverySeedV1`). The prover computes the
-///   context `BLAKE2b(32, "PIPA-v1-Recovery", statement || witness)` from the
-///   actual witness, hands it to the caller's derivation, draws 32 bytes
+///   seed (for example a wallet's secret recovery seed). The prover computes
+///   the context `BLAKE2b(32, "PIPA-v1-Recovery", statement || witness)` from
+///   the actual witness, hands it to the caller's derivation, draws 32 bytes
 ///   `r` from the stream the derivation returns, and keys the stream it
 ///   actually uses itself: `ChaCha20(BLAKE2b(32, "PIPA-v1-RecovKey", r ||
 ///   context))` ([`recovery_stream_key`]). Two witnesses or statements proved
@@ -364,11 +364,11 @@ impl<'a> ProverRandomness<'a> {
     /// A deterministic recovery stream: `derive` receives the context digest
     /// `BLAKE2b(32, "PIPA-v1-Recovery", statement || witness)` and returns a
     /// stream, typically `seed.rng(RECOVERY_PURPOSE, context)` of a
-    /// `KagemushaRecoverySeedV1`. The prover draws 32 bytes `r` from it and
-    /// proves with `ChaCha20(`[`recovery_stream_key`]`(r, context))`, so the
-    /// witness and statement binding is enforced here and cannot be skipped
-    /// by a derivation that ignores the context (two witnesses never share
-    /// blinds). Secrecy of the blinds still requires the derivation to be
+    /// caller-held secret recovery seed. The prover draws 32 bytes `r` from
+    /// it and proves with `ChaCha20(`[`recovery_stream_key`]`(r, context))`,
+    /// so the witness and statement binding is enforced here and cannot be
+    /// skipped by a derivation that ignores the context (two witnesses never
+    /// share blinds). Secrecy of the blinds still requires the derivation to be
     /// keyed by a secret seed: with a public or constant derivation the
     /// blinds are a public function of the witness. The prover fails with
     /// [`ProverError::RecoveryStream`] when the derivation returns an error

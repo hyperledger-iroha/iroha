@@ -4,13 +4,6 @@ import Foundation
 
 extension ToriiClient {
     @discardableResult
-    public func getKagemushaCapability(
-        completion: @escaping (Result<ToriiKagemushaStatus, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.getKagemushaCapability() }
-    }
-
-    @discardableResult
     public func getStatusSnapshot(
         completion: @escaping (Result<ToriiStatusSnapshot, Swift.Error>) -> Void
     ) -> Task<Void, Never> {

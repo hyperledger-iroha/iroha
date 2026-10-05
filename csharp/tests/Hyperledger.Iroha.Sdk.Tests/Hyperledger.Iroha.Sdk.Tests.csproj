@@ -35,8 +35,6 @@
     <None Include="../../../fixtures/numeric_v1_golden.json" Link="Fixtures/numeric_v1_golden.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/petal/petal_stream_v1.json" Link="Fixtures/petal/petal_stream_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/petal/petal_captures_v1.json" Link="Fixtures/petal/petal_captures_v1.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../../fixtures/offline/kagemusha_v1.json" Link="Fixtures/kagemusha_v1.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../../fixtures/offline/kagemusha_device_mint_stage_v1.json" Link="Fixtures/kagemusha_device_mint_stage_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../IrohaSwift/Fixtures/swift_parity_manifest.json" Link="Fixtures/swift_parity_manifest.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../IrohaSwift/Fixtures/swift_parity_payloads.json" Link="Fixtures/swift_parity_payloads.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../IrohaSwift/Fixtures/swift_*.norito" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />

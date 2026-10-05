@@ -12,13 +12,13 @@ use iroha_core::{
     },
 };
 use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair};
+use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, ValidatorEpochDecisionV1};
 use iroha_data_model::{
     consensus::GlobalThresholdBeaconChainAnchorV1,
     isi::consensus_keys::{
         ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
         ThresholdKeyLifecycleCertificateV1,
     },
-    isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1},
     parameter::system::SumeragiNposParameters,
     sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
     transaction::TransactionEntrypoint,
@@ -1456,13 +1456,13 @@ fn verify_pulse(
                     "scheduling epoch must advance after retained boundary"
                 );
                 ensure!(
-                    authorization.decision == KagemushaMintFinalityEpochDecisionV1::Retain,
+                    authorization.decision == ValidatorEpochDecisionV1::Retain,
                     "unchanged committee must authenticate a retain decision"
                 );
                 ensure!(
                     authorization.beacon
                         == BeaconEpochBindingV1::Installed(
-                            iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                            iroha_data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1 {
                                 session_id: record.session.session_id,
                                 transcript_hash: record.session.transcript_hash
                             }

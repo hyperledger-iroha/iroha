@@ -49,6 +49,17 @@ products occupy one zero word. Private tapes permit 250,000 nodes and depth 256;
 public records retain their existing 256-node limit. Each table remains bounded
 to 8,192 words, independently of a handle's checked payload allocation size.
 
+The sole callable wire body is `CS1\0`, a fixed little-endian `u64` node
+count, then complete preorder nodes with one-byte tags. Struct names and ordered
+field names use canonical Norito String and Vec<String>; nominal errors retain
+the complete length-prefixed canonical descriptor. Tuple arity is `u32`, List
+capacity and public/cursor kinds are `u8`, and internal/private pointer types are
+`u16`. Child length prefixes follow the enclosing advertised Norito flags. The
+node vector has no per-node enum-field wrappers or retained sequence span plan.
+Decoding charges cumulative elements and the real node Vec backing before
+allocation, preserves charged canonical string/error decoding, then validates
+the complete forest. The former generic-vector wire body is rejected directly.
+
 The JavaScript artifact boundary reads this same complete tape, including
 reserved query-view shapes, nominal error catalogs, cursor key kinds and private
 resource restrictions. Its bounded iterative traversal keeps the private limits

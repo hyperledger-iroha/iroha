@@ -10,6 +10,8 @@
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
 mod access_hint_normalization;
+#[cfg(test)]
+mod compact_call_schema;
 mod compact_emission;
 #[cfg(test)]
 mod emission_profile;

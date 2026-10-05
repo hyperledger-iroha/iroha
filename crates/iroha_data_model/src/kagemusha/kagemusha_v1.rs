@@ -15,10 +15,12 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_crypto::kex::{KeyExchangeScheme as _, X25519Sha256};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use p256::ecdsa::{
-    Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
-};
+use p256::ecdsa::VerifyingKey as P256VerifyingKey;
 use sha2::{Digest as _, Sha256};
+
+use super::kagemusha_wallet_v1::{
+    KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaWalletValidationErrorV1,
+};
 
 mod app_attest_extensions;
 pub use app_attest_extensions::{AppAttestExtensionError, app_attest_release_extensions_digest};
@@ -48,10 +50,6 @@ pub const KAGEMUSHA_TEXT_PREFIX_V1: &str = "kgm1:";
 pub const KAGEMUSHA_ASSET_SCALE_MAX_V1: u32 = 28;
 /// Maximum lifetime of a signed payment request in Unix milliseconds.
 pub const KAGEMUSHA_REQUEST_MAX_TTL_MS_V1: u64 = 5 * 60 * 1_000;
-/// Exact canonical uncompressed SEC1 P-256 public-key bytes.
-pub const KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1: usize = 65;
-/// Exact canonical fixed-width P-256 ECDSA signature bytes.
-pub const KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1: usize = 64;
 /// Maximum canonical aggregate-state metadata bytes.
 pub const KAGEMUSHA_AGGREGATE_STATE_MAX_BYTES_V1: usize = 768;
 /// Maximum canonical receiver-request bytes, including the governed app-policy binding.
@@ -488,273 +486,26 @@ impl From<norito::Error> for KagemushaValidationErrorV1 {
     }
 }
 
-/// Sole KAGEMUSHA V1 device authority key.
-///
-/// The wire value is exactly one canonical uncompressed SEC1 NIST P-256 point
-/// (`0x04 || x || y`). There is no algorithm tag or selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-#[repr(transparent)]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaDevicePublicKeyV1")]
-pub struct KagemushaDevicePublicKeyV1([u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1]);
-
-/// Sole KAGEMUSHA V1 device signature.
-///
-/// The wire value is the fixed-width big-endian ECDSA scalar pair `r || s`.
-/// Both scalars must be in `1..n`, and `s` must be low.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-#[repr(transparent)]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaDeviceSignatureV1")]
-pub struct KagemushaDeviceSignatureV1([u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1]);
-
-impl norito::SerializePayload for KagemushaDevicePublicKeyV1 {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        self.validate()
-            .map_err(|error| norito::Error::Message(error.to_string()))?;
-        writer.write_all(&self.0)?;
-        Ok(())
-    }
-
-    fn encoded_len_hint(&self) -> Option<usize> {
-        Some(KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1)
-    }
-
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.encoded_len_hint()
-    }
-}
-
-impl<'de> norito::DeserializePayload<'de> for KagemushaDevicePublicKeyV1 {
-    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("KAGEMUSHA device public key must be canonical SEC1 bytes")
-    }
-
-    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
-        let (value, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        if used != bytes.len() {
-            return Err(norito::Error::LengthMismatch);
+// TODO(S20): delete this conversion with the rest of the old KAGEMUSHA V1 wire family. The
+// device key and signature types moved to `kagemusha_wallet_v1` and report its error type;
+// this maps their errors back for old callers until this module is deleted.
+impl From<KagemushaWalletValidationErrorV1> for KagemushaValidationErrorV1 {
+    fn from(error: KagemushaWalletValidationErrorV1) -> Self {
+        match error {
+            KagemushaWalletValidationErrorV1::Codec(error) => Self::Codec(error),
+            KagemushaWalletValidationErrorV1::EncodedSizeExceeded { actual, max } => {
+                Self::EncodedSizeExceeded { actual, max }
+            }
+            KagemushaWalletValidationErrorV1::UnsupportedVersion { field, .. }
+            | KagemushaWalletValidationErrorV1::SchemeMismatch { field }
+            | KagemushaWalletValidationErrorV1::InvalidField { field }
+            | KagemushaWalletValidationErrorV1::ArithmeticOverflow { field } => {
+                Self::InvalidField { field }
+            }
+            KagemushaWalletValidationErrorV1::InvalidSignature { .. } => Self::InvalidField {
+                field: "device_signature",
+            },
         }
-        Ok(value)
-    }
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDevicePublicKeyV1 {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        let raw = bytes
-            .get(..KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1)
-            .ok_or(norito::Error::LengthMismatch)?;
-        let value = Self::from_sec1_bytes(raw)
-            .map_err(|error| norito::Error::Message(error.to_string()))?;
-        Ok((value, KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1))
-    }
-}
-
-impl norito::SerializePayload for KagemushaDeviceSignatureV1 {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        self.validate()
-            .map_err(|error| norito::Error::Message(error.to_string()))?;
-        writer.write_all(&self.0)?;
-        Ok(())
-    }
-
-    fn encoded_len_hint(&self) -> Option<usize> {
-        Some(KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1)
-    }
-
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.encoded_len_hint()
-    }
-}
-
-impl<'de> norito::DeserializePayload<'de> for KagemushaDeviceSignatureV1 {
-    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("KAGEMUSHA device signature must be canonical raw P-256 bytes")
-    }
-
-    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
-        let (value, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        if used != bytes.len() {
-            return Err(norito::Error::LengthMismatch);
-        }
-        Ok(value)
-    }
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDeviceSignatureV1 {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        let raw = bytes
-            .get(..KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1)
-            .ok_or(norito::Error::LengthMismatch)?;
-        let value =
-            Self::from_raw_bytes(raw).map_err(|error| norito::Error::Message(error.to_string()))?;
-        Ok((value, KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1))
-    }
-}
-
-impl KagemushaDevicePublicKeyV1 {
-    /// Parse the canonical uncompressed SEC1 P-256 encoding.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for the wrong width, a compressed or invalid point, or
-    /// a non-canonical encoding.
-    pub fn from_sec1_bytes(bytes: &[u8]) -> Result<Self, KagemushaValidationErrorV1> {
-        let raw: [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1] =
-            bytes.try_into().map_err(|_| invalid("device_public_key"))?;
-        if raw[0] != 0x04 {
-            return Err(invalid("device_public_key"));
-        }
-        let verifying_key =
-            P256VerifyingKey::from_sec1_bytes(&raw).map_err(|_| invalid("device_public_key"))?;
-        if verifying_key.to_encoded_point(false).as_bytes() != raw {
-            return Err(invalid("device_public_key"));
-        }
-        Ok(Self(raw))
-    }
-
-    /// Validate a value obtained through a raw Norito or JSON decoder.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error unless the key is one canonical uncompressed P-256 point.
-    pub fn validate(&self) -> Result<(), KagemushaValidationErrorV1> {
-        Self::from_sec1_bytes(&self.0).map(|_| ())
-    }
-
-    /// Return the canonical uncompressed SEC1 bytes.
-    #[must_use]
-    pub const fn as_sec1_bytes(&self) -> &[u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1] {
-        &self.0
-    }
-
-    fn verifying_key(&self) -> Result<P256VerifyingKey, KagemushaValidationErrorV1> {
-        self.validate()?;
-        P256VerifyingKey::from_sec1_bytes(&self.0).map_err(|_| invalid("device_public_key"))
-    }
-}
-
-impl TryFrom<&[u8]> for KagemushaDevicePublicKeyV1 {
-    type Error = KagemushaValidationErrorV1;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_sec1_bytes(value)
-    }
-}
-
-impl TryFrom<[u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1]> for KagemushaDevicePublicKeyV1 {
-    type Error = KagemushaValidationErrorV1;
-
-    fn try_from(
-        value: [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1],
-    ) -> Result<Self, Self::Error> {
-        Self::from_sec1_bytes(&value)
-    }
-}
-
-impl AsRef<[u8]> for KagemushaDevicePublicKeyV1 {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl KagemushaDeviceSignatureV1 {
-    /// Parse a canonical DER ECDSA signature and normalize its S scalar for the direct
-    /// hardware-selection wire profile.
-    ///
-    /// Android `KeyMint` commonly returns DER from `SHA256withECDSA`; ECDSA's `(r, n - s)`
-    /// equivalent is normalized before the fixed-width low-S signature enters Norito.
-    /// This conversion is cryptographic framing only, not evidence of hardware enforcement.
-    ///
-    /// # Errors
-    /// Returns an error for malformed or non-canonical DER or an invalid P-256 signature.
-    pub fn from_der_normalizing_low_s(bytes: &[u8]) -> Result<Self, KagemushaValidationErrorV1> {
-        if !(8..=72).contains(&bytes.len()) {
-            return Err(invalid("device_signature"));
-        }
-        let parsed = P256Signature::from_der(bytes).map_err(|_| invalid("device_signature"))?;
-        if parsed.to_der().as_bytes() != bytes {
-            return Err(invalid("device_signature"));
-        }
-        let canonical = parsed.normalize_s().unwrap_or(parsed);
-        Self::from_raw_bytes(canonical.to_bytes().as_ref())
-    }
-
-    /// Parse a canonical fixed-width low-S P-256 ECDSA signature.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for the wrong width, invalid scalars, or a high-S signature.
-    pub fn from_raw_bytes(bytes: &[u8]) -> Result<Self, KagemushaValidationErrorV1> {
-        let raw: [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1] =
-            bytes.try_into().map_err(|_| invalid("device_signature"))?;
-        let signature = P256Signature::from_slice(&raw).map_err(|_| invalid("device_signature"))?;
-        if signature.normalize_s().is_some() {
-            return Err(invalid("device_signature"));
-        }
-        Ok(Self(raw))
-    }
-
-    /// Validate a value obtained through a raw Norito or JSON decoder.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error unless the signature is fixed-width and low-S.
-    pub fn validate(&self) -> Result<(), KagemushaValidationErrorV1> {
-        Self::from_raw_bytes(&self.0).map(|_| ())
-    }
-
-    /// Return the canonical fixed-width `r || s` bytes.
-    #[must_use]
-    pub const fn as_raw_bytes(&self) -> &[u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1] {
-        &self.0
-    }
-
-    /// Verify ECDSA-P256-SHA256 under the fixed KAGEMUSHA V1 profile.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the key, signature, or authentication is invalid.
-    pub fn verify(
-        &self,
-        public_key: &KagemushaDevicePublicKeyV1,
-        message: &[u8],
-    ) -> Result<(), KagemushaValidationErrorV1> {
-        self.validate()?;
-        let signature =
-            P256Signature::from_slice(&self.0).map_err(|_| invalid("device_signature"))?;
-        public_key
-            .verifying_key()?
-            .verify(message, &signature)
-            .map_err(|_| invalid("device_signature"))
-    }
-}
-
-impl TryFrom<&[u8]> for KagemushaDeviceSignatureV1 {
-    type Error = KagemushaValidationErrorV1;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_raw_bytes(value)
-    }
-}
-
-impl TryFrom<[u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1]> for KagemushaDeviceSignatureV1 {
-    type Error = KagemushaValidationErrorV1;
-
-    fn try_from(value: [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1]) -> Result<Self, Self::Error> {
-        Self::from_raw_bytes(&value)
-    }
-}
-
-impl AsRef<[u8]> for KagemushaDeviceSignatureV1 {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
     }
 }
 
@@ -4522,3 +4273,48 @@ mod captured_kagemusha_v1_schema_tests;
 
 #[cfg(test)]
 mod budget_tests;
+
+// TODO(S20): delete with the `From<KagemushaWalletValidationErrorV1>` conversion.
+#[cfg(test)]
+mod wallet_key_error_tests {
+    use super::*;
+
+    #[test]
+    fn wallet_key_errors_keep_their_old_field_labels() {
+        let key_error = KagemushaDevicePublicKeyV1::from_sec1_bytes(&[0x04; 64]).unwrap_err();
+        assert!(matches!(
+            KagemushaValidationErrorV1::from(key_error),
+            KagemushaValidationErrorV1::InvalidField {
+                field: "device_public_key"
+            }
+        ));
+        let signature_error = KagemushaDeviceSignatureV1::from_raw_bytes(&[0; 64]).unwrap_err();
+        assert!(matches!(
+            KagemushaValidationErrorV1::from(signature_error),
+            KagemushaValidationErrorV1::InvalidField {
+                field: "device_signature"
+            }
+        ));
+        assert!(matches!(
+            KagemushaValidationErrorV1::from(KagemushaWalletValidationErrorV1::Codec(
+                norito::Error::LengthMismatch
+            )),
+            KagemushaValidationErrorV1::Codec(norito::Error::LengthMismatch)
+        ));
+        assert!(matches!(
+            KagemushaValidationErrorV1::from(
+                KagemushaWalletValidationErrorV1::EncodedSizeExceeded { actual: 3, max: 2 }
+            ),
+            KagemushaValidationErrorV1::EncodedSizeExceeded { actual: 3, max: 2 }
+        ));
+        assert!(matches!(
+            KagemushaValidationErrorV1::from(
+                KagemushaWalletValidationErrorV1::UnsupportedVersion {
+                    field: "version",
+                    version: 2
+                }
+            ),
+            KagemushaValidationErrorV1::InvalidField { field: "version" }
+        ));
+    }
+}

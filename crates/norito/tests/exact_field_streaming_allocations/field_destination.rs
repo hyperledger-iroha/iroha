@@ -873,7 +873,9 @@ fn closed_tuple_keeps_original_wire_error_and_slice_contract_with_zero_allocatio
                 .unwrap_err()
                 .to_string()
         );
-        let frame = norito::to_bytes(&value).unwrap();
+        // The bare and ordinary cases above retain the selected ambient layout.
+        // Canonical admission requires the sole canonical V1 encoder's flags.
+        let frame = norito::encode_canonical(&value).unwrap();
         let held = pool
             .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
             .unwrap();

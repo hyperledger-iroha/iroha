@@ -7,12 +7,14 @@
 use crate::{
     NetworkId,
     block::SignedBlock,
-    isi::{SetParameter, kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1},
+    isi::SetParameter,
     parameter::{
         Parameter,
         system::{ConsensusMode, SumeragiNposParameters},
     },
-    sumeragi::epoch::{ValidatorCommitteeMemberV1, ValidatorEpochContextV1},
+    sumeragi::epoch::{
+        ValidatorCommitteeMemberV1, ValidatorEpochAuthorizationV1, ValidatorEpochContextV1,
+    },
     transaction::{Executable, TransactionDomain},
 };
 use iroha_crypto::Hash;
@@ -132,7 +134,7 @@ pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, G
         .authority_generation
         .bind_network_id(network_id)
         .map_err(|error| error.to_string())?;
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, last_height)
+    let authorization = ValidatorEpochAuthorizationV1::genesis(&authority, last_height)
         .map_err(|error| error.to_string())?;
     let committee = super::genesis_registrations(genesis)
         .map_err(|error| error.to_string())?

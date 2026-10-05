@@ -44,7 +44,6 @@ export {
 } from "./numericV1.js";
 
 export { NetworkId } from "./networkId.js";
-export { Kagemusha } from "./kagemusha.js";
 export { OperatorSigningContext } from "./operatorRequest.browser.js";
 export {
   computeIvmArtifactHashes,

@@ -5,10 +5,13 @@
 
 mod common;
 
-use common::{budget_shape, relation_shapes, smallest_shape, vesta_prover};
+use common::{
+    TWO_LEVEL_BUDGET, TWO_LEVEL_SMALLEST, budget_shape, relation_shapes, smallest_shape,
+    vesta_prover,
+};
 use iroha_kagemusha_proof::{
     PROOF_BYTES_GATE, PrefixMode, ProofFormat, RelationShape, SigmaParams, SigmaShape,
-    SigmaVerifier, StateLayout, StepRelation,
+    SigmaVerifier, StateLayout, StepRelation, limb_bits_for,
 };
 use iroha_pasta::{Ep, Eq, Fp};
 use iroha_plonk_gadgets::poseidon::ROWS_PER_PERMUTATION;
@@ -88,18 +91,39 @@ fn selected_shapes_fit_and_meet_the_budget() {
 }
 
 #[test]
-fn two_level_steps_select_k10_two_lanes_or_k11_one_lane_within_the_budget() {
+fn two_level_steps_select_their_pinned_shapes() {
     for step in [StepRelation::Send, StepRelation::Receive] {
         let relation = RelationShape::new(step, StateLayout::TwoLevel, PrefixMode::Folded);
         let smallest = smallest_shape(relation);
-        assert_eq!((smallest.k, smallest.params.lanes()), (10, 2), "{step:?}");
+        assert_eq!(
+            (smallest.k, smallest.params.lanes()),
+            TWO_LEVEL_SMALLEST,
+            "{step:?}"
+        );
         let budget = budget_shape(relation);
-        assert_eq!((budget.k, budget.params.lanes()), (11, 1), "{step:?}");
+        assert_eq!(
+            (budget.k, budget.params.lanes()),
+            TWO_LEVEL_BUDGET,
+            "{step:?}"
+        );
         // The proof length does not depend on the curve.
         assert_eq!(
             budget.proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP),
             budget.proof_length::<Ep>(ProofFormat::KAGEMUSHA_STEP)
         );
+        // At k = 11 the spec core needs two lanes (65 or 64 permutations do
+        // not fit 2,048 rows), whose proof exceeds the budget.
+        let one_lane = SigmaParams::new(relation, 1, limb_bits_for(11)).expect("params");
+        assert!(SigmaShape::new(one_lane, 11).inventory::<Fp>().is_err());
+        let two_lanes = SigmaParams::new(relation, 2, limb_bits_for(11)).expect("params");
+        let bytes = SigmaShape::new(two_lanes, 11)
+            .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
+            .expect("k = 11 with two lanes fits");
+        println!(
+            "SHAPE k11_two_lanes case={} proof_bytes={bytes}",
+            relation.label()
+        );
+        assert!(bytes > PROOF_BYTES_GATE, "{bytes}");
     }
 }
 

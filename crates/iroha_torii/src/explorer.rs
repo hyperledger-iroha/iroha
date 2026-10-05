@@ -2214,8 +2214,8 @@ pub(crate) fn accounts_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Accounts,
         &[
-            domain_filter.map(|value| value as &dyn json::JsonSerialize),
-            definition_filter.map(|value| value as &dyn json::JsonSerialize),
+            domain_filter.map(|value| -> &dyn json::JsonSerialize { value }),
+            definition_filter.map(|value| -> &dyn json::JsonSerialize { value }),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2323,7 +2323,7 @@ pub(crate) fn domains_page_for_filters<'world>(
     let limit = query.validated_limit()?;
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Domains,
-        &[owned_by.map(|value| value as &dyn json::JsonSerialize)],
+        &[owned_by.map(|value| -> &dyn json::JsonSerialize { value })],
         visibility.visible_route_set_digest(),
         byte_budget,
     )?;
@@ -2395,8 +2395,8 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::AssetDefinitions,
         &[
-            owning_domain_filter.map(|value| value as &dyn json::JsonSerialize),
-            owner_filter.map(|value| value as &dyn json::JsonSerialize),
+            owning_domain_filter.map(|value| -> &dyn json::JsonSerialize { value }),
+            owner_filter.map(|value| -> &dyn json::JsonSerialize { value }),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2494,9 +2494,9 @@ pub(crate) fn assets_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Assets,
         &[
-            owned_by.map(|value| value as &dyn json::JsonSerialize),
-            definition_filter.map(|value| value as &dyn json::JsonSerialize),
-            asset_filter.map(|value| value as &dyn json::JsonSerialize),
+            owned_by.map(|value| -> &dyn json::JsonSerialize { value }),
+            definition_filter.map(|value| -> &dyn json::JsonSerialize { value }),
+            asset_filter.map(|value| -> &dyn json::JsonSerialize { value }),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2622,8 +2622,8 @@ pub(crate) fn nfts_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Nfts,
         &[
-            owned_by.map(|value| value as &dyn json::JsonSerialize),
-            domain_filter.map(|value| value as &dyn json::JsonSerialize),
+            owned_by.map(|value| -> &dyn json::JsonSerialize { value }),
+            domain_filter.map(|value| -> &dyn json::JsonSerialize { value }),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2720,8 +2720,8 @@ pub(crate) fn rwas_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Rwas,
         &[
-            owned_by.map(|value| value as &dyn json::JsonSerialize),
-            domain_filter.map(|value| value as &dyn json::JsonSerialize),
+            owned_by.map(|value| -> &dyn json::JsonSerialize { value }),
+            domain_filter.map(|value| -> &dyn json::JsonSerialize { value }),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -3093,10 +3093,7 @@ mod tests {
     }
     #[test]
     fn explorer_cursor_is_canonical_collection_and_filter_bound() {
-        let filters = [
-            Some(&"wonderland.universal" as &dyn json::JsonSerialize),
-            None,
-        ];
+        let filters: [Option<&dyn json::JsonSerialize>; 2] = [Some(&"wonderland.universal"), None];
         let visibility_digest = [0x11; 32];
         let digest = explorer_filter_digest(
             ExplorerCursorCollection::Accounts,
@@ -3119,7 +3116,8 @@ mod tests {
         .expect("canonical account cursor")
         .expect("cursor key");
         assert_eq!(decoded, ALICE_ID.clone());
-        let other_filters = [Some(&"garden.universal" as &dyn json::JsonSerialize), None];
+        let other_filters: [Option<&dyn json::JsonSerialize>; 2] =
+            [Some(&"garden.universal"), None];
         let other_digest = explorer_filter_digest(
             ExplorerCursorCollection::Accounts,
             &other_filters,
@@ -3417,9 +3415,9 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, domain.metadata()));
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id": domain.id().to_string(), "logo": "sorafs://manifest/logo.png", "metadata": {"label":"value"},
-                "owned_by": ALICE_ID.to_string(), "accounts":2, "assets":3, "nfts":4
+            norito::json!({
+                "id": (domain.id().to_string()), "logo": "sorafs://manifest/logo.png", "metadata": {"label":"value"},
+                "owned_by": (ALICE_ID.to_string()), "accounts":2, "assets":3, "nfts":4
             }),
         );
     }
@@ -3465,8 +3463,8 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, details.metadata()));
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id": expected_id, "network_prefix": dto.network_prefix,
+            norito::json!({
+                "id": expected_id, "network_prefix": (dto.network_prefix),
                 "metadata": {}, "owned_domains":1, "owned_assets":2, "owned_nfts":3
             }),
         );
@@ -3505,9 +3503,9 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, definition.metadata()));
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id":def_id.to_string(), "owning_domain":null, "mintable":"Once", "logo":null,
-                "metadata":{"ticker":"ROSE"}, "owned_by":ALICE_ID.to_string(), "assets":7,
+            norito::json!({
+                "id": (def_id.to_string()), "owning_domain":null, "mintable":"Once", "logo":null,
+                "metadata":{"ticker":"ROSE"}, "owned_by": (ALICE_ID.to_string()), "assets":7,
                 "total_quantity":"100", "locked_quantity":null, "circulating_quantity":null
             }),
         );
@@ -3528,9 +3526,9 @@ mod tests {
         assert_eq!(dto.account_id, &*ALICE_ID);
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id":asset_id.to_string(), "definition_id":asset_id.definition().to_string(),
-                "account_id":ALICE_ID.to_string(), "value":"42"
+            norito::json!({
+                "id": (asset_id.to_string()), "definition_id": (asset_id.definition().to_string()),
+                "account_id": (ALICE_ID.to_string()), "value":"42"
             }),
         );
     }
@@ -3565,8 +3563,8 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, &value.content));
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id":nft_id.to_string(), "owned_by":ALICE_ID.to_string(), "metadata":{"artist":"Alice"}
+            norito::json!({
+                "id": (nft_id.to_string()), "owned_by": (ALICE_ID.to_string()), "metadata":{"artist":"Alice"}
             }),
         );
     }
@@ -3622,10 +3620,10 @@ mod tests {
         assert_eq!(dto.parents.0.as_ptr(), value.parents.as_ptr());
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id":id.to_string(), "owned_by":ALICE_ID.to_string(), "quantity":"7", "held_quantity":"2",
+            norito::json!({
+                "id": (id.to_string()), "owned_by": (ALICE_ID.to_string()), "quantity":"7", "held_quantity":"2",
                 "primary_reference":"https://example.org/certificate", "status":"held", "is_frozen":true,
-                "metadata":{}, "parents":[{"rwa":id.to_string(),"quantity":"3"}]
+                "metadata":{}, "parents":[{"rwa": (id.to_string()),"quantity":"3"}]
             }),
         );
         let many = vec![parent; 2048];
@@ -3708,10 +3706,7 @@ mod tests {
             expected.update(value.as_bytes());
         }
         expected.update([0x11; 32]);
-        let filters = [
-            Some(&domain as &dyn json::JsonSerialize),
-            Some(&*ALICE_ID as &dyn json::JsonSerialize),
-        ];
+        let filters: [Option<&dyn json::JsonSerialize>; 2] = [Some(&domain), Some(&*ALICE_ID)];
         assert_eq!(
             explorer_filter_digest(
                 ExplorerCursorCollection::Accounts,

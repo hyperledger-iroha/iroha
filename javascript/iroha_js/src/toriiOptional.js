@@ -20,16 +20,6 @@ export {
 export { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
 
 export {
-  kagemushaOperationIdHexV1,
-  normalizeKagemushaReadinessV1,
-  normalizeUnverifiedKagemushaOperationStatusV1,
-  requireKagemushaJsonContentTypeV1,
-  requireKagemushaSubmissionResponseV1,
-} from "./kagemushaToriiV1.js";
-
-export { _encodeRedemptionRequestV1 } from "./kagemusha.js";
-
-export {
   PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
   PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
   PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,

@@ -1283,32 +1283,6 @@ pub mod kagemusha {
     )
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Complete name originals; the handler additionally requires the native genesis-issued read root.
-    pub const RESOURCE_NAMES_STATE: RouteDescriptor = RouteDescriptor::new(
-        "ledger.resource_names_state",
-        HttpMethod::Get,
-        "/v1/ledger/resource-names/{challenge}",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Scoped account/fee originals for an existing native full-ledger read holder.
-    pub const AUTHORITY_ORIGINALS: RouteDescriptor = RouteDescriptor::new(
-        "ledger.authority_originals",
-        HttpMethod::Post,
-        "/v1/ledger/authority-originals",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
     /// Canonical first-release KAGEMUSHA API catalog.
     /// Exact current S/W originals under account authentication; no broad ledger-read grant.
     pub const ORDINARY_WALLET_CURRENT: RouteDescriptor = RouteDescriptor::new(
@@ -1369,8 +1343,6 @@ pub mod kagemusha {
         REDEEM,
         OPERATION,
         AUTHORITY_STATE,
-        RESOURCE_NAMES_STATE,
-        AUTHORITY_ORIGINALS,
         ORDINARY_WALLET_CURRENT,
         ORDINARY_MINT_ISSUER_PURPOSE,
         ORDINARY_MINT_FINALIZED,
@@ -1767,6 +1739,33 @@ pub mod core {
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
+    /// Complete resource-name originals; the handler additionally requires the
+    /// native genesis-issued full-ledger read permission.
+    pub const RESOURCE_NAMES_STATE: RouteDescriptor = RouteDescriptor::new(
+        "ledger.resource_names_state",
+        HttpMethod::Get,
+        "/v1/ledger/resource-names/{challenge}",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Scoped account/fee originals for an existing native full-ledger read holder.
+    pub const AUTHORITY_ORIGINALS: RouteDescriptor = RouteDescriptor::new(
+        "ledger.authority_originals",
+        HttpMethod::Post,
+        "/v1/ledger/authority-originals",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Internal peer-to-peer Torii HTTP proxy.
     pub const INTERNAL_PROXY: RouteDescriptor = RouteDescriptor::new(
         "operator.internal_torii_proxy",
@@ -1978,6 +1977,8 @@ pub mod core {
         LEDGER_STATE_PROOF,
         LEDGER_EXECUTED_BLOCK_WIRE,
         LEDGER_BLOCK_PROOF,
+        RESOURCE_NAMES_STATE,
+        AUTHORITY_ORIGINALS,
         INTERNAL_PROXY,
         NFT_OFFER_CAPABILITIES,
         NFT_OFFER_LIST,

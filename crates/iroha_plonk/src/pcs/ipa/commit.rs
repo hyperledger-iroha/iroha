@@ -33,6 +33,13 @@
 //! addition). The scalar recoding changes no formula and no result; when a
 //! split were unavailable (excluded by the Pasta constants) the unsigned
 //! full-width windows run instead.
+//!
+//! The split keeps, per term, the two 128-bit halves, their signs and the
+//! endomorphism image of the base (`32 + 1 + 64` bytes); each window recodes
+//! its signed digits from the halves in closed form, so there is no digit
+//! table. The terms are split in chunks whose split data takes at most half
+//! the memory budget, and the chunk sums add up, so the working set beyond
+//! the caller's inputs is bounded by the budget.
 
 use ff::{Field, PrimeField};
 use group::prime::PrimeCurveAffine;
@@ -333,95 +340,163 @@ fn signed_window(terms: usize, budget: MemoryBudget) -> usize {
     width
 }
 
-/// Recodes `value < 2^128` into `out.len()` signed digits of `width <= 16`
-/// bits, least significant first: `value = sum_w out[w] 2^(width w)` with
-/// every digit in `(-2^(width - 1), 2^(width - 1)]`. Returns the carry left
-/// after the last digit (zero when `out` has [`signed_windows`] digits).
-fn signed_digits(value: u128, width: usize, out: &mut [i32]) -> i32 {
-    let full = 1_i32 << width;
-    let half = 1_i32 << (width - 1);
-    let mask = (1_u128 << width) - 1;
-    let mut carry = 0_i32;
-    for (window, digit) in out.iter_mut().enumerate() {
-        let shift = window.saturating_mul(width);
-        let bits = if shift < GLV_HALF_BITS {
-            i32::try_from((value >> shift) & mask).unwrap_or(0)
+/// The signed digits of one window, for any magnitude `value < 2^128`.
+///
+/// Digit `w` of the sequential recoding (carry propagated from the least
+/// significant window; digits in `(-2^(c - 1), 2^(c - 1)]`; the tests keep
+/// it as the reference) depends on the lower
+/// windows only through its incoming carry, and that carry has a closed
+/// form: the lower `w` digits reach every residue modulo `2^(c w)` exactly
+/// once between `-T_w + R_w` and `T_w`, where
+/// `T_w = 2^(c - 1) (2^(c w) - 1) / (2^c - 1)` is their largest value and
+/// `R_w = (2^(c w) - 1) / (2^c - 1)`. So the carry into window `w` is set
+/// exactly when `value mod 2^(c w) > T_w`, and each window recodes its digit
+/// from the magnitude alone. (For `c w > 128`, `T_w >= 2^(c w - 1) >= 2^128`
+/// and no carry arrives.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SignedWindow {
+    /// `c w`.
+    shift: usize,
+    /// `c`.
+    width: usize,
+    /// `2^(c w) - 1`, the mask of the lower windows.
+    low_mask: u128,
+    /// `T_w`, or `None` when no carry can arrive (`w = 0`, or `c w > 128`).
+    threshold: Option<u128>,
+}
+
+impl SignedWindow {
+    /// Window `window` of width `width` (`1..=MAX_SIGNED_WINDOW`).
+    fn new(width: usize, window: usize) -> Self {
+        let shift = width.saturating_mul(window);
+        let low_mask = match shift {
+            0 => 0,
+            1..GLV_HALF_BITS => (1_u128 << shift) - 1,
+            _ => u128::MAX,
+        };
+        let threshold = (window > 0 && shift <= GLV_HALF_BITS)
+            .then(|| {
+                let radix_minus_one = (1_u128 << width) - 1;
+                (low_mask / radix_minus_one).checked_mul(1_u128 << (width - 1))
+            })
+            .flatten();
+        Self {
+            shift,
+            width,
+            low_mask,
+            threshold,
+        }
+    }
+
+    /// The signed digit of this window of `value`.
+    fn digit(self, value: u128) -> i32 {
+        let full = 1_i32 << self.width;
+        let half = 1_i32 << (self.width - 1);
+        let bits = if self.shift < GLV_HALF_BITS {
+            i32::try_from((value >> self.shift) & ((1_u128 << self.width) - 1)).unwrap_or(0)
         } else {
             0
         };
-        let mut signed = bits + carry;
-        carry = 0;
-        if signed > half {
-            signed -= full;
-            carry = 1;
-        }
-        *digit = signed;
+        let carry = i32::from(
+            self.threshold
+                .is_some_and(|threshold| value & self.low_mask > threshold),
+        );
+        let signed = bits + carry;
+        if signed > half { signed - full } else { signed }
     }
-    carry
 }
 
-/// The GLV split of every term: `2n` affine bases (`±B`, `±phi(B)` for each
-/// base `B`) and their signed digits (row-major, [`signed_windows`] per
-/// split base), or `None` when a split or an endomorphism image is
-/// unavailable.
-fn glv_split<C: PastaCurve>(
+/// The GLV split of a chunk of terms: per term the magnitudes `[k1, k2]` of
+/// the halves, their signs (bit 0: `k1 < 0`, bit 1: `k2 < 0`) and the
+/// endomorphism image `phi(B)` of the base. Digits are recoded per window
+/// ([`SignedWindow`]), so no digit table is kept.
+struct GlvTerms<A> {
+    halves: Vec<[u128; 2]>,
+    signs: Vec<u8>,
+    images: Vec<A>,
+}
+
+/// Bytes of the split data of one term ([`GlvTerms`]).
+fn glv_term_bytes<C: PastaCurve>() -> usize {
+    core::mem::size_of::<[u128; 2]>()
+        .saturating_add(1)
+        .saturating_add(core::mem::size_of::<C::AffineExt>())
+}
+
+/// The terms of one GLV chunk under `budget`: its split data takes at most
+/// half the budget (the buckets of a wave take the rest); at least one.
+fn glv_chunk_terms<C: PastaCurve>(budget: MemoryBudget) -> usize {
+    (budget.bytes() / 2 / glv_term_bytes::<C>()).max(1)
+}
+
+/// The GLV split of every term, or `None` when a split or an endomorphism
+/// image is unavailable.
+fn glv_terms<C: PastaCurve>(
     scalars: &[C::ScalarExt],
     bases: &[C::AffineExt],
-    width: usize,
-) -> Option<(Vec<C::AffineExt>, Vec<i32>)> {
-    let windows = signed_windows(width);
+) -> Option<GlvTerms<C::AffineExt>> {
     let beta = <C::AffineExt as PastaAffine>::endo_beta();
     let terms = scalars.len().min(bases.len());
-    let mut split_bases = vec![C::AffineExt::identity(); terms.checked_mul(2)?];
-    let mut digits = vec![0_i32; terms.checked_mul(2)?.checked_mul(windows)?];
-    split_bases
-        .par_chunks_mut(2)
-        .zip(digits.par_chunks_mut(2 * windows))
+    let mut split = GlvTerms {
+        halves: vec![[0_u128; 2]; terms],
+        signs: vec![0_u8; terms],
+        images: vec![C::AffineExt::identity(); terms],
+    };
+    split
+        .halves
+        .par_iter_mut()
+        .zip(split.signs.par_iter_mut())
+        .zip(split.images.par_iter_mut())
         .zip(scalars.par_iter().zip(bases))
-        .try_for_each(|((split, split_digits), (scalar, base))| {
-            let halves = C::glv_decompose(scalar)?;
+        .try_for_each(|(((halves, signs), image), (scalar, base))| {
+            let decomposition = C::glv_decompose(scalar)?;
             // phi(x, y) = (beta x, y) = [ZETA] (x, y); the identity (0, 0)
             // maps to itself.
-            let image: C::AffineExt =
-                Option::from(C::AffineExt::from_xy(base.x() * beta, base.y()))?;
-            split[0] = if halves.k1_neg { -*base } else { *base };
-            split[1] = if halves.k2_neg { -image } else { image };
-            let (first, second) = split_digits.split_at_mut(windows);
-            let carry =
-                signed_digits(halves.k1, width, first) | signed_digits(halves.k2, width, second);
-            (carry == 0).then_some(())
+            *image = Option::from(C::AffineExt::from_xy(base.x() * beta, base.y()))?;
+            *halves = [decomposition.k1, decomposition.k2];
+            *signs = u8::from(decomposition.k1_neg) | (u8::from(decomposition.k2_neg) << 1);
+            Some(())
         })?;
-    Some((split_bases, digits))
+    Some(split)
 }
 
 /// The sum of one signed window: `2^(width - 1)` buckets by digit magnitude
-/// (the negated base for a negative digit), then the running-sum reduction.
+/// (the negated base for a negative signed half), then the running-sum
+/// reduction. Each term adds its base for `k1` and its image for `k2`.
 fn signed_window_sum<C: PastaCurve>(
-    digits: &[i32],
+    terms: &GlvTerms<C::AffineExt>,
     bases: &[C::AffineExt],
     window: usize,
-    windows: usize,
     width: usize,
 ) -> C {
+    let recoder = SignedWindow::new(width, window);
     let mut buckets = vec![C::identity(); 1_usize << (width - 1)];
-    for (term, base) in bases.iter().enumerate() {
-        let digit = digits
-            .get(term.saturating_mul(windows).saturating_add(window))
-            .copied()
-            .unwrap_or(0);
-        let Some(bucket) = usize::try_from(digit.unsigned_abs())
-            .ok()
-            .and_then(|magnitude| magnitude.checked_sub(1))
-            .and_then(|index| buckets.get_mut(index))
-        else {
-            continue;
-        };
-        // Complete mixed addition of the (possibly negated) affine base:
-        // correct for equal, opposite and identity inputs.
-        if digit > 0 {
-            *bucket += base;
-        } else {
-            *bucket += &(-*base);
+    let split = terms
+        .halves
+        .iter()
+        .zip(&terms.signs)
+        .zip(&terms.images)
+        .zip(bases);
+    for (((halves, signs), image), base) in split {
+        for (half, point, negative) in [
+            (halves[0], base, signs & 1 != 0),
+            (halves[1], image, signs & 2 != 0),
+        ] {
+            let digit = recoder.digit(half);
+            let Some(bucket) = usize::try_from(digit.unsigned_abs())
+                .ok()
+                .and_then(|magnitude| magnitude.checked_sub(1))
+                .and_then(|index| buckets.get_mut(index))
+            else {
+                continue;
+            };
+            // Complete mixed addition of the (possibly negated) affine
+            // point: correct for equal, opposite and identity inputs.
+            if (digit < 0) == negative {
+                *bucket += point;
+            } else {
+                *bucket += &(-*point);
+            }
         }
     }
     let mut running = C::identity();
@@ -459,20 +534,29 @@ fn combine_windows<C: PastaCurve>(
 }
 
 /// [`msm_complete`] on GLV-split, signed-digit windows, or `None` when a
-/// split is unavailable.
+/// split is unavailable. The terms are split in chunks of
+/// [`glv_chunk_terms`] whose sums add up: the split data never takes more
+/// than half the budget.
 fn msm_complete_glv<C: PastaCurve>(
     scalars: &[C::ScalarExt],
     bases: &[C::AffineExt],
     budget: MemoryBudget,
 ) -> Option<C> {
-    let width = signed_window(scalars.len().saturating_mul(2), budget);
-    let windows = signed_windows(width);
-    let (split_bases, digits) = glv_split::<C>(scalars, bases, width)?;
-    let per_window = BUCKET_BYTES << (width - 1);
-    let concurrency = budget.bytes() / per_window;
-    Some(combine_windows(windows, width, concurrency, |window| {
-        signed_window_sum::<C>(&digits, &split_bases, window, windows, width)
-    }))
+    let n = scalars.len().min(bases.len());
+    let chunk = glv_chunk_terms::<C>(budget);
+    let mut total = C::identity();
+    for (scalars, bases) in scalars[..n].chunks(chunk).zip(bases[..n].chunks(chunk)) {
+        let split_bytes = scalars.len().saturating_mul(glv_term_bytes::<C>());
+        let buckets = MemoryBudget::new(budget.bytes().saturating_sub(split_bytes));
+        let terms = glv_terms::<C>(scalars, bases)?;
+        let width = signed_window(scalars.len().saturating_mul(2), buckets);
+        let windows = signed_windows(width);
+        let concurrency = buckets.bytes() / (BUCKET_BYTES << (width - 1));
+        total += combine_windows(windows, width, concurrency, |window| {
+            signed_window_sum::<C>(&terms, bases, window, width)
+        });
+    }
+    Some(total)
 }
 
 /// `sum_i scalars[i] * bases[i]` for public data with complete formulas only
@@ -708,6 +792,143 @@ mod tests {
     fn complete_msm_matches_the_naive_msm_on_adversarial_inputs() {
         complete_matches_naive::<Ep>(11);
         complete_matches_naive::<Eq>(12);
+    }
+
+    /// The sequential signed-digit recoding, the reference of
+    /// [`SignedWindow`]: `out.len()` digits of `width <= 16` bits, least
+    /// significant first, `value = sum_w out[w] 2^(width w)` with every digit
+    /// in `(-2^(width - 1), 2^(width - 1)]`. Returns the carry left after the
+    /// last digit (zero when `out` has [`signed_windows`] digits).
+    fn signed_digits(value: u128, width: usize, out: &mut [i32]) -> i32 {
+        let full = 1_i32 << width;
+        let half = 1_i32 << (width - 1);
+        let mask = (1_u128 << width) - 1;
+        let mut carry = 0_i32;
+        for (window, digit) in out.iter_mut().enumerate() {
+            let shift = window.saturating_mul(width);
+            let bits = if shift < GLV_HALF_BITS {
+                i32::try_from((value >> shift) & mask).unwrap_or(0)
+            } else {
+                0
+            };
+            let mut signed = bits + carry;
+            carry = 0;
+            if signed > half {
+                signed -= full;
+                carry = 1;
+            }
+            *digit = signed;
+        }
+        carry
+    }
+
+    #[test]
+    fn per_window_digits_equal_the_sequential_recoding() {
+        let mut rng = ChaCha20Rng::seed_from_u64(29);
+        let mut values = vec![
+            0_u128,
+            1,
+            u128::MAX,
+            u128::MAX - 1,
+            1 << 127,
+            (1 << 127) - 1,
+            0x5555_5555_5555_5555_5555_5555_5555_5555,
+            0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa,
+            0x8000_0000_0000_0001_8000_0000_0000_0001,
+        ];
+        values.extend((0..200).map(|_| {
+            let high = u128::from(rand_core_06::RngCore::next_u64(&mut rng));
+            let low = u128::from(rand_core_06::RngCore::next_u64(&mut rng));
+            (high << 64) | low
+        }));
+        // Runs of digits at the half boundary, where the carries chain.
+        for width in 1..=MAX_SIGNED_WINDOW {
+            let half = 1_u128 << (width - 1);
+            let mut run = 0_u128;
+            let mut shift = 0;
+            while shift < GLV_HALF_BITS {
+                run |= half << shift;
+                values.push(run);
+                values.push(run.wrapping_add(1));
+                shift += width;
+            }
+        }
+        for width in 1..=MAX_SIGNED_WINDOW {
+            let windows = signed_windows(width);
+            for value in &values {
+                let mut digits = vec![0_i32; windows];
+                assert_eq!(signed_digits(*value, width, &mut digits), 0);
+                for (window, digit) in digits.iter().enumerate() {
+                    assert_eq!(
+                        SignedWindow::new(width, window).digit(*value),
+                        *digit,
+                        "width {width} window {window} value {value:#x}"
+                    );
+                }
+            }
+            // A window past the last one carries nothing.
+            assert_eq!(SignedWindow::new(width, windows).digit(u128::MAX), 0);
+        }
+        assert_eq!(
+            SignedWindow::new(16, 8).threshold.map(|t| t > 0),
+            Some(true)
+        );
+        assert_eq!(SignedWindow::new(16, 9).threshold, None);
+        assert_eq!(SignedWindow::new(4, 0).threshold, None);
+    }
+
+    #[test]
+    fn glv_chunks_bound_the_split_data_by_the_budget() {
+        let term = glv_term_bytes::<Ep>();
+        assert_eq!(
+            term,
+            32 + 1 + core::mem::size_of::<<Ep as PastaCurve>::AffineExt>()
+        );
+        assert_eq!(glv_chunk_terms::<Ep>(MemoryBudget::new(0)), 1);
+        assert_eq!(glv_chunk_terms::<Ep>(MemoryBudget::new(10 * term)), 5);
+        assert!(glv_chunk_terms::<Eq>(MemoryBudget::DEFAULT) > 1 << 20);
+        // Chunked sums equal one MSM.
+        let mut rng = ChaCha20Rng::seed_from_u64(31);
+        let n = 37;
+        let scalars: Vec<Fq> = (0..n).map(|_| Fq::random(&mut rng)).collect();
+        let bases: Vec<_> = (0..n).map(|_| Ep::random(&mut rng).to_affine()).collect();
+        let expected = msm_naive::<Ep>(&scalars, &bases);
+        for terms in [1, 2, 5, 36, 37, 64] {
+            let budget = MemoryBudget::new(2 * terms * term);
+            assert_eq!(glv_chunk_terms::<Ep>(budget), terms);
+            assert_eq!(
+                msm_complete_glv::<Ep>(&scalars, &bases, budget),
+                Some(expected),
+                "{terms} terms per chunk"
+            );
+        }
+    }
+
+    /// One verifier MSM at the decide size `n = 2^16` on one thread, for
+    /// the peak RSS (`/usr/bin/time -l`) of its working set.
+    #[test]
+    #[ignore = "working-set measurement; run in release under /usr/bin/time -l"]
+    fn measure_complete_msm_working_set() {
+        use std::time::Instant;
+
+        let mut rng = ChaCha20Rng::seed_from_u64(3);
+        let n = 1_usize << 16;
+        let bases: Vec<_> = (0..n).map(|_| Ep::random(&mut rng).to_affine()).collect();
+        let scalars: Vec<Fq> = (0..n).map(|_| Fq::random(&mut rng)).collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("pool");
+        let started = Instant::now();
+        let result = pool.install(|| msm_complete::<Ep>(&scalars, &bases, MemoryBudget::DEFAULT));
+        println!(
+            "MSM_WORKING_SET n=2^16 inputs_bytes={} split_bytes={} elapsed={:?} identity={}",
+            n * (core::mem::size_of::<Fq>()
+                + core::mem::size_of::<<Ep as PastaCurve>::AffineExt>()),
+            n * glv_term_bytes::<Ep>(),
+            started.elapsed(),
+            bool::from(result.is_identity()),
+        );
     }
 
     #[test]

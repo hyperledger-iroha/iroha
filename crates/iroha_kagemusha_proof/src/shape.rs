@@ -27,7 +27,8 @@ use crate::{
     circuit::{Inventory, MAX_LANES, RelationShape, SigmaCircuit, SigmaParams},
 };
 
-/// The proof-size gate of the split-lineage recommendation (M7: 3.5 KB).
+/// The proof-size gate of the split-lineage recommendation (3.5 KB, from
+/// M7).
 pub const PROOF_BYTES_GATE: usize = 3_500;
 
 /// The proof format of a step proof.
@@ -310,22 +311,27 @@ mod tests {
     }
 
     #[test]
-    fn a_receive_does_not_fit_one_lane_at_k10() {
+    fn a_receive_needs_four_lanes_at_k10() {
+        // The 29-field G1 statement encoding takes 15 folded permutations, so
+        // three lanes no longer fit `k = 10`.
         let relation = RelationShape::new(
             StepRelation::Receive,
             StateLayout::TwoLevel,
             PrefixMode::Folded,
         );
-        let params = SigmaParams::new(relation, 1, 9).expect("params");
-        assert_eq!(
-            SigmaShape::new(params, 10).inventory::<Fp>(),
-            Err(SigmaError::DoesNotFit { k: 10 })
-        );
-        let two = SigmaParams::new(relation, 2, 9).expect("params");
-        let inventory = SigmaShape::new(two, 10).inventory::<Fp>().expect("fits");
+        for lanes in [1, 2, 3] {
+            let params = SigmaParams::new(relation, lanes, 9).expect("params");
+            assert_eq!(
+                SigmaShape::new(params, 10).inventory::<Fp>(),
+                Err(SigmaError::DoesNotFit { k: 10 }),
+                "{lanes} lanes"
+            );
+        }
+        let four = SigmaParams::new(relation, 4, 9).expect("params");
+        let inventory = SigmaShape::new(four, 10).inventory::<Fp>().expect("fits");
         assert_eq!(inventory.permutations(), relation.permutations());
         assert!(inventory.rows() < 1 << 10);
-        let bytes = SigmaShape::new(two, 10)
+        let bytes = SigmaShape::new(four, 10)
             .proof_length::<Eq>(ProofFormat::KAGEMUSHA_STEP)
             .expect("length");
         assert!(bytes > 0 && bytes.is_multiple_of(32), "{bytes}");

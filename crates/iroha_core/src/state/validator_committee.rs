@@ -17,12 +17,12 @@ use crate::{
         verify_kagemusha_mint_finality_seat_readiness_v1,
     },
 };
+use iroha_data_model::sumeragi::epoch::{
+    BeaconEpochBindingV1, ValidatorEpochAuthorizationV1, ValidatorEpochDecisionV1,
+};
 use iroha_data_model::{
     account::AccountId,
-    isi::kagemusha_v1::{
-        BeaconEpochBindingV1, KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
-    },
+    isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     nexus::{
         ValidatorCandidateKeysV1, ValidatorCommitteeOperationV1, ValidatorCommitteeTransitionV1,
     },
@@ -252,7 +252,7 @@ pub(crate) fn validate_persisted_progress(world: &impl WorldReadOnly) -> Result<
 fn validate_current_beacon(
     world: &impl WorldReadOnly,
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
-    authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+    authorization: &ValidatorEpochAuthorizationV1,
     committed_height: u64,
 ) -> Result<(), String> {
     authorization
@@ -309,7 +309,7 @@ fn validate_current_beacon(
             .is_none_or(|height| height > latest_activation)
         || record.retired_at_height.is_some()
         || record.session.adaptive_dkg.finalized_at_height > committed_height
-        || (authorization.decision == KagemushaMintFinalityEpochDecisionV1::Activate
+        || (authorization.decision == ValidatorEpochDecisionV1::Activate
             && record.activated_at_height != Some(authorization.first_height))
     {
         return Err("committee authorization differs from the active beacon lifecycle".to_owned());
@@ -443,8 +443,7 @@ pub(crate) fn validate_committed_progress(
             }
         }
         match outcome.decision {
-            KagemushaMintFinalityEpochDecisionV1::Activate
-            | KagemushaMintFinalityEpochDecisionV1::RetainAndCancel => {
+            ValidatorEpochDecisionV1::Activate | ValidatorEpochDecisionV1::RetainAndCancel => {
                 let transition = world
                     .validator_committee_transitions()
                     .get(&outcome.epoch)
@@ -454,7 +453,7 @@ pub(crate) fn validate_committed_progress(
                         "committee terminal decision differs from native certified history".into(),
                     );
                 }
-                if outcome.decision == KagemushaMintFinalityEpochDecisionV1::Activate {
+                if outcome.decision == ValidatorEpochDecisionV1::Activate {
                     let BeaconEpochBindingV1::Installed(previous) = current.authorization.beacon
                     else {
                         return Err("activation lacks the incumbent installed beacon".into());
@@ -481,7 +480,7 @@ pub(crate) fn validate_committed_progress(
                     }
                 }
             }
-            KagemushaMintFinalityEpochDecisionV1::Retain => {
+            ValidatorEpochDecisionV1::Retain => {
                 if world
                     .validator_committee_transitions()
                     .get(&outcome.epoch)
@@ -490,7 +489,7 @@ pub(crate) fn validate_committed_progress(
                     return Err("retention omitted cancellation of a frozen attempt".into());
                 }
             }
-            KagemushaMintFinalityEpochDecisionV1::Genesis => {
+            ValidatorEpochDecisionV1::Genesis => {
                 return Err("epoch boundary resets genesis authorization".into());
             }
         }
@@ -567,7 +566,7 @@ pub(crate) fn current_authority(
 ) -> Result<
     (
         KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityEpochAuthorizationV1,
+        ValidatorEpochAuthorizationV1,
     ),
     Attempt<String>,
 > {
@@ -625,7 +624,7 @@ fn validate_beacon_preparation(
     world: &impl WorldReadOnly,
     height: u64,
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
-    authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+    authorization: &ValidatorEpochAuthorizationV1,
     record: &crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
     authorizing_roster: &[PeerId],
 ) -> Result<bool, String> {
@@ -750,8 +749,7 @@ impl StateBlock<'_> {
         let mut completed = None;
         let mut beacon_rotation = None;
         match outcome.decision {
-            KagemushaMintFinalityEpochDecisionV1::Activate
-            | KagemushaMintFinalityEpochDecisionV1::RetainAndCancel => {
+            ValidatorEpochDecisionV1::Activate | ValidatorEpochDecisionV1::RetainAndCancel => {
                 let mut transition = self
                     .world
                     .validator_committee_transitions
@@ -767,7 +765,7 @@ impl StateBlock<'_> {
                 verify_progress(&self.world, &transition)?;
                 transition.outcome = Some(*outcome);
                 transition.validate()?;
-                if outcome.decision == KagemushaMintFinalityEpochDecisionV1::Activate {
+                if outcome.decision == ValidatorEpochDecisionV1::Activate {
                     let credentials = transition
                         .credentials
                         .as_ref()
@@ -821,7 +819,7 @@ impl StateBlock<'_> {
                 }
                 completed = Some(transition);
             }
-            KagemushaMintFinalityEpochDecisionV1::Retain => {
+            ValidatorEpochDecisionV1::Retain => {
                 if self
                     .world
                     .validator_committee_transitions
@@ -833,7 +831,7 @@ impl StateBlock<'_> {
                     );
                 }
             }
-            KagemushaMintFinalityEpochDecisionV1::Genesis => {
+            ValidatorEpochDecisionV1::Genesis => {
                 return Err(("boundary cannot reset scheduling authorization".to_owned()).into());
             }
         }
@@ -1137,7 +1135,7 @@ impl StateTransaction<'_, '_> {
         &self,
         target_epoch: u64,
         transition_id: [u8; 32],
-        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        authorization: &ValidatorEpochAuthorizationV1,
     ) -> Result<ValidatorCommitteeTransitionV1, String> {
         let transition = self
             .world

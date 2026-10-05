@@ -20,14 +20,12 @@ use crate::{
     },
 };
 use iroha_allocation::AllocationBudget;
+use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1};
 use iroha_data_model::{
     NetworkId,
     isi::{
         consensus_keys::{ThresholdKeyLifecycleActionV1, ThresholdKeyLifecycleCertificateV1},
-        kagemusha_v1::{
-            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-            KagemushaMintFinalityAuthorityGenerationV1,
-        },
+        kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     },
     nexus::{
         ValidatorCandidateKeysV1, ValidatorCommitteePreparationV1, ValidatorCommitteeStatusV1,

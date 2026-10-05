@@ -527,11 +527,35 @@ fn check_pk_tables<C: PastaCurve>() {
         eager.coset_cache_bytes(),
         cached_polys * pieces * n * core::mem::size_of::<C::ScalarExt>()
     );
-    // The selector columns live once, in the fixed columns.
-    assert!(eager.constraint_system().selector_columns().is_empty());
+    // The selector columns live once, as the last fixed columns, and the
+    // key reports them from there.
     let first =
         usize::try_from(eager.binding().descriptor().selectors.first_column).expect("first column");
     assert!(first <= fixed);
+    assert_eq!(eager.selector_values(), &eager.fixed_values()[first..]);
+    assert_eq!(
+        eager.selector_values().len(),
+        eager.constraint_system().selector_plan().num_columns()
+    );
+    // The same system and selector columns as a fresh finalization.
+    let synthesized = crate::frontend::synthesize(&CIRCUIT, params.k(), None).expect("synthesis");
+    let finalized = synthesized
+        .cs
+        .finalize(
+            synthesized.tables.selectors(),
+            eager_config.compress_selectors,
+        )
+        .expect("finalize");
+    assert!(!finalized.selector_columns().is_empty());
+    assert_eq!(eager.selector_values(), finalized.selector_columns());
+    assert_eq!(
+        eager.constraint_system().constraint_system(),
+        finalized.constraint_system()
+    );
+    assert_eq!(
+        eager.constraint_system().selector_plan(),
+        finalized.selector_plan()
+    );
 }
 
 #[test]

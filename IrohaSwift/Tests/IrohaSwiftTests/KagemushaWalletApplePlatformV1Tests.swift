@@ -256,7 +256,7 @@ private final class DiagnosticLog: @unchecked Sendable {
 /// The error a failing fake App Attest stage throws (`DCError.serverUnavailable`).
 private let appAttestServerUnavailable = NSError(domain: "com.apple.devicecheck.error", code: 4)
 
-private final class FakeWalletAppAttest: KagemushaAppAttestServiceV1, @unchecked Sendable {
+private final class FakeWalletAppAttest: KagemushaWalletAppAttestServiceV1, @unchecked Sendable {
   private let lock = NSLock()
   private var log: [String] = []
   private var keyCount = 0

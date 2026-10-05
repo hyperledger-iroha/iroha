@@ -46,7 +46,6 @@ def test_actual_candidate_sources_have_the_complete_reviewed_projection(captured
     ordinary = rows["dist/crc64Xz.js"]
     assert ordinary.source == "src/crc64Xz.js"
     assert ordinary.content is sources[ordinary.source]
-    assert "src/kagemushaAttestedV1.js" not in sources and "dist/kagemushaAttestedV1.js" not in rows
     assert "src/retailFeeAssessment.js" in sources and "dist/retailFeeAssessment.js" in rows
     assert "src/validationFeeHijiriQuote.js" not in sources and "dist/validationFeeHijiriQuote.js" not in rows
     assert {row.name: row.content for row in projected.members} == expected

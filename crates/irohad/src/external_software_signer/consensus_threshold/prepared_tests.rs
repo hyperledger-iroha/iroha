@@ -4,10 +4,10 @@
 fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restart() {
     let budget = test_credential_budget();
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1;
     use iroha_data_model::{
         isi::kagemusha_v1::{
-            InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-            KagemushaMintFinalityAuthorityGenerationV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
         },
         nexus::{
             ValidatorCommitteeCredentialsV1, ValidatorCommitteePreparationV1,
@@ -397,7 +397,7 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
 #[test]
 fn prepared_beacon_restart_preserves_exact_session_inventory_for_every_four_and_seven_seat() {
     let budget = test_credential_budget();
-    use iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1;
+    use iroha_data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1;
     let network = network_id_v1(0xC1);
     for (current_size, pending_size) in [(4, 7), (7, 4)] {
         let current_roster = beacon_fixture_roster_v1(current_size);

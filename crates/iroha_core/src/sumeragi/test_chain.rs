@@ -2259,7 +2259,7 @@ mod tests {
     #[test]
     fn boundary_currency_fixture_retains_native_authority_with_signed_genesis() {
         use iroha_data_model::{
-            asset::AssetBalancePolicy, isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
+            asset::AssetBalancePolicy, sumeragi::epoch::ValidatorEpochDecisionV1,
         };
 
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
@@ -2297,7 +2297,7 @@ mod tests {
             .next;
         assert_eq!(
             next.authorization.decision,
-            KagemushaMintFinalityEpochDecisionV1::Retain
+            ValidatorEpochDecisionV1::Retain
         );
         assert_eq!(next.authority, current.authority);
         assert_eq!(next.committee, current.committee);

@@ -457,7 +457,9 @@ impl JsonSerialize for PredicateJson {
                 let result = (|| -> Result<(), norito::json::BoundedJsonError> {
                     let mut previous = None;
                     let mut wrote = false;
-                    while let Some(index) = next_sorted_index_by(&self.exists, previous, String::as_str) {
+                    while let Some(index) =
+                        next_sorted_index_by(&self.exists, previous, String::as_str)
+                    {
                         if wrote {
                             out.push(',')?;
                         }

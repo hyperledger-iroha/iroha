@@ -84,9 +84,9 @@ pub struct BlockHeader {
     /// Preserved unchanged on EMPTY, locked reproposals, sync and restart.
     pub control_witness: crate::types::ControlWitness,
     /// Application flag (§3.7): Commit votes for this block carry attestations. Set from the
-    /// independent transaction/control builders and checked by execution; proposals always carry
-    /// nonempty work. The final height of an authenticated epoch requires this flag so the
-    /// application certifies the boundary transition.
+    /// independent transaction/control builders alone and checked by execution; proposals always
+    /// carry nonempty work. The core adds no flag of its own, so the final height of an epoch is
+    /// flagged only when the application requires it (§3.7 A1).
     pub attest: bool,
 }
 
@@ -202,10 +202,6 @@ impl Proposal {
             (header.instance != instance, Defect::HeaderInstance),
             (header.height != height, Defect::HeaderHeight),
             (header.epoch != config.epoch.id, Defect::EpochContext),
-            (
-                height == config.epoch.last_height && !header.attest,
-                Defect::BoundaryAttestation,
-            ),
             (header.parent_hash != parent.0, Defect::ParentHash),
             (header.parent_result != parent.1, Defect::ParentResult),
             (
@@ -1048,8 +1044,6 @@ pub enum Defect {
     HeaderHeight,
     /// Header names a different scheduling epoch or complete context.
     EpochContext,
-    /// An epoch boundary omits mandatory current-authority attestation.
-    BoundaryAttestation,
     /// `header.parent_hash ≠ tip.block_hash`.
     ParentHash,
     /// `header.parent_result ≠ tip.result`.
@@ -1482,7 +1476,6 @@ mod tests {
             Defect::HeaderInstance,
             Defect::HeaderHeight,
             Defect::EpochContext,
-            Defect::BoundaryAttestation,
             Defect::ParentHash,
             Defect::ParentResult,
             Defect::PayloadTooLarge,

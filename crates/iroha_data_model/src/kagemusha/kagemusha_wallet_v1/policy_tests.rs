@@ -13,7 +13,8 @@ use crate::kagemusha::kagemusha_wallet_v1::{
             IdentityFixture, identity_fixture, raw_output, signing_key, test_certificate,
         },
     },
-    state::{KagemushaWalletLifecycleV1, state_tests::EMPTY_ROOTS},
+    poseidon::kagemusha_wallet_poseidon_v1,
+    state::{KagemushaWalletLifecycleV1, state_tests::field_value},
 };
 
 const T0_MS: u64 = 1_790_000_000_000;
@@ -82,7 +83,7 @@ impl PolicyFixture {
     }
 
     fn state(&self) -> KagemushaWalletStateV1 {
-        KagemushaWalletStateV1::bootstrap(&self.credential, &EMPTY_ROOTS, [0x5d; 32])
+        KagemushaWalletStateV1::bootstrap(&self.credential, field_value(0x5d))
             .expect("bootstrap state")
     }
 
@@ -255,7 +256,9 @@ impl PolicyFixture {
             anchor.map(|anchor| KagemushaWalletPolicyUpdateV1::TimeAnchor { anchor }),
         ];
         for update in updates.into_iter().flatten() {
-            state.policy = state.refresh_policy(update).expect("refresh").policy;
+            let refresh = state.refresh_policy(update).expect("refresh");
+            state.core = refresh.core;
+            state.rest = refresh.rest;
         }
         state
     }
@@ -339,7 +342,7 @@ fn naive_blacklist_root(entries: &[KagemushaWalletBlacklistEntryV1]) -> [u8; 32]
     while level.len() > 1 {
         level = level
             .chunks_exact(2)
-            .map(|pair| kagemusha_wallet_blacklist_node_v1(&pair[0], &pair[1]))
+            .map(|pair| kagemusha_wallet_blacklist_node_v1(&pair[0], &pair[1]).expect("node"))
             .collect();
     }
     level[0]
@@ -352,8 +355,6 @@ fn kagemusha_wallet_v1_policy_transcript_lengths_are_pinned() {
         (KAGEMUSHA_WALLET_SCHEME_POLICY_BODY_TRANSCRIPT_BYTES_V1, 142),
         (KAGEMUSHA_WALLET_FEE_SCHEDULE_BODY_TRANSCRIPT_BYTES_V1, 191),
         (KAGEMUSHA_WALLET_BLACKLIST_BODY_TRANSCRIPT_BYTES_V1, 118),
-        (KAGEMUSHA_WALLET_BLACKLIST_LEAF_TRANSCRIPT_BYTES_V1, 64),
-        (KAGEMUSHA_WALLET_QUOTA_WINDOW_TRANSCRIPT_BYTES_V1, 33),
         (KAGEMUSHA_WALLET_QUOTA_SHARE_BODY_TRANSCRIPT_BYTES_V1, 190),
         (KAGEMUSHA_WALLET_TIME_ANCHOR_BODY_TRANSCRIPT_BYTES_V1, 138),
         (KAGEMUSHA_WALLET_CHARGE_QUOTE_BODY_TRANSCRIPT_BYTES_V1, 219),
@@ -381,10 +382,7 @@ fn kagemusha_wallet_v1_policy_transcript_lengths_are_pinned() {
         KAGEMUSHA_WALLET_BLACKLIST_BODY_TRANSCRIPT_BYTES_V1
     );
     let windows = sample_windows();
-    assert_eq!(
-        windows[0].transcript().len(),
-        KAGEMUSHA_WALLET_QUOTA_WINDOW_TRANSCRIPT_BYTES_V1
-    );
+    assert_eq!(windows[0].field_items().len(), 4);
     assert_eq!(
         f.share_body(1, &windows).transcript().len(),
         KAGEMUSHA_WALLET_QUOTA_SHARE_BODY_TRANSCRIPT_BYTES_V1
@@ -620,16 +618,35 @@ fn kagemusha_wallet_v1_blacklist_root_matches_the_full_tree() {
         kagemusha_wallet_blacklist_root_v1(&[]).expect("empty root"),
         naive_blacklist_root(&[])
     );
-    let mut leaf = [0x10; 32].to_vec();
-    leaf.extend_from_slice(&[0x20; 32]);
+    // Poseidon trees (§7): a gap leaf over the four limbs of `lower || upper`, a node over its
+    // two children.
+    let limb = |value: u8| {
+        let mut item = [0_u8; 32];
+        item[..16].copy_from_slice(&[value; 16]);
+        item
+    };
     assert_eq!(
-        kagemusha_wallet_blacklist_leaf_v1(&[0x10; 32], &[0x20; 32]),
-        kagemusha_wallet_digest_v1(Role::BlacklistLeaf, &leaf)
+        Some(kagemusha_wallet_blacklist_leaf_v1(&[0x10; 32], &[0x20; 32])),
+        kagemusha_wallet_poseidon_v1(
+            KAGEMUSHA_WALLET_BLACKLIST_LEAF_DOMAIN_V1,
+            &[limb(0x10), limb(0x10), limb(0x20), limb(0x20)]
+        )
+        .ok()
     );
     assert_eq!(
-        kagemusha_wallet_blacklist_node_v1(&[0x10; 32], &[0x20; 32]),
-        kagemusha_wallet_digest_v1(Role::BlacklistNode, &leaf)
+        kagemusha_wallet_blacklist_node_v1(&[0x10; 32], &[0x20; 32]).ok(),
+        kagemusha_wallet_poseidon_v1(
+            KAGEMUSHA_WALLET_BLACKLIST_NODE_DOMAIN_V1,
+            &[[0x10; 32], [0x20; 32]]
+        )
+        .ok()
     );
+    assert!(is_invalid(
+        kagemusha_wallet_blacklist_node_v1(&[0x10; 32], &[0xff; 32]),
+        "blacklist.node"
+    ));
+    let root = kagemusha_wallet_blacklist_root_v1(&entries).expect("root");
+    assert!(super::super::digest::kagemusha_wallet_is_canonical_field_v1(&root));
     for (entries, field) in [
         (vec![entry(0x20), entry(0x10)], "blacklist.order"),
         (vec![entry(0x10), entry(0x10)], "blacklist.order"),
@@ -674,6 +691,9 @@ fn kagemusha_wallet_v1_blacklist_gap_openings() {
             moved.verify(&root, &account),
             "blacklist.opening"
         ));
+        let mut wide = opening;
+        wide.siblings[3] = [0xff; 32];
+        assert!(is_invalid(wide.verify(&root, &account), "blacklist.node"));
     }
     let opening = list.gap_opening(&[0x15; 32]).expect("opening");
     assert!(is_invalid(
@@ -789,35 +809,39 @@ fn kagemusha_wallet_v1_maximum_blacklist_fits_its_frame_cap() {
 fn kagemusha_wallet_v1_quota_windows_root_and_share_rules() {
     let f = policy_fixture();
     let windows = sample_windows();
+    // Poseidon trees (§7): the window leaf over its four fields, the empty slot over zeros.
+    let int = |value: u128| {
+        let mut item = [0_u8; 32];
+        item[..16].copy_from_slice(&value.to_le_bytes());
+        item
+    };
     let empty = kagemusha_wallet_quota_empty_window_leaf_v1();
     assert_eq!(
-        empty,
-        kagemusha_wallet_digest_v1(Role::QuotaWindow, &[0; 33])
+        Some(empty),
+        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1, &[int(0); 4]).ok()
     );
-    let mut expected = windows[0].kind.tag().to_le_bytes().to_vec();
-    expected.extend_from_slice(&T0_MS.to_le_bytes());
-    expected.extend_from_slice(&(T0_MS + DAY_MS).to_le_bytes());
-    expected.extend_from_slice(&1_000_u128.to_le_bytes());
-    assert_eq!(windows[0].transcript(), expected);
+    let expected = vec![
+        int(u128::from(windows[0].kind.tag())),
+        int(u128::from(T0_MS)),
+        int(u128::from(T0_MS + DAY_MS)),
+        int(1_000),
+    ];
+    assert_eq!(windows[0].field_items(), expected);
     assert_eq!(
-        windows[0].leaf_digest(),
-        kagemusha_wallet_digest_v1(Role::QuotaWindow, &expected)
+        Some(windows[0].leaf_value()),
+        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1, &expected).ok()
     );
     let mut level: Vec<[u8; 32]> = (0..64)
         .map(|slot| {
             windows
                 .get(slot)
-                .map_or(empty, KagemushaWalletQuotaWindowV1::leaf_digest)
+                .map_or(empty, KagemushaWalletQuotaWindowV1::leaf_value)
         })
         .collect();
     for _ in 0..KAGEMUSHA_WALLET_QUOTA_TREE_DEPTH_V1 {
         level = level
             .chunks_exact(2)
-            .map(|pair| {
-                let mut node = pair[0].to_vec();
-                node.extend_from_slice(&pair[1]);
-                kagemusha_wallet_digest_v1(Role::QuotaNode, &node)
-            })
+            .map(|pair| kagemusha_wallet_quota_node_v1(&pair[0], &pair[1]).expect("node"))
             .collect();
     }
     assert_eq!(level.len(), 1);
@@ -826,9 +850,14 @@ fn kagemusha_wallet_v1_quota_windows_root_and_share_rules() {
         level[0]
     );
     assert_eq!(
-        kagemusha_wallet_quota_node_v1(&[1; 32], &[2; 32]),
-        kagemusha_wallet_digest_v1(Role::QuotaNode, &[[1_u8; 32], [2; 32]].concat())
+        kagemusha_wallet_quota_node_v1(&[1; 32], &[2; 32]).ok(),
+        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_QUOTA_NODE_DOMAIN_V1, &[[1; 32], [2; 32]])
+            .ok()
     );
+    assert!(is_invalid(
+        kagemusha_wallet_quota_node_v1(&[0xff; 32], &[2; 32]),
+        "quota_share.node"
+    ));
     assert!(is_invalid(
         kagemusha_wallet_quota_windows_root_v1(&vec![windows[0]; 65]),
         "quota_share.windows"
@@ -1133,7 +1162,7 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
     };
     // With no control active, no clock condition blocks Send.
     let mut idle = f.state();
-    idle.policy.accepted_time_floor_ms = 50;
+    idle.core.accepted_time_floor_ms = 50;
     assert_eq!(
         idle.effective_accepted_time(None, &now, 40).expect("idle"),
         interval(50, 50)
@@ -1147,7 +1176,7 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
     let anchored = KagemushaWalletAnchoredTimeV1::new(anchor, BOOT, 1_000, 1_300, MAX_RESPONSE_MS)
         .expect("anchored");
     let state = f.controlled_state(None, None, Some(&anchor));
-    assert!(state.policy.send_requires_time_anchor());
+    assert!(state.send_requires_time_anchor());
     assert!(is_invalid(
         state.effective_accepted_time(None, &now, 0),
         "time_anchor.missing"
@@ -1173,7 +1202,7 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
         interval(T0_MS + 9_000, T0_MS + 9_000)
     );
     // The committed floor (the anchor's T) also bounds L from below.
-    assert_eq!(state.policy.accepted_time_floor_ms, T0_MS);
+    assert_eq!(state.core.accepted_time_floor_ms, T0_MS);
     let uncommitted = KagemushaWalletAnchoredTimeV1::new(
         f.time_anchor(T0_MS + 1),
         BOOT,
@@ -1184,10 +1213,10 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
     .expect("anchored");
     assert!(is_invalid(
         state.effective_accepted_time(Some(&uncommitted), &now, 0),
-        "policy.time_anchor"
+        "state.rest.time_anchor"
     ));
     let mut foreign = f.state();
-    foreign.wallet_id = [0x0f; 32];
+    foreign.core.wallet_id = [0x0f; 32];
     assert!(is_invalid(
         foreign.effective_accepted_time(Some(&anchored), &now, 0),
         "time_anchor.wallet_id"
@@ -1203,14 +1232,14 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
     let refresh = state
         .refresh_policy(KagemushaWalletPolicyUpdateV1::SchemePolicy { policy: &policy })
         .expect("scheme policy");
-    assert_eq!(refresh.policy.policy_epoch, 2);
+    assert_eq!(refresh.core.policy_epoch, 2);
     assert_eq!(
-        refresh.policy.enabled_controls,
+        refresh.core.enabled_controls,
         KAGEMUSHA_WALLET_CONTROL_QUOTAS_V1
     );
-    assert_eq!(refresh.policy.fee_schedule, [0x0f; 32]);
-    assert_eq!(refresh.policy.accepted_time_floor_ms, 0);
-    assert_eq!(refresh.credential_digest, state.credential_digest);
+    assert_eq!(refresh.rest.fee_schedule, [0x0f; 32]);
+    assert_eq!(refresh.core.accepted_time_floor_ms, 0);
+    assert_eq!(refresh.credential_digest, state.core.credential_digest);
     assert_eq!(
         refresh.effect,
         KagemushaWalletEffectV1::RefreshPolicy {
@@ -1220,20 +1249,21 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
         }
     );
     let mut epoch_two = state;
-    epoch_two.policy = refresh.policy;
+    epoch_two.core = refresh.core;
+    epoch_two.rest = refresh.rest;
     assert!(is_invalid(
         epoch_two.refresh_policy(KagemushaWalletPolicyUpdateV1::SchemePolicy { policy: &policy }),
         "scheme_policy.policy_epoch"
     ));
     // A credential that permits nothing activates nothing.
-    let plain = KagemushaWalletStateV1::bootstrap(&f.identity.credential, &EMPTY_ROOTS, [1; 32])
-        .expect("plain state");
+    let plain =
+        KagemushaWalletStateV1::bootstrap(&f.identity.credential, [1; 32]).expect("plain state");
     let all = f.scheme_policy(1, KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1, [0; 32]);
     assert_eq!(
         plain
             .refresh_policy(KagemushaWalletPolicyUpdateV1::SchemePolicy { policy: &all })
             .expect("refresh")
-            .policy
+            .core
             .enabled_controls,
         0
     );
@@ -1243,11 +1273,12 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
     let refresh = state
         .refresh_policy(KagemushaWalletPolicyUpdateV1::Blacklist { list: &list })
         .expect("blacklist");
-    assert_eq!(refresh.policy.blacklist_version, 1);
-    assert_eq!(refresh.policy.blacklist_root, list.body.entries_root);
-    assert_eq!(refresh.policy.accepted_time_floor_ms, T0_MS + 10);
+    assert_eq!(refresh.core.blacklist_version, 1);
+    assert_eq!(refresh.core.blacklist_root, list.body.entries_root);
+    assert_eq!(refresh.core.accepted_time_floor_ms, T0_MS + 10);
     let mut listed = state;
-    listed.policy = refresh.policy;
+    listed.core = refresh.core;
+    listed.rest = refresh.rest;
     assert!(is_invalid(
         listed.refresh_policy(KagemushaWalletPolicyUpdateV1::Blacklist { list: &list }),
         "blacklist.list_version"
@@ -1257,7 +1288,7 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
         listed
             .refresh_policy(KagemushaWalletPolicyUpdateV1::Blacklist { list: &older })
             .expect("older issuance never lowers the floor")
-            .policy
+            .core
             .accepted_time_floor_ms,
         T0_MS + 10
     );
@@ -1282,14 +1313,11 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
             usage: &[],
         })
         .expect("share");
-    assert_eq!(refresh.policy.quota_share_id, 1);
-    assert_eq!(
-        refresh.policy.quota_usage_root,
-        state.policy.quota_usage_root
-    );
-    assert_eq!(refresh.policy.accepted_time_floor_ms, T0_MS);
+    assert_eq!(refresh.rest.quota_share_id, 1);
+    assert_eq!(refresh.core.quota_usage_root, state.core.quota_usage_root);
+    assert_eq!(refresh.core.accepted_time_floor_ms, T0_MS);
     let mut other_wallet = f.state();
-    other_wallet.wallet_id = [0x0e; 32];
+    other_wallet.core.wallet_id = [0x0e; 32];
     assert!(is_invalid(
         other_wallet.refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &share,
@@ -1302,11 +1330,12 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
     let refresh = state
         .refresh_policy(KagemushaWalletPolicyUpdateV1::TimeAnchor { anchor: &anchor })
         .expect("anchor");
-    assert_eq!(refresh.policy.time_anchor, anchor.time_anchor_digest());
-    assert_eq!(refresh.policy.accepted_time_floor_ms, T0_MS + 99);
+    assert_eq!(refresh.rest.time_anchor, anchor.time_anchor_digest());
+    assert_eq!(refresh.core.accepted_time_floor_ms, T0_MS + 99);
     // Re-committing the held anchor would repeat the earlier operation ID.
     let mut anchored = state;
-    anchored.policy = refresh.policy;
+    anchored.core = refresh.core;
+    anchored.rest = refresh.rest;
     assert!(is_invalid(
         anchored.refresh_policy(KagemushaWalletPolicyUpdateV1::TimeAnchor { anchor: &anchor }),
         "time_anchor.unchanged"
@@ -1315,7 +1344,7 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
     let refresh = anchored
         .refresh_policy(KagemushaWalletPolicyUpdateV1::TimeAnchor { anchor: &later })
         .expect("a new anchor after the next boot");
-    assert_eq!(refresh.policy.time_anchor, later.time_anchor_digest());
+    assert_eq!(refresh.rest.time_anchor, later.time_anchor_digest());
 
     // Replacement credential: lease renewal under the same incarnation (design C5).
     let mut body = f.credential.body;
@@ -1331,8 +1360,8 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
         })
         .expect("credential");
     assert_eq!(refresh.credential_digest, replacement.credential_digest());
-    assert_eq!(refresh.policy.lease_expires_at_ms, LEASE_MS + DAY_MS);
-    assert_eq!(refresh.policy.accepted_time_floor_ms, T0_MS + 500);
+    assert_eq!(refresh.core.lease_expires_at_ms, LEASE_MS + DAY_MS);
+    assert_eq!(refresh.core.accepted_time_floor_ms, T0_MS + 500);
     assert_eq!(
         refresh.effect,
         KagemushaWalletEffectV1::RefreshPolicy {
@@ -1353,7 +1382,7 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
             previous: &replacement,
             replacement: &replacement,
         }),
-        "state.credential_digest"
+        "state.core.credential_digest"
     ));
 }
 
@@ -1364,14 +1393,14 @@ fn kagemusha_wallet_v1_send_control_checks() {
     let list = f.blacklist(1, T0_MS, vec![entry(0x10), entry(0x20)]);
     let share = f.quota_share(1, sample_windows());
     let state = f.controlled_state(Some(&list), Some(&share), Some(&anchor));
-    assert_eq!(state.lifecycle, KagemushaWalletLifecycleV1::Active);
+    assert_eq!(state.core.lifecycle, KagemushaWalletLifecycleV1::Active);
     let early = interval(T0_MS + 10, T0_MS + 20);
 
     // Lease: refused once U reaches the expiry.
     state.check_lease(&early).expect("lease");
     assert!(is_invalid(
         state.check_lease(&interval(LEASE_MS - 1, LEASE_MS)),
-        "policy.lease_expired"
+        "state.lease_expired"
     ));
     let idle = f.state();
     idle.check_lease(&interval(LEASE_MS, LEASE_MS))
@@ -1383,7 +1412,7 @@ fn kagemusha_wallet_v1_send_control_checks() {
         .expect("not listed")
         .expect("enforced");
     opening
-        .verify(&state.policy.blacklist_root, &[0x15; 32])
+        .verify(&state.core.blacklist_root, &[0x15; 32])
         .expect("opening");
     assert!(is_invalid(
         state.check_blacklist(Some(&list), &[0x20; 32], &early),
@@ -1396,7 +1425,7 @@ fn kagemusha_wallet_v1_send_control_checks() {
     let other = f.blacklist(1, T0_MS, vec![entry(0x30)]);
     assert!(is_invalid(
         state.check_blacklist(Some(&other), &[0x15; 32], &early),
-        "policy.blacklist"
+        "state.rest.blacklist"
     ));
     assert!(is_invalid(
         state.check_blacklist(
@@ -1440,7 +1469,7 @@ fn kagemusha_wallet_v1_send_control_checks() {
     let other_share = f.quota_share(2, sample_windows());
     assert!(is_invalid(
         state.check_quota(Some(&other_share), &[], &early, 1),
-        "policy.quota_share"
+        "state.rest.quota_share"
     ));
     assert!(
         idle.check_quota(None, &[], &early, u128::MAX)

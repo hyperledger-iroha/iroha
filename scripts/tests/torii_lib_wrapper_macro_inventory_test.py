@@ -272,7 +272,7 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
 ROUTE_POLICY_DECLARATIONS_SHA256 = "c9cd5d54a3818e070e662a1406ee781198ed4ab41411acb583a8c475bdfae006"
 ROUTE_POLICY_NAMES = ('canonical_account_delete', 'canonical_account_get', 'canonical_account_proof_get', 'canonical_account_post', 'canonical_account_proof_post', 'canonical_signature_delete', 'canonical_signature_get', 'optional_canonical_signature_get', 'canonical_signature_post', 'canonical_signed_post', 'layered_canonical_account_post', 'layered_canonical_signature_get', 'layered_canonical_signature_post', 'layered_canonical_signed_post', 'layered_public_get', 'limited_canonical_account_get', 'limited_canonical_account_post', 'limited_canonical_signature_post', 'limited_optional_canonical_signature_post', 'limited_canonical_signed_post', 'limited_hardened_canonical_signature_get', 'limited_operator_get', 'limited_operator_post', 'limited_protocol_handshake_get', 'limited_protocol_handshake_post', 'limited_public_get', 'limited_unauthenticated_get', 'limited_public_post', 'private_root_owner_get', 'onboarding_get', 'onboarding_post', 'operator_credential_post', 'operator_delete', 'operator_get', 'operator_post', 'protocol_handshake_post', 'public_get', 'public_post', 'unauthenticated_any', 'unauthenticated_get')
 ROUTE_ROW_COUNT = 602
-ROUTE_TUPLE_SHA256 = "8f64058a1a4158f637d974fbb87247872d8014b7fd590f46c24df90c2131f5e7"
+ROUTE_TUPLE_SHA256 = "a9c1bd1e8a164da6072de456a0dfe22614ed8458c3dba1bd9d1b5f47aa7d6b23"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -1274,13 +1274,49 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 with self.assertRaises(GuardError):
                     validate_source(self.source.replace(old, new, 1))
 
+    def test_ledger_original_carriers_are_core_signed_reads_in_every_build(self) -> None:
+        """Reject feature gating, removal, or weakened authentication on ledger carriers."""
+        expected = [
+            (
+                "always", "GET", "route_catalog::core::RESOURCE_NAMES_STATE",
+                "resource_names_state::handler", "none", "handler:CanonicalAccountSignature",
+            ),
+            (
+                "always", "POST", "route_catalog::core::AUTHORITY_ORIGINALS",
+                "authority_originals::handler",
+                "max(iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1)",
+                "handler:CanonicalAccountSignature",
+            ),
+        ]
+        rows = _route_table_rows(self.source)
+        for row in expected:
+            self.assertEqual(rows.count(row), 1)
+        self.assertEqual(
+            [row for row in rows if row[2].endswith(("::RESOURCE_NAMES_STATE", "::AUTHORITY_ORIGINALS"))],
+            expected,
+        )
+        names = "RESOURCE_NAMES_STATE => canonical_signature_get(resource_names_state::handler);"
+        originals = "AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);"
+        for old, new in (
+            (names, ""),
+            (names, names.replace("canonical_signature_get", "public_get", 1)),
+            (originals, ""),
+            (originals, originals.replace("limited_canonical_signature_post", "limited_post", 1)),
+        ):
+            with self.subTest(target=old, changed=new):
+                self.assertEqual(self.source.count(old), 1)
+                changed = self.source.replace(old, new, 1)
+                self.assertNotEqual(changed, self.source)
+                with self.assertRaises(GuardError):
+                    validate_source(changed)
+
     def test_universal_kagemusha_mounts_preserve_signed_wallet_read_policy(self) -> None:
         """Reject feature gating, removal, or weakened authentication on required routes."""
         rows = [row for row in _route_table_rows(self.source)
                 if row[2].startswith("route_catalog::kagemusha::")]
         self.assertEqual([row[2].rsplit("::", 1)[1] for row in rows], [
             "READINESS", "TOP_UP", "REDEEM", "OPERATION", "AUTHORITY_STATE",
-            "RESOURCE_NAMES_STATE", "AUTHORITY_ORIGINALS", "ORDINARY_WALLET_CURRENT",
+            "ORDINARY_WALLET_CURRENT",
             "ORDINARY_MINT_ISSUER_PURPOSE", "ORDINARY_MINT_FINALIZED", "ORDINARY_MINT_CREDIT",
         ])
         self.assertTrue(all(row[0] == "always" for row in rows))

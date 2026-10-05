@@ -559,8 +559,13 @@ fn parse_provider_ingest_completion_authority(
     value: &Bound<'_, PyDict>,
 ) -> PyResult<ProviderIngestCompletionAuthorityV1> {
     const CONTEXT: &str = "expected_authority";
-    require_exact_dict_fields(value, &["provider_owner", "signer_policy"], CONTEXT)?;
+    require_exact_dict_fields(
+        value,
+        &["provider_owner", "completion_signer", "signer_policy"],
+        CONTEXT,
+    )?;
     let provider_owner = required_dict_string(value, "provider_owner", CONTEXT)?;
+    let completion_signer = required_dict_string(value, "completion_signer", CONTEXT)?;
     let signer_policy_value = required_dict_field(value, "signer_policy", CONTEXT)?;
     let signer_policy = signer_policy_value
         .cast::<PyDict>()
@@ -629,6 +634,7 @@ fn parse_provider_ingest_completion_authority(
     }
     Ok(ProviderIngestCompletionAuthorityV1::new(
         parse_exact_i105_account_id(&provider_owner, "expected_authority.provider_owner")?,
+        parse_exact_i105_account_id(&completion_signer, "expected_authority.completion_signer")?,
         signer_policy,
     ))
 }
@@ -5104,6 +5110,36 @@ mod tests {
     }
     fn python_test_network_id() -> PyNetworkId {
         PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH]).expect("marked test NetworkId")
+    }
+    #[test]
+    fn provider_completion_authority_requires_exact_distinct_signer() {
+        ensure_python();
+        let owner = AccountId::new(PublicKey::from(parse_private_key(&[0x11; 32]).unwrap()));
+        let signer = AccountId::new(PublicKey::from(parse_private_key(&[0x22; 32]).unwrap()));
+        Python::attach(|py| {
+            let policy = PyDict::new(py);
+            policy.set_item("policy_id", "21".repeat(32)).unwrap();
+            policy.set_item("revision", 1).unwrap();
+            policy.set_item("predecessor_digest", py.None()).unwrap();
+            policy.set_item("policy_digest", "43".repeat(32)).unwrap();
+            let authority = PyDict::new(py);
+            authority
+                .set_item("provider_owner", owner.canonical_i105().unwrap())
+                .unwrap();
+            authority
+                .set_item("completion_signer", signer.canonical_i105().unwrap())
+                .unwrap();
+            authority.set_item("signer_policy", policy).unwrap();
+            let decoded = parse_provider_ingest_completion_authority(&authority).unwrap();
+            assert_eq!(decoded.provider_owner, owner);
+            assert_eq!(decoded.completion_signer, signer);
+            authority.del_item("completion_signer").unwrap();
+            assert!(parse_provider_ingest_completion_authority(&authority).is_err());
+            authority
+                .set_item("completion_signer", "not-an-account")
+                .unwrap();
+            assert!(parse_provider_ingest_completion_authority(&authority).is_err());
+        });
     }
     #[test]
     fn privacy_capability_native_builder_rejects_offline_inspection() {

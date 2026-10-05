@@ -204,25 +204,3 @@ concrete freshness verifier accepts certificate/prefix inputs without these held
 journal descriptors. The pending pair intentionally exposes no unverified read or
 response capability to fill that gap. A future native owner needs a read-only material
 integration before this path can qualify as complete hardware-backed recovery.
-
-# Single-design `Advance` provider (`wallet_advance_v1`)
-
-`wallet_advance_v1` implements the stock-phone provider contract of the
-[single KAGEMUSHA design](../../../../specs/kagemusha_single_design_proposal.md) §4
-over the G1 objects of `iroha_data_model::kagemusha::kagemusha_wallet_v1`. One
-non-backup custody root holds, per wallet slot, marker generations (Enrollment,
-Selected head, Released head bound to its completion digest, Terminal), frozen
-recovery capsules and completion records in two copies, and retained results by
-operation identity. The highest durable marker alone selects the head; staging
-without a marker is discarded; a key or journal without any marker is lost
-custody; a released completion is never signed again. Read errors and locked
-storage are `Unavailable`, never absence. On iPhone a passcode-bound keychain
-anchor refuses restored older custody files as rollbacks.
-
-The provider signs receipts with the hardware payment key only while a Selected
-marker is durable, and it is generic over the receipt body and the retained
-frames, so the state and proof owners decide monetary validity. Platform
-adapters (Android Keystore and storage, iPhone Secure Enclave and keychain) and
-the bridge wiring are not implemented yet. Crash-point matrices over the
-fault-injecting simulator are in `wallet_advance_v1/*_tests.rs`
-(`cargo test -p iroha_core_zk --lib wallet_advance_v1`).

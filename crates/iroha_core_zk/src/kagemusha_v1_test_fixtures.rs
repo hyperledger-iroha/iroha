@@ -4,18 +4,16 @@
 use iroha_data_model::isi::kagemusha_v1::{
     KagemushaMintFinalityAuthorityGenerationTemplateV1, KagemushaMintFinalityGenesisParametersV1,
 };
+use iroha_data_model::sumeragi::epoch::ValidatorEpochAuthorizationV1;
 use iroha_data_model::{
     NetworkId,
     block::consensus::ValidatorPower,
-    isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityEpochAuthorizationV1,
-    },
+    isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1},
 };
 #[cfg(any(test, feature = "test-utils"))]
 use iroha_data_model::{
     block::consensus::SumeragiGenesisContextParameters,
-    isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1},
+    sumeragi::epoch::{BeaconEpochBindingV1, ValidatorEpochDecisionV1},
 };
 
 /// Build actual paired-Pasta keys for one immutable generation, independent of election epoch.
@@ -56,8 +54,8 @@ pub fn mint_finality_authority(
 pub fn mint_finality_genesis_for_authority(
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
     last_height: u64,
-) -> KagemushaMintFinalityEpochAuthorizationV1 {
-    KagemushaMintFinalityEpochAuthorizationV1::genesis(authority, last_height)
+) -> ValidatorEpochAuthorizationV1 {
+    ValidatorEpochAuthorizationV1::genesis(authority, last_height)
         .expect("generation-zero genesis authorization")
 }
 
@@ -69,7 +67,7 @@ pub fn mint_finality_genesis_authorization(
     last_height: u64,
     roster: &[ValidatorPower],
 ) -> (
-    KagemushaMintFinalityEpochAuthorizationV1,
+    ValidatorEpochAuthorizationV1,
     KagemushaMintFinalityAuthorityGenerationV1,
 ) {
     let authority = mint_finality_authority(network_id, 0, roster);
@@ -81,14 +79,14 @@ pub fn mint_finality_genesis_authorization(
 #[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
 pub fn mint_finality_successor_authorization(
-    previous: &KagemushaMintFinalityEpochAuthorizationV1,
+    previous: &ValidatorEpochAuthorizationV1,
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
     last_height: u64,
     beacon: BeaconEpochBindingV1,
-    decision: KagemushaMintFinalityEpochDecisionV1,
+    decision: ValidatorEpochDecisionV1,
     transition_id: [u8; 32],
-) -> KagemushaMintFinalityEpochAuthorizationV1 {
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+) -> ValidatorEpochAuthorizationV1 {
+    let authorization = ValidatorEpochAuthorizationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id: authority.network_id,
         epoch: previous
@@ -176,7 +174,7 @@ pub fn mint_finality_retained_authorization(
     last_height: u64,
     roster: &[ValidatorPower],
 ) -> (
-    KagemushaMintFinalityEpochAuthorizationV1,
+    ValidatorEpochAuthorizationV1,
     KagemushaMintFinalityAuthorityGenerationV1,
 ) {
     assert!(epoch < 1_024, "fixture epoch history is bounded");
@@ -193,7 +191,7 @@ pub fn mint_finality_retained_authorization(
                 next_epoch + 1
             },
             fixture_installed_beacon(),
-            KagemushaMintFinalityEpochDecisionV1::Retain,
+            ValidatorEpochDecisionV1::Retain,
             [0; 32],
         );
     }
@@ -209,7 +207,7 @@ pub fn mint_finality_scheduled_authorization(
     epoch_length: u64,
     roster: &[ValidatorPower],
 ) -> (
-    KagemushaMintFinalityEpochAuthorizationV1,
+    ValidatorEpochAuthorizationV1,
     KagemushaMintFinalityAuthorityGenerationV1,
 ) {
     assert!(epoch < 1_024, "fixture epoch history is bounded");
@@ -226,7 +224,7 @@ pub fn mint_finality_scheduled_authorization(
             &authority,
             last_height,
             fixture_installed_beacon(),
-            KagemushaMintFinalityEpochDecisionV1::Retain,
+            ValidatorEpochDecisionV1::Retain,
             [0; 32],
         );
     }
@@ -238,7 +236,7 @@ pub fn mint_finality_scheduled_authorization(
 #[doc(hidden)]
 pub fn fixture_installed_beacon() -> BeaconEpochBindingV1 {
     BeaconEpochBindingV1::Installed(
-        iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+        iroha_data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1 {
             session_id: [0x71; 32],
             transcript_hash: [0x72; 32],
         },

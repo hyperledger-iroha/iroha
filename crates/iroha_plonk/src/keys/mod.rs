@@ -31,7 +31,9 @@ mod tests;
 pub mod vk;
 
 pub use keygen::{KeygenConfig, keygen_from_tables, keygen_pk, keygen_vk, permutation_values};
-pub use pk::{CosetCachePolicy, CosetMasks, CosetPolynomial, ProvingKey, QuotientDomain};
+pub use pk::{
+    CosetCachePolicy, CosetMasks, CosetPolynomial, KeyConstraintSystem, ProvingKey, QuotientDomain,
+};
 pub use vk::{VK_VERSION, VerifyingKey, VkError};
 
 /// A validated descriptor, its canonical Norito frame `D` and

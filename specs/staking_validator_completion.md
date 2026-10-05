@@ -30,21 +30,25 @@ retention keeps the current key generation without claiming forward security.
 Missing target readiness cannot change the frozen roster in place. Missing the
 current quorum does not authorize weakened voting rules.
 
-The latest recorded compiler artifact of the production DLMM pool is 59,817 bytes,
-including 32,360 bytes of code. Exact numeric operand staging removes 168 bytes
-from the 59,985-byte artifact while preserving complete schemas, permissions,
-access hints, literal payloads, callable frames and every original metered
-consumer. All ten numeric compiler controls pass, with complete genuine native
-captures and exact reproduction. The full compiler library run passed 1,241
-controls and failed one spill-shape fixture that still expected removed zero
-instructions. Its exact fixture correction preserves reload registers, lifetimes,
-operand order and independent original-zero comparisons; a fresh run is pending.
+The latest recorded compiler artifact of the production DLMM pool is 58,457 bytes,
+including 32,360 bytes of code. Direct CS1 callable metadata compaction removes
+1,360 bytes from the 59,817-byte artifact after numeric operand staging removed
+168 bytes from the 59,985-byte artifact. Complete schemas, permissions, access
+hints, literal payloads, callable frames and original metered consumers remain.
+Seven codec, three allocation and two compiler controls pass for CS1, together
+with both JavaScript tape controls. Complete genuine native outputs are recorded;
+mandatory reproduction rejects the obsolete captures, whose replacement awaits
+the public schema format before canonical publication. The earlier full compiler
+library run passed 1,241 controls and failed one spill-shape fixture that still
+expected removed zero instructions. Its exact correction preserves reload
+registers, lifetimes, operand order and independent original-zero comparisons;
+a fresh full run with regenerated fixtures is pending.
 The current IVM run passed seven of eight local cases; the map recorder's exact
 diagnostic allocation was underfunded before execution and its repaired fixture
 awaits a fresh run. Full compiler and VM candidate qualification remain open.
 
-The artifact's nested byte charge alone is 3,828,288 gas at the unchanged
-64-gas-per-byte price, leaving 171,712 gas within the default four-million-gas
+The artifact's nested byte charge alone is 3,741,248 gas at the unchanged
+64-gas-per-byte price, leaving 258,752 gas within the default four-million-gas
 block limit. A state read requires at least 524,304 gas before its path prefix to
 escrow the unchanged maximum 512-KiB value allowance. Refunded actual consumption
 does not establish that this original temporary reservation fits. Further artifact
@@ -54,7 +58,7 @@ failed with `OutOfGas` before the signed callback. An explicit ignored diagnosti
 using that artifact measured 3,983,636 gas with an eight-million-gas VM against the
 same default-policy signed genesis and discarded all effects and overlays. That
 diagnostic cannot qualify the signed callback or change the default allowance;
-the fresh 59,817-byte artifact still requires the actual default-limit gate.
+the fresh 58,457-byte artifact still requires the actual default-limit gate.
 The strict workspace source inventory refuses an unsafe nested checkout path;
 component measurements do not establish candidate or network qualification.
 TODO: qualify the actual enacted payout under the default policy on the

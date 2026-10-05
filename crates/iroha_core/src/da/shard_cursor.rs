@@ -244,7 +244,7 @@ impl DaShardCursorIndex {
         bundle: &DaCommitmentBundle,
         block_height: u64,
     ) -> Result<(), DaShardCursorError> {
-        self.record_records(lane_config, &bundle.commitments, block_height)
+        self.record_records(lane_config, bundle.commitments(), block_height)
     }
     /// Record borrowed commitments against the shard cursor index.
     ///
@@ -603,7 +603,7 @@ impl DaShardCursorJournal {
         bundle: &DaCommitmentBundle,
     ) -> Result<(), ShardCursorJournalError> {
         let mut candidate = self.clone();
-        for record in &bundle.commitments {
+        for record in bundle.commitments() {
             candidate.record_commitment(block_height, record)?;
         }
         *self = candidate;

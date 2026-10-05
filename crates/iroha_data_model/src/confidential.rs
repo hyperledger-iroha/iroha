@@ -982,7 +982,7 @@ impl norito::json::JsonDeserialize for ConfidentialStatus {
 #[norito(reuse_archived)]
 #[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
 #[norito(no_fast_from_json)]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 pub struct ConfidentialFeatureDigest {
     /// Optional hash summarizing the set of active verifying keys.
     #[norito(json = "crate::json_helpers::fixed_bytes::option")]

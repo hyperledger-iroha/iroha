@@ -357,7 +357,7 @@ fn run(args: Args) -> Result<(), PreparationError> {
 pub(super) fn validate_retained_incumbent(
     retained: &[RuntimeGlobalBeaconShareProvisioningV1],
     incumbent_index: Option<u16>,
-    active: iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1,
+    active: iroha_data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1,
 ) -> Result<(), &'static str> {
     if let Some(index) = incumbent_index {
         if !retained.iter().any(|entry| {
