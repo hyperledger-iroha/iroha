@@ -246,7 +246,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             self.runtime.revalidate(self.admitted, deadline, false)?;
             match observer.observe(&clients, inventory.chain_discriminant, deadline)? {
                 HeightObservationV1::Verified(evidence) => {
-                    let report = json::json!({ "schema": "iroha.taira.public-reset.route-finality.v1", "public_tls": public, "evidence": evidence });
+                    let report = norito::json!({ "schema": "iroha.taira.public-reset.route-finality.v1", "public_tls": public, "evidence": evidence });
                     let name = if public {
                         "public-finality.json"
                     } else {

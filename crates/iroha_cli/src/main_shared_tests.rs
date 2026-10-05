@@ -3269,7 +3269,7 @@ fn run_exact_asset_definition_cli_fixture(metadata: bool) {
             assert!(length <= 64 * 1024, "bounded fixture body");
             let (status, content_type, body) = if step == 0 {
                 assert!(first_line.starts_with("GET /v1/node/capabilities "));
-                ("200 OK", "application/json", norito::json::to_vec(&norito::json!({"data_model_version": iroha::data_model::DATA_MODEL_VERSION})).expect("matching capabilities"))
+                ("200 OK", "application/json", norito::json::to_vec(&norito::json!({"data_model_version": (iroha::data_model::DATA_MODEL_VERSION)})).expect("matching capabilities"))
             } else {
                 assert!(first_line.starts_with("POST /v1/query "));
                 assert!(headers.lines().any(|line| {

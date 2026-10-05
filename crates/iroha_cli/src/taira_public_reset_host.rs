@@ -27,15 +27,15 @@ pub(super) use write_canary::CoreWriteTransport;
 
 use super::executor_model::{ExecutionStep, RecoveryProgress, ResetTransport};
 use super::{
-    AccountOnboardingPlanRequestV1, AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1, EdgeV1,
-    EndpointV1, InventoryV1, PUBLIC_ROOT, PinnedArtifact, PriorValidatorServiceStateV1,
-    RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome, TrustedKeyV1,
-    ValidatorV1, artifact, authorization_semantic_sha256, ensure_authorization_current,
-    ensure_pinned_unchanged, now_unix_ms, open_pinned_regular, pin_owner_private_file,
-    read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex, validate_inventory,
-    validate_owner_private_dir, validate_validator_genesis_config,
-    validate_validator_operator_config, validator_operator_public_key,
-    verify_execution_authorization,
+    AccountOnboardingPlanRequestV1, AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1,
+    BUILD_TARGET, EdgeV1, EndpointV1, InventoryV1, PUBLIC_ROOT, PinnedArtifact,
+    PriorValidatorServiceStateV1, RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1,
+    RecoveryOutcome, TrustedKeyV1, ValidatorV1, artifact, authorization_semantic_sha256,
+    ensure_authorization_current, ensure_pinned_unchanged, host_pair, now_unix_ms,
+    open_pinned_regular, pin_owner_private_file, read_pinned_bytes, read_private_json,
+    revalidate_pinned, sha256_hex, validate_inventory, validate_owner_private_dir,
+    validate_validator_genesis_config, validate_validator_operator_config,
+    validator_operator_public_key, verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, ensure, eyre};
@@ -415,7 +415,6 @@ struct HostRequestV1 {
     trusted_key_base64: String,
     trusted_key_sha256: String,
     action_deadline_unix_ms: u64,
-    #[norito(required)]
     phase_checkpoints: Vec<super::host_pair::SignedHostPhaseV1>,
     artifact_role: String,
     artifact_sha256: String,
@@ -16675,7 +16674,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         };
         let receipt = self.bootstrap_and_dispatch_edge(&inventory.edge, action, timeout_secs)?;
         if action == HostAction::EdgeVerify {
-            let native = json::json!({ "schema": "iroha.taira.public-reset.native-edge-ready.v1", "receipt": receipt });
+            let native = norito::json!({ "schema": "iroha.taira.public-reset.native-edge-ready.v1", "receipt": receipt });
             self.retain_phase(super::host_pair::HostPhaseV1::NativeEdgeReady, &native)?;
             let public = self.verify_public_frontier(timeout_secs)?;
             self.retain_phase(super::host_pair::HostPhaseV1::DeploymentProven, &public)?;
@@ -20602,6 +20601,37 @@ pub(super) mod tests {
             mutation_transaction_hash: String::new(),
             mutation_evidence_base64: String::new(),
         }
+    }
+
+    #[test]
+    fn host_request_requires_explicit_phase_checkpoints() {
+        let request = sample_request();
+        let rendered = json::to_json(&request).expect("host request JSON");
+        let decoded: HostRequestV1 = json::from_str(&rendered).expect("explicit empty checkpoints");
+        assert!(decoded.phase_checkpoints.is_empty());
+        assert_eq!(json::to_json(&decoded).unwrap(), rendered);
+
+        let canonical = json::to_value(&request).expect("host request value");
+        let mut missing = canonical.clone();
+        missing.as_object_mut().unwrap().remove("phase_checkpoints");
+        assert!(json::from_str::<HostRequestV1>(&json::to_json(&missing).unwrap()).is_err());
+        assert!(json::from_value::<HostRequestV1>(missing).is_err());
+
+        let mut null = canonical;
+        null.as_object_mut()
+            .unwrap()
+            .insert("phase_checkpoints".into(), json::Value::Null);
+        assert!(json::from_str::<HostRequestV1>(&json::to_json(&null).unwrap()).is_err());
+        assert!(json::from_value::<HostRequestV1>(null).is_err());
+
+        let checkpoint_field = "\"phase_checkpoints\":[]";
+        assert!(rendered.contains(checkpoint_field));
+        let duplicate = rendered.replacen(
+            checkpoint_field,
+            "\"phase_checkpoints\":[],\"phase_checkpoints\":[]",
+            1,
+        );
+        assert!(json::from_str::<HostRequestV1>(&duplicate).is_err());
     }
 
     #[test]

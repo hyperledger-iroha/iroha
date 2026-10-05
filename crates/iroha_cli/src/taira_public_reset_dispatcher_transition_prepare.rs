@@ -117,7 +117,7 @@ fn candidate(
     let proof = import.join("preparation");
     let preparation = observed.pin(&proof.join("result.json"), Some(0o400), 16 * 1024 * 1024)?;
     need(
-        preparation.sha256 == expected,
+        preparation.sha256 == *expected,
         "qualified result digest differs",
     )?;
     let value: Value = json::from_slice(&admission::read(&preparation)?)?;
@@ -492,8 +492,8 @@ impl PrepareDispatcherTransition {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::super as reset;
     use super::*;
+    use crate::taira_public_reset as reset;
 
     fn runtime_fixture() -> CurrentRuntime {
         let inventory = reset::sample_inventory_fixture();
