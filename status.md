@@ -120,8 +120,11 @@ Current source initializes fresh safety records before first startup and retires
 completed execution after successful replay before strict native archive
 attachment. Public-reset rollback separates interrupted pre-Start Reset
 publication from post-Start native state and quarantines the complete owned state
-without rearming first-boot authority. Deployment preparation, transfer and the
-routine updater accept an authenticated build-only candidate without a full
+without rearming first-boot authority. Beacon bootstrap supplies the selected
+chain identity to every native command and reauthenticates complete original
+native journal prefixes for each signed genesis DKG phase. Deployment
+preparation, transfer and the routine updater accept an authenticated build-only
+candidate without a full
 regression gate. On-chain governance owns deployment policy; no fixed 24-hour
 fault test is a prerequisite for testnet or production. Release qualification
 remains open.

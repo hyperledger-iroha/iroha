@@ -12,13 +12,20 @@ use crate::taira_dataspace_deploy::{
 use crate::taira_public_reset as reset;
 use iroha::client::Client;
 use iroha_core::beacon::{
-    AdaptiveGlobalThresholdBeaconDkgCryptoV1, FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    GlobalThresholdBeaconDkgStateV1, global_threshold_beacon_roster_hash_v1,
+    AdaptiveGlobalThresholdBeaconDkgCryptoV1, AuthenticatedGlobalBeaconDkgAttemptV1,
+    FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgStateV1,
+    global_threshold_beacon_roster_hash_v1,
 };
+use iroha_core::sumeragi::native_journal::NativeJournalCursor;
 use iroha_crypto::{Hash, KeyPair, PublicKey};
 use iroha_data_model::{
+    block::consensus::SumeragiRootScope,
     consensus::GlobalThresholdBeaconDkgSessionV1,
     isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
+    sumeragi::finality::{
+        NATIVE_FINALITY_MAX_BLOCK_BYTES, NativeFinalityArtifact, NativeFinalityJournal,
+        NativeFinalityLimits,
+    },
     sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
 };
 use std::num::{NonZeroU64, NonZeroUsize};
@@ -90,13 +97,99 @@ fn configured_beacon_credential_memory(config: &[u8], path: &Path) -> Result<Non
     Ok(policy.credential_max_memory_bytes)
 }
 
-fn beacon_native_args(memory: NonZeroUsize, subcommand: &str) -> Vec<OsString> {
-    vec![
+// The existing relay frame cap is also the selected complete native journal cap.
+// Every child still charges its own admitted physical credential pool.
+const BEACON_FINALITY_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+fn beacon_native_finality_limits(memory: NonZeroUsize) -> Result<NativeFinalityLimits> {
+    let limits = NativeFinalityLimits {
+        block_bytes: NATIVE_FINALITY_MAX_BLOCK_BYTES.min(BEACON_FINALITY_MAX_BYTES),
+        journal_bytes: BEACON_FINALITY_MAX_BYTES,
+        block_count: 4,
+        allocated_bytes: memory.get(),
+    };
+    limits.validate().map_err(|error| eyre!(error))?;
+    Ok(limits)
+}
+
+fn beacon_native_args(
+    memory: NonZeroUsize,
+    subcommand: &str,
+    chain_id: &str,
+) -> Result<Vec<OsString>> {
+    let limits = beacon_native_finality_limits(memory)?;
+    Ok(vec![
         "beacon-bootstrap".into(),
         "--credential-max-memory-bytes".into(),
         memory.get().to_string().into(),
         subcommand.into(),
-    ]
+        "--chain-id".into(),
+        chain_id.into(),
+        "--finality-block-bytes".into(),
+        limits.block_bytes.to_string().into(),
+        "--finality-journal-bytes".into(),
+        limits.journal_bytes.to_string().into(),
+        "--finality-block-count".into(),
+        limits.block_count.to_string().into(),
+        "--finality-allocated-bytes".into(),
+        limits.allocated_bytes.to_string().into(),
+    ])
+}
+
+/// Copy the original result-bearing source from the authenticated observer.
+/// This transport remains untrusted until the relay's native cursor verifies it.
+fn observed_native_phase_journal(
+    observed: &VerifiedCommittedHeightV1,
+    height: u64,
+    limits: NativeFinalityLimits,
+) -> Result<NativeFinalityJournal> {
+    limits.validate().map_err(|error| eyre!(error))?;
+    if !(2..=4).contains(&height)
+        || height > observed.committed_height().get()
+        || usize::try_from(height)? > limits.block_count
+    {
+        return Err(eyre!(
+            "authenticated observation has no bounded native DKG phase prefix"
+        ));
+    }
+    let mut blocks = Vec::new();
+    blocks.try_reserve_exact(usize::try_from(height)?)?;
+    let mut total = 0_usize;
+    for index in 1..=height {
+        let proof = observed
+            .proof_at(NonZeroU64::new(index).ok_or_else(|| eyre!("invalid phase height"))?)
+            .ok_or_else(|| eyre!("authenticated native phase prefix is incomplete"))?;
+        if proof.block_header.height().get() != index
+            || proof.block_wire.is_empty()
+            || proof.block_wire.len() > limits.block_bytes
+        {
+            return Err(eyre!(
+                "authenticated native phase source exceeds its exact block bound"
+            ));
+        }
+        total = total
+            .checked_add(proof.block_wire.len())
+            .ok_or_else(|| eyre!("native phase source size overflow"))?;
+        if total > limits.journal_bytes {
+            return Err(eyre!(
+                "authenticated native phase source exceeds its journal bound"
+            ));
+        }
+        let mut block_wire = Vec::new();
+        block_wire.try_reserve_exact(proof.block_wire.len())?;
+        block_wire.extend_from_slice(&proof.block_wire);
+        blocks.push(NativeFinalityArtifact { block_wire });
+    }
+    let journal = NativeFinalityJournal { blocks };
+    journal
+        .validate_source(limits)
+        .map_err(|error| eyre!(error))?;
+    if norito::canonical_frame_len(&journal)? > limits.journal_bytes {
+        return Err(eyre!(
+            "native phase archive exceeds its exact relay frame bound"
+        ));
+    }
+    Ok(journal)
 }
 
 /// A required part of the signed inventory, never populated after authorization.
@@ -147,7 +240,6 @@ struct GenesisProofV1 {
     manifest: iroha_genesis::RawGenesisTransaction,
     signed_wire: Vec<u8>,
     public_key: PublicKey,
-    first_finality: SumeragiFinalityProof,
 }
 
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
@@ -156,7 +248,7 @@ struct PublicBundleV1 {
     schema: String,
     request: NativeRequestV1,
     genesis: GenesisProofV1,
-    phase_proofs: Vec<SumeragiFinalityProof>,
+    phase_proofs: Vec<NativeFinalityJournal>,
     finalized_observed_height: u64,
     record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     finalization_draft: ThresholdKeyLifecycleCertificateV1,
@@ -870,8 +962,16 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let inventory = &self.admitted.inventory;
         validate_plan(inventory)?;
         let root = ceremony_root(inventory);
+        let selected_chain_id = inventory.chain_id.clone();
+        let credential_memory = self.beacon_coordinator_credential_memory()?;
+        let finality_limits = beacon_native_finality_limits(credential_memory)?;
         if root.join("complete.json").try_exists()? {
-            validate_completed_ceremony(inventory, &self.admitted.authorization_sha256, &root)?;
+            validate_completed_ceremony(
+                inventory,
+                &self.admitted.authorization_sha256,
+                &root,
+                credential_memory,
+            )?;
             return Ok(());
         }
         require_new_ceremony(&root, next)?;
@@ -924,13 +1024,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             &request_bytes,
             &initial,
         )?;
-        let h1 = initial
-            .proof_at(NonZeroU64::new(1).ok_or_else(|| eyre!("invalid genesis height"))?)
-            .ok_or_else(|| eyre!("authenticated h1 finality is unavailable"))?;
-        reset::inputs::write_new_private(
-            &root.join("genesis-finality.norito"),
-            &norito::encode_canonical(h1)?,
-        )?;
         let proof_args = vec![
             "--network-id".into(),
             request.dkg_session.network_id.to_string().into(),
@@ -944,24 +1037,32 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             root.join("genesis.signed.nrt").into_os_string(),
             "--genesis-public-key".into(),
             root.join("genesis.public-key").into_os_string(),
-            "--genesis-finality".into(),
-            root.join("genesis-finality.norito").into_os_string(),
         ];
         let ceremony = root.join("ceremony");
         ensure_private_directory(&ceremony)?;
         let program = self.beacon_daemon()?;
         // One pool belongs to the complete relay attempt, derived from the pinned
         // coordinator policy before any mutable DKG owner is constructed.
-        let relay_budget = iroha_core::state::AllocationBudget::new(
-            self.beacon_coordinator_credential_memory()?.get(),
-        );
-        let mut relay = GenesisRelay::new(
-            request.dkg_session,
-            h1,
-            genesis_verifier(&genesis, &inventory.chain_id)?,
-            deadline,
+        let relay_budget = iroha_core::state::AllocationBudget::new(credential_memory.get());
+        let chain_id = iroha_model_base::chain::ChainId::try_from(inventory.chain_id.clone())?;
+        let attempt = AuthenticatedGlobalBeaconDkgAttemptV1::signed_genesis(
+            genesis.block(),
+            request.dkg_session.network_id,
+            &chain_id,
+        )?;
+        if attempt.session() != request.dkg_session {
+            return Err(eyre!(
+                "beacon relay session differs from original signed genesis"
+            ));
+        }
+        let clock = NativeJournalCursor::new(
+            chain_id,
+            request.dkg_session.network_id,
+            SumeragiRootScope::Global,
+            finality_limits,
             &relay_budget,
         )?;
+        let mut relay = GenesisRelay::new(request.dkg_session, clock, deadline)?;
         for (index, peer) in request.target_roster.iter().enumerate() {
             let selected = inventory
                 .validator_clients
@@ -1013,14 +1114,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 &root.join(format!("after-{kind}.json")),
                 &canonical_json_report_bytes(&json::to_value(&observed)?)?,
             )?;
-            let proof = observed
-                .proof_at(NonZeroU64::new(phase_height).ok_or_else(|| eyre!("invalid DKG phase"))?)
-                .ok_or_else(|| eyre!("required authenticated DKG phase finality is unavailable"))?;
+            let journal = observed_native_phase_journal(&observed, phase_height, finality_limits)?;
+            relay.advance(phase_height, &journal)?;
             reset::inputs::write_new_private(
                 &ceremony.join(format!("phase-{phase_height}.norito")),
-                &norito::encode_canonical(proof)?,
+                &norito::encode_canonical(&journal)?,
             )?;
-            relay.advance(phase_height, proof)?;
             match phase_height {
                 2 => relay.deliveries()?,
                 3 => relay.acceptances()?,
@@ -1051,9 +1150,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             &norito::encode_canonical(public_session.record())?,
         )?;
         let mut assemble_args = beacon_native_args(
-            self.beacon_coordinator_credential_memory()?,
+            credential_memory,
             "assemble-genesis-dkg",
-        );
+            &selected_chain_id,
+        )?;
         assemble_args.extend(proof_args);
         for phase_height in 2..=4 {
             assemble_args.extend([
@@ -1087,10 +1187,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             &root.join("ceremony/public-bundle.json"),
             "beacon public bundle",
         )?;
-        validate_bundle_identity(&self.admitted.inventory, &bundle)?;
+        validate_bundle_identity(&self.admitted.inventory, &bundle, credential_memory)?;
         if &bundle.record.session != public_session.record()
             || bundle.phase_proofs != phase_proofs
-            || &bundle.genesis.first_finality != h1
+            || bundle.genesis.signed_wire != genesis_wire
         {
             return Err(eyre!(
                 "native beacon bundle differs from the per-seat signed public exchange"
@@ -1120,7 +1220,11 @@ struct CompletedV1 {
     seat_processes_exit_code: i32,
 }
 
-fn validate_bundle_identity(inventory: &InventoryV1, bundle: &PublicBundleV1) -> Result<()> {
+fn validate_bundle_identity(
+    inventory: &InventoryV1,
+    bundle: &PublicBundleV1,
+    credential_memory: NonZeroUsize,
+) -> Result<()> {
     let plan = &inventory.beacon_bootstrap;
     if bundle.schema != BUNDLE_SCHEMA
         || json::to_value(&bundle.request)? != json::to_value(&plan.request)?
@@ -1140,21 +1244,36 @@ fn validate_bundle_identity(inventory: &InventoryV1, bundle: &PublicBundleV1) ->
         ));
     }
     let genesis = plan_genesis(inventory, &bundle.genesis.signed_wire)?;
-    if bundle.genesis.first_finality.block_header.hash() != genesis.block().hash()
-        || bundle.genesis.first_finality.block_header.height().get() != 1
-    {
+    let chain_id = iroha_model_base::chain::ChainId::try_from(inventory.chain_id.clone())?;
+    let attempt = AuthenticatedGlobalBeaconDkgAttemptV1::signed_genesis(
+        genesis.block(),
+        plan.request.dkg_session.network_id,
+        &chain_id,
+    )?;
+    if attempt.session() != plan.request.dkg_session {
         return Err(eyre!(
-            "native beacon bundle has another signed-genesis anchor"
+            "native beacon bundle has another signed-genesis session"
         ));
     }
-    let mut verifier = genesis_verifier(&genesis, &inventory.chain_id)?;
-    verifier.verify(&bundle.genesis.first_finality)?;
-    for (offset, proof) in bundle.phase_proofs.iter().enumerate() {
-        let height = u64::try_from(offset + 2)?;
-        if proof.block_header.height().get() != height {
-            return Err(eyre!("beacon phase proof is not an immediate successor"));
+    let budget = iroha_core::state::AllocationBudget::new(credential_memory.get());
+    let limits = beacon_native_finality_limits(credential_memory)?;
+    let mut clock = NativeJournalCursor::new(
+        chain_id,
+        plan.request.dkg_session.network_id,
+        SumeragiRootScope::Global,
+        limits,
+        &budget,
+    )?;
+    for (offset, journal) in bundle.phase_proofs.iter().enumerate() {
+        let height = offset + 2;
+        if journal.blocks.len() != height
+            || norito::canonical_frame_len(journal)? > limits.journal_bytes
+        {
+            return Err(eyre!(
+                "beacon phase journal is not a bounded complete immediate prefix"
+            ));
         }
-        verifier.verify(proof)?;
+        clock.advance(journal.into())?;
     }
     for (index, provider) in bundle.providers.iter().enumerate() {
         if provider.signer_index != u16::try_from(index + 1)?
@@ -1174,6 +1293,7 @@ fn validate_completed_ceremony(
     inventory: &InventoryV1,
     authorization: &str,
     root: &Path,
+    credential_memory: NonZeroUsize,
 ) -> Result<PublicBundleV1> {
     let (completed, _) =
         read_public::<CompletedV1>(&root.join("complete.json"), "beacon completion")?;
@@ -1189,7 +1309,7 @@ fn validate_completed_ceremony(
             "retained beacon bundle lacks its exact successful process receipt"
         ));
     }
-    validate_bundle_identity(inventory, &bundle)?;
+    validate_bundle_identity(inventory, &bundle, credential_memory)?;
     Ok(bundle)
 }
 
@@ -1223,14 +1343,18 @@ fn verify_native_install(
     deadline: Instant,
     runner: &mut impl ProcessRunner,
 ) -> Result<VerifiedInstall> {
-    let bundle = validate_completed_ceremony(inventory, authorization, root)?;
+    let bundle = validate_completed_ceremony(inventory, authorization, root, credential_memory)?;
     let bundle_path = root.join("ceremony/public-bundle.json");
     let (_, before) = read_public::<PublicBundleV1>(&bundle_path, "beacon bundle")?;
     let validator = &inventory.validators[0];
     verify_regular_hash(program, &artifact(&validator.artifacts, "iroha3d")?.sha256)?;
     let temporary = private_beacon_workdir(root, "native-bundle-check-")?;
     let output = temporary.path().join("instructions.json");
-    let mut args = beacon_native_args(credential_memory, "assemble-genesis-install");
+    let mut args = beacon_native_args(
+        credential_memory,
+        "assemble-genesis-install",
+        &inventory.chain_id,
+    )?;
     args.extend([
         "--network-id".into(),
         inventory
@@ -1439,7 +1563,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     "reserved beacon lifecycle descriptor 198 is occupied"
                 ));
             }
-            let mut args = beacon_native_args(credential_memory, "sign-genesis-install");
+            let mut args = beacon_native_args(
+                credential_memory,
+                "sign-genesis-install",
+                &self.admitted.inventory.chain_id,
+            )?;
             args.extend([
                 "--network-id".into(),
                 self.admitted
@@ -2446,17 +2574,143 @@ mod tests {
                 "assemble-genesis-install",
                 "sign-genesis-install",
             ] {
+                let chain_id = format!("selected-{subcommand}-{bytes}");
                 assert_eq!(
-                    beacon_native_args(admitted, subcommand),
+                    beacon_native_args(admitted, subcommand, &chain_id).unwrap(),
                     vec![
                         OsString::from("beacon-bootstrap"),
                         OsString::from("--credential-max-memory-bytes"),
                         OsString::from(bytes.to_string()),
-                        OsString::from(subcommand)
+                        OsString::from(subcommand),
+                        OsString::from("--chain-id"),
+                        OsString::from(chain_id),
+                        OsString::from("--finality-block-bytes"),
+                        OsString::from(
+                            NATIVE_FINALITY_MAX_BLOCK_BYTES
+                                .min(BEACON_FINALITY_MAX_BYTES)
+                                .to_string()
+                        ),
+                        OsString::from("--finality-journal-bytes"),
+                        OsString::from(BEACON_FINALITY_MAX_BYTES.to_string()),
+                        OsString::from("--finality-block-count"),
+                        OsString::from("4"),
+                        OsString::from("--finality-allocated-bytes"),
+                        OsString::from(bytes.to_string()),
                     ],
                 );
             }
         }
+    }
+
+    #[test]
+    fn beacon_phase_transport_preserves_authenticated_original_prefix_and_exact_caps() {
+        let (genesis, peers, evidence) = VerifiedCommittedHeightV1::convergence_evidence_fixture(3);
+        let observed = VerifiedCommittedHeightV1::validate_retained(
+            &genesis,
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+            peers,
+            evidence,
+        )
+        .unwrap();
+        let before = json::to_value(&observed).unwrap();
+        let limits =
+            beacon_native_finality_limits(NonZeroUsize::new(64 * 1024 * 1024).unwrap()).unwrap();
+        let first = observed_native_phase_journal(&observed, 2, limits).unwrap();
+        let next = observed_native_phase_journal(&observed, 3, limits).unwrap();
+        assert_eq!(first.blocks, next.blocks[..2]);
+        for (index, frame) in next.blocks.iter().enumerate() {
+            assert_eq!(
+                frame.block_wire,
+                observed
+                    .proof_at(NonZeroU64::new(u64::try_from(index + 1).unwrap()).unwrap())
+                    .unwrap()
+                    .block_wire,
+            );
+        }
+        assert_eq!(
+            iroha_data_model::block::decode_framed_signed_block(&first.blocks[0].block_wire)
+                .unwrap()
+                .hash(),
+            genesis.expected_hash(),
+        );
+        let wire = norito::encode_canonical(&next).unwrap();
+        assert_eq!(NativeFinalityJournal::decode(&wire, limits).unwrap(), next);
+        let block_bytes = next
+            .blocks
+            .iter()
+            .map(|frame| frame.block_wire.len())
+            .max()
+            .unwrap();
+        let source_bytes = next
+            .blocks
+            .iter()
+            .map(|frame| frame.block_wire.len())
+            .sum::<usize>();
+        let exact = NativeFinalityLimits {
+            block_bytes,
+            journal_bytes: wire.len(),
+            block_count: 3,
+            ..limits
+        };
+        assert_eq!(
+            observed_native_phase_journal(&observed, 3, exact).unwrap(),
+            next
+        );
+        for bounds in [
+            NativeFinalityLimits {
+                block_bytes: block_bytes - 1,
+                ..exact
+            },
+            NativeFinalityLimits {
+                journal_bytes: source_bytes - 1,
+                ..exact
+            },
+            NativeFinalityLimits {
+                journal_bytes: wire.len() - 1,
+                ..exact
+            },
+            NativeFinalityLimits {
+                block_count: 2,
+                ..exact
+            },
+        ] {
+            assert!(observed_native_phase_journal(&observed, 3, bounds).is_err());
+        }
+        // H1 is signed body authority only; it cannot be presented as a native
+        // finalized phase, and a future phase cannot be invented from the DTO.
+        for height in [0, 1, 4, u64::MAX] {
+            assert!(observed_native_phase_journal(&observed, height, limits).is_err());
+        }
+        assert_eq!(json::to_value(&observed).unwrap(), before);
+    }
+
+    #[test]
+    fn beacon_current_genesis_bundle_codec_has_no_first_finality_authority_field() {
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        // This is real independently signed genesis/manifest preparation. It
+        // proves the closed public codec, without claiming a finalized H1 result.
+        let prepared =
+            CertifiedTestChain::prepare(TestChainConfig::new(World::new(), 10_000)).unwrap();
+        let current = GenesisProofV1 {
+            manifest: prepared.manifest,
+            signed_wire: prepared.genesis.canonical_wire().to_vec(),
+            public_key: prepared.genesis.public_key().clone(),
+        };
+        let wire = json::to_value(&current).unwrap();
+        let admitted: GenesisProofV1 = json::from_value(wire.clone()).unwrap();
+        assert_eq!(json::to_value(&admitted).unwrap(), wire);
+        let mut obsolete = wire;
+        obsolete
+            .as_object_mut()
+            .unwrap()
+            .insert("first_finality".into(), json::Value::Null);
+        assert!(json::from_value::<GenesisProofV1>(obsolete).is_err());
+        let mut absent = json::to_value(&current).unwrap();
+        absent.as_object_mut().unwrap().remove("signed_wire");
+        assert!(json::from_value::<GenesisProofV1>(absent).is_err());
     }
 
     #[test]

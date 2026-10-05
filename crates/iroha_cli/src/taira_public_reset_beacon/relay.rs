@@ -4,8 +4,9 @@ use super::*;
 use iroha_core::beacon::{
     GlobalThresholdBeaconDkgSnapshotV1, RetainedGlobalThresholdBeaconDkgFinalizationV1,
 };
+use iroha_core::sumeragi::native_journal::NativeJournalCursor;
 use iroha_data_model::{
-    consensus::GlobalThresholdBeaconKeySessionV1, sumeragi_finality::SumeragiFinalityVerifier,
+    consensus::GlobalThresholdBeaconKeySessionV1, sumeragi::finality::NativeFinalityJournal,
 };
 use norito::NoritoSerialize;
 use std::{
@@ -24,7 +25,6 @@ use std::{
 const KEY_FD: i32 = 198;
 const PUBLIC_FD: i32 = 201;
 const FINALITY_FD: i32 = 202;
-const MAX_PROOF_FRAME: usize = 4 * 1024 * 1024;
 
 struct SeatChild {
     child: Child,
@@ -55,6 +55,7 @@ impl SeatChild {
         program: &Path,
         root: &Path,
         session: GlobalThresholdBeaconDkgSessionV1,
+        chain_id: &str,
         proof_args: &[OsString],
         signer_index: u16,
         config: &[u8],
@@ -115,7 +116,8 @@ impl SeatChild {
             .args(beacon_native_args(
                 credential_memory,
                 "provision-genesis-seat",
-            ))
+                chain_id,
+            )?)
             .args(proof_args)
             .arg("--signer-index")
             .arg(signer_index.to_string())
@@ -240,33 +242,34 @@ pub(super) struct GenesisRelay {
     session: GlobalThresholdBeaconDkgSessionV1,
     state: GlobalThresholdBeaconDkgStateV1,
     children: Vec<SeatChild>,
-    verifier: SumeragiFinalityVerifier,
-    proofs: Vec<SumeragiFinalityProof>,
+    clock: NativeJournalCursor,
+    proofs: Vec<NativeFinalityJournal>,
     deadline: Instant,
 }
 
 impl GenesisRelay {
     pub(super) fn new(
         session: GlobalThresholdBeaconDkgSessionV1,
-        first_finality: &SumeragiFinalityProof,
-        mut verifier: SumeragiFinalityVerifier,
+        clock: NativeJournalCursor,
         deadline: Instant,
-        budget: &iroha_core::state::AllocationBudget,
     ) -> Result<Self> {
-        if first_finality.block_header.height().get() != 1 {
-            return Err(eyre!("genesis relay requires authenticated h1 finality"));
+        if session.network_id != clock.network_id()
+            || session.start_height != 1
+            || clock.tip().is_some()
+        {
+            return Err(eyre!(
+                "genesis relay requires its original signed-genesis clock"
+            ));
         }
-
-        verifier.verify(first_finality)?;
         Ok(Self {
             session,
             state: GlobalThresholdBeaconDkgStateV1::new(
                 session,
                 &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
-                budget,
+                clock.allocation_budget(),
             )?,
             children: Vec::with_capacity(4),
-            verifier,
+            clock,
             proofs: Vec::with_capacity(3),
             deadline,
         })
@@ -287,6 +290,7 @@ impl GenesisRelay {
             program,
             root,
             self.session,
+            self.clock.chain_id().as_str(),
             proof_args,
             signer_index,
             config,
@@ -388,24 +392,41 @@ impl GenesisRelay {
         Ok(())
     }
 
-    pub(super) fn advance(&mut self, height: u64, proof: &SumeragiFinalityProof) -> Result<()> {
-        if height != self.session.start_height + u64::try_from(self.proofs.len() + 1)?
-            || proof.block_header.height().get() != height
+    pub(super) fn advance(&mut self, height: u64, journal: &NativeFinalityJournal) -> Result<()> {
+        let next = self
+            .session
+            .start_height
+            .checked_add(u64::try_from(self.proofs.len() + 1)?)
+            .ok_or_else(|| eyre!("genesis phase height overflow"))?;
+        if height != next
+            || u64::try_from(journal.blocks.len())? != height
             || height > self.session.acceptances_end_height
+            || self.clock.tip().map(|tip| tip.height()).unwrap_or(1) != height - 1
         {
             return Err(eyre!("genesis phase finality is replayed or discontinuous"));
         }
-        self.verifier.verify(proof)?;
-        let bytes = norito::encode_canonical(proof)?;
+        let limits = self.clock.limits();
+        journal
+            .validate_source(limits)
+            .map_err(|error| eyre!(error))?;
+        let bytes = norito::encode_canonical(journal)?;
+        if bytes.is_empty() || bytes.len() > limits.journal_bytes {
+            return Err(eyre!(
+                "genesis native journal frame exceeds its exact bound"
+            ));
+        }
+        // The original full-prefix cursor verifies native certificates, parent results,
+        // epochs and retained-tip continuity before any child sees this phase.
+        self.clock.advance(journal.into())?;
         for child in &mut self.children {
             write_frame(
                 &mut child.finality_writer,
                 &bytes,
-                MAX_PROOF_FRAME,
+                limits.journal_bytes,
                 self.deadline,
             )?;
         }
-        self.proofs.push(proof.clone());
+        self.proofs.push(journal.clone());
         Ok(())
     }
 
@@ -485,7 +506,7 @@ impl GenesisRelay {
     ) -> Result<(
         RetainedGlobalThresholdBeaconDkgFinalizationV1,
         Vec<PathBuf>,
-        Vec<SumeragiFinalityProof>,
+        Vec<NativeFinalityJournal>,
     )> {
         if self.proofs.len() != 3 {
             return Err(eyre!(
@@ -544,6 +565,249 @@ impl GenesisRelay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_core::{
+        beacon::ceremony::global_beacon_genesis_dkg_session_v1,
+        state::World,
+        sumeragi::{
+            native_journal::{NativeJournalError, authenticate_signed_genesis},
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        },
+    };
+    use iroha_data_model::{
+        block::{SignedBlock, consensus::SumeragiRootScope},
+        sumeragi::finality::{NativeFinalityArtifact, NativeFinalityLimits},
+    };
+    use iroha_model_base::chain::ChainId;
+
+    struct NativePhaseFixture {
+        chain: CertifiedTestChain,
+        chain_id: ChainId,
+        limits: NativeFinalityLimits,
+        journal: NativeFinalityJournal,
+        session: GlobalThresholdBeaconDkgSessionV1,
+    }
+
+    impl NativePhaseFixture {
+        fn new(times: [u64; 3]) -> Self {
+            let config = TestChainConfig::new(World::new(), 1_000);
+            let chain_id = config.chain_id.clone();
+            let mut chain = CertifiedTestChain::start(config).expect("actual signed genesis");
+            for time in times {
+                chain.commit_at(time, Vec::new());
+            }
+            let budget = chain.state().ivm_execution_budget();
+            let limits = beacon_native_finality_limits(
+                NonZeroUsize::new(budget.limit_bytes()).expect("original physical pool"),
+            )
+            .expect("current native source limits");
+            let journal = NativeFinalityJournal {
+                blocks: (1..=4)
+                    .map(|height| {
+                        NativeFinalityArtifact::from_block(chain.committed(height).block(), limits)
+                            .expect("original canonical native block")
+                    })
+                    .collect(),
+            };
+            let (_, epoch) = authenticate_signed_genesis(
+                &journal.blocks[0].block_wire,
+                chain.network_id(),
+                limits,
+            )
+            .expect("original signed-genesis epoch");
+            let roster = epoch
+                .committee
+                .iter()
+                .map(|seat| seat.validator.clone())
+                .collect::<Vec<_>>();
+            let session = global_beacon_genesis_dkg_session_v1(chain.network_id(), &roster)
+                .expect("current canonical genesis session");
+            Self {
+                chain,
+                chain_id,
+                limits,
+                journal,
+                session,
+            }
+        }
+
+        fn prefix(&self, height: usize) -> NativeFinalityJournal {
+            NativeFinalityJournal {
+                blocks: self.journal.blocks[..height].to_vec(),
+            }
+        }
+
+        fn relay_with_limits(&self, limits: NativeFinalityLimits) -> GenesisRelay {
+            let clock = NativeJournalCursor::new(
+                self.chain_id.clone(),
+                self.chain.network_id(),
+                SumeragiRootScope::Global,
+                limits,
+                &self.chain.state().ivm_execution_budget(),
+            )
+            .expect("original native clock");
+            GenesisRelay::new(
+                self.session,
+                clock,
+                Instant::now() + Duration::from_secs(30),
+            )
+            .expect("relay owns the same native pool")
+        }
+
+        fn relay(&self) -> GenesisRelay {
+            self.relay_with_limits(self.limits)
+        }
+    }
+
+    #[test]
+    fn native_phase_prefixes_authenticate_h2_h3_h4_without_h1_finalized_receipt() {
+        // These actual native blocks test relay admission and the current node envelope.
+        // No seat child or completed DKG ceremony is fabricated by this fixture.
+        let fixture = NativePhaseFixture::new([2_000, 3_000, 4_000]);
+        let mut relay = fixture.relay();
+        assert!(relay.clock.tip().is_none());
+        assert!(relay.advance(1, &fixture.prefix(1)).is_err());
+        assert!(relay.clock.tip().is_none());
+        assert!(relay.proofs.is_empty());
+        for height in 2..=4 {
+            let prefix = fixture.prefix(height);
+            let bytes = norito::encode_canonical(&prefix).expect("current native journal frame");
+            let decoded = NativeFinalityJournal::decode(&bytes, fixture.limits)
+                .expect("the native node accepts the exact journal envelope");
+            assert_eq!(decoded, prefix);
+            relay
+                .advance(height as u64, &decoded)
+                .expect("actual native phase");
+            assert_eq!(
+                relay.clock.tip().unwrap().block_hash(),
+                fixture.chain.committed(height as u64).block_hash()
+            );
+            assert_eq!(relay.proofs.len(), height - 1);
+            assert_eq!(relay.proofs.last(), Some(&prefix));
+            assert!(
+                relay.advance(height as u64, &prefix).is_err(),
+                "replayed phase"
+            );
+            assert_eq!(relay.proofs.len(), height - 1);
+        }
+    }
+
+    #[test]
+    fn native_phase_refusals_keep_the_original_tip_and_retained_prefix() {
+        let fixture = NativePhaseFixture::new([2_000, 3_000, 4_000]);
+        let mut relay = fixture.relay();
+        relay.advance(2, &fixture.prefix(2)).unwrap();
+        let original_hash = relay.clock.tip().unwrap().block_hash();
+        let original_result = relay.clock.tip().unwrap().result();
+        let original_prefix = relay.proofs[0].clone();
+
+        let mut forged = fixture.prefix(3);
+        let mut value = json::to_value(fixture.chain.committed(3).block().as_ref()).unwrap();
+        let result = value
+            .as_object_mut()
+            .unwrap()
+            .get_mut("result")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        let actual = result
+            .get("committed_fragment_count")
+            .unwrap()
+            .as_u64()
+            .unwrap();
+        result.insert(
+            "committed_fragment_count".into(),
+            json::Value::from(actual + 1),
+        );
+        let block: SignedBlock =
+            json::from_value(value).expect("altered result retains its original certificate");
+        forged.blocks[2] = NativeFinalityArtifact::from_block(&block, fixture.limits).unwrap();
+        assert!(
+            relay.advance(3, &forged).is_err(),
+            "uncertified result mutation"
+        );
+
+        let mut gap = fixture.prefix(4);
+        gap.blocks.remove(1);
+        assert!(
+            relay.advance(3, &gap).is_err(),
+            "three entries cannot hide missing H2"
+        );
+        let suffix = NativeFinalityJournal {
+            blocks: fixture.journal.blocks[1..].to_vec(),
+        };
+        assert!(
+            relay.advance(3, &suffix).is_err(),
+            "a suffix is not a signed-genesis prefix"
+        );
+        assert!(
+            relay.advance(4, &fixture.prefix(4)).is_err(),
+            "phase H3 cannot be skipped"
+        );
+
+        let fork = NativePhaseFixture::new([2_001, 3_001, 4_001]);
+        assert_eq!(fork.chain.network_id(), fixture.chain.network_id());
+        assert_ne!(fork.chain.committed(2).block_hash(), original_hash);
+        let mut fork_relay = fork.relay();
+        fork_relay.advance(2, &fork.prefix(2)).unwrap();
+        fork_relay.advance(3, &fork.prefix(3)).unwrap();
+        assert!(
+            relay.advance(3, &fork.prefix(3)).is_err(),
+            "a genuinely certified fork cannot replace the retained tip"
+        );
+        assert_eq!(relay.clock.tip().unwrap().block_hash(), original_hash);
+        assert_eq!(relay.clock.tip().unwrap().result(), original_result);
+        assert_eq!(relay.proofs, vec![original_prefix]);
+        relay
+            .advance(3, &fixture.prefix(3))
+            .expect("original prefix still advances");
+    }
+
+    #[test]
+    fn native_phase_source_and_original_pool_bounds_refuse_without_advancing() {
+        let fixture = NativePhaseFixture::new([2_000, 3_000, 4_000]);
+        let mut relay = fixture.relay();
+        relay.advance(2, &fixture.prefix(2)).unwrap();
+        let original_hash = relay.clock.tip().unwrap().block_hash();
+        let pool = fixture.chain.state().ivm_execution_budget();
+        let blocker = pool
+            .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+            .unwrap();
+        let error = relay
+            .advance(3, &fixture.prefix(3))
+            .expect_err("original pool is occupied");
+        assert!(matches!(
+            error.downcast_ref::<NativeJournalError>(),
+            Some(NativeJournalError::Block(_))
+        ));
+        assert_eq!(relay.clock.tip().unwrap().block_hash(), original_hash);
+        assert_eq!(relay.proofs.len(), 1);
+        drop(blocker);
+        relay
+            .advance(3, &fixture.prefix(3))
+            .expect("same original source retries after original pool releases");
+
+        let mut count_bound = fixture.relay_with_limits(NativeFinalityLimits {
+            block_count: 2,
+            ..fixture.limits
+        });
+        count_bound.advance(2, &fixture.prefix(2)).unwrap();
+        assert!(count_bound.advance(3, &fixture.prefix(3)).is_err());
+        assert_eq!(count_bound.clock.tip().unwrap().height(), 2);
+        assert_eq!(count_bound.proofs.len(), 1);
+        let mut decode_bound = fixture.relay_with_limits(NativeFinalityLimits {
+            allocated_bytes: 1,
+            ..fixture.limits
+        });
+        assert!(decode_bound.advance(2, &fixture.prefix(2)).is_err());
+        assert!(decode_bound.clock.tip().is_none());
+        assert!(decode_bound.proofs.is_empty());
+        let mut oversized = fixture.prefix(2);
+        oversized.blocks[1]
+            .block_wire
+            .resize(fixture.limits.block_bytes + 1, 0);
+        assert!(decode_bound.advance(2, &oversized).is_err());
+        assert!(decode_bound.clock.tip().is_none());
+    }
 
     #[test]
     fn public_frame_rejects_empty_and_oversized_payloads() {
