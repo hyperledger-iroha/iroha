@@ -265,6 +265,15 @@ impl CapturedStateSnapshot {
             .map_err(|error| SnapshotCaptureError::Encoding(Box::new(error)))
     }
 }
+// This concrete Core producer must use the sole MV present-undo framing.
+// HC120 mutates this producer only; MV dependency writers are not mutated.
+fn serialize_runtime_predecessor(undo: &Option<SnapshotNexusRuntime>, out: &mut String) {
+    #[cfg(all(test, sumeragi_core_mutation = "HC120"))]
+    json::JsonSerialize::json_serialize(undo, out);
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC120")))]
+    mv::json::json_serialize_undo(undo, out);
+}
+
 fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, out: &mut String) {
     let block_hashes = &view.block_hashes;
     out.push('{');
@@ -283,7 +292,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     json::write_json_string("nexus_runtime", out);
     out.push(':');
     out.push_str("{\"revert\":");
-    json::JsonSerialize::json_serialize(view.canonical_runtime_predecessor.get(), out);
+    serialize_runtime_predecessor(view.canonical_runtime_predecessor.get(), out);
     out.push_str(",\"blocks\":");
     json::JsonSerialize::json_serialize(view.canonical_runtime.get(), out);
     out.push('}');
@@ -1823,6 +1832,8 @@ enum SnapshotJsonContext {
     World,
     ElectionsStorage,
     ElectionEntries,
+    ElectionUndoEntries,
+    ElectionPresentUndo,
     ElectionState,
     ElectionAcceptedBallots,
     ElectionAcceptedBallot,
@@ -1862,7 +1873,9 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             )));
         }
         let token = self.peek();
-        if (context == SnapshotJsonContext::ElectionAcceptedBallots && token != Some(b'['))
+        if (context == SnapshotJsonContext::ElectionPresentUndo
+            && !matches!(token, Some(b'{' | b'n')))
+            || (context == SnapshotJsonContext::ElectionAcceptedBallots && token != Some(b'['))
             || (context == SnapshotJsonContext::ElectionAcceptedBallot && token != Some(b'{'))
             || (context == SnapshotJsonContext::ElectionDigest && token != Some(b'"'))
         {
@@ -1898,10 +1911,12 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
     ) -> Result<(), TryReadError> {
         self.consume_byte(b'{')?;
         let exact_ballot_entry = context == SnapshotJsonContext::ElectionAcceptedBallot;
+        let exact_present_undo = context == SnapshotJsonContext::ElectionPresentUndo;
+        let mut present_undo_fields = 0_u8;
         let mut ballot_entry_fields = 0_u8;
         if self.peek() == Some(b'}') {
             self.cursor += 1;
-            return if exact_ballot_entry {
+            return if exact_ballot_entry || exact_present_undo {
                 Err(TryReadError::NonCanonicalSnapshotPayload)
             } else {
                 Ok(())
@@ -1909,6 +1924,12 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
         }
         loop {
             let key = self.parse_string(false)?;
+            if exact_present_undo {
+                if key.raw != "value" || present_undo_fields != 0 {
+                    return Err(TryReadError::NonCanonicalSnapshotPayload);
+                }
+                present_undo_fields = 1;
+            }
             if exact_ballot_entry {
                 let field_bit = match key.raw {
                     "nullifier" => 1,
@@ -1934,8 +1955,17 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             let child_context = match (context, key.raw) {
                 (SnapshotJsonContext::Root, "world") => SnapshotJsonContext::World,
                 (SnapshotJsonContext::World, "elections") => SnapshotJsonContext::ElectionsStorage,
-                (SnapshotJsonContext::ElectionsStorage, "revert" | "blocks") => {
+                (SnapshotJsonContext::ElectionsStorage, "blocks") => {
                     SnapshotJsonContext::ElectionEntries
+                }
+                (SnapshotJsonContext::ElectionsStorage, "revert") => {
+                    SnapshotJsonContext::ElectionUndoEntries
+                }
+                (SnapshotJsonContext::ElectionUndoEntries, _) => {
+                    SnapshotJsonContext::ElectionPresentUndo
+                }
+                (SnapshotJsonContext::ElectionPresentUndo, "value") => {
+                    SnapshotJsonContext::ElectionState
                 }
                 (SnapshotJsonContext::ElectionEntries, _) => SnapshotJsonContext::ElectionState,
                 (SnapshotJsonContext::ElectionState, "accepted_ballots") => {
@@ -5151,7 +5181,7 @@ mod tests {
     fn election_corpus_snapshot(field: &str, value: &str, previous: bool) -> Vec<u8> {
         let mut input = String::from(r#"{"world":{"elections":{"#);
         input.push_str(if previous {
-            r#""revert":{"vote":{"#
+            r#""revert":{"vote":{"value":{"#
         } else {
             r#""blocks":{"vote":{"#
         });
@@ -5159,8 +5189,34 @@ mod tests {
         input.push_str(field);
         input.push_str("\":");
         input.push_str(value);
-        input.push_str("}}}}}");
+        input.push_str(if previous { "}}}}}}" } else { "}}}}}" });
         input.into_bytes()
+    }
+
+    #[test]
+    fn snapshot_scanner_requires_explicit_undo_and_checks_original_election_descendants() {
+        let policy = super::SnapshotResourcePolicy::default();
+        for undo in [
+            r#"{"accepted_ballots":[]}"#,
+            r#"{}"#,
+            r#"{"extra":null}"#,
+            r#"{"value":{"accepted_ballots":[]},"value":{"accepted_ballots":[]}}"#,
+            r#"{"value":{"accepted_ballots":[]},"extra":null}"#,
+            r#"{"value":{"ciphertexts":[]}}"#,
+        ] {
+            let input = format!(r#"{{"world":{{"elections":{{"revert":{{"vote":{undo}}}}}}}}}"#);
+            assert!(
+                matches!(
+                    super::validate_snapshot_json_resources(input.as_bytes(), policy),
+                    Err(super::TryReadError::NonCanonicalSnapshotPayload)
+                ),
+                "accepted {input}"
+            );
+        }
+        for undo in ["null", r#"{"value":{"accepted_ballots":[]}}"#] {
+            let input = format!(r#"{{"world":{{"elections":{{"revert":{{"vote":{undo}}}}}}}}}"#);
+            super::validate_snapshot_json_resources(input.as_bytes(), policy).unwrap();
+        }
     }
 
     #[test]

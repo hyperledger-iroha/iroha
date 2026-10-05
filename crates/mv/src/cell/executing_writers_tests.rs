@@ -396,7 +396,7 @@ fn paired_writer_codec_borrows_the_same_original_undo_and_current_values() {
     assert_eq!((block.original_undo(), block.get()), (&Some(10), &20));
     assert_eq!(
         norito::json::to_json(&block).unwrap(),
-        r#"{"revert":10,"blocks":20}"#
+        r#"{"revert":{"value":10},"blocks":20}"#
     );
     block.commit();
     let replacement = cell.block_and_revert();

@@ -440,3 +440,46 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{asset, audit};
+
+    #[test]
+    fn original_mint_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Mint::asset_quantity(7_u32, asset()));
+    }
+
+    #[test]
+    fn original_burn_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Burn::asset_quantity(7_u32, asset()));
+    }
+
+    #[test]
+    fn original_mint_checked_container_preserves_manual_leaf_without_fast_or_clone() {
+        let leaf = crate::checked_container_refusal_controls::RefusingLeaf(std::cell::Cell::new(0));
+        let value = Mint::<_, crate::account::Account> {
+            object: leaf,
+            destination: crate::checked_container_refusal_controls::account(61),
+        };
+        crate::checked_container_refusal_controls::audit_leaf_refusal("{\"object\":", |out| {
+            norito::json::FastJsonWrite::write_json_to(&value, out)
+        });
+        assert_eq!(value.object.0.get(), 1);
+    }
+
+    #[test]
+    fn original_burn_checked_container_preserves_manual_leaf_without_fast_or_clone() {
+        let leaf = crate::checked_container_refusal_controls::RefusingLeaf(std::cell::Cell::new(0));
+        let value = Burn::<_, crate::account::Account> {
+            object: leaf,
+            destination: crate::checked_container_refusal_controls::account(61),
+        };
+        crate::checked_container_refusal_controls::audit_leaf_refusal("{\"object\":", |out| {
+            norito::json::FastJsonWrite::write_json_to(&value, out)
+        });
+        assert_eq!(value.object.0.get(), 1);
+    }
+}

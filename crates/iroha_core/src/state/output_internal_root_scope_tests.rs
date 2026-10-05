@@ -150,3 +150,73 @@ fn internal_capture_never_overwrites_any_preexisting_namespace() {
         assert_eq!(tx.world.current_dataspace_id, world);
     }
 }
+
+#[test]
+fn original_invocation_capture_keeps_fee_storage_separate_and_rejects_call_lane_confusion() {
+    use crate::{
+        fastpq::{FastpqCapturedSourceRoute, FastpqSourceCaptureError},
+        state::output_capacity::OwnedExecutionSource,
+    };
+    use iroha_model_base::topology::LaneId;
+
+    let scope = private_scope();
+    let original_dataspace = scope.dataspace_id();
+    let state = state(test_support::world(scope), Some(scope));
+    let mut block = state.block(header(2));
+    let mut tx = block.transaction();
+    capture_internal_root_dataspace(&mut tx).unwrap();
+    let call = Hash::new(b"original-invocation-source");
+    tx.tx_call_hash = Some(call);
+    let original = OwnedExecutionSource::new(call, None, original_dataspace);
+    tx.bind_original_fastpq_invocation_source(original).unwrap();
+    assert!(tx.bind_original_fastpq_invocation_source(original).is_err());
+    assert!(
+        tx.require_original_fastpq_invocation_source(OwnedExecutionSource::new(
+            call,
+            None,
+            DataSpaceId::UNIVERSAL,
+        ))
+        .is_err()
+    );
+    // The fee instruction deliberately addresses a different balance namespace.
+    // This component capture is local provenance; it cannot authorize publication.
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    let captured = tx.capture_original_fastpq_transcript_source(call).unwrap();
+    assert_eq!(captured.entry_hash(), call);
+    assert_eq!(captured.dataspace_id(), original_dataspace);
+    assert_eq!(captured.route(), FastpqCapturedSourceRoute::Unrouted);
+    assert_eq!(captured.source().network_id, state.network_id);
+    assert_eq!(captured.source().height, 2);
+    assert!(!captured.is_protocol_purpose());
+    let foreign = Hash::new(b"foreign-invocation-source");
+    assert_eq!(
+        tx.capture_original_fastpq_transcript_source(foreign),
+        Err(FastpqSourceCaptureError::ExecutionIdentityMismatch),
+    );
+    tx.tx_call_hash = Some(foreign);
+    assert_eq!(
+        tx.capture_original_fastpq_transcript_source(foreign),
+        Err(FastpqSourceCaptureError::ExecutionIdentityMismatch),
+    );
+    tx.tx_call_hash = None;
+    assert_eq!(
+        tx.capture_original_fastpq_transcript_source(call),
+        Err(FastpqSourceCaptureError::ExecutionIdentityMismatch),
+    );
+    tx.tx_call_hash = Some(call);
+    tx.current_lane_id = Some(LaneId::new(1));
+    assert_eq!(
+        tx.capture_original_fastpq_transcript_source(call),
+        Err(FastpqSourceCaptureError::ConflictingSource { entry_hash: call }),
+    );
+    tx.current_lane_id = None;
+    tx.current_dataspace_id = Some(original_dataspace);
+    tx.world.current_dataspace_id = Some(original_dataspace);
+    tx.require_original_fastpq_invocation_source(original)
+        .unwrap();
+    assert_eq!(
+        tx.capture_original_fastpq_transcript_source(call).unwrap(),
+        captured
+    );
+}

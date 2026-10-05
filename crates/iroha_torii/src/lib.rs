@@ -18861,8 +18861,15 @@ enum BoundedContractViewWork {
 }
 #[cfg(feature = "app_api")]
 enum BoundedContractViewOutput {
-    Single { status: StatusCode, body: Vec<u8>, memory: QueryFanoutMemoryReservation },
-    Batch { body: Vec<u8>, memory: QueryFanoutMemoryReservation },
+    Single {
+        status: StatusCode,
+        body: Vec<u8>,
+        memory: QueryFanoutMemoryReservation,
+    },
+    Batch {
+        body: Vec<u8>,
+        memory: QueryFanoutMemoryReservation,
+    },
 }
 #[cfg(feature = "app_api")]
 async fn execute_bounded_contract_view_work(
@@ -18893,7 +18900,11 @@ async fn execute_bounded_contract_view_work(
             BoundedContractViewWork::Single(request) => {
                 let (status, body) =
                     routing::handle_post_contract_view(state, NoritoJson(request))?;
-                Ok(BoundedContractViewOutput::Single { status, body, memory })
+                Ok(BoundedContractViewOutput::Single {
+                    status,
+                    body,
+                    memory,
+                })
             }
             BoundedContractViewWork::Batch(request) => {
                 let body = routing::handle_post_contract_view_batch(state, NoritoJson(request))?;
@@ -18920,7 +18931,11 @@ async fn execute_bounded_contract_view_work(
     })?
 }
 #[cfg(feature = "app_api")]
-fn contract_view_json_bytes_response(status: StatusCode, body: Vec<u8>, memory: QueryFanoutMemoryReservation) -> Response {
+fn contract_view_json_bytes_response(
+    status: StatusCode,
+    body: Vec<u8>,
+    memory: QueryFanoutMemoryReservation,
+) -> Response {
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = status;
     response.headers_mut().insert(
@@ -21186,9 +21201,11 @@ async fn execute_torii_read_request_locally_admitted(
             )
             .await
             {
-                Ok(BoundedContractViewOutput::Single { status, body, memory }) => {
-                    contract_view_json_bytes_response(status, body, memory)
-                }
+                Ok(BoundedContractViewOutput::Single {
+                    status,
+                    body,
+                    memory,
+                }) => contract_view_json_bytes_response(status, body, memory),
                 Ok(BoundedContractViewOutput::Batch { .. }) => {
                     Error::Query(iroha_data_model::ValidationFail::InternalError(
                         "contract view worker returned a batch response".to_owned(),
@@ -21409,10 +21426,15 @@ async fn execute_torii_single_route_read_with_format(
         Ok(reservation) => reservation,
         Err(response) => return response,
     };
-    let mut budget = ToriiRoutedReadMemoryBudget::from_envelope(match reservation.admitted_envelope(app) {
-        Ok(envelope) => envelope,
-        Err(response) => return hold_query_fanout_memory_in_response_body(response, reservation),
-    }, app.torii_proxy_max_response_bytes);
+    let mut budget = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return hold_query_fanout_memory_in_response_body(response, reservation);
+            }
+        },
+        app.torii_proxy_max_response_bytes,
+    );
     let sanitize_request = matches!(
         endpoint,
         ToriiReadEndpointV1::AliasResolve
@@ -21451,7 +21473,12 @@ async fn execute_torii_single_route_read_with_format(
         body,
     );
     request.response_format = response_format;
-    let response = COLLECTION_READ_MEMORY_RESERVATION.scope(reservation.clone(), execute_torii_read_for_route(app, route, request, None)).await;
+    let response = COLLECTION_READ_MEMORY_RESERVATION
+        .scope(
+            reservation.clone(),
+            execute_torii_read_for_route(app, route, request, None),
+        )
+        .await;
     let response =
         match bound_torii_single_route_response(response, response_format, &mut budget).await {
             Ok(response) | Err(response) => response,
@@ -26457,7 +26484,11 @@ async fn handler_post_contract_view(
     )
     .await
     {
-        Ok(BoundedContractViewOutput::Single { status, body, memory }) => {
+        Ok(BoundedContractViewOutput::Single {
+            status,
+            body,
+            memory,
+        }) => {
             let mut response = proof_cached_json_response_with_egress(
                 &app,
                 &headers,
@@ -31680,10 +31711,18 @@ async fn handler_alias_resolve_index(
         Ok(reservation) => reservation,
         Err(response) => return Ok(response),
     };
-    let admission = ToriiRoutedReadMemoryBudget::from_envelope(match reservation.admitted_envelope(&app) {
-        Ok(envelope) => envelope,
-        Err(response) => return Ok(hold_query_fanout_memory_in_response_body(response, reservation)),
-    }, app.torii_proxy_max_response_bytes);
+    let admission = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(&app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return Ok(hold_query_fanout_memory_in_response_body(
+                    response,
+                    reservation,
+                ));
+            }
+        },
+        app.torii_proxy_max_response_bytes,
+    );
     if let Err(response) = admission.admit_request_bytes(body.len()) {
         return Ok(hold_query_fanout_memory_in_response_body(
             response,
@@ -31812,10 +31851,18 @@ async fn handler_alias_lookup_by_account(
         Ok(reservation) => reservation,
         Err(response) => return Ok(response),
     };
-    let admission = ToriiRoutedReadMemoryBudget::from_envelope(match reservation.admitted_envelope(&app) {
-        Ok(envelope) => envelope,
-        Err(response) => return Ok(hold_query_fanout_memory_in_response_body(response, reservation)),
-    }, app.torii_proxy_max_response_bytes);
+    let admission = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(&app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return Ok(hold_query_fanout_memory_in_response_body(
+                    response,
+                    reservation,
+                ));
+            }
+        },
+        app.torii_proxy_max_response_bytes,
+    );
     if let Err(response) = admission.admit_request_bytes(body.len()) {
         return Ok(hold_query_fanout_memory_in_response_body(
             response,

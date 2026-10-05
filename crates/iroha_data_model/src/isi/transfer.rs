@@ -633,3 +633,48 @@ mod tests {
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{account, asset, audit, definition};
+
+    #[test]
+    fn original_transfer_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Transfer::asset_quantity(asset(), 7_u32, account(62)));
+    }
+
+    #[test]
+    fn original_batch_entry_checked_container_retains_bytes_errors_and_depth() {
+        audit(&TransferAssetBatchEntry::with_leg_id(
+            "original",
+            account(61),
+            account(62),
+            definition(),
+            7_u32,
+        ));
+    }
+
+    #[test]
+    fn original_batch_transfer_checked_container_retains_bytes_errors_and_depth() {
+        audit(&TransferAssetBatch::new(vec![
+            TransferAssetBatchEntry::with_leg_id(
+                "original",
+                account(61),
+                account(62),
+                definition(),
+                7_u32,
+            ),
+        ]));
+        audit(&TransferAssetBatch::independent(vec![
+            TransferAssetBatchEntry::with_leg_id(
+                "original",
+                account(61),
+                account(62),
+                definition(),
+                7_u32,
+            ),
+        ]));
+    }
+}

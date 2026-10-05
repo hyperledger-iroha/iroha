@@ -70,3 +70,6 @@ mod address_schema_identity;
 
 #[cfg(test)]
 mod payload_decode_tests;
+
+#[cfg(all(test, feature = "json"))]
+mod checked_json_cleanup_tests;

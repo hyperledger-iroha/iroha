@@ -804,3 +804,22 @@ mod frame_owner_identity_tests {
         >("iroha_data_model::isi::register::RegisterCommitteePeerWithPop");
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{account, audit};
+
+    #[test]
+    fn original_register_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Register::account(crate::account::Account::new(account(
+            61,
+        ))));
+    }
+
+    #[test]
+    fn original_unregister_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Unregister::account(account(61)));
+    }
+}

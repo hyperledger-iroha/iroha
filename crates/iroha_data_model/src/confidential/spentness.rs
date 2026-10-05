@@ -1003,3 +1003,18 @@ mod tests {
 
 #[cfg(test)]
 mod captured_spentness_schema_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_spentness_path_checked_container_retains_full_original_path_and_depth() {
+        let digest = GoldilocksDigest384V1::new([7; 6]).unwrap();
+        let path = ConfidentialSpentnessPathV1::new([digest; CONFIDENTIAL_SPENTNESS_TREE_DEPTH_V1])
+            .unwrap();
+        audit(&path);
+    }
+}

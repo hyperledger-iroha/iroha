@@ -607,3 +607,22 @@ mod tests {
 
 #[cfg(test)]
 mod captured_runtime_schema_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_runtime_upgrade_id_checked_container_retains_bytes_errors_and_depth() {
+        audit(&RuntimeUpgradeId([7; 32]));
+    }
+
+    #[test]
+    fn original_runtime_upgrade_status_checked_container_retains_every_variant_and_depth() {
+        audit(&RuntimeUpgradeStatus::Proposed);
+        audit(&RuntimeUpgradeStatus::ActivatedAt(17));
+        audit(&RuntimeUpgradeStatus::Canceled);
+    }
+}

@@ -219,7 +219,7 @@ fn restored_cell_current_and_undo_refund_only_after_actual_ebr_deallocation() {
             seed: ValueFromJson::<u64>::new(),
         }
         .deserialize_charged(
-            &mut norito::json::Parser::new(r#"{"revert":7,"blocks":11}"#),
+            &mut norito::json::Parser::new(r#"{"revert":{"value":7},"blocks":11}"#),
             charges,
         )
         .unwrap();

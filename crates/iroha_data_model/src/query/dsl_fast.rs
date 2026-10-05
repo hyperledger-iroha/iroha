@@ -1886,3 +1886,15 @@ pub mod prelude {
 
 #[cfg(test)]
 mod captured_dsl_fast_schema_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_empty_compound_predicate_checked_container_retains_bytes_errors_and_depth() {
+        audit(&CompoundPredicate::<crate::account::Account>::PASS);
+    }
+}

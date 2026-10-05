@@ -45,6 +45,7 @@ pub(super) struct ReservedExecutionOutputPlan {
 }
 
 /// Immutable actual invocation source, constructed only by the execution producer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct OwnedExecutionSource {
     call: Hash,
     lane: Option<iroha_model_base::topology::LaneId>,
@@ -52,6 +53,17 @@ pub(super) struct OwnedExecutionSource {
 }
 
 impl OwnedExecutionSource {
+    pub(in crate::state) fn new(
+        call: Hash,
+        lane: Option<iroha_model_base::topology::LaneId>,
+        dataspace: iroha_model_base::topology::DataSpaceId,
+    ) -> Self {
+        Self {
+            call,
+            lane,
+            dataspace,
+        }
+    }
     pub(super) fn call(&self) -> Hash {
         self.call
     }
@@ -70,6 +82,8 @@ pub(super) struct OwnedExecutionSources {
     source_context: iroha_data_model::fastpq::FastpqSourceStatementContextV1,
     entries: Vec<OwnedExecutionSource>,
     network_routes: Vec<crate::queue::RoutingDecision>,
+    // The actual authenticated callback root, captured before its execution.
+    internal_dataspace: Option<iroha_model_base::topology::DataSpaceId>,
 }
 
 impl OwnedExecutionSources {
@@ -86,6 +100,9 @@ impl OwnedExecutionSources {
     }
     pub(super) fn network_routes(&self) -> &[crate::queue::RoutingDecision] {
         &self.network_routes
+    }
+    pub(super) fn internal_dataspace(&self) -> Option<iroha_model_base::topology::DataSpaceId> {
+        self.internal_dataspace
     }
     pub(super) fn carrier_network_routes(&self) -> &[crate::queue::RoutingDecision] {
         &self.network_routes
@@ -344,3 +361,81 @@ impl StateTransaction<'_, '_> {
 #[cfg(test)]
 #[path = "output_capacity_tests.rs"]
 mod tests;
+
+impl StateTransaction<'_, '_> {
+    /// Bind once from the actual producer before body, rejection fee or callback execution.
+    /// Fixed scalar custody cannot authorize execution or allocate a replacement graph.
+    pub(in crate::state) fn bind_original_fastpq_invocation_source(
+        &mut self,
+        source: OwnedExecutionSource,
+    ) -> Result<(), String> {
+        if self.original_fastpq_invocation_source.is_some()
+            || self.tx_call_hash != Some(source.call())
+            || self.current_lane_id != source.lane()
+            || self.current_dataspace_id != Some(source.dataspace())
+            || self.world.current_dataspace_id != Some(source.dataspace())
+        {
+            return Err("FASTPQ invocation source differs from its original producer".into());
+        }
+        self.original_fastpq_invocation_source = Some(source);
+        Ok(())
+    }
+
+    /// Require the same original producer record at its completed transaction boundary.
+    pub(in crate::state) fn require_original_fastpq_invocation_source(
+        &self,
+        source: OwnedExecutionSource,
+    ) -> Result<(), String> {
+        if self.original_fastpq_invocation_source != Some(source)
+            || self.tx_call_hash != Some(source.call())
+            || self.current_lane_id != source.lane()
+            || self.current_dataspace_id != Some(source.dataspace())
+            || self.world.current_dataspace_id != Some(source.dataspace())
+        {
+            return Err("FASTPQ invocation lost its original producer source".into());
+        }
+        Ok(())
+    }
+
+    /// Shared quantity/transcript capture retains the invocation namespace while fee
+    /// effects independently retain their actual global/restricted balance scope.
+    pub(in crate::state) fn capture_original_fastpq_transcript_source(
+        &self,
+        batch_hash: Hash,
+    ) -> Result<
+        crate::fastpq::FastpqCapturedTranscriptSource,
+        crate::fastpq::FastpqSourceCaptureError,
+    > {
+        use crate::fastpq::FastpqSourceCaptureError;
+        let (lane, dataspace) = match self.original_fastpq_invocation_source {
+            Some(original) => {
+                if self.tx_call_hash != Some(original.call()) {
+                    return Err(FastpqSourceCaptureError::ExecutionIdentityMismatch);
+                }
+                if self.current_lane_id != original.lane() {
+                    return Err(FastpqSourceCaptureError::ConflictingSource {
+                        entry_hash: batch_hash,
+                    });
+                }
+                // SPEC: §13.4 HC114 — fee storage cannot replace invocation provenance.
+                #[cfg(all(test, sumeragi_core_mutation = "HC114"))]
+                let dataspace = self.current_dataspace_id;
+                #[cfg(not(all(test, sumeragi_core_mutation = "HC114")))]
+                let dataspace = Some(original.dataspace());
+                (original.lane(), dataspace)
+            }
+            // Typed native-purpose execution retains its existing purpose/quota
+            // custody and namespace. Capture cannot grant ordinary invocation
+            // authority or construct a complete producer/output owner; actual
+            // Network/Pipeline/Time paths bind their original above first.
+            None => (self.current_lane_id, self.current_dataspace_id),
+        };
+        self.fastpq_source_context.capture_transcript(
+            self.tx_call_hash,
+            batch_hash,
+            lane,
+            dataspace,
+            *self.committed_fragments,
+        )
+    }
+}

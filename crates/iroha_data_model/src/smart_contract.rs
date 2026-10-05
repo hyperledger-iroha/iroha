@@ -2569,3 +2569,24 @@ mod additional_frame_owner_identity_tests {
 
 /// Canonical current contract-multisig construction shared by clients and Torii.
 pub mod multisig_call;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_access_hints_checked_container_retains_original_key_vectors_and_depth() {
+        let value = crate::smart_contract::manifest::AccessSetHints {
+            read_keys: vec!["a".into()],
+            write_keys: vec!["b".into()],
+            dynamic_reads: Vec::new(),
+            dynamic_writes: Vec::new(),
+        };
+        let reads = value.read_keys.as_ptr();
+        let writes = value.write_keys.as_ptr();
+        audit(&value);
+        assert_eq!(value.read_keys.as_ptr(), reads);
+        assert_eq!(value.write_keys.as_ptr(), writes);
+    }
+}

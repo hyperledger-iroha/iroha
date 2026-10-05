@@ -729,13 +729,13 @@ async fn advance_exact_rotation_phase(
     network: &sandbox::SerializedNetwork,
     voters: &[PeerId],
     height: u64,
+    deadline: Instant,
 ) -> Result<()> {
     ensure!(
         exact_quorum(voters.len()).is_ok(),
         "rotation phase requires an exact current quorum geometry"
     );
     let peers = exact_process_roster(network, voters)?;
-    let deadline = Instant::now() + WAIT;
     let mut before = Vec::with_capacity(peers.len());
     for peer in &peers {
         before.push(committee_status::height_until(peer.client().client(), deadline).await?);
@@ -778,12 +778,12 @@ async fn advance_exact_rotation_phase(
 async fn advance_exact_genesis_phase(
     network: &sandbox::SerializedNetwork,
     height: u64,
+    deadline: Instant,
 ) -> Result<()> {
     ensure!(
         (2..=4).contains(&height),
         "invalid genesis DKG phase height"
     );
-    let deadline = Instant::now() + WAIT;
     let mut before = Vec::new();
     for peer in network.validators() {
         before.push(committee_status::height_until(peer.client().client(), deadline).await?);
@@ -863,12 +863,20 @@ fn read_genesis_dkg_finality_chain(
     network_id: NetworkId,
     signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
     end: u64,
+    deadline: Instant,
 ) -> Result<NativeFinalityJournal> {
     ensure!(
         (2..=4).contains(&end),
         "genesis DKG phase must have actual H2–H4 finality"
     );
-    Ok(read_contiguous_finality_chain(client, network_id, signed_genesis_hash, end)?.0)
+    Ok(read_contiguous_finality_chain_until(
+        client,
+        network_id,
+        signed_genesis_hash,
+        end,
+        deadline,
+    )?
+    .0)
 }
 
 fn read_contiguous_finality_chain(
@@ -877,7 +885,24 @@ fn read_contiguous_finality_chain(
     signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
     end: u64,
 ) -> Result<(NativeFinalityJournal, Vec<CertifiedBlock>)> {
-    let deadline = Instant::now() + WAIT;
+    read_contiguous_finality_chain_until(
+        client,
+        network_id,
+        signed_genesis_hash,
+        end,
+        Instant::now() + WAIT,
+    )
+}
+
+// One canonical reader implementation serves fresh observations and callers
+// that already own an enclosing deadline; it never replenishes that deadline.
+fn read_contiguous_finality_chain_until(
+    client: &Client,
+    network_id: NetworkId,
+    signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+    end: u64,
+    deadline: Instant,
+) -> Result<(NativeFinalityJournal, Vec<CertifiedBlock>)> {
     let source = client.client().with_request_deadline(deadline);
     finality_chain_from_proofs(
         client.client().chain(),
@@ -1286,18 +1311,15 @@ async fn execute_rotation_preparation(
         input,
         provider_revision,
         certificate_height,
-        |height| {
+        |height, deadline| {
             let admin = admin.clone();
             let voters = current_roster.clone();
             async move {
-                advance_exact_rotation_phase(network, &voters, height).await?;
+                advance_exact_rotation_phase(network, &voters, height, deadline).await?;
                 let observed = read_on_dedicated_thread({
                     let admin = admin.clone();
                     move || -> Result<u64> {
-                        Ok(committee_status::height_until_blocking(
-                            &admin,
-                            Instant::now() + WAIT,
-                        )?)
+                        Ok(committee_status::height_until_blocking(&admin, deadline)?)
                     }
                 })
                 .await
@@ -1307,11 +1329,12 @@ async fn execute_rotation_preparation(
                     "rotation DKG public phase missed exact h{height} observation"
                 );
                 read_on_dedicated_thread(move || {
-                    Ok(read_contiguous_finality_chain(
+                    Ok(read_contiguous_finality_chain_until(
                         &admin,
                         network_id,
                         signed_genesis_hash,
                         height,
+                        deadline,
                     )?
                     .0)
                 })
@@ -2031,13 +2054,13 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             &network,
             finality_limits(),
             5,
-            |height, _public_snapshot| {
+            |height, _public_snapshot, deadline| {
                 let admin = admin.clone();
                 async move {
-                    advance_exact_genesis_phase(network_ref, height).await?;
+                    advance_exact_genesis_phase(network_ref, height, deadline).await?;
                     let observed = read_on_dedicated_thread({
                         let admin = admin.clone();
-                        move || -> Result<u64> { Ok(committee_status::height_until_blocking(&admin, Instant::now() + WAIT)?) }
+                        move || -> Result<u64> { Ok(committee_status::height_until_blocking(&admin, deadline)?) }
                     })
                     .await
                     .wrap_err("genesis phase status worker failed")?;
@@ -2046,7 +2069,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                         "genesis DKG public phase missed exact h{height} observation"
                     );
                     read_on_dedicated_thread(move || {
-                        read_genesis_dkg_finality_chain(&admin, network_id, block_hash, height)
+                        read_genesis_dkg_finality_chain(&admin, network_id, block_hash, height, deadline)
                     })
                     .await
                     .wrap_err("genesis phase finality worker failed")
@@ -2487,7 +2510,7 @@ fn committee_history_public_proofs_require_the_exact_genesis_anchored_prefix() -
         verify(3, &changed).0.is_err(),
         "foreign signed genesis must reject"
     );
-    for end in [0, 1, 257] {
+    for end in [0, 1, MAX_QUALIFICATION_HEIGHT + 1] {
         let (result, requested) = verify(end, &proofs);
         assert!(result.is_err());
         assert!(
@@ -2544,4 +2567,45 @@ fn native_finality_rejects_wrong_independent_genesis_before_query() {
             .to_string()
             .contains("network differs from independent signed genesis")
     );
+}
+
+#[test]
+fn committee_history_observation_keeps_original_read_deadline_before_query() -> Result<()> {
+    let config = iroha::config::Config {
+        chain: "committee-deadline-unit".into(),
+        network_id: NetworkId::from_genesis_hash(iroha::crypto::HashOf::from_untyped_unchecked(
+            Hash::prehashed([0x5B; Hash::LENGTH]),
+        )),
+        key_pair: iroha_test_samples::ALICE_KEYPAIR.clone(),
+        account: ALICE_ID.clone(),
+        account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+        torii_api_url: "http://committee-deadline.invalid/".parse()?,
+        torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+        basic_auth: None,
+        api_token: None,
+        transaction_add_nonce: false,
+        transaction_ttl: Duration::from_secs(5),
+        transaction_status_timeout: Duration::from_secs(10),
+        sorafs_alias_cache: iroha::config::AliasCache::default().into_policy(),
+        sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
+        sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
+    };
+    let network_id = config.network_id;
+    let client = Client::new(config)?;
+    let deadline = Instant::now();
+    let error = read_contiguous_finality_chain_until(
+        &client,
+        network_id,
+        network_id.into_genesis_hash(),
+        2,
+        deadline,
+    )
+    .expect_err("an exhausted original observation deadline must not be renewed");
+    assert!(
+        error
+            .to_string()
+            .contains("committee proof retrieval deadline elapsed"),
+        "expired custody observations must refuse before any endpoint query: {error}",
+    );
+    Ok(())
 }

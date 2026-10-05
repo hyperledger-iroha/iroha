@@ -1240,3 +1240,16 @@ mod frame_owner_identity_tests {
         >("iroha_data_model::trigger::model::action::model::TimeTriggerRetryPolicy");
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_trigger_repeats_checked_container_retains_every_variant_and_depth() {
+        audit(&action::Repeats::Indefinitely);
+        audit(&action::Repeats::Exactly(17));
+    }
+}

@@ -3147,3 +3147,63 @@ mod additional_frame_owner_identity_tests {
         >("iroha_data_model::nexus::LaneLifecycleStatusV1");
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_lane_config_checked_container_retains_bytes_errors_and_depth() {
+        audit(&LaneConfig::default());
+    }
+
+    #[test]
+    fn original_lane_lifecycle_plan_checked_container_retains_original_vectors_and_depth() {
+        let value = LaneLifecyclePlan {
+            additions: vec![LaneConfig::default()],
+            retire: vec![LaneId::new(7)],
+        };
+        let pointer = value.additions.as_ptr();
+        audit(&value);
+        assert_eq!(value.additions.as_ptr(), pointer);
+    }
+
+    #[test]
+    fn original_lane_lifecycle_parameter_checked_container_retains_source_hashes_and_depth() {
+        audit(&LaneLifecycleParameterV1 {
+            version: LaneLifecycleParameterV1::VERSION,
+            expected_catalog_hash: Hash::new(b"catalog"),
+            expected_incarnation_root: Hash::new(b"incarnations"),
+            plan: LaneLifecyclePlan {
+                additions: vec![LaneConfig::default()],
+                retire: vec![LaneId::new(7)],
+            },
+        });
+    }
+
+    #[test]
+    fn original_lane_incarnation_checked_container_retains_bytes_errors_and_depth() {
+        audit(&LaneLifecycleIncarnationEntry {
+            lane_id: LaneId::new(7),
+            incarnation: Hash::new(b"original incarnation"),
+        });
+    }
+
+    #[test]
+    fn original_lane_lifecycle_status_checked_container_retains_bytes_errors_and_depth() {
+        audit(&LaneLifecycleStatusV1 {
+            version: LaneLifecycleStatusV1::VERSION,
+            lane_count: 1,
+            lanes: vec![LaneConfig::default()],
+            catalog_hash: Hash::new(b"catalog"),
+            incarnations: vec![LaneLifecycleIncarnationEntry {
+                lane_id: LaneId::SINGLE,
+                incarnation: Hash::new(b"original incarnation"),
+            }],
+            incarnation_root: Hash::new(b"incarnations"),
+            runtime_catalog_hash: Some(Hash::new(b"runtime")),
+        });
+    }
+}

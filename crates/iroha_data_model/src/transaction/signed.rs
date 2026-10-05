@@ -2715,3 +2715,72 @@ impl core::fmt::Display for TransactionResult {
     }
 }
 include!("signed_norito_rpc_fixture_tests.rs");
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{account, audit, definition};
+
+    #[test]
+    fn original_entrypoint_checked_container_retains_every_legal_variant_and_depth() {
+        let key = iroha_crypto::KeyPair::from_seed(vec![61; 32], iroha_crypto::Algorithm::Ed25519);
+        let authority = crate::account::AccountId::new(key.public_key().clone());
+        let network =
+            crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"original network"),
+            ));
+        let fees = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                definition(),
+                7_u32.into(),
+            )],
+            None,
+        );
+        let tx = TransactionBuilder::new(network, authority.clone(), fees)
+            .with_instructions([crate::isi::Log::new(crate::Level::INFO, "original".into())])
+            .sign(key.private_key());
+        audit(&TransactionEntrypoint::External(tx));
+        let commitment = SealedTransactionCommitmentPayload::new(
+            network,
+            authority,
+            iroha_crypto::Hash::new(b"sealed original"),
+            3,
+            7,
+            None,
+        );
+        audit(&TransactionEntrypoint::SealedCommitment(
+            SignedSealedTransactionCommitment::sign(commitment, key.private_key()),
+        ));
+        let fees = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                definition(),
+                7_u32.into(),
+            )],
+            None,
+        );
+        let reveal_tx = TransactionBuilder::new(network, account(61), fees)
+            .with_instructions([crate::isi::Log::new(crate::Level::INFO, "reveal".into())])
+            .sign(key.private_key());
+        audit(&TransactionEntrypoint::SealedReveal(
+            SealedTransactionReveal::new(
+                iroha_crypto::Hash::new(b"original reveal"),
+                reveal_tx,
+                [7; 32],
+            ),
+        ));
+    }
+
+    #[test]
+    fn original_transaction_result_checked_container_retains_success_rejection_and_depth() {
+        audit(&TransactionResult::new(Ok(Default::default())));
+        let rejection = crate::transaction::error::TransactionRejectionReason::LimitCheck(
+            crate::transaction::error::TransactionLimitError {
+                reason: "original rejection".into(),
+            },
+        );
+        audit(&TransactionResult::new(Err(rejection)));
+    }
+}

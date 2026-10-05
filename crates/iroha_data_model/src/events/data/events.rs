@@ -2841,3 +2841,19 @@ pub mod prelude {
 
 #[cfg(test)]
 mod captured_event_boundary_identity_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{account, audit};
+
+    #[test]
+    fn original_metadata_event_checked_container_retains_borrowed_json_and_depth() {
+        audit(&MetadataChanged {
+            target: account(61),
+            key: "original".parse().unwrap(),
+            value: iroha_primitives::json::Json::new([1_u64, 2]),
+        });
+    }
+}

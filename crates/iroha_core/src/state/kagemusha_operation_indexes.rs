@@ -167,7 +167,10 @@ pub(super) fn restore_json(
                 literal(parser, b"null")?;
                 None
             } else {
-                Some(digest(parser)?)
+                literal(parser, b"{\"value\":")?;
+                let value = digest(parser)?;
+                literal(parser, b"}")?;
+                Some(value)
             };
             undo(key, value).map_err(OperationIndexRestoreError::Admission)
         })?;
@@ -318,6 +321,50 @@ mod tests {
         assert_eq!(json(&target), canonical);
         drop(target);
         assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn fixed_index_restore_retains_wrapped_present_and_absent_preimages_in_original_pool() {
+        let pool = default_budget();
+        let original = OperationIndex::try_new_admitted(pool.clone()).unwrap();
+        let present = [7; 32];
+        let absent = [8; 32];
+        let before = [11; 32];
+        let after = [12; 32];
+        original
+            .try_with_admitted_block(|block| {
+                block.try_insert_admitted(present, before).unwrap();
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        original
+            .try_with_admitted_block(|block| {
+                block.try_insert_admitted(present, after).unwrap();
+                block.try_insert_admitted(absent, after).unwrap();
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        let retained = original.snapshot();
+        assert_eq!(retained.revert_map().get(&present), Some(&Some(before)));
+        assert_eq!(retained.revert_map().get(&absent), Some(&None));
+        let source = json(&original);
+        let pointer = source.as_ptr();
+        let occupied = pool.reserved_bytes();
+        let restored = restore_json(&source, pool.clone()).unwrap();
+        assert_eq!(source.as_ptr(), pointer);
+        assert_eq!(json(&restored), source);
+        assert_eq!(restored.view().get(&present), Some(&after));
+        assert_eq!(
+            restored.snapshot().revert_map().get(&present),
+            Some(&Some(before))
+        );
+        assert_eq!(restored.snapshot().revert_map().get(&absent), Some(&None));
+        assert!(pool.reserved_bytes() > occupied);
+        assert_eq!(retained.current().get(&present), Some(&after));
+        let retired = source.replace(&format!("{{\"value\":{}}}", json(&before)), &json(&before));
+        assert_ne!(source, retired);
+        assert!(restore_json(&retired, pool.clone()).is_err());
+        assert_eq!(json(&original), source);
     }
 
     #[test]

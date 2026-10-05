@@ -306,10 +306,36 @@ impl FileLaneBlockStore {
         }
     }
 
-    /// Retirement must preserve pending or currently active merge reads. A nonblocking probe
-    /// avoids making lifecycle reconciliation wait on another incarnation's decoding work.
-    pub(super) fn retains_batch_read(&self) -> bool {
-        self.batch_read.try_lock().is_none_or(|slot| slot.is_some())
+    /// Observe the durable tip only after the original retained read authenticates.
+    /// The completed artifact stays in the same pending slot for its normal consumer;
+    /// runtime BlockStore::height remains the infallible already-committed height.
+    ///
+    /// # Errors
+    /// Propagates the original incomplete attempt or authentication/storage rejection
+    /// without taking, replacing or abandoning its retained restoration owner.
+    pub(super) fn authenticated_height(&self) -> Result<u64, Attempt<io::Error>> {
+        let mut state = self.state.lock();
+        if let Some(read) = state.read.as_mut()
+            && read.ready.is_none()
+        {
+            read.ready = Some(read.job.poll(&self.budget)?);
+        }
+        Ok(state.tip)
+    }
+
+    /// Retirement preserves the original unfinished read, publication and batch owners.
+    /// Each mutex is probed separately without waiting or reversing the batch-to-state lock
+    /// order. A busy owner conservatively remains retained for later reconciliation.
+    pub(super) fn retains_pending_work(&self) -> bool {
+        if cfg!(all(test, sumeragi_core_mutation = "HC116")) {
+            return self.batch_read.try_lock().is_none_or(|slot| slot.is_some());
+        }
+        let Some(state) = self.state.try_lock() else {
+            return true;
+        };
+        let pending_state = state.read.is_some() || state.write.is_some();
+        drop(state);
+        pending_state || self.batch_read.try_lock().is_none_or(|slot| slot.is_some())
     }
     /// Wait until the durable validated tip reaches `height`, bounded by `timeout`.
     #[must_use]
@@ -495,3 +521,7 @@ mod tests;
 #[cfg(test)]
 #[path = "store/publication_tests.rs"]
 mod publication_tests;
+
+#[cfg(test)]
+#[path = "store/retirement_probe_tests.rs"]
+mod retirement_probe_tests;

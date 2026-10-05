@@ -129,6 +129,7 @@ iroha_musubi_service = { workspace = true }
 iroha_wallet = { workspace = true }
 iroha_storage_client = { workspace = true }
 iroha_core = { workspace = true, default-features = false }
+iroha_sumeragi = { workspace = true }
 iroha_core_zk = { workspace = true, default-features = false }
 iroha_logger = { workspace = true }
 iroha_futures = { workspace = true }

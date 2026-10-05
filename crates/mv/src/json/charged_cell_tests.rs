@@ -82,7 +82,7 @@ impl ValueSeed for ObservedSeed {
 #[test]
 fn charged_restore_moves_exact_undo_without_cloning_or_changing_wire_shape() {
     for (wire, undo, calls) in [
-        (r#"{"revert":7,"blocks":11}"#, Some(7), 2),
+        (r#"{"revert":{"value":7},"blocks":11}"#, Some(7), 2),
         (r#"{"revert":null,"blocks":11}"#, None, 1),
     ] {
         let budget = AllocationBudget::new(pair_bytes::<NoCloneValue>());
@@ -121,13 +121,13 @@ fn charged_restore_parse_failures_preserve_diagnostics_and_refund_unused_pair() 
     for wire in [
         r#"[]"#,
         r#"{"blocks":11}"#,
-        r#"{"revert":7}"#,
-        r#"{"revert":7,"revert":8,"blocks":11}"#,
-        r#"{"revert":7,"blocks":11,"blocks":12}"#,
-        r#"{"revert":7,"blocks":11,"unknown":0}"#,
-        r#"{"revert":"invalid","blocks":11}"#,
-        r#"{"revert":7,"blocks":"invalid"}"#,
-        r#"{"revert":7,"blocks":11"#,
+        r#"{"revert":{"value":7}}"#,
+        r#"{"revert":{"value":7},"revert":{"value":8},"blocks":11}"#,
+        r#"{"revert":{"value":7},"blocks":11,"blocks":12}"#,
+        r#"{"revert":{"value":7},"blocks":11,"unknown":0}"#,
+        r#"{"revert":{"value":"invalid"},"blocks":11}"#,
+        r#"{"revert":{"value":7},"blocks":"invalid"}"#,
+        r#"{"revert":{"value":7},"blocks":11"#,
     ] {
         let budget = AllocationBudget::new(pair_bytes::<u64>());
         let charged_error = seed
@@ -159,7 +159,7 @@ fn charged_restore_capacity_refuses_before_parse_and_retries_the_original_input(
             panic: false,
         },
     };
-    let mut parser = json::Parser::new(r#"{"revert":7,"blocks":11}"#);
+    let mut parser = json::Parser::new(r#"{"revert":{"value":7},"blocks":11}"#);
     let refused = charges::<NoCloneValue>(&budget)
         .map(|prepaid| seed.deserialize_charged(&mut parser, prepaid));
     assert!(matches!(
@@ -195,7 +195,7 @@ fn charged_restore_seed_unwind_refunds_only_uninstalled_ebr_owners() {
     };
     let panic = catch_unwind(AssertUnwindSafe(|| {
         seed.deserialize_charged(
-            &mut json::Parser::new(r#"{"revert":7,"blocks":11}"#),
+            &mut json::Parser::new(r#"{"revert":{"value":7},"blocks":11}"#),
             charges::<NoCloneValue>(&budget).unwrap(),
         )
     }));
@@ -212,7 +212,7 @@ fn charged_restore_serializes_staged_undo_and_retains_retired_generations() {
     };
     let cell = seed
         .deserialize_charged(
-            &mut json::Parser::new(r#"{"revert":4,"blocks":7}"#),
+            &mut json::Parser::new(r#"{"revert":{"value":4},"blocks":7}"#),
             charges::<u64>(&budget).unwrap(),
         )
         .unwrap();
@@ -223,9 +223,15 @@ fn charged_restore_serializes_staged_undo_and_retains_retired_generations() {
     let mut transaction = block.transaction();
     *transaction.get_mut() = 9;
     transaction.apply();
-    assert_eq!(json::to_json(&block).unwrap(), r#"{"revert":7,"blocks":9}"#);
+    assert_eq!(
+        json::to_json(&block).unwrap(),
+        r#"{"revert":{"value":7},"blocks":9}"#
+    );
     block.commit();
-    assert_eq!(json::to_json(&cell).unwrap(), r#"{"revert":7,"blocks":9}"#);
+    assert_eq!(
+        json::to_json(&cell).unwrap(),
+        r#"{"revert":{"value":7},"blocks":9}"#
+    );
     assert_eq!(*original, 7);
     assert_eq!(*predecessor, Some(4));
     assert_eq!(budget.reserved_bytes(), 2 * pair);

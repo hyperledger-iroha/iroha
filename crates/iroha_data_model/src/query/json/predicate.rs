@@ -736,3 +736,30 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_predicate_json_checked_container_retains_all_sorted_nested_levels() {
+        let value = PredicateJson {
+            equals: vec![
+                EqualsCondition::new("z", Value::Array(vec![Value::from(7_u64)])),
+                EqualsCondition::new("a", Value::from(3_u64)),
+            ],
+            r#in: vec![
+                InCondition::new("z", vec![Value::from(7_u64)]),
+                InCondition::new("a", vec![Value::from(3_u64)]),
+            ],
+            exists: vec!["z".into(), "a".into()],
+        };
+        let equals = value.equals.as_ptr();
+        let membership = value.r#in.as_ptr();
+        audit(&value);
+        assert_eq!(value.equals.as_ptr(), equals);
+        assert_eq!(value.r#in.as_ptr(), membership);
+    }
+}

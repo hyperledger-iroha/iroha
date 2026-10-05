@@ -574,7 +574,7 @@ fn snapshot_capture_retains_exact_topology_bytes_after_later_publication() {
         assert_eq!(current.canonical_hash().unwrap(), hash);
         let encoded: norito::json::Value = norito::json::from_str(current.as_json()).unwrap();
         assert_eq!(
-            encoded["commit_topology"]["revert"],
+            encoded["commit_topology"]["revert"]["value"],
             norito::json::Value::Array(Vec::new())
         );
         assert_eq!(

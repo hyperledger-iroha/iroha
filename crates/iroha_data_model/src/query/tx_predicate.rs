@@ -3021,3 +3021,43 @@ mod tests {
         assert!(wire::inflate(&too_many).is_err());
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit_write;
+    use norito::json::JsonSerialize as _;
+
+    #[test]
+    fn original_predicate_expression_checked_container_retains_both_levels_and_exact_error() {
+        let expected = "{\"args\":[7],\"op\":\"const\"}";
+        audit_write(expected, |out| {
+            write_predicate_expression_to("const", out, |out| 7_u64.json_serialize_to(out))
+        });
+        let mut original = crate::checked_container_refusal_controls::OriginalSink::new(usize::MAX);
+        assert_eq!(
+            write_predicate_expression_to("const", &mut original, |_out| Err(
+                norito::json::BoundedJsonError::Unsupported
+            )),
+            Err(norito::json::BoundedJsonError::Unsupported)
+        );
+        assert_eq!(
+            original.depth,
+            crate::checked_container_refusal_controls::ORIGINAL_DEPTH
+        );
+        assert_eq!(original.text, "{\"args\":[");
+    }
+
+    #[test]
+    fn original_predicate_json_slice_checked_container_retains_bytes_errors_and_depth() {
+        audit_write("[7,9]", |out| write_json_slice_to(&[7_u64, 9], out));
+    }
+
+    #[test]
+    fn original_predicate_display_slice_checked_container_retains_bytes_errors_and_depth() {
+        audit_write("[\"7\",\"9\"]", |out| {
+            write_json_display_slice_to(&[7_u64, 9], out)
+        });
+    }
+}

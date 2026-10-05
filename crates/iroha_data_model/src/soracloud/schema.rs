@@ -3457,3 +3457,17 @@ impl AgentApartmentManifestV1 {
 
 #[cfg(test)]
 mod captured_schema_schema_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{audit};
+
+    #[test]
+    fn original_inrou_manifest_checked_container_retains_nested_guest_graph_and_depth() {
+        let image = SoraInrouGuestImageV1 { kernel_image_path: "kernel".into(), rootfs_image_path: "rootfs".into(), initrd_image_path: Some("initrd".into()), published_artifact: SoraPublishedInrouGuestImageArtifactV1 { manifest_digest_hex: "7".repeat(64), content_cid: encode_lowercase_multibase_base32(&sorafs_manifest::canonical_manifest_root_cid([7;32])) } };
+        let value = SoraInrouManifestV1 { schema_version: SORA_INROU_MANIFEST_VERSION_V1, guest_images: [(SoraInrouGuestIsaV1::Aarch64, image)].into() };
+        audit(&value);
+    }
+}

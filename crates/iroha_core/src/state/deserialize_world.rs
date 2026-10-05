@@ -7621,13 +7621,14 @@ mod kagemusha_registry_persistence_tests;
 /// separately authenticated current/revert chain cuts validate its authority graph.
 #[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
 struct NativeScheduleSnapshot {
-    revert: Option<crate::sumeragi::schedule::ConsensusSchedule>,
+    revert: Option<mv::json::SnapshotUndoValue<crate::sumeragi::schedule::ConsensusSchedule>>,
     blocks: crate::sumeragi::schedule::ConsensusSchedule,
 }
 #[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct NativeLaneCustodySnapshot {
-    revert: Option<iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    revert:
+        Option<mv::json::SnapshotUndoValue<iroha_data_model::sumeragi_lanes::SumeragiLaneState>>,
     blocks: iroha_data_model::sumeragi_lanes::SumeragiLaneState,
 }
 fn take_native_lane_custody(
@@ -7660,7 +7661,7 @@ fn take_native_lane_custody(
     let previous = snapshot
         .revert
         .as_ref()
-        .map(|value| crate::sumeragi::lanes::custody::admit_state(value, budget))
+        .map(|undo| crate::sumeragi::lanes::custody::admit_state(&undo.value, budget))
         .transpose()
         .map_err(StateRestoreError::NativeLaneCustody)?;
     map.remove("sumeragi_lanes");
@@ -7689,7 +7690,11 @@ mod native_lane_custody_tests;
 struct NativeBeaconSessionSnapshot {
     revert: std::collections::BTreeMap<
         [u8; 32],
-        Option<crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+        Option<
+            mv::json::SnapshotUndoValue<
+                crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+            >,
+        >,
     >,
     blocks: std::collections::BTreeMap<
         [u8; 32],
@@ -7753,7 +7758,10 @@ fn take_native_beacon_sessions(
     for (key, value) in &snapshot.revert {
         undo.insert(
             *key,
-            value.as_ref().map(|value| admit(key, value)).transpose()?,
+            value
+                .as_ref()
+                .map(|undo| admit(key, &undo.value))
+                .transpose()?,
         );
     }
     map.remove("global_beacon_key_sessions");
@@ -7777,7 +7785,7 @@ fn take_native_amx_participant(
         // Preserve the original Cell encoder's declaration order during the
         // canonical comparison; both current and explicit undo remain required.
         #[norito(required)]
-        revert: Option<Undo>,
+        revert: Option<mv::json::SnapshotUndoValue<Undo>>,
         blocks: Undo,
     }
     #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
@@ -7808,7 +7816,7 @@ fn take_native_amx_participant(
     let previous = snapshot
         .revert
         .as_ref()
-        .map(|undo| admit(undo.value.as_ref()))
+        .map(|undo| admit(undo.value.value.as_ref()))
         .transpose()?;
     let initial = mv::cell::CellInitialization::try_reserve(budget)
         .map_err(crate::state::scalar_cell_custody::admission_error)?;
@@ -7834,7 +7842,7 @@ fn take_native_consensus_schedule(
     let undo = snapshot
         .revert
         .as_ref()
-        .map(|source| RetainedConsensusSchedule::admit(source, budget))
+        .map(|undo| RetainedConsensusSchedule::admit(&undo.value, budget))
         .transpose()
         .map_err(classify)?;
     // Both exact nested owners exist before either EBR generation is installed. These
@@ -12325,7 +12333,7 @@ mod decode_tests {
     }
     #[test]
     fn funded_scalar_restore_preserves_both_cuts_and_refuses_local_capacity_separately() {
-        let raw = r#"{"musubi_replication_shortfall_releases":{"revert":6,"blocks":9}}"#;
+        let raw = r#"{"musubi_replication_shortfall_releases":{"revert":{"value":6},"blocks":9}}"#;
         let demand = mv::cell::CellInitialization::<u64>::allocation_layouts()
             .into_iter()
             .map(|layout| layout.size())
@@ -12344,9 +12352,9 @@ mod decode_tests {
         assert_eq!(*value.predecessor_view().get(), Some(6));
         assert_eq!(pool.reserved_bytes(), demand);
         for raw in [
-            r#"{"musubi_replication_shortfall_releases":{"blocks":9,"revert":6}}"#,
-            r#"{"musubi_replication_shortfall_releases":{"revert":6,"blocks":9,"extra":0}}"#,
-            r#"{"musubi_replication_shortfall_releases":{"revert":6,"blocks":9,"blocks":9}}"#,
+            r#"{"musubi_replication_shortfall_releases":{"blocks":9,"revert":{"value":6}}}"#,
+            r#"{"musubi_replication_shortfall_releases":{"revert":{"value":6},"blocks":9,"extra":0}}"#,
+            r#"{"musubi_replication_shortfall_releases":{"revert":{"value":6},"blocks":9,"blocks":9}}"#,
         ] {
             let budget = iroha_allocation::AllocationBudget::new(demand);
             let mut map = match SnapshotJsonMap::parse(raw, "world") {

@@ -50,16 +50,19 @@ impl Drop for Observation {
 fn exact_both_cut_decode_and_canonical_refusals_allocate_nothing() {
     let cases = [
         (r#"{"revert":null,"blocks":0}"#, Some((0, None))),
-        (r#"{"revert":6,"blocks":9}"#, Some((9, Some(6)))),
+        (r#"{"revert":{"value":6},"blocks":9}"#, Some((9, Some(6)))),
         (
-            r#"{"revert":18446744073709551615,"blocks":18446744073709551615}"#,
+            r#"{"revert":{"value":18446744073709551615},"blocks":18446744073709551615}"#,
             Some((u64::MAX, Some(u64::MAX))),
         ),
-        (r#"{"revert":6,"blocks":9,"blocks":9}"#, None),
-        (r#"{"revert":6,"blocks":18446744073709551616}"#, None),
-        (r#"{"revert":6,"blocks":09}"#, None),
-        (r#"{"revert":6,"blocks": 9}"#, None),
-        (r#"{"revert":6,"blocks":9} "#, None),
+        (r#"{"revert":{"value":6},"blocks":9,"blocks":9}"#, None),
+        (
+            r#"{"revert":{"value":6},"blocks":18446744073709551616}"#,
+            None,
+        ),
+        (r#"{"revert":{"value":6},"blocks":09}"#, None),
+        (r#"{"revert":{"value":6},"blocks": 9}"#, None),
+        (r#"{"revert":{"value":6},"blocks":9} "#, None),
     ];
     COUNT.with(|count| count.set(Some(0)));
     let observation = Observation;

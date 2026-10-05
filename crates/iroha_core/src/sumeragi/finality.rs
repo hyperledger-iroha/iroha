@@ -77,12 +77,18 @@ fn proof_from_chain<V: StateReadOnly>(
             .block()
             .encode_wire()
             .map_err(|error| ProofError::Encoding(error.to_string()))?,
-        committee: chain
-            .proof_committee(height)?
-            .into_iter()
-            .map(|(public_key, proof_of_possession)| FinalityValidator {
-                public_key,
-                proof_of_possession,
+        // The complete certified read already authenticates this exact
+        // historical epoch. Project its original keys/PoPs without a second
+        // prefix read; portable verification below remains independent.
+        committee: certified
+            .commitment()
+            .schedule
+            .current
+            .committee
+            .iter()
+            .map(|member| FinalityValidator {
+                public_key: member.validator.public_key().clone(),
+                proof_of_possession: member.proof_of_possession.clone(),
             })
             .collect(),
     };
@@ -294,6 +300,140 @@ mod tests {
         sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig},
     };
 
+    // The normal-stack native fixture completes before the later proof-reader
+    // assertion frame exists. Its genuinely signed prefix and original State
+    // remain owned by this helper throughout both independent reads.
+    #[inline(never)]
+    fn with_original_finality_boundary(assert_original: fn(&CertifiedTestChain)) {
+        let mut chain = Box::new(CertifiedTestChain::npos_boundary_fixture());
+        chain.commit(Vec::new());
+        assert_eq!(chain.height(), 10);
+        assert_original(&chain);
+    }
+
+    // Independent test oracle: exactly one complete native certified read. It
+    // does not call the producer or the separate proof_committee read, and it
+    // retains the unchanged canonical output, including every original PoP.
+    #[inline(never)]
+    fn original_finality_from_one_certified_read<V: StateReadOnly>(
+        view: &V,
+        height: u64,
+        require_native_boundary: bool,
+    ) -> Result<SumeragiFinalityProof, ProofError> {
+        let reader = CertifiedChain::new(view)?;
+        let original = reader.certified(height)?;
+        assert_eq!(original.height(), height);
+        assert_eq!(
+            original.verification(),
+            if height == 1 {
+                QcVerification::Genesis
+            } else {
+                QcVerification::Verified
+            }
+        );
+        if require_native_boundary {
+            assert!(original.header().expect("native boundary header").attest);
+            assert!(
+                original
+                    .commit_qc()
+                    .expect("genuine boundary CommitQC")
+                    .attest
+            );
+            assert!(original.commitment().schedule.boundary.is_some());
+        }
+        Ok(SumeragiFinalityProof {
+            block_header: original.block().header(),
+            block_wire: original
+                .block()
+                .encode_wire()
+                .expect("original canonical signed frame"),
+            committee: original
+                .commitment()
+                .schedule
+                .current
+                .committee
+                .iter()
+                .map(|member| FinalityValidator {
+                    public_key: member.validator.public_key().clone(),
+                    proof_of_possession: member.proof_of_possession.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    #[inline(never)]
+    fn assert_single_certified_finality_source(
+        chain: &CertifiedTestChain,
+        height: u64,
+        expected_frames: &[u64],
+        expected_qcs: &[u64],
+        require_native_boundary: bool,
+    ) {
+        use crate::sumeragi::certified_chain::relation_counts;
+
+        let view = chain.state().view();
+        let (original, once) = relation_counts::measure(|| {
+            original_finality_from_one_certified_read(&view, height, require_native_boundary)
+        });
+        let original = original.expect("the exact signed original prefix authenticates once");
+        assert_eq!(once.frames, expected_frames);
+        assert_eq!(once.qcs, expected_qcs);
+        assert!(original.decode_checked().is_ok());
+
+        let (produced, served) = relation_counts::measure(|| build_proof(&view, height));
+        let produced = produced.expect("ordinary current-source proof producer");
+        assert_eq!(
+            produced, original,
+            "same header, canonical signed bytes and exact epoch PoPs"
+        );
+        assert_eq!(produced.height(), height);
+        assert!(produced.decode_checked().is_ok());
+        assert_eq!(
+            served.frames, once.frames,
+            "portable producer must use the same already authenticated source instead of reading its committee again"
+        );
+        assert_eq!(
+            served.qcs, once.qcs,
+            "the committee projection must not repeat the complete native quorum/Pasta verification"
+        );
+    }
+
+    #[test]
+    fn portable_genesis_proof_uses_one_authenticated_frame_relation() {
+        let chain = CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
+            .expect("actual signed genesis and retained State");
+        assert_single_certified_finality_source(&chain, 1, &[1, 1], &[], false);
+    }
+
+    #[test]
+    fn portable_proof_uses_one_authenticated_prefix_for_exact_committee() {
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
+            .expect("actual signed genesis and retained State");
+        chain.commit(Vec::new());
+        chain.commit(Vec::new());
+        assert_single_certified_finality_source(&chain, 3, &[1, 3, 2], &[2, 3], false);
+    }
+
+    #[test]
+    fn portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_pasta() {
+        with_original_finality_boundary(
+            assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_pasta,
+        );
+    }
+
+    #[inline(never)]
+    fn assert_portable_native_boundary_proof_uses_one_authenticated_prefix_and_original_pasta(
+        chain: &CertifiedTestChain,
+    ) {
+        assert_single_certified_finality_source(
+            chain,
+            10,
+            &[1, 10, 2, 3, 4, 5, 6, 7, 8, 9],
+            &[2, 3, 4, 5, 6, 7, 8, 9, 10],
+            true,
+        );
+    }
+
     #[test]
     fn portable_proof_uses_current_embedded_certificates_and_rejects_subquorum() {
         let mut chain =
@@ -375,8 +515,53 @@ mod tests {
             ProofError::from(inner)
         });
         assert!(
-            matches!(completed, ProofError::Portable(_)),
-            "dropped inner ceiling is not current caller refusal: {completed:?}"
+            matches!(&completed, ProofError::Deferred(local) if local == &expected),
+            "the captured original admission refusal survives scope retirement: {completed:?}"
+        );
+        // A new canonical attempt cannot borrow the retired attempt's opaque origin.
+        let reintroduced = norito::with_decode_limits_scope(limits(8 * 1024 * 1024), || {
+            let inner = norito::with_decode_limits_scope(limits(0), read).unwrap_err();
+            let iroha_data_model::sumeragi_finality::FinalityReadError::DecodeResource(original) =
+                inner
+            else {
+                panic!("the actual checkpoint read must retain its original decoder error");
+            };
+            assert_eq!(
+                original.kind(),
+                norito::core::DecodeAttemptErrorKind::EnclosingLimit
+            );
+            let stale = original.into_error();
+            let recaptured =
+                norito::core::classify_decode_attempt(|| Err::<(), _>(stale)).unwrap_err();
+            assert_eq!(
+                recaptured.kind(),
+                norito::core::DecodeAttemptErrorKind::Invalid
+            );
+            ProofError::from(
+                iroha_data_model::sumeragi_finality::FinalityReadError::DecodeResource(recaptured),
+            )
+        });
+        assert!(
+            matches!(reintroduced, ProofError::Portable(_)),
+            "a fresh observer rejects the retired origin: {reintroduced:?}"
+        );
+        // Copied diagnostic numbers carry no original emitting layer or attempt family.
+        let reconstructed = norito::with_decode_limits_scope(limits(0), || {
+            let error = norito::core::classify_decode_attempt(|| {
+                Err::<(), _>(norito::Error::TotalAllocationExceeded {
+                    attempted: 1,
+                    limit: 0,
+                })
+            })
+            .unwrap_err();
+            assert_eq!(error.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
+            ProofError::from(
+                iroha_data_model::sumeragi_finality::FinalityReadError::DecodeResource(error),
+            )
+        });
+        assert!(
+            matches!(reconstructed, ProofError::Portable(_)),
+            "copied numbers cannot mint local admission provenance: {reconstructed:?}"
         );
         assert_eq!(checkpoint.encode_canonical().unwrap(), original);
     }

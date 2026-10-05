@@ -377,3 +377,25 @@ fn sparse_custody_untrusted_control_refusal_preserves_the_decode_category() {
     let retried = SumeragiLaneCustodySigners::try_from(source.as_slice().to_vec()).unwrap();
     assert_eq!(retried, source);
 }
+
+#[test]
+fn original_charged_lane_signers_checked_container_retains_exact_pool_backing_and_depth() {
+    use iroha_allocation::{AllocationBudget, ChargedBuffer};
+    let source = obligation().signers;
+    let demand = std::mem::size_of::<SumeragiLaneSignerCustody>()
+        + SumeragiLaneCustodySigners::control_layout().size();
+    let pool = AllocationBudget::new(demand);
+    let mut rows = ChargedBuffer::new(1, &pool).unwrap();
+    rows.append(source.as_slice()).unwrap();
+    let pointer = rows.as_slice().as_ptr();
+    let owner = SumeragiLaneCustodySigners::from_charged(rows, &pool)
+        .unwrap_or_else(|(_, error)| panic!("original custody: {error:?}"));
+    let charged = pool.reserved_bytes();
+    pool.set_limit_bytes(0);
+    crate::checked_container_refusal_controls::audit(&owner);
+    assert_eq!(owner.as_slice().as_ptr(), pointer);
+    assert!(owner.admitted_to(&pool));
+    assert_eq!(pool.reserved_bytes(), charged);
+    drop(owner);
+    assert_eq!(pool.reserved_bytes(), 0);
+}

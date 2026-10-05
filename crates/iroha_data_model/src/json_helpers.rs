@@ -896,3 +896,24 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{account, audit_write};
+
+    #[test]
+    fn original_account_metadata_map_checked_container_retains_order_and_depth() {
+        let mut values = std::collections::BTreeMap::new();
+        values.insert(account(61), iroha_model_base::metadata::Metadata::default());
+        values.insert(account(62), iroha_model_base::metadata::Metadata::default());
+        let pointer = std::ptr::from_ref(&values);
+        let mut ordinary = String::new();
+        account_metadata_map::serialize(&values, &mut ordinary);
+        audit_write(&ordinary, |out| {
+            account_metadata_map::serialize_bounded(&values, out)
+        });
+        assert_eq!(std::ptr::from_ref(&values), pointer);
+    }
+}

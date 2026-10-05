@@ -2847,3 +2847,17 @@ mod generated_box_identity_tests;
 
 #[cfg(test)]
 pub(crate) mod generated_record_identity_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_mismatch_checked_container_retains_bytes_errors_and_depth() {
+        audit(&crate::isi::error::Mismatch {
+            expected: 7_u64,
+            actual: 9_u64,
+        });
+    }
+}

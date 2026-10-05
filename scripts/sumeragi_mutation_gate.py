@@ -7,7 +7,7 @@ Purpose
     variable `SUMERAGI_MUTATION=<ID>` is set (see `crates/iroha_sumeragi/build.rs`). For each
     mutation this script builds the mutated crate and runs
 
-        SUMERAGI_MUTATION=<ID> cargo test -p iroha_sumeragi --release \\
+        SUMERAGI_MUTATION=<ID> cargo test --locked -p iroha_sumeragi --release \\
             --features mutation-testing,sim --lib -- <named det test(s)>
 
     expecting a FAILURE, then (unless --fast) the mutation's randomized scenario(s) with
@@ -49,6 +49,7 @@ Outputs
 Exit status
     0 when the baseline passes and no mutation survived or errored; 1 otherwise. With --strict
     (the literal §13.4 CI rule) a mutation killed only by its scenario also fails the gate.
+    Strict runs require the unmutated baseline; --skip-baseline is a diagnostic option.
 
 Examples
     scripts/sumeragi_mutation_gate.py --jobs 4
@@ -682,6 +683,31 @@ CORE_MUTATIONS = [
       ["sumeragi::executor::preparation::tests::native_source_publication_change_retries_without_recovery_or_quarantine"]),
     m("HC99", "native source publication: replace the original local capacity refusal",
       ["block::valid::native_header_source_tests::native_local_refusal_after_source_publication_retains_original_capacity"]),
+    m("HC106", "signed evidence root: collapse original immutable-root JSON refusal into invalid input",
+      ["sumeragi::evidence::tests::original_signed_evidence_root_scope_refusal_stays_local_and_retries_same_state",
+       "sumeragi::evidence::tests::original_root_observation_refusal_keeps_pending_bytes_and_same_state_retry"]),
+    m("HC114", "quantity source: replace original invocation dataspace with temporary fee-storage namespace",
+      ["sumeragi::lanes::merge::tests::paid_quantity_source::paid_merged_lane_burn_keeps_original_nonuniversal_source",
+       "state::output_capacity::producer::internal::root_scope_tests::original_invocation_capture_keeps_fee_storage_separate_and_rejects_call_lane_confusion"]),
+    m("HC115", "lane registry: retain a retired historical ready store after its final reader closes",
+      ["sumeragi::lanes::registry::tests::retired_historical_ready_store_releases_last_owner_after_completed_reader"]),
+    m("HC116", "lane retirement: drop original pending read and publication owners before batch population",
+      ["sumeragi::lanes::registry::tests::retired_ready_store_preserves_original_read_refusal_before_batch_population",
+       "sumeragi::lanes::registry::tests::retired_ready_store_preserves_original_unfinished_publication_until_exact_retry",
+       "sumeragi::lanes::store::retirement_probe_tests::retirement_pending_work_probe_retains_each_held_mutex_without_waiting"]),
+    m("HC117", "lane opening: erase a historical join when its runtime recovery retires",
+      ["sumeragi::lanes::registry::tests::historical_join_of_runtime_opening_retains_original_recovery_after_lane_retirement"]),
+    m("HC118", "lane source tip: return cached height despite original read authentication failure or refusal",
+      ["sumeragi::lanes::registry::tests::ready_tip_preserves_same_original_authentication_failure_without_reopening",
+       "sumeragi::lanes::registry::tests::ready_tip_retains_original_pool_refusal_and_completed_read_until_normal_consumption"]),
+
+    m("HC119", "BLS admission: reuse a local key credential under a changed proof of possession",
+      ["sumeragi::crypto::tests::repeated_exact_pop_admission_retains_original_credential",
+       "sumeragi::crypto::tests::repeated_committee_admission_retains_owners_and_failed_batch_is_atomic"]),
+
+    m("HC120", "Core Nexus snapshot: write retained runtime undo without its explicit present-value frame",
+      ["state::tests::snapshot_runtime_requires_exact_retained_predecessor_and_roundtrips_both_cuts"]),
+
 ]
 
 
@@ -736,6 +762,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     env.pop("SUMERAGI_DAEMON_MUTATION", None)
     crate, features, mutation_env = package_options(args)
     env.pop("SUMERAGI_SIM_SEED", None)
+    env.pop("SUMERAGI_SIM_SEED_BASE", None)
     if mutation:
         env[mutation_env] = mutation
     if seeds is not None:
@@ -745,7 +772,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     env["CARGO_TARGET_DIR"] = str(target_dir)
     profile = getattr(args, "core_profile", None) if getattr(args, "core", False) else None
     profile_options = ["--profile", profile] if profile else ["--release"]
-    cmd = ["cargo", "test", "-p", crate, *profile_options, "--features", features, "--lib"]
+    cmd = ["cargo", "test", "--locked", "-p", crate, *profile_options, "--features", features, "--lib"]
     if no_run:
         cmd.append("--no-run")
     else:
@@ -763,6 +790,10 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
         out, _ = proc.communicate()
         code = None
     elapsed = time.monotonic() - started
+    # Spawning and completion processing also belong to this original deadline.
+    # Keep all output, but a naturally completed late command cannot qualify.
+    if timeout and elapsed > timeout:
+        code = None
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w") as f:
         f.write(f"$ {' '.join(cmd)}\n# {mutation_env}={mutation or ''} "
@@ -879,7 +910,7 @@ def evaluate_baseline(args, target_dir, mutations):
         result["verdict"] = "error"
         return result
     tests = sorted({t for mu in mutations for t in mu.tests})
-    named = run_step(args, target_dir, None, tests, None, args.timeout_test * 2,
+    named = run_step(args, target_dir, None, tests, None, args.timeout_test,
                      logs / "baseline.named.log")
     result["named"] = named.__dict__
     ok = named.status == "pass"
@@ -887,7 +918,7 @@ def evaluate_baseline(args, target_dir, mutations):
     if scenarios and not args.fast:
         filters = [SCENARIOS[s] for s in scenarios]
         scen = run_step(args, target_dir, None, filters, args.seeds,
-                        args.timeout_scenario * 3, logs / "baseline.scenario.log")
+                        args.timeout_scenario, logs / "baseline.scenario.log")
         result["scenario"] = scen.__dict__
         ok = ok and scen.status == "pass"
     result["verdict"] = "pass" if ok else "fail"
@@ -921,7 +952,7 @@ def main():
                              "(the literal §13.4 CI rule)")
     parser.add_argument("--core-profile", choices=("release", "test"),
                         help="Core-only build profile (default: release); identical for baseline and mutant")
-    parser.add_argument("--timeout-build", type=int, default=1800,
+    parser.add_argument("--timeout-build", type=int, default=1200,
                         help="seconds per build deadline (0 disables its deadline)")
     parser.add_argument("--timeout-test", type=int, default=900,
                         help="seconds per named-test deadline (0 disables its deadline)")
@@ -929,6 +960,8 @@ def main():
                         help="seconds per scenario deadline (0 disables its deadline)")
     parser.add_argument("--list", action="store_true", help="print the mutation table and exit")
     args = parser.parse_args()
+    if args.strict and args.skip_baseline:
+        parser.error("--strict requires the unmutated baseline")
     if args.target_dir is None:
         name = ("sumeragi-daemon-mutants" if args.daemon else
                 "sumeragi-core-mutants" if args.core else "sumeragi-mutants")

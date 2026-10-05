@@ -1253,5 +1253,172 @@ pub mod multisig {
             assert_eq!(decoded.block_height, 43);
             assert_eq!(decoded.entrypoint_hash, [0xcdu8; 32]);
         }
+
+        mod checked_refusal_oracle {
+            // Test-only refusal oracle over the sole ordinary writer and original borrowed graph.
+
+            use norito::json::{BoundedJsonError, JsonSerialize, JsonWriteSink};
+
+            pub(crate) const ORIGINAL_DEPTH: usize = 7;
+            pub(crate) struct OriginalSink {
+                pub(crate) text: String,
+                pub(crate) depth: usize,
+                cap: usize,
+                deny_entry: Option<usize>,
+                entries: usize,
+            }
+            impl OriginalSink {
+                pub(crate) fn new(cap: usize) -> Self {
+                    Self {
+                        text: String::new(),
+                        depth: ORIGINAL_DEPTH,
+                        cap,
+                        deny_entry: None,
+                        entries: 0,
+                    }
+                }
+            }
+            impl JsonWriteSink for OriginalSink {
+                fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
+                    self.push_str(value.encode_utf8(&mut [0; 4]))
+                }
+                fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
+                    if self
+                        .text
+                        .len()
+                        .checked_add(value.len())
+                        .is_none_or(|len| len > self.cap)
+                    {
+                        return Err(BoundedJsonError::BodyTooLarge);
+                    }
+                    self.text.push_str(value);
+                    Ok(())
+                }
+                fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
+                    self.entries += 1;
+                    if self.deny_entry == Some(self.entries) {
+                        return Err(BoundedJsonError::Unsupported);
+                    }
+                    self.depth += 1;
+                    Ok(())
+                }
+                fn end_container(&mut self) {
+                    assert!(
+                        self.depth > ORIGINAL_DEPTH,
+                        "writer cannot release inherited caller depth"
+                    );
+                    self.depth -= 1;
+                }
+            }
+            /// Retain exact bytes/errors/depth on every byte cap and every actual entry refusal.
+            pub(crate) fn audit_write(
+                ordinary: &str,
+                write: impl Fn(&mut dyn JsonWriteSink) -> Result<(), BoundedJsonError>,
+            ) {
+                for cap in 0..ordinary.len() {
+                    let mut sink = OriginalSink::new(cap);
+                    assert_eq!(
+                        write(&mut sink),
+                        Err(BoundedJsonError::BodyTooLarge),
+                        "exact byte refusal at {cap}"
+                    );
+                    assert_eq!(
+                        sink.depth, ORIGINAL_DEPTH,
+                        "original inherited depth at byte cap {cap}"
+                    );
+                    assert!(
+                        ordinary.starts_with(&sink.text),
+                        "unchanged canonical prefix at {cap}"
+                    );
+                }
+                let mut sink = OriginalSink::new(ordinary.len());
+                assert_eq!(write(&mut sink), Ok(()));
+                assert_eq!(sink.text, ordinary);
+                assert_eq!(sink.depth, ORIGINAL_DEPTH);
+                for denied in 1..=sink.entries {
+                    let mut refused = OriginalSink::new(usize::MAX);
+                    refused.deny_entry = Some(denied);
+                    assert_eq!(
+                        write(&mut refused),
+                        Err(BoundedJsonError::Unsupported),
+                        "actual entry {denied}"
+                    );
+                    assert_eq!(
+                        refused.depth, ORIGINAL_DEPTH,
+                        "every entered level must release on child admission refusal {denied}"
+                    );
+                    assert!(ordinary.starts_with(&refused.text));
+                }
+                // Retry the same borrowed graph with a fresh test sink; no decode or copied source.
+                let mut retry = OriginalSink::new(ordinary.len());
+                assert_eq!(write(&mut retry), Ok(()));
+                assert_eq!(retry.text, ordinary);
+                assert_eq!(retry.depth, ORIGINAL_DEPTH);
+            }
+            /// Observe the same owning object via ordinary and checked canonical writers.
+            pub(crate) fn audit<T: JsonSerialize + ?Sized>(value: &T) {
+                let original = std::ptr::from_ref(value);
+                let mut ordinary = String::new();
+                value.json_serialize(&mut ordinary);
+                audit_write(&ordinary, |out| value.json_serialize_to(out));
+                assert!(std::ptr::eq(std::ptr::from_ref(value), original));
+            }
+        }
+        use checked_refusal_oracle::audit;
+
+        #[test]
+        fn original_multisig_spec_checked_container_retains_original_signers_and_depth() {
+            let value = sample_spec();
+            audit(&value);
+        }
+        #[test]
+        fn original_multisig_proposal_checked_container_retains_original_instructions_and_depth() {
+            let value = MultisigProposalValue {
+                instructions: vec![
+                    iroha_data_model::isi::Log::new(
+                        iroha_data_model::Level::INFO,
+                        "original".into(),
+                    )
+                    .into(),
+                ],
+                proposed_at_ms: 17,
+                expires_at_ms: 23,
+                approvals: [fixture_account(1), fixture_account(2)].into(),
+                is_relayed: Some(false),
+            };
+            let pointer = value.instructions.as_ptr();
+            audit(&value);
+            assert_eq!(value.instructions.as_ptr(), pointer);
+        }
+        #[test]
+        fn original_multisig_instruction_checked_container_retains_every_variant_and_depth() {
+            let account = fixture_account(3);
+            let instructions: Vec<InstructionBox> = vec![
+                iroha_data_model::isi::Log::new(iroha_data_model::Level::INFO, "original".into())
+                    .into(),
+            ];
+            let hash = HashOf::new(&instructions);
+            audit(&MultisigInstructionBox::Register(MultisigRegister::new(
+                account.clone(),
+                None::<DomainId>,
+                sample_spec(),
+            )));
+            audit(&MultisigInstructionBox::Propose(MultisigPropose {
+                account: account.clone(),
+                instructions,
+                transaction_ttl_ms: NonZeroU64::new(17),
+            }));
+            audit(&MultisigInstructionBox::Approve(MultisigApprove {
+                account: account.clone(),
+                instructions_hash: hash,
+            }));
+            audit(&MultisigInstructionBox::Cancel(MultisigCancel {
+                account: account.clone(),
+                instructions_hash: hash,
+            }));
+            audit(&MultisigInstructionBox::InvalidateOutstanding(
+                MultisigInvalidateOutstanding { account },
+            ));
+        }
     }
 }

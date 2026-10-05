@@ -1932,3 +1932,96 @@ mod frame_owner_identity_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{account, asset, audit};
+
+    #[test]
+    fn original_set_key_value_checked_container_retains_bytes_errors_and_depth() {
+        audit(&SetKeyValue::account(
+            account(61),
+            "nested".parse().unwrap(),
+            iroha_primitives::json::Json::new([1_u64, 2]),
+        ));
+    }
+
+    #[test]
+    fn original_set_asset_key_value_checked_container_retains_bytes_errors_and_depth() {
+        audit(&SetAssetKeyValue::new(
+            asset(),
+            "nested".parse().unwrap(),
+            iroha_primitives::json::Json::new([1_u64, 2]),
+        ));
+    }
+
+    #[test]
+    fn original_remove_key_value_checked_container_retains_bytes_errors_and_depth() {
+        audit(&RemoveKeyValue::account(
+            account(61),
+            "nested".parse().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn original_remove_asset_key_value_checked_container_retains_bytes_errors_and_depth() {
+        audit(&RemoveAssetKeyValue::new(
+            asset(),
+            "nested".parse().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn original_grant_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Grant::account_role(
+            "original_role".parse().unwrap(),
+            account(61),
+        ));
+    }
+
+    #[test]
+    fn original_revoke_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Revoke::account_role(
+            "original_role".parse().unwrap(),
+            account(61),
+        ));
+    }
+
+    #[test]
+    fn original_execute_trigger_checked_container_retains_bytes_errors_and_depth() {
+        audit(&ExecuteTrigger::new("original_trigger".parse().unwrap()).with_args([1_u64, 2]));
+    }
+
+    #[test]
+    fn original_log_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Log::new(crate::Level::INFO, "original \n message".into()));
+    }
+
+    #[test]
+    fn original_grant_checked_container_preserves_manual_leaf_without_fast_or_clone() {
+        let leaf = crate::checked_container_refusal_controls::RefusingLeaf(std::cell::Cell::new(0));
+        let value = Grant::<_, crate::account::Account> {
+            object: leaf,
+            destination: crate::checked_container_refusal_controls::account(61),
+        };
+        crate::checked_container_refusal_controls::audit_leaf_refusal("{\"object\":", |out| {
+            norito::json::FastJsonWrite::write_json_to(&value, out)
+        });
+        assert_eq!(value.object.0.get(), 1);
+    }
+
+    #[test]
+    fn original_revoke_checked_container_preserves_manual_leaf_without_fast_or_clone() {
+        let leaf = crate::checked_container_refusal_controls::RefusingLeaf(std::cell::Cell::new(0));
+        let value = Revoke::<_, crate::account::Account> {
+            object: leaf,
+            destination: crate::checked_container_refusal_controls::account(61),
+        };
+        crate::checked_container_refusal_controls::audit_leaf_refusal("{\"object\":", |out| {
+            norito::json::FastJsonWrite::write_json_to(&value, out)
+        });
+        assert_eq!(value.object.0.get(), 1);
+    }
+}

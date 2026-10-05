@@ -890,3 +890,49 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_time_event_checked_container_retains_bytes_errors_and_depth() {
+        audit(&TimeEvent {
+            interval: TimeInterval {
+                since_ms: 17,
+                length_ms: 23,
+            },
+        });
+    }
+
+    #[test]
+    fn original_execution_time_checked_container_retains_schedule_and_scalar_branch() {
+        audit(&ExecutionTime::PreCommit);
+        audit(&ExecutionTime::Schedule(Schedule {
+            start_ms: 17,
+            period_ms: Some(23),
+        }));
+    }
+
+    #[test]
+    fn original_schedule_checked_container_retains_optional_period_and_depth() {
+        audit(&Schedule {
+            start_ms: 17,
+            period_ms: None,
+        });
+        audit(&Schedule {
+            start_ms: 17,
+            period_ms: Some(23),
+        });
+    }
+
+    #[test]
+    fn original_time_interval_checked_container_retains_bytes_errors_and_depth() {
+        audit(&TimeInterval {
+            since_ms: 17,
+            length_ms: 23,
+        });
+    }
+}

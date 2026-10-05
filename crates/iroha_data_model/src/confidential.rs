@@ -1477,3 +1477,36 @@ mod additional_frame_owner_identity_tests {
         >("iroha_data_model::confidential::PoseidonParams");
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_memo_slots_checked_container_retains_original_backing_and_depth() {
+        let slots = core::array::from_fn(|_| {
+            ConfidentialMemoRecipientSlotV1::new(
+                ConfidentialMemoSuiteV1::MlKem768XChaCha20Poly1305,
+                vec![7; CONFIDENTIAL_MEMO_ML_KEM_768_CIPHERTEXT_BYTES_V1],
+                [7; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
+                [7; CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1],
+            )
+            .unwrap()
+        });
+        let value = ConfidentialMemoRecipientSlotsV1::from(slots);
+        let source = value
+            .slots
+            .each_ref()
+            .map(|slot| slot.encapsulation().as_ptr());
+        audit(&value);
+        assert_eq!(
+            value
+                .slots
+                .each_ref()
+                .map(|slot| slot.encapsulation().as_ptr()),
+            source
+        );
+    }
+}

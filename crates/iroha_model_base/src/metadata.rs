@@ -103,18 +103,21 @@ impl norito::json::FastJsonWrite for Metadata {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        for (index, (key, value)) in self.0.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            for (index, (key, value)) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                norito::json::write_json_string_to(key.as_ref(), out)?;
+                out.push(':')?;
+                norito::json::JsonSerialize::json_serialize_to(value, out)?;
             }
-            norito::json::write_json_string_to(key.as_ref(), out)?;
-            out.push(':')?;
-            norito::json::JsonSerialize::json_serialize_to(value, out)?;
-        }
-        out.push('}')?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 
@@ -307,3 +310,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "metadata/checked_json_cleanup_tests.rs"]
+mod checked_json_cleanup_tests;

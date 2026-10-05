@@ -269,3 +269,31 @@ mod tests {
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 }
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_propose_runtime_upgrade_checked_container_retains_bytes_errors_and_depth() {
+        audit(&ProposeRuntimeUpgrade {
+            manifest_bytes: vec![0, 1, 2, 255],
+        });
+    }
+
+    #[test]
+    fn original_activate_runtime_upgrade_checked_container_retains_bytes_errors_and_depth() {
+        audit(&ActivateRuntimeUpgrade {
+            id: crate::runtime::RuntimeUpgradeId([3; 32]),
+        });
+    }
+
+    #[test]
+    fn original_cancel_runtime_upgrade_checked_container_retains_bytes_errors_and_depth() {
+        audit(&CancelRuntimeUpgrade {
+            id: crate::runtime::RuntimeUpgradeId([3; 32]),
+        });
+    }
+}

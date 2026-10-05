@@ -1747,3 +1747,15 @@ mod tests {
 mod captured_pin_registry_schema_tests;
 #[cfg(test)]
 mod completion_authority_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_manifest_cid_checked_container_retains_bytes_errors_and_depth() {
+        audit(&ManifestRootCid::from_blake3_digest([7; 32]).unwrap());
+    }
+}

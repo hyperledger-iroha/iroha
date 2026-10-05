@@ -862,14 +862,7 @@ impl StateTransaction<'_, '_> {
             }
         }
         let captured = self
-            .fastpq_source_context
-            .capture_transcript(
-                self.tx_call_hash,
-                entry_hash,
-                self.current_lane_id,
-                self.current_dataspace_id,
-                *self.committed_fragments,
-            )
+            .capture_original_fastpq_transcript_source(entry_hash)
             .map_err(|_| QuantityCaptureIssue::InvalidFacts)?;
         self.fastpq_source_quota
             .require_existing_quantity_capture_entry(entry_hash, captured.is_protocol_purpose())
@@ -933,14 +926,7 @@ impl StateTransaction<'_, '_> {
             }
         }
         let captured = self
-            .fastpq_source_context
-            .capture_transcript(
-                self.tx_call_hash,
-                entry_hash,
-                self.current_lane_id,
-                self.current_dataspace_id,
-                *self.committed_fragments,
-            )
+            .capture_original_fastpq_transcript_source(entry_hash)
             .map_err(|_| QuantityCaptureIssue::InvalidFacts)?;
         self.fastpq_source_quota
             .require_existing_quantity_capture_entry(entry_hash, captured.is_protocol_purpose())
@@ -1309,14 +1295,7 @@ impl StateTransaction<'_, '_> {
             .tx_call_hash
             .ok_or(QuantityCaptureIssue::UnsupportedOwner)?;
         let source = self
-            .fastpq_source_context
-            .capture_transcript(
-                self.tx_call_hash,
-                hash,
-                self.current_lane_id,
-                self.current_dataspace_id,
-                *self.committed_fragments,
-            )
+            .capture_original_fastpq_transcript_source(hash)
             .map_err(|_| QuantityCaptureIssue::UnsupportedOwner)?;
         let owner = self
             .fastpq_source_quota
@@ -1337,14 +1316,7 @@ impl StateTransaction<'_, '_> {
     ) -> Result<Hash, QuantityCaptureIssue> {
         let hash = retained.source.entry_hash();
         let actual = self
-            .fastpq_source_context
-            .capture_transcript(
-                self.tx_call_hash,
-                hash,
-                self.current_lane_id,
-                self.current_dataspace_id,
-                *self.committed_fragments,
-            )
+            .capture_original_fastpq_transcript_source(hash)
             .map_err(|_| QuantityCaptureIssue::UnsupportedOwner)?;
         if self.tx_call_hash != Some(hash)
             || actual != retained.source

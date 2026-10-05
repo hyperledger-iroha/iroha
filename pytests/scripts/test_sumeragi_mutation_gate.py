@@ -194,7 +194,7 @@ def test_package_mutation_environment_is_confined_to_its_actual_owner(monkeypatc
     code, _, _ = gate.cargo_test(args, tmp_path, mutation, ["named"], None, 0, tmp_path / "log")
     crate, features, environment = gate.package_options(args)
     assert code == 0
-    assert captured["command"][:9] == ["cargo", "test", "-p", crate, "--release", "--features", features, "--lib", "--"]
+    assert captured["command"][:10] == ["cargo", "test", "--locked", "-p", crate, "--release", "--features", features, "--lib", "--"]
     assert captured["env"][environment] == mutation
     foreign = "SUMERAGI_MUTATION" if core else "SUMERAGI_CORE_MUTATION"
     assert foreign not in captured["env"]
@@ -222,6 +222,7 @@ def test_registered_core_rules_have_real_hooks_and_named_core_regressions():
     source = gate.REPO / "crates" / "iroha_core" / "src"
     text = "\n".join(path.read_text() for path in source.rglob("*.rs"))
     functions = set(re.findall(r"\bfn\s+(\w+)\s*\(", text))
+    functions.update(re.findall(r"\bstate_test!\s*\{\s*(?:sync|result|large_stack|consensus_stack)\s+(\w+)\b", text))
     ids = [mutation.id for mutation in gate.CORE_MUTATIONS]
     assert len(ids) == len(set(ids))
     for mutation in gate.CORE_MUTATIONS:
@@ -333,7 +334,7 @@ def test_core_profile_is_identical_for_baseline_and_mutant_and_recorded(monkeypa
         assert gate.cargo_test(args, tmp_path, mutation, ["named"], None, 0,
                                tmp_path / f"{mutation}.log")[0] == 0
     assert captured[0] == captured[1]
-    assert captured[0][4:6] == ["--profile", profile]
+    assert captured[0][5:7] == ["--profile", profile]
     monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", "--core", "--core-profile", profile,
                                      "--only", "HC1", "--strict", "--fast", "--target-dir", str(tmp_path)])
     monkeypatch.setattr(gate, "evaluate_baseline", lambda *_: {"id": "baseline", "verdict": "pass"})
@@ -1405,8 +1406,8 @@ def test_daemon_mutation_environment_never_reaches_dependency_owners(
     code, _, _ = gate.cargo_test(args, tmp_path, mutation, ["named"], None, 0, tmp_path / "log")
     assert code == 0
     package, features, selected_environment = gate.package_options(args)
-    assert captured["command"][:8] == [
-        "cargo", "test", "-p", package, "--release", "--features", features, "--lib"
+    assert captured["command"][:9] == [
+        "cargo", "test", "--locked", "-p", package, "--release", "--features", features, "--lib"
     ]
     if owner == "daemon":
         assert (package, features, selected_environment) == (
@@ -1493,3 +1494,94 @@ def test_daemon_build_script_has_no_shipping_fault_control(
     assert "cargo:rustc-cfg=sumeragi_core_mutation=" not in result.stdout
     if not feature and mutation:
         assert "ignored" in result.stdout
+
+
+def capture_command(monkeypatch,tmp_path):
+    captured={}
+    class Child:
+        returncode=0
+        def communicate(self,*,timeout=None): return '',None
+    def popen(command,**kwargs):
+        captured.update(command=command,seed_base=kwargs['env'].get('SUMERAGI_SIM_SEED_BASE'))
+        return Child()
+    monkeypatch.setattr(gate.subprocess,'Popen',popen)
+    gate.cargo_test(SimpleNamespace(),tmp_path,None,[],None,900,tmp_path/'cargo.log',no_run=True)
+    return captured
+
+def test_actual_mutation_command_cannot_resolve_an_unlocked_dependency_graph(monkeypatch,tmp_path):
+    assert '--locked' in capture_command(monkeypatch,tmp_path)['command']
+
+def test_actual_mutation_command_rejects_inherited_simulator_seed_base(monkeypatch,tmp_path):
+    monkeypatch.setenv('SUMERAGI_SIM_SEED_BASE','123456789')
+    assert capture_command(monkeypatch,tmp_path)['seed_base'] is None
+
+@pytest.mark.parametrize('scenarios,expected',[ ((),[900]), (('F1',),[900,3600]) ])
+def test_actual_baseline_keeps_original_named_and_scenario_deadlines(monkeypatch,tmp_path,scenarios,expected):
+    if scenarios: scenarios=(next(iter(gate.SCENARIOS)),)
+    calls=[]
+    monkeypatch.setattr(gate,'build',lambda *args:gate.Step(status='pass'))
+    def step(args,target,mutation,filters,seeds,timeout,log):
+        calls.append(timeout);return gate.Step(status='pass')
+    monkeypatch.setattr(gate,'run_step',step)
+    args=SimpleNamespace(target_dir=tmp_path,timeout_test=900,timeout_scenario=3600,seeds=200,fast=False)
+    result=gate.evaluate_baseline(args,tmp_path,[SimpleNamespace(tests=('tests::named',),scenarios=scenarios)])
+    assert result['verdict']=='pass'
+    assert calls==expected,'an aggregate baseline must not replenish the configured deadlines'
+
+def setup_main(monkeypatch,tmp_path,extra=()):
+    monkeypatch.setattr(sys,'argv',['sumeragi_mutation_gate.py','--only','MS1','--fast','--jobs','1','--target-dir',str(tmp_path),*extra])
+    captured={}
+    def baseline(args,*rest):
+        captured['build_cap']=args.timeout_build
+        return {'id':'baseline','verdict':'pass'}
+    monkeypatch.setattr(gate,'evaluate_baseline',baseline)
+    monkeypatch.setattr(gate,'evaluate',lambda args,target,mu:{'id':mu.id,'verdict':'killed_by_test','named':{'failed':['tests::named']}})
+    return captured
+
+def test_actual_mutation_default_build_deadline_is_twenty_minutes(monkeypatch,tmp_path):
+    captured=setup_main(monkeypatch,tmp_path)
+    assert gate.main()==0
+    assert captured['build_cap']==1200
+
+def test_actual_strict_gate_cannot_pass_without_an_unmutated_baseline(monkeypatch,tmp_path):
+    setup_main(monkeypatch,tmp_path,('--strict','--skip-baseline'))
+    with pytest.raises(SystemExit) as error: gate.main()
+    assert error.value.code==2
+
+
+@pytest.mark.parametrize("timeout", [900, 1200, 3600])
+@pytest.mark.parametrize("completed_code", [0, 101])
+def test_mutation_command_retains_cap_failure_after_late_natural_completion(
+    monkeypatch, tmp_path, timeout, completed_code
+):
+    output = "test tests::named ... " + ("ok" if completed_code == 0 else "FAILED") + "\n"
+    class Process:
+        returncode = completed_code
+        def communicate(self, *, timeout=None):
+            return output, None
+    moments = iter((100.0, 100.0 + timeout + 1.0))
+    monkeypatch.setattr(gate.time, "monotonic", lambda: next(moments))
+    monkeypatch.setattr(gate.subprocess, "Popen", lambda *_args, **_kwargs: Process())
+    code, retained, elapsed = gate.cargo_test(
+        SimpleNamespace(), tmp_path, None, ["named"], None, timeout, tmp_path / "late.log"
+    )
+    assert elapsed == timeout + 1.0
+    assert retained == output
+    assert code is None, "a late natural completion cannot pass or kill a mutant"
+
+
+def test_mutation_command_keeps_explicit_unbounded_diagnostic_wait(
+    monkeypatch, tmp_path
+):
+    class Process:
+        returncode = 0
+        def communicate(self, *, timeout=None):
+            assert timeout is None
+            return "retained original output", None
+    moments = iter((100.0, 10000.0))
+    monkeypatch.setattr(gate.time, "monotonic", lambda: next(moments))
+    monkeypatch.setattr(gate.subprocess, "Popen", lambda *_args, **_kwargs: Process())
+    code, retained, elapsed = gate.cargo_test(
+        SimpleNamespace(), tmp_path, None, [], None, 0, tmp_path / "unbounded.log"
+    )
+    assert (code, retained, elapsed) == (0, "retained original output", 9900.0)

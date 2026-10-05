@@ -2092,4 +2092,45 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn original_manifest_checked_container_retains_all_five_levels_and_original_entries() {
+        let value = cbdc_manifest_fixture();
+        let source = value.entries.as_ptr();
+        crate::checked_container_refusal_controls::audit(&value);
+        assert_eq!(value.entries.as_ptr(), source);
+    }
+
+    #[test]
+    fn original_manifest_entry_checked_container_retains_notes_effect_scope_and_depth() {
+        let value = cbdc_manifest_fixture();
+        for entry in &value.entries {
+            let original = json::to_json(&entry_to_json_value(entry)).unwrap();
+            crate::checked_container_refusal_controls::audit_write(&original, |out| {
+                entry_json_serialize_to(entry, out)
+            });
+        }
+    }
+
+    #[test]
+    fn original_manifest_scope_checked_container_retains_all_original_fields_and_depth() {
+        let value = cbdc_manifest_fixture();
+        for entry in &value.entries {
+            let original = json::to_json(&scope_to_json_value(&entry.scope)).unwrap();
+            crate::checked_container_refusal_controls::audit_write(&original, |out| {
+                scope_json_serialize_to(&entry.scope, out)
+            });
+        }
+    }
+
+    #[test]
+    fn original_manifest_effect_checked_container_retains_both_nested_variants_and_depth() {
+        let value = cbdc_manifest_fixture();
+        for entry in &value.entries {
+            let original = json::to_json(&effect_to_json_value(&entry.effect)).unwrap();
+            crate::checked_container_refusal_controls::audit_write(&original, |out| {
+                effect_json_serialize_to(&entry.effect, out)
+            });
+        }
+    }
 }

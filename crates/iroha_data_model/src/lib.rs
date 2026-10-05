@@ -389,3 +389,9 @@ mod manual_schema_identity;
 
 #[cfg(test)]
 mod registration_identity_tests;
+
+#[cfg(test)]
+mod checked_snapshot_leaf_cleanup_tests;
+
+#[cfg(test)]
+mod checked_container_refusal_controls;
