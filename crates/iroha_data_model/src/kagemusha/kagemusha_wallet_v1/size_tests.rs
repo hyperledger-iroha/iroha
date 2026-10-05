@@ -19,7 +19,7 @@ use super::{
 /// 3.5 KB budget shape (`k = 12`, one lane), with the empty mask and with the blacklist
 /// list-age control alike.
 // TODO(G3): re-measure once σ_send carries the blacklist non-membership, quota and lease checks
-// (spec §7); the R9 budget then bounds Ω by `8,385 − |σ_send|`.
+// (spec §7); the R9 budget then bounds Ω by `8,319 − |σ_send|`.
 const MEASURED_SIGMA_SEND_BYTES: usize = 3_296;
 /// Placeholder Ω transport proof length; Ω is unbuilt and unmeasured (spec §11).
 // TODO(G3): replace with the exact transport length of the frozen verifying-key allowlist
@@ -76,7 +76,10 @@ fn payment_with(
     KagemushaWalletMessageV1::Payment { payment }
 }
 
-/// `credited` with its `σ_recv` (Receive) or Ω(h) proof and opening (Status) resized.
+/// Size-only stand-in copy with its `σ_recv` (Receive) or Ω(h) proof resized.
+///
+/// An indexed opening keeps its genuine path at the fixed width. Another requested width
+/// deliberately creates malformed shape for refusal and raw encoded-size controls only.
 fn credited_with(
     credited: &KagemushaWalletCreditedV1,
     proof: usize,
@@ -89,7 +92,9 @@ fn credited_with(
         }
         KagemushaWalletCreditedEvidenceV1::Status { status } => {
             status.lineage.proof = bytes_of(proof);
-            status.opening.siblings = stand_in_siblings(siblings);
+            if siblings != KAGEMUSHA_WALLET_INDEXED_TREE_DEPTH_V1 {
+                status.opening.siblings = stand_in_siblings(siblings);
+            }
         }
     }
     KagemushaWalletMessageV1::Credited { credited }
@@ -273,8 +278,8 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
     );
     println!(
         "KAGEMUSHA wallet V1 fixed overheads (bytes): Payment {} + |Ω proof| + |σ_send|, \
-         Credited::Receive {} + |σ_recv|, Credited::Status {} + |Ω(h) proof| + {} per sibling, \
-         Lineage {} + |Ω proof|; largest Ω proof in a Payment with the measured σ_send {}, \
+         Credited::Receive {} + |σ_recv|, Credited::Status {} + |Ω(h) proof| (fixed 32 siblings; \
+         malformed extra sibling adds {} bytes), Lineage {} + |Ω proof|; largest Ω proof in a Payment with the measured σ_send {}, \
          largest |Ω proof| + |σ_send| {}, largest Ω(h) proof in Credited::Status with {} \
          siblings {}",
         sizes.payment_overhead,
@@ -360,7 +365,8 @@ fn kagemusha_wallet_v1_size_search_helpers() {
     assert_eq!(resized.send.lineage.lineage().expect("Ω").proof.len(), 50);
 
     let credited = f.credited_status(&payment, 32, 2);
-    let KagemushaWalletMessageV1::Credited { credited: resized } = credited_with(&credited, 40, 3)
+    let KagemushaWalletMessageV1::Credited { credited: resized } =
+        credited_with(&credited, 40, KAGEMUSHA_WALLET_INDEXED_TREE_DEPTH_V1)
     else {
         panic!("credited");
     };
@@ -372,13 +378,54 @@ fn kagemusha_wallet_v1_size_search_helpers() {
             status.lineage.proof.len(),
             status.opening.sibling_values().count()
         ),
+        (40, KAGEMUSHA_WALLET_INDEXED_TREE_DEPTH_V1)
+    );
+    status.opening.validate().expect("fixed-width opening");
+    let KagemushaWalletMessageV1::Credited {
+        credited: malformed,
+    } = credited_with(&credited, 40, 3)
+    else {
+        panic!("malformed credited");
+    };
+    let KagemushaWalletCreditedEvidenceV1::Status {
+        status: malformed_status,
+    } = &malformed.evidence
+    else {
+        panic!("malformed status");
+    };
+    // Retain the original resized-shape observation, but three siblings cannot be admitted.
+    assert_eq!(
+        (
+            malformed_status.lineage.proof.len(),
+            malformed_status.opening.sibling_values().count()
+        ),
         (40, 3)
     );
-    status.opening.validate().expect("resized opening");
-    let one_byte_more = envelope_len(&credited_with(&credited, 33, 2));
+    assert!(matches!(
+        malformed_status.opening.validate(),
+        Err(KagemushaWalletValidationErrorV1::InvalidField {
+            field: "indexed_opening.siblings"
+        })
+    ));
+    assert!(
+        KagemushaWalletEnvelopeV1::new(KagemushaWalletMessageV1::Credited {
+            credited: malformed
+        })
+        .to_canonical_bytes()
+        .is_err()
+    );
+    let one_byte_more = envelope_len(&credited_with(
+        &credited,
+        33,
+        KAGEMUSHA_WALLET_INDEXED_TREE_DEPTH_V1,
+    ));
     assert_eq!(
         one_byte_more,
-        envelope_len(&credited_with(&credited, 32, 2)) + 1
+        envelope_len(&credited_with(
+            &credited,
+            32,
+            KAGEMUSHA_WALLET_INDEXED_TREE_DEPTH_V1
+        )) + 1
     );
     let lineage = f.lineage_message(&payment);
     assert_eq!(

@@ -141,7 +141,7 @@ fn sample_effects(f: &IdentityFixture) -> [KagemushaWalletEffectV1; 8] {
         },
         KagemushaWalletEffectV1::ArchiveSent {
             credit_id: field_value(0x71),
-            credited: [0x78; 32],
+            credited: field_value(0x78),
         },
         KagemushaWalletEffectV1::Unload {
             nullifier: kagemusha_wallet_unload_nullifier_v1(&body.scheme_id, &body.wallet_id, 2),
@@ -1200,7 +1200,7 @@ fn kagemusha_wallet_v1_statement_successor_rules() {
         },
         KagemushaWalletEffectV1::ArchiveSent {
             credit_id: field_value(0x71),
-            credited: [0x78; 32],
+            credited: field_value(0x78),
         },
         KagemushaWalletEffectV1::Unload {
             nullifier: kagemusha_wallet_unload_nullifier_v1(&body.scheme_id, &body.wallet_id, 0),

@@ -3,7 +3,6 @@
 use p256::ecdsa::SigningKey;
 
 use super::*;
-use crate::kagemusha::kagemusha_wallet_v1::digest::kagemusha_wallet_digest_v1;
 use crate::kagemusha::kagemusha_wallet_v1::{
     KAGEMUSHA_WALLET_VERSION_V1, KagemushaWalletValidationErrorV1,
     codec_tests::{assert_every_flip_rejected_or_rebound, norito_tag},

@@ -804,11 +804,11 @@ fn sample_messages(f: &MessageFixture) -> [KagemushaWalletMessageV1; 7] {
 #[test]
 fn kagemusha_wallet_v1_message_transcript_lengths_are_pinned() {
     assert_eq!(KAGEMUSHA_WALLET_OFFER_BODY_TRANSCRIPT_BYTES_V1, 194);
-    assert_eq!(KAGEMUSHA_WALLET_REQUEST_BODY_TRANSCRIPT_BYTES_V1, 354);
+    assert_eq!(KAGEMUSHA_WALLET_REQUEST_BODY_TRANSCRIPT_BYTES_V1, 418);
     assert_eq!(KAGEMUSHA_WALLET_PAYMENT_TRANSCRIPT_BYTES_V1, 163);
     assert_eq!(KAGEMUSHA_WALLET_CREDIT_STATUS_TRANSCRIPT_BYTES_V1, 162);
     assert_eq!(KAGEMUSHA_WALLET_CREDITED_TRANSCRIPT_BYTES_V1, 99);
-    assert_eq!(KAGEMUSHA_WALLET_CREDIT_OPENING_DEPTH_V1, 256);
+    assert_eq!(KAGEMUSHA_WALLET_CREDIT_OPENING_DEPTH_V1, 32);
     assert_eq!(KAGEMUSHA_WALLET_SESSION_CONTROL_UNION_BYTES_V1, 34);
     assert_eq!(
         KAGEMUSHA_WALLET_SESSION_CONTROL_BODY_TRANSCRIPT_BYTES_V1,
@@ -1295,7 +1295,56 @@ fn kagemusha_wallet_v1_send_rule_and_send_effect() {
     let same_key = same_key_credential(&f.receiver);
     let (mut body, slot, certificates) = f.request_parts(true, 1_000);
     body.payer_wallet_id = same_key.body.wallet_id;
-    let same_key_request = f.sign_request(&body, slot, certificates).expect("request");
+    body.payer_account_digest = same_key.body.account_digest;
+    // The ordinary fixture Offer names another payer, so canonical construction refuses it.
+    assert_invalid(
+        f.sign_request(&body, slot, certificates.clone()),
+        "request.payer_wallet_id",
+    );
+    // Even an authenticated Offer naming this payer cannot reuse the receiver payment key.
+    let mut offer_body = f.offer().body;
+    offer_body.payer_wallet_id = same_key.body.wallet_id;
+    offer_body.payer_credential_digest = same_key.credential_digest();
+    let same_key_offer = KagemushaWalletOfferV1::sign(
+        offer_body,
+        same_key,
+        &f.receiver.enrollment_certificate,
+        raw_output(&f.receiver.payment, &offer_body.signing_message()),
+    )
+    .expect("authenticated same-key Offer");
+    same_key_offer
+        .verify(&f.payer.scheme)
+        .expect("same-key issuer");
+    assert_invalid(
+        KagemushaWalletRequestV1::sign(
+            &f.payer.scheme,
+            &same_key_offer,
+            body,
+            f.receiver.credential,
+            slot,
+            certificates.clone(),
+            raw_output(&f.receiver.payment, &body.signing_message()),
+        ),
+        "request.payment_key",
+    );
+    // Build a receiver-signed adversarial object directly in this test: no canonical constructor
+    // is bypassed in production, and the retained Send rule must independently refuse it.
+    let same_key_request = KagemushaWalletRequestV1 {
+        body,
+        receiver_credential: f.receiver.credential,
+        fee_schedule: slot,
+        certificates,
+        signature: kagemusha_wallet_freeze_signature_v1(
+            &f.receiver.credential.body.payment_key,
+            Domain::Request,
+            &body.signing_message(),
+            raw_output(&f.receiver.payment, &body.signing_message()),
+        )
+        .expect("adversarial receiver signature"),
+    };
+    same_key_request
+        .validate()
+        .expect("receiver-authenticated shape");
     let mut same_key_state =
         KagemushaWalletStateV1::bootstrap(&same_key, field_value(0x5d)).expect("state");
     same_key_state.core.policy_epoch = state.core.policy_epoch;
@@ -2123,8 +2172,32 @@ fn kagemusha_wallet_v1_credit_status_of_a_folded_head() {
         credit_id: flip_bit(&digests.credit_id, 100),
         ..MessageFixture::credit_leaf(&payment, false)
     };
+    assert_invalid(tree.membership(&absent.key()), "indexed_tree.absent");
+    let (low, absence_path) = tree.non_membership(&absent.key()).expect("ordered absence");
+    crate::kagemusha::kagemusha_wallet_v1::poseidon::kagemusha_wallet_indexed_verify_non_membership_v1(
+        &tree.root(), &absent.key(), &low, &absence_path,
+    )
+    .expect("authenticated ordered absence");
+    assert_invalid(
+        KagemushaWalletCreditOpeningV1::new(&absent, &low, &absence_path),
+        "credit_opening.leaf",
+    );
+    // A forged member claim for the absent key reuses the real occupied slot's path. This
+    // standalone shape is canonical, but cannot match the certified Ω(h) root. Keep Ω, τ,
+    // the statement and all funded fixture state intact; only the adversarial claim changes.
     let mut absence = status.clone();
-    absence.opening = credit_opening_in(&tree, &absent);
+    absence.opening = KagemushaWalletCreditOpeningV1 {
+        credit_id: absent.credit_id,
+        payment_digest: absent.payment_digest,
+        burned: absent.burned,
+        next_key: [0; 32],
+        slot: status.opening.slot,
+        siblings: status.opening.siblings.clone(),
+    };
+    absence
+        .opening
+        .validate()
+        .expect("adversarial member claim shape");
     assert_invalid(absence.credit_status_digest(), "credit_status.opening");
 }
 

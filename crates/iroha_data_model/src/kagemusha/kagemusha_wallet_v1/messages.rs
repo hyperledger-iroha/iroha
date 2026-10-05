@@ -62,7 +62,6 @@ pub(super) mod messages_tests;
 
 const DIGEST_BYTES: usize = 32;
 const U16_BYTES: usize = 2;
-const U32_BYTES: usize = 4;
 const U64_BYTES: usize = 8;
 const U128_BYTES: usize = 16;
 
