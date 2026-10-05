@@ -493,7 +493,6 @@ impl Core {
             }
             AppliedConfig::Boundary { next, after_next } => {
                 if height != current.epoch.last_height
-                    || !header.attest
                     || !next.follows(current)
                     || !next.epoch.contains(next_height)
                     || !after_next.same_authority(&next)

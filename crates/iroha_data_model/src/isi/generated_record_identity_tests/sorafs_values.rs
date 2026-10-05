@@ -49,7 +49,70 @@ pub(super) fn values() -> Vec<Value> {
         minimum_height: 9,
         minimum_block_hash: [0x65; 32],
     };
-    vec![capacity, initializer, capture(assertion)]
+    let mut values = vec![capacity, initializer, capture(assertion)];
+    values.extend(completion_authority_values());
+    values.push(crate::isi::musubi::generated_identity_values::provider_attestation_value());
+    values
+}
+
+#[test]
+fn current_completion_records_keep_full_governed_and_signed_canonical_frames() {
+    use crate::isi::musubi::RegisterMusubiProviderBundleAttestationV1;
+    let rows = values();
+    assert_eq!(rows.len(), 7);
+    let nominals: std::collections::BTreeSet<_> = rows
+        .iter()
+        .map(|row| row.get("nominal").unwrap().as_str().unwrap())
+        .collect();
+    assert_eq!(nominals.len(), rows.len());
+    for nominal in [
+        "iroha_data_model::isi::sorafs::CompleteReplicationOrder",
+        "iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority",
+        "iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority",
+        "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1",
+    ] {
+        assert!(nominals.contains(nominal));
+        let row = rows
+            .iter()
+            .find(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal))
+            .unwrap();
+        let cases = super::super::captured(nominal)
+            .get("cases")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(cases.len(), 1);
+        assert_eq!(super::super::frame_fields(row), cases[0]);
+    }
+    let row = rows
+        .iter()
+        .find(|row| {
+            row.get("nominal").unwrap().as_str().unwrap()
+                == "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1"
+        })
+        .unwrap();
+    let bytes = hex::decode(row.get("frame").unwrap().as_str().unwrap()).unwrap();
+    let mut decoded: RegisterMusubiProviderBundleAttestationV1 =
+        norito::decode_from_bytes(&bytes).unwrap();
+    decoded.validate().unwrap();
+    decoded
+        .attestation
+        .verify(&decoded.attestation.payload.binding)
+        .unwrap();
+    assert_eq!(norito::to_bytes(&decoded).unwrap(), bytes);
+    decoded
+        .attestation
+        .payload
+        .binding
+        .completion_authority
+        .signer_policy
+        .revision += 1;
+    assert!(
+        decoded
+            .attestation
+            .verify(&decoded.attestation.payload.binding)
+            .is_err(),
+        "changed complete signer binding invalidates its original signature"
+    );
 }
 
 /// Capture the three instructions containing the current governed completion signer.

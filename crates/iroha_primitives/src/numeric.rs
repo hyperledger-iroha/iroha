@@ -8,6 +8,7 @@
 //! The mantissa is a raw [`crate::bigint::BigInt`] integer (no decimal scale
 //! is embedded in the integer), and the scale is stored separately as a `u32`.
 use crate::bigint::{BigInt, BigIntAdmissionCloneError};
+mod prepared_quantity;
 use core::{cmp::Ordering, str::FromStr};
 pub use iroha_primitives_derive::numeric;
 use norito::{
@@ -16,6 +17,9 @@ use norito::{
 };
 use num_bigint::{BigInt as UnboundedBigInt, BigUint as UnboundedBigUint, Sign as UnboundedSign};
 use num_traits::{One as _, Signed as _, Zero as _};
+pub use prepared_quantity::{
+    ChargedQuantity, PreparedQuantityDecode, QuantityDecodePlan, QuantityDestinationError,
+};
 use std::{
     alloc::Layout,
     string::{String, ToString},
@@ -167,11 +171,14 @@ impl FastJsonWrite for NumericSpec {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"scale\":")?;
-        self.scale.json_serialize_to(out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), json::BoundedJsonError> {
+            out.push_str("{\"scale\":")?;
+            self.scale.json_serialize_to(out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 impl JsonDeserialize for NumericSpec {
@@ -589,7 +596,7 @@ impl Numeric {
     ///
     /// Zero at nonzero scale is rejected without bigint division. Every other
     /// nonzero-scale value emits exactly one [`NumericWorkStep::CanonicalityProbe`]
-    /// before its quotient/remainder-by-ten operation.
+    /// before its exact divisibility-by-ten probe.
     ///
     /// # Errors
     /// Returns noncanonical input or propagates an observer rejection before
@@ -601,27 +608,13 @@ impl Numeric {
     where
         F: FnMut(NumericWorkStep) -> Result<(), E>,
     {
-        if self.scale == 0 {
-            return Ok(());
-        }
-        if self.mantissa.is_zero() {
-            return Err(ObservedNumericError::Numeric(
-                NumericOperationError::NonCanonical,
-            ));
-        }
-        observer(NumericWorkStep::CanonicalityProbe {
-            mantissa_limbs: logical_limbs(self.mantissa.inner()),
-            scale: u8::try_from(self.scale).expect("validated scale fits u8"),
-        })
-        .map_err(ObservedNumericError::Observer)?;
-        let ten = UnboundedBigInt::from(10_u8);
-        let (_, remainder) = quotient_remainder(self.mantissa.inner(), &ten);
-        if remainder.is_zero() {
-            return Err(ObservedNumericError::Numeric(
-                NumericOperationError::NonCanonical,
-            ));
-        }
-        Ok(())
+        validate_decimal_parts_observed(
+            self.scale,
+            self.mantissa.is_zero(),
+            logical_limbs(self.mantissa.inner()),
+            || magnitude_divisible_by_ten(self.mantissa.inner().iter_u64_digits().rev()),
+            observer,
+        )
     }
     /// Checked canonical decimal negation.
     ///
@@ -2380,6 +2373,41 @@ fn infallible_observed<T>(
         Err(ObservedNumericError::Observer(never)) => match never {},
     }
 }
+/// Shared exact canonicality decision; the observer still precedes all probe work.
+fn validate_decimal_parts_observed<E>(
+    scale: u32,
+    zero: bool,
+    mantissa_limbs: u16,
+    divisible_by_ten: impl FnOnce() -> bool,
+    observer: &mut impl FnMut(NumericWorkStep) -> Result<(), E>,
+) -> Result<(), ObservedNumericError<E>> {
+    if scale == 0 {
+        return Ok(());
+    }
+    if zero {
+        return Err(ObservedNumericError::Numeric(
+            NumericOperationError::NonCanonical,
+        ));
+    }
+    observer(NumericWorkStep::CanonicalityProbe {
+        mantissa_limbs,
+        scale: u8::try_from(scale).expect("validated scale fits u8"),
+    })
+    .map_err(ObservedNumericError::Observer)?;
+    if divisible_by_ten() {
+        return Err(ObservedNumericError::Numeric(
+            NumericOperationError::NonCanonical,
+        ));
+    }
+    Ok(())
+}
+/// Exact unsigned-magnitude remainder, highest u64 digit first, without scratch.
+/// Sign does not affect whether a signed mantissa is divisible by ten.
+fn magnitude_divisible_by_ten(digits: impl Iterator<Item = u64>) -> bool {
+    digits.fold(0_u128, |remainder, digit| {
+        ((remainder << 64) | u128::from(digit)) % 10
+    }) == 0
+}
 fn logical_limbs(value: &UnboundedBigInt) -> u16 {
     let bits = value.bits();
     let limbs = bits.max(1).div_ceil(64);
@@ -3091,7 +3119,7 @@ mod scale_ {
     }
     #[allow(unexpected_cfgs)]
     #[derive(norito::Encode, norito::Decode)]
-    #[norito(decode_from_slice)]
+    #[norito(decode_fields, decode_from_slice)]
     /// Internal helper used to encode/decode Numeric as `(mantissa, scale)`.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_primitives::numeric::scale_::NumericScaleHelper")]

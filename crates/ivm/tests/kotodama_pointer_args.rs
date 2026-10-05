@@ -15,7 +15,7 @@ fn account_from_public_key(public_key: &str) -> AccountId {
     AccountId::new(public_key.parse().expect("public key must be valid"))
 }
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {
-    let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
+    let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
         i128::from(key),
     ))
     .expect("encode canonical pointer-backed StateMap key");

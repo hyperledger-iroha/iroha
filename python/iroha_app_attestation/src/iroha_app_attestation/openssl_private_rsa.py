@@ -1,4 +1,4 @@
-"""Private RSA operations in the protected worker's already loaded TLS library.
+"""Private RSA operations in the calling process's already loaded TLS library.
 
 Actual Root-owned physical module, crypto and TLS originals are held and
 rechecked before private intake. These local custody observations do not admit

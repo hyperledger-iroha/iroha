@@ -7,16 +7,28 @@
 use std::io::Read as _;
 
 use iroha_data_model::{
+    NetworkId,
     block::proofs::{BlockProofs, TrustedBlockProofAnchor},
     sumeragi_finality::{
         SumeragiFinalityCheckpoint, SumeragiFinalityProof, SumeragiFinalityVerifier,
+        verify_checkpoint_page,
     },
     transaction::SignedTransaction,
 };
 
 #[test]
 #[ignore = "requires an explicitly selected genuine Kagami native execution capture"]
-fn genuine_kagami_execution_captures_verify_through_public_sdk_bridge() {
+fn genuine_kagami_execution_captures_verify_through_current_sdk_evidence() {
+    let verify_capture = |network: NetworkId,
+                          checkpoint: &SumeragiFinalityCheckpoint,
+                          bytes: &[u8]|
+     -> Result<SumeragiFinalityCheckpoint, String> {
+        let proofs: Vec<SumeragiFinalityProof> =
+            norito::json::from_slice(bytes).map_err(|error| error.to_string())?;
+        verify_checkpoint_page(network, checkpoint, &proofs, 4096, 16 * 1024 * 1024)
+            .map(|page| page.checkpoint().clone())
+            .map_err(|error| error.to_string())
+    };
     let path = std::env::var_os("IROHA_KAGAMI_NATIVE_EXECUTION_CAPTURE")
         .expect("the native qualification runner must select the captured artifact");
     let mut bytes = Vec::new();
@@ -45,14 +57,9 @@ fn genuine_kagami_execution_captures_verify_through_public_sdk_bridge() {
         assert_eq!(root.height(), 1);
         assert_eq!(tip.height(), 2);
         let json = get("proof-page.json");
-        let anchor = crate::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-            root.network_id(),
-            &root,
-            &json,
-        )
-        .unwrap();
-        assert_eq!(anchor.network_id, root.network_id());
-        assert_eq!(anchor.checkpoint, tip);
+        let anchor = verify_capture(root.network_id(), &root, &json).unwrap();
+        assert_eq!(anchor.network_id(), root.network_id());
+        assert_eq!(anchor, tip);
         let mut verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
             &root,
             &root.network_id(),
@@ -124,43 +131,15 @@ fn genuine_kagami_execution_captures_verify_through_public_sdk_bridge() {
                 }
             }
             let malformed = norito::json::to_vec(&changed).unwrap();
-            assert!(
-                crate::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-                    root.network_id(),
-                    &root,
-                    &malformed,
-                )
-                .is_err()
-            );
+            assert!(verify_capture(root.network_id(), &root, &malformed,).is_err());
         }
-        assert!(
-            crate::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-                root.network_id(),
-                &tip,
-                &json,
-            )
-            .is_err()
-        );
+        assert!(verify_capture(root.network_id(), &tip, &json,).is_err());
         roots.push(root);
         pages.push(json);
     }
     assert_ne!(roots[0].network_id(), roots[1].network_id());
     for (root, foreign_page) in [(&roots[0], &pages[1]), (&roots[1], &pages[0])] {
-        assert!(
-            crate::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-                root.network_id(),
-                root,
-                foreign_page,
-            )
-            .is_err()
-        );
+        assert!(verify_capture(root.network_id(), root, foreign_page,).is_err());
     }
-    assert!(
-        crate::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-            roots[1].network_id(),
-            &roots[0],
-            &pages[0],
-        )
-        .is_err()
-    );
+    assert!(verify_capture(roots[1].network_id(), &roots[0], &pages[0],).is_err());
 }

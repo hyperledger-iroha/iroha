@@ -42,6 +42,7 @@ mod model {
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
     )]
+    #[norito(decode_fields)]
     #[allow(clippy::redundant_pub_crate)]
     pub(crate) struct BlockPayload {
         /// Essential metadata for a block in the chain.

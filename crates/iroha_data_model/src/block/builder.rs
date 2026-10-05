@@ -1,5 +1,8 @@
 //! Proposal-only block builder. Actual typed outputs are installed by one checked owner.
-use super::{BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockSignature, SignedBlock};
+use super::{
+    BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockSignature, BlockSignatures,
+    SignedBlock,
+};
 use crate::{
     consensus::{FinalizedGlobalThresholdBeaconPulseV1, NposConsensusEffects},
     da::{
@@ -12,7 +15,7 @@ use crate::{
     },
 };
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
-use std::{collections::BTreeSet, vec::Vec};
+use std::vec::Vec;
 /// Helper to incrementally assemble a block while maintaining Merkle roots.
 #[derive(Debug, Clone)]
 pub struct BlockBuilder {
@@ -132,11 +135,11 @@ impl BlockBuilder {
     /// Build untrusted structural block data with the provided signatures.
     /// Native inputs are not execution authority; callers must attach
     /// actual full results through the checked setter and validate the carrier.
-    pub fn build(mut self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
+    pub fn build(mut self, signatures: BlockSignatures) -> SignedBlock {
         self.finalize_header();
         self.into_block(signatures)
     }
-    fn into_block(self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
+    fn into_block(self, signatures: BlockSignatures) -> SignedBlock {
         let payload = BlockPayload {
             header: self.header,
             external_entrypoints: self.external_entrypoints,
@@ -166,11 +169,11 @@ impl BlockBuilder {
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedBlock, iroha_crypto::Error> {
         self.finalize_header();
-        let mut block = self.into_block(BTreeSet::new());
+        let mut block = self.into_block(BlockSignatures::default());
         let sig = SignatureOf::try_from_hash(private_key, block.hash())?;
         block
             .signatures
-            .insert(BlockSignature::new(signatory_index, sig));
+            .try_insert(BlockSignature::new(signatory_index, sig))?;
         Ok(block)
     }
     /// Convenience: sign the built header hash with a single validator and return the block.
@@ -284,7 +287,7 @@ mod tests {
         let mut builder = BlockBuilder::new(header);
         let bundle = sample_da_bundle();
         builder.set_da_commitments(Some(bundle.clone()));
-        let block = builder.build(BTreeSet::new());
+        let block = builder.build(crate::block::BlockSignatures::default());
         assert_eq!(block.da_commitments().unwrap(), &bundle);
         assert!(block.header().da_commitments_hash().is_some());
     }
@@ -299,7 +302,7 @@ mod tests {
         let mut unsigned_builder = builder.clone();
         unsigned_builder.da_commitments = Some(DaCommitmentBundle::default());
         unsigned_builder.da_pin_intents = Some(DaPinIntentBundle::default());
-        let unsigned = unsigned_builder.build(BTreeSet::new());
+        let unsigned = unsigned_builder.build(crate::block::BlockSignatures::default());
         assert!(unsigned.da_commitments().is_none());
         assert!(unsigned.header().da_commitments_hash().is_none());
         assert!(unsigned.da_pin_intents().is_none());

@@ -133,9 +133,10 @@ fn resource_gather_tracks_actual_sidecar_bytes_and_resident_queue_memberships() 
         iroha_crypto::SignatureOf::try_from_hash(key.private_key(), block.header().hash()).unwrap();
     block
         .replace_signatures(
-            [iroha_data_model::block::BlockSignature::new(0, signature)]
-                .into_iter()
-                .collect(),
+            iroha_data_model::block::BlockSignatures::try_from_iter([
+                iroha_data_model::block::BlockSignature::new(0, signature),
+            ])
+            .expect("at most 31 block signatures"),
         )
         .unwrap();
     let block_hash = block.hash();

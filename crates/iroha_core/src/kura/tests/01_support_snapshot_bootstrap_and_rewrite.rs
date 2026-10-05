@@ -545,6 +545,7 @@ fn native_storage_original_frames_and_certificates_survive_strict_restart() {
             .read_authenticated_execution_wire(
                 &authority,
                 original_wires[height as usize - 1].len() as u64,
+                &history_budget,
             )
             .unwrap()
             .unwrap();
@@ -552,7 +553,7 @@ fn native_storage_original_frames_and_certificates_survive_strict_restart() {
             &retained,
             authority.block()
         ));
-        assert_eq!(bytes, original_wires[height as usize - 1]);
+        assert_eq!(bytes.as_slice(), original_wires[height as usize - 1]);
     }
     assert!(!reopened.store_root().join("merge_ledger").exists());
     assert!(!reopened.store_root().join("v2_finality").exists());
@@ -575,15 +576,24 @@ fn native_storage_reads_preserve_original_bytes_when_recovery_or_poison_blocks_a
         };
         flag.store(true, Ordering::Release);
         assert!(
-            kura.read_authenticated_execution_wire(&authority, original.len() as u64)
-                .is_err()
+            kura.read_authenticated_execution_wire(
+                &authority,
+                original.len() as u64,
+                &chain.state().ivm_execution_budget()
+            )
+            .is_err()
         );
         flag.store(false, Ordering::Release);
         assert_eq!(
-            kura.read_authenticated_execution_wire(&authority, original.len() as u64)
-                .unwrap()
-                .unwrap()
-                .1,
+            kura.read_authenticated_execution_wire(
+                &authority,
+                original.len() as u64,
+                &chain.state().ivm_execution_budget()
+            )
+            .unwrap()
+            .unwrap()
+            .1
+            .as_slice(),
             original
         );
     }

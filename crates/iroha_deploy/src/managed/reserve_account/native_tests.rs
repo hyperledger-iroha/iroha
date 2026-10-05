@@ -107,7 +107,7 @@ fn generated_native_registration_retains_exact_reserve_operator_wallet_and_disti
     let set_finality = verify_carrier(&before, &set).unwrap();
     let schema = State::native_world_schema_hash_v1().unwrap();
     let policy_proof = native.policy_proof(&manager.account);
-    let selected = policy_proof
+    let selected_policy = policy_proof
         .verify(
             &manager.chain.to_string(),
             manager.network_id,
@@ -117,9 +117,9 @@ fn generated_native_registration_retains_exact_reserve_operator_wallet_and_disti
             &before.verified_tip().unwrap(),
         )
         .unwrap();
-    assert_eq!(selected.current().unwrap().policy, policy);
+    assert_eq!(selected_policy.current().unwrap().policy, policy);
     assert_eq!(
-        selected.current().unwrap().policy_digest,
+        selected_policy.current().unwrap().policy_digest,
         policy.digest().unwrap()
     );
 
@@ -244,7 +244,7 @@ fn generated_native_registration_retains_exact_reserve_operator_wallet_and_disti
     assert_eq!(instruction.terms, underwriting);
     assert_eq!(
         instruction.policy_digest,
-        selected.current().unwrap().policy_digest
+        selected_policy.current().unwrap().policy_digest
     );
     let wire = signed.encode_wire_v1().unwrap();
     let operation_bytes = std::fs::read(path.join("operation.json")).unwrap();
@@ -378,7 +378,7 @@ fn generated_native_registration_retains_exact_reserve_operator_wallet_and_disti
     ] {
         assert_eq!(time, finalized.block_time_ms / 1_000);
     }
-    assert_eq!(current.policy(), selected.current().unwrap());
+    assert_eq!(current.policy(), selected_policy.current().unwrap());
     assert_eq!(current.height(), finalized.height);
     assert!(absent.verify(&expected, &carrier).is_err());
     assert!(

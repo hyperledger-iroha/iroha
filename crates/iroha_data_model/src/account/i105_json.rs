@@ -20,7 +20,8 @@ const I105_CHECKSUM_LEN: usize = 6;
 /// more than six bits. The non-zero V1 header also means the emitted numeral contains at least `N`
 /// digits. Accounting for the partially occupied final limb, the reserved scratch is therefore at
 /// most twice the complete emitted JSON body. Allocation is attempted fallibly before any unchecked
-/// vector push.
+/// vector push. The exact scratch layout is charged to any active Norito resource scope before
+/// requesting native storage.
 pub(super) fn write_bounded(
     account: &AccountId,
     output: &mut dyn JsonWriteSink,
@@ -114,6 +115,8 @@ fn try_allocate_exact_limbs(length: usize) -> Result<Box<[MaybeUninit<u64>]>, Bo
     if layout.size() == 0 {
         return Err(BoundedJsonError::Unsupported);
     }
+    norito::core::reserve_decode_allocation(layout.size())
+        .map_err(BoundedJsonError::from_decode_resource)?;
     // SAFETY: `layout` is non-zero and was constructed for exactly `length`
     // `MaybeUninit<u64>` values. `Box::from_raw` receives that same slice
     // layout and therefore deallocates it with the matching request size.
@@ -513,6 +516,103 @@ mod tests {
             assert_eq!(
                 core::mem::size_of_val(storage.as_ref()),
                 length * core::mem::size_of::<u64>()
+            );
+        }
+    }
+    #[test]
+    fn checked_i105_scratch_is_charged_before_any_visitor_output() {
+        let _guard = ChainDiscriminantGuard::enter(0x02f1);
+        fn visit_without_destination(
+            account: &AccountId,
+            expected: &str,
+        ) -> (Result<(), BoundedJsonError>, usize) {
+            let mut offset = 0;
+            let result = visit_key_text(account, |chunk| {
+                let end = offset + chunk.len();
+                assert_eq!(expected.get(offset..end), Some(chunk));
+                offset = end;
+                Ok(())
+            });
+            (result, offset)
+        }
+
+        let limits = |bytes| {
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        };
+        let members = (0..2)
+            .map(|index| {
+                MultisigMember::new(keypair(index + 10).public_key().clone(), 1)
+                    .expect("valid multisig member")
+            })
+            .collect();
+        // Independent V1 fixture widths: a single controller is header(1) +
+        // tag/curve/length(3) + Ed25519 key(32) = 36 bytes. Two multisig members
+        // are header(1) + tag/version/threshold/count(6) + 2 * (curve/weight/
+        // length/key)(37) = 81 bytes. Their exact limb requests are 48 and 112.
+        let accounts = [
+            (AccountId::new(keypair(9).public_key().clone()), 36, 48),
+            (
+                AccountId::new_multisig(
+                    MultisigPolicy::new(2, members).expect("valid multisig policy"),
+                ),
+                81,
+                112,
+            ),
+        ];
+        for (account, expected_canonical, expected_scratch) in accounts {
+            let expected = account.canonical_i105().expect("canonical account literal");
+            assert_eq!(
+                canonical_address_len(&account).expect("canonical address length"),
+                expected_canonical,
+            );
+
+            // The visitor borrows its expected bytes and has no destination allocation.
+            // A zero budget must therefore refuse the native limb allocation itself.
+            let ((rejected, emitted), usage) =
+                norito::core::with_decode_limits_measured(limits(0), || {
+                    visit_without_destination(&account, &expected)
+                });
+            assert_eq!(
+                rejected,
+                Err(BoundedJsonError::DecodeResource(
+                    norito::core::DecodeResourceError::TotalAllocationExceeded {
+                        attempted: u64::try_from(expected_scratch).unwrap(),
+                        limit: 0,
+                    },
+                ))
+            );
+            assert_eq!(
+                emitted, 0,
+                "no account chunk may escape a refused allocation"
+            );
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let ((accepted, emitted), usage) =
+                norito::core::with_decode_limits_measured(limits(expected_scratch), || {
+                    visit_without_destination(&account, &expected)
+                });
+            assert_eq!(accepted, Ok(()));
+            assert_eq!(emitted, expected.len());
+            assert_eq!(usage.total_allocated_bytes(), expected_scratch);
+
+            let ((rejected, emitted), usage) =
+                norito::core::with_decode_limits_measured(limits(expected_scratch - 1), || {
+                    visit_without_destination(&account, &expected)
+                });
+            assert_eq!(
+                rejected,
+                Err(BoundedJsonError::DecodeResource(
+                    norito::core::DecodeResourceError::TotalAllocationExceeded {
+                        attempted: u64::try_from(expected_scratch).unwrap(),
+                        limit: u64::try_from(expected_scratch - 1).unwrap(),
+                    },
+                ))
+            );
+            assert_eq!(emitted, 0);
+            assert_eq!(usage.total_allocated_bytes(), 0);
+            assert_eq!(
+                visit_without_destination(&account, &expected),
+                (Ok(()), expected.len())
             );
         }
     }

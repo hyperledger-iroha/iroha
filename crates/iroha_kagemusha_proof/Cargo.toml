@@ -1,0 +1,41 @@
+[package]
+name = "iroha_kagemusha_proof"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Native-only KAGEMUSHA relations on the PIPA-v1 engine: the prototype split-lineage step relations sigma_send and sigma_recv (spec section 3 core, controls off), their native consumer checks, shape selector and keygen, prove and verify entry points"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories = ["cryptography"]
+
+[lints]
+workspace = true
+
+# The native-only compilation boundary for KAGEMUSHA relations: this crate
+# links the native engine (`iroha_pasta`, `iroha_plonk`) and its chips
+# (`iroha_plonk_gadgets`), never the vendored halo2 stack or
+# `iroha_core_zk`. Every entry below is already in the workspace lockfile.
+[dependencies]
+# Fields, curves and the pinned RP57 Poseidon the native reference hashes with.
+iroha_pasta = { workspace = true }
+# Constraint systems, keys, the prover and the verifier.
+iroha_plonk = { workspace = true }
+# Pow5 sponge lanes, running-sum range checks, checked u128 and glue chips,
+# and the prototype statement encoding.
+iroha_plonk_gadgets = { workspace = true }
+# `Field`/`PrimeField` traits of the iroha_pasta field types.
+ff = "0.13.1"
+
+[dev-dependencies]
+# The shared KAGEMUSHA Poseidon vectors in `fixtures/native_prover/kats_v1.json`.
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
+# Deterministic recovery streams for reproducible test proofs.
+rand_chacha = "0.3.1"
+# Thread pools for the measurement harness and the parallel tamper sweep.
+rayon = { workspace = true }
+# High-resolution process CPU time (`CLOCK_PROCESS_CPUTIME_ID`) for the
+# measurement harness, without `unsafe`.
+rustix = { version = "1.1.4", features = ["time"] }

@@ -14,44 +14,54 @@ pub fn write_validated_json_to(
     let mut chunk_start = 0;
     let mut in_string = false;
     let mut escaped = false;
-    for (index, byte) in bytes.iter().copied().enumerate() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else {
-                match byte {
-                    b'\\' => escaped = true,
-                    b'"' => in_string = false,
-                    _ => {}
+    let mut entered_containers = 0_usize;
+    let result = (|| {
+        for (index, byte) in bytes.iter().copied().enumerate() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else {
+                    match byte {
+                        b'\\' => escaped = true,
+                        b'"' => in_string = false,
+                        _ => {}
+                    }
                 }
+                continue;
             }
-            continue;
+            match byte {
+                b'"' => in_string = true,
+                b'{' | b'[' => {
+                    if chunk_start != index {
+                        output.push_str(&value[chunk_start..index])?;
+                    }
+                    output.begin_container()?;
+                    entered_containers += 1;
+                    output.push(char::from(byte))?;
+                    chunk_start = index + 1;
+                }
+                b'}' | b']' => {
+                    if chunk_start != index {
+                        output.push_str(&value[chunk_start..index])?;
+                    }
+                    output.push(char::from(byte))?;
+                    output.end_container();
+                    entered_containers -= 1;
+                    chunk_start = index + 1;
+                }
+                _ => {}
+            }
         }
-        match byte {
-            b'"' => in_string = true,
-            b'{' | b'[' => {
-                if chunk_start != index {
-                    output.push_str(&value[chunk_start..index])?;
-                }
-                output.begin_container()?;
-                output.push(char::from(byte))?;
-                chunk_start = index + 1;
-            }
-            b'}' | b']' => {
-                if chunk_start != index {
-                    output.push_str(&value[chunk_start..index])?;
-                }
-                output.push(char::from(byte))?;
-                output.end_container();
-                chunk_start = index + 1;
-            }
-            _ => {}
+        if chunk_start != bytes.len() {
+            output.push_str(&value[chunk_start..])?;
         }
+        Ok(())
+    })();
+    while entered_containers != 0 {
+        output.end_container();
+        entered_containers -= 1;
     }
-    if chunk_start != bytes.len() {
-        output.push_str(&value[chunk_start..])?;
-    }
-    Ok(())
+    result
 }
 #[cfg(test)]
 mod tests {

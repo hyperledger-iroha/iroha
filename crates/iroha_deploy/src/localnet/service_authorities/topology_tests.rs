@@ -25,6 +25,9 @@ fn inventory_codec_fixture() -> StreamTokenAuthorityManifest {
                 .collect(),
             reserve_accounts: reserve_accounts(&account(2)).unwrap(),
             network_plan: vec![1, 2, 3],
+            // Canonical codec input; this fixture does not claim publication admission.
+            publication_plan: norito::encode_canonical(&NetworkServiceAuthorityRole::MusubiPin)
+                .unwrap(),
         },
         providers: std::array::from_fn(|slot| ProviderServiceInventory {
             slot: u8::try_from(slot).unwrap(),
@@ -242,7 +245,7 @@ fn three_providers_share_only_network_policy_and_require_explicit_original_selec
         advert.verify_signature().unwrap();
         assert_eq!(&advert.body, &plan.admission_material().advert_body);
     }
-    assert_eq!(accounts.len(), 33); // manager + two network + three times ten provider roles
+    assert_eq!(accounts.len(), 34); // manager + three network + three times ten provider roles
     assert_eq!(compliance_keys.len(), 12);
     let absent = ProviderId::new([0xFD; 32]);
     assert!(!provider_ids.contains(&absent));

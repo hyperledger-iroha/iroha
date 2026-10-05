@@ -57,11 +57,13 @@ pub trait LaneStoreAuthorities: Send + Sync {
     ) -> Result<Option<LaneStoreAuthority>, Attempt<io::Error>>;
 }
 
-// The bool records a lane-runner opening. A historical reopen after retirement is retained
-// independently, so later lifecycle checks cannot restart its authenticated recovery prefix.
+// Runtime cancellation and a historical joining reader are independent interests. A refused
+// historical recovery keeps its original prefix even when its runtime incarnation retires.
+// An unfinished historical recovery has no returned Arc yet; this inline bit records
+// its joining reader. Ready readers retain actual Arcs and original pending work instead.
 enum StoreSlot {
     Opening(LaneStoreOpen, bool),
-    Ready(Arc<FileLaneBlockStore>, bool),
+    Ready(Arc<FileLaneBlockStore>),
 }
 
 /// The exclusive lane block store owners of one node.
@@ -141,8 +143,9 @@ impl LaneStores {
         self.store_with_runtime_owner(lane, incarnation, false)
     }
 
-    /// Recover a store for the lane runner, retaining its lifecycle ownership even if the
-    /// original opening is refused. Historical readers use `store` without this marker.
+    /// Recover a store for an applied runtime incarnation. Unfinished runtime-only recovery
+    /// may cancel after that incarnation retires; a joining historical `store` call retains
+    /// the original opening independently. Ready readers retain actual Arcs and pending work.
     pub(super) fn runtime_store(
         &self,
         lane: LaneId,
@@ -159,8 +162,7 @@ impl LaneStores {
     ) -> Result<Arc<FileLaneBlockStore>, Attempt<io::Error>> {
         let key = (lane, *incarnation);
         let mut stores = self.stores.lock();
-        if let Some(StoreSlot::Ready(store, owned)) = stores.get_mut(&key) {
-            *owned |= runtime_owner;
+        if let Some(StoreSlot::Ready(store)) = stores.get(&key) {
             return Ok(Arc::clone(store));
         }
         if stores.contains_key(&key) {
@@ -206,7 +208,7 @@ impl LaneStores {
             authority.schedule,
             authority.verifier,
         )?;
-        Self::complete_store_opening(stores, key, opening, runtime_owner)
+        Self::complete_store_opening(stores, key, opening, !runtime_owner)
     }
 
     // The caller observed this key under the same exclusive map guard and returned any
@@ -216,47 +218,55 @@ impl LaneStores {
         key: (LaneId, [u8; 32]),
         runtime_owner: bool,
     ) -> Result<Arc<FileLaneBlockStore>, Attempt<io::Error>> {
-        let (opening, owned) = match stores.remove(&key) {
-            Some(StoreSlot::Opening(opening, owned)) => (opening, owned),
+        let (opening, historical) = match stores.remove(&key) {
+            Some(StoreSlot::Opening(opening, historical)) => (opening, historical),
             Some(StoreSlot::Ready(..)) => unreachable!("ready owner returned while lock held"),
             None => unreachable!("opening observed while the same map lock is held"),
         };
-        Self::complete_store_opening(stores, key, opening, owned || runtime_owner)
+        let historical =
+            historical || (!runtime_owner && !cfg!(all(test, sumeragi_core_mutation = "HC124")));
+        Self::complete_store_opening(stores, key, opening, historical)
     }
 
     // A refused completion returns its unchanged original owner to the same key. Only
-    // a fully recovered store publishes Ready; historical/runtime ownership is preserved.
+    // a fully recovered store publishes Ready; unfinished historical interest is preserved.
     fn complete_store_opening(
         stores: &mut BTreeMap<(LaneId, [u8; 32]), StoreSlot>,
         key: (LaneId, [u8; 32]),
         opening: LaneStoreOpen,
-        runtime_owner: bool,
+        historical: bool,
     ) -> Result<Arc<FileLaneBlockStore>, Attempt<io::Error>> {
         match opening.complete() {
             Ok(store) => {
                 let store = Arc::new(store);
-                stores.insert(key, StoreSlot::Ready(Arc::clone(&store), runtime_owner));
+                stores.insert(key, StoreSlot::Ready(Arc::clone(&store)));
                 Ok(store)
             }
             Err((opening, error)) => {
-                stores.insert(key, StoreSlot::Opening(opening, runtime_owner));
+                stores.insert(key, StoreSlot::Opening(opening, historical));
                 Err(error)
             }
         }
     }
 
-    /// Relinquish a retired runtime owner, including pending startup recovery. An active or
-    /// refused merge reader becomes a historical owner so its exact custody and lock survive.
-    /// Frames remain on disk for authenticated replay.
+    /// Release a cancelled runtime-only opening, or an idle Ready owner with no reader Arcs
+    /// or original pending work. A historical join independently retains unfinished recovery;
+    /// ready read, publication and batch owners retain their exact allocations and native lock.
+    /// Certified frames remain on disk for independently authenticated replay.
     pub fn release(&self, lane: LaneId, incarnation: &[u8; 32]) {
         let mut stores = self.stores.lock();
-        if let Some(StoreSlot::Ready(store, owned)) = stores.get_mut(&(lane, *incarnation)) {
-            // Under the registry lock a sole Arc has no external reader that can race this
-            // check. Already shared Arcs cover readers before they acquire the batch mutex.
-            if Arc::strong_count(store) > 1 || store.retains_batch_read() {
-                *owned = false;
+        if let Some(StoreSlot::Ready(store)) = stores.get(&(lane, *incarnation)) {
+            // The registry lock excludes another registry acquisition. Returned reader Arcs
+            // pin the owner before either store mutex is acquired; pending work also pins it.
+            if Arc::strong_count(store) > 1 || store.retains_pending_work() {
                 return;
             }
+        }
+        if matches!(
+            stores.get(&(lane, *incarnation)),
+            Some(StoreSlot::Opening(_, true))
+        ) {
+            return;
         }
         stores.remove(&(lane, *incarnation));
     }
@@ -265,8 +275,9 @@ impl LaneStores {
     /// that never reached a running driver. Call after stopping retired drivers and recovery
     /// jobs. Historical frames remain available to authenticated global replay; outstanding
     /// readers retain their exclusive ready-store owner until their final Arc is dropped.
-    /// Subsequent historical openings have no runtime marker, so repeated reconciliation
-    /// cannot discard their retained recovery progress or original allocation custody.
+    /// A historical reader joining unfinished runtime recovery independently retains that
+    /// same opening. Completed ready owners release their lock once readers and original
+    /// read, batch or publication work are gone; certified disk frames remain available.
     pub(super) fn release_retired(&self, lanes: &SumeragiLaneState) {
         self.stores.lock().retain(|(lane, incarnation), slot| {
             if lanes
@@ -276,16 +287,11 @@ impl LaneStores {
                 return true;
             }
             match slot {
-                StoreSlot::Opening(_, owned) => !*owned,
-                StoreSlot::Ready(store, owned) => {
-                    if !*owned {
-                        return true;
-                    }
-                    if Arc::strong_count(store) > 1 || store.retains_batch_read() {
-                        *owned = false;
-                        return true;
-                    }
-                    false
+                StoreSlot::Opening(_, historical) => *historical,
+                StoreSlot::Ready(store) => {
+                    Arc::strong_count(store) > 1
+                        || store.retains_pending_work()
+                        || cfg!(all(test, sumeragi_core_mutation = "HC122"))
                 }
             }
         });
@@ -294,8 +300,13 @@ impl LaneStores {
 
 impl LaneBlockSource for LaneStores {
     fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> Result<Option<u64>, Attempt<io::Error>> {
-        self.store(lane, incarnation)
-            .map(|store| Some(store.height()))
+        self.store(lane, incarnation).and_then(|store| {
+            if cfg!(all(test, sumeragi_core_mutation = "HC125")) {
+                // Mutation: report a cached durable tip despite an unfinished original read.
+                return Ok(Some(store.height()));
+            }
+            store.authenticated_height().map(Some)
+        })
     }
 
     fn block(

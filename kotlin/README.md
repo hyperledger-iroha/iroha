@@ -313,6 +313,39 @@ and resets both counters to zero. `rotateHardwareEpoch()` does not first drain t
 remains callable with saturated counters and pending receipts. The native provider must arrange
 rollover before counter exhaustion; the managed wallet does not schedule automatic rotation.
 
+### Wallet custody backup obligations
+
+`kagemusha-wallet-android` merges `android:allowBackup="false"` and exclude-only
+`android:dataExtractionRules` / `android:fullBackupContent` resources into the host
+application. A full-data restore that reaches an app without its own backup agent
+clears its data, including `no_backup` custody files, and its Keystore keys, so the
+wallet's backup and device-transfer set must stay empty. A host that declares
+`allowBackup="true"` gets a manifest-merger conflict. Host apps must not override
+these attributes (`tools:replace` / `tools:remove`), must not ship resources named
+`kagemusha_wallet_v1_data_extraction_rules` or `kagemusha_wallet_v1_full_backup_content`,
+and must not declare a backup agent. `KagemushaWalletAndroidPlatformV1.create(context)`
+refuses below API 31 (keystore1 reports Keystore errors as absent keys), with backup
+allowed, with a backup agent, with non-exclude-only rule resources, or with a
+device-protected context. It cannot detect a replaced rules attribute. The returned
+handle has no public operation: only the Rust provider's role-checked signers reach
+the payment key through it.
+
+### Android Keystore existence decisions
+
+`KeyStore.containsAlias`, `getEntry`, `aliases`, `isKeyEntry` and `getCertificate*`
+report every Keystore error as an absent alias (AOSP `AndroidKeyStoreSpi`), and
+generating under an occupied alias replaces its key (keystore2 `rebind_alias`;
+keystore1 deletes the alias first). `client-android` therefore decides existence
+only through `KeyStore.getKey(alias, null)`: a key is present, null is absent and
+any throw stops the call. Only keystore2 (API 31+) makes that null definitive, so
+`KagemushaAndroidHardwareAppKeyStoreV1` (issue, recovery and signing), the KeyMint
+and Pixel 6 one-use diagnostics, and `SystemAndroidKeystoreBackend` refuse below
+API 31. There `KagemushaAndroidHardwareAppKeyStoreV1.isPlatformApiAvailable()` is
+false and `KeystoreKeyProvider.maybeCreate` returns null, so
+`IrohaKeyManager.withDefaultProviders` keeps only its software provider. On API 31+
+`IrohaKeyManager.generateOrLoad` stops instead of generating when the Keystore cannot
+answer. No key is deleted or regenerated in response to a Keystore error.
+
 ### Attestation command
 
 The `tools` application verifies collected Android key evidence using the pure
@@ -366,8 +399,9 @@ exports, including duplicate implementation namespaces. JNI names follow the
 [JVM native lookup rules](https://docs.oracle.com/en/java/javase/21/docs/specs/jni/design.html#resolving-native-method-names).
 Matching export names does not prove argument types, receiver semantics, source
 build provenance, native execution, or device behavior. Those remain separate
-release checks. The current migration still has 55 Android implementation
-exports to retire, so this strict export check is not yet a passing release gate.
+release checks. The bridge no longer exports duplicate `org.hyperledger.iroha.android`
+implementations; the Java SDK declares no JNI methods and delegates its native calls
+to these Kotlin owners. This strict export check is not yet a passing release gate.
 
 Android managed consumers run with
 `./gradlew :client-android:testDebugUnitTest :kagemusha-wallet-android:testDebugUnitTest`.
@@ -600,8 +634,10 @@ encode the same three-message payment exchange—direct request, post-commit pro
 payment, and durable acknowledgement. Each request binds one exact amount and a fresh
 recipient encryption key; distinct valid payments against a reusable request are accepted.
 Mint authorization, mint credit, and redemption vouchers are separately framed;
-`kgm1:` is the sole text transport. Exposed credits cannot be cancelled. QR, NFC, and Nearby consume
-`../fixtures/offline/kagemusha_v1.json`. Public wire
+`kgm1:` is the sole text transport. Exposed credits cannot be cancelled. The QR, NFC, and Nearby
+carriers (`IrohaPeer*`) move KAGEMUSHA wallet V1 envelope frames instead
+(`../specs/kagemusha_wallet_wire_v1.md` §6) and test against
+`../fixtures/kagemusha/wallet_v1_vectors.json`. Public wire
 size and verification work are independent of balance history; no hop, input,
 origin, ancestry, fan-in, or proof-depth limit is encoded.
 

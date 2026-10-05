@@ -158,7 +158,6 @@ const SUPPORTED_BROWSER_INSTRUCTION_WIRE_IDS = new Set([
   (TEXT_IROHA_INSTRUCTION_V1_SMART_CONTRACT_CODE + "CancelSmartContractCodeUpload"),
   (TEXT_IROHA_INSTRUCTION_V1_SMART_CONTRACT_CODE + "RegisterSmartContractCode"),
   (TEXT_IROHA_INSTRUCTION_V1_SMART_CONTRACT_CODE + "CommitContractDeployment"),
-  "iroha.kagemusha.v1.top_up",
 ]);
 const TRANSFER_INPUT_FIELDS = new Set([
   FIELD_NETWORK_ID,

@@ -548,6 +548,64 @@ pub fn preserve_execution_deferral(error: VMError, malformed: VMError) -> VMErro
     }
 }
 
+// Numeric pointer faults have one canonical conversion for all ABI producers and runtime consumers.
+impl From<iroha_primitives::numeric_abi::NumericAbiError> for VMError {
+    fn from(error: iroha_primitives::numeric_abi::NumericAbiError) -> Self {
+        use iroha_primitives::numeric_abi::NumericAbiError;
+        let fault = match error {
+            NumericAbiError::SchemaMismatch => PointerAbiFaultV1::SchemaMismatch,
+            NumericAbiError::NonCanonicalMantissa
+            | NumericAbiError::NonCanonicalDecimal
+            | NumericAbiError::MantissaOverflow
+            | NumericAbiError::InvalidScale
+            | NumericAbiError::NegativeQuantity => PointerAbiFaultV1::NonCanonical,
+            NumericAbiError::FrameTooLarge => PointerAbiFaultV1::OversizedLength,
+            NumericAbiError::FrameTooShort
+            | NumericAbiError::InvalidHeader
+            | NumericAbiError::CompressionNotAllowed
+            | NumericAbiError::LayoutFlagsNotAllowed
+            | NumericAbiError::LengthMismatch
+            | NumericAbiError::Norito(_) => PointerAbiFaultV1::MalformedFrame,
+        };
+        VMError::PointerAbiFault(fault)
+    }
+}
+
+#[cfg(test)]
+mod numeric_abi_error_tests {
+    use super::{PointerAbiFaultV1, VMError};
+    use iroha_primitives::numeric_abi::NumericAbiError;
+
+    #[test]
+    fn every_numeric_frame_error_maps_to_its_stable_pointer_fault() {
+        use NumericAbiError::*;
+        use PointerAbiFaultV1::{MalformedFrame, NonCanonical, OversizedLength};
+
+        let cases = [
+            (FrameTooShort, MalformedFrame),
+            (FrameTooLarge, OversizedLength),
+            (InvalidHeader, MalformedFrame),
+            (SchemaMismatch, PointerAbiFaultV1::SchemaMismatch),
+            (CompressionNotAllowed, MalformedFrame),
+            (LayoutFlagsNotAllowed, MalformedFrame),
+            (LengthMismatch, MalformedFrame),
+            (MantissaOverflow, NonCanonical),
+            (NonCanonicalMantissa, NonCanonical),
+            (InvalidScale, NonCanonical),
+            (NonCanonicalDecimal, NonCanonical),
+            (NegativeQuantity, NonCanonical),
+            (Norito("invalid checksum".into()), MalformedFrame),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(
+                VMError::from(error.clone()),
+                VMError::PointerAbiFault(expected),
+                "numeric frame error {error:?} changed its pointer fault"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod execution_deferral_tests {
     use super::{ExecutionDeferral, VMError, preserve_execution_deferral};

@@ -3,13 +3,20 @@
 //! Inspection grants no current-state authority. Only explicit preparation can complete a retained
 //! payload; submission remains a separate once-only transition after exact signed bytes are durable.
 use super::*;
-use crate::operation_journal::{NativeRecord, canonical_bytes};
 use iroha_data_model::transaction::{TransactionDomain, TransactionPayload};
+use iroha_operation_journal::{MAX_JOURNAL_BYTES, NativeRecord, canonical_bytes};
 use sha2::{Digest as _, Sha256};
 
 const PAYLOAD_MAX: usize = 1024 * 1024;
-pub(super) const LIMITS: norito::DecodeLimits =
-    norito::DecodeLimits::new(4096, 4 * 1024 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024, 64);
+// Norito counts raw byte vectors as sequence elements. Bound them by the admitted journal
+// frame; the closed purpose validators independently enforce fee/committee cardinalities.
+pub(super) const LIMITS: norito::DecodeLimits = norito::DecodeLimits::new(
+    MAX_JOURNAL_BYTES,
+    MAX_JOURNAL_BYTES,
+    MAX_JOURNAL_BYTES,
+    64 * 1024 * 1024,
+    64,
+);
 
 /// Inspected durable preparation phase; never inclusion or permission evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,6 +255,11 @@ pub(super) struct Retained {
     authorization_deadline_ms: u64,
 }
 impl Retained {
+    /// Borrow the original request only after the sole reader has verified every retained phase.
+    /// The selection is local custody, not permission, finality or a renewed authorization.
+    pub(super) fn selection(&self) -> Selection<'_> {
+        self.request.selection()
+    }
     pub(super) fn read(journal: &Journal, config: &Config) -> Result<Self> {
         let request: Request = journal
             .read_native(NativeRecord::Request)?
@@ -755,3 +767,7 @@ pub(super) fn retain_signed_fixture(path: &Path, record: &TransactionJournal) ->
 #[cfg(test)]
 #[path = "operations_preparation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "operations_byte_frame_tests.rs"]
+mod byte_frame_tests;

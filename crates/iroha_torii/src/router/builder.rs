@@ -1226,16 +1226,6 @@ mod tests {
             catalog_get(|| async { StatusCode::NO_CONTENT }),
         );
         builder.route(
-            &kagemusha::RESOURCE_NAMES_STATE,
-            catalog_get(|| async { StatusCode::NO_CONTENT })
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &kagemusha::AUTHORITY_ORIGINALS,
-            catalog_post(|| async { StatusCode::NO_CONTENT })
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
             &kagemusha::ORDINARY_WALLET_CURRENT,
             catalog_post(|| async { StatusCode::NO_CONTENT })
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
@@ -1258,7 +1248,7 @@ mod tests {
         let (router, manifest) = builder
             .finish()
             .expect("every build requires and accepts the complete KAGEMUSHA family");
-        assert_eq!(kagemusha::ROUTES.len(), 11);
+        assert_eq!(kagemusha::ROUTES.len(), 9);
         assert_eq!(manifest.explicit_routes(), kagemusha::ROUTES);
         let response = router
             .clone()
@@ -1298,12 +1288,75 @@ mod tests {
             .project(CatalogProjection::Mcp, EnabledFeatures::none());
         assert_eq!(mcp.len(), 5);
         assert!(mcp.contains(&&kagemusha::AUTHORITY_STATE));
-        assert!(!mcp.contains(&&kagemusha::RESOURCE_NAMES_STATE));
-        assert!(!mcp.contains(&&kagemusha::AUTHORITY_ORIGINALS));
         assert!(!mcp.contains(&&kagemusha::ORDINARY_WALLET_CURRENT));
         assert!(!mcp.contains(&&kagemusha::ORDINARY_MINT_ISSUER_PURPOSE));
         assert!(!mcp.contains(&&kagemusha::ORDINARY_MINT_FINALIZED));
         assert!(!mcp.contains(&&kagemusha::ORDINARY_MINT_CREDIT));
+    }
+    #[tokio::test]
+    async fn ledger_original_carriers_mount_without_optional_features() {
+        use iroha_torii_shared::route_catalog::core;
+        const LEDGER_CARRIERS: &[RouteDescriptor] =
+            &[core::RESOURCE_NAMES_STATE, core::AUTHORITY_ORIGINALS];
+        let mut builder = RouterBuilder::new(
+            (),
+            RouteCatalog::new(LEDGER_CARRIERS),
+            EnabledFeatures::none(),
+        )
+        .expect("ledger original-carrier catalog is valid");
+        builder.route(
+            &core::RESOURCE_NAMES_STATE,
+            catalog_get(|| async { StatusCode::NO_CONTENT })
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &core::AUTHORITY_ORIGINALS,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        let (router, manifest) = builder
+            .finish()
+            .expect("every build requires and accepts both ledger original carriers");
+        assert_eq!(manifest.explicit_routes(), LEDGER_CARRIERS);
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        core::RESOURCE_NAMES_STATE
+                            .path()
+                            .replace("{challenge}", &"ab".repeat(32)),
+                    )
+                    .body(Body::empty())
+                    .expect("resource-names request"),
+            )
+            .await
+            .expect("resource-names route response");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(core::AUTHORITY_ORIGINALS.path())
+                    .body(Body::empty())
+                    .expect("authority-originals request"),
+            )
+            .await
+            .expect("authority-originals route response");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        for projection in [CatalogProjection::OpenApi, CatalogProjection::Sdk] {
+            assert_eq!(
+                RouteCatalog::new(LEDGER_CARRIERS)
+                    .project(projection, EnabledFeatures::none())
+                    .len(),
+                LEDGER_CARRIERS.len()
+            );
+        }
+        assert!(
+            RouteCatalog::new(LEDGER_CARRIERS)
+                .project(CatalogProjection::Mcp, EnabledFeatures::none())
+                .is_empty()
+        );
     }
     #[cfg(feature = "app_api")]
     async fn short_circuit_success(

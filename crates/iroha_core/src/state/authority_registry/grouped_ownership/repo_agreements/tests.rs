@@ -1,5 +1,6 @@
 //! Repo participant grouping, retained rollback and original publication custody.
 
+use super::test_support::*;
 use super::*;
 use crate::{
     kura::Kura,
@@ -11,76 +12,9 @@ use crate::{
             leaf::{LeafError, LeafLimits},
         },
     },
-    test_allocations::allocations_during,
 };
-use iroha_data_model::{
-    account::Account,
-    asset::{AssetDefinitionId, AssetId},
-    prelude::Registrable,
-    repo::{RepoCashLeg, RepoCollateralLeg, RepoGovernance},
-};
-use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::Storage;
-
-fn id() -> RepoAgreementId {
-    "exactrepogroups".parse().unwrap()
-}
-
-fn fixture(custodian: bool) -> World {
-    let mut world = World::with(
-        [],
-        [
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
-            Account::new(BOB_ID.clone()).build(&BOB_ID),
-        ],
-        [],
-    );
-    let definition = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("repogroups", "universal").unwrap(),
-        "token".parse().unwrap(),
-    );
-    let record = RepoAgreement::new(
-        id(),
-        ALICE_ID.clone(),
-        BOB_ID.clone(),
-        RepoCashLeg::new(definition.clone(), Quantity::one()),
-        AssetId::of(definition.clone(), BOB_ID.clone()),
-        RepoCollateralLeg::new(definition.clone(), Quantity::one()),
-        AssetId::of(definition, BOB_ID.clone()),
-        100,
-        1_000,
-        1,
-        RepoGovernance::with_defaults(1_000, 60),
-        custodian.then(|| BOB_ID.clone()),
-    );
-    world.repo_agreements.insert(id(), record);
-    world.rebuild_repo_agreement_indexes();
-    world
-}
-
-fn check(world: &World, work: u64) -> Result<(), GroupedOwnershipError> {
-    let mut result = None;
-    assert_eq!(
-        allocations_during(
-            || result = Some(CheckedRepoAgreements::capture(world, work).map(|_| ()))
-        ),
-        0
-    );
-    result.unwrap()
-}
-
-fn corrupt(index: &'static str, previous: bool, mismatch: GroupMismatch) -> GroupedOwnershipError {
-    GroupedOwnershipError::Corrupt {
-        index,
-        image: if previous {
-            GroupImage::Predecessor
-        } else {
-            GroupImage::Current
-        },
-        mismatch,
-    }
-}
 
 #[test]
 fn optional_custodian_changes_and_rollback_preserve_exact_original_images() {
@@ -99,7 +33,7 @@ fn optional_custodian_changes_and_rollback_preserve_exact_original_images() {
             tx.apply();
             block.commit();
         }
-        assert_eq!(check(&world, 1024), Ok(()));
+        assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
         let mut source_snapshot = String::new();
         crate::state::snapshot_storage::serialize(&world.repo_agreements, &mut source_snapshot);
         world.repo_agreements = norito::json::from_str::<
@@ -111,8 +45,8 @@ fn optional_custodian_changes_and_rollback_preserve_exact_original_images() {
         // Decode the actual canonical snapshot before rebuilding. Keep the real
         // predecessor, including a custodian appearing or disappearing, for rollback.
         world.rebuild_repo_agreement_indexes();
-        assert_eq!(check(&world, 1024), Ok(()));
-        let checked = CheckedRepoAgreements::capture(&world, 1024).unwrap();
+        assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
+        let checked = CheckedRepoAgreements::capture(&world, TEST_WORK_ALLOWANCE).unwrap();
         assert_eq!(checked.rows().get(&id()), Some(&replacement));
         assert_eq!(
             get_at(checked.rows(), GroupImage::Predecessor, &id()),
@@ -121,7 +55,7 @@ fn optional_custodian_changes_and_rollback_preserve_exact_original_images() {
         assert!(checked.matches_current().unwrap());
         drop(checked);
         world.block_and_revert().commit();
-        assert_eq!(check(&world, 1024), Ok(()));
+        assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
         assert_eq!(world.repo_agreements.view().get(&id()), Some(&original));
     }
 }
@@ -148,13 +82,13 @@ fn restored_groups_keep_untouched_members_across_insert_remove_and_rollback() {
         block.commit();
     }
     world.rebuild_repo_agreement_indexes();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
     assert_eq!(
         world.repo_agreements_by_initiator.view().get(&ALICE_ID),
         Some(&BTreeSet::from([untouched.id.clone(), inserted.id]))
     );
     world.block_and_revert().commit();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
     assert_eq!(
         world.repo_agreements_by_initiator.view().get(&ALICE_ID),
         Some(&BTreeSet::from([untouched.id, original.id]))
@@ -192,7 +126,7 @@ fn every_group_rejects_missing_members_in_both_native_images() {
                 _ => unreachable!(),
             };
             assert_eq!(
-                check(&world, 1024),
+                check(&world, TEST_WORK_ALLOWANCE),
                 Err(corrupt(name, previous, GroupMismatch::MissingMember))
             );
         }
@@ -218,7 +152,7 @@ fn absent_custodians_cannot_have_empty_foreign_or_deleted_source_membership() {
                 block.commit();
             }
             assert_eq!(
-                check(&world, 1024),
+                check(&world, TEST_WORK_ALLOWANCE),
                 Err(corrupt(
                     "world.repo_agreements_by_custodian",
                     previous,
@@ -235,7 +169,7 @@ fn absent_custodians_cannot_have_empty_foreign_or_deleted_source_membership() {
 
 #[test]
 fn local_work_counts_custodianless_sources_and_absent_undo_rows() {
-    for (custodian, exact) in [(false, 14), (true, 18)] {
+    for (custodian, exact, absent_work) in [(false, 816, 140), (true, 1222, 168)] {
         let world = fixture(custodian);
         assert_eq!(check(&world, exact), Ok(()));
         assert_eq!(
@@ -248,10 +182,10 @@ fn local_work_counts_custodianless_sources_and_absent_undo_rows() {
             block.commit();
         }
         assert_eq!(
-            check(&world, exact + 2),
+            check(&world, exact + absent_work - 1),
             Err(GroupedOwnershipError::WorkLimit)
         );
-        assert_eq!(check(&world, exact + 3), Ok(()));
+        assert_eq!(check(&world, exact + absent_work), Ok(()));
     }
 }
 
@@ -259,7 +193,7 @@ fn local_work_counts_custodianless_sources_and_absent_undo_rows() {
 fn every_original_reader_detects_even_an_empty_index_publication() {
     for index in 0..4 {
         let world = fixture(false);
-        let checked = CheckedRepoAgreements::capture(&world, 1024).unwrap();
+        let checked = CheckedRepoAgreements::capture(&world, TEST_WORK_ALLOWANCE).unwrap();
         match index {
             0 => world.repo_agreements.block().commit(),
             1 => world.repo_agreements_by_initiator.block().commit(),

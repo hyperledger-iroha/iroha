@@ -1,7 +1,8 @@
 //! Presentation-free contract compilation and durable native deployment.
 //!
-//! Callers supply the exact SDK configuration, alias scope and private journal root. This
-//! boundary never discovers a wallet, network configuration or signing material from a project.
+//! Callers supply the exact SDK configuration, alias scope, private journal root and cache root.
+//! This boundary never discovers a wallet, network configuration, cache location or signing
+//! material from a project or the operating-system user cache.
 use crate::archive_fetch::PreparedProductionSorafsArchiveTransportV1;
 use eyre::{Result, WrapErr as _, bail, eyre};
 use iroha::config::Config;
@@ -200,6 +201,7 @@ pub type BuildRegistryResolver =
 pub struct DeploymentRuntime {
     config: Config,
     journal_root: PathBuf,
+    cache_root: PathBuf,
     archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
     build_registry: Option<Config>,
     registry_resolver: Option<std::sync::Arc<BuildRegistryResolver>>,
@@ -207,10 +209,11 @@ pub struct DeploymentRuntime {
 impl DeploymentRuntime {
     /// Retain immutable context without reading files, loading keys or contacting the network.
     #[must_use]
-    pub fn new(config: Config, journal_root: PathBuf) -> Self {
+    pub fn new(config: Config, journal_root: PathBuf, cache_root: PathBuf) -> Self {
         Self {
             config,
             journal_root,
+            cache_root,
             archive_transport: None,
             build_registry: None,
             registry_resolver: None,
@@ -299,6 +302,7 @@ impl DeploymentRuntime {
                 locked,
             } => crate::command::build_runtime_package(
                 &self.config,
+                &self.cache_root,
                 self.build_registry.as_ref(),
                 self.registry_resolver.as_deref(),
                 manifest,
@@ -792,7 +796,8 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         let temporary = TempDir::new()?;
         let config = config();
         let root = temporary.path().join("absent-deployments");
-        let runtime = DeploymentRuntime::new(config.clone(), root.clone());
+        let runtime =
+            DeploymentRuntime::new(config.clone(), root.clone(), temporary.path().join("cache"));
         let alias: ContractAlias = "Counter::universal".parse()?;
         assert!(runtime.current_deployment(&alias).is_err());
         assert!(!root.exists());
@@ -820,7 +825,11 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             temp.path().join("Musubi.toml"),
             "invalid unrelated manifest",
         )?;
-        let runtime = DeploymentRuntime::new(config(), temp.path().join("journals"));
+        let runtime = DeploymentRuntime::new(
+            config(),
+            temp.path().join("journals"),
+            temp.path().join("explicit-build-cache"),
+        );
         let built = runtime.build(&ContractInput::Source(source))?;
         assert_eq!(built.name(), "Coffee");
         let bytecode = temp.path().join("contract.to");
@@ -828,6 +837,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         let loaded = runtime.build(&ContractInput::Bytecode(bytecode))?;
         assert_eq!(loaded.bytes(), built.bytes());
         assert!(!temp.path().join("journals").exists());
+        assert!(!temp.path().join("explicit-build-cache").exists());
         assert!(!temp.path().join("Musubi.lock").exists());
         Ok(())
     }
@@ -876,10 +886,14 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             temp.path().join("Musubi.networks.toml"),
             "invalid unused network binding",
         )?;
-        let runtime = DeploymentRuntime::new(config(), temp.path().join("journals"))
-            .with_build_registry_resolver(std::sync::Arc::new(|| {
-                panic!("local package must not resolve a parent registry")
-            }));
+        let runtime = DeploymentRuntime::new(
+            config(),
+            temp.path().join("journals"),
+            temp.path().join("explicit-build-cache"),
+        )
+        .with_build_registry_resolver(std::sync::Arc::new(|| {
+            panic!("local package must not resolve a parent registry")
+        }));
         let input = |locked| ContractInput::Package {
             manifest: manifest.clone(),
             package: None,
@@ -892,6 +906,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         assert_eq!(runtime.build(&input(true))?.bytes(), artifact.bytes());
         assert!(temp.path().join("Musubi.lock").is_file());
         assert!(!temp.path().join("journals").exists());
+        assert!(!temp.path().join("explicit-build-cache").exists());
         Ok(())
     }
 
@@ -904,7 +919,11 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             &manifest,
             "manifest-version = 1\n[package]\nnamespace = \"demo\"\nname = \"coffee\"\nversion = \"0.1.0\"\nedition = \"1\"\nabi-version = 1\n[[contract]]\nname = \"coffee\"\npath = \"contract.ko\"\n[dependencies]\ndependency = { package = \"deps.sora/dependency\", version = \"^1.0.0\" }\n",
         )?;
-        let runtime = DeploymentRuntime::new(config(), temp.path().join("journals"));
+        let runtime = DeploymentRuntime::new(
+            config(),
+            temp.path().join("journals"),
+            temp.path().join("explicit-build-cache"),
+        );
         let error = runtime
             .build(&ContractInput::Package {
                 manifest,
@@ -921,6 +940,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             "{error:#}"
         );
         assert!(!temp.path().join("Musubi.lock").exists());
+        assert!(!temp.path().join("explicit-build-cache").exists());
         Ok(())
     }
 
@@ -996,7 +1016,11 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         fs::write(&source, "not Kotodama")?;
         let root = temp.path().join("journals");
         fs::create_dir(&root)?;
-        let runtime = DeploymentRuntime::new(config(), root.clone());
+        let runtime = DeploymentRuntime::new(
+            config(),
+            root.clone(),
+            temp.path().join("explicit-build-cache"),
+        );
         let alias = AliasSelection::Scope {
             domain: None,
             dataspace: "universal".into(),
@@ -1034,6 +1058,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
                 .contains("outside this runtime's journal slots")
         );
         assert_eq!(iroha_data_model::account::address::chain_discriminant(), 73);
+        assert!(!temp.path().join("explicit-build-cache").exists());
         Ok(())
     }
 }

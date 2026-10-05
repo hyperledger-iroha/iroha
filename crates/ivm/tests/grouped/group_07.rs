@@ -34,8 +34,6 @@ mod privacy_enforcement;
 mod private_input;
 #[path = "../prop_skeleton.rs"]
 mod prop_skeleton;
-#[path = "../ptx_kernels.rs"]
-mod ptx_kernels;
 #[path = "../register_log.rs"]
 mod register_log;
 #[path = "../register_merkle.rs"]

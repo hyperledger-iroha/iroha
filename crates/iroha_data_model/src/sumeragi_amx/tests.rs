@@ -11,11 +11,9 @@ use iroha_sumeragi::{
 use super::*;
 use crate::{
     block::consensus::{ExecKv, ExecWitness},
-    isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
-    },
     sumeragi::epoch::{
-        ValidatorCommitteeMemberV1, ValidatorEpochBoundaryV1, ValidatorEpochContextV1,
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorCommitteeMemberV1,
+        ValidatorEpochBoundaryV1, ValidatorEpochContextV1, ValidatorEpochDecisionV1,
         tests::{fixture, retained},
     },
     sumeragi_finality::{
@@ -60,7 +58,7 @@ fn rotated(previous: &ValidatorEpochContextV1, seeds: [u8; 4]) -> ValidatorEpoch
     }
     next.authorization.authority_generation = next.authority.generation;
     next.authorization.authority_id = next.authority.authority_id().unwrap();
-    next.authorization.decision = KagemushaMintFinalityEpochDecisionV1::Activate;
+    next.authorization.decision = ValidatorEpochDecisionV1::Activate;
     next.authorization.transition_id = [0x61; 32];
     next.authorization.beacon = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
         session_id: [0x42; 32],

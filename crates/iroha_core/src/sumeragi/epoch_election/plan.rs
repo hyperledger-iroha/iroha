@@ -5,16 +5,14 @@
 //! its immutable funded guard before releasing these borrows and beginning execution.
 
 use super::*;
-use iroha_data_model::isi::kagemusha_v1::{
-    KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-    KagemushaMintFinalityEpochDecisionV1,
-};
+use iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1;
+use iroha_data_model::sumeragi::epoch::{ValidatorEpochAuthorizationV1, ValidatorEpochDecisionV1};
 
 /// A complete checked boundary decision that still borrows its selecting prestate.
 pub(super) struct BoundaryInputs<'a> {
     pub(super) current: &'a ValidatorEpochContextV1,
     pub(super) selection_anchor: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
-    pub(super) authorization: KagemushaMintFinalityEpochAuthorizationV1,
+    pub(super) authorization: ValidatorEpochAuthorizationV1,
     pub(super) authority: &'a KagemushaMintFinalityAuthorityGenerationV1,
     pub(super) committee: &'a [iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1],
     pub(super) entropy: BoundaryEntropy,
@@ -24,6 +22,40 @@ pub(super) struct BoundaryInputs<'a> {
     pub(super) future_last: u64,
     pub(super) next_params: crate::sumeragi::schedule::ChainParamsRecord,
     pub(super) after_next_params: crate::sumeragi::schedule::ChainParamsRecord,
+}
+
+/// Every frozen seat needs both its signed credential readiness and original XOR custody.
+/// The caller verifies the genuine attempt and every supplied proof before this check;
+/// a target quorum never substitutes for the complete immutable target roster.
+pub(super) fn prepared_committee_ready(
+    source: &CheckedElectionView<'_>,
+    transition: &iroha_data_model::nexus::ValidatorCommitteeTransitionV1,
+) -> bool {
+    let preparation = &transition.preparation;
+    let complete_readiness = if cfg!(all(test, sumeragi_core_mutation = "HC102")) {
+        transition.readiness.len()
+            >= preparation.committee.len() - (preparation.committee.len() - 1) / 3
+    } else {
+        transition.readiness.len() == preparation.committee.len()
+    };
+    if transition.credentials.is_none() || !complete_readiness {
+        return false;
+    }
+    let has_custody = |seat: &iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1| {
+        source
+            .ready_under(
+                &preparation.eligibility,
+                &seat.validator,
+                preparation.first_height,
+                preparation.last_height,
+            )
+            .is_some()
+    };
+    #[cfg(all(test, sumeragi_core_mutation = "HC101"))]
+    let complete_custody = preparation.committee.iter().any(has_custody);
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC101")))]
+    let complete_custody = preparation.committee.iter().all(has_custody);
+    complete_custody
 }
 
 /// Read all boundary decisions from B−1 once; later B transactions cannot change this result.
@@ -109,18 +141,7 @@ pub(super) fn boundary_inputs<'a>(
                 .validate_against_preparing_authorization(&current.authorization)?;
             crate::state::validator_committee::verify_progress(world, transition)?;
             let preparation = &transition.preparation;
-            let ready = transition.credentials.is_some()
-                && transition.readiness.len() == preparation.committee.len()
-                && preparation.committee.iter().all(|seat| {
-                    source
-                        .ready_under(
-                            &preparation.eligibility,
-                            &seat.validator,
-                            preparation.first_height,
-                            preparation.last_height,
-                        )
-                        .is_some()
-                });
+            let ready = prepared_committee_ready(&source, transition);
             let id = preparation.transition_id()?;
             if ready {
                 let credentials = transition
@@ -136,7 +157,7 @@ pub(super) fn boundary_inputs<'a>(
                 }
                 (
                     preparation.last_height,
-                    KagemushaMintFinalityEpochDecisionV1::Activate,
+                    ValidatorEpochDecisionV1::Activate,
                     id,
                     &credentials.authority,
                     preparation.committee.as_slice(),
@@ -145,7 +166,7 @@ pub(super) fn boundary_inputs<'a>(
             } else {
                 (
                     preparation.last_height,
-                    KagemushaMintFinalityEpochDecisionV1::RetainAndCancel,
+                    ValidatorEpochDecisionV1::RetainAndCancel,
                     id,
                     &current.authority,
                     current.committee.as_slice(),
@@ -157,14 +178,26 @@ pub(super) fn boundary_inputs<'a>(
                 height
                     .checked_add(policy.epoch_length_blocks)
                     .ok_or("retained epoch end overflows")?,
-                KagemushaMintFinalityEpochDecisionV1::Retain,
+                ValidatorEpochDecisionV1::Retain,
                 [0; 32],
                 &current.authority,
                 current.committee.as_slice(),
                 entropy.beacon,
             )
         };
-    if decision != KagemushaMintFinalityEpochDecisionV1::Activate {
+    if decision != ValidatorEpochDecisionV1::Activate {
+        #[cfg(all(test, sumeragi_core_mutation = "HC103"))]
+        if current.committee.iter().any(|seat| {
+            selection_pop(
+                source.keys.as_slice(),
+                &seat.validator,
+                next_first,
+                last_height,
+            )
+            .map_or(true, |proof| proof.is_none())
+        }) {
+            return Err("retained authority requires fresh incumbent key publications".into());
+        }
         let incumbent = world
             .global_beacon_key_sessions()
             .get(&entropy.beacon.session_id)
@@ -173,7 +206,7 @@ pub(super) fn boundary_inputs<'a>(
             return Err("retained beacon does not cover the next epoch".into());
         }
     }
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+    let authorization = ValidatorEpochAuthorizationV1 {
         version: 1,
         network_id: current.network_id,
         epoch: next_epoch,

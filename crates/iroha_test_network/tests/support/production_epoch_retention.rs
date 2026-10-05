@@ -7,14 +7,11 @@ use iroha_core::sumeragi::native_journal::authenticate_signed_genesis;
 use iroha_data_model::query::{
     block::prelude::FindBlocks, builder::QueryBuilderExt as _, parameters::Pagination,
 };
-use iroha_data_model::{
-    NetworkId,
-    isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1,
-    },
+use iroha_data_model::sumeragi::epoch::{
+    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochAuthorizationV1,
+    ValidatorEpochDecisionV1,
 };
+use iroha_data_model::{NetworkId, isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1};
 use iroha_model_base::peer::PeerId;
 use std::num::NonZeroU64;
 
@@ -30,8 +27,8 @@ pub(super) fn admit_build_identity(identity: BuildIdentity) -> Result<BuildIdent
 
 fn require_retained_successor(
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
-    current: &KagemushaMintFinalityEpochAuthorizationV1,
-    next: &KagemushaMintFinalityEpochAuthorizationV1,
+    current: &ValidatorEpochAuthorizationV1,
+    next: &ValidatorEpochAuthorizationV1,
     installed: InstalledBeaconEpochBindingV1,
     boundary_height: u64,
 ) -> Result<()> {
@@ -44,7 +41,7 @@ fn require_retained_successor(
                 == boundary_height
                     .checked_add(EPOCH_LENGTH)
                     .ok_or_else(|| eyre!("retained fixture epoch height overflow"))?
-            && next.decision == KagemushaMintFinalityEpochDecisionV1::Retain
+            && next.decision == ValidatorEpochDecisionV1::Retain
             && next.beacon == BeaconEpochBindingV1::Installed(installed),
         "certified boundary changed incumbent authority, installed beacon or signed epoch schedule"
     );
@@ -78,7 +75,7 @@ pub(super) async fn verify_boundary_chain(
         .kagemusha_mint_finality
         .authority_generation
         .bind_network_id(network)?;
-    let initial = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, EPOCH_LENGTH)?;
+    let initial = ValidatorEpochAuthorizationV1::genesis(&authority, EPOCH_LENGTH)?;
     let (_, genesis_epoch) =
         authenticate_signed_genesis(&genesis_bytes, network, native_finality_limits())
             .map_err(|error| eyre!(error))?;
@@ -154,7 +151,7 @@ pub(super) async fn verify_boundary_chain(
             let cursor = NativeJournalCursor::new(client.chain().clone(), network, iroha_data_model::block::consensus::SumeragiRootScope::Global, native_finality_limits(),
 &iroha_allocation::AllocationBudget::new(native_finality_limits().allocated_bytes),
 ).map_err(|error| eyre!(error))?;
-            let proofs = with_verified_native_journal(&journal, client.chain(), &network, native_finality_limits(), cursor.attestations(), cursor.allocation_budget(), |reader| reader.walk(1, height).collect::<std::result::Result<Vec<_>, _>>().map_err(iroha_core::sumeragi::native_journal::NativeJournalError::History)).map_err(|error| eyre!(error))?;
+            let proofs = with_verified_native_journal((&journal).into(), client.chain(), &network, native_finality_limits(), cursor.attestations(), cursor.allocation_budget(), |reader| reader.walk(1, height).collect::<std::result::Result<Vec<_>, _>>().map_err(iroha_core::sumeragi::native_journal::NativeJournalError::History)).map_err(|error| eyre!(error))?;
             let first = proofs.first().ok_or_else(|| eyre!("missing actual signed genesis"))?;
             let context = &first.commitment().schedule.current;
             ensure!(first.block_hash() == genesis_hash && context.committee == roster && context.authority == authority && context.authorization == initial,
@@ -237,8 +234,8 @@ fn production_epoch_retention_requires_exact_source_identity_before_setup() -> R
 
 fn authorization_fixture() -> Result<(
     KagemushaMintFinalityAuthorityGenerationV1,
-    KagemushaMintFinalityEpochAuthorizationV1,
-    KagemushaMintFinalityEpochAuthorizationV1,
+    ValidatorEpochAuthorizationV1,
+    ValidatorEpochAuthorizationV1,
     InstalledBeaconEpochBindingV1,
 )> {
     let mut validators = (1_u8..=4)
@@ -260,18 +257,18 @@ fn authorization_fixture() -> Result<(
         generation: 0,
         validators,
     };
-    let current = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, EPOCH_LENGTH)?;
+    let current = ValidatorEpochAuthorizationV1::genesis(&authority, EPOCH_LENGTH)?;
     let installed = InstalledBeaconEpochBindingV1 {
         session_id: [7; 32],
         transcript_hash: [8; 32],
     };
-    let next = KagemushaMintFinalityEpochAuthorizationV1 {
+    let next = ValidatorEpochAuthorizationV1 {
         epoch: 1,
         first_height: EPOCH_LENGTH + 1,
         last_height: 2 * EPOCH_LENGTH,
         beacon: BeaconEpochBindingV1::Installed(installed),
         previous_authorization_id: current.authorization_id()?,
-        decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+        decision: ValidatorEpochDecisionV1::Retain,
         ..current
     };
     Ok((authority, current, next, installed))
@@ -281,7 +278,7 @@ fn authorization_fixture() -> Result<(
 fn production_epoch_retention_binds_exact_generation_beacon_and_interval() -> Result<()> {
     let (authority, current, next, installed) = authorization_fixture()?;
     require_retained_successor(&authority, &current, &next, installed, EPOCH_LENGTH)?;
-    let later = KagemushaMintFinalityEpochAuthorizationV1 {
+    let later = ValidatorEpochAuthorizationV1 {
         epoch: 2,
         first_height: 2 * EPOCH_LENGTH + 1,
         last_height: 3 * EPOCH_LENGTH,
@@ -320,7 +317,7 @@ fn production_epoch_retention_rejects_changed_generation_beacon_parent_and_sched
             6 => next.first_height += 1,
             7 => next.last_height += 1,
             _ => {
-                next.decision = KagemushaMintFinalityEpochDecisionV1::RetainAndCancel;
+                next.decision = ValidatorEpochDecisionV1::RetainAndCancel;
                 next.transition_id = [9; 32];
             }
         }

@@ -17,6 +17,7 @@ use crate::{
     sumeragi::test_chain::{Signers, TestChainConfig},
 };
 use iroha_crypto::{Hash, SignatureOf};
+use iroha_data_model::sumeragi::epoch::{InstalledBeaconEpochBindingV1, ValidatorEpochDecisionV1};
 use iroha_data_model::{
     account::{Account, AccountId},
     asset::AssetId,
@@ -28,16 +29,14 @@ use iroha_data_model::{
         GlobalThresholdBeaconPulseContextV1, NposPenaltyAction,
     },
     isi::{
-        FinalizePublicLaneUnbond, InstructionBox, Log, Mint, PublicLaneCandidateAuthorization,
-        Register, RegisterPublicLaneCandidate, RegisterPublicLaneValidator, SetParameter,
+        FinalizePublicLaneUnbond, Grant, InstructionBox, Log, Mint,
+        PublicLaneCandidateAuthorization, Register, RegisterPublicLaneCandidate,
+        RegisterPublicLaneValidator, SetParameter,
         consensus_keys::{
             ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
             ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
         },
-        kagemusha_v1::{
-            InstalledBeaconEpochBindingV1, KagemushaMintFinalityAuthorityGenerationV1,
-            KagemushaMintFinalityEpochDecisionV1,
-        },
+        kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     },
     nexus::{
         AdmitValidatorCommitteeSeatV1, FeeDebitSource, PrepareValidatorCommitteeCredentialsV1,
@@ -104,6 +103,15 @@ pub(super) fn fund_signed_genesis(config: &mut TestChainConfig) {
         .push(Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
             std::num::NonZeroU64::new(EPOCH).unwrap(),
         )));
+    // The signed genesis grants the administrator exactly the permission needed
+    // by its later committed lane/committee policy updates.
+    config.genesis_instructions.push(
+        Grant::account_permission(
+            iroha_executor_data_model::permission::parameter::CanSetParameters,
+            AccountId::new(administrator().public_key().clone()),
+        )
+        .into(),
+    );
     let xor = policy().xor_asset_definition_id;
     for index in 0..4 {
         let account = AccountId::new(operator(index).public_key().clone());
@@ -620,15 +628,39 @@ pub(super) fn finish_after_real_detector_penalty(
     assert_eq!(lanes.fixed.len(), 1);
     lanes.fixed.clear();
     drop(view);
-    let signed = paid(
+    let update: InstructionBox =
+        SetParameter::new(Parameter::Custom(lanes.into_custom_parameter())).into();
+    let denied = paid(chain, &operator(0), update.clone());
+    commit_checked(
         chain,
-        &administrator(),
-        SetParameter::new(Parameter::Custom(lanes.into_custom_parameter())).into(),
+        denied,
+        Some("CanSetParameters"),
+        None,
+        ControlWitness::empty(),
     );
+    let signed = paid(chain, &administrator(), update);
     commit_checked(chain, signed, None, None, ControlWitness::empty());
     let EvidenceScope::Lane(scope) = expected_evidence.attribution.scope else {
         panic!("the original report belongs to the authenticated fixed lane")
     };
+    let view = chain.state().view();
+    let closing_lane = view
+        .world()
+        .sumeragi_lanes()
+        .lanes
+        .iter()
+        .find(|row| row.incarnation == scope.incarnation)
+        .expect("the committed close policy retains the lane through its retirement fence");
+    let retirement = closing_lane
+        .retirement_height()
+        .expect("the committed policy update closed the original lane");
+    assert!(
+        retirement < EPOCH,
+        "real retirement completes before frozen selection"
+    );
+    assert!(retirement > chain.height());
+    drop(view);
+    advance(chain, retirement, &bootstrap);
     let view = chain.state().view();
     let old_lane = view
         .world()
@@ -643,6 +675,14 @@ pub(super) fn finish_after_real_detector_penalty(
         })
         .expect("the original report retains its exact retired lane custody");
     old_lane.validate().unwrap();
+    assert_eq!(old_lane.retired_at, Some(retirement));
+    assert!(
+        view.world()
+            .sumeragi_lanes()
+            .lanes
+            .iter()
+            .all(|row| row.incarnation != scope.incarnation)
+    );
     assert!(
         old_lane
             .admits_at(expected_evidence.recorded_at_height)
@@ -830,10 +870,7 @@ pub(super) fn finish_after_real_detector_penalty(
         .outcome
         .as_ref()
         .unwrap();
-    assert_eq!(
-        outcome.decision,
-        KagemushaMintFinalityEpochDecisionV1::Activate
-    );
+    assert_eq!(outcome.decision, ValidatorEpochDecisionV1::Activate);
     assert_eq!(outcome.authority_generation, 1);
     assert_eq!(
         view.world()
@@ -875,7 +912,14 @@ pub(super) fn finish_after_real_detector_penalty(
     assert!(
         !crate::state::validator_committee::peer_has_committee_obligation(
             view.world(),
-            view.world().peers().iter(),
+            chain
+                .committed(TARGET_FIRST)
+                .commitment()
+                .schedule
+                .current
+                .committee
+                .iter()
+                .map(|seat| &seat.validator),
             &registration.peer_id
         )
     );

@@ -384,3 +384,9 @@ mod budget_context;
 
 #[path = "exact_field_streaming_allocations/prepared_sequence.rs"]
 mod prepared_sequence;
+
+#[path = "exact_field_streaming_allocations/prepared_option.rs"]
+mod prepared_option;
+
+#[path = "exact_field_streaming_allocations/prepared_string.rs"]
+mod prepared_string;

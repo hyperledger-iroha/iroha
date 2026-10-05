@@ -15,7 +15,6 @@ from iroha_python import (
     NetworkId,
     OperatorSigningContext,
     SumeragiEvidenceAppliedPenaltyStatus,
-    SumeragiEvidenceCancelledPenaltyStatus,
     SumeragiEvidenceCount,
     SumeragiEvidenceListPage,
     SumeragiEvidencePendingPenaltyStatus,
@@ -68,7 +67,7 @@ def test_sumeragi_evidence_models_parse_the_closed_contract() -> None:
                 ),
                 evidence_record_payload(
                     penalty_status={
-                        "status": "cancelled",
+                        "status": "applied",
                         "details": {"height": 43},
                     }
                 ),
@@ -79,7 +78,7 @@ def test_sumeragi_evidence_models_parse_the_closed_contract() -> None:
     assert isinstance(page.items[0].penalty_status, SumeragiEvidencePendingPenaltyStatus)
     assert isinstance(page.items[1].penalty_status, SumeragiEvidenceAppliedPenaltyStatus)
     assert page.items[1].penalty_status.details.height == 42
-    assert isinstance(page.items[2].penalty_status, SumeragiEvidenceCancelledPenaltyStatus)
+    assert isinstance(page.items[2].penalty_status, SumeragiEvidenceAppliedPenaltyStatus)
     assert page.items[2].penalty_status.details.height == 43
     assert SumeragiEvidenceCount.from_payload({"count": 3}).count == 3
 
@@ -488,4 +487,13 @@ def test_empty_offenders_require_exact_certificate_safety_violation(
         "class": evidence_class, "safety_violation": safety_violation, "offenders": [],
     })
     with pytest.raises(ValueError, match="offenders must contain"):
+        SumeragiEvidenceRecord.from_payload(payload)
+
+
+@pytest.mark.parametrize("details", [{"height": 43}, None, {}, {"height": 43, "note": "x"}])
+def test_sumeragi_evidence_models_reject_retired_cancelled_status(details: Any) -> None:
+    payload = evidence_record_payload(
+        penalty_status={"status": "cancelled", "details": details}
+    )
+    with pytest.raises(ValueError, match="status must be pending or applied"):
         SumeragiEvidenceRecord.from_payload(payload)

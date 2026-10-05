@@ -1538,7 +1538,10 @@ fn archive_replay_genesis_at(creation_time_ms: u64) -> iroha_data_model::block::
             .expect("sign the retained result-bearing genesis"),
     );
     genesis
-        .replace_signatures(std::collections::BTreeSet::from([signature]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([signature])
+                .expect("at most 31 block signatures"),
+        )
         .expect("install exact retained genesis signature");
     assert_eq!(
         genesis.header().creation_time(),

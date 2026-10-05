@@ -384,13 +384,6 @@ fn validate_persisted_records_inner(
                             NposPenaltyAction::MarkConsensusEvidenceApplied(mark) if mark.evidence_key == *key && mark.height == height)))
                 }
             }
-            EvidencePenaltyStatus::Cancelled { .. } => {
-                // TODO(S7/S8 release blocker): authenticate cancellation through original
-                // execution replay. A snapshot's plausible cancellation height is not authority.
-                return Err(invalid(
-                    "cancelled evidence restore requires original execution replay",
-                ));
-            }
         };
         if !lifecycle_valid {
             return Err(invalid("restored penalty lifecycle is impossible"));
@@ -891,5 +884,8 @@ mod restoration;
 
 #[cfg(test)]
 mod codec_tests;
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 mod witness_custody;

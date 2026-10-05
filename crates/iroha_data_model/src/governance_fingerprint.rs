@@ -23,18 +23,6 @@ pub const CONTRACT_EMERGENCY_HOLD_V1: &[u8] =
 /// Exact-account global data-trigger permission proposal domain.
 pub const GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE_V1: &[u8] =
     b"iroha.governance.proposal.global_data_trigger_permission.v1";
-/// Initial governed KAGEMUSHA verifier signer-policy proposal domain.
-pub const KAGEMUSHA_VERIFIER_POLICY_INSTALL_V1: &[u8] =
-    b"iroha.governance.proposal.kagemusha_verifier_policy_install.v1";
-/// Exact standby KAGEMUSHA verifier-release proposal domain.
-pub const KAGEMUSHA_VERIFIER_RELEASE_INSTALL_V1: &[u8] =
-    b"iroha.governance.proposal.kagemusha_verifier_release_install.v1";
-/// Exact active KAGEMUSHA verifier-release proposal domain.
-pub const KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE_V1: &[u8] =
-    b"iroha.governance.proposal.kagemusha_verifier_release_activate.v1";
-/// Exact unused standby KAGEMUSHA verifier-release retirement proposal domain.
-pub const KAGEMUSHA_VERIFIER_RELEASE_RETIRE_V1: &[u8] =
-    b"iroha.governance.proposal.kagemusha_verifier_release_retire.v1";
 pub const GOVERNANCE_EFFECT_PREIMAGE_V1: &[u8] = b"iroha.governance.effect_preimage.v1";
 pub const GOVERNANCE_SUBJECT_ID_V1: &[u8] = b"iroha.governance.subject.id.v1";
 pub const GOVERNANCE_ATTEMPT_ID_V1: &[u8] = b"iroha.governance.attempt.id.v1";
@@ -95,10 +83,6 @@ mod tests {
             CONTRACT_LIFECYCLE_GOVERNANCE_V1,
             CONTRACT_EMERGENCY_HOLD_V1,
             GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE_V1,
-            KAGEMUSHA_VERIFIER_POLICY_INSTALL_V1,
-            KAGEMUSHA_VERIFIER_RELEASE_INSTALL_V1,
-            KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE_V1,
-            KAGEMUSHA_VERIFIER_RELEASE_RETIRE_V1,
             GOVERNANCE_EFFECT_PREIMAGE_V1,
             GOVERNANCE_SUBJECT_ID_V1,
             GOVERNANCE_ATTEMPT_ID_V1,

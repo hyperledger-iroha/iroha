@@ -244,7 +244,7 @@ fn uninitialized_or_disallowed_native_loads_publish_no_original_owner() {
         let mut lease =
             ExecutionMemoryLease::reserve(&budget, NativeInvocation::allocation_plan().unwrap())
                 .unwrap();
-        let result = NativeInvocation::run_unit_root(
+        let result = NativeInvocation::run_public_leaf_root(
             artifact(
                 &[enc::encode_ri(wide::memory::LOAD64, 0, base, offset)],
                 frame,
@@ -321,7 +321,8 @@ fn public_stack_bounds_match_native_gas_policy_at_small_and_maximum_budgets() {
             false,
         );
         let native =
-            NativeInvocation::run_unit_root(contract, "main", gas, &mut lease, &budget).unwrap();
+            NativeInvocation::run_public_leaf_root(contract, "main", gas, &mut lease, &budget)
+                .unwrap();
         let plan = root(&native);
         let expected_top =
             ivm::Memory::STACK_START + ivm::IvmStackPolicy::V1.stack_limit_for_gas(gas);
@@ -400,7 +401,9 @@ fn native_refused_frame_and_result_descriptors_publish_no_packet_owner() {
                 .unwrap();
         assert!(
             matches!(
-                NativeInvocation::run_unit_root(contract, "main", 10_000, &mut lease, &budget),
+                NativeInvocation::run_public_leaf_root(
+                    contract, "main", 10_000, &mut lease, &budget
+                ),
                 Err(CaptureError::Unsupported)
             ),
             "base {base}, offset {offset}, frame {frame}"

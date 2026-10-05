@@ -99,6 +99,7 @@ pub mod query_load_profiles;
 mod reserve_account_proof;
 #[cfg(feature = "app_api")]
 mod reserve_policy_proof;
+mod resource_names_state;
 /// SCCP v1 public read API.
 mod sccp;
 mod sns_lease;
@@ -757,6 +758,7 @@ impl ValidatedToriiHttpTransport {
 }
 
 mod public_tls;
+pub use public_tls::native_https_server_identity_v1;
 
 async fn serve_torii_http_connection<S>(
     stream: S,
@@ -6555,8 +6557,24 @@ pub(crate) struct QueryAdmissionPermit {
     _query: tokio::sync::OwnedSemaphorePermit,
     _heavy: Option<tokio::sync::OwnedSemaphorePermit>,
     _body: Option<tokio::sync::OwnedSemaphorePermit>,
+    // Detached blocking work retains the same complete query owner through completion.
+    _fanout_memory: Option<QueryFanoutMemoryReservation>,
 }
 impl QueryAdmissionPermit {
+    /// Use the response phase granted by this worker's retained query owner.
+    /// Response custody alone cannot grant producer allocation authority.
+    pub(crate) fn response_body_budget(&self) -> Result<usize, Error> {
+        self._fanout_memory
+            .as_ref()
+            .and_then(|owner| owner.admission)
+            .map(|admission| admission.envelope.route_body_bytes)
+            .ok_or_else(|| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(
+                    "The query worker has no admitted response memory owner.".to_owned(),
+                ))
+            })
+    }
+
     #[cfg(test)]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         self._body = Some(permit);
@@ -6586,6 +6604,7 @@ async fn acquire_query_admission(
             _query: query,
             _heavy: heavy,
             _body: None,
+            _fanout_memory: current_query_fanout_memory_for_state(app),
         });
     }
     let acquire = async {
@@ -6610,6 +6629,7 @@ async fn acquire_query_admission(
             _query: query,
             _heavy: heavy,
             _body: None,
+            _fanout_memory: current_query_fanout_memory_for_state(app),
         })
     };
     tokio::time::timeout(app.query_queue_timeout, acquire)
@@ -8507,7 +8527,7 @@ async fn account_history_collection_read(
             ToriiReadEndpointV1::AccountTransactionsQuery,
         ),
     };
-    let (query, body) = prepare_collection_forward(app, &target, query)?;
+    let (query, body, reservation) = prepare_collection_forward(app, &target, query)?;
     let use_target_account_routes =
         torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller);
     let route_scope =
@@ -8540,6 +8560,7 @@ async fn account_history_collection_read(
         endpoint,
         vec![canonical_account_id.to_string()],
         body,
+        reservation,
     )
     .await)
 }
@@ -8615,7 +8636,7 @@ async fn handler_account_assets(
         };
     // Reject an invalid query before routing: a read without a visible
     // route must not answer it with an empty page.
-    let (query, body) = prepare_collection_forward(
+    let (query, body, reservation) = prepare_collection_forward(
         &app,
         &routing::collection_sources::CollectionTarget::AccountAssets(
             canonical_account_id.to_string(),
@@ -8661,6 +8682,7 @@ async fn handler_account_assets(
         ToriiReadEndpointV1::AccountAssetsQuery,
         vec![canonical_account_id.to_string()],
         body,
+        reservation,
     )
     .await)
 }
@@ -8724,7 +8746,7 @@ async fn account_permissions_collection_read(
         &app.telemetry_handle(),
         routing::ENDPOINT_ACCOUNTS_PERMISSIONS,
     )?;
-    let (query, body) = prepare_collection_forward(
+    let (query, body, reservation) = prepare_collection_forward(
         app,
         &routing::collection_sources::CollectionTarget::AccountPermissions(canonical.to_string()),
         query,
@@ -8749,6 +8771,7 @@ async fn account_permissions_collection_read(
             ToriiReadEndpointV1::AccountPermissionsQuery,
             vec![canonical.to_string()],
             body,
+            reservation,
         )
         .await
     } else {
@@ -8794,7 +8817,7 @@ async fn handler_account_assets_query(
         };
     // Reject an invalid query before routing: a read without a visible
     // route must not answer it with an empty page.
-    let (query, body) = prepare_collection_forward(
+    let (query, body, reservation) = prepare_collection_forward(
         &app,
         &routing::collection_sources::CollectionTarget::AccountAssets(
             canonical_account_id.to_string(),
@@ -8832,6 +8855,7 @@ async fn handler_account_assets_query(
         ToriiReadEndpointV1::AccountAssetsQuery,
         vec![canonical_account_id.to_string()],
         body,
+        reservation,
     )
     .await)
 }
@@ -8938,14 +8962,13 @@ async fn handler_contracts_activity_get(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
             .await?;
     }
-    routing::handle_v1_contracts_activity_get(
-        app.state.clone(),
-        visibility.current_visibility(),
+    execute_scoped_direct_collection_read(
+        &app,
+        routing::collection_sources::CollectionTarget::ContractActivity,
         query,
-        app.telemetry.clone(),
+        visibility.current_visibility(),
     )
     .await
-    .map(IntoResponse::into_response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_contracts_events_get(
@@ -8971,14 +8994,13 @@ async fn handler_contracts_events_get(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
             .await?;
     }
-    routing::handle_v1_contracts_events_get(
-        app.state.clone(),
-        visibility.current_visibility(),
+    execute_scoped_direct_collection_read(
+        &app,
+        routing::collection_sources::CollectionTarget::ContractEvents,
         query,
-        app.telemetry.clone(),
+        visibility.current_visibility(),
     )
     .await
-    .map(IntoResponse::into_response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_contracts_activity_query(
@@ -18855,8 +18877,15 @@ enum BoundedContractViewWork {
 }
 #[cfg(feature = "app_api")]
 enum BoundedContractViewOutput {
-    Single { status: StatusCode, body: Vec<u8> },
-    Batch { body: Vec<u8> },
+    Single {
+        status: StatusCode,
+        body: Vec<u8>,
+        memory: QueryFanoutMemoryReservation,
+    },
+    Batch {
+        body: Vec<u8>,
+        memory: QueryFanoutMemoryReservation,
+    },
 }
 #[cfg(feature = "app_api")]
 async fn execute_bounded_contract_view_work(
@@ -18864,6 +18893,8 @@ async fn execute_bounded_contract_view_work(
     endpoint: &'static str,
     work: BoundedContractViewWork,
 ) -> Result<BoundedContractViewOutput, Error> {
+    let memory = try_acquire_query_fanout_memory(app)
+        .map_err(|_| collections::memory::capacity("contract view working set"))?;
     if let BoundedContractViewWork::Batch(request) = &work {
         routing::validate_contract_view_batch_request(request)?;
     }
@@ -18885,11 +18916,15 @@ async fn execute_bounded_contract_view_work(
             BoundedContractViewWork::Single(request) => {
                 let (status, body) =
                     routing::handle_post_contract_view(state, NoritoJson(request))?;
-                Ok(BoundedContractViewOutput::Single { status, body })
+                Ok(BoundedContractViewOutput::Single {
+                    status,
+                    body,
+                    memory,
+                })
             }
             BoundedContractViewWork::Batch(request) => {
                 let body = routing::handle_post_contract_view_batch(state, NoritoJson(request))?;
-                Ok(BoundedContractViewOutput::Batch { body })
+                Ok(BoundedContractViewOutput::Batch { body, memory })
             }
         }
     });
@@ -18912,14 +18947,18 @@ async fn execute_bounded_contract_view_work(
     })?
 }
 #[cfg(feature = "app_api")]
-fn contract_view_json_bytes_response(status: StatusCode, body: Vec<u8>) -> Response {
+fn contract_view_json_bytes_response(
+    status: StatusCode,
+    body: Vec<u8>,
+    memory: QueryFanoutMemoryReservation,
+) -> Response {
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = status;
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
-    response
+    hold_query_fanout_memory_in_response_body(response, memory)
 }
 #[cfg(any(feature = "app_api", test))]
 fn error_response_with_format(error: Error, format: ResponseFormat) -> Response {
@@ -20611,7 +20650,7 @@ fn require_routed_contract_view_authority(
     require_runtime_governance_canonical_account_literal(caller, authority, "routed contract view")
 }
 #[cfg(feature = "app_api")]
-async fn execute_torii_read_request_locally(
+async fn execute_torii_read_request_locally_admitted(
     app: &SharedAppState,
     request: ToriiReadProxyRequestV1,
     routing_decision: RoutingDecision,
@@ -21178,9 +21217,11 @@ async fn execute_torii_read_request_locally(
             )
             .await
             {
-                Ok(BoundedContractViewOutput::Single { status, body }) => {
-                    contract_view_json_bytes_response(status, body)
-                }
+                Ok(BoundedContractViewOutput::Single {
+                    status,
+                    body,
+                    memory,
+                }) => contract_view_json_bytes_response(status, body, memory),
                 Ok(BoundedContractViewOutput::Batch { .. }) => {
                     Error::Query(iroha_data_model::ValidationFail::InternalError(
                         "contract view worker returned a batch response".to_owned(),
@@ -21213,8 +21254,8 @@ async fn execute_torii_read_request_locally(
             )
             .await
             {
-                Ok(BoundedContractViewOutput::Batch { body }) => {
-                    contract_view_json_bytes_response(StatusCode::OK, body)
+                Ok(BoundedContractViewOutput::Batch { body, memory }) => {
+                    contract_view_json_bytes_response(StatusCode::OK, body, memory)
                 }
                 Ok(BoundedContractViewOutput::Single { .. }) => {
                     Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -21401,15 +21442,15 @@ async fn execute_torii_single_route_read_with_format(
         Ok(reservation) => reservation,
         Err(response) => return response,
     };
-    let mut budget = match ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    let mut budget = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return hold_query_fanout_memory_in_response_body(response, reservation);
+            }
+        },
         app.torii_proxy_max_response_bytes,
-    ) {
-        Ok(budget) => budget,
-        Err(response) => {
-            return hold_query_fanout_memory_in_response_body(response, reservation);
-        }
-    };
+    );
     let sanitize_request = matches!(
         endpoint,
         ToriiReadEndpointV1::AliasResolve
@@ -21448,7 +21489,12 @@ async fn execute_torii_single_route_read_with_format(
         body,
     );
     request.response_format = response_format;
-    let response = execute_torii_read_for_route(app, route, request, None).await;
+    let response = COLLECTION_READ_MEMORY_RESERVATION
+        .scope(
+            reservation.clone(),
+            execute_torii_read_for_route(app, route, request, None),
+        )
+        .await;
     let response =
         match bound_torii_single_route_response(response, response_format, &mut budget).await {
             Ok(response) | Err(response) => response,
@@ -26454,7 +26500,11 @@ async fn handler_post_contract_view(
     )
     .await
     {
-        Ok(BoundedContractViewOutput::Single { status, body }) => {
+        Ok(BoundedContractViewOutput::Single {
+            status,
+            body,
+            memory,
+        }) => {
             let mut response = proof_cached_json_response_with_egress(
                 &app,
                 &headers,
@@ -26465,7 +26515,7 @@ async fn handler_post_contract_view(
             )
             .await?;
             *response.status_mut() = status;
-            Ok(response)
+            Ok(hold_query_fanout_memory_in_response_body(response, memory))
         }
         Ok(BoundedContractViewOutput::Batch { .. }) => Err(Error::Query(
             iroha_data_model::ValidationFail::InternalError(
@@ -26554,8 +26604,8 @@ async fn handler_post_contract_view_batch(
     )
     .await
     {
-        Ok(BoundedContractViewOutput::Batch { body }) => {
-            proof_cached_json_response_with_egress(
+        Ok(BoundedContractViewOutput::Batch { body, memory }) => {
+            let response = proof_cached_json_response_with_egress(
                 &app,
                 &headers,
                 Some(remote.ip()),
@@ -26563,7 +26613,8 @@ async fn handler_post_contract_view_batch(
                 Bytes::from(body),
                 true,
             )
-            .await
+            .await?;
+            Ok(hold_query_fanout_memory_in_response_body(response, memory))
         }
         Ok(BoundedContractViewOutput::Single { .. }) => Err(Error::Query(
             iroha_data_model::ValidationFail::InternalError(
@@ -31676,29 +31727,29 @@ async fn handler_alias_resolve_index(
         Ok(reservation) => reservation,
         Err(response) => return Ok(response),
     };
-    let admission = match ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    let admission = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(&app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return Ok(hold_query_fanout_memory_in_response_body(
+                    response,
+                    reservation,
+                ));
+            }
+        },
         app.torii_proxy_max_response_bytes,
-    ) {
-        Ok(admission) => admission,
-        Err(response) => {
-            return Ok(hold_query_fanout_memory_in_response_body(
-                response,
-                reservation,
-            ));
-        }
-    };
+    );
     if let Err(response) = admission.admit_request_bytes(body.len()) {
         return Ok(hold_query_fanout_memory_in_response_body(
             response,
             reservation,
         ));
     }
-    let collected = match collect_torii_alias_json_payloads(
+    let collected = match COLLECTION_READ_MEMORY_RESERVATION.scope(reservation.clone(), collect_torii_alias_json_payloads(
         &allowed_routes,
         denied_routes,
         "one or more dataspace routes denied the alias-index lookup and no allowed route resolved it",
-        app.query_fanout_working_set_bytes,
+        admission.envelope.working_set_bytes,
         app.torii_proxy_max_response_bytes,
         |route| {
             execute_torii_single_route_read_in_fanout(
@@ -31711,7 +31762,7 @@ async fn handler_alias_resolve_index(
                 body.to_vec(),
             )
         },
-    )
+    ))
     .await
     {
         Ok(collected) => collected,
@@ -31816,32 +31867,32 @@ async fn handler_alias_lookup_by_account(
         Ok(reservation) => reservation,
         Err(response) => return Ok(response),
     };
-    let admission = match ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    let admission = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(&app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return Ok(hold_query_fanout_memory_in_response_body(
+                    response,
+                    reservation,
+                ));
+            }
+        },
         app.torii_proxy_max_response_bytes,
-    ) {
-        Ok(admission) => admission,
-        Err(response) => {
-            return Ok(hold_query_fanout_memory_in_response_body(
-                response,
-                reservation,
-            ));
-        }
-    };
+    );
     if let Err(response) = admission.admit_request_bytes(body.len()) {
         return Ok(hold_query_fanout_memory_in_response_body(
             response,
             reservation,
         ));
     }
-    let collected = match collect_torii_alias_lookup_json_payloads(
+    let collected = match COLLECTION_READ_MEMORY_RESERVATION.scope(reservation.clone(), collect_torii_alias_lookup_json_payloads(
         &app,
         &allowed_routes,
         denied_routes,
         "one or more dataspace routes denied the alias-by-account lookup and no allowed route returned aliases",
         visibility.caller(),
         &request,
-        app.query_fanout_working_set_bytes,
+        admission.envelope.working_set_bytes,
         app.torii_proxy_max_response_bytes,
         |route| {
             execute_torii_single_route_read_in_fanout(
@@ -31854,7 +31905,7 @@ async fn handler_alias_lookup_by_account(
                 body.to_vec(),
             )
         },
-    )
+    ))
     .await
     {
         Ok(collected) => collected,
@@ -33577,7 +33628,8 @@ async fn ledger_executed_block_wire_response(
         }
         Err(error) => return Err(map_block_proof_error(error)),
     };
-    let mut response = Response::new(Body::from(wire));
+    // HTTP retirement owns the original charged frame; no response byte copy or early refund.
+    let mut response = Response::new(Body::from(Bytes::from_owner(wire)));
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static(utils::NORITO_MIME_TYPE),
@@ -37224,6 +37276,8 @@ impl Torii {
             LEDGER_STATE_PROOF => public_get(handler_ledger_state_proof);
             LEDGER_EXECUTED_BLOCK_WIRE => canonical_signature_get(handler_ledger_executed_block_wire);
             LEDGER_BLOCK_PROOF => canonical_signature_get(handler_block_proof);
+            RESOURCE_NAMES_STATE => canonical_signature_get(resource_names_state::handler);
+            AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);
         );
     }
     #[cfg(not(feature = "app_api"))]
@@ -37804,12 +37858,15 @@ impl Torii {
                 .authenticated_operator(app_state),
         );
     }
-    /// Mandatory KAGEMUSHA monetary and recovery routes in every Torii build.
-    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder) {
-        let transaction_max_content_len = self.transaction_max_content_len;
+    /// Mandatory certified multisig execution-record publication in every Torii build.
+    fn add_multisig_execution_evidence_routes(builder: &mut RouterBuilder) {
         mount_catalog_route_rows!(builder, multisig_execution_evidence;
             GET => public_get(multisig_execution_evidence::handler);
         );
+    }
+    /// Mandatory KAGEMUSHA monetary and recovery routes in every Torii build.
+    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder) {
+        let transaction_max_content_len = self.transaction_max_content_len;
         let kagemusha_top_up_body_limit_bytes =
             kagemusha_top_up_body_limit(transaction_max_content_len);
         let kagemusha_redeem_body_limit_bytes =
@@ -37821,8 +37878,6 @@ impl Torii {
             REDEEM => limited_canonical_signed_post(handler_kagemusha_redeem, kagemusha_redeem_body_limit_bytes);
             OPERATION => public_get(handler_kagemusha_operation_status);
             AUTHORITY_STATE => public_get(kagemusha_state::handler);
-            RESOURCE_NAMES_STATE => canonical_signature_get(kagemusha_state::handle_resource_names);
-            AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);
             ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);
             ORDINARY_MINT_ISSUER_PURPOSE => limited_canonical_signature_post(ordinary_mint_issuer_purpose::handler, iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1);
             ORDINARY_MINT_FINALIZED => limited_canonical_signature_post(ordinary_mint_finalized::handler, iroha_torii_shared::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1);
@@ -41534,6 +41589,7 @@ impl Torii {
         // Iroha Connect (feature-gated)
         #[cfg(feature = "connect")]
         self.add_connect_routes(&mut builder);
+        Self::add_multisig_execution_evidence_routes(&mut builder);
         self.add_kagemusha_routes(&mut builder);
         // App-facing JSON API
         #[cfg(feature = "app_api")]
@@ -43989,3 +44045,6 @@ fn validate_native_transaction_submission_identity(
 }
 #[cfg(all(test, feature = "connect"))]
 mod native_transaction_proxy_tests;
+
+#[cfg(test)]
+mod service_checked_writer_test_support;

@@ -15,6 +15,7 @@ use thiserror::Error;
 #[repr(transparent)]
 #[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::BlobDigest")]
+#[norito(decode_fields)]
 pub struct BlobDigest(
     #[norito(
         with = "crate::json_helpers::fixed_bytes",
@@ -78,6 +79,7 @@ pub type ChunkDigest = BlobDigest;
 #[repr(transparent)]
 #[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::StorageTicketId")]
+#[norito(decode_fields)]
 pub struct StorageTicketId(
     #[norito(
         with = "crate::json_helpers::fixed_bytes",
@@ -208,6 +210,7 @@ pub enum Compression {
 #[repr(transparent)]
 #[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::GovernanceTag")]
+#[norito(decode_fields)]
 pub struct GovernanceTag(pub String);
 impl GovernanceTag {
     /// Construct a governance tag wrapper.
@@ -319,7 +322,7 @@ impl Default for ErasureProfile {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::RetentionPolicy")]
 pub struct RetentionPolicy {

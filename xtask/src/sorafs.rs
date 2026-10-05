@@ -3916,6 +3916,7 @@ fn pin_fixture_commit_completion_anchor(state: &State) -> Result<(), Box<dyn Err
 fn pin_fixture_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
     ProviderIngestCompletionAuthorityV1::new(
         pin_fixture_alice(),
+        pin_fixture_alice(),
         ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0xA1; 32],
             revision: 1,

@@ -8,7 +8,7 @@
 //! and root-return control through the dispatcher.
 //! Atomic destinations, initialized stack reads, STORE effects and all compact
 //! gaps use original clocks; private/wide memory and faults remain open.
-//! The Unit return joins all original operands, both staged validation debits,
+//! The artifact-selected Unit/Bool return joins all original operands, both staged validation debits,
 //! its typed memory read and every initialization-scan cell. The successful
 //! terminal bank constrains optional padding and the complete unused suffix;
 //! compact activity is an exact prefix before the single fixed root return.
@@ -96,7 +96,8 @@ impl Source {
         .map_err(SourceError::Initializer)?;
         let instructions = instructions::Instructions::new(&native, &root, budget)
             .map_err(SourceError::Instructions)?;
-        let returning = returning::Returning::new(&native, budget).map_err(SourceError::Return)?;
+        let returning =
+            returning::Returning::new(&native, &root, budget).map_err(SourceError::Return)?;
         let terminal =
             terminal::Terminal::new(&native, &root, budget).map_err(SourceError::Terminal)?;
         Ok(Self {

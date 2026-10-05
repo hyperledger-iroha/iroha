@@ -970,7 +970,6 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                         )?;
                     }
                 }
-                outcome.applied = outcome.applied.saturating_add(1);
                 outcome.slashed = outcome.slashed.saturating_add(1);
             }
             NposPenaltyAction::MarkConsensusEvidenceApplied(action) => {
@@ -992,6 +991,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                 tx.world
                     .consensus_evidence
                     .insert(action.evidence_key, record);
+                outcome.applied = outcome.applied.saturating_add(1);
             }
         }
     }
@@ -1011,11 +1011,6 @@ fn ensure_evidence_penalty_is_unresolved(
         EvidencePenaltyStatus::Applied { .. } => {
             return Err(eyre!(
                 "consensus penalty action references already applied evidence"
-            ));
-        }
-        EvidencePenaltyStatus::Cancelled { .. } => {
-            return Err(eyre!(
-                "consensus penalty action references cancelled evidence"
             ));
         }
     }
@@ -3338,7 +3333,7 @@ mod tests {
         assert_eq!(record.penalty_status, EvidencePenaltyStatus::Pending);
     }
     #[test]
-    fn post_execution_evidence_cancellation_rejects_slash_and_mark_atomically() {
+    fn post_execution_evidence_terminalization_rejects_slash_and_mark_atomically() {
         let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
@@ -3365,8 +3360,8 @@ mod tests {
                 .consensus_evidence
                 .get(&evidence_key)
                 .cloned()
-                .expect("candidate cancellation target exists");
-            record.penalty_status = EvidencePenaltyStatus::Cancelled { height: 2 };
+                .expect("candidate terminalization target exists");
+            record.penalty_status = EvidencePenaltyStatus::Applied { height: 2 };
             transaction
                 .world
                 .consensus_evidence
@@ -3383,19 +3378,19 @@ mod tests {
             0,
             2_000,
         )
-        .expect_err("same-block cancellation must reject the candidate penalty bundle");
+        .expect_err("same-block terminalization must reject the candidate penalty bundle");
         assert!(
-            error.to_string().contains("cancelled evidence"),
+            error.to_string().contains("already applied evidence"),
             "unexpected rejection: {error}"
         );
         let evidence = state_block
             .world
             .consensus_evidence
             .get(&evidence_key)
-            .expect("candidate cancellation remains staged");
+            .expect("candidate terminalization remains staged");
         assert_eq!(
             evidence.penalty_status,
-            EvidencePenaltyStatus::Cancelled { height: 2 }
+            EvidencePenaltyStatus::Applied { height: 2 }
         );
         let validator_record = state_block
             .world
@@ -3762,5 +3757,148 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn terminalized_evidence_count_includes_unslashable_original_lane_record() {
+        // This is explicit admitted monetary-kernel prestate, not an assertion that
+        // seeded World attribution is certified history. Genesis execution is real.
+        let (state, evidence_key, validator) = lane_penalty_fixture(false);
+        let lane = LaneId::new(42);
+        let validator_key = (lane, validator);
+        let (asset_definition, _, _) = penalty_staking_ids();
+        let view = state.view();
+        let original_record = view
+            .world()
+            .consensus_evidence()
+            .get(&evidence_key)
+            .unwrap()
+            .clone();
+        assert_eq!(
+            original_record.penalty_status,
+            EvidencePenaltyStatus::Pending
+        );
+        let original_custody = view
+            .world()
+            .public_lane_stake_custody()
+            .get(&validator_key)
+            .unwrap()
+            .clone();
+        let original_validator = view
+            .world()
+            .public_lane_validators()
+            .get(&validator_key)
+            .unwrap()
+            .clone();
+        let original_balances = view
+            .world()
+            .assets()
+            .iter()
+            .map(|(id, amount)| (id.clone(), amount.as_ref().clone()))
+            .collect::<Vec<_>>();
+        let original_supply = view
+            .world()
+            .asset_definitions()
+            .get(&asset_definition)
+            .unwrap()
+            .total_quantity()
+            .clone();
+        drop(view);
+
+        let (actions, _index) = PenaltyApplier::new(&state, None)
+            .derive_npos_penalty_actions(&penalty_header(22))
+            .unwrap();
+        assert_eq!(
+            actions,
+            vec![NposPenaltyAction::MarkConsensusEvidenceApplied(
+                NposMarkConsensusEvidenceAppliedAction {
+                    evidence_key,
+                    height: 22
+                },
+            )],
+            "an originally unbound signer terminalizes without inventing monetary liability"
+        );
+        let effects = NposConsensusEffects {
+            parent_service_commit_qc: None,
+            evidence_admissions: Vec::new(),
+            penalty_actions: actions,
+        };
+        let mut block = state
+            .consensus_effects_probe_block(penalty_header(22))
+            .unwrap();
+        // Separate any inherited fixture events from this exact finality operation.
+        let _original_events = block.world.take_external_events();
+        let witness_guard = crate::exec_witness::exec_witness_guard();
+        crate::exec_witness::start_block();
+        let mut transaction = block.consensus_effects_transaction().unwrap();
+        let outcome = apply_npos_consensus_effects_to_transaction(
+            &mut transaction,
+            &effects,
+            None,
+            &[],
+            &[],
+            22,
+            0,
+            22_000,
+        )
+        .unwrap();
+        let mut expected_record = original_record;
+        expected_record.penalty_status = EvidencePenaltyStatus::Applied { height: 22 };
+        assert_eq!(
+            transaction
+                .world
+                .consensus_evidence
+                .get(&evidence_key)
+                .unwrap(),
+            &expected_record,
+            "only the existing original record's terminal status changes"
+        );
+        assert_eq!(
+            transaction
+                .world
+                .public_lane_stake_custody
+                .get(&validator_key),
+            Some(&original_custody)
+        );
+        assert_eq!(
+            transaction.world.public_lane_validators.get(&validator_key),
+            Some(&original_validator)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .assets()
+                .iter()
+                .map(|(id, amount)| (id.clone(), amount.as_ref().clone()))
+                .collect::<Vec<_>>(),
+            original_balances,
+            "all escrow, sink, payer and recipient balances remain exact"
+        );
+        assert_eq!(
+            transaction
+                .world
+                .asset_definitions()
+                .get(&asset_definition)
+                .unwrap()
+                .total_quantity(),
+            &original_supply,
+            "terminal markers do not mint, burn or charge fees"
+        );
+        transaction.apply_consensus_effects();
+        assert!(block.world.take_external_events().is_empty());
+        let witness = crate::exec_witness::drain_exec_witness();
+        drop(witness_guard);
+        assert!(witness.reads.is_empty());
+        assert!(witness.writes.is_empty());
+        assert!(witness.fastpq_transcripts.is_empty());
+        assert!(witness.fastpq_batches.is_empty());
+        assert!(block.drain_transfer_transcripts().is_empty());
+        assert_eq!(outcome.slashed, 0, "there is no custody slash");
+        // This is the intended causal BEFORE assertion: the original kernel
+        // reports zero, after successfully terminalizing the same record above.
+        assert_eq!(
+            outcome.applied, 1,
+            "count terminalized records, not slash actions"
+        );
     }
 }

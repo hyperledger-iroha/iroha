@@ -27,7 +27,11 @@ use iroha_data_model::{
     },
     sumeragi::{
         SumeragiFootprint, SumeragiStatus,
-        epoch::{ValidatorCommitteeMemberV1, ValidatorEpochBoundaryV1, ValidatorEpochContextV1},
+        epoch::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorCommitteeMemberV1,
+            ValidatorEpochAuthorizationV1, ValidatorEpochBoundaryV1, ValidatorEpochContextV1,
+            ValidatorEpochDecisionV1,
+        },
     },
     sumeragi_finality::{
         ChainParamsRecord, ExecutionCommitment, ExecutionResultCommitment, NativeLaneStateProof,
@@ -240,7 +244,7 @@ impl Chain {
                     validators: pasta(&keys, generation),
                 }
             };
-            let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+            let authorization = ValidatorEpochAuthorizationV1 {
                 epoch: previous.authorization.epoch + 1,
                 first_height: previous.authorization.last_height + 1,
                 last_height: *end,
@@ -257,9 +261,9 @@ impl Chain {
                     [u8::try_from(generation).unwrap(); 32]
                 },
                 decision: if retained {
-                    KagemushaMintFinalityEpochDecisionV1::Retain
+                    ValidatorEpochDecisionV1::Retain
                 } else {
-                    KagemushaMintFinalityEpochDecisionV1::Activate
+                    ValidatorEpochDecisionV1::Activate
                 },
                 ..previous.authorization
             };
@@ -327,7 +331,7 @@ impl Chain {
                     )])
                     .sign(authority.private_key()),
                 );
-                builder.build(BTreeSet::new())
+                builder.build(iroha_data_model::block::BlockSignatures::default())
             };
             NativeFinalityFixture::install_network_results(&mut b, vec![Ok(Vec::default())]);
             let context = chain.epochs[index].context.clone();
@@ -727,7 +731,7 @@ fn with_committee(context: &ValidatorEpochContextV1, keys: &[KeyPair]) -> Valida
         validators: pasta(keys, 900),
         ..context.authority.clone()
     };
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+    let authorization = ValidatorEpochAuthorizationV1 {
         authority_id: authority.authority_id().unwrap(),
         ..context.authorization
     };

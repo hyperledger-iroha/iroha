@@ -20,11 +20,13 @@
 use norito::{NoritoSchema, codec::Encode};
 
 // Borrow concrete original current/undo owners without admitting arbitrary row suppliers.
-pub(super) mod original_images;
+pub(crate) mod original_images;
 
 mod account_alias_ownership;
 
 mod account_identity_ownership;
+
+pub(in crate::state) mod borrowed_controller_work;
 
 mod grouped_ownership;
 

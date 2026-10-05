@@ -1205,178 +1205,6 @@ pub mod multisig_execution_evidence {
     pub const ROUTES: &[RouteDescriptor] = &[GET];
 }
 
-/// Universal KAGEMUSHA protocol route descriptors.
-pub mod kagemusha {
-    use super::{
-        AdmissionPolicy, ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor,
-        RouteEffect, RouteProjections,
-    };
-    /// Fetch the node's universal KAGEMUSHA readiness contract.
-    pub const READINESS_PATH: &str = "/v1/kagemusha/readiness";
-    /// Submit a signed KAGEMUSHA top-up operation.
-    pub const TOP_UP_PATH: &str = "/v1/kagemusha/top-up";
-    /// Submit a signed KAGEMUSHA redemption operation.
-    pub const REDEEM_PATH: &str = "/v1/kagemusha/redeem";
-    /// Fetch one KAGEMUSHA operation by its canonical operation ID.
-    pub const OPERATION_PATH: &str = "/v1/kagemusha/operations/{operation_id}";
-    /// Read challenged complete native World content for one current asset definition.
-    pub const AUTHORITY_STATE_PATH: &str = "/v1/kagemusha/authority-state/{asset_definition_id}";
-    /// Descriptor for universal KAGEMUSHA readiness discovery.
-    pub const READINESS: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.readiness",
-        HttpMethod::Get,
-        READINESS_PATH,
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::ALL)
-    .with_cors_options(true);
-    /// Descriptor for KAGEMUSHA top-up submission.
-    pub const TOP_UP: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.top_up",
-        HttpMethod::Post,
-        TOP_UP_PATH,
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::Mutation,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
-    .with_projections(RouteProjections::ALL)
-    .with_cors_options(true);
-    /// Descriptor for KAGEMUSHA redemption submission.
-    pub const REDEEM: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.redeem",
-        HttpMethod::Post,
-        REDEEM_PATH,
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::Mutation,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
-    .with_projections(RouteProjections::ALL)
-    .with_cors_options(true);
-    /// Descriptor for reading one KAGEMUSHA operation.
-    pub const OPERATION: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.operation",
-        HttpMethod::Get,
-        OPERATION_PATH,
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::ALL)
-    .with_cors_options(true);
-    /// Data-only complete World publication; clients independently select finality authority.
-    pub const AUTHORITY_STATE: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.authority_state",
-        HttpMethod::Get,
-        AUTHORITY_STATE_PATH,
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::ALL)
-    .with_cors_options(true);
-    /// Complete name originals; the handler additionally requires the native genesis-issued read root.
-    pub const RESOURCE_NAMES_STATE: RouteDescriptor = RouteDescriptor::new(
-        "ledger.resource_names_state",
-        HttpMethod::Get,
-        "/v1/ledger/resource-names/{challenge}",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Scoped account/fee originals for an existing native full-ledger read holder.
-    pub const AUTHORITY_ORIGINALS: RouteDescriptor = RouteDescriptor::new(
-        "ledger.authority_originals",
-        HttpMethod::Post,
-        "/v1/ledger/authority-originals",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Canonical first-release KAGEMUSHA API catalog.
-    /// Exact current S/W originals under account authentication; no broad ledger-read grant.
-    pub const ORDINARY_WALLET_CURRENT: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.ordinary_wallet_current",
-        HttpMethod::Post,
-        "/v1/kagemusha/ordinary/current-wallet",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Exact single-issuer positive current World Mint grant under that issuer's own signature.
-    pub const ORDINARY_MINT_ISSUER_PURPOSE: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.ordinary_mint_issuer_purpose",
-        HttpMethod::Post,
-        "/v1/kagemusha/ordinary/mint-issuer-purpose",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Exact payer-authenticated ordinary debit original and native receipt membership.
-    pub const ORDINARY_MINT_FINALIZED: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.ordinary_mint_finalized",
-        HttpMethod::Post,
-        "/v1/kagemusha/ordinary/top-up/finality",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Exact payer-authenticated ordinary credit published by the genuine background owner.
-    pub const ORDINARY_MINT_CREDIT: RouteDescriptor = RouteDescriptor::new(
-        "kagemusha.ordinary_mint_credit",
-        HttpMethod::Post,
-        "/v1/kagemusha/ordinary/top-up/credit",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Complete first-release KAGEMUSHA route descriptor inventory.
-    pub const ROUTES: &[RouteDescriptor] = &[
-        READINESS,
-        TOP_UP,
-        REDEEM,
-        OPERATION,
-        AUTHORITY_STATE,
-        RESOURCE_NAMES_STATE,
-        AUTHORITY_ORIGINALS,
-        ORDINARY_WALLET_CURRENT,
-        ORDINARY_MINT_ISSUER_PURPOSE,
-        ORDINARY_MINT_FINALIZED,
-        ORDINARY_MINT_CREDIT,
-    ];
-}
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {
     use super::{
@@ -1767,6 +1595,33 @@ pub mod core {
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
+    /// Complete resource-name originals; the handler additionally requires the
+    /// native genesis-issued full-ledger read permission.
+    pub const RESOURCE_NAMES_STATE: RouteDescriptor = RouteDescriptor::new(
+        "ledger.resource_names_state",
+        HttpMethod::Get,
+        "/v1/ledger/resource-names/{challenge}",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Scoped account/fee originals for an existing native full-ledger read holder.
+    pub const AUTHORITY_ORIGINALS: RouteDescriptor = RouteDescriptor::new(
+        "ledger.authority_originals",
+        HttpMethod::Post,
+        "/v1/ledger/authority-originals",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Internal peer-to-peer Torii HTTP proxy.
     pub const INTERNAL_PROXY: RouteDescriptor = RouteDescriptor::new(
         "operator.internal_torii_proxy",
@@ -1978,6 +1833,8 @@ pub mod core {
         LEDGER_STATE_PROOF,
         LEDGER_EXECUTED_BLOCK_WIRE,
         LEDGER_BLOCK_PROOF,
+        RESOURCE_NAMES_STATE,
+        AUTHORITY_ORIGINALS,
         INTERNAL_PROXY,
         NFT_OFFER_CAPABILITIES,
         NFT_OFFER_LIST,
@@ -4819,7 +4676,6 @@ const CATALOGED_ROUTE_FAMILIES: &[&[RouteDescriptor]] = &[
     contracts_and_verification_keys::ROUTES,
     soracloud_gateway::ROUTES,
     content_directory::ROUTES,
-    kagemusha::ROUTES,
     multisig_execution_evidence::ROUTES,
     sccp::ROUTES,
 ];

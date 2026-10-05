@@ -422,9 +422,10 @@ class ProviderIngestCompletionSignerPolicyV1:
 
 @dataclass(frozen=True)
 class ProviderIngestCompletionAuthorityV1:
-    """Exact provider owner and governed signer policy expected at commit."""
+    """Exact provider owner, completion signer and governed policy expected at commit."""
 
     provider_owner: str
+    completion_signer: str
     signer_policy: ProviderIngestCompletionSignerPolicyV1
 
     def __post_init__(self) -> None:
@@ -432,6 +433,11 @@ class ProviderIngestCompletionAuthorityV1:
             self,
             "provider_owner",
             _canonical_account_id(self.provider_owner, "provider_owner"),
+        )
+        object.__setattr__(
+            self,
+            "completion_signer",
+            _canonical_account_id(self.completion_signer, "completion_signer"),
         )
         if not isinstance(
             self.signer_policy,
@@ -446,6 +452,7 @@ class ProviderIngestCompletionAuthorityV1:
 
         return {
             "provider_owner": self.provider_owner,
+            "completion_signer": self.completion_signer,
             "signer_policy": self.signer_policy.to_payload(),
         }
 
@@ -458,11 +465,12 @@ class ProviderIngestCompletionAuthorityV1:
 
         body = _exact_mapping(
             payload,
-            frozenset({"provider_owner", "signer_policy"}),
+            frozenset({"provider_owner", "completion_signer", "signer_policy"}),
             "ProviderIngestCompletionAuthorityV1",
         )
         return cls(
             provider_owner=body["provider_owner"],
+            completion_signer=body["completion_signer"],
             signer_policy=ProviderIngestCompletionSignerPolicyV1.from_payload(
                 body["signer_policy"]
             ),

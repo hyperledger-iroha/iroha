@@ -452,6 +452,26 @@ fn owned_pop_credential_moves_original_backing_and_returns_it_on_rejection() {
     assert_eq!(credential.public_key(), pair.public_key());
     let ordinary = crate::BlsNormalPopVerifiedKey::new(pair.public_key(), &proof).unwrap();
     assert_eq!(credential, ordinary);
+    assert!(without_allocations(
+        || credential.proof_of_possession_matches(&proof)
+    ));
+    assert!(without_allocations(
+        || ordinary.proof_of_possession_matches(&proof)
+    ));
+    let cloned = credential.clone();
+    assert!(without_allocations(
+        || cloned.proof_of_possession_matches(&proof)
+    ));
+    let mut changed = proof.clone();
+    changed[17] ^= 1;
+    for other in [&[][..], &proof[..95], changed.as_slice()] {
+        assert!(!without_allocations(
+            || credential.proof_of_possession_matches(other)
+        ));
+        assert!(!without_allocations(
+            || ordinary.proof_of_possession_matches(other)
+        ));
+    }
 
     let owned = pair.public_key().clone();
     let original = owned.borrowed_parts().unwrap().1.as_ptr();

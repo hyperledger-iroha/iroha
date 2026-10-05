@@ -8518,30 +8518,33 @@ pub mod json {
         }
         fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
             out.begin_container()?;
-            out.push('[')?;
-            let mut previous: Option<&T> = None;
-            for index in 0..self.len() {
-                let mut next: Option<&T> = None;
-                for candidate in self {
-                    if previous.is_some_and(|value| candidate <= value) {
-                        continue;
+            let result = (|| {
+                out.push('[')?;
+                let mut previous: Option<&T> = None;
+                for index in 0..self.len() {
+                    let mut next: Option<&T> = None;
+                    for candidate in self {
+                        if previous.is_some_and(|value| candidate <= value) {
+                            continue;
+                        }
+                        if next.is_none_or(|value| candidate < value) {
+                            next = Some(candidate);
+                        }
                     }
-                    if next.is_none_or(|value| candidate < value) {
-                        next = Some(candidate);
+                    let Some(value) = next else {
+                        return Err(BoundedJsonError::LengthMismatch);
+                    };
+                    if index != 0 {
+                        out.push(',')?;
                     }
+                    value.json_serialize_to(out)?;
+                    previous = Some(value);
                 }
-                let Some(value) = next else {
-                    return Err(BoundedJsonError::LengthMismatch);
-                };
-                if index != 0 {
-                    out.push(',')?;
-                }
-                value.json_serialize_to(out)?;
-                previous = Some(value);
-            }
-            out.push(']')?;
+                out.push(']')?;
+                Ok(())
+            })();
             out.end_container();
-            Ok(())
+            result
         }
     }
     impl FastJsonWrite for Url {

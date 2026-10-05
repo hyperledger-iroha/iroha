@@ -539,6 +539,7 @@ const STANDARD_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1
         5,
     ),
 );
+include!("beacon_decode_profile.rs");
 const OPAQUE_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 64 * 1024 * 1024;
 const OPAQUE_BLOB_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
     (

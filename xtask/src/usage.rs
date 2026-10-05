@@ -551,6 +551,9 @@ fn print_usage() {
     );
     eprintln!("    Build the MOCHI desktop bundle with a manifest and optional .tar.gz archive.");
     eprintln!(
+        "    Release requires committed defaults/developer/network-profiles.nrt; --network-profiles is development-only."
+    );
+    eprintln!(
         "    The bundler builds matching Mochi, Kagami and iroha3d together; latency commands observe an existing bundle and emit diagnostic samples only."
     );
     eprintln!(

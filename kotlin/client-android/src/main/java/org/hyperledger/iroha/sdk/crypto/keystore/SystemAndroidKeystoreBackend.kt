@@ -6,10 +6,12 @@ import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import java.io.IOException
 import java.security.GeneralSecurityException
+import java.security.Key
 import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.PrivateKey
 import java.security.ProviderException
 import java.security.cert.Certificate
 import java.security.cert.X509Certificate
@@ -61,26 +63,40 @@ internal fun generateAndroidKeystoreWithPreferredStrongBoxFallback(
 
 /**
  * `AndroidKeystoreBackend` implementation that bridges to the platform Android Keystore.
+ *
+ * Alias existence is the tri-state `getKey` probe ([probeAndroidKeystoreAliasV1]): [load] returns
+ * null only for a definitive keystore2 absence and throws when the Keystore cannot answer, so
+ * `IrohaKeyManager.generateOrLoad` never regenerates (and thereby replaces) a key it could not
+ * see. The backend is offered only on keystore2 (API 31+), where that absence is definitive.
  */
-internal class SystemAndroidKeystoreBackend private constructor(
+internal class SystemAndroidKeystoreBackend internal constructor(
     private val _metadata: KeyProviderMetadata,
+    private val entries: AndroidKeystoreEntriesV1 = AndroidSystemKeystoreV1(),
 ) : AndroidKeystoreBackend {
 
     @Throws(KeyManagementException::class)
     override fun load(alias: String): KeyPair? {
         require(alias.isNotBlank()) { "alias must not be blank" }
-        try {
-            val keyStore = loadKeyStore()
-            if (!keyStore.containsAlias(alias)) return null
-            val entry = keyStore.getEntry(alias, null)
-            if (entry !is KeyStore.PrivateKeyEntry) return null
-            return KeyPair(entry.certificate.publicKey, entry.privateKey)
+        val key = presentKey(alias, "Failed to load key from Android Keystore") ?: return null
+        val privateKey = key as? PrivateKey
+            ?: throw KeyManagementException("Android Keystore alias does not hold a private key")
+        val certificate = try {
+            entries.getCertificateChain(alias)?.firstOrNull()
         } catch (ex: GeneralSecurityException) {
             throw KeyManagementException("Failed to load key from Android Keystore", ex)
         } catch (ex: IOException) {
             throw KeyManagementException("Failed to load key from Android Keystore", ex)
-        }
+        } ?: throw KeyManagementException("Android Keystore key has no certificate")
+        return KeyPair(certificate.publicKey, privateKey)
     }
+
+    /** The key under [alias], null only for a definitive absence, or a [KeyManagementException]. */
+    private fun presentKey(alias: String, failure: String): Key? =
+        try {
+            entries.probe(alias)
+        } catch (ex: AndroidKeystoreUnavailableExceptionV1) {
+            throw KeyManagementException("$failure: the Keystore could not answer, so the alias is not treated as absent", ex)
+        }
 
     @Throws(KeyManagementException::class)
     override fun generate(alias: String, parameters: KeyGenParameters): KeyGenerationResult {
@@ -202,15 +218,14 @@ internal class SystemAndroidKeystoreBackend private constructor(
         require(alias.isNotBlank()) { "alias must not be blank" }
         val challengeCopy = challenge.copyOf()
         try {
-            val keyStore = loadKeyStore()
-            if (!keyStore.containsAlias(alias)) return null
+            presentKey(alias, "Failed to read Android Keystore attestation") ?: return null
             if (challengeCopy.isNotEmpty()) {
                 throw KeyManagementException(
                     "Android Keystore cannot re-attest an existing alias; provision a new alias " +
                         "with KeyGenParameters.setAttestationChallenge"
                 )
             }
-            return loadAttestationBundle(alias, keyStore)
+            return loadAttestationBundle(alias)
         } catch (ex: GeneralSecurityException) {
             throw KeyManagementException("Failed to read Android Keystore attestation", ex)
         } catch (ex: IOException) {
@@ -218,17 +233,10 @@ internal class SystemAndroidKeystoreBackend private constructor(
         }
     }
 
-    private fun loadAttestationBundle(alias: String): KeyAttestation? {
-        val keyStore = loadKeyStore()
-        return loadAttestationBundle(alias, keyStore)
-    }
+    private fun loadAttestationBundle(alias: String): KeyAttestation? =
+        buildAttestation(alias, entries.getCertificateChain(alias))
 
-    private fun loadAttestationBundle(alias: String, keyStore: KeyStore): KeyAttestation? {
-        val chain: Array<Certificate>? = keyStore.getCertificateChain(alias)
-        return buildAttestation(alias, chain)
-    }
-
-    private fun buildAttestation(alias: String, chain: Array<Certificate>?): KeyAttestation? {
+    private fun buildAttestation(alias: String, chain: List<Certificate>?): KeyAttestation? {
         if (chain.isNullOrEmpty()) return null
         val builder = KeyAttestation.builder().setAlias(alias)
         for (certificate in chain) {
@@ -241,18 +249,18 @@ internal class SystemAndroidKeystoreBackend private constructor(
 
     companion object {
         fun create(): AndroidKeystoreBackend? {
-            if (!isAndroidRuntime()) return null
-            val keyStore: KeyStore
+            // keystore1 (API < 31) cannot prove that an alias is empty, so the platform backend is
+            // not offered there. Its default algorithm, Ed25519, needs API 33 for Keystore keys.
+            if (androidApiLevel() < ANDROID_KEYSTORE2_MIN_API_V1) return null
             try {
-                keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
-                keyStore.load(null)
+                KeyStore.getInstance(ANDROID_KEYSTORE).load(null)
             } catch (_: GeneralSecurityException) {
                 return null
             } catch (_: IOException) {
                 return null
             }
 
-            val supportsStrongBox = detectStrongBoxSupport(keyStore)
+            val supportsStrongBox = detectStrongBoxSupport()
 
             val metadata = if (supportsStrongBox) {
                 KeyProviderMetadata(
@@ -274,19 +282,13 @@ internal class SystemAndroidKeystoreBackend private constructor(
             return SystemAndroidKeystoreBackend(metadata)
         }
 
-        private fun isAndroidRuntime(): Boolean =
+        /** The platform API level, or 0 off Android. */
+        private fun androidApiLevel(): Int =
             try {
                 Build.VERSION.SDK_INT
-                true
             } catch (_: Throwable) {
-                false
+                0
             }
-
-        private fun loadKeyStore(): KeyStore {
-            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
-            keyStore.load(null)
-            return keyStore
-        }
 
         private fun createKeyPairGenerator(algorithm: String?): KeyPairGenerator {
             val resolvedAlgorithm = algorithm ?: "Ed25519"
@@ -353,29 +355,20 @@ internal class SystemAndroidKeystoreBackend private constructor(
             builder.setAlgorithmParameterSpec(NamedParameterSpec("Ed25519"))
         }
 
-        private fun detectStrongBoxSupport(keyStore: KeyStore): Boolean {
+        // `initialize` only validates the spec and never creates an entry, so there is no probe
+        // alias to clean up (and no entry this backend did not create is ever deleted).
+        private fun detectStrongBoxSupport(): Boolean {
             if (Build.VERSION.SDK_INT < 28) return false
             return try {
                 val generator = KeyPairGenerator.getInstance("Ed25519", ANDROID_KEYSTORE)
                 val parameters = KeyGenParameters.builder().setRequireStrongBox(true).build()
                 val spec = buildKeyGenParameterSpec("__iroha_strongbox_probe__", parameters, true)
                 generator.initialize(spec)
-                cleanupProbeAlias(keyStore)
                 true
             } catch (_: ProviderException) {
                 false
             } catch (_: GeneralSecurityException) {
                 false
-            }
-        }
-
-        private fun cleanupProbeAlias(keyStore: KeyStore) {
-            try {
-                if (keyStore.containsAlias("__iroha_strongbox_probe__")) {
-                    keyStore.deleteEntry("__iroha_strongbox_probe__")
-                }
-            } catch (_: GeneralSecurityException) {
-                // Best-effort cleanup.
             }
         }
     }

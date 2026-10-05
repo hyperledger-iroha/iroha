@@ -12,13 +12,12 @@ use iroha_data_model::{
         consensus::{SumeragiRootScope, ValidatorPower},
     },
     consensus::{ConsensusKeyId, ConsensusKeyStatus},
-    isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     nexus::{PublicLaneStakeShare, PublicLaneValidatorStatus},
     parameter::{
         Parameter,
         system::{ConsensusMode, SumeragiNposParameters},
     },
-    sumeragi::epoch::ValidatorCommitteeMemberV1,
+    sumeragi::epoch::{ValidatorCommitteeMemberV1, ValidatorEpochAuthorizationV1},
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::NumericSpec;
@@ -273,7 +272,7 @@ fn pulse_fixture() -> (World, ValidatorEpochContextV1, Vec<HashOf<BlockHeader>>)
         .collect::<Vec<_>>();
     let authority =
         crate::kagemusha_v1_test_fixtures::mint_finality_authority(network(), 0, &roster);
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10).unwrap();
+    let authorization = ValidatorEpochAuthorizationV1::genesis(&authority, 10).unwrap();
     let current = ValidatorEpochContextV1 {
         da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         version: 1,
@@ -491,7 +490,7 @@ fn frozen_boundary_refusal_returns_original_pool_and_does_not_need_fresh_incumbe
     assert!(captured.boundary().preparation.is_none());
     assert_eq!(
         captured.boundary().next.authorization.decision,
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain
+        iroha_data_model::sumeragi::epoch::ValidatorEpochDecisionV1::Retain
     );
     drop(captured);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -719,4 +718,142 @@ fn restore_installs_exact_current_and_undo_graph_owners_without_deep_cloning() {
         std::thread::yield_now();
     }
     assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn prepared_boundary_readiness_requires_every_frozen_seat_custody() {
+    // Source component: genuine attempt-bound paired/share proofs and an independently
+    // reconciled global XOR ledger. Certified boundary publication remains a separate gate.
+    let fixture = crate::state::validator_committee::tests::fixture(7);
+    let mut transition = fixture.transition;
+    let (mut world, policy, pairs, asset) = custody_pool(8);
+    {
+        let original = fixture.world.view();
+        for (id, keys) in original.validator_candidate_keys().iter() {
+            world.validator_candidate_keys.insert(*id, keys.clone());
+        }
+        for (id, record) in original.global_beacon_key_sessions().iter() {
+            world.global_beacon_key_sessions.insert(*id, record.clone());
+        }
+    }
+    // The frozen policy's self-bond is 1,000 XOR, while the newer selecting policy
+    // admits ten. A later floor change cannot reinterpret an already frozen target.
+    assert_eq!(
+        transition.preparation.eligibility.min_self_bond,
+        Quantity::from(1_000_u64)
+    );
+    for pair in &pairs {
+        let owner = AccountId::new(pair.public_key().clone());
+        let key = (LaneId::SINGLE, owner.clone());
+        let mut validator = world
+            .public_lane_validators
+            .view()
+            .get(&key)
+            .unwrap()
+            .clone();
+        validator.self_stake = Quantity::from(1_000_u64);
+        validator.total_stake = Quantity::from(1_000_u64);
+        world.public_lane_validators.insert(key.clone(), validator);
+        let share_key = (LaneId::SINGLE, owner.clone(), owner);
+        let mut share = world
+            .public_lane_stake_shares
+            .view()
+            .get(&share_key)
+            .unwrap()
+            .clone();
+        share.bonded = Quantity::from(1_000_u64);
+        world.public_lane_stake_shares.insert(share_key, share);
+        world
+            .public_lane_stake_custody
+            .insert(key, (asset.clone(), Quantity::from(1_000_u64)));
+    }
+    world
+        .public_lane_stake_reserves
+        .insert(asset.clone(), Quantity::from(8_000_u64));
+    let (id, balance) = Asset::new(asset.clone(), Quantity::from(8_000_u64)).into_key_value();
+    world.assets.insert(id, balance);
+    let budget = AllocationBudget::new(1 << 20);
+    {
+        let view = world.view();
+        crate::state::validator_committee::verify_progress(&view, &transition).unwrap();
+        let source = CheckedElectionView::new(&view, &policy, &budget).unwrap();
+        assert!(super::plan::prepared_committee_ready(&source, &transition));
+        let credentials = transition.credentials.take();
+        let readiness = std::mem::take(&mut transition.readiness);
+        crate::state::validator_committee::verify_progress(&view, &transition).unwrap();
+        assert!(!super::plan::prepared_committee_ready(&source, &transition));
+        transition.credentials = credentials;
+        transition.readiness = readiness;
+        let saved = transition.readiness.pop().unwrap();
+        crate::state::validator_committee::verify_progress(&view, &transition).unwrap();
+        assert!(
+            !super::plan::prepared_committee_ready(&source, &transition),
+            "even six genuine readiness proofs cannot activate seven target seats"
+        );
+        transition.readiness.push(saved);
+    }
+    assert_eq!(budget.reserved_bytes(), 0);
+    // Fail each exact target seat independently while the other six remain funded.
+    // The reduced ledger is still valid under today's policy and fully backed.
+    for seat in &transition.preparation.committee {
+        let owner = AccountId::new(seat.validator.public_key().clone());
+        let key = (LaneId::SINGLE, owner.clone());
+        let share_key = (LaneId::SINGLE, owner.clone(), owner);
+        let original_validator = world
+            .public_lane_validators
+            .view()
+            .get(&key)
+            .unwrap()
+            .clone();
+        let original_share = world
+            .public_lane_stake_shares
+            .view()
+            .get(&share_key)
+            .unwrap()
+            .clone();
+        let mut validator = original_validator.clone();
+        validator.self_stake = Quantity::from(999_u64);
+        validator.total_stake = Quantity::from(999_u64);
+        world.public_lane_validators.insert(key.clone(), validator);
+        let mut share = original_share.clone();
+        share.bonded = Quantity::from(999_u64);
+        world
+            .public_lane_stake_shares
+            .insert(share_key.clone(), share);
+        world
+            .public_lane_stake_custody
+            .insert(key.clone(), (asset.clone(), Quantity::from(999_u64)));
+        world
+            .public_lane_stake_reserves
+            .insert(asset.clone(), Quantity::from(7_999_u64));
+        let (id, balance) = Asset::new(asset.clone(), Quantity::from(7_999_u64)).into_key_value();
+        world.assets.insert(id, balance);
+        {
+            let view = world.view();
+            crate::state::validator_committee::verify_progress(&view, &transition).unwrap();
+            let source = CheckedElectionView::new(&view, &policy, &budget).unwrap();
+            assert!(
+                !super::plan::prepared_committee_ready(&source, &transition),
+                "one target with insufficient frozen custody must retain the incumbent"
+            );
+        }
+        assert_eq!(budget.reserved_bytes(), 0);
+        world
+            .public_lane_validators
+            .insert(key.clone(), original_validator);
+        world
+            .public_lane_stake_shares
+            .insert(share_key, original_share);
+        world
+            .public_lane_stake_custody
+            .insert(key, (asset.clone(), Quantity::from(1_000_u64)));
+        world
+            .public_lane_stake_reserves
+            .insert(asset.clone(), Quantity::from(8_000_u64));
+        let (id, balance) = Asset::new(asset.clone(), Quantity::from(8_000_u64)).into_key_value();
+        world.assets.insert(id, balance);
+    }
+    let view = world.view();
+    let source = CheckedElectionView::new(&view, &policy, &budget).unwrap();
+    assert!(super::plan::prepared_committee_ready(&source, &transition));
 }

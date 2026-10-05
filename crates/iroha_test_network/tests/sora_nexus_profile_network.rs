@@ -975,7 +975,7 @@ fn verify_pulse(
         )
         .map_err(|error| eyre!(error))?;
         let certified = with_verified_native_journal(
-            &journal,
+            (&journal).into(),
             &config.common.chain,
             &network,
             native_finality_limits(),

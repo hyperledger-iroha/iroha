@@ -61,6 +61,9 @@ pub(in super::super::super::super) struct PrepareTopologyIntent {
     initial_unit: Vec<PathBuf>,
     #[arg(long)]
     edge_config: PathBuf,
+    /// Retained public Darwin artifact copy admitted by the signed transition candidate.
+    #[arg(long)]
+    native_edge_cli: PathBuf,
     #[arg(long)]
     output: PathBuf,
 }
@@ -93,8 +96,11 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
         old.validators.len() == 4
             && old.validator_clients.len() == 4
             && runtime.validators.len() == 4
-            && plan.predecessor.occupied.len() == 5
+            && plan.predecessor.occupied.len() == 4
             && plan.host_identity_sha256 == runtime.host_identity_sha256
+            && json::to_vec(&plan.hosts)? == json::to_vec(&runtime.hosts)?
+            && json::to_vec(&plan.predecessor.native_edge_capture)?
+                == json::to_vec(&runtime.native_edge)?
             && old.revision.commit != plan.candidate.commit,
         "retained inventory, stopped runtime and candidate revision differ",
     )?;
@@ -152,20 +158,24 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
             "selected genesis-hash artifact differs from restored network identity",
         )?;
     }
-    let edge = &plan.predecessor.occupied[4];
+    runtime.hosts.validate_physical_binding(&old.hosts)?;
+    let edge = &runtime.native_edge.claims.release;
     need(
         old.edge.slug == "taira-edge"
-            && old.edge.endpoint.host_identity_sha256 == runtime.host_identity_sha256
-            && runtime.edge.commit == old.revision.commit
-            && edge.slug == "taira-edge"
-            && edge.selector.target == runtime.edge.release_root
-            && edge.files.len() == 4
-            && edge.files[0].sha256 == runtime.edge.cli_sha256
-            && edge.files[1].sha256 == runtime.edge.config_sha256
+            && old.edge.endpoint.host_identity_sha256
+                == runtime.hosts.native_edge.endpoint.host_identity_sha256
+            && edge.commit == old.revision.commit
+            && edge.config_sha256
+                == runtime
+                    .native_edge
+                    .claims
+                    .owned_publication
+                    .publication
+                    .sha256
             && old.edge.artifacts.iter().any(|artifact| {
-                artifact.role == "edge_config" && artifact.sha256 == runtime.edge.config_sha256
+                artifact.role == "edge_config" && artifact.sha256 == edge.config_sha256
             }),
-        "stopped edge differs from selected predecessor",
+        "independently captured native edge differs from selected predecessor",
     )
 }
 
@@ -201,6 +211,10 @@ fn bind_inventory_lineage(
     predecessor_sha256: &str,
     rolled_back: bool,
 ) -> Result<()> {
+    runtime.hosts.validate_physical_binding(&selected.hosts)?;
+    runtime
+        .hosts
+        .validate_physical_binding(&predecessor.hosts)?;
     if rolled_back {
         need(
             selected_sha256 != predecessor_sha256
@@ -218,8 +232,9 @@ fn bind_inventory_lineage(
             )?;
         }
         need(
-            json::to_vec(predecessor.edge.admitted_release()?)? == json::to_vec(&runtime.edge)?,
-            "rolled-back edge does not bind the restored release",
+            json::to_vec(predecessor.edge.admitted_release()?)?
+                == json::to_vec(&runtime.native_edge.claims.release)?,
+            "rolled-back native edge does not bind the restored release",
         )?;
     } else {
         need(
@@ -290,12 +305,20 @@ mod tests {
         let runtime = CurrentRuntime {
             schema: "iroha.taira.dispatcher-current-runtime.v1".into(),
             host_identity_sha256: selected.validators[0].endpoint.host_identity_sha256.clone(),
+            hosts: selected.hosts.clone(),
             validators: predecessor
                 .validators
                 .iter()
                 .map(|v| v.admitted_release().unwrap().clone())
                 .collect(),
-            edge: predecessor.edge.admitted_release().unwrap().clone(),
+            native_edge: reset::host_pair::fixture_native_edge_capture(
+                &selected.hosts,
+                predecessor.edge.admitted_release().unwrap().clone(),
+                &"a".repeat(64),
+                &"b".repeat(64),
+                &predecessor.authorization_nonce,
+                &predecessor.next_genesis_hash,
+            ),
         };
         (selected, predecessor, runtime)
     }
@@ -352,7 +375,7 @@ mod tests {
             .is_err()
         );
         wrong_runtime = runtime.clone();
-        wrong_runtime.edge.config_sha256 = "e".repeat(64);
+        wrong_runtime.native_edge.claims.release.config_sha256 = "e".repeat(64);
         assert!(
             bind_inventory_lineage(
                 &selected,
@@ -418,6 +441,8 @@ mod tests {
             "/unit4",
             "--edge-config",
             "/edge.conf",
+            "--native-edge-cli",
+            "/darwin/iroha",
             "--output",
             "/intent.json",
         ];
@@ -431,6 +456,36 @@ mod tests {
         let mut missing_authorization = args;
         missing_authorization.drain(12..14);
         assert!(crate::Args::try_parse_from(missing_authorization).is_err());
+    }
+
+    #[test]
+    fn predecessor_lineage_refuses_a_substituted_native_mac_host() {
+        let (selected, predecessor, mut runtime) = lineage_fixture();
+        runtime.hosts.native_edge.endpoint.hostname = "other-mac.example.org".into();
+        assert!(
+            bind_inventory_lineage(
+                &selected,
+                "selected",
+                &predecessor,
+                &runtime,
+                "failed",
+                true,
+            )
+            .is_err()
+        );
+        let (mut selected, predecessor, runtime) = lineage_fixture();
+        selected.hosts.native_edge.owner_uid += 1;
+        assert!(
+            bind_inventory_lineage(
+                &selected,
+                "selected",
+                &predecessor,
+                &runtime,
+                "failed",
+                true,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -598,7 +653,7 @@ fn daemon_identity(
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn source_revision(
+pub(super) fn source_revision(
     source_manifest: &Path,
     import_root: &Path,
     candidate_commit: &str,
@@ -738,12 +793,24 @@ impl PrepareTopologyIntent {
                 &plan.candidate.commit,
                 &mut observed,
             )?;
+            plan.candidate.native_edge_candidate.verify(
+                &plan.hosts,
+                &revision.commit,
+                &revision.tree,
+                &revision.cargo_lock_sha256,
+                &revision.source_closure_sha256,
+                &trusted,
+            )?;
             let public = reset::public_inputs::load(&self.public_inputs)?;
             need(
                 old.next_genesis_hash != public.genesis_hash,
                 "fresh public genesis must differ from completed predecessor",
             )?;
             let mut intent = reset::inputs::ResetTopologyIntentV1::from(&old);
+            intent.hosts = plan.hosts.clone();
+            intent.hosts.validator_guest.dispatcher_sha256 =
+                plan.candidate.executable.sha256.clone();
+            intent.hosts.validator_guest.guard_sha256 = sha256_hex(&guards[0]);
             intent.deployment_id = format!("taira-public-{}-", &revision.commit[..8]);
             let mut nonce = [0_u8; 16];
             OsRng
@@ -893,15 +960,35 @@ impl PrepareTopologyIntent {
             intent.validator_clients = clients;
             intent.faucet_policy = policy;
             observed.pin(&self.edge_config, Some(0o640), MAX_PROOF)?;
-            let edge_release = format!("/srv/taira/edge/releases/{}", revision.commit);
-            intent.edge.endpoint.remote_cli = format!("{edge_release}/bin/iroha");
-            intent.edge.endpoint.upload_guard_sha256 = sha256_hex(&guards[4]);
-            intent.edge.initial_state = EdgeInitialStateV1::AdmittedRelease(runtime.edge.clone());
+            let native_cli = observed.pin(&self.native_edge_cli, Some(0o755), MAX_BINARY)?;
+            let signed_cli = &plan.candidate.native_edge_candidate.claims.iroha_cli;
+            need(
+                native_cli.path == signed_cli.local_path
+                    && native_cli.sha256 == signed_cli.sha256
+                    && native_cli.size == signed_cli.size
+                    && native_cli.mode == u32::from(signed_cli.mode),
+                "topology Darwin artifact copy differs from the independently signed native candidate",
+            )?;
+            let edge_release = format!(
+                "{}/.local/share/iroha/taira/edge/releases/{}",
+                intent.hosts.native_edge.owner_home, revision.commit,
+            );
+            intent.edge.platform = intent.hosts.native_edge.platform.clone();
+            intent.edge.endpoint.remote_cli = signed_cli.remote_path.clone();
+            intent.edge.endpoint.upload_guard_sha256 = plan
+                .candidate
+                .native_edge_candidate
+                .claims
+                .native_guard
+                .sha256
+                .clone();
+            intent.edge.initial_state =
+                EdgeInitialStateV1::AdmittedRelease(runtime.native_edge.claims.release.clone());
             intent.edge.artifacts = vec![
                 artifact(
                     "iroha_cli",
-                    &import_bins.join("iroha"),
-                    format!("{edge_release}/bin/iroha"),
+                    &self.native_edge_cli,
+                    signed_cli.remote_path.clone(),
                 )?,
                 artifact(
                     "edge_config",

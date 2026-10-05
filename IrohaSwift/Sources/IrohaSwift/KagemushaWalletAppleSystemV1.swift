@@ -2,13 +2,62 @@ import CryptoKit
 import Darwin
 import Foundation
 import Security
+import os
 #if canImport(LocalAuthentication)
 import LocalAuthentication
 #endif
 
 // Operating-system seams of the iPhone wallet platform adapter
-// (`KagemushaWalletApplePlatformV1`), plus its custody root, boot identity and clock.
-// Every seam is a value the tests replace with a fake; the live values call the system.
+// (`KagemushaWalletApplePlatformV1`), plus its custody root and boot identity. Every seam is a
+// value the tests replace with a fake; the live values call the system. There is no clock
+// here: the Rust default `KagemushaWalletPlatformV1::monotonic_ms` already reads
+// `mach_continuous_time` on Apple targets.
+
+/// A failed Security or CryptoTokenKit call: its error domain and code.
+struct KagemushaWalletAppleSecurityErrorV1: Equatable, Sendable {
+  /// Error domain (`NSOSStatusErrorDomain`, `CryptoTokenKit`, `com.apple.LocalAuthentication`).
+  let domain: String
+  /// Code within `domain`.
+  let code: Int
+
+  init(domain: String, code: Int) {
+    self.domain = domain
+    self.code = code
+  }
+
+  /// An `OSStatus` result.
+  init(status: OSStatus) {
+    self.init(domain: NSOSStatusErrorDomain, code: Int(status))
+  }
+
+  /// The error of a failed call; a failure without an error is `errSecInternalComponent`.
+  init(_ error: CFError?) {
+    guard let error else {
+      self.init(status: errSecInternalComponent)
+      return
+    }
+    self.init(domain: CFErrorGetDomain(error) as String, code: CFErrorGetCode(error))
+  }
+
+  /// The `OSStatus` of an `NSOSStatusErrorDomain` error; `nil` for every other domain, so a
+  /// CryptoTokenKit or LocalAuthentication code is never read as an `OSStatus`.
+  var osStatus: OSStatus? {
+    domain == NSOSStatusErrorDomain ? OSStatus(exactly: code) : nil
+  }
+
+  /// `<domain> <code>`, for diagnostics.
+  var detail: String { "\(domain) \(code)" }
+}
+
+/// One condition the adapter reports as unavailable, for the field log; never acted on.
+struct KagemushaWalletAppleDiagnosticV1: Equatable, Sendable {
+  /// What happened: fixed text, logged publicly.
+  let event: String
+  /// Keychain name of the slot concerned; logged as private.
+  let slot: String?
+  /// An item count, a protection class or an error domain and code; logged publicly.
+  let detail: String?
+}
 
 /// Keychain operations the adapter performs. Production uses
 /// ``KagemushaWalletAppleSystemKeychainV1``; tests inject a fake.
@@ -21,8 +70,9 @@ protocol KagemushaWalletAppleKeychainV1: Sendable {
   func update(_ query: [String: Any], _ attributes: [String: Any]) -> OSStatus
   /// `SecItemDelete`.
   func delete(_ query: [String: Any]) -> OSStatus
-  /// `SecKeyCreateRandomKey`; on failure the status is the `CFError` code.
-  func createRandomKey(_ attributes: [String: Any]) -> (key: SecKey?, status: OSStatus)
+  /// `SecKeyCreateRandomKey`; on failure the error's domain and code.
+  func createRandomKey(_ attributes: [String: Any])
+    -> (key: SecKey?, error: KagemushaWalletAppleSecurityErrorV1?)
 }
 
 /// The system keychain.
@@ -45,23 +95,15 @@ struct KagemushaWalletAppleSystemKeychainV1: KagemushaWalletAppleKeychainV1 {
     SecItemDelete(query as CFDictionary)
   }
 
-  func createRandomKey(_ attributes: [String: Any]) -> (key: SecKey?, status: OSStatus) {
+  func createRandomKey(_ attributes: [String: Any])
+    -> (key: SecKey?, error: KagemushaWalletAppleSecurityErrorV1?)
+  {
     var error: Unmanaged<CFError>?
     guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
-      return (nil, KagemushaWalletAppleSystemV1.status(of: error?.takeRetainedValue()))
+      return (nil, KagemushaWalletAppleSecurityErrorV1(error?.takeRetainedValue()))
     }
-    return (key, errSecSuccess)
+    return (key, nil)
   }
-}
-
-/// Mach continuous time and its timebase.
-struct KagemushaWalletAppleContinuousTimeV1: Equatable, Sendable {
-  /// `mach_continuous_time()` ticks (includes sleep).
-  var ticks: UInt64
-  /// `mach_timebase_info` numerator.
-  var numer: UInt32
-  /// `mach_timebase_info` denominator.
-  var denom: UInt32
 }
 
 /// Operating-system services of the adapter.
@@ -72,33 +114,37 @@ struct KagemushaWalletAppleSystemV1: Sendable {
   var secureEnclaveAvailable: @Sendable () -> Bool
   /// `true` with a device passcode, `false` when the system reports none, `nil` when unknown.
   var passcodeSet: @Sendable () -> Bool?
+  /// Whether the OS enforces file data protection: an iPhone or iPad app on its own device;
+  /// never macOS, Mac Catalyst or an iPhone app running on a Mac.
+  var dataProtectionEnforced: @Sendable () -> Bool
   /// The app's `Library/Application Support` directory.
   var applicationSupportDirectory: @Sendable () -> Result<URL, KagemushaWalletAppleUnavailableV1>
   /// Open and read one byte of `path`; `0` on success, otherwise the `errno`.
   var probeReadable: @Sendable (String) -> Int32
+  /// Data-protection class of the file at `path` (`nil` when the file system reports none).
+  var fileProtection: @Sendable (String) -> Result<FileProtectionType?, KagemushaWalletAppleUnavailableV1>
+  /// Set the data-protection class of the file at `path`.
+  var setFileProtection: @Sendable (String, FileProtectionType) -> Result<Void, KagemushaWalletAppleUnavailableV1>
   /// Raw bytes of a string `sysctl`.
   var sysctl: @Sendable (String) -> Result<[UInt8], KagemushaWalletAppleUnavailableV1>
-  /// Mach continuous time.
-  var continuousTime: @Sendable () -> KagemushaWalletAppleContinuousTimeV1
-  /// Diagnostic sink for conditions reported as unavailable (never acted on).
-  var diagnostic: @Sendable (String) -> Void
+  /// Field log of conditions reported as unavailable (never acted on).
+  var diagnostic: @Sendable (KagemushaWalletAppleDiagnosticV1) -> Void
 
   /// The live system.
   static let live = KagemushaWalletAppleSystemV1(
     keychain: KagemushaWalletAppleSystemKeychainV1(),
     secureEnclaveAvailable: { SecureEnclave.isAvailable },
     passcodeSet: { liveDevicePasscodeSet() },
+    dataProtectionEnforced: { liveDataProtectionEnforced() },
     applicationSupportDirectory: { liveApplicationSupportDirectory() },
     probeReadable: { liveProbeReadable($0) },
+    fileProtection: { liveFileProtection($0) },
+    setFileProtection: { liveSetFileProtection($0, $1) },
     sysctl: { liveSysctlBytes($0) },
-    continuousTime: { liveContinuousTime() },
-    diagnostic: { _ in })
+    diagnostic: { liveDiagnostic($0) })
 
-  /// `OSStatus` of a `CFError` (its code), or `errSecInternalComponent` when none fits.
-  static func status(of error: CFError?) -> OSStatus {
-    guard let error else { return errSecInternalComponent }
-    return OSStatus(exactly: CFErrorGetCode(error)) ?? errSecInternalComponent
-  }
+  /// Unified-log destination of the live diagnostics.
+  static let logger = Logger(subsystem: "org.hyperledger.iroha.kagemusha.wallet", category: "platform")
 
   /// POSIX code of a Foundation error (directly or as its underlying error), or `0`.
   static func posixCode(_ error: Error) -> Int32 {
@@ -114,6 +160,13 @@ struct KagemushaWalletAppleSystemV1: Sendable {
     return 0
   }
 
+  /// Write `entry` to the unified log; the slot name is private.
+  static func liveDiagnostic(_ entry: KagemushaWalletAppleDiagnosticV1) {
+    logger.error(
+      "\(entry.event, privacy: .public) \(entry.detail ?? "", privacy: .public) slot=\(entry.slot ?? "-", privacy: .private)"
+    )
+  }
+
   private static func liveDevicePasscodeSet() -> Bool? {
     #if canImport(LocalAuthentication)
     let context = LAContext()
@@ -127,6 +180,14 @@ struct KagemushaWalletAppleSystemV1: Sendable {
     return nil
     #else
     return nil
+    #endif
+  }
+
+  private static func liveDataProtectionEnforced() -> Bool {
+    #if os(iOS) && !targetEnvironment(macCatalyst)
+    return !ProcessInfo.processInfo.isiOSAppOnMac
+    #else
+    return false
     #endif
   }
 
@@ -158,6 +219,30 @@ struct KagemushaWalletAppleSystemV1: Sendable {
     }
   }
 
+  private static func liveFileProtection(_ path: String)
+    -> Result<FileProtectionType?, KagemushaWalletAppleUnavailableV1>
+  {
+    do {
+      let value = try FileManager.default.attributesOfItem(atPath: path)[.protectionKey]
+      if let protection = value as? FileProtectionType { return .success(protection) }
+      if let raw = value as? String { return .success(FileProtectionType(rawValue: raw)) }
+      return .success(nil)
+    } catch {
+      return .failure(.io(posixCode(error)))
+    }
+  }
+
+  private static func liveSetFileProtection(_ path: String, _ protection: FileProtectionType)
+    -> Result<Void, KagemushaWalletAppleUnavailableV1>
+  {
+    do {
+      try FileManager.default.setAttributes([.protectionKey: protection], ofItemAtPath: path)
+      return .success(())
+    } catch {
+      return .failure(.io(posixCode(error)))
+    }
+  }
+
   private static func liveSysctlBytes(_ name: String)
     -> Result<[UInt8], KagemushaWalletAppleUnavailableV1>
   {
@@ -167,15 +252,6 @@ struct KagemushaWalletAppleSystemV1: Sendable {
     var buffer = [UInt8](repeating: 0, count: size)
     guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return .failure(.io(errno)) }
     return .success(Array(buffer.prefix(size)))
-  }
-
-  private static func liveContinuousTime() -> KagemushaWalletAppleContinuousTimeV1 {
-    var timebase = mach_timebase_info_data_t()
-    guard mach_timebase_info(&timebase) == KERN_SUCCESS else {
-      return KagemushaWalletAppleContinuousTimeV1(ticks: 0, numer: 0, denom: 0)
-    }
-    return KagemushaWalletAppleContinuousTimeV1(
-      ticks: mach_continuous_time(), numer: timebase.numer, denom: timebase.denom)
   }
 }
 
@@ -205,15 +281,20 @@ enum KagemushaWalletAppleEntryKindV1: Equatable {
 }
 
 extension KagemushaWalletApplePlatformV1 {
-  /// Directory name of the custody root (Rust `KAGEMUSHA_WALLET_ROOT_DIR_NAME_V1`).
+  /// Directory name of the custody root (Rust `KAGEMUSHA_WALLET_ROOT_DIR_NAME_V1`). The iOS
+  /// Application Support directory is per app, so the name needs no bundle prefix.
   static let custodyRootName = "kagemusha-wallet-v1"
   /// Protected-data canary name (Rust `KAGEMUSHA_WALLET_CANARY_NAME_V1`).
   static let canaryName = "canary"
+  /// First-unlock probe, next to the custody root (the Rust root admits no other entry).
+  static let firstUnlockProbeName = "kagemusha-wallet-v1.first-unlock"
   /// Default protection class of the custody root, so every file the Rust store creates in it
   /// is readable after the first unlock (design: completeUntilFirstUserAuthentication).
   static let custodyRootProtection = FileProtectionType.completeUntilFirstUserAuthentication
   /// Protection class of the canary: readable only while the device is unlocked.
   static let canaryProtection = FileProtectionType.complete
+  /// Protection class of the first-unlock probe: readable once unlocked since boot.
+  static let firstUnlockProbeProtection = FileProtectionType.completeUntilFirstUserAuthentication
 
   /// Attributes (re)applied to the custody root on every preparation.
   static var custodyRootAttributes: [FileAttributeKey: Any] {
@@ -233,6 +314,15 @@ extension KagemushaWalletApplePlatformV1 {
     #endif
   }
 
+  /// Create-new write options of the first-unlock probe.
+  static var firstUnlockProbeWriteOptions: Data.WritingOptions {
+    #if os(iOS)
+    return [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication]
+    #else
+    return [.withoutOverwriting]
+    #endif
+  }
+
   /// `Library/Application Support/kagemusha-wallet-v1`, without touching the filesystem.
   func custodyRootURL() -> Result<URL, KagemushaWalletAppleUnavailableV1> {
     system.applicationSupportDirectory().map {
@@ -240,25 +330,43 @@ extension KagemushaWalletApplePlatformV1 {
     }
   }
 
-  /// Prepare the custody root and return its path for the Rust store.
+  /// Prepare the custody root and return its path for the Rust store. The provider calls it
+  /// when it opens; protected-data answers stay unavailable until it has succeeded in this
+  /// process.
   ///
   /// The root lives in `Library/Application Support` (never `Documents` or an App Group
   /// container, which app extensions could reach). It is created with mode `0700`; its mode,
   /// its default protection class and `isExcludedFromBackup` are re-applied on every call
   /// (exclusion is Apple guidance only, so safety never depends on it: the keychain anchor
-  /// detects restored files). The Complete-class canary is created once, create-new, and is
-  /// never rewritten. A root or canary that is a symbolic link or another kind of entry is
-  /// refused; nothing is ever removed.
+  /// detects restored files). The canary is created once, create-new, and is never rewritten;
+  /// its Complete protection class is read back on every call, re-applied once when it
+  /// differs, and the root is refused while it still differs. A root or canary that is a
+  /// symbolic link or another kind of entry is refused; nothing is ever removed. Refused
+  /// outright where the OS does not enforce file data protection.
   func custodyRootPath() -> Result<String, KagemushaWalletAppleUnavailableV1> {
     prepareCustodyRoot().map(\.path)
   }
 
   func prepareCustodyRoot() -> Result<URL, KagemushaWalletAppleUnavailableV1> {
-    let root: URL
-    switch custodyRootURL() {
-    case .success(let url): root = url
+    let prepared = prepareCustodyRootEntries()
+    if case .success = prepared {
+      custodyRootVerified = true
+    } else {
+      custodyRootVerified = false
+    }
+    return prepared
+  }
+
+  private func prepareCustodyRootEntries() -> Result<URL, KagemushaWalletAppleUnavailableV1> {
+    guard system.dataProtectionEnforced() else {
+      return .failure(.platform(KagemushaWalletAppleStatusV1.dataProtectionUnavailable))
+    }
+    let support: URL
+    switch system.applicationSupportDirectory() {
+    case .success(let url): support = url
     case .failure(let reason): return .failure(reason)
     }
+    let root = support.appendingPathComponent(Self.custodyRootName, isDirectory: true)
     let manager = FileManager.default
     switch KagemushaWalletAppleEntryKindV1(path: root.path) {
     case .directory:
@@ -300,6 +408,7 @@ extension KagemushaWalletApplePlatformV1 {
         try manager.setAttributes(
           [.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: canary.path)
       } catch {
+        // A concurrent creator may have won; its class is verified below like any other.
         guard KagemushaWalletAppleEntryKindV1(path: canary.path) == .file else {
           return .failure(.io(KagemushaWalletAppleSystemV1.posixCode(error)))
         }
@@ -309,11 +418,73 @@ extension KagemushaWalletApplePlatformV1 {
     case .error(let code):
       return .failure(.io(code))
     }
+    if case .failure(let reason) = requireCanaryProtection(canary.path) {
+      return .failure(reason)
+    }
+    prepareFirstUnlockProbe(support.appendingPathComponent(Self.firstUnlockProbeName))
     return .success(root)
+  }
+
+  /// Verify the canary's Complete class, re-applying it once when it differs (a crash between
+  /// creation and protection, a restored or pre-existing file). Both protected-data brackets
+  /// depend on the canary, so an unverified one is never accepted.
+  private func requireCanaryProtection(_ path: String) -> Result<Void, KagemushaWalletAppleUnavailableV1> {
+    let found: FileProtectionType?
+    switch system.fileProtection(path) {
+    case .success(let protection): found = protection
+    case .failure(let reason): return .failure(reason)
+    }
+    if found == Self.canaryProtection { return .success(()) }
+    diagnose(
+      "custody canary is not in the Complete protection class",
+      detail: found?.rawValue ?? "none")
+    if case .failure(let reason) = system.setFileProtection(path, Self.canaryProtection) {
+      return .failure(reason)
+    }
+    switch system.fileProtection(path) {
+    case .success(let protection) where protection == Self.canaryProtection:
+      return .success(())
+    case .success:
+      return .failure(.platform(KagemushaWalletAppleStatusV1.invalidCustodyRoot))
+    case .failure(let reason):
+      return .failure(reason)
+    }
+  }
+
+  /// Create the first-unlock probe once (best effort). Without it, an `EPERM` canary reads as
+  /// locked even before the first unlock; both answers are unavailable, so nothing else
+  /// depends on it.
+  private func prepareFirstUnlockProbe(_ url: URL) {
+    switch KagemushaWalletAppleEntryKindV1(path: url.path) {
+    case .file:
+      return
+    case .missing:
+      do {
+        try Data([0x01]).write(to: url, options: Self.firstUnlockProbeWriteOptions)
+      } catch {
+        guard KagemushaWalletAppleEntryKindV1(path: url.path) == .file else {
+          diagnose(
+            "first-unlock probe not created",
+            detail: "errno \(KagemushaWalletAppleSystemV1.posixCode(error))")
+          return
+        }
+      }
+    case .directory, .other, .error:
+      diagnose("first-unlock probe is not a regular file")
+    }
+  }
+
+  /// Reason for a refused Complete-class canary: `beforeFirstUnlock` when the first-unlock
+  /// probe (completeUntilFirstUserAuthentication) is refused with `EPERM` too, otherwise
+  /// `locked`.
+  func lockedReason() -> KagemushaWalletAppleUnavailableV1 {
+    guard case .success(let support) = system.applicationSupportDirectory() else { return .locked }
+    let code = system.probeReadable(support.appendingPathComponent(Self.firstUnlockProbeName).path)
+    return code == EPERM ? .beforeFirstUnlock : .locked
   }
 }
 
-// MARK: - Boot identity and clock
+// MARK: - Boot identity
 
 extension KagemushaWalletApplePlatformV1 {
   /// Sysctl naming the boot session (read-only in XNU).
@@ -322,9 +493,10 @@ extension KagemushaWalletApplePlatformV1 {
   /// Lowercase boot session UUID of the current boot (`kern.bootsessionuuid`).
   ///
   /// Rust hashes this text to the 32-byte boot identity with
-  /// `kagemusha_wallet_boot_id_from_text_v1`. Whether the sysctl is readable from the iOS app
-  /// sandbox is unverified; when it is not, the answer is unavailable and the provider treats
-  /// every file as written in the current boot.
+  /// `kagemusha_wallet_boot_id_from_text_v1` (its `kagemusha_wallet_native_boot_id_v1` has no
+  /// Apple source). Whether the sysctl is readable from the iOS app sandbox is unverified;
+  /// when it is not, the answer is unavailable and the provider treats every file as written
+  /// in the current boot.
   // TODO(G2-iOS): device-test `kern.bootsessionuuid` from the app sandbox.
   func bootSessionUUID() -> Result<String, KagemushaWalletAppleUnavailableV1> {
     system.sysctl(Self.bootSessionSysctl).flatMap(Self.bootSessionUUID(fromSysctl:))
@@ -347,23 +519,5 @@ extension KagemushaWalletApplePlatformV1 {
       }
     guard wellFormed else { return .failure(.io(0)) }
     return .success(String(decoding: uuid, as: UTF8.self).lowercased())
-  }
-
-  /// Sleep-inclusive monotonic milliseconds from `mach_continuous_time`.
-  func monotonicMilliseconds() -> Result<UInt64, KagemushaWalletAppleUnavailableV1> {
-    guard let milliseconds = Self.milliseconds(system.continuousTime()) else {
-      return .failure(.platform(KagemushaWalletAppleStatusV1.clockUnavailable))
-    }
-    return .success(milliseconds)
-  }
-
-  /// `floor(ticks * numer / (denom * 1_000_000))` without intermediate overflow; `nil` for a
-  /// zero timebase or a result beyond `UInt64`.
-  static func milliseconds(_ time: KagemushaWalletAppleContinuousTimeV1) -> UInt64? {
-    guard time.numer != 0, time.denom != 0 else { return nil }
-    let product = time.ticks.multipliedFullWidth(by: UInt64(time.numer))
-    let divisor = UInt64(time.denom) * 1_000_000
-    guard product.high < divisor else { return nil }
-    return divisor.dividingFullWidth(product).quotient
   }
 }

@@ -63,17 +63,51 @@ def workflow_job(source: str, name: str) -> str:
     return match.group(0)
 
 
+def make_bridge_fixture(base: Path) -> tuple[Path, dict[str, str], Path, Path]:
+    """Run the real Make target with inert builder and checksum executables."""
+
+    root, tools = base / "repo with spaces", base / "tools"
+    (root / "scripts").mkdir(parents=True)
+    tools.mkdir()
+    (root / "Makefile").write_text(read("Makefile"), encoding="utf-8")
+    (root / "Cargo.lock").write_text("source graph must not be selected implicitly\n")
+    (root / "scripts/build_norito_xcframework.sh").write_text(
+        'printf \'%s\\0\' "$@" > "$BRIDGE_TEST_BUILDER_LOG"\n'
+        'exit "${BRIDGE_TEST_BUILDER_STATUS:-0}"\n',
+        encoding="utf-8",
+    )
+    swift = tools / "swift"
+    swift.write_text(
+        '#!/bin/sh\n'
+        'printf \'%s\\0\' "$@" > "$BRIDGE_TEST_CHECKSUM_LOG"\n',
+        encoding="utf-8",
+    )
+    swift.chmod(0o755)
+    selected_lock = base / "external selected graph.lock"
+    selected_lock.write_bytes(b"reviewed external graph\n")
+    selected_lock.chmod(0o400)
+    builder_log, checksum_log = base / "builder-call", base / "checksum-call"
+    environment = {
+        "PATH": f"{tools}:/usr/bin:/bin",
+        "SOURCE_DATE_EPOCH": "1730000000",
+        "NORITO_BRIDGE_OUT_DIR": str(base / "external artifact"),
+        "NORITO_BRIDGE_BUILD_DIR": str(base / "external build"),
+        "NORITO_BRIDGE_ARCHIVE_OUTPUT": str(base / "release output.zip"),
+        "MOBILE_SDK_CARGO_LOCKFILE": str(selected_lock),
+        "BRIDGE_TEST_BUILDER_LOG": str(builder_log),
+        "BRIDGE_TEST_CHECKSUM_LOG": str(checksum_log),
+    }
+    return root, environment, builder_log, checksum_log
+
+
 class PrivacySwiftNativeContractTests(unittest.TestCase):
     """Guard the release Swift tests against native capability skips."""
 
     def test_native_archive_frameworks_reach_every_apple_consumer(self) -> None:
         builder = read("scripts/build_norito_xcframework.sh")
         swift_package = read("IrohaSwift/Package.swift")
-        binary_podspec = read("crates/connect_norito_bridge/NoritoBridge.podspec.template")
+        archive_workflow = workflow_job(read(".github/workflows/mobile_sdk_artifacts.yml"), "apple-mobile-sdk")
         frameworks = ("Foundation", "Security", "Metal", "CoreGraphics", "Accelerate")
-        declared = re.search(r"s\.frameworks\s*=\s*\[([^]]+)\]", binary_podspec)
-        self.assertIsNotNone(declared)
-        self.assertEqual(re.findall(r"'([^']+)'", declared.group(1)), list(frameworks))
         for framework in frameworks:
             with self.subTest(framework=framework):
                 self.assertIn(f"-framework {framework}", builder)
@@ -81,8 +115,10 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                     f'.linkedFramework("{framework}", .when(platforms: [.iOS, .macOS]))',
                     swift_package,
                 )
-        source_pod = read("IrohaSwift/IrohaSwift.podspec")
-        self.assertIn("s.dependency       'NoritoBridge', version", source_pod)
+                self.assertIn(
+                    f'.linkedFramework("{framework}", .when(platforms: [.iOS, .macOS]))',
+                    archive_workflow,
+                )
 
     def test_swift_release_test_inventory_has_no_runtime_skip(self) -> None:
         test_roots = (
@@ -168,7 +204,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         self.assertIn("/absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock", readme)
         self.assertNotIn("export RUSTC_BOOTSTRAP=", readme)
         self.assertNotIn("build\nan opt-in Apple artifact", readme)
-        self.assertIn("Every bridge build includes mandatory privacy and KAGEMUSHA support", readme)
+        self.assertIn("Every bridge build includes mandatory privacy support", readme)
         self.assertIn("stock Rust 1.93.1", readme)
         self.assertIn("unset RUSTC_BOOTSTRAP", readme)
         self.assertIn('bridge_local="$PWD/target/norito-bridge-local"', readme)
@@ -314,10 +350,70 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                     "scripts/check_mobile_sdk_artifacts.sh --apple-only" in line or
                     "run: bash scripts/package_mobile_sdk_artifacts.sh --apple " in line):
                     self.assertIn(f'--lockfile-path "{selected_lock}"', line, path)
-        self.assertIn('--lockfile-path "$(CURDIR)/Cargo.lock"', read("Makefile"))
+        makefile = read("Makefile")
+        self.assertIn('--lockfile-path "$$MOBILE_SDK_CARGO_LOCKFILE"', makefile)
+        self.assertNotIn('--lockfile-path "$(CURDIR)/Cargo.lock"', makefile)
         self.assertIn('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only --lockfile-path "${PRIVACY_RELEASE_CARGO_LOCK}"', read("ci/check_privacy_swift_sdk.sh"))
         android = read("kotlin/client-android/build.gradle.kts")
         self.assertEqual(android.count('"--lockfile-path",\n                tools.cargoLock.toString(),'), 2)
+
+    def test_make_bridge_requires_selected_external_lock_before_builder(self) -> None:
+        for selector in (None, ""):
+            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as temporary:
+                root, environment, builder_log, checksum_log = make_bridge_fixture(
+                    Path(temporary).resolve()
+                )
+                if selector is None:
+                    environment.pop("MOBILE_SDK_CARGO_LOCKFILE")
+                else:
+                    environment["MOBILE_SDK_CARGO_LOCKFILE"] = selector
+                result = subprocess.run(
+                    ["/usr/bin/make", "bridge-xcframework"], cwd=root,
+                    env=environment, capture_output=True, text=True, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("MOBILE_SDK_CARGO_LOCKFILE is required", result.stderr)
+                self.assertFalse(builder_log.exists())
+                self.assertFalse(checksum_log.exists())
+
+    def test_make_bridge_forwards_selected_lock_and_archive_without_rewriting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, environment, builder_log, checksum_log = make_bridge_fixture(
+                Path(temporary).resolve()
+            )
+            result = subprocess.run(
+                ["/usr/bin/make", "bridge-xcframework"], cwd=root,
+                env=environment, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                builder_log.read_bytes().split(b"\0"),
+                [b"--lockfile-path", os.fsencode(environment["MOBILE_SDK_CARGO_LOCKFILE"]),
+                 b"--archive-output", os.fsencode(environment["NORITO_BRIDGE_ARCHIVE_OUTPUT"]), b""],
+            )
+            self.assertEqual(
+                checksum_log.read_bytes().split(b"\0"),
+                [b"package", b"compute-checksum",
+                 os.fsencode(environment["NORITO_BRIDGE_ARCHIVE_OUTPUT"]), b""],
+            )
+            selected_lock = Path(environment["MOBILE_SDK_CARGO_LOCKFILE"])
+            self.assertEqual(selected_lock.read_bytes(), b"reviewed external graph\n")
+            self.assertEqual(selected_lock.stat().st_mode & 0o777, 0o400)
+
+    def test_make_bridge_preserves_builder_lock_refusal_before_checksum(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, environment, builder_log, checksum_log = make_bridge_fixture(
+                Path(temporary).resolve()
+            )
+            environment["BRIDGE_TEST_BUILDER_STATUS"] = "19"
+            result = subprocess.run(
+                ["/usr/bin/make", "bridge-xcframework"], cwd=root,
+                env=environment, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(builder_log.exists())
+            self.assertIn("Error 19", result.stderr)
+            self.assertFalse(checksum_log.exists())
 
     def test_swift_authenticated_external_lock_allows_execution(self) -> None:
         source = read("ci/check_privacy_swift_sdk.sh")
@@ -411,228 +507,81 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         ):
             self.assertIn(marker, source)
 
-    def test_cocoapods_bridge_lint_cannot_capability_skip(self) -> None:
-        source = read("scripts/check_swift_pod_bridge.sh")
-        wrapper = read("ci/check_swift_pod_bridge.sh")
-        self.assertIn('[[ ! -x "${CHECK_SCRIPT}" ]]', wrapper)
-        self.assertIn(
-            'fail "cocoapods CLI not available; refusing to skip lint"',
-            source,
-        )
-        self.assertIn(
-            "cocoapods CLI not available; refusing to skip lint",
-            source,
-        )
-        self.assertNotIn('write_summary "skipped"', source)
-        self.assertNotIn("skipping lint", source)
-        self.assertIn("MOBILE_SDK_PACKAGE_OUT_DIR", source)
-        self.assertIn("render_norito_bridge_podspec.py", source)
-        self.assertIn("packaged NoritoBridge archive authentication failed", source)
-        self.assertIn("checksum inventory does not contain the exact Apple package set", source)
-        self.assertIn(
-            "package directory does not contain the exact five Apple files",
-            source,
-        )
-        self.assertIn(
-            'APPLE_MANIFEST="$PACKAGE_DIR/NoritoBridge-v${POD_VERSION}.artifacts.json"',
-            source,
-        )
-        self.assertIn(
-            "embedded NoritoBridge manifest version does not match pod SemVer",
-            source,
-        )
-        self.assertIn('spec lint "$LOCAL_PODSPEC"', source)
-        self.assertIn('lib lint "$PODSPEC_PATH"', source)
-        self.assertIn('"--include-podspecs=$LOCAL_PODSPEC"', source)
-        self.assertIn(
-            "CocoaPods resolves --include-podspecs through :path",
-            source,
-        )
-        self.assertIn('framework = stage / "NoritoBridge.xcframework"', source)
-        self.assertIn('"--configuration=Release"', source)
-        self.assertNotIn('"--allow-warnings"', source)
-        self.assertNotIn('"--skip-tests"', source)
-        self.assertLess(
-            source.index('python3 -I -S -B "$RENDERER"'),
-            source.index('run_lint "binary pod spec lint"'),
-        )
-
-        podspec = read("IrohaSwift/IrohaSwift.podspec")
-        template = read("crates/connect_norito_bridge/NoritoBridge.podspec.template")
-        self.assertIn("s.dependency       'NoritoBridge', version", podspec)
-        self.assertIn(':tag => "v#{version}"', podspec)
-        self.assertIn('version_bytes == "#{version}\\n"', podspec)
-        self.assertIn(":sha256 => '__ARCHIVE_SHA256__'", template)
-        self.assertIn("s.vendored_frameworks = 'NoritoBridge.xcframework'", template)
-        for forbidden in ("prepare_command", "curl", "../dist"):
-            self.assertNotIn(forbidden, podspec + template)
-
-        # Release-workflow authorization policy is covered by the dedicated
-        # mobile artifact tests. This test owns only Swift/native source wiring.
-        return
-
-        workflow = read(".github/workflows/mobile_sdk_artifacts.yml")
-        checker_job = workflow_job(workflow, "checker-self-test")
-        authorization_job = workflow_job(workflow, "authorize-mobile-production")
-        apple_job = workflow_job(workflow, "apple-mobile-sdk")
-        android_job = workflow_job(workflow, "android-mobile-sdk")
-        publisher_job = workflow_job(workflow, "publish-release-assets")
-        self.assertNotIn("APPLE_PRIVACY_PRODUCTION_ENABLED", workflow)
-        self.assertNotIn("ANDROID_PRIVACY_PRODUCTION_ENABLED", workflow)
-        production_binding = (
-            "PRIVACY_PRODUCTION_ENABLED: "
-            "${{ needs.authorize-mobile-production.outputs.production }}"
-        )
-        self.assertIn(production_binding, apple_job)
-        self.assertIn(production_binding, android_job)
-        self.assertNotIn('elif [[ "$GITHUB_REF_TYPE" == tag ]]', authorization_job)
-        self.assertIn(
-            "Resolve an explicitly requested protected promotion run",
-            authorization_job,
-        )
-        self.assertNotIn("PRIVACY_PRODUCTION_ENABLED: ${{ env.", workflow)
-        self.assertNotIn("inputs.privacy_production_enabled", workflow)
-        self.assertNotIn("github.ref_type == 'tag' ||", workflow)
-        self.assertIn("Verify and enable only the Apple production build", apple_job)
-        self.assertIn("Verify and enable only the Android production build", android_job)
-        self.assertIn('echo "PRIVACY_PRODUCTION_ENABLED=true" >> "$GITHUB_ENV"', apple_job)
-        self.assertIn('echo "PRIVACY_PRODUCTION_ENABLED=true" >> "$GITHUB_ENV"', android_job)
-        self.assertIn("gh attestation verify", apple_job)
-        self.assertIn("gh attestation verify", android_job)
-        self.assertIn("verify-pair", publisher_job)
-        self.assertIn(
-            "needs.authorize-mobile-production.outputs.production == 'true'",
-            publisher_job,
-        )
-        self.assertIn('release_inventory_phase=artifacts', publisher_job)
-        self.assertIn('release_inventory_phase=final', publisher_job)
-        self.assertNotIn(
-            "github.repository == 'hyperledger-iroha/iroha' &&\n"
-            "      needs.authorize-mobile-production.outputs.production == 'true'",
-            publisher_job,
-        )
-        self.assertGreaterEqual(publisher_job.count("gh attestation verify"), 2)
-        self.assertIn("verify-apple-artifact", publisher_job)
-        self.assertIn("verify-android-artifact", publisher_job)
-        self.assertIn(
-            "package_inventory_sha256: "
-            "${{ steps.verify-apple-package.outputs.package_inventory_sha256 }}",
-            apple_job,
-        )
-        self.assertIn(
-            "package_inventory_sha256: "
-            "${{ steps.verify-android-package.outputs.package_inventory_sha256 }}",
-            android_job,
-        )
-        self.assertIn("Bind every Apple package byte to this build job", apple_job)
-        self.assertIn("Bind every Android package byte to this build job", android_job)
-        self.assertIn("APPLE_BUILD_PACKAGE_INVENTORY_SHA256", publisher_job)
-        self.assertIn("ANDROID_BUILD_PACKAGE_INVENTORY_SHA256", publisher_job)
-        self.assertEqual(publisher_job.count("verify-release-inventory"), 3)
-        self.assertIn("--phase artifacts", publisher_job)
-        self.assertEqual(publisher_job.count("--phase final"), 1)
-        self.assertIn('--phase "$RELEASE_INVENTORY_PHASE"', publisher_job)
-        self.assertIn(
-            '--release-root "$GITHUB_WORKSPACE/release-assets"', publisher_job
-        )
-        self.assertIn(
-            '--archive "$release_root/NoritoBridge-${RELEASE_TAG}.xcframework.zip"',
-            publisher_job,
-        )
-        self.assertIn(
-            '--archive "$release_root/iroha-mobile-sdk-android-${RELEASE_TAG}.zip"',
-            publisher_job,
-        )
-        self.assertNotIn('--manifest "release-assets/', publisher_job)
-        self.assertIn(
-            "release asset bytes changed after final verification", publisher_job
-        )
-        self.assertLess(
-            publisher_job.index(
-                "Verify release inventory and any selected production authorizations"
-            ),
-            publisher_job.index('gh release create "$GITHUB_REF_NAME"'),
-        )
-
-        for trigger in (
-            "ci/check_swift_pod_bridge.sh",
-            "scripts/check_swift_pod_bridge.sh",
+    def test_retired_cocoapods_delivery_cannot_reenter_the_release_workflows(self) -> None:
+        retired = (
+            "IrohaSwift/IrohaSwift.podspec",
+            "crates/connect_norito_bridge/NoritoBridge.podspec.template",
             "scripts/render_norito_bridge_podspec.py",
-            "scripts/tests/render_norito_bridge_podspec_test.py",
+            "scripts/check_swift_pod_bridge.sh",
+            "ci/check_swift_pod_bridge.sh",
+        )
+        for relative in retired:
+            self.assertFalse((REPO_ROOT / relative).exists(), relative)
+        for relative in (
+            ".github/workflows/mobile_sdk_artifacts.yml",
+            ".github/workflows/pr_privacy_sdk_guard.yml",
+            ".github/workflows/sorafs-cli-release.yml",
+        ):
+            workflow = read(relative)
+            for path in retired:
+                self.assertNotIn(path, workflow, relative)
+            self.assertNotIn("CocoaPods", workflow, relative)
+
+    def test_swiftpm_archive_consumer_authenticates_before_compilation(self) -> None:
+        workflow = read(".github/workflows/mobile_sdk_artifacts.yml")
+        checker = workflow_job(workflow, "checker-self-test")
+        apple = workflow_job(workflow, "apple-mobile-sdk")
+        for trigger in (
+            "scripts/validate_norito_bridge_archive.py",
+            "scripts/tests/validate_norito_bridge_archive_test.py",
         ):
             self.assertIn(f'      - "{trigger}"', workflow)
-        self.assertIn("CocoaPods authenticated archive and source lint (no capability skip)", apple_job)
-        self.assertIn(
-            "SWIFT_POD_REPORT_DIR: ${{ runner.temp }}/iroha-swift-pod-report",
-            apple_job,
-        )
-        self.assertIn("run: ci/check_swift_pod_bridge.sh", apple_job)
-        self.assertIn(
-            "Reject a noncanonical release tag before setup or build",
-            checker_job,
-        )
-        self.assertIn(
-            'version_bytes="$(wc -c < IrohaSwift/VERSION | tr -d \'[:space:]\')"',
-            checker_job,
-        )
-        self.assertLess(
-            checker_job.index("Reject a noncanonical release tag before setup or build"),
-            checker_job.index("actions/setup-python@"),
-        )
-        production_version_precedence = (
-            'if [[ "$authorized_production" == "true" ]]; then\n'
-            '            [[ "$authorized_release_tag" =~ '
-            '^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.'
-            '(0|[1-9][0-9]*)$ ]]\n'
-            '            version="$authorized_release_tag"\n'
-            '          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then'
-        )
-        self.assertEqual(workflow.count(production_version_precedence), 2)
-        self.assertEqual(
-            workflow.count(
-                're.fullmatch(rb"(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.'
-                '(0|[1-9][0-9]*)\\n", raw)'
-            ),
-            4,
-        )
-        self.assertLess(
-            apple_job.index("name: Package Apple mobile SDK artifact"),
-            apple_job.index("name: CocoaPods authenticated archive and source lint"),
-        )
-        self.assertNotIn("--clobber", workflow)
+            self.assertIn(trigger, checker)
+        self.assertIn("scripts/validate_norito_bridge_archive.py", read("scripts/package_mobile_sdk_artifacts.sh"))
         for marker in (
-            "github.repository == 'hyperledger-iroha/iroha'",
-            "gh release create \"$GITHUB_REF_NAME\" --draft --verify-tag",
-            "draft release already contains assets; refusing partial upload",
-            "uploaded release asset inventory is incomplete",
-            "downloaded release asset digest mismatch",
-            'gh release edit "$GITHUB_REF_NAME" --draft=false',
+            're.fullmatch(rb"(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\n", raw)',
+            'archive="$MOBILE_SDK_PACKAGE_OUT_DIR/NoritoBridge-v${bridge_version}.xcframework.zip"',
+            '"$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/validate_norito_bridge_archive.py',
+            '--root "$GITHUB_WORKSPACE"',
+            '--archive "$archive"',
+            '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
+            'NORITO_BRIDGE_SEAL_CARGO_HOME="${MOBILE_SDK_CARGO_HOME:-$HOME/.cargo}"',
+            'NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="${MOBILE_SDK_CARGO_INVOCATION_DIR:-$GITHUB_WORKSPACE}"',
+            'NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR"',
+            'path: "NoritoBridge.xcframework.zip"',
+            "connect_norito_bridge_abi_version()",
+            '--disable-automatic-resolution',
         ):
-            self.assertIn(marker, workflow)
+            self.assertIn(marker, apple)
+        self.assertLess(
+            apple.index("name: Package Apple mobile SDK artifact"),
+            apple.index('"$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/validate_norito_bridge_archive.py'),
+        )
+        self.assertLess(
+            apple.index('"$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/validate_norito_bridge_archive.py'),
+            apple.index('swift build'),
+        )
+        for forbidden in ("--allow-dirty-source", "--local-integration", "--skip", "--clobber"):
+            self.assertNotIn(forbidden, apple)
 
     def test_release_guidance_distinguishes_source_wiring_from_publication(self) -> None:
         guide = read("docs/norito_bridge_release.md")
-        readme = read("IrohaSwift/README.md")
-        plan = read("specs/sorafs_reference_sdk_plan.md")
-        for source in (guide, readme, plan):
-            self.assertIn("CocoaPods", source)
-            self.assertIn("vendored", source.lower())
-        self.assertIn("This closes repository source wiring", guide)
-        self.assertIn("CocoaPods registry publication remains blocked", guide)
-        self.assertIn("checksum-pinned `NoritoBridge`", guide)
-        self.assertIn("Generated `dist/*`", guide)
-        self.assertIn("only `dist/.gitkeep` belongs in Git", guide)
-        self.assertNotIn("swift package compute-checksum", guide)
-        self.assertNotIn("Commit the generated artifacts", guide)
-        for source in (
+        sources = (
             guide,
-            readme,
-            plan,
+            read("IrohaSwift/README.md"),
+            read("specs/sorafs_reference_sdk_plan.md"),
             read("specs/sdk/swift/index.md"),
             read("ci/README.md"),
-        ):
-            self.assertNotIn("offline lint", source.lower())
+        )
+        for source in sources:
+            self.assertRegex(source, r"SwiftPM|Swift Package Manager")
+            for retired in (".podspec", "pod lib lint", "pod spec lint"):
+                self.assertNotIn(retired, source)
             self.assertNotIn("offline consumer compilation", source.lower())
+        self.assertIn("MOBILE_SDK_APPLE_ARTIFACT_DIR", guide)
+        self.assertIn("Generated `dist/*`", guide)
+        self.assertIn("only `dist/.gitkeep` belongs in Git", guide)
+        self.assertNotIn("Commit the generated artifacts", guide)
 
     def test_workflow_builds_authenticates_and_tests_exact_apple_artifact(self) -> None:
         source = read(".github/workflows/pr_privacy_sdk_guard.yml")
@@ -640,14 +589,11 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         for trigger in (
             ".github/workflows/mobile_sdk_artifacts.yml",
             "ci/README.md",
-            "ci/check_swift_pod_bridge.sh",
-            "IrohaSwift/IrohaSwift.podspec",
             "IrohaSwift/Package.swift",
             "IrohaSwift/VERSION",
             "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
             "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift",
             "scripts/tests/check_privacy_swift_native_contract_test.py",
-            "scripts/check_swift_pod_bridge.sh",
             "scripts/archive_norito_xcframework.py",
             "scripts/build_norito_xcframework.sh",
             "scripts/check_mobile_sdk_artifact_pin_commit.py",
@@ -656,14 +602,13 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "scripts/norito_bridge_source_seal.py",
             "scripts/package_mobile_sdk_artifacts.sh",
             "scripts/run_mobile_hermetic_command.py",
-            "scripts/render_norito_bridge_podspec.py",
+            "scripts/validate_norito_bridge_archive.py",
             "scripts/tests/package_mobile_sdk_artifacts_test.py",
-            "scripts/tests/render_norito_bridge_podspec_test.py",
+            "scripts/tests/validate_norito_bridge_archive_test.py",
             "scripts/tests/norito_bridge_apple_slice_handoff_test.py",
             "scripts/tests/norito_bridge_source_seal_test.py",
             "scripts/update_norito_bridge_swift_pins.py",
             "scripts/validate_norito_bridge_xcframework.py",
-            "crates/connect_norito_bridge/NoritoBridge.podspec.template",
             "crates/connect_norito_bridge/RELEASE_NOTES.md",
             "docs/norito_bridge_release.md",
             "specs/sdk/swift/index.md",

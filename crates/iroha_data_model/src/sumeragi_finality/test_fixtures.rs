@@ -33,7 +33,7 @@ use iroha_sumeragi::{
     crypto::Signer,
     types::{Bitmap, ChainParams},
 };
-use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
+use std::{num::NonZeroU64, time::Duration};
 
 // Only fixed public fixture keys enter this signer; it is never deployment custody.
 struct FixtureSigner<'a> {
@@ -397,7 +397,7 @@ impl NativeFinalityFixture {
             .sign(signer.private_key());
         let mut builder = BlockBuilder::new(header);
         builder.push_transaction(tx);
-        let mut block = builder.build(BTreeSet::new());
+        let mut block = builder.build(crate::block::BlockSignatures::default());
         Self::install_network_results(&mut block, vec![Ok(Vec::new())]);
         block
     }

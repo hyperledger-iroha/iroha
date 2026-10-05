@@ -106,9 +106,11 @@ cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_be
   -- --rows 20000 --iterations 5 --output fastpq_metal_bench_20k.json
 ```
 
-The build-generated library path is embedded automatically. If that path is
-stale or absent, the benchmark compiles the embedded Metal source at runtime;
-reserve `FASTPQ_METAL_LIB` for an explicit debug/dev library override.
+The benchmark requires independently admitted embedded compiled Metal bytes
+before device discovery. Current source supplies no approved bundle; producing an
+unqualified candidate does not enable native eligibility. Ordinary builds/runtime
+never compile Metal source or resolve a library path. Sixteen real pipeline loads
+and complete parity remain required for native evidence.
 
 Commit the resulting JSON under `artifacts/fastpq_benchmarks/` together with the Metal trace so the determinism evidence stays reproducible.
 
@@ -242,13 +244,13 @@ cargo run --release -p ivm --features metal --example merkle_threshold -- --json
 ```
 
 Set `FASTPQ_GPU=gpu` when the FastPQ benchmark must fail rather than accept a
-CPU fallback. `FASTPQ_METAL_LIB` is only a debug/dev override for a specific
-offline library; normal builds use their embedded library path or runtime
-source compilation. Keep both CPU + GPU captures checked in so WP1-F can chart
-the policy thresholds.
+CPU fallback. FastPQ Metal requires independently admitted embedded compiled
+bytes, a real device and original preflight; the current absent bundle refuses a
+required GPU request. Keep both actual CPU and GPU captures so WP1-F can chart
+the policy thresholds. Missing or ignored native tests are not hardware passes.
 
 When running from a headless shell, set `IVM_DEBUG_METAL_ENUM=1` to log device enumeration and `IVM_FORCE_METAL_ENUM=1` to bypass `MTLCreateSystemDefaultDevice()`. The CLI warms up the CoreGraphics session **before** asking for the default Metal device and falls back to `MTLCreateSystemDefaultDevice()` when `MTLCopyAllDevices()` returns zero; if the host still reports no devices the capture will retain `metal_available=false` (useful CPU baselines live under `macos14_arm64_*`). FastPQ captures use `FASTPQ_GPU=gpu` to require an accelerator; `metal` is a backend label, not a valid `FASTPQ_GPU` override.
 
-`fastpq_metal_bench` exposes a similar knob via `FASTPQ_DEBUG_METAL_ENUM=1`, which prints the `MTLCreateSystemDefaultDevice`/`MTLCopyAllDevices` results before the backend decides whether to stay on the GPU path. Enable it whenever `FASTPQ_GPU=gpu` still reports `backend="none"` in the wrapped JSON so the capture bundle records exactly how the host enumerated Metal hardware; the harness aborts immediately when `FASTPQ_GPU=gpu` is set but no accelerator is detected, pointing at the debug knob so the release bundle never hides a CPU fallback behind a forced GPU run.【crates/fastpq_prover/src/backend.rs:665】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】
+`FASTPQ_DEBUG_METAL_ENUM=1` logs FastPQ's actual device-discovery attempts only after the compiled bundle is admitted. The benchmark's additional Metal inventory is emitted only after an admitted Metal backend is selected. Current `None` admission performs no Metal enumeration; `--gpu-probe` records the requested/resolved mode and backend with inventory withheld, so a `backend="none"` snapshot cannot show device results. `FASTPQ_GPU=gpu` still requires an accelerator and refuses an unavailable backend; the debug knob cannot authorize an absent bundle. See `backend.rs::metal_available` and `fastpq_metal_bench.rs::log_gpu_probe_summary`.
 
 The CSV helper emits per-profile tables (for example `macos14_arm64_*.csv` and `takemiyacStudio.lan_25.0.0_arm64.csv`), preserving the `metal_available` flag so regression dashboards can ingest the CPU and GPU measurements without bespoke parsers.

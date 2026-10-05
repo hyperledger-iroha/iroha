@@ -33,14 +33,14 @@ error. Every negotiated response declares `Vary: Accept`.
     limited to 17 MiB: committed proof payloads consume at most 16 MiB and the
     remaining budget covers the bounded record and frame envelope. Torii
     measures first and allocates only an accepted exact-size body.
-  - Every JSON audit item includes the non-null `consensus_admitted_height` and one closed `penalty_status` object. Its exact shape is `{ "status": "pending", "details": null }`, `{ "status": "applied", "details": { "height": <u64> } }`, or `{ "status": "cancelled", "details": { "height": <u64> } }`; the terminal height is the canonical block that applied or cancelled the penalty.
+  - Every JSON audit item includes the non-null `consensus_admitted_height` and one closed `penalty_status` object. Its exact shape is `{ "status": "pending", "details": null }` or `{ "status": "applied", "details": { "height": <u64> } }`; the terminal height is the canonical block that applied the mandatory penalty. Unsupported lifecycle tags fail binary and JSON decoding.
   - The persisted first-release Norito `EvidenceRecord` stores `recorded_at_height`, `recorded_at_view`, `recorded_at_ms`, and the same closed `EvidencePenaltyStatus` sum type. Shortened pre-release records and retired boolean/nullable penalty layouts are rejected rather than default-filled.
   - `offenders` may be empty only for a `conflicting_certificates` item with
     `safety_violation: true`: CommitQCs from different views establish a safety
     violation without attributing individual signers. SDKs preserve that report
     and its exact proof hash; they never invent an offender to make it parse.
   - `EvidenceRecord` is not itself the JSON response DTO. Torii exposes a fixed, closed audit projection; the embedded `Evidence` holds one canonical native Sumeragi evidence frame (`iroha_sumeragi::message::Evidence`).
-  - Node-local pending observations have no data-model record and never appear in either endpoint. No instruction cancels a penalty; the `cancelled` status is never written.
+  - Node-local pending observations have no data-model record and never appear in either endpoint. No instruction cancels a mandatory penalty. The canonical lifecycle has only `pending` and `applied` states.
 - Root evidence uses its authenticated global subject height for the governed
   `SumeragiNposParameters.reconfig.evidence_horizon_blocks` check. Lane evidence
   uses its authenticated incarnation's lifetime: live custody remains liable,

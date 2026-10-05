@@ -1030,7 +1030,7 @@ fn decode_commitments(path: &Path) -> Result<Vec<CommitmentArtifact>, Box<dyn Er
             if let Some(bundle) = block.da_commitments() {
                 let height = block.header().height();
                 return Ok(bundle
-                    .commitments
+                    .commitments()
                     .iter()
                     .map(|record| CommitmentArtifact {
                         record: record.clone(),
@@ -1047,8 +1047,9 @@ fn decode_commitments(path: &Path) -> Result<Vec<CommitmentArtifact>, Box<dyn Er
     }
     if let Ok(bundle) = decode_from_bytes::<DaCommitmentBundle>(&bytes) {
         return Ok(bundle
-            .commitments
-            .into_iter()
+            .commitments()
+            .iter()
+            .cloned()
             .map(|record| CommitmentArtifact {
                 record,
                 source: path.display().to_string(),
@@ -1063,8 +1064,9 @@ fn decode_commitments(path: &Path) -> Result<Vec<CommitmentArtifact>, Box<dyn Er
     }
     if let Ok(bundle) = json::from_slice::<DaCommitmentBundle>(&bytes) {
         return Ok(bundle
-            .commitments
-            .into_iter()
+            .commitments()
+            .iter()
+            .cloned()
             .map(|record| CommitmentArtifact {
                 record,
                 source: path.display().to_string(),

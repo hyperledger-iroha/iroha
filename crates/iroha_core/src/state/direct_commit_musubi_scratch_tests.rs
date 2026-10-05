@@ -656,8 +656,11 @@ fn retained_state_da_capacity_refusal_keeps_original_bundle_and_all_writers_free
         iroha_crypto::Signature::new(key.private_key(), b"DA publication custody component"),
     );
     let bundle = DaCommitmentBundle::new(vec![record]);
-    let bundle_backing = bundle.commitments.as_ptr();
-    let signature_backing = bundle.commitments[0].acknowledgement_sig.payload().as_ptr();
+    let bundle_backing = bundle.commitments().as_ptr();
+    let signature_backing = bundle.commitments()[0]
+        .acknowledgement_sig
+        .payload()
+        .as_ptr();
     original.pending_da_commitments = Some(PendingDaCommitmentBundle {
         block_height: header.height().get(),
         bundle,
@@ -691,9 +694,9 @@ fn retained_state_da_capacity_refusal_keeps_original_bundle_and_all_writers_free
             world_owner
         );
         let pending = original.pending_da_commitments.as_ref().unwrap();
-        assert_eq!(pending.bundle.commitments.as_ptr(), bundle_backing);
+        assert_eq!(pending.bundle.commitments().as_ptr(), bundle_backing);
         assert_eq!(
-            pending.bundle.commitments[0]
+            pending.bundle.commitments()[0]
                 .acknowledgement_sig
                 .payload()
                 .as_ptr(),
@@ -753,9 +756,9 @@ fn retained_state_da_capacity_refusal_keeps_original_bundle_and_all_writers_free
     drop(original);
     let commitments = state.da_commitments.read();
     let published = commitments.bundle_at(header.height().get()).unwrap();
-    assert_eq!(published.commitments.as_ptr(), bundle_backing);
+    assert_eq!(published.commitments().as_ptr(), bundle_backing);
     assert_eq!(
-        published.commitments[0]
+        published.commitments()[0]
             .acknowledgement_sig
             .payload()
             .as_ptr(),

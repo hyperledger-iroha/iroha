@@ -444,7 +444,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                22,
+                18,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(
@@ -462,10 +462,6 @@ mod tests {
             "iroha.instruction.v1::governance::ProposeContractLifecycleGovernance",
             "iroha.instruction.v1::governance::ProposeContractEmergencyHold",
             "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance",
-            "iroha.instruction.v1::governance::ProposeKagemushaVerifierPolicyInstallV1",
-            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseInstallV1",
-            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseActivateV1",
-            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseRetireV1",
             "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal",
             "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
             "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance",
@@ -488,20 +484,6 @@ mod tests {
             .map(|entry| entry.wire_id)
             .collect::<Vec<_>>();
         assert_eq!(actual, PERMITTED_GOVERNANCE_WIRE_IDS);
-        let release_install: governance::ProposeKagemushaVerifierReleaseInstallV1 =
-            norito::decode_canonical(include_bytes!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
-            )))
-            .expect("canonical verifier-release instruction fixture");
-        assert_default_registry_decodes(release_install);
-        let release_activate: governance::ProposeKagemushaVerifierReleaseActivateV1 =
-            norito::decode_canonical(include_bytes!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
-            )))
-            .expect("canonical verifier-activation instruction fixture");
-        assert_default_registry_decodes(release_activate);
         let retired_manual_council_wire_id = [
             "iroha.instruction.v1::governance::",
             "Persist",
@@ -1500,6 +1482,10 @@ mod tests {
             "iroha.offline.kagemusha.recursive_release.deactivate.v1".to_owned(),
             "iroha.offline.kagemusha.taira_canary.record.v1".to_owned(),
             "iroha.offline.kagemusha.taira_canary.authorize.v1".to_owned(),
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierPolicyInstallV1".to_owned(),
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseInstallV1".to_owned(),
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseActivateV1".to_owned(),
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseRetireV1".to_owned(),
             "iroha.offline.device_attestation.register".to_owned(),
             "iroha.instruction.v1::offline::SetOfflineDeviceAttestationPolicy".to_owned(),
             "iroha.instruction.v1::sorafs::RegisterSorafsAnonymousServiceNote".to_owned(),

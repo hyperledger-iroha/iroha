@@ -2259,7 +2259,7 @@ mod tests {
     #[test]
     fn boundary_currency_fixture_retains_native_authority_with_signed_genesis() {
         use iroha_data_model::{
-            asset::AssetBalancePolicy, isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
+            asset::AssetBalancePolicy, sumeragi::epoch::ValidatorEpochDecisionV1,
         };
 
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
@@ -2297,7 +2297,7 @@ mod tests {
             .next;
         assert_eq!(
             next.authorization.decision,
-            KagemushaMintFinalityEpochDecisionV1::Retain
+            ValidatorEpochDecisionV1::Retain
         );
         assert_eq!(next.authority, current.authority);
         assert_eq!(next.committee, current.committee);
@@ -2359,7 +2359,7 @@ mod tests {
             transaction::Executable,
         };
         use iroha_model_base::{domain::DomainId, topology::LaneId};
-        use iroha_primitives::numeric::Quantity;
+        use iroha_primitives::numeric::{NumericSpec, Quantity};
 
         let mut config = TestChainConfig::new(World::new(), 1_000);
         let owner = AccountId::new(config.genesis_key.public_key().clone());
@@ -2371,23 +2371,23 @@ mod tests {
         let source_asset = AssetId::new(definition.clone(), validator.clone());
         let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
         let amount = Quantity::from(1_000_u32);
-        config.world =
-            World::with_assets(
-                [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&owner)],
-                [
-                    Account::new(validator.clone()).build(&owner),
-                    Account::new(escrow.clone()).build(&owner),
-                ],
-                [AssetDefinition::numeric(
-                    definition,
-                    "Staked XOR",
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&owner)],
-                [Asset::new(source_asset.clone(), amount.clone())],
-                [],
-            );
+        config.world = World::with_assets(
+            [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&owner)],
+            [
+                Account::new(validator.clone()).build(&owner),
+                Account::new(escrow.clone()).build(&owner),
+            ],
+            [AssetDefinition::new(
+                definition,
+                "Network XOR",
+                NumericSpec::fractional(9),
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&owner)],
+            [Asset::new(source_asset.clone(), amount.clone())],
+            [],
+        );
         // This permissioned-chain fixture supplies the same initial staking policy
         // as its application consumers; it does not declare an NPoS consensus mode.
         let mut initial = config.world.block();
@@ -2543,15 +2543,15 @@ mod tests {
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         // Deliberately retain the prior derived table: the configured catalog is the source.
         let stale_policies = crate::da::active_proof_policy_bundle_at_height(&nexus, 1);
-        assert!(stale_policies.policies.is_empty());
+        assert!(stale_policies.policies().is_empty());
         config.nexus = Some(nexus);
         let prepared = CertifiedTestChain::prepare(config)
             .expect("custom catalog policies are signed before original genesis execution");
         let original = prepared.genesis.block();
         let actual_nexus = prepared.state.nexus_snapshot();
         let expected = crate::da::active_proof_policy_bundle_at_height(&actual_nexus, 1);
-        assert_eq!(expected.policies.len(), 1);
-        assert_eq!(expected.policies[0].alias, "configured-primary");
+        assert_eq!(expected.policies().len(), 1);
+        assert_eq!(expected.policies()[0].alias, "configured-primary");
         assert_eq!(original.da_proof_policies(), Some(&expected));
         assert_eq!(
             original.header().da_proof_policies_hash(),

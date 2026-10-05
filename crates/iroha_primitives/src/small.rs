@@ -886,16 +886,19 @@ mod small_vector {
             out: &mut dyn json::JsonWriteSink,
         ) -> Result<(), json::BoundedJsonError> {
             out.begin_container()?;
-            out.push('[')?;
-            for (index, item) in self.0.iter().enumerate() {
-                if index != 0 {
-                    out.push(',')?;
+            let result = (|| -> Result<(), json::BoundedJsonError> {
+                out.push('[')?;
+                for (index, item) in self.0.iter().enumerate() {
+                    if index != 0 {
+                        out.push(',')?;
+                    }
+                    item.json_serialize_to(out)?;
                 }
-                item.json_serialize_to(out)?;
-            }
-            out.push(']')?;
+                out.push(']')?;
+                Ok(())
+            })();
             out.end_container();
-            Ok(())
+            result
         }
     }
     impl<A: smallvec::Array> JsonDeserialize for SmallVec<A>

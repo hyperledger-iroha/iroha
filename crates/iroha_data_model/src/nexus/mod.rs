@@ -1035,40 +1035,44 @@ impl norito::json::FastJsonWrite for LaneConfig {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"id\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.id, out)?;
-        out.push_str(",\"shard_id\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.shard_id, out)?;
-        out.push_str(",\"dataspace_id\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.dataspace_id, out)?;
-        out.push_str(",\"alias\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.alias, out)?;
-        out.push_str(",\"description\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.description, out)?;
-        out.push_str(",\"visibility\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.visibility, out)?;
-        out.push_str(",\"lane_type\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.lane_type, out)?;
-        out.push_str(",\"governance\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.governance, out)?;
-        out.push_str(",\"settlement\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.settlement, out)?;
-        out.push_str(",\"storage\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.storage, out)?;
-        out.push_str(",\"proof_scheme\":")?;
-        norito::json::write_json_string_to(&self.proof_scheme.to_string(), out)?;
-        out.push_str(",\"manifest_policy\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.manifest_policy, out)?;
-        out.push_str(",\"confidential_compute\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.confidential_compute, out)?;
-        out.push_str(",\"scheduler\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.scheduler, out)?;
-        out.push_str(",\"settlement_buffer\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.settlement_buffer, out)?;
-        out.push_str(",\"metadata\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.metadata, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"id\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.id, out)?;
+            out.push_str(",\"shard_id\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.shard_id, out)?;
+            out.push_str(",\"dataspace_id\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.dataspace_id, out)?;
+            out.push_str(",\"alias\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.alias, out)?;
+            out.push_str(",\"description\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.description, out)?;
+            out.push_str(",\"visibility\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.visibility, out)?;
+            out.push_str(",\"lane_type\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.lane_type, out)?;
+            out.push_str(",\"governance\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.governance, out)?;
+            out.push_str(",\"settlement\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.settlement, out)?;
+            out.push_str(",\"storage\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.storage, out)?;
+            out.push_str(",\"proof_scheme\":")?;
+            norito::json::write_json_string_to(&self.proof_scheme.to_string(), out)?;
+            out.push_str(",\"manifest_policy\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.manifest_policy, out)?;
+            out.push_str(",\"confidential_compute\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.confidential_compute, out)?;
+            out.push_str(",\"scheduler\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.scheduler, out)?;
+            out.push_str(",\"settlement_buffer\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.settlement_buffer, out)?;
+            out.push_str(",\"metadata\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.metadata, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1210,12 +1214,16 @@ impl norito::json::FastJsonWrite for LaneLifecyclePlan {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"additions\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.additions, out)?;
-        out.push_str(",\"retire\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.retire, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"additions\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.additions, out)?;
+            out.push_str(",\"retire\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.retire, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1294,16 +1302,20 @@ impl norito::json::FastJsonWrite for LaneLifecycleParameterV1 {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"version\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
-        out.push_str(",\"expected_catalog_hash\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.expected_catalog_hash, out)?;
-        out.push_str(",\"expected_incarnation_root\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.expected_incarnation_root, out)?;
-        out.push_str(",\"plan\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.plan, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"version\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
+            out.push_str(",\"expected_catalog_hash\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.expected_catalog_hash, out)?;
+            out.push_str(",\"expected_incarnation_root\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.expected_incarnation_root, out)?;
+            out.push_str(",\"plan\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.plan, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1405,12 +1417,16 @@ impl norito::json::FastJsonWrite for LaneLifecycleIncarnationEntry {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"lane_id\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.lane_id, out)?;
-        out.push_str(",\"incarnation\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.incarnation, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"lane_id\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.lane_id, out)?;
+            out.push_str(",\"incarnation\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.incarnation, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1501,22 +1517,26 @@ impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"version\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
-        out.push_str(",\"lane_count\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.lane_count, out)?;
-        out.push_str(",\"lanes\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.lanes, out)?;
-        out.push_str(",\"catalog_hash\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.catalog_hash, out)?;
-        out.push_str(",\"incarnations\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.incarnations, out)?;
-        out.push_str(",\"incarnation_root\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.incarnation_root, out)?;
-        out.push_str(",\"runtime_catalog_hash\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.runtime_catalog_hash, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"version\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
+            out.push_str(",\"lane_count\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.lane_count, out)?;
+            out.push_str(",\"lanes\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.lanes, out)?;
+            out.push_str(",\"catalog_hash\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.catalog_hash, out)?;
+            out.push_str(",\"incarnations\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.incarnations, out)?;
+            out.push_str(",\"incarnation_root\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.incarnation_root, out)?;
+            out.push_str(",\"runtime_catalog_hash\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.runtime_catalog_hash, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -3145,5 +3165,65 @@ mod additional_frame_owner_identity_tests {
         crate::frame_owner_identity_tests::assert_bidirectional::<
             crate::nexus::LaneLifecycleStatusV1,
         >("iroha_data_model::nexus::LaneLifecycleStatusV1");
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_lane_config_checked_container_retains_bytes_errors_and_depth() {
+        audit(&LaneConfig::default());
+    }
+
+    #[test]
+    fn original_lane_lifecycle_plan_checked_container_retains_original_vectors_and_depth() {
+        let value = LaneLifecyclePlan {
+            additions: vec![LaneConfig::default()],
+            retire: vec![LaneId::new(7)],
+        };
+        let pointer = value.additions.as_ptr();
+        audit(&value);
+        assert_eq!(value.additions.as_ptr(), pointer);
+    }
+
+    #[test]
+    fn original_lane_lifecycle_parameter_checked_container_retains_source_hashes_and_depth() {
+        audit(&LaneLifecycleParameterV1 {
+            version: LaneLifecycleParameterV1::VERSION,
+            expected_catalog_hash: Hash::new(b"catalog"),
+            expected_incarnation_root: Hash::new(b"incarnations"),
+            plan: LaneLifecyclePlan {
+                additions: vec![LaneConfig::default()],
+                retire: vec![LaneId::new(7)],
+            },
+        });
+    }
+
+    #[test]
+    fn original_lane_incarnation_checked_container_retains_bytes_errors_and_depth() {
+        audit(&LaneLifecycleIncarnationEntry {
+            lane_id: LaneId::new(7),
+            incarnation: Hash::new(b"original incarnation"),
+        });
+    }
+
+    #[test]
+    fn original_lane_lifecycle_status_checked_container_retains_bytes_errors_and_depth() {
+        audit(&LaneLifecycleStatusV1 {
+            version: LaneLifecycleStatusV1::VERSION,
+            lane_count: 1,
+            lanes: vec![LaneConfig::default()],
+            catalog_hash: Hash::new(b"catalog"),
+            incarnations: vec![LaneLifecycleIncarnationEntry {
+                lane_id: LaneId::SINGLE,
+                incarnation: Hash::new(b"original incarnation"),
+            }],
+            incarnation_root: Hash::new(b"incarnations"),
+            runtime_catalog_hash: Some(Hash::new(b"runtime")),
+        });
     }
 }

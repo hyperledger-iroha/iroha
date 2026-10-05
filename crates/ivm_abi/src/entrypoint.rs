@@ -3,7 +3,43 @@
 //! The data model owns these types because the same exact recursive schema is embedded in CNTR
 //! metadata, copied into signed manifests, and consumed by clients. Re-exporting it here keeps VM
 //! and compiler call sites concise while preventing a second ABI model from drifting.
+use crate::VMError;
 pub use iroha_data_model::smart_contract::entrypoint::*;
+/// Return the exclusive end of one preorder subtree without recursion.
+///
+/// The data-model walker is the authoritative structural cursor. All aggregate
+/// children, including a List's element type, live inline in the same tape.
+/// # Errors
+/// Returns [`VMError::DecodeError`] for an invalid or incomplete subtree.
+pub fn value_subtree_end(
+    nodes: &[EntrypointValueTypeNodeV1],
+    start: usize,
+) -> Result<usize, VMError> {
+    entrypoint_value_subtree_range_v1(nodes, start)
+        .map(|range| range.end)
+        .ok_or(VMError::DecodeError)
+}
+/// Return exact preorder starts of one node's declared children.
+///
+/// # Errors
+/// Returns [`VMError::DecodeError`] when child boundaries do not consume the subtree exactly.
+pub fn value_child_starts(
+    nodes: &[EntrypointValueTypeNodeV1],
+    node_start: usize,
+    child_count: usize,
+) -> Result<Vec<usize>, VMError> {
+    let mut child = node_start.checked_add(1).ok_or(VMError::DecodeError)?;
+    let mut starts = Vec::with_capacity(child_count);
+    for _ in 0..child_count {
+        starts.push(child);
+        child = value_subtree_end(nodes, child)?;
+    }
+    if child != value_subtree_end(nodes, node_start)? {
+        return Err(VMError::DecodeError);
+    }
+    Ok(starts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

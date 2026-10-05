@@ -47,8 +47,10 @@ pub use fixed_frame::FixedFrameLayout;
 pub use nominal_text::{NominalText, borrow_canonical_text, borrow_text_payload};
 mod budget_scope;
 mod field_destination;
+mod prepared_option;
 mod prepared_scope;
 mod prepared_sequence;
+mod prepared_string;
 use budget_scope::CounterOwner;
 pub use field_destination::{
     CanonicalField, DecodeField, DecodeIntoError, DecodeRecordFields, FieldDestination,
@@ -58,8 +60,9 @@ pub use field_destination::{
 pub use prepared_scope::{PreparedDecodeError, PreparedDecodeScopeError, PreparedDecodeWorkspace};
 pub use prepared_sequence::{
     PreparedElementSequence, SequenceDestinationError, decode_raw_byte_sequence_into,
-    prepare_element_sequence,
+    inspect_element_sequence, prepare_element_sequence,
 };
+pub use prepared_string::{StringDestinationError, borrow_canonical_string, decode_string_into};
 mod decode_attempt;
 pub use decode_attempt::classify_decode_attempt;
 pub use decode_attempt::{DecodeAttemptError, DecodeAttemptErrorKind, ScopedDecodeResourceError};
@@ -1968,7 +1971,10 @@ where
 {
     encode_seq_payloads::<T, I>(writer, items)
 }
-fn sequence_encoded_len_hint<'a, T, I>(items: I) -> Option<usize>
+/// Canonical element-sequence sizing shared by immutable collection owners.
+/// Returns `None` when any original leaf has no representable length hint.
+#[doc(hidden)]
+pub fn sequence_encoded_len_hint<'a, T, I>(items: I) -> Option<usize>
 where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
@@ -1984,7 +1990,10 @@ where
     }
     Some(total)
 }
-fn sequence_encoded_len_exact<'a, T, I>(items: I) -> Option<usize>
+/// Exact canonical element-sequence sizing without staging a temporary byte Vec.
+/// Returns `None` when any original leaf has no representable exact length.
+#[doc(hidden)]
+pub fn sequence_encoded_len_exact<'a, T, I>(items: I) -> Option<usize>
 where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
@@ -3073,26 +3082,21 @@ where
     T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
-        record_slice_access(bytes, 1);
-        match tag {
-            0 => Ok((None, 1)),
-            1 => {
-                let (len, hdr) = read_len_dyn_slice(&bytes[1..])?;
-                let start = 1 + hdr;
-                let end = start.checked_add(len).ok_or(Error::LengthMismatch)?;
-                if end > bytes.len() {
+        let (payload, used) = prepared_option::option_payload_prefix(bytes, |_| {
+            Error::Message("invalid option tag".into())
+        })?;
+        let value = match payload {
+            None => None,
+            Some(payload) => {
+                let (value, consumed) = decode_field_canonical::<T>(payload)?;
+                if consumed != payload.len() {
                     return Err(Error::LengthMismatch);
                 }
-                let (value, used) = decode_field_canonical::<T>(&bytes[start..end])?;
-                if used != len {
-                    return Err(Error::LengthMismatch);
-                }
-                record_slice_access(bytes, end);
-                Ok((Some(value), end))
+                Some(value)
             }
-            _ => Err(Error::Message("invalid option tag".into())),
-        }
+        };
+        record_slice_access(bytes, used);
+        Ok((value, used))
     }
 }
 impl<'a, T: DecodeFromSlice<'a>, E: DecodeFromSlice<'a>> DecodeFromSlice<'a> for Result<T, E> {
@@ -4712,24 +4716,20 @@ impl<'a> DeserializePayload<'a> for String {
             .unwrap_or_else(|err| panic!("norito: invalid archived String: {err:?}"))
     }
     fn try_deserialize(archived: &'a Archived<String>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
+        let ptr = std::ptr::from_ref(archived).cast::<u8>();
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
         let ptr_us = ptr as usize;
-        if ptr_us < base || ptr_us >= base + total {
+        let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
+        if ptr_us < base || ptr_us >= base_end {
             return Err(Error::LengthMismatch);
         }
-        let (len, hdr) = read_len_dyn_at_ptr(ptr)?;
-        let off = (ptr_us - base) + hdr;
-        let end = off.checked_add(len).ok_or(Error::LengthMismatch)?;
-        if end > total {
-            return Err(Error::LengthMismatch);
-        }
+        // SAFETY: this is the original validated active payload. Its tail is
+        // borrowed only while constructing this owned String.
         let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        unsafe {
-            record_payload_access(payload.as_ptr().add(off), len);
-        }
-        let bytes = &payload[off..end];
-        try_copy_string_for_decode(bytes)
+        let (value, _) = prepared_string::string_payload(&payload[ptr_us - base..], |body| {
+            record_payload_access(body.as_ptr(), body.len());
+        })?;
+        try_copy_string_for_decode(value)
     }
 }
 
@@ -4778,12 +4778,10 @@ impl<'a> DeserializePayload<'a> for &'a str {
 // Bounded implementations for decoding from slices (no raw pointers)
 impl<'a> DecodeFromSlice<'a> for String {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, hdr) = read_len_dyn_slice(bytes)?;
-        let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
-        let data = bytes.get(hdr..end).ok_or(Error::LengthMismatch)?;
-        let s = try_copy_string_for_decode(data)?;
-        record_slice_access(bytes, end);
-        Ok((s, end))
+        let (value, used) = prepared_string::string_payload(bytes, |_| {})?;
+        let owned = try_copy_string_for_decode(value)?;
+        record_slice_access(bytes, used);
+        Ok((owned, used))
     }
 }
 impl<'a> DecodeFromSlice<'a> for &'a str {
@@ -5021,39 +5019,22 @@ where
         }
     }
     fn try_deserialize(archived: &'a Archived<Option<T>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let tag = payload_range_from_ptr(ptr, 1)?[0];
-        match tag {
-            0 => Ok(None),
-            1 => {
-                let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
-                let ptr_us = ptr as usize;
-                if ptr_us < base || ptr_us >= base + total {
+        let bytes = payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let (payload, used) = prepared_option::option_payload_prefix(bytes, |tag| {
+            Error::invalid_tag("Option::try_deserialize", tag)
+        })?;
+        let value = match payload {
+            None => None,
+            Some(payload) => {
+                let (value, consumed) = decode_field_canonical::<T>(payload)?;
+                if consumed != payload.len() {
                     return Err(Error::LengthMismatch);
                 }
-                let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-                let start = ptr_us - base + 1; // skip tag
-                if start > payload.len() {
-                    return Err(Error::LengthMismatch);
-                }
-                let bytes = &payload[start..];
-                let (data_len, hdr) = read_len_dyn_slice(bytes)?;
-                let data_start = hdr;
-                let data_end = data_start
-                    .checked_add(data_len)
-                    .ok_or(Error::LengthMismatch)?;
-                if data_end > bytes.len() {
-                    return Err(Error::LengthMismatch);
-                }
-                let archived_slice = &bytes[data_start..data_end];
-                let (value, used) = decode_field_canonical::<T>(archived_slice)?;
-                if used != data_len {
-                    return Err(Error::LengthMismatch);
-                }
-                Ok(Some(value))
+                Some(value)
             }
-            _ => Err(Error::invalid_tag("Option::try_deserialize", tag)),
-        }
+        };
+        record_slice_access(bytes, used);
+        Ok(value)
     }
 }
 

@@ -18,6 +18,9 @@ use norito::json::Value;
 pub(in crate::isi) fn provider_attestation_value() -> Value {
     let value = fixture_values::generated_identity_values().register_provider_attestation;
     value
+        .validate()
+        .expect("complete signed current provider-bundle fixture");
+    value
         .attestation
         .verify(&value.attestation.payload.binding)
         .expect("canonical signed provider-bundle fixture");

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use eyre::{Result, ensure};
 use iroha_data_model::{NetworkId, account::AccountId, sorafs::pin_registry::StorageClass};
-use iroha_wallet::operation_journal::Journal;
+use iroha_operation_journal::Journal;
 use norito::json::{JsonDeserialize, JsonSerialize};
 
 /// Exact immutable local session original, shared by fresh generation and runtime ordinary open.
@@ -71,7 +71,7 @@ impl NativeMusubiPinSessionV1 {
         Ok(())
     }
 
-    /// Atomically initialize fresh private session custody using the sole wallet journal owner.
+    /// Atomically initialize fresh private session custody using the shared operation-journal owner.
     /// The returned journal retains its exclusive lock; generation drops it before publication.
     /// Existing or partially published custody is never adopted or repaired by this method.
     ///

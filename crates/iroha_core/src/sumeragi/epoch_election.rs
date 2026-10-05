@@ -27,11 +27,11 @@ impl From<&str> for Attempt<BoundaryCaptureError> {
 
 use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::Algorithm;
+use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1};
 use iroha_data_model::{
     NetworkId,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
     consensus::{ConsensusKeyRecord, ConsensusKeyRole, GlobalThresholdBeaconChainAnchorV1},
-    isi::kagemusha_v1::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1},
     nexus::{PublicLaneValidatorRecord, ValidatorElectionPolicyV1},
     sumeragi::epoch::{MAX_VALIDATORS, ValidatorEpochContextV1, validator_seat_rank},
 };
@@ -294,8 +294,13 @@ impl<'a> CheckedElectionView<'a> {
         {
             return Err("selection target differs from its frozen policy interval".into());
         }
+        let preparation_delay = if cfg!(all(test, sumeragi_core_mutation = "HC100")) {
+            1
+        } else {
+            2
+        };
         let target_epoch = selection_epoch
-            .checked_add(2)
+            .checked_add(preparation_delay)
             .ok_or("target epoch overflows")?;
         let mut selected = SelectedCommittee::empty();
         for seat in self.primary.as_slice() {

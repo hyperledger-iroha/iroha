@@ -1,5 +1,6 @@
 """Google attestation revocation schema, serial and live-source boundaries."""
 
+import http.client
 import json
 import unittest
 import urllib.error
@@ -115,6 +116,30 @@ class RevocationTests(unittest.TestCase):
                 fetch_google_revocation_status()
             with self.assertRaises(RevocationUnavailable):
                 verify_google_chain_not_revoked([certificate(0x2a), certificate(0x3b)])
+
+    def test_http_protocol_failures_outside_oserror_are_unavailable(self) -> None:
+        # http.client raises these outside OSError; they must not escape the
+        # check (an unclassified exception would bypass the caller's retryable
+        # unavailability handling).
+        self.assertFalse(issubclass(http.client.HTTPException, OSError))
+
+        class TruncatedResponse(FakeResponse):
+            def read(self, length):
+                raise http.client.IncompleteRead(b"")
+
+        with patch("iroha_app_attestation.revocation.urllib.request.build_opener",
+                   return_value=FakeOpener(TruncatedResponse(b'{"entries":{}}'))), \
+                self.assertRaisesRegex(RevocationUnavailable, "unavailable"):
+            fetch_google_revocation_status()
+        for failure in (http.client.BadStatusLine("x"), http.client.LineTooLong("header line")):
+            with self.subTest(failure=type(failure).__name__), patch(
+                "iroha_app_attestation.revocation.urllib.request.build_opener"
+            ) as build:
+                build.return_value.open.side_effect = failure
+                with self.assertRaisesRegex(RevocationUnavailable, "unavailable"):
+                    fetch_google_revocation_status()
+                with self.assertRaises(RevocationUnavailable):
+                    verify_google_chain_not_revoked([certificate(0x2a), certificate(0x3b)])
 
 
 if __name__ == "__main__":

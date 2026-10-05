@@ -1,5 +1,8 @@
 const fn operation_decode_policy(operation: u16) -> DecodeResourcePolicyV1 {
     match operation {
+        OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1
+        | OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1
+        | OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1 => GLOBAL_BEACON_DECODE_POLICY_V1,
         OPERATION_STREAM_TOKEN_SIGN_V1
         | OPERATION_STREAM_TOKEN_RECOVER_V1
         | OPERATION_STREAM_TOKEN_OBSERVE_V1
@@ -1078,9 +1081,10 @@ fn decode_global_beacon_partial_sign_request(
     ),
     BrokerError,
 > {
-    let request = decode_canonical::<GlobalBeaconPartialSignRequestWireV1>(
+    let request = decode_canonical_with_policy::<GlobalBeaconPartialSignRequestWireV1>(
         payload,
         MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        GLOBAL_BEACON_DECODE_POLICY_V1,
     )?;
     let aggregator = global_beacon_aggregator_from_sign_request(&request, session_network_id)?;
     Ok((request, aggregator))
@@ -1096,9 +1100,10 @@ fn decode_global_beacon_seat_readiness_request(
     ),
     BrokerError,
 > {
-    let request = decode_canonical::<GlobalBeaconSeatReadinessRequestWireV1>(
+    let request = decode_canonical_with_policy::<GlobalBeaconSeatReadinessRequestWireV1>(
         payload,
         MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        GLOBAL_BEACON_DECODE_POLICY_V1,
     )?;
     if request.session.network_id != *session_network_id {
         return Err(BrokerError::BindingMismatch);
@@ -1204,9 +1209,10 @@ fn decode_global_beacon_capability_attest_request(
     ),
     BrokerError,
 > {
-    let request = decode_canonical::<GlobalBeaconCapabilityAttestRequestWireV1>(
+    let request = decode_canonical_with_policy::<GlobalBeaconCapabilityAttestRequestWireV1>(
         payload,
         MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        GLOBAL_BEACON_DECODE_POLICY_V1,
     )?;
     if request.session.network_id != *session_network_id {
         return Err(BrokerError::BindingMismatch);

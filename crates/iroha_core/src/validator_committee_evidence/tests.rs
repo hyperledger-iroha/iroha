@@ -644,13 +644,17 @@ fn offline_committee_proposal_retains_signed_root_and_refuses_foreign_network_in
     let mut substituted_root = genesis.clone();
     substituted_root
         .replace_signatures(
-            [iroha_data_model::block::BlockSignature::new(
-                0,
-                iroha_crypto::SignatureOf::try_from_hash(foreign_key.private_key(), genesis.hash())
+            iroha_data_model::block::BlockSignatures::try_from_iter([
+                iroha_data_model::block::BlockSignature::new(
+                    0,
+                    iroha_crypto::SignatureOf::try_from_hash(
+                        foreign_key.private_key(),
+                        genesis.hash(),
+                    )
                     .unwrap(),
-            )]
-            .into_iter()
-            .collect(),
+                ),
+            ])
+            .expect("at most 31 block signatures"),
         )
         .unwrap();
     assert!(offline_proposal(&substituted_root, &genesis, input(network)).is_err());
@@ -949,14 +953,26 @@ fn committee_custody_evidence_retains_original_session_refusal_and_retries_uncha
     };
     let demand = global_threshold_beacon_session_allocation_bytes_v1(source, &binding).unwrap();
     let observer_bytes = ReleaseRegistration::allocation_layout().size();
-    let journal_controls = evidence.finality_journal.blocks.len()
-        * iroha_data_model::block::SharedSignedBlock::allocation_layout().size();
-    let pool = AllocationBudget::new(demand + journal_controls + observer_bytes);
+    let journal_count = evidence.finality_journal.blocks.len();
+    let journal_controls =
+        journal_count * iroha_data_model::block::SharedSignedBlock::allocation_layout().size();
+    // The sole native verifier retains both actual ordered index arrays while constructing
+    // the session. Their exact layouts are separate from each shared block control.
+    let journal_index = std::alloc::Layout::array::<iroha_data_model::block::SharedSignedBlock>(
+        journal_count,
+    )
+    .unwrap()
+    .size()
+        + std::alloc::Layout::array::<iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>>(
+            journal_count,
+        )
+        .unwrap()
+        .size();
+    let journal_owners = journal_controls + journal_index;
+    let pool = AllocationBudget::new(demand + journal_owners + observer_bytes);
     let mut observer = crate::unit_test_support::release_registration(&pool);
     let blocker = pool.try_reserve_bytes(1).unwrap();
-    let expected = pool
-        .try_reserve_bytes(demand + journal_controls)
-        .unwrap_err();
+    let expected = pool.try_reserve_bytes(demand + journal_owners).unwrap_err();
     let verify = || {
         verify_validator_committee_provisioning_evidence_v1(
             &evidence,
@@ -992,12 +1008,12 @@ fn committee_custody_evidence_retains_original_session_refusal_and_retries_uncha
         panic!("a held original pool must carry its exact release source");
     };
     assert_eq!(requested_bytes, demand);
-    assert_eq!(reserved_bytes, observer_bytes + journal_controls + 1);
+    assert_eq!(reserved_bytes, observer_bytes + journal_owners + 1);
     assert_eq!(limit_bytes, pool.limit_bytes());
     assert_eq!(release, expected_release);
     assert_eq!(pool.reserved_bytes(), observer_bytes + 1);
     let mut context = Context::from_waker(Waker::noop());
-    // Returning the failed attempt really retires its temporary journal controls. That is an
+    // Returning the failed attempt retires its temporary journal controls and index arrays. That is an
     // original-pool refund, not authority to assume enough capacity for the whole next proof.
     assert!(observer.poll_wait(&release, &mut context).is_ready());
     assert!(matches!(
@@ -1046,7 +1062,7 @@ fn status_selection_binding_uses_the_same_actual_native_boundary_as_custody() {
     let evidence = selection_evidence_fixture();
     let verifier = verifier(&evidence.finality_journal, evidence.status.network_id);
     with_verified_native_journal(
-        &evidence.finality_journal,
+        (&evidence.finality_journal).into(),
         &chain_id(),
         &evidence.status.network_id,
         limits(),
@@ -1118,4 +1134,71 @@ fn synthetic_world() -> crate::sumeragi::commitment::WorldStateTransition {
         world_state_root: iroha_crypto::Hash::new(b"synthetic World"),
         event_commitment: None,
     }
+}
+
+#[test]
+fn verified_rotation_attempt_uses_exact_native_selection_source_and_original_wider_cutoff() {
+    // Genuine signed native proof/selection verification through the maintained
+    // producer. This structural proof fixture does not claim a real World execution
+    // or network restart; those remain whole-candidate qualification boundaries.
+    let evidence = selection_evidence_fixture();
+    let network = evidence.status.network_id;
+    let chain_id = chain_id();
+    let budget = AllocationBudget::new(limits().allocated_bytes);
+    let preparation = &evidence
+        .status
+        .selected
+        .as_ref()
+        .unwrap()
+        .transition
+        .preparation;
+    let verification = verifier(&evidence.finality_journal, network);
+    let selected = verify_validator_committee_selection_evidence_v1(
+        &evidence,
+        &chain_id,
+        network,
+        2,
+        preparation.transition_id().unwrap(),
+        limits(),
+        &verification,
+        &budget,
+    )
+    .unwrap();
+    let mut clock = crate::sumeragi::native_journal::NativeJournalCursor::new(
+        chain_id.clone(),
+        network,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        limits(),
+        &budget,
+    )
+    .unwrap();
+    clock.advance((&evidence.finality_journal).into()).unwrap();
+    let authority =
+        crate::beacon::AuthenticatedGlobalBeaconDkgAttemptV1::rotation(&selected, &clock).unwrap();
+    assert_eq!(authority.session().start_height, selected.observed_height());
+    assert_eq!(
+        authority.session().attempt_id,
+        preparation.transition_id().unwrap()
+    );
+    assert_eq!(
+        authority.session().session_id,
+        preparation.beacon_session_id().unwrap()
+    );
+    assert_eq!(
+        authority.session().authority_generation,
+        preparation.authority_generation
+    );
+    assert_eq!(authority.cutoff(), preparation.first_height - 1);
+    assert!(authority.session().acceptances_end_height < authority.cutoff());
+    let empty = crate::sumeragi::native_journal::NativeJournalCursor::new(
+        chain_id,
+        network,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        limits(),
+        &budget,
+    )
+    .unwrap();
+    assert!(
+        crate::beacon::AuthenticatedGlobalBeaconDkgAttemptV1::rotation(&selected, &empty).is_err()
+    );
 }

@@ -207,10 +207,12 @@ impl KagemushaMintCertificateWitnessV1 {
                 .map_err(|error| format!("invalid mint-finality seal bundle: {error}"))?;
         } else if !self.seal_bundle.seals.is_empty()
             || self.seal_bundle.message.epoch_authorization.decision
-                != iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis
+                != iroha_data_model::sumeragi::epoch::ValidatorEpochDecisionV1::Genesis
             || self.seal_bundle.message.next_epoch_authorization.is_some()
         {
-            return Err("mint-authority bootstrap requires genesis without seals or a successor".into());
+            return Err(
+                "mint-authority bootstrap requires genesis without seals or a successor".into(),
+            );
         }
         if step == KagemushaMintAuthorityStepV1::FinalizedMint {
             self.membership

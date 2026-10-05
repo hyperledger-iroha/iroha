@@ -56,6 +56,8 @@ ROOT_INPUTS = (
     Path("javascript/iroha_js/src/blake2b.js"),
     Path("javascript/iroha_js/src/ivmArtifact.js"),
     Path("javascript/iroha_js/src/kotodamaCompiler/normalize.js"),
+    Path("javascript/iroha_js/src/kotodamaCompiler/embeddedCallSchema.js"),
+    Path("javascript/iroha_js/src/kotodamaCompiler/embeddedNorito.js"),
 )
 # Start at the executable's owner so the compiler and its runtime/admission
 # dependencies are included without traversing unrelated dev-dependencies.

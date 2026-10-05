@@ -15,7 +15,7 @@ impl Kura {
     ) -> Result<
         Option<(
             iroha_data_model::kagemusha::KagemushaOrdinaryFinalizedMintCreditOriginalV1,
-            StableSidecarRead,
+            StableSidecarRead<Vec<u8>>,
         )>,
     > {
         let directory = self.ordinary_mint_credit_directory();
@@ -168,7 +168,7 @@ impl Kura {
 struct KagemushaOrdinaryMintProgressV1 {
     version: u16,
     release_id: [u8; 32],
-    authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+    authorization: iroha_data_model::sumeragi::epoch::ValidatorEpochAuthorizationV1,
 }
 impl Kura {
     fn ordinary_mint_progress_path(&self, release: [u8; 32]) -> PathBuf {
@@ -210,9 +210,7 @@ impl Kura {
     pub(crate) fn ordinary_mint_checkpoint_progress_v1(
         &self,
         release: [u8; 32],
-    ) -> Result<
-        Option<iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1>,
-    > {
+    ) -> Result<Option<iroha_data_model::sumeragi::epoch::ValidatorEpochAuthorizationV1>> {
         if release == [0; 32] {
             return Err(Error::KagemushaMintOutbox(
                 "ordinary progress release is zero".into(),
@@ -230,7 +228,7 @@ impl Kura {
     pub(crate) fn store_ordinary_mint_checkpoint_progress_v1(
         &self,
         release: [u8; 32],
-        authorization: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+        authorization: &iroha_data_model::sumeragi::epoch::ValidatorEpochAuthorizationV1,
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
         authorization

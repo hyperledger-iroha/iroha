@@ -297,13 +297,12 @@ See [the profiling guide](../docs/profile_build.md#measured-memory-acceptance).
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
 - `check_swift_spm_validation.sh` – exercises `IrohaSwift/Package.swift` with the bridge present and with the bridge intentionally missing. The complete artifact must build and the missing-artifact case must fail with the mandatory-bridge diagnostic. Writes a summary + logs under `artifacts/swift_spm_validation`.
-- `check_swift_pod_bridge.sh` – requires CocoaPods, authenticates the final
-  packaged ZIP, generated binary podspec, checksum inventory, and package
-  manifest, then runs strict Release binary `pod spec lint` through a local
-  `file://` source followed by source `pod lib lint --include-podspecs`. Missing
-  tooling or artifacts fail the lane. Registry publication and clean public
-  install evidence remain release operations outside this package-local lint
-  gate; CocoaPods may still consult configured spec sources.
+- SwiftPM is the sole supported Swift packaging path. The mobile artifact
+  workflow authenticates the final XCFramework ZIP, checksum inventory and
+  package manifest, then compiles the ZIP consumer. Qualify an ordinary public
+  `IrohaSwift` dependency in Release with real native execution and no unsafe
+  linker flags. The complete host suite, simulator sample, physical-device
+  evidence and signed public installation retain separate verdicts.
 - `check_walletless_follow_bundle.sh` – repackages the walletless follow-game static bundle and asserts the tarball + `.sha256` sidecar exist. Use this in CI before publishing via the content lane workflow.
 
 ## Cargo `build-dir` decision

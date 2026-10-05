@@ -34,6 +34,7 @@ fn fixture_operation(store: &Store) -> Operation {
     Operation {
         id: [9; 32],
         ordinal: 1,
+        context_digest: [0x51; 32],
         source: slot::encode_frame(&source).unwrap(),
         authorization: NativePinAuthorizationV1 {
             deadline_unix_ms: 200_000,

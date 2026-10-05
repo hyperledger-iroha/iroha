@@ -75,6 +75,7 @@ mod ministry_agenda;
 mod ministry_jury;
 mod ministry_panel;
 mod mochi;
+mod network_profiles;
 mod nexus;
 mod nexus_lane_maintenance;
 mod norito_rpc;
@@ -2651,6 +2652,7 @@ where
                 }
             }
             kagami_bundle::validate_profile(&profile)?;
+            network_profiles::validate_input(&profile, network_profiles.as_deref())?;
             Ok(CommandKind::KagamiBundle {
                 output: output.unwrap_or_else(|| workspace_root().join("target/kagami-bundle")),
                 profile,
@@ -2715,6 +2717,7 @@ where
             }
             let output = output.unwrap_or_else(default_mochi_bundle_path);
             mochi::validate_bundle_profile(&profile)?;
+            network_profiles::validate_input(&profile, network_profiles.as_deref())?;
             Ok(CommandKind::MochiBundle {
                 output,
                 profile,

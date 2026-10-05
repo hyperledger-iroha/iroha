@@ -13,14 +13,14 @@ These guidelines apply to the `crates/ivm` directory and supplement `../AGENTS.m
 - `benches/` – Criterion microbenchmarks (`cargo bench -p ivm -- benches::bench_vm`).
 - `spec/` – design notes and opcode tables consumed by docs/tests.
 - `fuzz/` – `cargo fuzz` targets (e.g., `cargo fuzz run decode_header`) for instruction decoding, parser, and Norito header coverage.
-- `cuda/` – kernels built when the `cuda` feature is enabled. The build script honours `IVM_CUDA_NVCC`, `IVM_CUDA_GENCODE`, and `IVM_CUDA_NVCC_EXTRA`.
+- `cuda/` – fixed ten-family CUDA source and authenticated bundle inventory. Ordinary Cargo never invokes a CUDA compiler; the explicit offline producer owns reproducible candidate generation.
 - `target/prebuilt/` – Kotodama samples produced for integration tests; keep them deterministic because `integration_tests` copies them into `fixtures/ivm`.
 
 ## Development workflow
 - Keep changes deterministic across hardware. Every SIMD/Metal/CUDA path must have a byte-for-byte equivalent scalar fallback.
 - Features to know:
   - `metal` enables Apple Metal acceleration for SHA256BLOCK and vector helpers.
-  - `cuda` loads the CUDA driver at runtime and consumes the signed embedded PTX bundle by default. Ordinary build/startup must not require a driver or `nvcc`. Explicit developer `generate`/`check` artifact workflows use `nvcc`; a missing or invalid required release bundle fails the build. Kernel execution failures quarantine the affected device/kernel and select the qualified CPU fallback.
+  - `cuda` uses the one optional source-approved authenticated bundle and loads the driver at runtime only after bundle admission. Linux/Windows daemon dependencies select this feature automatically. Current `REVIEWED_CUDA_BUNDLE_PINS = None` with no bundle preserves CPU-capable ordinary builds in every profile; supplied unreviewed or malformed material is an integrity error. Shipping qualification requires genuine approval and the complete signed bundle. The sole explicit offline producer uses pinned tools; Cargo and startup never invoke `nvcc`. Kernel execution failures retain the original quarantine and CPU fallback.
   - ML-DSA verification is unconditional; `ivm_vrf_tests` and `ivm_zk_tests` gate heavy test suites.
 - Run `cargo test -p ivm` for the default set, plus targeted commands when relevant:
   - `cargo test -p ivm --features ivm_zk_tests`

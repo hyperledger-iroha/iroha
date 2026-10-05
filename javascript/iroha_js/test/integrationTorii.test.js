@@ -168,14 +168,6 @@ test(
     const health = await client.getHealth();
     assert.ok(health, "health snapshot should be present");
 
-    const kagemushaReadiness = await client.getKagemushaReadiness();
-    assert.deepEqual(kagemushaReadiness, {
-      kagemusha_handoff_capability: "kagemusha_handoff_v1",
-      wire_version: 1,
-      device_lifecycle_version: 1,
-      ready: true,
-    });
-
     const metricsText = await client.getMetrics({ asText: true });
     assert.equal(typeof metricsText, "string");
     assert.notEqual(metricsText.length, 0);
@@ -4859,17 +4851,6 @@ function shouldSkipTriggerEndpoints(error) {
   );
 }
 
-function isKagemushaApiUnavailableError(error) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const message = error.message ?? "";
-  return (
-    /unexpected status 404/i.test(message) ||
-    (/offline/i.test(message) && /disabled/i.test(message))
-  );
-}
-
 function shouldSkipGovernanceBallotEndpoints(error) {
   if (error instanceof ToriiHttpError) {
     return error.status === 404 || error.status === 501 || error.status === 503;
@@ -5289,7 +5270,7 @@ function assertEvidenceRecord(entry) {
   if (entry.penalty_status.status === "pending") {
     assert.equal(entry.penalty_status.details, null);
   } else {
-    assert.ok(["applied", "cancelled"].includes(entry.penalty_status.status));
+    assert.equal(entry.penalty_status.status, "applied");
     assert.deepEqual(Object.keys(entry.penalty_status.details), ["height"]);
     assertEvidenceU64(
       entry.penalty_status.details.height,

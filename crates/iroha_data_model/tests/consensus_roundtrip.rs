@@ -12,15 +12,17 @@ use iroha_data_model::{
         consensus::{SumeragiGenesisContextParameters, ValidatorPower},
     },
     isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
     sumeragi::{
         BeaconHorizonStatusV1, PROTOCOL_VERSION, SumeragiFootprint, SumeragiHaltReason,
         SumeragiStatus,
+        epoch::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochAuthorizationV1,
+            ValidatorEpochDecisionV1,
+        },
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -62,8 +64,8 @@ fn mint_finality_authority(
 fn mint_finality_genesis_authorization(
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
     last_height: u64,
-) -> KagemushaMintFinalityEpochAuthorizationV1 {
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+) -> ValidatorEpochAuthorizationV1 {
+    let authorization = ValidatorEpochAuthorizationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id: authority.network_id,
         epoch: 0,
@@ -74,7 +76,7 @@ fn mint_finality_genesis_authorization(
         beacon: BeaconEpochBindingV1::Bootstrap,
         previous_authorization_id: [0; 32],
         transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+        decision: ValidatorEpochDecisionV1::Genesis,
     };
     authorization
         .validate_against_authority(authority)
@@ -315,7 +317,7 @@ fn authority_generations_and_epoch_authorizations_roundtrip() {
             } else {
                 mint_finality_authority(network_id, 1, &roster)
             };
-            let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+            let authorization = ValidatorEpochAuthorizationV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
                 network_id,
                 epoch: 1,
@@ -334,9 +336,9 @@ fn authority_generations_and_epoch_authorizations_roundtrip() {
                     .expect("valid fixture predecessor"),
                 transition_id: if retained { [0; 32] } else { [0xB3; 32] },
                 decision: if retained {
-                    KagemushaMintFinalityEpochDecisionV1::Retain
+                    ValidatorEpochDecisionV1::Retain
                 } else {
-                    KagemushaMintFinalityEpochDecisionV1::Activate
+                    ValidatorEpochDecisionV1::Activate
                 },
             };
             authorization
@@ -484,7 +486,7 @@ fn consensus_persistence_norito_roundtrip() {
         recorded_at_height: 44,
         recorded_at_view: 8,
         recorded_at_ms: 1_702_000_123,
-        penalty_status: EvidencePenaltyStatus::Cancelled { height: 45 },
+        penalty_status: EvidencePenaltyStatus::Applied { height: 45 },
     };
     let exec_witness = ExecWitness {
         reads: vec![ExecKv {
@@ -656,5 +658,66 @@ fn native_status_requires_all_twenty_one_fields_and_explicit_nullable_slots() {
             .unwrap()
             .insert(retired.into(), norito::json::Value::Null);
         assert!(norito::json::from_value::<SumeragiStatus>(unknown).is_err());
+    }
+}
+
+#[test]
+fn penalty_lifecycle_accepts_only_pending_and_applied_in_canonical_binary_and_json() {
+    for status in [
+        EvidencePenaltyStatus::Pending,
+        EvidencePenaltyStatus::Applied { height: 0 },
+        EvidencePenaltyStatus::Applied { height: 45 },
+        EvidencePenaltyStatus::Applied { height: u64::MAX },
+    ] {
+        assert_roundtrip(&status);
+        let framed = norito::to_bytes(&status).expect("canonical current schema and header");
+        assert_eq!(
+            norito::decode_from_bytes::<EvidencePenaltyStatus>(&framed).unwrap(),
+            status
+        );
+        let json = norito::json::to_json(&status).unwrap();
+        assert_eq!(
+            norito::json::from_str::<EvidencePenaltyStatus>(&json).unwrap(),
+            status
+        );
+        assert_eq!(
+            status.is_terminal(),
+            matches!(status, EvidencePenaltyStatus::Applied { .. })
+        );
+    }
+}
+
+#[test]
+fn penalty_lifecycle_rejects_retired_binary_tag_json_tag_missing_and_defaulted_details() {
+    // Canonical derive_enum_serialize emits a u32 discriminator, then the
+    // named height field. The retired third variant had the identical height
+    // field. Mutate only that discriminator of an actually encoded payload;
+    // no retired codec, header repair, schema substitution or fallback exists.
+    let applied = EvidencePenaltyStatus::Applied { height: 45 }.encode();
+    let original_tag = 1_u32.encode();
+    let retired_tag = 2_u32.encode();
+    assert_eq!(original_tag.len(), 4);
+    assert_eq!(retired_tag.len(), original_tag.len());
+    assert_eq!(&applied[..original_tag.len()], original_tag.as_slice());
+    let mut retired = applied.clone();
+    retired[..retired_tag.len()].copy_from_slice(&retired_tag);
+    assert_eq!(
+        &retired[retired_tag.len()..],
+        &applied[original_tag.len()..]
+    );
+    assert!(EvidencePenaltyStatus::decode_all(&mut retired.as_slice()).is_err());
+    for json in [
+        r#"{"status":"cancelled","details":{"height":45}}"#,
+        r#"{"status":"cancelled","details":null}"#,
+        r#"{"status":"pending"}"#,
+        r#"{"status":"applied","details":{}}"#,
+        r#"{"status":"applied","details":null}"#,
+        r#"{"status":"applied","details":{"height":45,"cancelled":true}}"#,
+        r#"{}"#,
+    ] {
+        assert!(
+            norito::json::from_str::<EvidencePenaltyStatus>(json).is_err(),
+            "rejected lifecycle: {json}"
+        );
     }
 }

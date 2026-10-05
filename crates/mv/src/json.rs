@@ -11,7 +11,9 @@ use crate::{
 };
 use concread::bptree::{BptreeMap, BptreeMapReadTxn, MapMode, NodeCloning};
 use core::{fmt, marker::PhantomData};
-use norito::json::{self, JsonDeserialize, JsonKeyCodec, JsonSerialize};
+use norito::json::{
+    self, BoundedJsonError, JsonDeserialize, JsonKeyCodec, JsonSerialize, JsonWriteSink,
+};
 use std::{collections::BTreeMap, ops::Deref};
 /// Helper interface for parsing JSON object keys into typed values.
 pub trait KeySeed: Clone {
@@ -106,6 +108,72 @@ where
         T::json_deserialize(parser)
     }
 }
+/// One present predecessor value in the first-release MV snapshot schema.
+///
+/// A missing predecessor is encoded as `null`; this object is always present
+/// when an original value exists, even when that original value itself is null.
+/// Its sole `value` member is required. Retired unwrapped values are rejected.
+pub struct SnapshotUndoValue<V> {
+    /// The exact original value, without inferring presence from its JSON token.
+    pub value: V,
+}
+
+// TODO: migrate and qualify the complete enclosing State snapshot writer and its original funding.
+impl<V: JsonSerialize> JsonSerialize for SnapshotUndoValue<V> {
+    fn json_serialize(&self, out: &mut String) {
+        write_present_undo(&self.value, out);
+    }
+    fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        write_present_undo_to(&self.value, out)
+    }
+}
+
+impl<V: JsonDeserialize> JsonDeserialize for SnapshotUndoValue<V> {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        parse_present_undo(&ValueFromJson::<V>::new(), parser).map(|value| Self { value })
+    }
+}
+
+/// Serialize an exact predecessor option with explicit present-value framing.
+///
+/// This borrows the original value; it neither clones the payload nor constructs
+/// a temporary JSON value, string, map or restored runtime owner.
+pub fn json_serialize_undo<V: JsonSerialize>(undo: &Option<V>, out: &mut String) {
+    match undo {
+        Some(value) => write_present_undo(value, out),
+        None => out.push_str("null"),
+    }
+}
+
+fn write_present_undo<V: JsonSerialize + ?Sized>(value: &V, out: &mut String) {
+    out.push_str("{\"value\":");
+    value.json_serialize(out);
+    out.push('}');
+}
+
+fn parse_present_undo<S: ValueSeed>(
+    seed: &S,
+    parser: &mut json::Parser<'_>,
+) -> Result<S::Value, json::Error> {
+    let mut map = json::MapVisitor::new(parser)?;
+    // This outer option tracks whether the required member was read. An inner
+    // optional payload may independently be None and remains a present value.
+    let mut value = None;
+    while let Some(key) = map.next_key()? {
+        match key.as_str() {
+            "value" => {
+                if value.is_some() {
+                    return Err(json::MapVisitor::duplicate_field("value"));
+                }
+                value = Some(map.parse_value_with_parser(|parser| seed.parse_parser(parser))?);
+            }
+            other => return Err(json::MapVisitor::unknown_field(other)),
+        }
+    }
+    map.finish()?;
+    value.ok_or_else(|| json::MapVisitor::missing_field("value"))
+}
+
 /// Deserialize `Storage<K, V>` using custom key/value seeds.
 #[derive(Debug, Clone)]
 pub struct StorageSeeded<KS, VS> {
@@ -174,7 +242,7 @@ where
                 if parser.try_consume_null()? {
                     Ok(None)
                 } else {
-                    self.vseed.parse_parser(parser).map(Some)
+                    parse_present_undo(&self.vseed, parser).map(Some)
                 }
             })?;
             if out.insert(key, parsed).is_some() {
@@ -213,7 +281,7 @@ where
     S: ValueSeed,
     S::Value: Value,
 {
-    /// Parse `Cell` from `parser`, expecting `{ "revert": <Option>, "blocks": <Value> }`.
+    /// Parse `Cell` from `parser`, expecting `{ "revert": null | { "value": <Value> }, "blocks": <Value> }`.
     pub fn deserialize(
         &self,
         parser: &mut json::Parser<'_>,
@@ -225,7 +293,7 @@ where
     ///
     /// Both charges must be admitted before this call. Capacity refusal belongs
     /// to that admission operation and is never converted into a JSON error.
-    /// This uses the same `{ "revert": <Option>, "blocks": <Value> }` parser as
+    /// This uses the same explicit present-undo object parser as
     /// [`Self::deserialize`], without cloning values or creating dummy generations.
     /// Parse failure drops the unused charges; success moves them into the actual
     /// EBR allocations until physical reclamation, including retired readers.
@@ -261,7 +329,7 @@ where
                         if parser.try_consume_null()? {
                             Ok(None)
                         } else {
-                            self.seed.parse_parser(parser).map(Some)
+                            parse_present_undo(&self.seed, parser).map(Some)
                         }
                     })?);
                 }
@@ -299,6 +367,11 @@ where
         write_blocks(&blocks, out);
         out.push('}');
     }
+    fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        let revert = self.revert.read();
+        let blocks = self.blocks.read();
+        write_original_storage_to(revert.iter(), blocks.iter(), out)
+    }
 }
 impl<K, V, M: StorageMode<K, V>> JsonSerialize for StorageBlock<'_, K, V, M>
 where
@@ -307,6 +380,9 @@ where
 {
     fn json_serialize(&self, out: &mut String) {
         write_original_storage(self.revert_map().iter(), self.iter(), out);
+    }
+    fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        write_original_storage_to(self.revert_map().iter(), self.iter(), out)
     }
 }
 impl<K, V, A, M: StorageMode<K, V>> JsonSerialize for crate::storage::Detached<K, V, A, M>
@@ -317,6 +393,10 @@ where
     fn json_serialize(&self, out: &mut String) {
         let images = self.original_images();
         write_original_storage(images.undo_entries(), images.current_entries(), out);
+    }
+    fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        let images = self.original_images();
+        write_original_storage_to(images.undo_entries(), images.current_entries(), out)
     }
 }
 
@@ -364,7 +444,7 @@ pub fn json_serialize_storage_block_with_changes<K, V, M: StorageMode<K, V>>(
             if previous_key >= key {
                 break;
             }
-            write_storage_json_entry(previous_key, previous, &mut first, out);
+            write_storage_undo_entry(previous_key, previous.as_ref(), &mut first, out);
             revert.next();
         }
         let previous = match revert.peek().copied() {
@@ -374,13 +454,10 @@ pub fn json_serialize_storage_block_with_changes<K, V, M: StorageMode<K, V>>(
             }
             _ => block.get(key),
         };
-        match previous {
-            Some(value) => write_storage_json_entry(key, value, &mut first, out),
-            None => write_storage_json_entry(key, &Option::<V>::None, &mut first, out),
-        }
+        write_storage_undo_entry(key, previous, &mut first, out);
     }
     for (key, previous) in revert {
-        write_storage_json_entry(key, previous, &mut first, out);
+        write_storage_undo_entry(key, previous.as_ref(), &mut first, out);
     }
     out.push_str("},\"blocks\":{");
     first = true;
@@ -408,6 +485,23 @@ pub fn json_serialize_storage_block_with_changes<K, V, M: StorageMode<K, V>>(
     }
     out.push_str("}}");
 }
+fn write_storage_undo_entry<K: JsonKeyCodec, V: JsonSerialize>(
+    key: &K,
+    value: Option<&V>,
+    first: &mut bool,
+    out: &mut String,
+) {
+    if !*first {
+        out.push(',');
+    }
+    *first = false;
+    key.encode_json_key(out);
+    out.push(':');
+    match value {
+        Some(value) => write_present_undo(value, out),
+        None => out.push_str("null"),
+    }
+}
 fn write_storage_json_entry<K: JsonKeyCodec, V: JsonSerialize>(
     key: &K,
     value: &V,
@@ -432,11 +526,16 @@ where
         let blocks = self.blocks.read();
         out.push('{');
         out.push_str("\"revert\":");
-        JsonSerialize::json_serialize(revert.deref(), out);
+        json_serialize_undo(revert.deref(), out);
         out.push(',');
         out.push_str("\"blocks\":");
         JsonSerialize::json_serialize(blocks.deref(), out);
         out.push('}');
+    }
+    fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        let revert = self.revert.read();
+        let blocks = self.blocks.read();
+        write_original_cell_to(revert.deref(), blocks.deref(), out)
     }
 }
 impl<V, Charge> JsonSerialize for CellBlock<'_, V, Charge>
@@ -447,6 +546,9 @@ where
     fn json_serialize(&self, out: &mut String) {
         write_original_cell(self.original_undo(), self.get(), out);
     }
+    fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        write_original_cell_to(self.original_undo(), self.get(), out)
+    }
 }
 impl<V, A, Charge> JsonSerialize for crate::cell::Detached<V, A, Charge>
 where
@@ -456,16 +558,107 @@ where
     fn json_serialize(&self, out: &mut String) {
         write_original_cell(self.original_undo(), self.get(), out);
     }
+    fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        write_original_cell_to(self.original_undo(), self.get(), out)
+    }
 }
 
 fn write_original_cell<V: JsonSerialize>(undo: &Option<V>, value: &V, out: &mut String) {
     out.push('{');
     out.push_str("\"revert\":");
-    undo.json_serialize(out);
+    json_serialize_undo(undo, out);
     out.push(',');
     out.push_str("\"blocks\":");
     value.json_serialize(out);
     out.push('}');
+}
+
+// Each entered container is released on a returned key, leaf or sink refusal.
+// All projections borrow the exact original generation and its retained undo.
+fn write_container_to(
+    out: &mut dyn JsonWriteSink,
+    write: impl FnOnce(&mut dyn JsonWriteSink) -> Result<(), BoundedJsonError>,
+) -> Result<(), BoundedJsonError> {
+    out.begin_container()?;
+    let result = write(out);
+    out.end_container();
+    result
+}
+
+fn write_present_undo_to<V: JsonSerialize + ?Sized>(
+    value: &V,
+    out: &mut dyn JsonWriteSink,
+) -> Result<(), BoundedJsonError> {
+    write_container_to(out, |out| {
+        out.push_str("{\"value\":")?;
+        value.json_serialize_to(out)?;
+        out.push('}')
+    })
+}
+
+fn write_undo_value_to<V: JsonSerialize>(
+    undo: &Option<V>,
+    out: &mut dyn JsonWriteSink,
+) -> Result<(), BoundedJsonError> {
+    match undo {
+        Some(value) => write_present_undo_to(value, out),
+        None => out.push_str("null"),
+    }
+}
+
+fn write_storage_entries_to<'a, K, V>(
+    entries: impl Iterator<Item = (&'a K, &'a V)>,
+    out: &mut dyn JsonWriteSink,
+    mut write_value: impl FnMut(&V, &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError>,
+) -> Result<(), BoundedJsonError>
+where
+    K: JsonKeyCodec + 'a,
+    V: 'a,
+{
+    write_container_to(out, |out| {
+        out.push('{')?;
+        for (index, (key, value)) in entries.enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            key.encode_json_key_to(out)?;
+            out.push(':')?;
+            write_value(value, out)?;
+        }
+        out.push('}')
+    })
+}
+
+fn write_original_storage_to<'a, K, V>(
+    undo: impl Iterator<Item = (&'a K, &'a Option<V>)>,
+    current: impl Iterator<Item = (&'a K, &'a V)>,
+    out: &mut dyn JsonWriteSink,
+) -> Result<(), BoundedJsonError>
+where
+    K: JsonKeyCodec + 'a,
+    V: JsonSerialize + 'a,
+{
+    write_container_to(out, |out| {
+        out.push_str("{\"revert\":")?;
+        write_storage_entries_to(undo, out, write_undo_value_to::<V>)?;
+        out.push_str(",\"blocks\":")?;
+        write_storage_entries_to(current, out, V::json_serialize_to)?;
+        out.push('}')
+    })
+}
+
+fn write_original_cell_to<V: JsonSerialize>(
+    undo: &Option<V>,
+    current: &V,
+    out: &mut dyn JsonWriteSink,
+) -> Result<(), BoundedJsonError> {
+    write_container_to(out, |out| {
+        out.push_str("{\"revert\":")?;
+        write_undo_value_to(undo, out)?;
+        out.push_str(",\"blocks\":")?;
+        current.json_serialize_to(out)?;
+        out.push('}')
+    })
 }
 
 impl<K, V> JsonDeserialize for Storage<K, V>
@@ -502,12 +695,12 @@ where
     if let Some((key, value)) = iter.next() {
         key.encode_json_key(out);
         out.push(':');
-        value.json_serialize(out);
+        json_serialize_undo(value, out);
         for (key, value) in iter {
             out.push(',');
             key.encode_json_key(out);
             out.push(':');
-            value.json_serialize(out);
+            json_serialize_undo(value, out);
         }
     }
     out.push('}');
@@ -534,6 +727,14 @@ fn write_blocks<K, V, M: MapMode + NodeCloning<K, V>>(
     }
     out.push('}');
 }
+#[cfg(test)]
+#[path = "json/strict_undo_tests.rs"]
+mod strict_undo_tests;
+
+#[cfg(test)]
+#[path = "json/explicit_undo_tests.rs"]
+mod explicit_undo_tests;
+
 #[cfg(test)]
 #[path = "json/frozen_original_tests.rs"]
 mod frozen_original_tests;
@@ -572,8 +773,9 @@ mod tests {
     }
     #[test]
     fn storage_and_cell_seeded_decode_stream_values_directly() {
-        let mut parser =
-            json::Parser::new(r#"{"revert":{"stale":3,"gone":null},"blocks":{"live":7}}"#);
+        let mut parser = json::Parser::new(
+            r#"{"revert":{"stale":{"value":3},"gone":null},"blocks":{"live":7}}"#,
+        );
         let storage = StorageSeeded {
             kseed: CodecKeySeed::<String>::new(),
             vseed: StreamingOnlyValueSeed,
@@ -583,7 +785,7 @@ mod tests {
         parser.skip_ws();
         assert!(parser.eof());
         assert_eq!(storage.view().get("live"), Some(&7));
-        let mut parser = json::Parser::new(r#"{"revert":1,"blocks":2}"#);
+        let mut parser = json::Parser::new(r#"{"revert":{"value":1},"blocks":2}"#);
         let cell = CellSeeded {
             seed: StreamingOnlyValueSeed,
         }
@@ -776,3 +978,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "json/checked_snapshot_tests.rs"]
+mod checked_snapshot_tests;

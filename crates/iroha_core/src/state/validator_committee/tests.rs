@@ -29,7 +29,6 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
     block::consensus::ValidatorPower,
     consensus::GlobalThresholdBeaconDkgSessionV1,
-    isi::kagemusha_v1::InstalledBeaconEpochBindingV1,
     nexus::{
         PublicLaneStakeShare, PublicLaneUnbonding, PublicLaneValidatorRecord,
         PublicLaneValidatorStatus, ValidatorCandidateKeyAuthorizationV1,
@@ -40,6 +39,7 @@ use iroha_data_model::{
         Parameter,
         system::{ConsensusMode, SumeragiNposParameters},
     },
+    sumeragi::epoch::InstalledBeaconEpochBindingV1,
     sumeragi::epoch::{
         ValidatorCommitteeMemberV1, ValidatorEpochBoundaryV1, ValidatorEpochContextV1,
     },
@@ -50,7 +50,7 @@ use iroha_primitives::numeric::Quantity;
 pub(crate) struct Fixture {
     pub(crate) world: World,
     pub(crate) incumbent: KagemushaMintFinalityAuthorityGenerationV1,
-    pub(crate) authorization: KagemushaMintFinalityEpochAuthorizationV1,
+    pub(crate) authorization: ValidatorEpochAuthorizationV1,
     pub(crate) transition: ValidatorCommitteeTransitionV1,
 }
 
@@ -144,7 +144,7 @@ pub(crate) fn fixture_with_native_selection(
             session_id: old.record().session_id,
             transcript_hash: old.record().transcript_hash,
         }),
-        KagemushaMintFinalityEpochDecisionV1::Retain,
+        ValidatorEpochDecisionV1::Retain,
         [0; 32],
     );
     let preparation = ValidatorCommitteePreparationV1 {
@@ -276,18 +276,18 @@ pub(crate) fn fixture_with_native_selection(
     }
 }
 
-fn outcome(fixture: &Fixture, activate: bool) -> KagemushaMintFinalityEpochAuthorizationV1 {
+fn outcome(fixture: &Fixture, activate: bool) -> ValidatorEpochAuthorizationV1 {
     let credentials = fixture.transition.credentials.as_ref().unwrap();
-    KagemushaMintFinalityEpochAuthorizationV1 {
+    ValidatorEpochAuthorizationV1 {
         epoch: 2,
         first_height: 21,
         last_height: 30,
         previous_authorization_id: fixture.authorization.authorization_id().unwrap(),
         transition_id: fixture.transition.preparation.transition_id().unwrap(),
         decision: if activate {
-            KagemushaMintFinalityEpochDecisionV1::Activate
+            ValidatorEpochDecisionV1::Activate
         } else {
-            KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+            ValidatorEpochDecisionV1::RetainAndCancel
         },
         authority_generation: if activate { 1 } else { 0 },
         authority_id: if activate {
@@ -605,7 +605,7 @@ fn committee_retention_extends_exit_and_pending_unbond_liability() {
         mint_finality_authority(fixture.authorization.network_id, 1, &replacement_roster);
     boundary.next.authorization.authority_generation = 1;
     boundary.next.authorization.authority_id = boundary.next.authority.authority_id().unwrap();
-    boundary.next.authorization.decision = KagemushaMintFinalityEpochDecisionV1::Activate;
+    boundary.next.authorization.decision = ValidatorEpochDecisionV1::Activate;
     boundary.validate_against(&current).unwrap();
     let released = prepare_staking_obligations(&fixture.world.view(), &boundary).unwrap();
     assert_eq!(released.validators[0].1.deactivation_height, Some(21));

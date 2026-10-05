@@ -114,6 +114,7 @@ pub(crate) mod kagemusha_v1_poseidon;
 pub mod kagemusha_v1_recursion;
 /// Aggregate, hardware-guarded Kagemusha V1 host state machine.
 pub mod kagemusha_v1_state;
+pub mod kagemusha_wallet_advance_v1;
 /// Fixed opposite-field Pasta instructions used by paired Pasta recursion.
 pub(crate) mod pasta_cycle_loader;
 /// Dense normalized-GLV MSM used by paired Pasta recursion.

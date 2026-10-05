@@ -102,42 +102,78 @@ fence reject overlapping publication. Checking preserves undo entries, including
 redundant touches, and never repairs live World. This is a consumed scoped capture
 foundation; complete derived-index checking and State/Kura publication remain open.
 
-Scoped account-alias capture likewise retains the original account, alias and
-reverse-index readers. It checks exact reverse membership, account existence,
-primary labels and the existing raw-PII restriction in current and predecessor
-images before encoding those same alias rows. Physical tombstones and account
-rows without aliases consume the local work allowance. Exhaustion defers capture;
-validation never repairs an inconsistent index or supplies finalized authority.
+Scoped account-alias capture uses one sealed committed/frozen relation over the
+original account, alias and reverse-index readers. It preserves Current accounts,
+aliases and reverse buckets before the same Predecessor passes, checking exact
+membership, account existence, primary labels and the existing raw-PII restriction.
+Every physical advance, complete mask/lookup/member tail, controller/alias equality
+and label scan is prepaid. The 7,814-unit Single Ed25519 reference changes only local
+work scheduling; wider or quadratic cuts can defer without changing validity or gas.
+All three committed currentness Results precede validation and encoding outcomes;
+encoding retains native reader release and the State generation fence. Frozen
+capture requires all three actual State targets, equal acquisition modes and the
+original State pool. These scoped adapters still require fresh runtime qualification;
+complete State publication, physical admission of remaining scratch/owners and
+finalized authority remain open. See [the coupled relation](frozen_account_alias_relation.md).
 
 Scoped account capture retains the original accounts, universal-ID and opaque-ID
 readers through encoding. Current and predecessor images require exact inverse
 membership, unique universal IDs, and unique opaque members attached to a universal
-ID; implicit accounts without either remain valid. The allocation-free check
-charges physical rows, undo tombstones and inspected members before work. It
-neither invents an AccountId-to-identifier hash relation nor repairs live indexes.
-Native identity replacement or State publication invalidates the checked capture.
+ID; implicit accounts without either remain valid. The shared committed/frozen
+relation prepays every physical row, undo mask, complete lookup and reverse member
+scan, including candidates after a match. Both complete controller geometries or
+fixed identifier keys are admitted before equality. The 1,196-unit Single Ed25519
+reference is local work policy; wider or quadratic cuts can defer without changing
+validity or gas. It neither invents an AccountId-to-identifier hash relation nor
+repairs live indexes. Every original currentness probe runs before exposing a
+validation or encoding outcome; native replacement or State publication invalidates
+the capture. The frozen adapter retains all three exact State targets in the same
+mode and uses the original State pool. See the [scoped relation](frozen_account_identity_relation.md).
 
-Scoped NFT and RWA captures check their exact owner/domain and owner/status/frozen
-groups, respectively, on both retained native images. Empty buckets, omitted
-members and foreign members fail before leaf encoding; absent undo rows still
-consume bounded local work. Captures retain all original source/index readers
-through encoding and reject native identity changes or overlapping State
-publication. These checks do not repair derived state or establish finality.
+Committed and frozen NFT/RWA capture share one sealed relation over the actual
+three NFT and four RWA original owners. Both images require exact nonempty
+owner/domain and owner/status/frozen membership; `None` status is a populated
+key. Physical advances, complete predecessor masks, lookup/member tails and both
+full typed equality operands are prepaid. The 4,332/4,626 singleton references
+are local scheduling, with wider or denser cuts able to defer without changing
+validity or gas. Every committed native currentness Result precedes the held
+encoding result, reader drop and final State fence. Frozen capture requires the
+actual State targets, equal Ordinary/Replace modes and the original State pool;
+canonical restoration retains untouched rollback memberships and redundant or
+absent touches. Original physical limits remain unchanged. These scoped checks
+add no account/domain existence, economic, reference or finalized authority;
+fresh runtime qualification and complete State publication remain open. See the
+[source-coupled relations](frozen_nft_rwa_owner_relations.md).
 
-Scoped escrow capture applies the same exact grouping checks to seller, optional
-buyer and status indexes. Buyerless records require no buyer group and cannot
-appear in any such group. Current and predecessor memberships are checked through
-the original retained readers before canonical rows are encoded; absent undo rows
-and buyerless source rows still consume the local work allowance. Snapshot index
-restoration rebuilds both canonical images, including optional buyer changes,
-so replacing the latest block retains its real predecessor memberships.
+Committed and frozen escrow capture share one sealed relation over the actual
+source and seller, optional-buyer and status indexes in both original images.
+Buyerless records require no buyer group and cannot appear in any such group.
+Physical advances, complete predecessor masks, lookup/member tails and both
+complete equality operands are prepaid; the 1,366-unit singleton reference is a
+local schedule, with wider or denser cuts able to defer without changing validity
+or gas. All four native probes run before the held encoding result, reader drop
+and final State fence. Frozen capture retains four exact targets with equal
+Ordinary/Replace modes and the original State pool. Snapshot index restoration
+retains optional buyer changes and untouched rollback memberships. The original
+16 MiB physical-pool control remains unchanged. See the
+[scoped relation](frozen_escrow_owner_relation.md); complete State publication,
+physical funding and finalized-anchor authority remain open.
 
-The actual table catalog routes escrow and repo-agreement rows through these
-retained grouping checks before encoding. Repo initiator, counterparty and
-optional custodian groups are exact in both images; snapshot restoration derives
-both images, preserving untouched members of changed buckets through rollback.
-The former unchecked readers are removed. This does not replace the separate
-agreement-admission, complete-State publication or finalized-anchor requirements.
+Committed and frozen repo-agreement capture share one sealed relation over the
+original rows and initiator, counterparty and optional-custodian indexes. Both
+images require exact nonempty inverse membership; custodianless records cannot
+appear in a custodian group. Physical advances, complete masks, lookups and member
+tails admit both full Name UTF-8 or account-controller operands before equality.
+The 1,222-unit reference is local scheduling, with wider or denser cuts able to
+defer without changing validity or gas. All four committed currentness Results
+precede the held encoding result, reader drop and final State fence. Frozen
+capture requires four actual State targets, equal Ordinary/Replace modes and the
+original State pool. Snapshot restoration preserves untouched rollback members
+and optional custody changes. Original physical limits remain unchanged; fresh
+runtime qualification, remaining physical backing and complete State publication
+remain open. See the [scoped relation](frozen_repo_agreement_owner_relation.md).
+These checks add no agreement-admission, economic, settlement or finalized-anchor
+authority.
 
 Asset lookup recovery projects all eight derived indexes from both retained
 definition/domain/balance images. Owning-domain changes also move untouched
@@ -155,9 +191,20 @@ the same image, and restricted definitions must own a domain. Pending policies
 must have a valid shape; exact height/definition memberships and nonzero counts
 are checked against the complete original definitions, not `zk_assets` or another
 derived index. All seven original readers survive through the final identity
-check. Scans, masked source rows, undo tombstones and referenced-domain lookups
-consume bounded local work without allocating or repairing live indexes. Dense
-count scans can defer locally and retry with more admitted work. The balance
+check. Committed and frozen consumers share one sealed relation over these seven
+actual owners, preserving each original Current/Predecessor phase and source/index
+error. Complete physical scans, masked rows, no-op/absent undo, post-match lookup
+and member tails admit both full typed comparison operands before access. One
+reference row with a Single Ed25519 controller, 126 domain bytes and a pending
+policy window costs 3,868 local work units across both images; this is no validity
+or gas limit. All seven committed currentness Results precede propagation; readers
+survive encoding and are dropped before the final State generation fence. Frozen
+capture requires their actual StateBlock targets, matching Ordinary/Replace modes
+and original State pool, with no refresh from later target publication. Dense cuts
+can defer locally and retry the same immutable source with more admitted work.
+Fresh runtime qualification and remaining native reader/control, serializer and
+restore allocation custody remain open; see the
+[source-coupled definition relation](frozen_asset_definition_relation.md). The balance
 reader separately
 checks its five derived indexes, including exact domain projections and holder
 membership over all account/definition partitions. Both zero and nonzero holder
@@ -251,9 +298,10 @@ as do complete State commitments and finalized publication/recovery custody.
 Frozen native storage exposes borrowed current rows and physical undo entries
 from its original detached owner, preserving acquisition mode and predecessor
 identity without cloning rows or reacquiring a reader. The sealed raw-image
-boundary lets committed and frozen verifying-key, proof-status and validation-fee
-sources use their respective shared bounded both-image inverse relations. Each frozen consumer
-requires the actual StateBlock's completely frozen World, both exact State target
+boundary lets committed and frozen domain-owner, account-identity, verifying-key,
+proof-status, validation-fee and contract-alias sources use their respective shared bounded
+both-image inverse relations. Each frozen consumer
+requires the actual StateBlock's completely frozen World, all exact State target
 owners, equal acquisition modes and its original allocation pool; it feeds current
 canonical rows into the existing paired encoder. The proof-status adapter checks
 the complete stored `ProofId`/`ProofStatus` inverse in `world.proofs_by_status` at
@@ -267,6 +315,21 @@ and transaction gas are unchanged. Work, row and byte allowances remain
 caller-admitted local controls, and refusal leaves the original frozen source
 available for retry. These scoped consumers do not publish a root or establish
 complete State currentness.
+
+Contract-alias capture checks the exact stored alias/address bijection and lease
+windows in both original images, retaining undeployed and expired bindings. It
+prepays every physical row and both complete borrowed UTF-8 keys, without decoding
+or normalizing original literals. Its named 6,696-unit per-row descriptor is a local
+reference; larger quadratic or undo cuts may defer without changing gas or ledger
+validity. See the [scoped relation](frozen_contract_alias_relation.md).
+
+Domain-owner capture retains exact storage-key and stored-owner bucket membership
+in both original images, including complete predecessor masking. It prepays every
+physical advance and both full domain/controller comparisons without allocating
+key normalization or tree lookups. The 1,292-unit single-Ed25519/max-domain reference
+is local work policy; wider or quadratic cuts can defer without changing gas or
+validity. It adds no account-existence or embedded record-id requirement. See the
+[scoped relation](frozen_domain_owner_relation.md).
 
 The fee-proposal adapter checks the exact `(created_height, stored proposal id)`
 lookup for both fee kinds and every status in both original images. Its private
@@ -290,12 +353,69 @@ retain the actual selected field and concrete storage mode, require complete Wor
 freeze and exact State target ownership, and use the original State encoding pool.
 They return only existing scoped paired-table snapshots. Raw encoding does not
 validate dependent indexes or other fields' modes and identities. Verifier and
-proof-status and validation-fee captures use their complete bounded inverse
-relations; 22 other
-structural, trigger, Musubi and membership outputs report an explicit missing
-original adapter instead
-of yielding partial success. Complete structural/cell/history checks and the sole
+domain-owner, account-identity, account-alias, asset-definition, asset-balance,
+proof-status, validation-fee, contract-alias, contract-subject, escrow,
+repo-agreement, NFT/RWA, account-rekey and trigger action/contract captures use their
+complete bounded inverse relations. The scoped catalog has 192 raw adapters, 20 checked outputs
+and 5 Musubi and membership outputs with an explicit
+missing original adapter; missing adapters cannot yield partial success. Complete structural/cell/history checks and the sole
 StatePublication integration remain open.
+Account-rekey capture shares one complete four-source relation across committed
+and frozen owners, preserving canonical rekey provenance and historical audit
+occurrences. It retains native probes and encoding results through the final State
+fence, with the original pool and Ordinary/Replace owners. Fresh compilation and
+execution remain required; see the [source-coupled relation](frozen_account_rekey_occurrence_relation.md).
+
+Trigger-contract capture shares one complete relation across committed readers,
+startup validation and the original frozen Set owners. It checks every physical
+action/contract history stream in Current-before-Predecessor order, retaining
+complete lookup, code, count and dangling-occurrence checks. Its fixed counter
+backing uses the original State pool. All five committed currentness Results
+precede propagation; canonical encoding and reader release precede the final
+State fence. Frozen capture requires all ten actual Set targets and one common
+Ordinary/Replace mode. The registered image-order and inherited codec-budget
+controls still require fresh execution; cold/warm allocator evidence and full
+native physical custody remain open. Complete State publication remains unfinished.
+See the [source-coupled relation](frozen_trigger_contract_owner_relation.md).
+
+The four trigger-action outputs share one relation across committed and frozen
+readers. Both images require exactly one typed action for each ID, its exact
+ID-kind row, and active membership matching non-depleted, enabled actions. Every
+capture retains all ten original Set sources, validates the contract relation
+first, scans complete action/ID/active and metadata tails, and uses the same
+original-pool counter. Bool-first and then u64 eligibility decoding is shared
+with ordinary execution over borrowed Norito JSON text. All native currentness
+Results, held encoding, reader release and the final State fence precede exposure.
+Frozen capture requires all ten actual targets and one Ordinary/Replace mode.
+Fresh runtime, allocation and canonical-byte controls remain required; these
+local inverse checks do not establish complete State publication or finality.
+See the [source-coupled relation](frozen_trigger_action_owner_relation.md).
+
+Contract-subject capture shares one sealed native relation with committed readers
+and startup history. It preserves source-before-index and Current-before-
+Predecessor validation, strict V1 subject derivation, lifecycle controls, account
+existence, active-code membership and both inverse directions. Physical scans,
+complete masking/lookup tails and typed comparison geometry are admitted before
+work. Committed capture computes all four currentness Results before propagation;
+frozen capture retains the actual four matching-mode StateBlock sources and the
+original State pool through canonical encoding. The scoped adapter and its tests
+still require fresh runtime qualification. Full publication, startup allocation
+custody and serializer scratch remain open; see the
+[source-coupled relation](frozen_contract_subject_relation.md).
+
+Asset-balance capture now shares the sole original relation across committed
+readers and the caller's eight frozen balance/reference/index owners. Complete
+physical masks, lookup/member/partition tails and typed comparison geometry are
+prepaid before inspection. Original phased source/index errors, existential
+partition membership and quantity-zero checks remain. All eight currentness
+Results precede propagation; paired encoding retains its Result and readers
+through release and the final State fence. Frozen capture retains exact targets,
+equal modes and the original allocation pool, without later reader refresh.
+The independent Global reference is4146, valid Restricted reference4148;
+original fixtures2144/2838 and absent Global undo735/840 remain exact controls.
+The original16MiB physical retry limit is preserved. Fresh runtime qualification,
+complete physical backing and sole publication/recovery custody remain open;
+see the [source-coupled balance relation](frozen_asset_balance_relation.md).
 
 The complete root and its exact predecessor must travel with prepared State
 journals and publish under the same State generation as World, runtime and replay
@@ -324,6 +444,17 @@ The original frozen complete-State capture, durable node ownership and finality
 recovery remain open. Loaded/stale-artifact qualification still requires genuine
 threshold-authenticated native production bundles; fixture schema tests do not
 supply those execution inputs.
+
+The sole native capture constructor now accepts public empty-argument roots with
+an exact artifact-selected Unit or Bool leaf result. One return relation retains
+all four original u16 limbs: Unit requires zero; Bool requires a Boolean low limb
+and three zero upper limbs. Original gas debits, typed memory, initialization
+scan, packet/history joins, workspace geometry and degree bounds are unchanged.
+Unsupported aggregate, pointer, private, nested and syscall profiles remain
+outside this local component. Fresh runtime qualification, complete physical
+funding, jointly committed masked invocation/output columns and a registered
+native STARK execution relation remain open; these local equations establish no
+proof or finalized-State authority.
 
 G3 retirement now removes the old four-hash/16-column binding schema, Halo2
 IVM registration and key generator, dedicated native STARK binding relation,
@@ -355,6 +486,22 @@ active and nested host execution. The protected return stack is now reserved bef
 child-call gas, and call-frame bitmap and vector-slot growth is prepared before
 table-validation gas. Inactive runtime-template copies no longer duplicate spare
 frame capacity. These bounded cuts do not fund all frame and scratch owners.
+
+The V1 numeric payload writer borrows the existing canonical BigInt serializer,
+writes decimal/quantity scale through the same destination and computes exact
+body lengths without temporary buffers. Frame construction keeps its bounded
+69-byte body on the stack and uses the existing nominal Norito header/CRC writer.
+Opaque numeric-frame preparation now retains the exact immutable source borrow
+and minimal length; owned and prepared encoding share that same nominal writer.
+The four framing-only native-digit clone sites are removed. Output-length and
+byte debits still precede canonical frame/envelope/hash and host allocation, with
+result/status publication only after success. Preparation allocates no temporary
+storage; the real frame-name String and final frame Vec remain counted. Decoded
+native digits, arithmetic intermediates, materialized results, numeric snapshots,
+schema initialization and final frame/envelope buffers still require physical
+custody. Current-candidate byte, fault and gas parity and the isolated allocator
+census remain required.
+
 Private interval storage in State-owned VMs retains the original active pool;
 growth reserves replacement capacity while the previous allocation remains live,
 template copies partition the existing parent reservation, and warm reset reuses
@@ -512,15 +659,60 @@ reservation gauges alongside retained, active and unmeasured-owner totals. Compo
 retained-owner classification and funding missing active/scratch owners remain open;
 these gauges do not represent complete process RSS. The new
 pool and buffer APIs are not evidence that those production paths are funded.
+Shared and local idle-runtime rows now use one optional fixed ExecutionBuffer
+backing reserved from the original pool and carried through the real active lease.
+Warm checkout and return transfer that backing without growth; eviction refunds
+only at its final reclamation. Cold row refusal declines retention after mandatory
+VM/template admission, preserving completed guest outcomes and gas. Cache indexes,
+executor controls, host/native scratch and composite retained-owner classification
+remain open, and the current candidate still requires fresh execution tests.
 
-G6 shipping Linux recipes enable the narrow `irohad/ivm-cuda` feature, whose
-driver is loaded at runtime without CUDA toolkit or driver linkage. Plain Cargo
-daemon builds still omit that feature. The ten CUDA source families are present,
-but their PTX files and signed provenance bundle are absent; bundled release
-builds reject that missing input. Complete automatic defaults and supply the
-reproducible, authenticated and physically qualified bundle before CUDA release
-readiness can be claimed. Generated diagnostic kernels and loader-only tests do
-not satisfy that gate.
+G6 ordinary Linux and Windows daemon dependencies now include IVM CUDA, including
+builds without default features. Apple builds retain target-appropriate Metal;
+CPU SIMD remains capability-selected. The CUDA driver is loaded at runtime without
+toolkit or driver linkage. One source-owned optional approval descriptor admits
+only the exact signed manifest/key pins and ten unchanged kernel families through
+the shared canonical borrowed verifier. Genuine bundle absence preserves ordinary
+CPU builds and startup; supplied unreviewed, partial or nonregular material is an
+error. Runtime admission retains the original immutable inputs before device or
+private staging. Retired mode/environment/trust-input paths, daemon aliases and
+placeholder PTX tests are removed. Ordinary startup neither compiles nor downloads
+kernels. The approval remains `None`: authentic reproducible signed PTX, two clean
+offline runs, twenty actual kernel completions, calibrated selection and hardware
+parity remain open gates. Source and driverless tests do not qualify GPU execution
+or a release candidate.
+
+FASTPQ Metal has one private immutable compiled-bundle admission owner before
+device discovery or private staging. Ordinary builds and startup no longer invoke
+the Metal toolchain, compile source or resolve retired library-path aliases. The
+sole explicit offline producer records eight ordered source inputs, six modules
+and sixteen entry points with create-only publication and complete source/tool
+currentness checks. Its metadata cannot authorize its own output. The actual
+approved bundle remains absent; optional execution preserves CPU behavior and
+explicit required-GPU policy preserves operational refusal. Genuine independently
+reviewed compiled bytes, signed provenance, all sixteen real pipeline loads,
+complete parity, calibrated selection and driver allocation/recovery custody
+remain open. Source integrity and mocked producer controls provide no hardware
+qualification or complete prover evidence.
+
+BN254 add/subtract/multiply and Poseidon2/Poseidon6 batches share one nonblocking
+public calibration scheduler. Five inline profile cells belong to each original
+physical device/kernel policy and bind the exact artifact and CPU implementation.
+Selection uses public batch counts from 64 through 4,096, fixed known-answer
+operands and complete operation timings, including transfer, launch, validation,
+copyback and cleanup. Conservative CPU/native bounds require a clear estimated
+win; measurements never authorize an unqualified kernel. Original selection and
+policy are rechecked before any caller write, with complete CPU recomputation on
+refusal. Calibration receives no production completion credit. Signed performance
+provenance, every kernel's fastest-path coverage, native CUDA compilation/device
+qualification remains open. The canonical V1 CPU parameter owner now stores all
+621 unchanged width-3/6 fields in fixed canonical byte arrays. Canonical Fr
+initialization and exports, IVM four-limb banks and FastPQ flattened banks use
+fixed inline arrays; the original generator is a test oracle only. This removes
+heap parameter generation and export owners without changing domains, kernels,
+gas or defaults. Full-field oracle/digest, complete-state parity and fresh-process
+cold/warm allocation controls still require current-candidate execution. The finite pass
+checks expiry between completed attempts; it does not interrupt a native call.
 
 Merkle construction, root-only hashing and retained-tree rehash resolve one
 operation-local policy from the complete acceleration configuration. Reapplying
@@ -593,6 +785,22 @@ budget is nonzero, defaults to the existing 15 seconds and cannot exceed that bo
 handshake and wire ingress retain their separate transport bounds. Embedded server
 APIs carry the parsed broker policy, and standalone launchers read one bounded public
 TOML policy file instead of an endpoint override.
+
+Credential assembly validates the canonical catalog's positive memory bound against
+that same parsed policy before either platform credential handoff, disposable input
+or backend discovery. A zero catalog bound permits only inventories without either
+threshold-signing slot. The software signer consumes its originally loaded catalog
+through imports and executable assembly; the sole in-memory constructor does not
+reopen its source file. Both platform threshold handoffs receive one original policy
+pool, and currently admitted transcript owners retain its charges. This is local
+operational admission, not current provider authority or transaction gas. Parliament
+TLE import prepays its actual decoded handle/session/nested-vector backing, fixed
+charge ledger and canonical prepared decoder controls from the same original pool.
+The private backend retains that ledger through its final registry reader; payload
+destruction precedes refund, and an unproven consuming unwind retains credit. Public
+inventory hashing borrows the original sessions, and dealer validation uses the
+existing 31-seat inline bound. Supervisor input buffers, outer shared controls and
+Core custody-map nodes still lack complete physical funding and remain open gates.
 
 The server's move-only completed-reply owner borrows the original accepted socket,
 request, raw frame, inbound/decode admission and lifecycle permit. It retains the

@@ -2,40 +2,25 @@ package org.hyperledger.iroha.android.client;
 
 import java.nio.charset.StandardCharsets;
 
-/** Production JNI-backed verifier for restricted atomic-private-settlement responses. */
+/**
+ * Production native verifier for restricted atomic-private-settlement responses.
+ *
+ * <p>{@code connect_norito_bridge} exports these JNI entry points only for the Kotlin SDK object
+ * {@link org.hyperledger.iroha.sdk.client.AtomicPrivateSettlementNativeResponseVerifierV1}; the
+ * duplicate {@code org.hyperledger.iroha.android} exports are retired. This class keeps the Java
+ * argument checks and delegates verification to the Kotlin owner.
+ */
 public final class AtomicPrivateSettlementNativeResponseVerifierV1
     implements AtomicPrivateSettlementResponseVerifierV1 {
-  private static final String LIBRARY_NAME = "connect_norito_bridge";
-  private static final int REQUIRED_BRIDGE_ABI_VERSION = 25;
   private static final int HASH_BYTES = 32;
   private static final int RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
   private static final int APPROVAL_REQUEST_MAX_BYTES = 1024 * 1024;
   private static final int PUBLIC_KEY_MAX_BYTES = 1024;
-  private static final int PRIVATE_SETTLEMENT_REJECTED_STATUS = -507;
   private static final AtomicPrivateSettlementNativeResponseVerifierV1 INSTANCE =
       new AtomicPrivateSettlementNativeResponseVerifierV1();
-  private static final boolean NATIVE_AVAILABLE;
-
-  static {
-    boolean available = false;
-    try {
-      System.loadLibrary(LIBRARY_NAME);
-      final byte[] invalid = new byte[0];
-      available =
-          nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION
-              && nativeVerifyCommitteeProofResponseV1(invalid, invalid, invalid)
-                  == PRIVATE_SETTLEMENT_REJECTED_STATUS
-              && nativeVerifyAuditorCapsuleResponseWithRequestV1(
-                      invalid, invalid, invalid, invalid, invalid)
-                  == PRIVATE_SETTLEMENT_REJECTED_STATUS
-              && nativeVerifyAuditApprovalResponseV1(
-                      invalid, invalid, invalid, invalid, invalid)
-                  == PRIVATE_SETTLEMENT_REJECTED_STATUS;
-    } catch (final RuntimeException | LinkageError ignored) {
-      // Availability is reported through the fixed fail-closed exception below.
-    }
-    NATIVE_AVAILABLE = available;
-  }
+  private static final org.hyperledger.iroha.sdk.client.AtomicPrivateSettlementResponseVerifierV1
+      NATIVE = org.hyperledger.iroha.sdk.client.AtomicPrivateSettlementNativeResponseVerifierV1
+          .INSTANCE;
 
   private AtomicPrivateSettlementNativeResponseVerifierV1() {}
 
@@ -46,10 +31,7 @@ public final class AtomicPrivateSettlementNativeResponseVerifierV1
 
   @Override
   public void requireAvailable() {
-    if (!NATIVE_AVAILABLE) {
-      throw new IllegalStateException(
-          "native private settlement response verifier is unavailable");
-    }
+    NATIVE.requireAvailable();
   }
 
   @Override
@@ -58,10 +40,7 @@ public final class AtomicPrivateSettlementNativeResponseVerifierV1
       final byte[] expectedNetworkId,
       final byte[] requestedPayloadDigest) {
     requireCommonInputs(responseJson, expectedNetworkId, requestedPayloadDigest);
-    invokeRequiredNative(
-        () ->
-            nativeVerifyCommitteeProofResponseV1(
-                responseJson.clone(), expectedNetworkId.clone(), requestedPayloadDigest.clone()));
+    NATIVE.verifyCommitteeProofResponse(responseJson, expectedNetworkId, requestedPayloadDigest);
   }
 
   @Override
@@ -78,15 +57,9 @@ public final class AtomicPrivateSettlementNativeResponseVerifierV1
       throw new IllegalArgumentException(
           "private settlement auditor capsule request is outside the native verification bound");
     }
-    final byte[] auditorPublicKeyUtf8 = requireAuditorPublicKey(auditorPublicKey);
-    invokeRequiredNative(
-        () ->
-            nativeVerifyAuditorCapsuleResponseWithRequestV1(
-                responseJson.clone(),
-                requestJson.clone(),
-                expectedNetworkId.clone(),
-                requestedPayloadDigest.clone(),
-                auditorPublicKeyUtf8.clone()));
+    requireAuditorPublicKey(auditorPublicKey);
+    NATIVE.verifyAuditorCapsuleResponse(
+        responseJson, requestJson, expectedNetworkId, requestedPayloadDigest, auditorPublicKey);
   }
 
   @Override
@@ -103,15 +76,9 @@ public final class AtomicPrivateSettlementNativeResponseVerifierV1
       throw new IllegalArgumentException(
           "private settlement approval request is outside the native verification bound");
     }
-    final byte[] auditorPublicKeyUtf8 = requireAuditorPublicKey(auditorPublicKey);
-    invokeRequiredNative(
-        () ->
-            nativeVerifyAuditApprovalResponseV1(
-                responseJson.clone(),
-                requestJson.clone(),
-                expectedNetworkId.clone(),
-                requestedPayloadDigest.clone(),
-                auditorPublicKeyUtf8.clone()));
+    requireAuditorPublicKey(auditorPublicKey);
+    NATIVE.verifyAuditApprovalResponse(
+        responseJson, requestJson, expectedNetworkId, requestedPayloadDigest, auditorPublicKey);
   }
 
   private static void requireCommonInputs(
@@ -134,7 +101,7 @@ public final class AtomicPrivateSettlementNativeResponseVerifierV1
     }
   }
 
-  private static byte[] requireAuditorPublicKey(final String value) {
+  private static void requireAuditorPublicKey(final String value) {
     if (value == null || value.isEmpty() || !value.equals(value.trim())) {
       throw new IllegalArgumentException(
           "private settlement auditor public key must be exact and non-empty");
@@ -151,44 +118,5 @@ public final class AtomicPrivateSettlementNativeResponseVerifierV1
       throw new IllegalArgumentException(
           "private settlement auditor public key exceeds the native verification bound");
     }
-    return utf8;
   }
-
-  private void invokeRequiredNative(final NativeStatusCall invocation) {
-    requireAvailable();
-    final int status;
-    try {
-      status = invocation.invoke();
-    } catch (final LinkageError ignored) {
-      throw new IllegalStateException(
-          "native private settlement response verifier is unavailable");
-    }
-    if (status != 0) {
-      throw new IllegalStateException(
-          "native private settlement response verification rejected");
-    }
-  }
-
-  private interface NativeStatusCall {
-    int invoke();
-  }
-
-  private static native int nativeBridgeAbiVersion();
-
-  private static native int nativeVerifyCommitteeProofResponseV1(
-      byte[] responseJson, byte[] expectedNetworkId, byte[] requestedPayloadDigest);
-
-  private static native int nativeVerifyAuditorCapsuleResponseWithRequestV1(
-      byte[] responseJson,
-      byte[] requestJson,
-      byte[] expectedNetworkId,
-      byte[] requestedPayloadDigest,
-      byte[] auditorPublicKeyUtf8);
-
-  private static native int nativeVerifyAuditApprovalResponseV1(
-      byte[] responseJson,
-      byte[] requestJson,
-      byte[] expectedNetworkId,
-      byte[] requestedPayloadDigest,
-      byte[] auditorPublicKeyUtf8);
 }

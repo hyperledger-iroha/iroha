@@ -31,6 +31,9 @@ pub enum NativeJournalError {
     /// Canonical source decoding retained its original admission classification.
     #[error(transparent)]
     Decode(#[from] NativeFinalityDecodeError),
+    /// A canonical prepared frame belongs to a different original operation pool.
+    #[error("native journal prepared source belongs to another original pool")]
+    SourcePool,
     /// Original cumulative decoder allowance refused index/control accounting.
     #[error("native journal index admission failed")]
     DecodeAllocation(#[source] norito::Error),
@@ -87,8 +90,8 @@ impl NativeJournalIndex {
 /// # Errors
 /// Rejects malformed bounds, excessive source/decoded size, noncanonical frames, noncontiguous
 /// heights, wrong network/instance, altered execution results, quorum or attestation failures.
-pub fn with_verified_native_journal<'source, T>(
-    journal: impl Into<NativeFinalitySource<'source>>,
+pub fn with_verified_native_journal<T>(
+    journal: NativeFinalitySource<'_>,
     chain_id: &ChainId,
     network: &NetworkId,
     limits: NativeFinalityLimits,
@@ -96,8 +99,16 @@ pub fn with_verified_native_journal<'source, T>(
     budget: &AllocationBudget,
     read: impl FnOnce(&CertifiedChain<'_, StateView<'_>>) -> Result<T, NativeJournalError>,
 ) -> Result<T, NativeJournalError> {
-    let journal = journal.into();
     journal.validate(limits)?;
+    if !cfg!(all(test, sumeragi_core_mutation = "HC118"))
+        && journal.frames().any(|frame| {
+            frame
+                .charged_source()
+                .is_some_and(|source| !source.belongs_to(budget))
+        })
+    {
+        return Err(NativeJournalError::SourcePool);
+    }
     // The caller owns one operation pool; shared controls and both actual index backings
     // retain their original charges for their entire physical lifetime.
     // Prepared sources borrow original funded bytes and range backing. An owning DTO's
@@ -129,7 +140,13 @@ pub fn with_verified_native_journal<'source, T>(
         // index admission, preserving original control refusal precedence under saturation.
         let mut first_shell = Some(reserve_shell()?);
         let mut index = NativeJournalIndex::new(count, budget)?;
-        for (offset, wire) in journal.blocks().enumerate() {
+        for (offset, source) in journal.frames().enumerate() {
+            // The opaque frame keeps the actual charged source and canonical span
+            // through this read. Owning offchain DTOs cannot manufacture this
+            // provenance. TODO: consume this owner in a completely physically
+            // funded SignedBlock payload/result/DA decoder; the current ordinary
+            // nested block decode remains a separate unfunded graph obligation.
+            let wire = source.wire();
             let shell = match first_shell.take() {
                 Some(shell) => shell,
                 None => reserve_shell()?,
@@ -223,11 +240,10 @@ impl NativeJournalCursor {
     }
 
     /// Authenticate a strictly advancing complete prefix and retain its exact native tip.
-    pub fn advance<'source>(
+    pub fn advance(
         &mut self,
-        journal: impl Into<NativeFinalitySource<'source>>,
+        journal: NativeFinalitySource<'_>,
     ) -> Result<&super::certified_chain::CommittedBlock, NativeJournalError> {
-        let journal = journal.into();
         let height = u64::try_from(journal.len()).map_err(|_| "native phase height overflow")?;
         if height < 2 || self.tip.as_ref().is_some_and(|tip| height <= tip.height()) {
             return Err("native phase journal does not advance a certified ordinary height".into());
@@ -291,6 +307,7 @@ pub fn authenticate_signed_genesis(
 
 #[cfg(test)]
 mod tests {
+    mod signature_tests;
     use super::*;
     mod index_tests;
     mod source_tests;
@@ -332,7 +349,7 @@ mod tests {
         // Permissioned ordinary certificates carry no Pasta requirement; this rejecting verifier
         // is not a bypass for flagged boundaries (the production caller supplies NativePasta).
         with_verified_native_journal(
-            &journal,
+            (&journal).into(),
             &chain_id,
             &chain.network_id(),
             limits(),
@@ -362,7 +379,7 @@ mod tests {
         let chain_id = ChainId::from("sumeragi-certified-test-chain");
         let verify = |source: &NativeFinalityJournal, id: &ChainId, bounds| {
             with_verified_native_journal(
-                source,
+                source.into(),
                 id,
                 &chain.network_id(),
                 bounds,
@@ -418,7 +435,7 @@ mod tests {
         let initial = NativeFinalityJournal {
             blocks: journal.blocks[..1].to_vec(),
         };
-        assert!(cursor.advance(&initial).is_err());
+        assert!(cursor.advance((&initial).into()).is_err());
         assert!(cursor.tip().is_none());
         let (_, epoch) = authenticate_signed_genesis(
             &initial.blocks[0].block_wire,
@@ -430,14 +447,14 @@ mod tests {
         let h2 = NativeFinalityJournal {
             blocks: journal.blocks[..2].to_vec(),
         };
-        assert_eq!(cursor.advance(&h2).unwrap().height(), 2);
+        assert_eq!(cursor.advance((&h2).into()).unwrap().height(), 2);
         let result = cursor.tip().unwrap().result();
-        assert!(cursor.advance(&h2).is_err());
+        assert!(cursor.advance((&h2).into()).is_err());
         let mut malformed = journal.clone();
         malformed.blocks[2].block_wire.push(0);
-        assert!(cursor.advance(&malformed).is_err());
+        assert!(cursor.advance((&malformed).into()).is_err());
         assert_eq!(cursor.tip().unwrap().result(), result);
-        assert_eq!(cursor.advance(&journal).unwrap().height(), 3);
+        assert_eq!(cursor.advance((&journal).into()).unwrap().height(), 3);
         assert_eq!(
             cursor.chain_id(),
             &ChainId::from("sumeragi-certified-test-chain")
@@ -471,7 +488,7 @@ mod tests {
         let h2 = NativeFinalityJournal {
             blocks: journal.blocks[..2].to_vec(),
         };
-        cursor.advance(&h2).unwrap();
+        cursor.advance((&h2).into()).unwrap();
         let retained = cursor.tip().unwrap().block_hash();
         let blocker = pool
             .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
@@ -479,7 +496,7 @@ mod tests {
         let expected = pool
             .try_reserve(SharedSignedBlock::allocation_layout())
             .unwrap_err();
-        let error = cursor.advance(&journal).unwrap_err();
+        let error = cursor.advance((&journal).into()).unwrap_err();
         let NativeJournalError::Block(
             iroha_data_model::block::SharedBlockAdmissionError::Admission(actual),
         ) = error
@@ -500,7 +517,7 @@ mod tests {
         assert!(observer.poll_wait(&release, &mut context).is_ready());
         observer.cancel();
         assert_eq!(
-            cursor.advance(&journal).unwrap().block_hash(),
+            cursor.advance((&journal).into()).unwrap().block_hash(),
             chain.committed(3).block_hash()
         );
         drop(cursor);
@@ -521,9 +538,12 @@ mod tests {
         )
         .unwrap();
         cursor
-            .advance(&NativeFinalityJournal {
-                blocks: journal.blocks[..2].to_vec(),
-            })
+            .advance(
+                (&NativeFinalityJournal {
+                    blocks: journal.blocks[..2].to_vec(),
+                })
+                    .into(),
+            )
             .unwrap();
         let prior = cursor.tip().unwrap().block_hash();
         let credits = pool.reserved_bytes();
@@ -531,7 +551,7 @@ mod tests {
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
             || {
                 with_verified_native_journal(
-                    &journal,
+                    (&journal).into(),
                     cursor.chain_id(),
                     &chain.network_id(),
                     limits(),
@@ -556,14 +576,14 @@ mod tests {
         let mut malformed = journal.clone();
         malformed.blocks[2].block_wire.push(0);
         assert!(matches!(
-            cursor.advance(&malformed),
+            cursor.advance((&malformed).into()),
             Err(NativeJournalError::Decode(
                 NativeFinalityDecodeError::Malformed(_)
             ))
         ));
         assert_eq!(cursor.tip().unwrap().block_hash(), prior);
         assert_eq!(
-            cursor.advance(&journal).unwrap().block_hash(),
+            cursor.advance((&journal).into()).unwrap().block_hash(),
             chain.committed(3).block_hash()
         );
     }

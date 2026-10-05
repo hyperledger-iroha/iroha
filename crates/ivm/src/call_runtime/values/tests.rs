@@ -50,7 +50,7 @@ fn boolean() -> CallTypeNodeV1 {
 }
 
 fn blob(vm: &mut IVM, value: &[u8]) -> u64 {
-    vm.alloc_host_tlv(&crate::numeric_tlv::encode_envelope(PointerType::Blob, value).unwrap())
+    vm.alloc_host_tlv(&ivm_abi::numeric_tlv::encode_envelope(PointerType::Blob, value).unwrap())
         .unwrap()
 }
 

@@ -30,7 +30,7 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
     let routed_by = routed_by_for_routes(app, &routes);
     let collected = collect_torii_routed_list_json_payloads(
         &routes,
-        app.query_fanout_working_set_bytes,
+        current_routed_read_memory_envelope(app)?.working_set_bytes,
         app.torii_proxy_max_response_bytes,
         |route| {
             execute_torii_read_for_route(

@@ -38,7 +38,7 @@ fn norito_bytes_tlv<T: norito::core::NoritoSerialize>(val: &T) -> Vec<u8> {
     tlv_from_payload(&payload, PointerType::NoritoBytes as u16)
 }
 fn quantity_tlv(value: Quantity) -> Vec<u8> {
-    ivm::numeric_tlv::encode_quantity(&value).expect("encode quantity pointer envelope")
+    ivm_abi::numeric_tlv::encode_quantity(&value).expect("encode quantity pointer envelope")
 }
 fn tlv_from_payload(payload: &[u8], type_id: u16) -> Vec<u8> {
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);

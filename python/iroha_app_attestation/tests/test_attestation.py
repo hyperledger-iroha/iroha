@@ -13,7 +13,6 @@ from iroha_app_attestation.attestation import (
     AttestationRejected,
     GOOGLE_FACTORY_2016_ROOT_SHA256,
     GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS,
-    PREPARATION_DOMAIN,
     Selection,
     _certificate_valid_at,
     certificate_key_extensions,
@@ -24,11 +23,11 @@ from iroha_app_attestation.attestation import (
     encode_android_chain,
     explicit_tags,
     oid,
+    android_patch_policy_met,
     patch_level_yyyymm,
-    require_android_patch_floor,
+    validate_android_patch_floor,
     verify_apple_raw,
     verify_android_raw,
-    verify_issuer_preparation,
     verify_pinned_chain,
 )
 
@@ -209,103 +208,41 @@ class AttestationTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIsNone(patch_level_yyyymm(value))
 
-    def test_enrollment_patch_floor_uses_every_reported_hardware_level(self) -> None:
+    def test_patch_policy_fact_uses_every_reported_hardware_level(self) -> None:
         current = AndroidPatchLevels(300, 150000, 202609, 20260905, 20260901)
-        require_android_patch_floor(current, 202609)
-        require_android_patch_floor(current, 202601)
+        self.assertIs(android_patch_policy_met(current, 202609), True)
+        self.assertIs(android_patch_policy_met(current, 202601), True)
         # Vendor and boot levels that are absent or zero are "not reported".
-        require_android_patch_floor(AndroidPatchLevels(3, None, 202609, None, 0), 202609)
-        for levels, message in (
-            (AndroidPatchLevels(300, 150000, None, 20260905, 20260901), "OS patch level absent"),
-            (AndroidPatchLevels(300, 150000, 0, 20260905, 20260901), "OS patch level absent"),
-            (AndroidPatchLevels(300, 150000, 202608, 20260905, 20260901), "OS patch level is below"),
-            (AndroidPatchLevels(300, 150000, 202609, 20260805, 20260901), "vendor patch level is below"),
-            (AndroidPatchLevels(300, 150000, 202609, 20260905, 20260801), "boot patch level is below"),
-            (AndroidPatchLevels(300, 150000, 202613, 20260905, 20260901), "unparsable Android OS"),
-            (AndroidPatchLevels(300, 150000, 202609, 2026, 20260901), "unparsable Android vendor"),
-            (AndroidPatchLevels(300, 150000, 202609, 20260905, 20261301), "unparsable Android boot"),
+        self.assertIs(android_patch_policy_met(AndroidPatchLevels(3, None, 202609, None, 0), 202609), True)
+        # An unmet policy is the recorded PATCH_POLICY_MET fact, never an error.
+        for levels in (
+            AndroidPatchLevels(300, 150000, None, 20260905, 20260901),  # OS level absent
+            AndroidPatchLevels(300, 150000, 0, 20260905, 20260901),     # OS level not reported
+            AndroidPatchLevels(300, 150000, 202608, 20260905, 20260901),
+            AndroidPatchLevels(300, 150000, 202609, 20260805, 20260901),
+            AndroidPatchLevels(300, 150000, 202609, 20260905, 20260801),
+            AndroidPatchLevels(300, 150000, 202613, 20260905, 20260901),  # unparsable OS
+            AndroidPatchLevels(300, 150000, 202609, 2026, 20260901),      # unparsable vendor
+            AndroidPatchLevels(300, 150000, 202609, 20260905, 20261301),  # unparsable boot
         ):
-            with self.subTest(levels=levels), self.assertRaisesRegex(AttestationRejected, message):
-                require_android_patch_floor(levels, 202609)
-        for floor in (0, 20260901, 202613, 2026, True, "202609"):
-            with self.subTest(floor=floor), self.assertRaisesRegex(AttestationRejected, "patch floor"):
-                require_android_patch_floor(current, floor)
-        with self.assertRaisesRegex(AttestationRejected, "patch levels absent"):
-            require_android_patch_floor((300, 150000, 202609, 20260905, 20260901), 202609)
+            with self.subTest(levels=levels):
+                self.assertIs(android_patch_policy_met(levels, 202609), False)
 
-    def test_issuer_preparation_signature_binds_nonce_account_profile_lane_key_and_release(self) -> None:
-        executable = shutil.which("openssl")
-        if executable is None:
-            self.skipTest("OpenSSL CLI unavailable")
-        openssl = Path(executable).resolve()
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            def run(*args: str) -> None:
-                subprocess.run([str(openssl), *args], cwd=directory, capture_output=True, check=True)
-
-            run("genpkey", "-algorithm", "ED25519", "-out", "issuer.pem")
-            run("pkey", "-in", "issuer.pem", "-pubout", "-outform", "DER", "-out", "issuer.der")
-            issuer_key = (directory / "issuer.der").read_bytes()
-            account = "owner"
-            policy_id, release_id = b"\x05" * 32, b"\x06" * 32
-            selected = Selection(b"\x03" * 32, b"\x04" * 32, release_id,
-                                 b"\x07" * 32, b"\x08" * 32, b"\x09" * 32)
-            header = (b"\x01" + (1_000).to_bytes(8, "little") + (121_000).to_bytes(8, "little")
-                      + selected.client_nonce + selected.server_nonce + selected.release_id
-                      + selected.hardware_profile_id + selected.attested_key_id + selected.lane_id)
-            message = (PREPARATION_DOMAIN + header[1:] + policy_id
-                       + hashlib.sha256(account.encode()).digest())
-            self.assertEqual(len(message), 318)
-            self.assertEqual(hashlib.sha256(message).hexdigest(),
-                             "409f62d1db4cd8478b3d70dc2679350fcbdd7aa5743a1234b982ff03bd2095f7")
-            (directory / "message.bin").write_bytes(message)
-            run("pkeyutl", "-sign", "-inkey", "issuer.pem", "-rawin", "-in", "message.bin", "-out", "signature.bin")
-            token = header + (directory / "signature.bin").read_bytes()
-            args = (token, selected, account, policy_id,
-                    issuer_key, hashlib.sha256(issuer_key).digest(), 1_001, openssl)
-            verified = verify_issuer_preparation(*args)
-            self.assertEqual(verified.server_nonce, b"\x04" * 32)
-            with self.assertRaises(AttestationRejected):
-                verify_issuer_preparation(*args[:-2], 121_001, openssl)
-            self.assertEqual(
-                verify_issuer_preparation(*args[:-2], 121_001, openssl,
-                                          require_fresh=False).server_nonce,
-                selected.server_nonce,
-            )
-            android = Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
-                                selected.hardware_profile_id, b"\0" * 32, selected.lane_id)
-            android_header = header[:145] + b"\0" * 32 + header[177:]
-            (directory / "message.bin").write_bytes(
-                PREPARATION_DOMAIN + android_header[1:] + policy_id
-                + hashlib.sha256(account.encode()).digest())
-            run("pkeyutl", "-sign", "-inkey", "issuer.pem", "-rawin", "-in", "message.bin", "-out", "signature.bin")
-            android_token = android_header + (directory / "signature.bin").read_bytes()
-            self.assertEqual(verify_issuer_preparation(android_token, android, account, policy_id,
-                             issuer_key, hashlib.sha256(issuer_key).digest(), 1_001, openssl).server_nonce,
-                             selected.server_nonce)
-            for index, changed in (
-                (0, token[:49] + b"\x05" + token[50:]),
-                (1, Selection(b"\x07" * 32, selected.server_nonce, selected.release_id,
-                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
-                (1, Selection(selected.client_nonce, b"\x07" * 32, selected.release_id,
-                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
-                (1, Selection(selected.client_nonce, selected.server_nonce, b"\x07" * 32,
-                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
-                (1, Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
-                              b"\x0a" * 32, selected.attested_key_id, selected.lane_id)),
-                (1, Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
-                              selected.hardware_profile_id, b"\x0a" * 32, selected.lane_id)),
-                (1, Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
-                              selected.hardware_profile_id, selected.attested_key_id, b"\x0a" * 32)),
-                (2, "other account"),
-                (3, b"\x07" * 32),
-                (5, b"\x07" * 32),
-                (6, 121_000),
-            ):
-                mutated = list(args)
-                mutated[index] = changed
-                with self.subTest(index=index), self.assertRaises(AttestationRejected):
-                    verify_issuer_preparation(*mutated)
+    def test_bad_patch_floor_or_levels_raise_instead_of_reading_as_unmet(self) -> None:
+        current = AndroidPatchLevels(300, 150000, 202609, 20260905, 20260901)
+        self.assertEqual(validate_android_patch_floor(202609), 202609)
+        for floor in (0, 20260901, 202613, 2026, True, "202609", None):
+            with self.subTest(floor=floor):
+                with self.assertRaisesRegex(AttestationRejected, "patch floor"):
+                    validate_android_patch_floor(floor)
+                # A misconfigured floor must not be recorded as policy-not-met.
+                with self.assertRaisesRegex(AttestationRejected, "patch floor"):
+                    android_patch_policy_met(current, floor)
+        for levels in ((300, 150000, 202609, 20260905, 20260901), None,
+                       AndroidPatchLevels(300, 150000, "202609", 20260905, 20260901),
+                       AndroidPatchLevels(300, 150000, 202609, 20260905.0, 20260901)):
+            with self.subTest(levels=levels), self.assertRaisesRegex(AttestationRejected, "patch levels absent"):
+                android_patch_policy_met(levels, 202609)
 
 
 if __name__ == "__main__":

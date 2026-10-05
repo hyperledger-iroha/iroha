@@ -22,6 +22,9 @@ use crate::{
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 mod literal_calls;
+mod single_use_calls;
+#[cfg(test)]
+pub(crate) use single_use_calls::with_private_calls_retained;
 /// Maximum control-flow blocks accepted in one V1 function.
 ///
 /// The bound keeps dominance construction and verification deterministic and

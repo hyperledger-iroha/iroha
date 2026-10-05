@@ -28,11 +28,6 @@ function integer(bytes, width, label) {
   if (width === 4) return readU32Le(bytes, 0, label);
   return bytes[0] + (width === 2 ? bytes[1] * 256 : 0);
 }
-function strings(bytes, maximum, label) {
-  const result = [];
-  visitEmbeddedVector(bytes, label, maximum, (item, itemLabel) => result.push(decodeEmbeddedString(item, itemLabel)));
-  return result;
-}
 function nominalError(bytes, label, catalog) {
   const [identityBytes, variantsBytes] = fields(bytes, 2, label);
   const variants = [];
@@ -43,19 +38,35 @@ function nominalError(bytes, label, catalog) {
   const descriptor = normalizeContractErrorTypeV1({ identity: decodeEmbeddedString(identityBytes, label), variants }, label);
   if (catalog.get(descriptor.identity) !== JSON.stringify(descriptor)) fail(label, "does not match its declared nominal error catalog");
 }
-function node(bytes, label, zk, catalog) {
-  const kind = readU32Le(bytes, 0, label);
+function take(bytes, state, width, label) {
+  const start = state.offset;
+  const end = start + width;
+  if (end > bytes.length) fail(label, "has a truncated callable node");
+  state.offset = end;
+  return bytes.subarray(start, end);
+}
+function string(bytes, state, label) {
+  const start = state.offset;
+  readCompactField(bytes, state, label);
+  return decodeEmbeddedString(bytes.subarray(start, state.offset), label);
+}
+function node(bytes, state, label, zk, catalog) {
+  const kind = integer(take(bytes, state, 1, label), 1, label);
   const result = { kind, children: 0, resource: false };
   if ([2, 3, 6, 9].includes(kind)) {
-    fields(bytes, 0, label, 4);
     result.children = kind === 2 ? 1 : kind === 3 ? 2 : 0;
     result.resource = kind === 9;
     return result;
   }
   if (kind === 0) {
-    const [name, names] = fields(bytes, 2, label, 4);
-    result.name = decodeEmbeddedString(name, label);
-    result.fields = strings(names, MAX_NODES, label);
+    result.name = string(bytes, state, label);
+    const count = readU64Le(bytes, state.offset, `${label}.fields.count`);
+    state.offset += 8;
+    if (count > BigInt(MAX_NODES) || count > BigInt(bytes.length - state.offset)) fail(label, "has an impossible nominal field count");
+    result.fields = [];
+    for (let index = 0; index < Number(count); index += 1) {
+      result.fields.push(decodeEmbeddedString(readCompactField(bytes, state, `${label}.field${index}`), label));
+    }
     const reserved = CORE_VIEWS.has(result.name) || result.name === "QueryPage" || result.name === "StatePage";
     if ((!reserved && !isCanonicalKotodamaStructName(result.name)) ||
         result.fields.some((name) => !isCanonicalKotodamaIdentifier(name)) ||
@@ -63,28 +74,27 @@ function node(bytes, label, zk, catalog) {
     result.children = result.fields.length;
     return result;
   }
-  const [payload] = fields(bytes, 1, label, 4);
   switch (kind) {
     case 1:
-      result.children = integer(payload, 4, label);
+      result.children = integer(take(bytes, state, 4, label), 4, label);
       if (result.children < 2) fail(label, "requires tuple arity of at least two");
       break;
     case 4:
-      result.capacity = integer(payload, 1, label);
+      result.capacity = integer(take(bytes, state, 1, label), 1, label);
       if (result.capacity < 1 || result.capacity > 64) fail(label, "requires List capacity in 1..64");
       result.children = 1;
       break;
     case 5:
     case 8:
-      result.leaf = integer(payload, 4, label);
+      result.leaf = integer(take(bytes, state, 1, label), 1, label);
       if (result.leaf > 13 || (kind === 8 && result.leaf === 5)) fail(label, "has an invalid scalar or cursor key kind");
       break;
     case 7:
-      nominalError(payload, label, catalog);
+      nominalError(readCompactField(bytes, state, label), label, catalog);
       break;
     case 10:
     case 11:
-      result.pointer = integer(payload, 2, label);
+      result.pointer = integer(take(bytes, state, 2, label), 2, label);
       if (kind === 10 ? !INTERNAL_POINTERS.has(result.pointer) : !zk || result.pointer < 0x10 || result.pointer > 0x12) {
         fail(label, "has an invalid internal pointer or private numeric type");
       }
@@ -131,9 +141,13 @@ function reservedShapes(nodes, ends, label) {
 }
 
 function schema(bytes, label, zk, catalog) {
-  const [tape] = fields(bytes, 1, label);
+  if (bytes.length < 12 || bytes[0] !== 0x43 || bytes[1] !== 0x53 || bytes[2] !== 0x31 || bytes[3] !== 0) fail(label, "requires the canonical CS1 callable tape");
+  const count = readU64Le(bytes, 4, `${label}.nodes.count`);
+  const state = { offset: 12 };
+  if (count > BigInt(MAX_NODES) || count > BigInt(bytes.length - state.offset)) fail(label, "has an impossible callable node count");
   const nodes = [];
-  visitEmbeddedVector(tape, `${label}.nodes`, MAX_NODES, (bytes, itemLabel) => nodes.push(node(bytes, itemLabel, zk, catalog)));
+  for (let index = 0; index < Number(count); index += 1) nodes.push(node(bytes, state, `${label}.nodes[${index}]`, zk, catalog));
+  if (state.offset !== bytes.length) fail(label, "has trailing callable tape bytes");
   const ends = new Uint32Array(nodes.length);
   const stack = [];
   let roots = 0;

@@ -37,14 +37,11 @@ Lost, torn or blended frames cost time, never correctness.
 Petal Stream replaces the retired binary-grid prototype (`PS1` over `QrStreamFrame` bytes). It
 does not carry `QrStreamFrame` or `IRQR` frames: it is a complete transport with its own framing,
 forward error correction and payload integrity check. KAGEMUSHA payloads use the `kind` byte of
-§5.4 with the same values as `IrohaPeerWireKindV1` (1 request, 2 payment, 3 acknowledgement) and
-carry the encoded `IPM1` message as the payload.
-
-> **Superseded KAGEMUSHA kinds (2026-10-03).** Kinds 1 to 3 in this document name the retired
-> exchange. The [single implementation draft](kagemusha_single_design_proposal.md) §§5 and 8 define
-> the messages and their 10,000-byte bound, which the measurements in §8 use; Petal remains one of
-> their carriers and carries any such message whole (§5.5: the default receiver limit is 65 536 bytes).
-> The kind values are replaced together with the implementing change.
+§5.4 with the same values as `IrohaPeerWireKindV1`, which are the KAGEMUSHA wallet V1 envelope
+message tags (1 Offer, 2 Request, 3 Payment, 4 Credited, 5 SessionControl, 6 PolicyData;
+[wallet wire record](kagemusha_wallet_wire_v1.md) §3.4), and carry the encoded `IPM1` message as
+the payload. Envelopes are at most 10,000 bytes, which the measurements in §8 use; Petal carries
+any such message whole (§5.5: the default receiver limit is 65 536 bytes).
 
 ## 2. Frame geometry (normative)
 

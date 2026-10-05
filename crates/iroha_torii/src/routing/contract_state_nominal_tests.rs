@@ -43,7 +43,7 @@ fn contract_state_nominal_nested_options_preserve_none_and_some_unit() {
         let payload =
             IrohaJson::from_raw_json(format!("{{\"value\":{}}}", projected.get())).unwrap();
         assert_eq!(
-            ivm::argument_record_from_json(&schema, &payload)
+            ivm_abi::arguments::argument_record_from_json(&schema, &payload)
                 .unwrap()
                 .atoms,
             expected_atoms
@@ -56,7 +56,7 @@ fn contract_state_nominal_nested_options_preserve_none_and_some_unit() {
         "{\"none\":true,\"some\":{\"none\":true}}",
     ] {
         let payload = IrohaJson::from_raw_json(format!("{{\"value\":{malformed}}}")).unwrap();
-        assert!(ivm::argument_record_from_json(&schema, &payload).is_err());
+        assert!(ivm_abi::arguments::argument_record_from_json(&schema, &payload).is_err());
     }
 }
 
@@ -141,7 +141,7 @@ fn contract_state_nominal_products_roundtrip_through_public_argument_json() {
         }],
     };
     let payload = IrohaJson::from_raw_json(format!("{{\"receipt\":{}}}", projected.get())).unwrap();
-    let arguments = ivm::argument_record_from_json(&schema, &payload)
+    let arguments = ivm_abi::arguments::argument_record_from_json(&schema, &payload)
         .expect("projected state is valid public call JSON");
     assert_eq!(
         arguments.atoms,
@@ -162,7 +162,7 @@ fn contract_state_nominal_products_roundtrip_through_public_argument_json() {
         "{\"receipt\":{\"attempts\":[{\"err\":\"Other::IndexOutOfBounds\"}],\"completed\":null}}",
     ] {
         let payload = IrohaJson::from_raw_json(malformed.to_owned()).unwrap();
-        assert!(ivm::argument_record_from_json(&schema, &payload).is_err());
+        assert!(ivm_abi::arguments::argument_record_from_json(&schema, &payload).is_err());
     }
 }
 
@@ -285,7 +285,7 @@ fn contract_state_nominal_page_cursor_roundtrips_without_erasing_key_kind() {
         }],
     };
     let payload = IrohaJson::from_raw_json(format!("{{\"page\":{}}}", projected.get())).unwrap();
-    let arguments = ivm::argument_record_from_json(&schema, &payload).unwrap();
+    let arguments = ivm_abi::arguments::argument_record_from_json(&schema, &payload).unwrap();
     assert_eq!(
         arguments.atoms,
         vec![
@@ -304,7 +304,7 @@ fn contract_state_nominal_page_cursor_roundtrips_without_erasing_key_kind() {
         hex::encode(malformed)
     ))
     .unwrap();
-    assert!(ivm::argument_record_from_json(&schema, &payload).is_err());
+    assert!(ivm_abi::arguments::argument_record_from_json(&schema, &payload).is_err());
 }
 
 #[test]

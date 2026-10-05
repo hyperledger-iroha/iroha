@@ -69,15 +69,15 @@ use halo2_proofs::{
     poly::commitment::Params as _,
 };
 use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::sumeragi::epoch::ValidatorEpochAuthorizationV1;
 use iroha_data_model::{
     account::AccountId,
     block::consensus::ValidatorPower,
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
-        KagemushaPastaSchnorrSignatureV1, KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1,
-        kagemusha_mint_finality_root_v1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySealBundleV1,
+        KagemushaMintFinalitySealMessageV1, KagemushaPastaSchnorrSignatureV1, KagemushaTopUpLeafV1,
+        KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
     },
     kagemusha::{
         KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1, KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1,
@@ -1209,11 +1209,11 @@ impl FundingCertificate {
 
     fn message(
         roster: &KagemushaMintFinalityAuthorityGenerationV1,
-        authorization: KagemushaMintFinalityEpochAuthorizationV1,
+        authorization: ValidatorEpochAuthorizationV1,
         root: Hash,
         count: u32,
         block_height: u64,
-        next: Option<KagemushaMintFinalityEpochAuthorizationV1>,
+        next: Option<ValidatorEpochAuthorizationV1>,
     ) -> KagemushaMintFinalitySealMessageV1 {
         KagemushaMintFinalitySealMessageV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
@@ -2925,14 +2925,14 @@ fn mint_authority_heads_bind_authorization_instead_of_key_generation() {
 
 #[test]
 fn mint_authority_retention_advances_authorization_with_original_signing_keys() {
-    use iroha_data_model::isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
+    use iroha_data_model::sumeragi::epoch::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochDecisionV1,
     };
     let (_, _, funding) = funding_fixture();
     let mut certificate = funding.finalized;
     let authority = &certificate.authority_generation;
-    let genesis = KagemushaMintFinalityEpochAuthorizationV1::genesis(authority, 2).unwrap();
-    let retained = KagemushaMintFinalityEpochAuthorizationV1 {
+    let genesis = ValidatorEpochAuthorizationV1::genesis(authority, 2).unwrap();
+    let retained = ValidatorEpochAuthorizationV1 {
         epoch: 1,
         first_height: 3,
         last_height: 4,
@@ -2941,7 +2941,7 @@ fn mint_authority_retention_advances_authorization_with_original_signing_keys() 
             session_id: digest(b"retention-test-session", 0),
             transcript_hash: digest(b"retention-test-transcript", 0),
         }),
-        decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+        decision: ValidatorEpochDecisionV1::Retain,
         ..genesis
     };
     retained.validate_successor(&genesis).unwrap();

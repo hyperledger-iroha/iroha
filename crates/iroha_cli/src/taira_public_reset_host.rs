@@ -8,6 +8,10 @@ pub(super) mod deployment_lifecycle;
 pub(super) mod dispatcher_transition;
 #[path = "taira_public_reset_first_boot.rs"]
 mod first_boot;
+#[path = "taira_public_reset_native_edge.rs"]
+mod native_edge;
+#[path = "taira_public_reset_host_phases.rs"]
+mod phases;
 
 #[path = "taira_stopped_owner_maintenance.rs"]
 pub(crate) mod maintenance;
@@ -23,15 +27,15 @@ pub(super) use write_canary::CoreWriteTransport;
 
 use super::executor_model::{ExecutionStep, RecoveryProgress, ResetTransport};
 use super::{
-    AccountOnboardingPlanRequestV1, AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1, EdgeV1,
-    EndpointV1, InventoryV1, PUBLIC_ROOT, PinnedArtifact, PriorValidatorServiceStateV1,
-    RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome, TrustedKeyV1,
-    ValidatorV1, artifact, authorization_semantic_sha256, ensure_authorization_current,
-    ensure_pinned_unchanged, now_unix_ms, open_pinned_regular, pin_owner_private_file,
-    read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex, validate_inventory,
-    validate_owner_private_dir, validate_validator_genesis_config,
-    validate_validator_operator_config, validator_operator_public_key,
-    verify_execution_authorization,
+    AccountOnboardingPlanRequestV1, AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1,
+    BUILD_TARGET, EdgeV1, EndpointV1, InventoryV1, PUBLIC_ROOT, PinnedArtifact,
+    PriorValidatorServiceStateV1, RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1,
+    RecoveryOutcome, TrustedKeyV1, ValidatorV1, artifact, authorization_semantic_sha256,
+    ensure_authorization_current, ensure_pinned_unchanged, host_pair, now_unix_ms,
+    open_pinned_regular, pin_owner_private_file, read_pinned_bytes, read_private_json,
+    revalidate_pinned, sha256_hex, validate_inventory, validate_owner_private_dir,
+    validate_validator_genesis_config, validate_validator_operator_config,
+    validator_operator_public_key, verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, ensure, eyre};
@@ -411,6 +415,7 @@ struct HostRequestV1 {
     trusted_key_base64: String,
     trusted_key_sha256: String,
     action_deadline_unix_ms: u64,
+    phase_checkpoints: Vec<super::host_pair::SignedHostPhaseV1>,
     artifact_role: String,
     artifact_sha256: String,
     artifact_size: u64,
@@ -856,6 +861,9 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
         ));
     }
     let (admitted, _chain_guard) = admit_host_request(request, action)?;
+    if matches!(&admitted.target, HostTarget::Edge(_)) {
+        return native_edge::dispatch(&admitted, action, body);
+    }
     if !matches!(action, HostAction::Upload | HostAction::InrouStageUpload) {
         require_stream_eof(body)?;
     }
@@ -3413,7 +3421,15 @@ fn admit_host_request(
                 .then(|| HostTarget::Edge(inventory.edge.clone()))
         })
         .ok_or_else(|| eyre!("host request slug is not in the signed inventory"))?;
-    let guard_path = Path::new(target.reset_guard()).join("guard.json");
+    let host = match &target {
+        HostTarget::Validator(_) => &inventory.hosts.validator_guest,
+        HostTarget::Edge(_) => &inventory.hosts.native_edge,
+    };
+    let guard_path = if matches!(&target, HostTarget::Edge(_)) {
+        native_edge::canonical_guard_path(host)?
+    } else {
+        Path::new(target.reset_guard()).join("guard.json")
+    };
     let (guard, guard_bytes) = read_private_json::<HostGuardV1>(&guard_path, "host guard")?;
     if sha256_hex(&guard_bytes) != target.endpoint().upload_guard_sha256
         || guard.schema != HOST_GUARD_SCHEMA_V1
@@ -3421,14 +3437,15 @@ fn admit_host_request(
         || guard.service_root != target.service_root()
         || guard.state_root != target.state_root()
         || guard.trusted_key_sha256 != request.trusted_key_sha256
-        || guard.dispatcher_path != FIXED_DISPATCHER
+        || guard.dispatcher_path != host.dispatcher_path
+        || guard.dispatcher_sha256 != host.dispatcher_sha256
         || guard.upload_parent != upload_parent(target.service_root())
     {
         return Err(eyre!(
             "independently provisioned host guard does not bind this request"
         ));
     }
-    verify_dispatcher_identity(&guard)?;
+    verify_dispatcher_identity(&guard, host)?;
     let now = now_unix_ms()?;
     let monotonic_now = Instant::now();
     let execution_expired = now
@@ -3472,6 +3489,14 @@ fn admit_host_request(
             now,
         )?;
     }
+    phases::admit_request_checkpoints(
+        &request,
+        action,
+        &inventory,
+        &inventory_sha256,
+        &authorization_sha256,
+        authorization.claims.execution_expires_at_unix_ms,
+    )?;
     validate_host_artifact_request(&request, &inventory, &target, action)?;
     let request_sha256 = host_request_identity_sha256(&request)?;
     let action_deadline = monotonic_now
@@ -3660,21 +3685,31 @@ fn validate_host_artifact_request(
     Ok(())
 }
 
-fn verify_dispatcher_identity(guard: &HostGuardV1) -> Result<()> {
+fn verify_dispatcher_identity(
+    guard: &HostGuardV1,
+    host: &super::host_pair::ResetHostV1,
+) -> Result<()> {
     let executable = std::env::current_exe().wrap_err("failed to resolve host dispatcher")?;
-    if executable != Path::new(FIXED_DISPATCHER) {
+    if executable != Path::new(&host.dispatcher_path)
+        || guard.dispatcher_path != host.dispatcher_path
+    {
         return Err(eyre!(
             "host dispatcher is not running from its fixed provisioned path"
         ));
     }
     let (mut file, snapshot) = open_pinned_regular(&executable, "fixed host dispatcher")?;
     #[cfg(unix)]
-    if snapshot.uid != 0 || snapshot.mode & 0o022 != 0 || snapshot.mode & 0o111 == 0 {
+    if snapshot.uid != host.owner_uid
+        || snapshot.mode & 0o022 != 0
+        || snapshot.mode & 0o111 == 0
+        || rustix::process::geteuid().as_raw() != host.owner_uid
+        || rustix::process::getegid().as_raw() != host.owner_gid
+    {
         return Err(eyre!("fixed host dispatcher custody is unsafe"));
     }
     let digest = hash_reader(&mut file)?;
     ensure_pinned_unchanged(&executable, "fixed host dispatcher", &file, &snapshot)?;
-    if digest != guard.dispatcher_sha256 {
+    if digest != guard.dispatcher_sha256 || digest != host.dispatcher_sha256 {
         return Err(eyre!(
             "fixed host dispatcher hash differs from provisioned guard"
         ));
@@ -3720,22 +3755,10 @@ fn require_empty_root_directory(path: &Path, label: &str) -> Result<()> {
     require_empty_directory_contents(path, label)
 }
 
-fn attest_loaded_edge_unit(edge: &EdgeV1, deadline: Instant) -> Result<()> {
-    let fragment = Path::new("/etc/systemd/system/nginx.service");
-    let evidence = run_host_command(
-        SYSTEMCTL,
-        &[
-            "show",
-            "--all",
-            "--property=FragmentPath",
-            "--property=DropInPaths",
-            "--property=NeedDaemonReload",
-            "nginx.service",
-        ],
-        deadline,
-    )?;
-    validate_loaded_unit_evidence(&evidence, fragment)?;
-    verify_regular_hash(fragment, &edge.systemd_unit_sha256)
+fn refuse_guest_edge_execution() -> Result<()> {
+    Err(eyre!(
+        "native Mac edge actions require the independently admitted native dispatcher"
+    ))
 }
 
 fn validate_vacant_unit_evidence(bytes: &[u8], allow_failed: bool) -> Result<Option<PathBuf>> {
@@ -3799,7 +3822,7 @@ fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<(
             validator.systemd_unit.as_str()
         }
         HostTarget::Edge(edge) => {
-            attest_loaded_edge_unit(edge, admitted.action_deadline)?;
+            refuse_guest_edge_execution()?;
             "nginx.service"
         }
     };
@@ -4499,7 +4522,7 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
             verify_occupied_predecessor(admitted, validator)?;
         }
         HostTarget::Edge(edge) => {
-            attest_loaded_edge_unit(edge, admitted.action_deadline)?;
+            refuse_guest_edge_execution()?;
             let root = Path::new(&edge.admitted_release()?.release_root);
             require_root_directory(root, false, "edge rollback release")?;
             verify_regular_hash(
@@ -11333,6 +11356,26 @@ pub(super) struct ProcessSpec {
     deadline: Instant,
 }
 
+impl ProcessSpec {
+    /// One bounded public native subprocess; child cleanup stays in the shared runner.
+    pub(super) fn public_input(
+        program: PathBuf,
+        args: Vec<OsString>,
+        bytes: Vec<u8>,
+        deadline: Instant,
+    ) -> Self {
+        Self {
+            program,
+            args,
+            stdin_prefix: bytes,
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: Vec::new(),
+            deadline,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct ProcessOutput {
     pub(super) status: ExitStatus,
@@ -13500,11 +13543,19 @@ fn validate_candidate_probe_host_key(inventory: &InventoryV1, key: &str) -> Resu
         ));
     }
     let identity = sha256_hex(format!("{} {}", fields[0], fields[1]).as_bytes());
+    inventory
+        .hosts
+        .validate_roles(&inventory.validators, &inventory.edge)?;
     if inventory
-        .validators
-        .iter()
-        .any(|validator| validator.endpoint.host_identity_sha256 != identity)
-        || inventory.edge.endpoint.host_identity_sha256 != identity
+        .hosts
+        .validator_guest
+        .endpoint
+        .host_identity_sha256
+        != identity
+        || inventory
+            .validators
+            .iter()
+            .any(|validator| validator.endpoint.host_identity_sha256 != identity)
     {
         return Err(eyre!(
             "candidate probes must execute on the exact authenticated deployment host"
@@ -14018,6 +14069,7 @@ impl<'a> RecoverySshTransport<'a> {
 
 pub(super) struct RollbackSshTransport<'a> {
     admitted: &'a AdmittedReset,
+    local_receipt_root: PathBuf,
     runner: RealProcessRunner,
 }
 
@@ -14025,6 +14077,7 @@ pub(super) struct RollbackSshTransport<'a> {
 /// forward artifact and runtime-signing closure has been released.
 pub(super) struct SealCleanupSshTransport<'a> {
     admitted: &'a AdmittedReset,
+    local_receipt_root: PathBuf,
     runner: RealProcessRunner,
 }
 
@@ -14035,6 +14088,9 @@ impl<'a> RollbackSshTransport<'a> {
         revalidate_pinned(&admitted.known_hosts, "OpenSSH known-hosts")?;
         Ok(Self {
             admitted,
+            local_receipt_root: journal_dir
+                .join("local-receipts-v1")
+                .join(&admitted.authorization_sha256),
             runner: RealProcessRunner,
         })
     }
@@ -14051,6 +14107,7 @@ impl<'a> RollbackSshTransport<'a> {
             slug,
             endpoint,
             HostAction::Rollback,
+            phases::load_checkpoints(&self.local_receipt_root, self.admitted, 2, false)?,
             timeout_secs,
         )
     }
@@ -14063,6 +14120,9 @@ impl<'a> SealCleanupSshTransport<'a> {
         revalidate_pinned(&admitted.known_hosts, "OpenSSH known-hosts")?;
         Ok(Self {
             admitted,
+            local_receipt_root: journal_dir
+                .join("local-receipts-v1")
+                .join(&admitted.authorization_sha256),
             runner: RealProcessRunner,
         })
     }
@@ -14086,6 +14146,7 @@ impl<'a> SealCleanupSshTransport<'a> {
             slug,
             endpoint,
             action,
+            phases::load_checkpoints(&self.local_receipt_root, self.admitted, 3, true)?,
             timeout_secs,
         )
     }
@@ -14108,6 +14169,7 @@ fn preflight_hosts_with_runner<R: ProcessRunner>(
             &validator.slug,
             &validator.endpoint,
             HostAction::Preflight,
+            Vec::new(),
             timeout_secs,
         )
         .wrap_err_with(|| format!("read-only host preflight failed for {}", validator.slug))?;
@@ -14118,6 +14180,7 @@ fn preflight_hosts_with_runner<R: ProcessRunner>(
         &admitted.inventory.edge.slug,
         &admitted.inventory.edge.endpoint,
         HostAction::Preflight,
+        Vec::new(),
         timeout_secs,
     )
     .wrap_err("read-only host preflight failed for edge")
@@ -14129,6 +14192,7 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
     slug: &str,
     endpoint: &EndpointV1,
     action: HostAction,
+    phase_checkpoints: Vec<super::host_pair::SignedHostPhaseV1>,
     timeout_secs: u64,
 ) -> Result<()> {
     if !matches!(
@@ -14161,6 +14225,7 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
         trusted_key_base64: BASE64.encode(&admitted.trusted_key_bytes),
         trusted_key_sha256: sha256_hex(&admitted.trusted_key_bytes),
         action_deadline_unix_ms,
+        phase_checkpoints,
         artifact_role: String::new(),
         artifact_sha256: String::new(),
         artifact_size: 0,
@@ -14177,8 +14242,7 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
     let request_bytes = json::to_json(&request)?.into_bytes();
     let mut frame = format!("{:08x}\n", request_bytes.len()).into_bytes();
     frame.extend_from_slice(&request_bytes);
-    let remote_command = format!("{FIXED_DISPATCHER} {HOST_DISPATCH_SUFFIX}");
-    validate_remote_command(&remote_command)?;
+    let remote_command = remote_dispatcher_command(&admitted.inventory, slug, endpoint)?;
     let ssh_inputs = ParentHeldSshInputs::new(&admitted.ssh_identity, &admitted.known_hosts)?;
     let mut args = ssh_common_args(
         endpoint,
@@ -14457,6 +14521,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         timeout_secs: u64,
     ) -> Result<HostReceiptV1> {
         if action == HostAction::EdgeStage {
+            let evidence = self.verify_candidate_frontier(timeout_secs)?;
+            self.retain_phase(super::host_pair::HostPhaseV1::CandidateFrontier, &evidence)?;
             self.stream_host_artifacts(
                 &edge.slug,
                 &edge.endpoint,
@@ -14618,6 +14684,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             trusted_key_base64: BASE64.encode(&self.admitted.trusted_key_bytes),
             trusted_key_sha256: sha256_hex(&self.admitted.trusted_key_bytes),
             action_deadline_unix_ms,
+            phase_checkpoints: self.checkpoints_for_action(action)?,
             artifact_role,
             artifact_sha256,
             artifact_size,
@@ -14637,8 +14704,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let mut frame = format!("{:08x}\n", request_bytes.len()).into_bytes();
         frame.extend_from_slice(&request_bytes);
         frame.extend_from_slice(&stage_frame);
-        let remote_command = format!("{FIXED_DISPATCHER} {HOST_DISPATCH_SUFFIX}");
-        validate_remote_command(&remote_command)?;
+        let remote_command = remote_dispatcher_command(&self.admitted.inventory, slug, endpoint)?;
         let ssh_inputs =
             ParentHeldSshInputs::new(&self.admitted.ssh_identity, &self.admitted.known_hosts)?;
         let mut args = ssh_common_args(
@@ -14754,10 +14820,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         recovery_only: bool,
         timeout_secs: u64,
     ) -> Result<RetainedPreparedMutation> {
-        let edge = &self.admitted.inventory.edge;
-        let slug = edge.slug.clone();
-        let endpoint = edge.endpoint.clone();
-        let service_root = edge.service_root.clone();
+        let owner = self
+            .admitted
+            .inventory
+            .validators
+            .first()
+            .ok_or_else(|| eyre!("shared ledger mutation has no admitted guest coordinator"))?;
+        let slug = owner.slug.clone();
+        let endpoint = owner.endpoint.clone();
+        let service_root = owner.service_root.clone();
         let receipt = self.dispatch(
             &slug,
             &endpoint,
@@ -16601,7 +16672,13 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             ExecutionStep::EdgeVerify => HostAction::EdgeVerify,
             other => return Err(eyre!("edge received invalid step `{}`", other.label())),
         };
-        self.bootstrap_and_dispatch_edge(&inventory.edge, action, timeout_secs)?;
+        let receipt = self.bootstrap_and_dispatch_edge(&inventory.edge, action, timeout_secs)?;
+        if action == HostAction::EdgeVerify {
+            let native = norito::json!({ "schema": "iroha.taira.public-reset.native-edge-ready.v1", "receipt": receipt });
+            self.retain_phase(super::host_pair::HostPhaseV1::NativeEdgeReady, &native)?;
+            let public = self.verify_public_frontier(timeout_secs)?;
+            self.retain_phase(super::host_pair::HostPhaseV1::DeploymentProven, &public)?;
+        }
         Ok(())
     }
 
@@ -18241,26 +18318,45 @@ fn sync_private_regular(path: &Path, label: &str) -> Result<()> {
 }
 
 fn validate_shared_cli(admitted: &AdmittedReset) -> Result<()> {
+    admitted
+        .inventory
+        .hosts
+        .validate_roles(&admitted.inventory.validators, &admitted.inventory.edge)?;
     let mut expected: Option<(&str, u64)> = None;
     for artifacts in admitted
         .inventory
         .validators
         .iter()
         .map(|validator| validator.artifacts.as_slice())
-        .chain(std::iter::once(
-            admitted.inventory.edge.artifacts.as_slice(),
-        ))
     {
         let cli = artifact(artifacts, "iroha_cli")?;
+        if cli.target != BUILD_TARGET
+            || cli.source_commit != admitted.inventory.revision.commit
+            || cli.mode != 0o755
+        {
+            return Err(eyre!(
+                "guest CLI does not match its admitted source, target and mode"
+            ));
+        }
         match expected {
             None => expected = Some((&cli.sha256, cli.size)),
             Some((sha256, size)) if sha256 == cli.sha256 && size == cli.size => {}
             Some(_) => {
                 return Err(eyre!(
-                    "every host must use one byte-identical same-revision CLI dispatcher"
+                    "all four guest validators must share one exact same-revision Linux CLI"
                 ));
             }
         }
+    }
+    let native = artifact(&admitted.inventory.edge.artifacts, "iroha_cli")?;
+    if native.target != host_pair::NATIVE_EDGE_TARGET
+        || native.source_commit != admitted.inventory.revision.commit
+        || native.mode != 0o755
+        || native.sha256 != admitted.inventory.hosts.native_edge.dispatcher_sha256
+    {
+        return Err(eyre!(
+            "native edge CLI does not match its independently admitted Darwin source and dispatcher"
+        ));
     }
     Ok(())
 }
@@ -18377,7 +18473,7 @@ fn safe_remote_path(value: &str) -> bool {
         && !value.contains("//")
         && !value.split('/').any(|part| matches!(part, "." | ".."))
         && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase()
+            byte.is_ascii_alphabetic()
                 || byte.is_ascii_digit()
                 || matches!(byte, b'/' | b'.' | b'-' | b'_')
         })
@@ -18390,7 +18486,7 @@ fn validate_remote_command(value: &str) -> Result<()> {
     if !safe_remote_path(program)
         || suffix != HOST_DISPATCH_SUFFIX
         || value.bytes().any(|byte| {
-            !(byte.is_ascii_lowercase()
+            !(byte.is_ascii_alphabetic()
                 || byte.is_ascii_digit()
                 || matches!(byte, b'/' | b'.' | b'-' | b'_' | b' '))
         })
@@ -18400,6 +18496,34 @@ fn validate_remote_command(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn remote_dispatcher_command(
+    inventory: &InventoryV1,
+    slug: &str,
+    endpoint: &EndpointV1,
+) -> Result<String> {
+    inventory
+        .hosts
+        .validate_roles(&inventory.validators, &inventory.edge)?;
+    let (role, host) = if slug == inventory.edge.slug {
+        (&inventory.edge.endpoint, &inventory.hosts.native_edge)
+    } else {
+        let validator = inventory
+            .validators
+            .iter()
+            .find(|validator| validator.slug == slug)
+            .ok_or_else(|| eyre!("remote dispatcher role is outside the admitted host pair"))?;
+        (&validator.endpoint, &inventory.hosts.validator_guest)
+    };
+    if json::to_json(role)? != json::to_json(endpoint)? {
+        return Err(eyre!(
+            "remote dispatcher endpoint differs from its exact admitted role"
+        ));
+    }
+    let command = format!("{} {HOST_DISPATCH_SUFFIX}", host.dispatcher_path);
+    validate_remote_command(&command)?;
+    Ok(command)
 }
 
 fn verify_remote_receipt(request: &HostRequestV1, receipt: &HostReceiptV1) -> Result<()> {
@@ -20463,6 +20587,7 @@ pub(super) mod tests {
             trusted_key_base64: BASE64.encode(b"trusted"),
             trusted_key_sha256: "22".repeat(32),
             action_deadline_unix_ms: 1_000,
+            phase_checkpoints: Vec::new(),
             artifact_role: String::new(),
             artifact_sha256: String::new(),
             artifact_size: 0,
@@ -20555,6 +20680,7 @@ pub(super) mod tests {
                 trusted_key_base64: String::new(),
                 trusted_key_sha256: "c".repeat(64),
                 action_deadline_unix_ms: u64::MAX - 1,
+                phase_checkpoints: Vec::new(),
                 artifact_role: String::new(),
                 artifact_sha256: String::new(),
                 artifact_size: 0,
@@ -21299,6 +21425,26 @@ pub(super) mod tests {
             .expect("canonical lowercase boot UUID");
         assert!(validate_boot_id("01234567-89AB-cdef-0123-456789abcdef").is_err());
         assert!(validate_boot_id("0123456789abcdef0123456789abcdef").is_err());
+    }
+
+    #[test]
+    fn host_request_requires_explicit_phase_checkpoint_field() {
+        let request = sample_request();
+        let canonical = json::to_vec(&request).expect("canonical host request");
+        let decoded: HostRequestV1 = json::from_slice(&canonical).expect("current host request");
+        assert!(decoded.phase_checkpoints.is_empty());
+        assert_eq!(json::to_vec(&decoded).unwrap(), canonical);
+
+        let mut missing = json::to_value(&request).unwrap();
+        missing.as_object_mut().unwrap().remove("phase_checkpoints");
+        let error = json::from_value::<HostRequestV1>(missing).unwrap_err();
+        assert!(error.to_string().contains("phase_checkpoints"));
+
+        let mut null = json::to_value(&request).unwrap();
+        null.as_object_mut()
+            .unwrap()
+            .insert("phase_checkpoints".into(), json::Value::Null);
+        assert!(json::from_value::<HostRequestV1>(null).is_err());
     }
 
     #[test]
@@ -22383,8 +22529,14 @@ time.sleep(30)
         for validator in &mut admitted.inventory.validators {
             validator.endpoint.host_identity_sha256 = identity.clone();
         }
-        admitted.inventory.edge.endpoint.host_identity_sha256 = identity;
-        validate_candidate_probe_host_key(&admitted.inventory, key).expect("exact cohost identity");
+        admitted
+            .inventory
+            .hosts
+            .validator_guest
+            .endpoint
+            .host_identity_sha256 = identity;
+        validate_candidate_probe_host_key(&admitted.inventory, key)
+            .expect("exact admitted guest identity; Mac remains independent");
         assert!(
             validate_candidate_probe_host_key(&admitted.inventory, "ssh-ed25519 other-public-key")
                 .is_err()
@@ -23322,6 +23474,74 @@ time.sleep(30)
             )
             .is_err()
         );
+        let inventory = super::super::sample_inventory_fixture();
+        let native = format!(
+            "{} {HOST_DISPATCH_SUFFIX}",
+            inventory.hosts.native_edge.dispatcher_path
+        );
+        assert!(validate_remote_command(&native).is_ok());
+        assert!(safe_remote_path(
+            "/Users/taira/.local/share/iroha/taira/public-reset-v1/dispatcher/iroha"
+        ));
+        for invalid in [
+            "/Users/taira/../iroha",
+            "/Users/taira//iroha",
+            "/Users/taira/iroha;id",
+            "/Users/taira/iroha$(id)",
+        ] {
+            assert!(!safe_remote_path(invalid));
+        }
+    }
+
+    #[test]
+    fn remote_dispatcher_selects_exact_native_host_and_refuses_cross_role_route() {
+        let inventory = super::super::sample_inventory_fixture();
+        let guest = &inventory.validators[0];
+        assert_eq!(
+            remote_dispatcher_command(&inventory, &guest.slug, &guest.endpoint).unwrap(),
+            format!(
+                "{} {HOST_DISPATCH_SUFFIX}",
+                inventory.hosts.validator_guest.dispatcher_path
+            )
+        );
+        assert_eq!(
+            remote_dispatcher_command(&inventory, &inventory.edge.slug, &inventory.edge.endpoint)
+                .unwrap(),
+            format!(
+                "{} {HOST_DISPATCH_SUFFIX}",
+                inventory.hosts.native_edge.dispatcher_path
+            )
+        );
+        assert!(
+            remote_dispatcher_command(&inventory, &guest.slug, &inventory.edge.endpoint).is_err()
+        );
+        assert!(
+            remote_dispatcher_command(&inventory, &inventory.edge.slug, &guest.endpoint).is_err()
+        );
+        assert!(remote_dispatcher_command(&inventory, "unadmitted-role", &guest.endpoint).is_err());
+    }
+
+    #[test]
+    fn shared_cli_keeps_linux_cohort_bytes_and_admits_independent_darwin_artifact() {
+        let mut admitted = admitted_reset_fixture();
+        validate_shared_cli(&admitted).unwrap();
+        let native = admitted
+            .inventory
+            .edge
+            .artifacts
+            .iter_mut()
+            .find(|value| value.role == "iroha_cli")
+            .unwrap();
+        native.target = BUILD_TARGET.into();
+        assert!(validate_shared_cli(&admitted).is_err());
+        let mut admitted = admitted_reset_fixture();
+        let guest = admitted.inventory.validators[3]
+            .artifacts
+            .iter_mut()
+            .find(|value| value.role == "iroha_cli")
+            .unwrap();
+        guest.sha256 = "f".repeat(64);
+        assert!(validate_shared_cli(&admitted).is_err());
     }
 
     #[test]

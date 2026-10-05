@@ -4780,7 +4780,7 @@ seiyaku RebuildArguments {
             .entrypoint_descriptor("inspect")
             .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
             .expect("inspect argument schema");
-        let arguments = ivm::encode_argument_record_from_json(
+        let arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "7" })),
         )
@@ -4944,7 +4944,7 @@ seiyaku QuarantineArguments {
             .entrypoint_descriptor("inspect")
             .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
             .expect("inspect argument schema");
-        let canonical_arguments = ivm::encode_argument_record_from_json(
+        let canonical_arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "7" })),
         )
@@ -5309,7 +5309,7 @@ seiyaku ProtectedParameterizedOverlay {
             .entrypoint_descriptor("write")
             .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
             .expect("write argument schema");
-        let arguments = ivm::encode_argument_record_from_json(
+        let arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "7" })),
         )
@@ -5396,7 +5396,7 @@ seiyaku GuardedOverlay {
             .entrypoint_descriptor("main")
             .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
             .expect("main argument schema");
-        let arguments = ivm::encode_argument_record_from_json(
+        let arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "7" })),
         )

@@ -188,7 +188,7 @@ fn collection_ingress_and_routed_decoders_preserve_controls_and_reject_offset() 
     ] {
         let entry =
             app_routed_read_http_endpoint(route.stable_route_id()).expect("collection admission");
-        assert_eq!(entry.endpoint, endpoint);
+        assert_eq!(entry.endpoint, AppReadHttpIdentity::Routed(endpoint));
         assert_eq!(entry.decoder, AppRoutedReadHttpDecoder::Query("ListQuery"));
         let plan = routed_read_test_budget()
             .request_decode_plan()
@@ -624,7 +624,7 @@ async fn collection_coordinator_counts_global_rows_once_across_routes() {
             None,
             collection_query_body(
                 &query,
-                routing::collection_sources::collection_execution_limits(Some(&app))
+                routing::collection_sources::collection_execution_limits(None)
                     .expect("test collection limits")
                     .bytes,
             )
@@ -653,8 +653,8 @@ async fn collection_coordinator_counts_global_rows_once_across_routes() {
         None,
         collection_query_body(
             &base.include_total(),
-            routing::collection_sources::collection_execution_limits(Some(&app))
-                .expect("test collection limits")
+            Ok::<_, Error>(routing::collection_sources::collection_limits())
+                .expect("explicit independent test collection limits")
                 .bytes,
         )
         .unwrap(),
@@ -705,11 +705,12 @@ async fn execute_account_history_single_route_returns_shared_page() {
         vec![authority.to_string()],
         collection_query_body(
             &ListQuery::new().limit(10),
-            routing::collection_sources::collection_execution_limits(Some(&app))
+            routing::collection_sources::collection_execution_limits(None)
                 .expect("test collection limits")
                 .bytes,
         )
         .expect("query body"),
+        try_acquire_query_fanout_memory(&app).expect("full owner"),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -2991,7 +2992,7 @@ async fn permission_collection_counts_deduplicated_grants_once_across_routes() {
             None,
             collection_query_body(
                 &ListQuery::new().limit(1).include_total(),
-                routing::collection_sources::collection_execution_limits(Some(&app))
+                routing::collection_sources::collection_execution_limits(None)
                     .expect("test collection limits")
                     .bytes,
             )

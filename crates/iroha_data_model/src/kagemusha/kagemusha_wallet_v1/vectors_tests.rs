@@ -6,9 +6,13 @@
 //! `fixtures/kagemusha/wallet_v1_vectors.json`: digest vectors for every role, signature
 //! vectors with their high-S twins and the low-S boundary scalars, one envelope vector per
 //! message kind, frame identities of the top-level records, one pinned canonical frame of every
-//! framed object type and marker state, and the enum tag table. The file
-//! is compared byte for byte; `IROHA_UPDATE_KAGEMUSHA_WALLET_VECTORS=1` rewrites it (a
-//! test-only convenience). Stand-in proof bytes, relation bindings and empty-map roots are
+//! framed object type and marker state, the enum tag table, the σ-field element encodings
+//! (statement, state core and rest, chain appends, map and credit-digest leaves) and the
+//! Poseidon values computed over them, the `P_bytes` packing rule, `credit_id`, `proof_digest`
+//! and the Payment digest, the sparse, blacklist and quota-window trees with openings, and the
+//! verifying-key allowlist digest, that the native and in-circuit encoders must share (§3.2).
+//! The file is compared byte for byte; `IROHA_UPDATE_KAGEMUSHA_WALLET_VECTORS=1` rewrites it (a
+//! test-only convenience). Stand-in σ and Ω bytes, relation bindings and verifying keys are
 //! labelled: they change when G3 fixes the artifact set.
 
 use std::{path::PathBuf, sync::OnceLock};
@@ -26,13 +30,13 @@ use super::{
     identity::identity_tests::{
         public_key, raw_output, signing_key, test_account, test_certificate,
     },
-    messages::messages_tests::{ACCEPTED_MS, MessageFixture, message_fixture},
+    messages::messages_tests::{ACCEPTED_MS, MessageFixture, OPENING_SIBLINGS, message_fixture},
     state::state_tests::{
-        EMPTY_ROOTS, bootstrap_statement, signed_package, stand_in_proof, transition_statement,
+        CREDIT_DIGEST_ROOT, LINEAGE_PENDING_ROOT, bootstrap_statement, field_value, signed_package,
+        stand_in_proof, transition_statement,
     },
     *,
 };
-use crate::kagemusha::{KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1};
 
 type Role = KagemushaWalletDigestRoleV1;
 
@@ -65,9 +69,10 @@ const RECEIVER_SEED: u8 = 0x52;
 /// Ed25519 seed of the fee and charge beneficiary account.
 const BENEFICIARY_SEED: u8 = 0x5b;
 
-/// Stand-in proof lengths of the vectored packages.
+/// Stand-in σ length of the vectored packages.
 const VECTOR_PROOF_LEN: usize = 48;
-const STATUS_PROOF_LEN: usize = 24;
+/// Stand-in Ω(h) transport proof length of the vectored `CreditStatus`.
+const STATUS_LINEAGE_LEN: usize = 24;
 /// Session nonce of the vectored Offer and session controls.
 const SESSION_NONCE: [u8; 32] = [0x5e; 32];
 /// Renewal challenge of the vectored renewal request.
@@ -130,8 +135,12 @@ pub(super) struct VectorWorld {
     close: KagemushaWalletSessionControlV1,
     /// Unsigned `UnsupportedScheme` control.
     unsupported: KagemushaWalletSessionControlV1,
-    /// Fee-bearing Payment with three certificates.
+    /// Receiver-signed Request with the fee schedule; the Payment carries its signed body.
+    request: KagemushaWalletRequestV1,
+    /// Fee-bearing compact Payment carrying Ω(pred).
     payment: KagemushaWalletPaymentV1,
+    /// Lineage message carrying the Payment's exact Ω(pred) bytes.
+    lineage: KagemushaWalletLineageMessageV1,
     /// Receiver's Receive package of the Payment, receipted over `capsule`.
     receive: KagemushaWalletPackageV1,
     /// Recovery capsule of the Receive.
@@ -140,14 +149,18 @@ pub(super) struct VectorWorld {
     completion: KagemushaWalletCompletionRecordV1,
     /// Credited evidence from the Receive package.
     credited_receive: KagemushaWalletCreditedV1,
-    /// Credited evidence from a `CreditStatus` proof.
+    /// Credited evidence from a `CreditStatus` of a folded receiver head.
     credited_status: KagemushaWalletCreditedV1,
+    /// Fold record of the payer head that the Payment's Ω(pred) covers.
+    fold: KagemushaWalletFoldRecordV1,
     /// Generation-0 enrollment marker of the payer.
     marker: KagemushaWalletMarkerV1,
     /// Bootstrap package of the payer, bound to `marker`.
     bootstrap: KagemushaWalletPackageV1,
     /// Activate ledger control of the payer.
     control: KagemushaWalletLedgerControlV1,
+    /// Stand-in verifying-key allowlist matching the vectored proof lengths.
+    allowlist: KagemushaWalletVerifyingKeyAllowlistV1,
 }
 
 /// The fixture world, built once per test binary.
@@ -200,7 +213,7 @@ pub(super) fn vector_control(
             Kind::UnsupportedScheme | Kind::Close => 0,
         },
         credit_id: if kind == Kind::ReceiveDeferred {
-            [0x71; 32]
+            field_value(0x71)
         } else {
             [0; 32]
         },
@@ -242,6 +255,40 @@ fn vector_blacklist(f: &MessageFixture, count: u32) -> KagemushaWalletBlacklistV
         raw_output(&f.regulator, &body.signing_message()),
     )
     .expect("blacklist")
+}
+
+/// Stand-in verifying-key allowlist: every operation with the vectored σ length, Send also with
+/// every control enabled, and the vectored Ω transport length; the verifying-key digests are
+/// labelled stand-ins.
+fn vector_allowlist() -> KagemushaWalletVerifyingKeyAllowlistV1 {
+    let sigma = u32::try_from(VECTOR_PROOF_LEN).expect("σ length");
+    let mut steps = Vec::new();
+    for kind in KagemushaWalletOperationKindV1::ALL {
+        let masks: &[u32] = if kind == KagemushaWalletOperationKindV1::Send {
+            &[0, KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1]
+        } else {
+            &[0]
+        };
+        for (index, mask) in masks.iter().enumerate() {
+            steps.push(KagemushaWalletVerifyingKeyEntryV1 {
+                kind,
+                enabled_controls: *mask,
+                verifying_key_digest: [0x80
+                    | (kind.tag() << 3)
+                    | u8::try_from(*mask).expect("mask"); 32],
+                proof_bytes: sigma + u32::try_from(index).expect("index"),
+            });
+        }
+    }
+    let allowlist = KagemushaWalletVerifyingKeyAllowlistV1 {
+        version: KAGEMUSHA_WALLET_VERSION_V1,
+        steps,
+        lineage_verifying_key_digest: [0xc4; 32],
+        lineage_proof_bytes: u32::try_from(super::messages::messages_tests::PAYMENT_LINEAGE_LEN)
+            .expect("Ω length"),
+    };
+    allowlist.validate().expect("vector allowlist");
+    allowlist
 }
 
 /// Build every vectored object and check that each one validates.
@@ -476,7 +523,9 @@ fn build_world() -> VectorWorld {
     let close = vector_control(&f, KagemushaWalletSessionControlKindV1::Close);
     let unsupported = vector_control(&f, KagemushaWalletSessionControlKindV1::UnsupportedScheme);
 
+    let request = f.request(true);
     let payment = f.payment(true, VECTOR_PROOF_LEN);
+    assert_eq!(payment.request, request.signed());
     assert_eq!(
         payment.request.body.scheme_policy,
         scheme_policy.scheme_policy_digest()
@@ -485,24 +534,41 @@ fn build_world() -> VectorWorld {
         payment.request.body.fee_schedule,
         fee_schedule.fee_schedule_digest()
     );
-    assert_eq!(
-        payment.request.certificates.len() + payment.certificates.len(),
-        3
-    );
+    let payer_issuer = KagemushaWalletCertificateSetV1::new(vec![f.payer.enrollment_certificate])
+        .expect("payer issuer set");
+    let payment_digest = payment
+        .verify(&scheme, &payer, &payer_issuer, &request)
+        .expect("payment verifies")
+        .payment;
+    let lineage = f.lineage_message(&payment);
+    lineage
+        .verify_for_offer(&offer)
+        .expect("lineage matches the offer");
 
     // The Receive package is receipted over its real capsule, so the completion record verifies.
-    let statement = transition_statement(
-        &f.receiver,
-        5,
-        0,
-        KagemushaWalletLifecycleV1::Active,
-        payment.receive_effect(&receiver).expect("receive effect"),
-    );
+    // Its successor is the computed commitment of the capsule's successor state.
+    let mut state = KagemushaWalletStateV1::bootstrap(&receiver, field_value(0x5c)).expect("state");
+    state.core.sequence = 5;
+    state.core.balance = 1_000;
+    state.core.next_send = 1;
+    state.core.recv_chain = field_value(0x2d);
+    let statement = KagemushaWalletStatementV1 {
+        successor: state.commitment().expect("successor commitment"),
+        ..transition_statement(
+            &f.receiver,
+            5,
+            0,
+            KagemushaWalletLifecycleV1::Active,
+            payment
+                .receive_effect(&request, &receiver)
+                .expect("receive effect"),
+        )
+    };
     let proof = stand_in_proof(VECTOR_PROOF_LEN);
-    let mut state =
-        KagemushaWalletStateV1::bootstrap(&receiver, &EMPTY_ROOTS, [0x5c; 32]).expect("state");
-    state.sequence = statement.sequence;
-    state.balance = 1_000;
+    let proof_digest =
+        kagemusha_wallet_proof_digest_v1(KagemushaWalletOperationKindV1::Receive, None, &proof)
+            .expect("σ-only proof digest");
+    let retained = |role, bytes| KagemushaWalletRetainedInputV1 { role, bytes };
     let capsule = KagemushaWalletRecoveryCapsuleV1 {
         version: KAGEMUSHA_WALLET_VERSION_V1,
         scheme_id,
@@ -512,28 +578,63 @@ fn build_world() -> VectorWorld {
         predecessor_capsule_digest: [0x5b; 32],
         successor_state: state,
         statement,
-        proof: proof.clone(),
+        predecessor_lineage: KagemushaWalletLineageSlotV1::None,
+        step_proof: proof.clone(),
+        payment_digest,
         map_openings: vec![vec![0x6d; 32]],
-        retained_inputs: vec![KagemushaWalletRetainedInputV1 {
-            role: KagemushaWalletRetainedInputRoleV1::Payment,
-            bytes: payment.to_canonical_bytes().expect("payment frame"),
-        }],
-        output: KagemushaWalletOutputDescriptorV1::for_transition(&statement, &proof, None)
-            .expect("output"),
+        retained_inputs: vec![
+            retained(
+                KagemushaWalletRetainedInputRoleV1::Request,
+                encode_frame_v1(&request, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)
+                    .expect("request frame"),
+            ),
+            retained(
+                KagemushaWalletRetainedInputRoleV1::Payment,
+                payment.to_canonical_bytes().expect("payment frame"),
+            ),
+            retained(
+                KagemushaWalletRetainedInputRoleV1::CertificateSet,
+                encode_frame_v1(&payer_issuer, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)
+                    .expect("certificate set frame"),
+            ),
+            retained(
+                KagemushaWalletRetainedInputRoleV1::Credential,
+                payer.to_canonical_bytes().expect("payer credential frame"),
+            ),
+        ],
+        output: KagemushaWalletOutputDescriptorV1::for_transition(
+            &statement,
+            &proof_digest,
+            &payment_digest,
+        )
+        .expect("output"),
     };
     let capsule_digest = capsule.capsule_digest().expect("capsule digest");
-    let receipt_body =
-        KagemushaWalletReceiptBodyV1::derive(&receiver, &statement, &proof, capsule_digest)
-            .expect("receipt body");
+    let receiver_signer =
+        KagemushaWalletReceiptSignerV1::from_credential(&receiver).expect("receiver signer");
+    let receipt_body = KagemushaWalletReceiptBodyV1::derive(
+        &receiver_signer,
+        &statement,
+        &proof_digest,
+        capsule_digest,
+        payment_digest,
+    )
+    .expect("receipt body");
     let receipt = KagemushaWalletReceiptV1::sign(
         &receiver,
         &statement,
-        &proof,
+        &proof_digest,
         capsule_digest,
+        payment_digest,
         raw_output(&f.receiver.payment, &receipt_body.signing_message()),
     )
     .expect("receipt");
-    let receive = KagemushaWalletPackageV1::new(statement, proof, receipt);
+    let receive = KagemushaWalletPackageV1::new(
+        statement,
+        KagemushaWalletLineageSlotV1::None,
+        proof,
+        receipt,
+    );
     let completion = KagemushaWalletCompletionRecordV1::new(
         &capsule,
         receipt,
@@ -543,13 +644,29 @@ fn build_world() -> VectorWorld {
     completion
         .verify(&receiver, &capsule)
         .expect("completion verifies");
-    let credited_receive = KagemushaWalletCreditedV1::from_receive(
-        receiver,
-        &f.receiver.enrollment_certificate,
-        receive.clone(),
-    )
-    .expect("credited receive");
-    let credited_status = f.credited_status(&payment, VECTOR_PROOF_LEN, STATUS_PROOF_LEN);
+    let credited_receive =
+        KagemushaWalletCreditedV1::from_receive(receive.clone()).expect("credited receive");
+    credited_receive
+        .verify_for(&scheme, &request, &payment)
+        .expect("credited receive verifies");
+    let credited_status = f.credited_status(&payment, STATUS_LINEAGE_LEN, OPENING_SIBLINGS);
+    credited_status
+        .verify_for(&scheme, &request, &payment)
+        .expect("credited status verifies");
+
+    // The payer recorded Ω for its head at sequence 2 after one Λ run over steps 1 and 2.
+    let omega = payment.send.lineage.lineage().expect("Ω(pred)").clone();
+    let fold = KagemushaWalletFoldRecordV1 {
+        version: KAGEMUSHA_WALLET_VERSION_V1,
+        scheme_id,
+        wallet_id: payer.body.wallet_id,
+        first_sequence: 1,
+        sequence: 2,
+        head: omega.public.head,
+        capsule_digest: [0x6a; 32],
+        lineage: omega,
+    };
+    fold.validate().expect("fold record");
 
     let marker = KagemushaWalletMarkerV1::enrollment(&f.payer.challenge, payer.body.payment_key)
         .expect("enrollment marker");
@@ -579,6 +696,13 @@ fn build_world() -> VectorWorld {
         raw_output(&f.payer.payment, &control_body.signing_message()),
     )
     .expect("ledger control");
+    let allowlist = vector_allowlist();
+    allowlist
+        .check_package(&payment.send)
+        .expect("the Payment's proofs have the allowlisted lengths");
+    allowlist
+        .check_package(&receive)
+        .expect("the Receive package has the allowlisted σ length");
 
     VectorWorld {
         f,
@@ -600,15 +724,19 @@ fn build_world() -> VectorWorld {
         offer,
         close,
         unsupported,
+        request,
         payment,
+        lineage,
         receive,
         capsule,
         completion,
         credited_receive,
         credited_status,
+        fold,
         marker,
         bootstrap,
         control,
+        allowlist,
     }
 }
 
@@ -629,11 +757,16 @@ impl VectorWorld {
         &self.f.receiver.credential
     }
 
-    fn status(&self) -> (&KagemushaWalletPackageV1, &KagemushaWalletCreditStatusV1) {
+    fn status(&self) -> &KagemushaWalletCreditStatusV1 {
         match &self.credited_status.evidence {
-            KagemushaWalletCreditedEvidenceV1::Status { current, status } => (current, status),
+            KagemushaWalletCreditedEvidenceV1::Status { status } => status,
             KagemushaWalletCreditedEvidenceV1::Receive { .. } => panic!("status evidence"),
         }
+    }
+
+    fn payer_issuer_set(&self) -> KagemushaWalletCertificateSetV1 {
+        KagemushaWalletCertificateSetV1::new(vec![self.f.payer.enrollment_certificate])
+            .expect("payer issuer set")
     }
 
     fn close_signature(&self) -> KagemushaDeviceSignatureV1 {
@@ -739,29 +872,34 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
     let receiver = w.receiver();
     let certificate = &f.payer.enrollment_certificate;
     let payment = &w.payment;
-    let request = &payment.request;
+    let request = &w.request;
     let digests = payment.digests().expect("payment digests");
     let send = &payment.send;
+    let omega = send.lineage.lineage().expect("Ω(pred)");
+    let omega_bytes = omega.bytes();
+    let payer_signer =
+        KagemushaWalletReceiptSignerV1::from_lineage(&omega.public).expect("Ω signer");
     let receipt_body = send
         .receipt
-        .body(payer, &send.statement, &send.proof)
+        .body(&payer_signer, &send.statement, &digests.package.proof)
         .expect("receipt body");
-    let (_, status) = w.status();
-    let entries = &w.blacklist.entries;
-    let leaf_0 = kagemusha_wallet_blacklist_leaf_v1(
-        &KAGEMUSHA_WALLET_BLACKLIST_SENTINEL_LOW_V1,
-        &entries[0].account_digest,
-    );
-    let leaf_1 =
-        kagemusha_wallet_blacklist_leaf_v1(&entries[0].account_digest, &entries[1].account_digest);
-    let windows = &w.quota_share.windows;
-    let window_0 = windows[0].leaf_digest();
-    let window_1 = windows[1].leaf_digest();
+    let status = w.status();
     let receiver_challenge = f.receiver.challenge.challenge_digest();
     let payer_challenge = f.payer.challenge.challenge_digest();
-    let mut output_input = [0; KAGEMUSHA_WALLET_OUTPUT_KIND_INPUT_BYTES_V1];
-    output_input[..32].copy_from_slice(&digests.payment);
     let receive_digests = w.receive.verify(receiver).expect("receive package");
+    let (credited_digest, _) = w
+        .credited_receive
+        .verify_for(&scheme, request, payment)
+        .expect("credited receive");
+    let status_receipt = status
+        .receipt
+        .verify(
+            &KagemushaWalletReceiptSignerV1::from_lineage(&status.lineage.public)
+                .expect("Ω(h) signer"),
+            &status.statement,
+            &status.proof_digest,
+        )
+        .expect("status receipt");
     let KagemushaWalletRenewalEvidenceV1::Android {
         new_attested_key, ..
     } = w.renewal.evidence
@@ -932,24 +1070,6 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
             Some(w.blacklist.blacklist_digest()),
         ),
         digest_vector(
-            Role::BlacklistLeaf,
-            "blacklist gap leaf 0",
-            [
-                &KAGEMUSHA_WALLET_BLACKLIST_SENTINEL_LOW_V1[..],
-                &entries[0].account_digest[..],
-            ]
-            .concat(),
-            false,
-            Some(leaf_0),
-        ),
-        digest_vector(
-            Role::BlacklistNode,
-            "blacklist node over gap leaves 0 and 1",
-            [&leaf_0[..], &leaf_1[..]].concat(),
-            false,
-            Some(kagemusha_wallet_blacklist_node_v1(&leaf_0, &leaf_1)),
-        ),
-        digest_vector(
             Role::QuotaShareBody,
             "quota share body",
             w.quota_share.body.transcript(),
@@ -962,20 +1082,6 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
             signed_object_body(&w.quota_share.body.body_digest(), &w.quota_share.signature),
             false,
             Some(w.quota_share.quota_share_digest()),
-        ),
-        digest_vector(
-            Role::QuotaWindow,
-            "daily quota window leaf",
-            windows[0].transcript(),
-            false,
-            Some(window_0),
-        ),
-        digest_vector(
-            Role::QuotaNode,
-            "quota node over window leaves 0 and 1",
-            [&window_0[..], &window_1[..]].concat(),
-            false,
-            Some(kagemusha_wallet_quota_node_v1(&window_0, &window_1)),
         ),
         digest_vector(
             Role::TimeAnchorBody,
@@ -1020,28 +1126,6 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
             Some(digests.request),
         ),
         digest_vector(
-            Role::Credit,
-            "credit identity of the Request",
-            request.body.transcript(),
-            false,
-            Some(digests.credit_id),
-        ),
-        digest_vector(
-            Role::Dependencies,
-            "positional Send dependencies",
-            kagemusha_wallet_send_dependencies_transcript_v1(
-                &payer.body.issuer_certificate,
-                &request.receiver_credential.body.issuer_certificate,
-                &request.fee_schedule.signer_certificate(),
-            ),
-            false,
-            Some(
-                request
-                    .send_dependencies(payer)
-                    .expect("payer dependencies"),
-            ),
-        ),
-        digest_vector(
             Role::Statement,
             "Send statement",
             send.statement.transcript(),
@@ -1049,11 +1133,11 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
             Some(digests.package.statement),
         ),
         digest_vector(
-            Role::Proof,
-            "stand-in Send proof",
-            send.proof.bytes.clone(),
+            Role::Lineage,
+            "stand-in Ω(pred) bytes of the Payment",
+            omega_bytes.clone(),
             true,
-            Some(digests.package.proof),
+            Some(w.lineage.lineage_digest()),
         ),
         digest_vector(
             Role::ReceiptBody,
@@ -1082,32 +1166,40 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
             Some(digests.package.package),
         ),
         digest_vector(
-            Role::Payment,
-            "Payment",
-            kagemusha_wallet_payment_transcript_v1(
-                &digests.request,
-                &digests.payer_credential,
-                &digests.package.package,
-                &digests.certificates,
-            ),
+            Role::CreditOpening,
+            "CreditStatus credit-digest opening",
+            status.opening.transcript().expect("opening transcript"),
             false,
-            Some(digests.payment),
+            Some(status.opening.opening_digest().expect("opening digest")),
         ),
         digest_vector(
-            Role::CreditStatusStatement,
-            "CreditStatus statement",
-            status.statement.transcript(),
+            Role::CreditStatus,
+            "CreditStatus of the folded crediting head",
+            [
+                &1_u16.to_le_bytes()[..],
+                &status.statement.statement_digest()[..],
+                &status.proof_digest[..],
+                &status_receipt[..],
+                &status.lineage.lineage_digest()[..],
+                &status.opening.opening_digest().expect("opening")[..],
+            ]
+            .concat(),
             false,
-            Some(status.statement.statement_digest()),
+            Some(status.credit_status_digest().expect("credit status")),
         ),
         digest_vector(
             Role::Credited,
             "Credited from the Receive package",
-            w.credited_receive
-                .transcript()
-                .expect("credited transcript"),
+            [
+                &1_u16.to_le_bytes()[..],
+                &[1][..],
+                &digests.credit_id[..],
+                &digests.payment[..],
+                &receive_digests.package[..],
+            ]
+            .concat(),
             false,
-            Some(w.credited_receive.credited_digest().expect("credited")),
+            Some(credited_digest),
         ),
         digest_vector(
             Role::OperationId,
@@ -1127,7 +1219,7 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
                 KagemushaWalletOperationKindV1::Receive,
                 &receive_digests.statement,
                 &receive_digests.proof,
-                &output_input,
+                &digests.payment,
             ),
             false,
             Some(w.capsule.output.digest),
@@ -1152,6 +1244,13 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
             w.completion.to_canonical_bytes().expect("completion frame"),
             true,
             Some(w.completion.completion_digest().expect("completion digest")),
+        ),
+        digest_vector(
+            Role::Fold,
+            "payer fold record frame",
+            w.fold.to_canonical_bytes().expect("fold frame"),
+            true,
+            Some(w.fold.fold_digest().expect("fold digest")),
         ),
         digest_vector(
             Role::VoucherBody,
@@ -1220,6 +1319,17 @@ fn digest_vectors(w: &VectorWorld) -> Vec<DigestVector> {
             signed_object_body(&w.manifest.body.body_digest(), &w.manifest.signature),
             false,
             Some(w.manifest.manifest_digest()),
+        ),
+        digest_vector(
+            Role::VerifyingKeySet,
+            "stand-in verifying-key allowlist",
+            w.allowlist.transcript().expect("allowlist transcript"),
+            true,
+            Some(
+                w.allowlist
+                    .verifying_key_set_digest()
+                    .expect("verifying-key-set digest"),
+            ),
         ),
         digest_vector(
             Role::ChargeQuoteBody,
@@ -1294,12 +1404,25 @@ fn signature_vectors(w: &VectorWorld) -> Vec<SignatureVector> {
     let payer_key = payer.body.payment_key;
     let regulator_key = f.regulator_certificate.body.key;
     let certificate = &f.payer.enrollment_certificate;
-    let request = &w.payment.request;
+    let request = &w.request;
     let send = &w.payment.send;
     let receipt_body = send
         .receipt
-        .body(payer, &send.statement, &send.proof)
+        .body(
+            &KagemushaWalletReceiptSignerV1::from_credential(payer).expect("payer signer"),
+            &send.statement,
+            &send.proof_digest().expect("send proof digest"),
+        )
         .expect("receipt body");
+    let receive_body = w
+        .receive
+        .receipt
+        .body(
+            &KagemushaWalletReceiptSignerV1::from_credential(w.receiver()).expect("signer"),
+            &w.receive.statement,
+            &w.receive.proof_digest().expect("receive proof digest"),
+        )
+        .expect("receive receipt body");
     let KagemushaWalletRenewalEvidenceV1::Android {
         new_attested_key,
         key_binding_signature,
@@ -1343,6 +1466,13 @@ fn signature_vectors(w: &VectorWorld) -> Vec<SignatureVector> {
             key: payer_key,
             body: receipt_body.transcript(),
             signature: send.receipt.signature,
+        },
+        SignatureVector {
+            object: "Receive receipt binding the Payment digest",
+            role: Role::ReceiptBody,
+            key: w.receiver().body.payment_key,
+            body: receive_body.transcript(),
+            signature: w.receive.receipt.signature,
         },
         SignatureVector {
             object: "Close session control",
@@ -1680,7 +1810,7 @@ fn envelope_messages(w: &VectorWorld) -> Vec<(&'static str, KagemushaWalletMessa
         (
             "Request",
             KagemushaWalletMessageV1::Request {
-                request: w.payment.request.clone(),
+                request: w.request.clone(),
             },
             false,
         ),
@@ -1726,6 +1856,13 @@ fn envelope_messages(w: &VectorWorld) -> Vec<(&'static str, KagemushaWalletMessa
             },
             false,
         ),
+        (
+            "Lineage",
+            KagemushaWalletMessageV1::Lineage {
+                lineage: w.lineage.clone(),
+            },
+            true,
+        ),
     ]
 }
 
@@ -1737,6 +1874,7 @@ fn message_kind_name(message: &KagemushaWalletMessageV1) -> &'static str {
         KagemushaWalletMessageV1::Credited { .. } => "Credited",
         KagemushaWalletMessageV1::SessionControl { .. } => "SessionControl",
         KagemushaWalletMessageV1::PolicyData { .. } => "PolicyData",
+        KagemushaWalletMessageV1::Lineage { .. } => "Lineage",
     }
 }
 
@@ -1854,6 +1992,10 @@ fn frame_pins() -> Vec<FramePin> {
             "KagemushaWalletArtifactManifestV1",
             KAGEMUSHA_WALLET_ARTIFACT_MANIFEST_MAX_BYTES_V1,
         ),
+        frame_pin::<KagemushaWalletVerifyingKeyAllowlistV1>(
+            "KagemushaWalletVerifyingKeyAllowlistV1",
+            KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1,
+        ),
         frame_pin::<KagemushaWalletSchemePolicyV1>(
             "KagemushaWalletSchemePolicyV1",
             KAGEMUSHA_WALLET_SCHEME_POLICY_MAX_BYTES_V1,
@@ -1897,6 +2039,10 @@ fn frame_pins() -> Vec<FramePin> {
         frame_pin::<KagemushaWalletCompletionRecordV1>(
             "KagemushaWalletCompletionRecordV1",
             KAGEMUSHA_WALLET_COMPLETION_RECORD_MAX_BYTES_V1,
+        ),
+        frame_pin::<KagemushaWalletFoldRecordV1>(
+            "KagemushaWalletFoldRecordV1",
+            KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1,
         ),
         frame_pin::<KagemushaWalletLoadVoucherV1>(
             "KagemushaWalletLoadVoucherV1",
@@ -2115,7 +2261,9 @@ fn ledger_objects(w: &VectorWorld) -> LedgerObjects {
         payment: w.payment.clone(),
         beneficiary: test_account(BENEFICIARY_SEED),
     };
-    fee_claim.verify(&w.scheme()).expect("fee claim verifies");
+    fee_claim
+        .verify(&w.scheme(), &w.request, payer, &w.payer_issuer_set())
+        .expect("fee claim verifies");
 
     let activation = KagemushaWalletActivationV1 {
         version: KAGEMUSHA_WALLET_VERSION_V1,
@@ -2238,6 +2386,12 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
     decoded_package
         .verify(w.receiver())
         .expect("package verifies");
+    let allowlist_frame = w.allowlist.to_canonical_bytes().expect("allowlist frame");
+    let decoded_allowlist: KagemushaWalletVerifyingKeyAllowlistV1 = decode_frame_v1(
+        &allowlist_frame,
+        KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1,
+    )
+    .expect("allowlist decode");
     vec![
         framed_pin!(KagemushaWalletSchemeV1, "", scheme, &scheme_id, false),
         framed_pin!(
@@ -2267,6 +2421,14 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
             w.manifest,
             &scheme,
             false
+        ),
+        object_pin(
+            "KagemushaWalletVerifyingKeyAllowlistV1",
+            "stand-in keys",
+            &w.allowlist,
+            allowlist_frame,
+            &decoded_allowlist,
+            true,
         ),
         framed_pin!(
             KagemushaWalletSchemePolicyV1,
@@ -2312,7 +2474,7 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
         ),
         framed_pin!(
             KagemushaWalletPaymentV1,
-            "fee, 3 certificates",
+            "fee, Ω(pred)",
             w.payment,
             &scheme_id,
             true
@@ -2365,6 +2527,13 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
             "Receive",
             w.completion,
             &receiver_wallet,
+            true
+        ),
+        framed_pin!(
+            KagemushaWalletFoldRecordV1,
+            "payer head 2",
+            w.fold,
+            &scheme_id,
             true
         ),
         framed_pin!(
@@ -2488,10 +2657,14 @@ fn enum_tag_table(w: &VectorWorld) -> Vec<EnumTags> {
         ("Receive", w.receive.statement.effect),
         (
             "ArchiveSent",
-            Effect::ArchiveSent {
-                credit_id: w.credited_receive.credit_id,
-                credited: w.credited_receive.credited_digest().expect("credited"),
-            },
+            w.credited_receive
+                .archive_sent_effect(
+                    &w.scheme(),
+                    &w.request,
+                    payment,
+                    &payment.pending_outgoing_leaf().expect("pending leaf"),
+                )
+                .expect("archive effect"),
         ),
         (
             "Unload",
@@ -2685,6 +2858,16 @@ fn enum_tag_table(w: &VectorWorld) -> Vec<EnumTags> {
             .collect(),
         },
         EnumTags {
+            name: "KagemushaWalletLineageSlotV1",
+            variants: [
+                ("None", &w.receive.lineage),
+                ("Present", &payment.send.lineage),
+            ]
+            .iter()
+            .map(|&(variant, slot)| tag_row(variant, slot, slot.tag()))
+            .collect(),
+        },
+        EnumTags {
             name: "KagemushaWalletCreditedEvidenceV1",
             variants: [
                 ("Receive", &w.credited_receive.evidence),
@@ -2840,9 +3023,10 @@ fn stand_ins_json() -> Value {
         (
             "note",
             json_text(
-                "labelled stand-in values: proof bytes, relation bindings and empty-map roots \
-                 are fixed by the G3 artifact set and map owner; vectors that depend on them \
-                 change then",
+                "labelled stand-in values: proof bytes, relation bindings, verifying keys and the \
+                 lineage roots of the Payment's Ω(pred) are fixed by the G3 artifact set and \
+                 lineage relation; vectors that depend on them change then. Map roots, \
+                 credit-digest roots and openings are computed",
             ),
         ),
         ("eq_protocol_digest_hex", json_hex(&EQ)),
@@ -2851,10 +3035,28 @@ fn stand_ins_json() -> Value {
         ("verifying_key_set_digest_hex", json_hex(&VK_SET)),
         ("artifact_inventory_digest_hex", json_hex(&INVENTORY)),
         (
-            "empty_quota_usage_root_hex",
-            json_hex(&EMPTY_ROOTS.quota_usage),
+            "lineage_pending_outgoing_root_hex",
+            json_hex(&LINEAGE_PENDING_ROOT),
         ),
-        ("proof_byte_rule", json_text("byte i = i mod 251")),
+        ("credit_digest_root_hex", json_hex(&CREDIT_DIGEST_ROOT)),
+        (
+            "field_value_rule",
+            json_text("seed s: 31 bytes s followed by s & 0x3f (little-endian, canonical)"),
+        ),
+        ("proof_byte_rule", json_text("σ byte i = i mod 251")),
+        (
+            "lineage_proof_byte_rule",
+            json_text(
+                "Ω transport proof byte i = (i + 7) mod 251; CreditStatus Ω(h): (i + 11) mod 251",
+            ),
+        ),
+        (
+            "verifying_key_rule",
+            json_text(
+                "σ verifying-key digest: 32 bytes 0x80 | tag << 3 | mask; Ω transport key: 32 \
+                 bytes 0xc4",
+            ),
+        ),
     ])
 }
 
@@ -2906,16 +3108,650 @@ fn bounds_json() -> Value {
             json_number(KAGEMUSHA_WALLET_MESSAGE_TEXT_MAX_BYTES_V1),
         ),
         (
-            "proof_max_bytes",
-            json_number(KAGEMUSHA_WALLET_PROOF_MAX_BYTES_V1),
+            "lineage_max_bytes",
+            json_number(KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1),
         ),
         (
-            "credit_status_proof_max_bytes",
-            json_number(KAGEMUSHA_WALLET_CREDIT_STATUS_PROOF_MAX_BYTES_V1),
+            "fold_record_max_bytes",
+            json_number(KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1),
+        ),
+        (
+            "credential_max_bytes",
+            json_number(KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1),
+        ),
+        (
+            "payment_fixed_bytes",
+            json_number(KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1),
+        ),
+        (
+            "payment_proof_budget_bytes",
+            json_number(KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1),
+        ),
+        (
+            "proof_caps",
+            json_text(
+                "the exact σ and Ω transport lengths of the frozen verifying-key allowlist, with \
+                 Ω + the largest σ_send <= payment_proof_budget_bytes; until the artifacts freeze \
+                 only the carrying frames bound them",
+            ),
+        ),
+        (
+            "verifying_key_allowlist_max_bytes",
+            json_number(KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1),
+        ),
+        (
+            "verifying_key_entries_max",
+            json_number(KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1),
+        ),
+        (
+            "credit_opening_siblings_max",
+            json_number(KAGEMUSHA_WALLET_CREDIT_OPENING_DEPTH_V1),
         ),
         (
             "certificate_set_max",
             json_number(KAGEMUSHA_WALLET_CERTIFICATE_SET_MAX_V1),
+        ),
+    ])
+}
+
+/// One σ-field element list as hex strings of canonical little-endian encodings.
+fn json_items(items: &[[u8; 32]]) -> Value {
+    Value::Array(items.iter().map(|item| json_hex(item)).collect())
+}
+
+/// One Poseidon value: its element list and digest under `domain`.
+fn json_poseidon(domain: u64, items: &[[u8; 32]], digest: &[u8; 32]) -> Value {
+    assert_eq!(
+        kagemusha_wallet_poseidon_v1(domain, items).expect("canonical items"),
+        *digest
+    );
+    json_object(vec![
+        (
+            "domain",
+            json_text(core::str::from_utf8(&domain.to_le_bytes()).expect("ascii")),
+        ),
+        ("items", json_items(items)),
+        ("digest_hex", json_hex(digest)),
+    ])
+}
+
+/// One map leaf: its key, element list and leaf value.
+fn json_leaf(domain: u64, key: &[u8; 32], items: &[[u8; 32]], value: &[u8; 32]) -> Value {
+    let Value::Object(mut map) = json_poseidon(domain, items, value) else {
+        unreachable!("object");
+    };
+    map.insert("key_hex".to_owned(), json_hex(key));
+    Value::Object(map)
+}
+
+/// One compressed sparse-tree opening.
+fn json_opening(
+    key: &[u8; 32],
+    leaf: &[u8; 32],
+    opening: &KagemushaWalletSparseOpeningV1,
+    root: &[u8; 32],
+) -> Value {
+    assert_eq!(opening.root(key, leaf).expect("opening root"), *root);
+    json_object(vec![
+        ("key_hex", json_hex(key)),
+        ("leaf_hex", json_hex(leaf)),
+        ("path_bitmap_hex", json_hex(&opening.path_bitmap)),
+        ("siblings", json_items(&opening.siblings)),
+        ("root_hex", json_hex(root)),
+    ])
+}
+
+/// The σ-field encodings shared by native and in-circuit encoders (§3.2): the element lists of
+/// the statement, state core and rest, chain appends and map leaves, with the Poseidon values
+/// the data model computes over them.
+fn field_encodings_json(w: &VectorWorld) -> Value {
+    let payment = &w.payment;
+    let send = &payment.send.statement;
+    let receive = &w.receive.statement;
+    let state = &w.capsule.successor_state;
+    let digests = payment.digests().expect("payment digests");
+    let send_entry = payment.send_chain_entry().expect("send chain entry");
+    let recv_entry = payment.recv_chain_entry().expect("recv chain entry");
+    let consumed = payment
+        .consumed_credit_leaf(receive.sequence)
+        .expect("consumed-credit leaf");
+    let pending = payment.pending_outgoing_leaf().expect("pending leaf");
+    let fee = payment
+        .fee_claim_leaf()
+        .expect("fee leaf")
+        .expect("nonzero fee");
+    let credit_digest = w.status().opening.leaf();
+    assert_eq!(credit_digest.payment_digest, digests.payment);
+    let domain_rows = KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1
+        .iter()
+        .map(|(name, domain)| {
+            json_object(vec![
+                ("use", json_text(name)),
+                (
+                    "ascii",
+                    json_text(core::str::from_utf8(&domain.to_le_bytes()).expect("ascii")),
+                ),
+                ("u64_le_hex", json_hex(&domain.to_le_bytes())),
+            ])
+        })
+        .collect();
+    let core = state.core_field_items().expect("core items");
+    let rest = state.rest_field_items().expect("rest items");
+    let send_items = send.field_items().expect("send statement items");
+    let receive_items = receive.field_items().expect("receive statement items");
+    let send_append = send_entry.append_preimage(&[0; 32]).expect("send append");
+    let recv_append = recv_entry
+        .append_preimage(&field_value(0x2c))
+        .expect("recv append");
+    json_object(vec![
+        (
+            "field",
+            json_text(
+                "Pasta Fp (Vesta scalar field), p = \
+                 0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001",
+            ),
+        ),
+        (
+            "modulus_le_hex",
+            json_hex(&KAGEMUSHA_WALLET_FIELD_MODULUS_V1),
+        ),
+        (
+            "element_rule",
+            json_text(
+                "32-byte little-endian canonical encoding (< p); an integer, tag or mask is one \
+                 element; a 32-byte SHA-256 digest or identifier is two u128 limbs, low half \
+                 first; a Poseidon value (commitment, chain, root, nonce, credit_id, \
+                 proof_digest, Payment digest) is one element",
+            ),
+        ),
+        (
+            "poseidon_rule",
+            json_text(
+                "P(domain, items) = iroha_pasta::poseidon::hash_with_domain::<Fp>(domain, items) \
+                 (RP57): a fresh sponge absorbs [domain, len(items), items...]; domain is the u64 \
+                 of the 8 little-endian ASCII bytes",
+            ),
+        ),
+        (
+            "packing_rule",
+            json_text(
+                "P_bytes(domain, b) = P(domain, [len(b)] || c_0 || ... || c_(m-1)), m = \
+                 ceil(len(b) / 31), c_i = bytes 31i..31i+30 of b as a little-endian integer, \
+                 the last chunk zero-filled",
+            ),
+        ),
+        ("domains", Value::Array(domain_rows)),
+        (
+            "send_statement",
+            json_object(vec![
+                ("statement_hex", json_hex(&send.transcript())),
+                ("items", json_items(&send_items)),
+                (
+                    "digest_hex",
+                    json_hex(&send.field_digest().expect("send statement digest")),
+                ),
+            ]),
+        ),
+        (
+            "receive_statement",
+            json_object(vec![
+                ("statement_hex", json_hex(&receive.transcript())),
+                ("items", json_items(&receive_items)),
+                (
+                    "digest_hex",
+                    json_hex(&receive.field_digest().expect("receive statement digest")),
+                ),
+            ]),
+        ),
+        (
+            "receive_successor_state",
+            json_object(vec![
+                (
+                    "state_hex",
+                    json_hex(&norito::encode_canonical(state).expect("state frame")),
+                ),
+                ("core_items", json_items(&core)),
+                ("rest_items", json_items(&rest)),
+                (
+                    "rest_digest_hex",
+                    json_hex(&state.rest_digest().expect("rest digest")),
+                ),
+                (
+                    "commitment_hex",
+                    json_hex(&state.commitment().expect("commitment").value),
+                ),
+            ]),
+        ),
+        ("send_chain_append_from_empty", json_items(&send_append)),
+        (
+            "send_chain_append_from_empty_hex",
+            json_hex(&send_entry.append(&[0; 32]).expect("send chain")),
+        ),
+        ("recv_chain_append", json_items(&recv_append)),
+        (
+            "recv_chain_append_hex",
+            json_hex(&recv_entry.append(&field_value(0x2c)).expect("recv chain")),
+        ),
+        (
+            "consumed_credit_leaf",
+            json_items(&consumed.field_items().expect("consumed items")),
+        ),
+        (
+            "pending_outgoing_leaf",
+            json_items(&pending.field_items().expect("pending items")),
+        ),
+        (
+            "fee_claim_leaf",
+            json_items(&fee.field_items().expect("fee items")),
+        ),
+        (
+            "credit_digest_leaf",
+            json_items(&credit_digest.field_items().expect("credit-digest items")),
+        ),
+    ])
+}
+
+/// Poseidon vectors (owner answers Q1, Q2, Q7, Q9, Q10 and Q11): one KAT per domain, the
+/// packing rule, `credit_id`, both `proof_digest` domains, the Payment digest, every map leaf
+/// and its key, the sparse tree with membership and absence openings, the credit-digest opening
+/// of the vectored `CreditStatus`, the blacklist and quota-window trees, and the verifying-key
+/// allowlist.
+fn poseidon_json(w: &VectorWorld) -> Value {
+    let int = kagemusha_wallet_field_from_u128_v1;
+    let payment = &w.payment;
+    let request = &w.request;
+    let digests = payment.digests().expect("payment digests");
+    let receive_digests = w.receive.verify(w.receiver()).expect("receive package");
+
+    // One KAT per domain over the elements [1, 2, 3].
+    let kat_items = [int(1), int(2), int(3)];
+    let kats = KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1
+        .iter()
+        .map(|(_, domain)| {
+            json_poseidon(
+                *domain,
+                &kat_items,
+                &kagemusha_wallet_poseidon_v1(*domain, &kat_items).expect("kat"),
+            )
+        })
+        .collect();
+
+    // The packing rule at the empty input and the 31-byte chunk boundaries.
+    let packed_bytes: Vec<u8> = (1..=63_u8).collect();
+    let packing = [0_usize, 1, 30, 31, 32, 62, 63]
+        .iter()
+        .map(|len| {
+            let bytes = &packed_bytes[..*len];
+            let items = kagemusha_wallet_packed_bytes_v1(bytes);
+            json_object(vec![
+                ("len", json_number(*len)),
+                ("bytes_hex", json_hex(bytes)),
+                (
+                    "poseidon",
+                    json_poseidon(
+                        KAGEMUSHA_WALLET_STEP_PROOF_DOMAIN_V1,
+                        &items,
+                        &kagemusha_wallet_poseidon_bytes_v1(
+                            KAGEMUSHA_WALLET_STEP_PROOF_DOMAIN_V1,
+                            bytes,
+                        ),
+                    ),
+                ),
+            ])
+        })
+        .collect();
+
+    // proof_digest in both domains and the Payment digest.
+    let length_prefixed = |parts: &[&[u8]]| {
+        let mut body = Vec::new();
+        for part in parts {
+            body.extend_from_slice(&u32::try_from(part.len()).expect("len").to_le_bytes());
+            body.extend_from_slice(part);
+        }
+        body
+    };
+    let omega = payment.send.lineage.lineage().expect("Ω(pred)");
+    let send_proof_body = length_prefixed(&[&omega.bytes(), &payment.send.step_proof.bytes]);
+    let receive_proof_body = length_prefixed(&[&w.receive.step_proof.bytes]);
+    let payment_transcript = kagemusha_wallet_payment_transcript_v1(
+        &digests.request,
+        &payment.payer_payment_key,
+        &digests.payer_credential,
+        &digests.package.package,
+    );
+    let packed_digest = |name: &str, domain: u64, body: &[u8], digest: &[u8; 32]| {
+        assert_eq!(kagemusha_wallet_poseidon_bytes_v1(domain, body), *digest);
+        json_object(vec![
+            ("object", json_text(name)),
+            (
+                "domain",
+                json_text(core::str::from_utf8(&domain.to_le_bytes()).expect("ascii")),
+            ),
+            ("body_hex", json_hex(body)),
+            (
+                "elements",
+                json_number(kagemusha_wallet_packed_bytes_v1(body).len()),
+            ),
+            ("digest_hex", json_hex(digest)),
+        ])
+    };
+
+    // Every map leaf and its key; the consumed-credit map of the Receive with membership and
+    // absence openings.
+    let consumed = payment
+        .consumed_credit_leaf(w.receive.statement.sequence)
+        .expect("consumed leaf");
+    let pending = payment.pending_outgoing_leaf().expect("pending leaf");
+    let fee = payment
+        .fee_claim_leaf()
+        .expect("fee leaf")
+        .expect("nonzero fee");
+    let load = KagemushaWalletLoadLeafV1 {
+        ordinal: 0,
+        voucher_digest: w.voucher.voucher_digest(),
+        amount: w.voucher.body.amount,
+    };
+    let redeem = KagemushaWalletRedeemLeafV1 {
+        ordinal: 0,
+        nullifier: kagemusha_wallet_unload_nullifier_v1(
+            &w.scheme_id(),
+            &w.payer().body.wallet_id,
+            0,
+        ),
+        amount: 700,
+        online_charge: 7,
+    };
+    let usage = KagemushaWalletQuotaUsageLeafV1 {
+        window_kind: KagemushaWalletQuotaWindowKindV1::Daily,
+        window_start_ms: QUOTA_START_MS,
+        window_end_ms: QUOTA_START_MS + DAY_MS,
+        used: payment.request.body.amount + payment.request.body.fee,
+    };
+    let leaves = json_object(vec![
+        (
+            "consumed_credit",
+            json_leaf(
+                KAGEMUSHA_WALLET_CONSUMED_CREDIT_LEAF_DOMAIN_V1,
+                &consumed.key(),
+                &consumed.field_items().expect("items"),
+                &consumed.leaf_value().expect("value"),
+            ),
+        ),
+        (
+            "pending_outgoing",
+            json_leaf(
+                KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1,
+                &pending.key(),
+                &pending.field_items().expect("items"),
+                &pending.leaf_value().expect("value"),
+            ),
+        ),
+        (
+            "load_recovery",
+            json_leaf(
+                KAGEMUSHA_WALLET_LOAD_RECOVERY_LEAF_DOMAIN_V1,
+                &load.key(),
+                &load.field_items(),
+                &load.leaf_value(),
+            ),
+        ),
+        (
+            "redeem_recovery",
+            json_leaf(
+                KAGEMUSHA_WALLET_REDEEM_RECOVERY_LEAF_DOMAIN_V1,
+                &redeem.key(),
+                &redeem.field_items(),
+                &redeem.leaf_value(),
+            ),
+        ),
+        (
+            "fee_claim",
+            json_leaf(
+                KAGEMUSHA_WALLET_FEE_CLAIM_LEAF_DOMAIN_V1,
+                &fee.key(),
+                &fee.field_items().expect("items"),
+                &fee.leaf_value().expect("value"),
+            ),
+        ),
+        (
+            "quota_usage",
+            json_leaf(
+                KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1,
+                &usage.key(),
+                &usage.field_items(),
+                &usage.leaf_value(),
+            ),
+        ),
+    ]);
+    let mut recovery = KagemushaWalletSparseTreeV1::new();
+    recovery
+        .insert(load.key(), load.leaf_value())
+        .expect("load leaf");
+    recovery
+        .insert(redeem.key(), redeem.leaf_value())
+        .expect("redeem leaf");
+    let mut consumed_map = KagemushaWalletSparseTreeV1::new();
+    consumed_map
+        .insert(consumed.key(), consumed.leaf_value().expect("value"))
+        .expect("consumed leaf");
+    let absent = super::messages::messages_tests::flip_bit(&consumed.key(), 0);
+    let empty_leaf = kagemusha_wallet_sparse_default_v1(0).expect("empty leaf");
+    let sparse = json_object(vec![
+        ("empty_leaf_hex", json_hex(&empty_leaf)),
+        (
+            "default_height_1_hex",
+            json_hex(&kagemusha_wallet_sparse_default_v1(1).expect("height 1")),
+        ),
+        (
+            "empty_root_hex",
+            json_hex(&kagemusha_wallet_empty_map_root_v1()),
+        ),
+        ("load_redeem_recovery_root_hex", json_hex(&recovery.root())),
+        (
+            "load_membership",
+            json_opening(
+                &load.key(),
+                &load.leaf_value(),
+                &recovery.opening(&load.key()).expect("opening"),
+                &recovery.root(),
+            ),
+        ),
+        (
+            "consumed_credit_membership",
+            json_opening(
+                &consumed.key(),
+                &consumed.leaf_value().expect("value"),
+                &consumed_map.opening(&consumed.key()).expect("opening"),
+                &consumed_map.root(),
+            ),
+        ),
+        (
+            "consumed_credit_absence",
+            json_opening(
+                &absent,
+                &empty_leaf,
+                &consumed_map.opening(&absent).expect("absence"),
+                &consumed_map.root(),
+            ),
+        ),
+    ]);
+
+    // The credit-digest opening of the vectored CreditStatus.
+    let status = w.status();
+    let leaf = status.opening.leaf();
+    let credit_opening = json_object(vec![
+        (
+            "leaf",
+            json_leaf(
+                KAGEMUSHA_WALLET_CREDIT_DIGEST_LEAF_DOMAIN_V1,
+                &leaf.key(),
+                &leaf.field_items().expect("items"),
+                &leaf.leaf_value().expect("value"),
+            ),
+        ),
+        (
+            "opening",
+            json_opening(
+                &leaf.key(),
+                &leaf.leaf_value().expect("value"),
+                &KagemushaWalletSparseOpeningV1 {
+                    path_bitmap: status.opening.path_bitmap,
+                    siblings: status.opening.sibling_values().collect(),
+                },
+                &status.lineage.public.credit_digest_root,
+            ),
+        ),
+    ]);
+
+    // Blacklist and quota-window trees (§7).
+    let entries = &w.blacklist.entries;
+    let blacklist_leaf_items = |lower: &[u8; 32], upper: &[u8; 32]| {
+        let limbs = |value: &[u8; 32]| {
+            let mut low = [0_u8; 32];
+            let mut high = [0_u8; 32];
+            low[..16].copy_from_slice(&value[..16]);
+            high[..16].copy_from_slice(&value[16..]);
+            [low, high]
+        };
+        [limbs(lower), limbs(upper)].concat()
+    };
+    let leaf_0 = kagemusha_wallet_blacklist_leaf_v1(
+        &KAGEMUSHA_WALLET_BLACKLIST_SENTINEL_LOW_V1,
+        &entries[0].account_digest,
+    );
+    let leaf_1 =
+        kagemusha_wallet_blacklist_leaf_v1(&entries[0].account_digest, &entries[1].account_digest);
+    let outsider = kagemusha_wallet_digest_v1(Role::Account, b"unlisted");
+    let gap = w.blacklist.gap_opening(&outsider).expect("gap opening");
+    let blacklist = json_object(vec![
+        (
+            "leaf_0",
+            json_poseidon(
+                KAGEMUSHA_WALLET_BLACKLIST_LEAF_DOMAIN_V1,
+                &blacklist_leaf_items(
+                    &KAGEMUSHA_WALLET_BLACKLIST_SENTINEL_LOW_V1,
+                    &entries[0].account_digest,
+                ),
+                &leaf_0,
+            ),
+        ),
+        (
+            "node_0_1",
+            json_poseidon(
+                KAGEMUSHA_WALLET_BLACKLIST_NODE_DOMAIN_V1,
+                &[leaf_0, leaf_1],
+                &kagemusha_wallet_blacklist_node_v1(&leaf_0, &leaf_1).expect("node"),
+            ),
+        ),
+        ("entries_root_hex", json_hex(&w.blacklist.body.entries_root)),
+        (
+            "gap_opening",
+            json_object(vec![
+                ("account_digest_hex", json_hex(&outsider)),
+                (
+                    "leaf_index",
+                    json_number(usize::try_from(gap.leaf_index).expect("index")),
+                ),
+                ("lower_hex", json_hex(&gap.lower)),
+                ("upper_hex", json_hex(&gap.upper)),
+                ("siblings", json_items(&gap.siblings)),
+                ("root_hex", json_hex(&gap.root().expect("gap root"))),
+            ]),
+        ),
+    ]);
+    let windows = &w.quota_share.windows;
+    let quota = json_object(vec![
+        (
+            "window_0",
+            json_poseidon(
+                KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1,
+                &windows[0].field_items(),
+                &windows[0].leaf_value(),
+            ),
+        ),
+        (
+            "empty_window_hex",
+            json_hex(&kagemusha_wallet_quota_empty_window_leaf_v1()),
+        ),
+        (
+            "node_0_1",
+            json_poseidon(
+                KAGEMUSHA_WALLET_QUOTA_NODE_DOMAIN_V1,
+                &[windows[0].leaf_value(), windows[1].leaf_value()],
+                &kagemusha_wallet_quota_node_v1(&windows[0].leaf_value(), &windows[1].leaf_value())
+                    .expect("node"),
+            ),
+        ),
+        (
+            "windows_root_hex",
+            json_hex(&w.quota_share.body.windows_root),
+        ),
+    ]);
+
+    json_object(vec![
+        ("kats", Value::Array(kats)),
+        ("packing", Value::Array(packing)),
+        (
+            "credit_id",
+            json_object(vec![
+                ("request_body_hex", json_hex(&request.body.transcript())),
+                (
+                    "poseidon",
+                    json_poseidon(
+                        KAGEMUSHA_WALLET_CREDIT_DOMAIN_V1,
+                        &request.body.field_items(),
+                        &digests.credit_id,
+                    ),
+                ),
+            ]),
+        ),
+        (
+            "proof_digests",
+            Value::Array(vec![
+                packed_digest(
+                    "Send: stand-in Ω(pred) and σ_send",
+                    KAGEMUSHA_WALLET_PROOF_DOMAIN_V1,
+                    &send_proof_body,
+                    &digests.package.proof,
+                ),
+                packed_digest(
+                    "Receive: stand-in σ_recv",
+                    KAGEMUSHA_WALLET_STEP_PROOF_DOMAIN_V1,
+                    &receive_proof_body,
+                    &receive_digests.proof,
+                ),
+            ]),
+        ),
+        (
+            "payment_digest",
+            packed_digest(
+                "compact Payment",
+                KAGEMUSHA_WALLET_PAYMENT_DOMAIN_V1,
+                &payment_transcript,
+                &digests.payment,
+            ),
+        ),
+        ("leaves", leaves),
+        ("sparse_tree", sparse),
+        ("credit_digest_opening", credit_opening),
+        ("blacklist", blacklist),
+        ("quota_windows", quota),
+        (
+            "verifying_key_set",
+            json_object(vec![
+                (
+                    "transcript_hex",
+                    json_hex(&w.allowlist.transcript().expect("allowlist transcript")),
+                ),
+                (
+                    "digest_hex",
+                    json_hex(
+                        &w.allowlist
+                            .verifying_key_set_digest()
+                            .expect("allowlist digest"),
+                    ),
+                ),
+            ]),
         ),
     ])
 }
@@ -2957,6 +3793,8 @@ fn vectors_file_text(w: &VectorWorld) -> String {
         ("frames", frame_pins_json()),
         ("objects", object_pins_json(w)),
         ("enum_tags", enum_tags_json(&enum_tag_table(w))),
+        ("field_encodings", field_encodings_json(w)),
+        ("poseidon", poseidon_json(w)),
     ]);
     let mut text = norito::json::to_string_pretty(&document).expect("vectors json");
     text.push('\n');
@@ -3022,6 +3860,8 @@ fn kagemusha_wallet_v1_vectors_are_deterministic_and_parse() {
         "objects",
         "enum_tags",
         "keys",
+        "field_encodings",
+        "poseidon",
     ] {
         assert!(document.contains_key(key), "{key}");
     }
@@ -3047,14 +3887,23 @@ fn kagemusha_wallet_v1_vectors_cover_every_role_once_in_order() {
         .filter(|vector| vector.stand_in_proof)
         .map(|vector| vector.role.as_str())
         .collect();
-    assert_eq!(labelled, ["proof", "capsule", "completion"]);
+    assert_eq!(
+        labelled,
+        [
+            "lineage",
+            "capsule",
+            "completion",
+            "fold",
+            "verifying-key-set"
+        ]
+    );
 }
 
 #[test]
 fn kagemusha_wallet_v1_signature_vectors_and_boundaries() {
     let world = vector_world();
     let vectors = signature_vectors(world);
-    assert_eq!(vectors.len(), 17);
+    assert_eq!(vectors.len(), 18);
     let Value::Array(rows) = signature_vectors_json(&vectors) else {
         panic!("array");
     };
@@ -3114,6 +3963,7 @@ fn kagemusha_wallet_v1_envelope_vectors_and_frame_pins() {
         "Credited",
         "SessionControl",
         "PolicyData",
+        "Lineage",
     ] {
         assert!(kinds.contains(&kind), "{kind}");
     }
@@ -3211,14 +4061,24 @@ fn kagemusha_wallet_v1_every_version_field_precedes_the_scheme() {
         "statement.version",
     );
     let mut fee = l.fee_claim.clone();
-    fee.payment.payer_credential.body.version = 2;
+    fee.payment.send.statement.version = 2;
     fee.payment.request.body.scheme_id = foreign;
     assert_version_error(
         KagemushaWalletFeeClaimV1::decode_canonical(
             &norito::encode_canonical(&fee).expect("encode"),
             &w.scheme_id(),
         ),
-        "credential.version",
+        "statement.version",
+    );
+    let mut fold = w.fold.clone();
+    fold.lineage.public.version = 2;
+    fold.scheme_id = foreign;
+    assert_version_error(
+        KagemushaWalletFoldRecordV1::decode_canonical(
+            &norito::encode_canonical(&fold).expect("encode"),
+            &w.scheme_id(),
+        ),
+        "lineage.version",
     );
     let mut activation = l.activation.clone();
     activation.asset.version = 2;
@@ -3254,11 +4114,11 @@ fn kagemusha_wallet_v1_every_version_field_precedes_the_scheme() {
     completion.receipt.version = 2;
     assert_version_error(completion.require_versions(), "receipt.version");
     let mut status = w.credited_status.clone();
-    if let KagemushaWalletCreditedEvidenceV1::Status { status, .. } = &mut status.evidence {
+    if let KagemushaWalletCreditedEvidenceV1::Status { status } = &mut status.evidence {
         status.statement.version = 2;
     }
-    assert_version_error(status.require_versions(), "credit_status.version");
-    let mut request = w.payment.request.clone();
+    assert_version_error(status.require_versions(), "statement.version");
+    let mut request = w.request.clone();
     if let KagemushaWalletFeeScheduleSlotV1::Present { schedule } = &mut request.fee_schedule {
         schedule.body.version = 2;
     }
@@ -3317,7 +4177,7 @@ fn kagemusha_wallet_v1_every_version_field_precedes_the_scheme() {
 #[test]
 fn kagemusha_wallet_v1_every_enum_norito_tag_equals_its_transcript_tag() {
     let table = enum_tag_table(vector_world());
-    assert_eq!(table.len(), 21);
+    assert_eq!(table.len(), 22);
     for entry in &table {
         let mut previous = None;
         for (variant, tag, wire) in &entry.variants {
@@ -3340,11 +4200,17 @@ fn kagemusha_wallet_v1_every_enum_norito_tag_equals_its_transcript_tag() {
 fn kagemusha_wallet_v1_vector_world_objects_validate() {
     let w = vector_world();
     let scheme = w.scheme();
-    w.payment.verify(&scheme).expect("payment");
+    w.payment
+        .verify(&scheme, w.payer(), &w.payer_issuer_set(), &w.request)
+        .expect("payment");
     w.credited_receive
-        .verify(&scheme)
+        .verify_for(&w.scheme(), &w.request, &w.payment)
         .expect("credited receive");
-    w.credited_status.verify(&scheme).expect("credited status");
+    w.credited_status
+        .verify_for(&w.scheme(), &w.request, &w.payment)
+        .expect("credited status");
+    w.lineage.verify_for_offer(&w.offer).expect("lineage");
+    w.fold.validate().expect("fold record");
     w.offer.verify(&scheme).expect("offer");
     w.close.verify(Some(w.payer())).expect("close");
     w.unsupported.verify(None).expect("unsupported");
@@ -3442,7 +4308,7 @@ fn kagemusha_wallet_v1_flips_offer() {
 fn kagemusha_wallet_v1_flips_request() {
     let w = vector_world();
     let scheme = w.scheme();
-    let request = &w.payment.request;
+    let request = &w.request;
     assert_flips(request, request.request_digest(), |bytes| {
         let request: KagemushaWalletRequestV1 =
             decode_frame_v1(bytes, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1).ok()?;
@@ -3467,22 +4333,57 @@ fn kagemusha_wallet_v1_flips_payment() {
 #[test]
 fn kagemusha_wallet_v1_flips_credited_receive() {
     let w = vector_world();
-    let digest = w.credited_receive.credited_digest().expect("credited");
+    let (digest, _) = w
+        .credited_receive
+        .verify_for(&w.scheme(), &w.request, &w.payment)
+        .expect("credited");
     assert_flips(&w.credited_receive, digest, |bytes| {
         let credited: KagemushaWalletCreditedV1 =
             decode_frame_v1(bytes, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1).ok()?;
-        credited.credited_digest().ok()
+        credited
+            .verify_for(&w.scheme(), &w.request, &w.payment)
+            .ok()
+            .map(|(digest, _)| digest)
     });
 }
 
 #[test]
 fn kagemusha_wallet_v1_flips_credited_status() {
     let w = vector_world();
-    let digest = w.credited_status.credited_digest().expect("credited");
+    let (digest, _) = w
+        .credited_status
+        .verify_for(&w.scheme(), &w.request, &w.payment)
+        .expect("credited");
     assert_flips(&w.credited_status, digest, |bytes| {
         let credited: KagemushaWalletCreditedV1 =
             decode_frame_v1(bytes, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1).ok()?;
-        credited.credited_digest().ok()
+        credited
+            .verify_for(&w.scheme(), &w.request, &w.payment)
+            .ok()
+            .map(|(digest, _)| digest)
+    });
+}
+
+#[test]
+fn kagemusha_wallet_v1_flips_lineage_message() {
+    let w = vector_world();
+    assert_flips(&w.lineage, w.lineage.lineage_digest(), |bytes| {
+        let lineage: KagemushaWalletLineageMessageV1 =
+            decode_frame_v1(bytes, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1).ok()?;
+        lineage.verify_for_offer(&w.offer).ok()?;
+        Some(lineage.lineage_digest())
+    });
+}
+
+#[test]
+fn kagemusha_wallet_v1_flips_fold_record() {
+    let w = vector_world();
+    let digest = w.fold.fold_digest().expect("fold digest");
+    assert_flips(&w.fold, digest, |bytes| {
+        KagemushaWalletFoldRecordV1::decode_canonical(bytes, &w.scheme_id())
+            .ok()?
+            .fold_digest()
+            .ok()
     });
 }
 

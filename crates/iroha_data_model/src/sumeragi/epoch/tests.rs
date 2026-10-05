@@ -1,9 +1,7 @@
 //! Real BLS/Pasta epoch codec, identity, and successor controls.
 
 use super::*;
-use crate::isi::kagemusha_v1::{
-    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KagemushaMintFinalityValidatorKeysV1,
-};
+use crate::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1;
 use iroha_crypto::{Hash, KeyPair};
 
 // Public multiples 1..10 of (-1,2) on y²=x³+5, generated independently with the
@@ -66,7 +64,7 @@ pub fn fixture(count: usize) -> ValidatorEpochContextV1 {
             })
             .collect(),
     };
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10).unwrap();
+    let authorization = ValidatorEpochAuthorizationV1::genesis(&authority, 10).unwrap();
     let context = ValidatorEpochContextV1 {
         da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         version: 1,
@@ -88,7 +86,7 @@ pub fn retained(previous: &ValidatorEpochContextV1) -> ValidatorEpochContextV1 {
     authorization.first_height = previous.authorization.last_height + 1;
     authorization.last_height = authorization.first_height + 9;
     authorization.previous_authorization_id = previous.authorization.authorization_id().unwrap();
-    authorization.decision = KagemushaMintFinalityEpochDecisionV1::Retain;
+    authorization.decision = ValidatorEpochDecisionV1::Retain;
     authorization.beacon = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
         session_id: [0x41; 32],
         transcript_hash: [0x51; 32],

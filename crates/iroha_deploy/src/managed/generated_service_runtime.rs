@@ -9,7 +9,7 @@ use super::{
     service_policies::GeneratedServicePolicies,
 };
 use crate::localnet::service_authorities::{
-    RetainedGatewayCompliancePlan, RetainedProviderServicePlan,
+    RetainedGatewayCompliancePlan, RetainedProviderServicePlan, RetainedPublicationServicePlan,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -69,6 +69,7 @@ struct RuntimeSelection {
     plans: [RetainedProviderServicePlan; 3],
     compliance: [RetainedGatewayCompliancePlan; 3],
     initial: [Option<ManagedCustodyEnrollmentInterval>; 3],
+    publication: RetainedPublicationServicePlan,
 }
 impl RuntimeSelection {
     fn read(authority: &ServiceAuthority) -> Result<Self> {
@@ -77,6 +78,25 @@ impl RuntimeSelection {
             .prepared
             .provider_service_plans()?
             .ok_or_else(|| invalid("original provider plans absent"))?;
+        let publication = authority
+            .prepared
+            .publication_service_plan()?
+            .ok_or_else(|| invalid("original publication plan absent"))?;
+        if publication.peer_index() != 0
+            || publication.network_id() != authority.config.network_id
+            || publication.chain_id() != authority.config.chain.as_str()
+            || publication.seed_provider() != plans[0].provider_id()
+            || publication.ingress_broker() != &authority
+                .provider_inventory(plans[0].provider_id())?
+                .authority(crate::localnet::service_authorities::StreamTokenAuthorityRole::IssuerOperator)?
+                .account
+            || publication.pin_authority()
+                != authority.network_role(
+                    crate::localnet::service_authorities::NetworkServiceAuthorityRole::MusubiPin,
+                )?
+        {
+            return Err(invalid("original publication selection differs"));
+        }
         let parent = ManagedServiceBootstrap::open(&authority.prepared)?;
         let policies = parent.selected_policies()?;
         drop(parent);
@@ -111,6 +131,7 @@ impl RuntimeSelection {
         Ok(Self {
             policies,
             plans,
+            publication,
             compliance: compliance
                 .try_into()
                 .map_err(|_| invalid("original compliance count differs"))?,
@@ -358,6 +379,10 @@ impl GeneratedServiceRuntime {
         let selection = RuntimeSelection::read(&self.authority)?;
         let root = PrivateDirectory::open_exact(generation_path(&self.authority.prepared)?)?;
         let expected = encode(&revision.manifest, MAX_MANIFEST_BYTES)?;
+        let required_identities: &[RequiredTransaction] = revision
+            .required
+            .as_ref()
+            .map_or(&[], RequiredTransactions::identities);
         if root.path() != revision.cwd()
             || self
                 .authority
@@ -369,11 +394,7 @@ impl GeneratedServiceRuntime {
             || revision.manifest.intent.genesis != *self.authority.genesis.genesis.hash().as_ref()
             || revision.manifest.intent.policies
                 != *Hash::new(encode(&selection.policies, MAX_POLICY_BYTES)?).as_ref()
-            || revision.manifest.intent.required.as_slice()
-                != revision
-                    .required
-                    .as_ref()
-                    .map_or(&[][..], RequiredTransactions::identities)
+            || revision.manifest.intent.required.as_slice() != required_identities
             || revision.manifest.intent.components
                 != revision
                     .components
@@ -779,3 +800,85 @@ fn retain_exact(
 #[cfg(test)]
 #[path = "generated_service_runtime/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod protected_config_tests {
+    use super::*;
+    use iroha_data_model::{asset::AssetDefinitionId, transaction::FeePaymentIntent};
+    use iroha_primitives::numeric::Quantity;
+    use iroha_wallet::operations::BoundedTransactionOptions;
+    use std::{collections::BTreeMap, time::Duration};
+
+    #[test]
+    fn catalog_intent_borrows_private_originals_and_empty_carriers_validate() {
+        let _guard = crate::managed::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let ports = crate::managed::LocalnetPorts::reserve().unwrap();
+        let prepared = crate::localnet::prepare_localnet_at(
+            "runtime-protected-originals",
+            &temporary.path().join("generation"),
+            &ports,
+            crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities,
+            None,
+        )
+        .unwrap();
+        let options = BoundedTransactionOptions {
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            max_total_fees: BTreeMap::from([(
+                AssetDefinitionId::parse_address_literal(
+                    crate::genesis::profile::TAIRA_XOR_ASSET_DEFINITION_ID,
+                )
+                .unwrap(),
+                Quantity::from(1_000u64),
+            )]),
+            deadline: Instant::now() + Duration::from_secs(300),
+        };
+        let mut bootstrap = ManagedServiceBootstrap::open(&prepared).unwrap();
+        bootstrap.authorize_test_startup(&options).unwrap().unwrap();
+        drop(bootstrap);
+        let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+        let selection = RuntimeSelection::read(&owner.authority).unwrap();
+        let root = PrivateDirectory::open_exact(generation_path(&prepared).unwrap()).unwrap();
+        let originals: Vec<zeroize::Zeroizing<Vec<u8>>> = (0..4)
+            .map(|index| {
+                root.read(format!("peer{index}.toml"), MAX_CONFIG_BYTES)
+                    .unwrap()
+            })
+            .collect();
+        let addresses: [_; 4] = std::array::from_fn(|index| originals[index].as_ptr());
+        let digests: [_; 4] =
+            std::array::from_fn(|index| *blake3::hash(originals[index].as_slice()).as_bytes());
+        let intent = owner
+            .publication_intent(&selection, &originals, None, None)
+            .unwrap();
+        assert_eq!(intent.originals, digests);
+        assert!(intent.required.is_empty());
+        assert!(intent.components.is_none());
+        assert_eq!(intent.stage, GeneratedRuntimeStage::Catalog);
+        for index in 0..4 {
+            assert_eq!(
+                originals[index].as_ptr(),
+                addresses[index],
+                "original private backing stays owned"
+            );
+            assert_eq!(
+                *blake3::hash(originals[index].as_slice()).as_bytes(),
+                digests[index]
+            );
+        }
+        assert!(
+            owner
+                .publication_intent(&selection, &originals[..3], None, None)
+                .is_err()
+        );
+        assert!(
+            owner
+                .publication_intent(&selection, &originals, Some([[1; 32]; 3]), None)
+                .is_err()
+        );
+        let revision = owner.prepare_catalog(options.deadline).unwrap();
+        assert_eq!(revision.manifest.intent.originals, digests);
+        assert!(revision.required_transactions().is_empty());
+        owner.validate_material(&revision).unwrap();
+    }
+}

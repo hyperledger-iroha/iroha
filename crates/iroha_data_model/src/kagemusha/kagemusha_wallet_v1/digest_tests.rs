@@ -7,8 +7,10 @@ use sha2::{Digest as _, Sha256};
 
 use super::*;
 
-/// Exact role labels of design §1.1 with the C3 additions, in declaration order.
-const ROLE_LABELS: [&str; 59] = [
+/// Exact role labels in declaration order. The values a step relation computes or opens
+/// (`credit_id`, `proof_digest`, the Payment digest, the blacklist and quota-window trees) are
+/// Poseidon values, not SHA roles (owner answers Q1, Q2 and Q9).
+const ROLE_LABELS: [&str; 55] = [
     "scheme",
     "relation",
     "provider-contract",
@@ -29,33 +31,28 @@ const ROLE_LABELS: [&str; 59] = [
     "fee-schedule",
     "blacklist-body",
     "blacklist",
-    "blacklist-leaf",
-    "blacklist-node",
     "quota-share-body",
     "quota-share",
-    "quota-window",
-    "quota-node",
     "time-anchor-body",
     "time-anchor",
     "offer-body",
     "session-control-body",
     "request-body",
     "request",
-    "credit",
-    "dependencies",
     "statement",
-    "proof",
+    "lineage",
     "receipt-body",
     "receipt",
     "package",
-    "payment",
-    "credit-status-statement",
+    "credit-opening",
+    "credit-status",
     "credited",
     "operation-id",
     "output",
     "capsule",
     "marker",
     "completion",
+    "fold",
     "voucher-body",
     "voucher",
     "unload-nullifier",
@@ -65,6 +62,7 @@ const ROLE_LABELS: [&str; 59] = [
     "renewal-assertion",
     "artifact-manifest-body",
     "artifact-manifest",
+    "verifying-key-set",
     "charge-quote-body",
     "charge-quote",
     "evidence",
@@ -148,6 +146,19 @@ fn kagemusha_wallet_v1_role_labels_are_pinned_unique_and_ascii() {
     let labels: BTreeSet<&str> = ROLE_LABELS.into_iter().collect();
     assert_eq!(labels.len(), ROLE_LABELS.len());
     assert!(!labels.contains("policy-chunk"), "C3 drops policy-chunk");
+    // The superseded SHA roles of the Poseidon values are gone, not aliased.
+    for label in [
+        "credit",
+        "proof",
+        "step-proof",
+        "payment",
+        "blacklist-leaf",
+        "blacklist-node",
+        "quota-window",
+        "quota-node",
+    ] {
+        assert!(!labels.contains(label), "{label}");
+    }
     assert_eq!(
         KAGEMUSHA_WALLET_DIGEST_PREFIX_V1,
         b"iroha:kagemusha:wallet:v1:"
@@ -169,17 +180,18 @@ fn kagemusha_wallet_v1_preimage_layout_and_pinned_digests() {
         "90882608a8e8892521a2661be1e81c3fbfca0f8773e621000daed362a37485a5"
     );
     let body = [0_u8, 1, 2, 3];
-    let credit = kagemusha_wallet_preimage_v1(KagemushaWalletDigestRoleV1::Credit, &body);
+    let credential = kagemusha_wallet_preimage_v1(KagemushaWalletDigestRoleV1::Credential, &body);
     assert_eq!(
-        hex::encode(&credit),
-        "69726f68613a6b6167656d757368613a77616c6c65743a76313a63726564697400040000000000000000010203"
+        hex::encode(&credential),
+        "69726f68613a6b6167656d757368613a77616c6c65743a76313a63726564656e7469616c000400000000000000\
+         00010203"
     );
     assert_eq!(
         hex::encode(kagemusha_wallet_digest_v1(
-            KagemushaWalletDigestRoleV1::Credit,
+            KagemushaWalletDigestRoleV1::Credential,
             &body
         )),
-        "faa1d5dde3ff201dfe03acf8b5a722555217924aec6fec2510ebd3c1608a4ae2"
+        "ce04890831ccf922d21886e0c51ca341b7ec7652a63618aab1921315924ed8ea"
     );
     let mut digests = BTreeSet::new();
     for role in KagemushaWalletDigestRoleV1::ALL {
@@ -226,7 +238,11 @@ fn kagemusha_wallet_v1_signed_object_digest_hashes_body_digest_then_signature() 
 #[test]
 fn kagemusha_wallet_v1_transcript_builder_writes_fixed_widths() {
     let (signing, public) = key(9);
-    let (low, _) = low_and_high(&sign(&signing, KagemushaWalletDigestRoleV1::Proof, b"x"));
+    let (low, _) = low_and_high(&sign(
+        &signing,
+        KagemushaWalletDigestRoleV1::Statement,
+        b"x",
+    ));
     let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&low).expect("low-S");
     let transcript = WalletTranscriptV1::with_capacity(0)
         .u8(0xab)
@@ -398,12 +414,12 @@ fn kagemusha_wallet_v1_signature_boundary_scalars() {
     assert!(matches!(
         kagemusha_wallet_freeze_signature_v1(
             &public,
-            KagemushaWalletDigestRoleV1::Proof,
+            KagemushaWalletDigestRoleV1::Statement,
             b"",
             KagemushaWalletSignerOutputV1::Raw(raw(&one, &half_plus_one))
         ),
         Err(KagemushaWalletValidationErrorV1::InvalidSignature {
-            role: KagemushaWalletDigestRoleV1::Proof
+            role: KagemushaWalletDigestRoleV1::Statement
         })
     ));
 }

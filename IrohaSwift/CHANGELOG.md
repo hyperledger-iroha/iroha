@@ -4,6 +4,44 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- Added `KagemushaWalletApplePlatformV1`, the iPhone platform adapter behind the
+  Rust KAGEMUSHA wallet Advance provider: the Secure Enclave payment key, the
+  keychain rollback anchor, the Complete-class protected-data canary, the custody
+  root under Application Support and the boot session identity. Both custody
+  keychain items are `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` in the
+  app's own access group, which `init(appAttest:applicationIdentifierPrefix:)`
+  derives from the App ID prefix. The adapter is constructible only for iPhone
+  and iPad apps on their own device. `attestEnrollment(slot:paymentPublicKey:challengeDigest:)`
+  produces the App Attest evidence of enrollment step E5
+  (`KagemushaWalletAppleEnrollmentEvidenceV1`), with
+  `KagemushaWalletAppleEnrollmentAttestationErrorV1` and
+  `KagemushaWalletAppleAppAttestStageV1` for failures. The slot, profile,
+  unavailable-reason, status and configuration-error types are public.
+- Removed the aggregate-balance KAGEMUSHA wallet and its consumers, superseded by
+  the KAGEMUSHA wallet V1 design (`KagemushaWalletWireV1` and
+  `KagemushaWalletApplePlatformV1`): the wire codec and models (`KagemushaNoritoV1`,
+  `KagemushaWireV1`, `KagemushaModelsV1`), `KagemushaWalletV1` orchestration, the
+  hardware-provider, device-lifecycle and Core coordinator bridges, the App Attest
+  ordinary enrollment and approval providers, reserve finality, top-up and
+  redemption. `ToriiClient` no longer exposes `getKagemushaCapability`,
+  `submitKagemushaTopUp`, `submitKagemushaRedemption`, `getKagemushaOperation`,
+  `ToriiKagemushaStatus`, the `ToriiKagemushaOperation*` types or
+  `ToriiTopUpOwnershipV1`; `TxBuilder.buildSignedKagemushaTopUp` and
+  `KagemushaTopUpTransactionInputError` are gone. `ParticipantEnrollmentHttpCodecV1`,
+  `AndroidProvisionedProof` and the `IrohaSwiftTransferUI` KAGEMUSHA flow views
+  (`IrohaKagemushaFlowView` and its widgets) were removed with them.
+- Removed the signature-only KAGEMUSHA wallet suite (`Sources/IrohaSwift/KagemushaAttested/`):
+  `KagemushaAmount`, `KagemushaConfig`, `KagemushaAccountProof`,
+  `KagemushaLedgerPort`, `KagemushaPlatform`, `KagemushaStatus`,
+  `KagemushaReadyState`, `KagemushaLimit`, `KagemushaError`, `KagemushaRefusal`,
+  `KagemushaUnsupportedReason`, `KagemushaFrozenReason`,
+  `KagemushaRevocationReason`, `KagemushaLoadResult`, `KagemushaOutgoingPayment`,
+  `KagemushaReceiveResult`, `KagemushaRedemptionStatus`, `KagemushaRedeemResult`,
+  `KagemushaDeliveredPayment`, `KagemushaSyncResult`, `KagemushaPeerMessage`,
+  `KagemushaIssuerTransport`, `KagemushaURLSessionTransport` and the DEBUG-only
+  `KagemushaTestKeyStore` and `KagemushaTestAttestationProvider`. Its Secure
+  Enclave key handling moved into `KagemushaWalletApplePlatformV1`; the Rust
+  provider owns custody storage and enrollment parsing.
 - Collection queries follow `specs/torii/collection_queries.md`: `ToriiFilter`
   (builder operators, result builder, canonical text `description` and JSON
   `jsonData()`, client-side limits), `ToriiSortKey`, `ToriiAggregate`,
@@ -110,13 +148,6 @@ All notable changes to `IrohaSwift` are documented in this file.
   contract activity/event reads plus the generic event SSE feed now use the
   client's default canonical request signer when configured, while remaining
   anonymous for public dataspaces.
-- Added the aggregate-balance KAGEMUSHA wire codec (`KagemushaNoritoV1`), `kgm1:`
-  text transport, device-lifecycle surface, and fail-closed wallet orchestration.
-  The wallet supports concurrent head-independent requests, durable idempotent
-  staging and acknowledgements, unbounded inbox-prefix folding, immediately
-  usable send successors,
-  byte-identical retries, partial/full redemption, and KAGEMUSHA epoch-local counter
-  rollover without a software fallback.
 - Replaced the governance mutation boundary with closed public-only request
   types. Deploy proposals no longer expose ignored limits and now use typed
   manifest provenance; ZK public inputs are exact and shared across legacy,

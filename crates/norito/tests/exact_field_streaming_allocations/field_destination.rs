@@ -736,3 +736,168 @@ fn prepared_nested_late_scope_failure_keeps_both_original_banks_for_unchanged_re
     drop((error, workspace, destination, reservation));
     assert_eq!(pool.reserved_bytes(), 0);
 }
+
+#[derive(Debug, PartialEq, NoritoSerialize, DeserializePayload, NoritoSchema)]
+#[norito(decode_fields, decode_from_slice)]
+#[norito_schema(name = "prepared.Tuple")]
+struct TupleRecord(u32, u64, [u8; 4]);
+#[derive(Debug, PartialEq, NoritoSerialize, DeserializePayload, NoritoSchema)]
+#[norito(decode_from_slice)]
+#[norito_schema(name = "prepared.Tuple")]
+struct OriginalTuple(u32, u64, [u8; 4]);
+struct TupleDestination {
+    first: u32,
+    second: u64,
+    fixed: [u8; 4],
+}
+impl FieldDestination for TupleDestination {
+    type Error = std::convert::Infallible;
+}
+impl DecodeField<0, u32> for TupleDestination {
+    type Value = ();
+    fn decode_field(
+        &mut self,
+        field: CanonicalField<'_, u32>,
+    ) -> Result<(), DecodeIntoError<Self::Error>> {
+        field.with_payload(|bytes| {
+            let (value, used) = u32::decode_from_slice(bytes)?;
+            if used != bytes.len() {
+                return Err(norito::Error::LengthMismatch.into());
+            }
+            self.first = value;
+            Ok(())
+        })
+    }
+}
+impl DecodeField<1, u64> for TupleDestination {
+    type Value = ();
+    fn decode_field(
+        &mut self,
+        field: CanonicalField<'_, u64>,
+    ) -> Result<(), DecodeIntoError<Self::Error>> {
+        field.with_payload(|bytes| {
+            let (value, used) = u64::decode_from_slice(bytes)?;
+            if used != bytes.len() {
+                return Err(norito::Error::LengthMismatch.into());
+            }
+            self.second = value;
+            Ok(())
+        })
+    }
+}
+impl DecodeField<2, [u8; 4]> for TupleDestination {
+    type Value = ();
+    fn decode_field(
+        &mut self,
+        field: CanonicalField<'_, [u8; 4]>,
+    ) -> Result<(), DecodeIntoError<Self::Error>> {
+        self.fixed = field.decode_owned()?;
+        Ok(())
+    }
+}
+impl SerializePayload for TupleDestination {
+    fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        TupleRecord(self.first, self.second, self.fixed).serialize(encoder)
+    }
+}
+impl norito::core::PreparedRecordDestination<TupleRecord> for TupleDestination {
+    fn reset(&mut self) {
+        self.first = 0;
+        self.second = 0;
+        self.fixed = [0; 4];
+    }
+}
+#[test]
+fn closed_tuple_keeps_original_wire_error_and_slice_contract_with_zero_allocation_prepared_scalars()
+{
+    let pool = AllocationBudget::new(1 << 20);
+    let mut reservation = pool
+        .try_reserve_layouts(PreparedDecodeWorkspace::allocation_layouts())
+        .unwrap();
+    let mut work = PreparedDecodeWorkspace::from_reservation(&pool, &mut reservation).unwrap();
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let value = TupleRecord(0x11223344, 0x1122334455667788, [3, 5, 7, 11]);
+        let original = OriginalTuple(value.0, value.1, value.2);
+        let bytes = super::bare_bytes(&value, flags);
+        assert_eq!(bytes, super::bare_bytes(&original, flags));
+        assert_eq!(
+            norito::to_bytes(&value).unwrap(),
+            norito::to_bytes(&original).unwrap()
+        );
+        let mut source = iroha_allocation::ChargedBuffer::new(bytes.len() + 1, &pool).unwrap();
+        source.append(&[0xa5]).unwrap();
+        source.append(&bytes).unwrap();
+        let pointer = source.as_slice().as_ptr();
+        let mut destination = TupleDestination {
+            first: 0,
+            second: 0,
+            fixed: [0; 4],
+        };
+        let held = pool
+            .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+            .unwrap();
+        let mut used = None;
+        let allocations = super::allocations_during(|| {
+            used = Some(
+                work.with_limits(tuple_limits(1 << 20), tuple_limits(1 << 20), || {
+                    TupleRecord::decode_fields(&source.as_slice()[1..], &mut destination)
+                })
+                .unwrap()
+                .unwrap()
+                .1,
+            );
+        });
+        assert_eq!(allocations, 0);
+        assert_eq!(used, Some(bytes.len()));
+        assert_eq!(
+            (destination.first, destination.second, destination.fixed),
+            (value.0, value.1, value.2)
+        );
+        assert_eq!(source.as_slice().as_ptr(), pointer);
+        assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
+        drop(held);
+        for end in 0..bytes.len() {
+            let ordinary = OriginalTuple::decode_from_slice(&bytes[..end]).unwrap_err();
+            let updated = TupleRecord::decode_from_slice(&bytes[..end]).unwrap_err();
+            assert_eq!(ordinary.to_string(), updated.to_string());
+            assert!(TupleRecord::decode_fields(&bytes[..end], &mut destination).is_err());
+        }
+        let mut trailing = bytes.clone();
+        trailing.extend_from_slice(&[0xff, 0xee]);
+        assert_eq!(
+            OriginalTuple::decode_from_slice(&trailing)
+                .unwrap_err()
+                .to_string(),
+            TupleRecord::decode_from_slice(&trailing)
+                .unwrap_err()
+                .to_string()
+        );
+        // The bare and ordinary cases above retain the selected ambient layout.
+        // Canonical admission requires the sole canonical V1 encoder's flags.
+        let frame = norito::encode_canonical(&value).unwrap();
+        let held = pool
+            .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+            .unwrap();
+        let allocations = super::allocations_during(|| {
+            work.decode_canonical_into::<TupleRecord, _>(
+                &frame,
+                tuple_limits(1 << 20),
+                &mut destination,
+            )
+            .unwrap()
+        });
+        assert_eq!(allocations, 0);
+        assert_eq!(
+            (destination.first, destination.second, destination.fixed),
+            (value.0, value.1, value.2)
+        );
+        drop(held);
+    }
+    drop(work);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+fn tuple_limits(bytes: usize) -> DecodeLimits {
+    DecodeLimits::new(4096, 1 << 20, 1 << 20, bytes, 64)
+}

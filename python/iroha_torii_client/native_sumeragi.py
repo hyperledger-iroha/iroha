@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import json
 import re
 from typing import Any, Mapping
-from .governance_proposals import _kagemusha_public_key
+from ._public_key_multihash import decode_canonical_public_key_multihash
 from .bls_public_key import decode_bls_normal_peer_id
 
 STATUS_MAX_BYTES = 1024 * 1024
@@ -39,7 +39,7 @@ def _optional_uint(value: Any) -> int | None:
 def _public_key(value: Any) -> str | None:
     if value is None:
         return None
-    literal, (algorithm, _payload) = _kagemusha_public_key(value, "native status public key")
+    literal, (algorithm, _payload) = decode_canonical_public_key_multihash(value, "native status public key")
     if literal.startswith("ea0130"):
         decode_bls_normal_peer_id(literal, "native status public key")
     return literal

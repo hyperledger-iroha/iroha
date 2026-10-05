@@ -830,6 +830,8 @@ mod tests {
             .map(|member| member.package.selector.clone())
             .collect::<Vec<_>>();
         let options = WorkspaceResolutionOptionsV1 {
+            cache_root: None,
+            archive_transport: None,
             mode: GraphModeArgs::default(),
             config: Some(&path),
             config_image: selected.config_image.clone(),

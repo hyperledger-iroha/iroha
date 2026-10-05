@@ -15,7 +15,7 @@ let torii = TairaTestnetProfile.makeClient(deployedNetworkId: networkId)
 Features:
 - Collection queries for every Torii collection: typed filter builder with canonical text and JSON forms, cursor pages and on-demand iteration, typed `{code, message, details}` errors
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
-- KAGEMUSHA V1 aggregate-balance wallet orchestration, payment models, proof binding helpers, and universal capability discovery through `/v1/kagemusha/readiness`
+- KAGEMUSHA wallet V1 wire helpers (`KagemushaWalletWireV1`) and the iPhone platform adapter of the Rust wallet Advance provider (`KagemushaWalletApplePlatformV1`)
 - Petal Stream animated optical transport: stream encoder/assembler, camera-frame decoder, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
@@ -122,122 +122,33 @@ for try await message in torii.streamTransactionStatusEvents(hashHex: envelope.h
   (`ToriiListQuery.requestBody()`); `queryItems()` gives the equivalent `GET`
   parameters. Only the first page of an iteration asks for `include_total`.
 
-### KAGEMUSHA V1 wallet
+### KAGEMUSHA wallet V1
 
-`KagemushaWalletV1.open(provider:allowBootstrap:)` accepts only a provider attesting
-the complete non-forking hardware contract. The required admission callback is
-checked after qualification and recovery, immediately before creating an absent
-aggregate. Retail apps must check current MiBank approval for the exact account
-and authority scope in that callback; `{ false }` permits committed recovery
-without creating a new aggregate. The wallet stages incoming payments before returning
-their durable acknowledgement, treats exact delivery duplicates idempotently, folds
-an opaque durable inbox prefix without a note-count limit, and folds only the pending
-credits needed to fund a send or redemption. Sender successors are usable immediately;
-a missing acknowledgement only leaves the byte-identical payment in the retry outbox.
-Apps can call `foldPendingCredit(selector:)` for one authenticated pending selector
-and `drainStagedCredits()` at explicit synchronization points.
+The Swift SDK carries the client side of the KAGEMUSHA wallet V1 design
+([proposal](../specs/kagemusha_single_design_proposal.md) §8, wire record
+[kagemusha_wallet_wire_v1.md](../specs/kagemusha_wallet_wire_v1.md)). The Rust
+module `iroha_data_model::kagemusha::kagemusha_wallet_v1` owns the canonical
+objects, and the Rust wallet Advance provider
+(`crates/iroha_core_zk/src/kagemusha_wallet_advance_v1`) owns custody, signing
+and the monotonic clock.
 
-Before requesting, sending, minting, or redeeming offline value, the app must durably
-save a fresh nonzero 32-byte operation identity and its exact action parameters, then
-pass that identity to the corresponding reservation and execution calls. An identical
-retry retains the same identity; a lost native return must never cause the app to
-allocate a replacement. The authenticated provider rejects a substituted reservation
-identity before executing a device operation. Payment and redemption reservations
-carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
-archive, shared with the native outgoing-operation index.
+`KagemushaWalletWireV1` consumes `fixtures/kagemusha/wallet_v1_vectors.json` and
+mirrors only what an SDK needs before it hands bytes to the typed decoder: the
+domain-separated digests (`digest(role:body:)`, `signedObjectDigest`), the raw
+low-S P-256 signature rule, the envelope frame header with its per-kind bounds
+(`inspectEnvelope`, `validateEnvelope`) and the strict `kgm1:` text form
+(`encodeText`, `decodeText`). Structural envelope checks carry no monetary or
+delivery authority; typed decoding and verification of the message bodies remain
+open (TODO(G4)).
 
-Authenticated providers require an injected `KagemushaOperationIntentOwnerV1`
-backed by a durable `KagemushaOperationIntentStoringV1`. Its shared scope lock must
-serialize all owners, and the store must persist and reopen exact bytes before
-returning. The owner records full qualification and canonical commands before
-dispatch, and retains authenticated results after native acceptance. Apps call
-`acknowledgeDurableResult(operationID:canonicalResult:)` only after the dependent
-transcript is durable, including when resuming after an interrupted acknowledgement.
-Completed monetary records retain their evidence. Reads 1, 13, 18, and 21 use
-native `BeginObservation` (coordinator method 11) and never enter the durable
-intent store. Each begin supplies the exact canonical read command and receives
-a native random nonce. A new begin supersedes the prior challenge for that read;
-native owner recreation requires a fresh begin. Lost read replies are retried
-with a fresh challenge. Before a snapshot acknowledges an installed mutation,
-its exact accepted reply, nonce, authenticator, command, and qualification are
-saved on that mutation as historical evidence, never as a current read response.
-If native acceptance of a verified mutation fails, the live provider retains that
-exact response for acceptance and original-intent persistence before further work.
-After provider recreation, recovery replays unresolved internal commands with
-their durable identity and original qualification, then obtains a new signed
-snapshot before acknowledging installation. An absent aggregate cannot authorize
-replaying a bootstrap draft: the current `allowBootstrap` gate must approve it.
-The required live `bootstrapState(allowBootstrap:)` callback is checked again after
-durable/native reservation, immediately before device dispatch. An approval value
-is never persisted as authority.
-
-Ordinary app enrollment uses `KagemushaNativePreparedRetailEnrollmentV1` to retain
-the exact FI challenge, wallet signature and complete signed certificate through
-Native Core. After certificate acceptance, `prepareBootstrapAppApproval()` derives
-the same selector from that retained original and prepares a distinct zero-state
-Bootstrap W. `KagemushaAppAttestBootstrapApprovalProviderV1` keeps its exact Apple
-assertion in the private intent journal and returns a separate receipt only after
-Native verifies and durably captures the original within its signed interval.
-Recovery reuses retained originals. This Bootstrap receipt cannot enter the generic
-monetary approval path or reconstruct Native's captured capability.
-
-`KagemushaCoreCoordinatorBridgeV1.open(storagePath:)` provides the strict native
-schema-2 transport. It checks the complete ABI-25 inventory and correlates method
-responses with the caller's request. It fails closed when the native coordinator
-is unavailable. Every failure after dispatch revokes the local handle before
-native teardown; uncertain monetary state remains owned by the qualified backend.
-`KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath:)`
-implements the wallet coordinator interface over that transport and the exact
-`KagemushaCoreCoordinatorArchiveV1` codecs. It binds preparations to the caller,
-original public inputs, and qualification; candidates retain that exact preparation.
-Recovery and release retain the creation context across ordinary epoch rotation.
-Archive parsing proves canonical shape, while native Core must resolve each selector
-against its authenticated durable journal and verify proof and hardware authority.
-Authenticated reply admission carries the original full 64-byte low-S P-256
-response authenticator and exact canonical command so native Core can independently
-authenticate the transcript. Its signature binds the response header, command digest,
-hardware policy, and qualification report. The sole native verifier export is
-`connect_norito_kagemusha_device_command_response_v1_verify`; a library exposing the
-earlier response-only verifier cannot qualify. Historical mutation replies are
-re-admitted with their original command and qualification before recovery acknowledges them.
-The adapter supplies no software monetary backend. See [the source contract](../specs/kagemusha_device_bridge_v1.md).
-
-Online top-up is payer-signed. Build a transaction containing exactly one
-`KagemushaNoritoV1.topUpInstructionFrame(_:)` result and sign it with the embedded payer. Construct
-`KagemushaPreparedTopUpSubmissionV1(signedTransaction:expectedRequest:)` from the
-canonical versioned signed transaction and the exact reviewed request. This
-requires the linked native verifier to validate the signature, network, sole instruction, payer and complete canonical request equality.
-Persist those exact bytes with the original durable operation and wallet identity
-before calling `submitKagemushaTopUp(_:withCurrentOwner:)`. The required MainActor
-owner wrapper must invoke the supplied synchronous action exactly once. It holds
-the caller's nonblocking state lease only while the bounded network task resumes;
-zero or repeated invocation fails and cancels the task. The SDK also rechecks the
-owner before returning a result or error. A resumed operation reconstructs the
-prepared value through the same native verifier and captures a fresh authenticated
-attempt without changing its original monetary intent. The client takes its body
-and operation ID only from that prepared value; Torii never signs or rebuilds it.
-`getKagemushaOperation(operationID:)` returns `nil` only for Torii's exact
-`kagemusha_operation_not_found` 404 header and JSON code. A route or proxy 404
-is an error. On exact absence, retry only the retained signed transaction and
-original operation ID; never reserve or sign a replacement top-up.
-Submission accepts a pending 202 only with the exact operation `Location` and
-`Retry-After: 1`. Other HTTP failures retain Torii's `X-Iroha-Reject-Code`
-header as `ToriiAPIError.rejectCode` in `ToriiClientError.api`; JSON body fields cannot supply it.
-Pending, ambiguous and unverified applied responses do not authorize intent
-cleanup, credit issuance or retirement. Native artifact qualification, retained
-hardware ownership and trusted finality checkpoints remain caller prerequisites.
-
-The monetary sequence is epoch-local. When it reaches its `u128` maximum, the wallet
-requires a hardware-authorized KAGEMUSHA epoch rotation, resets the new epoch's sequence
-to zero, and resumes folding or spending. This avoids stranding funds at counter
-rollover without weakening exact-next checks inside an epoch.
-
-There is intentionally no built-in software provider. Secure Enclave and App Attest
-signatures alone do not supply an atomic rollback-resistant monetary journal, exact-next
-counter, multi-credit inbox, durable outbox, trusted commit time, and KAGEMUSHA epoch
-rotation. Apple wallet startup requires a qualified native owner that supplies
-that entire contract through `KagemushaHardwareProviderV1`. Missing ownership
-or custody evidence fails startup; KAGEMUSHA has no disabled product mode.
+`KagemushaWalletApplePlatformV1` is the iPhone platform adapter of the Rust wallet
+Advance provider (Secure Enclave payment key, passcode-bound keychain rollback anchor,
+protected-data canary and custody root); `KagemushaWalletAppleSystemV1.swift` holds
+its replaceable operating-system seams. Construct it with the app's App ID prefix,
+which names its own keychain access group. Its only app-facing operation is
+`attestEnrollment(slot:paymentPublicKey:challengeDigest:)`, the App Attest evidence of
+enrollment step E5; key use and the anchor are reached only through the Rust provider.
+Registering the adapter with the native bridge remains open (TODO(G2-bridge)).
 
 The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
@@ -347,7 +258,7 @@ keys used by the rails you enable (replace only the human-readable strings):
 ```xml
 <!-- Info.plist: needed only when the app captures QR with the camera. -->
 <key>NSCameraUsageDescription</key>
-<string>Scan a KAGEMUSHA QR code.</string>
+<string>Scan a wallet transfer QR code.</string>
 
 <!-- Info.plist: Google Nearby. Keep the Bonjour service exact. -->
 <key>NSBonjourServices</key>
@@ -355,13 +266,13 @@ keys used by the rails you enable (replace only the human-readable strings):
     <string>_F2EBA4BCB49B._tcp</string>
 </array>
 <key>NSBluetoothAlwaysUsageDescription</key>
-<string>Discover a nearby device for a KAGEMUSHA transfer.</string>
+<string>Discover a nearby device for a wallet transfer.</string>
 <key>NSLocalNetworkUsageDescription</key>
-<string>Exchange a KAGEMUSHA transfer with a nearby device.</string>
+<string>Exchange a wallet transfer with a nearby device.</string>
 
 <!-- Info.plist: Core NFC reader mode. Keep the AID exact. -->
 <key>NFCReaderUsageDescription</key>
-<string>Exchange a KAGEMUSHA transfer over NFC.</string>
+<string>Exchange a wallet transfer over NFC.</string>
 <key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
 <array>
     <string>F0504B45504B524E464301</string>
@@ -402,7 +313,7 @@ The canonical XCFramework contains `ios-arm64`, the universal
 `macos-arm64_x86_64` slice. The macOS slice must contain both `arm64` and
 `x86_64`; the artifact checker rejects single-architecture substitutions.
 
-Every bridge build includes mandatory privacy and KAGEMUSHA support using stock
+Every bridge build includes mandatory privacy support using stock
 Rust 1.93.1. Building an artifact does not establish provider, proving, hardware,
 or release qualification. To build with the reviewed external graph:
 
@@ -424,7 +335,7 @@ scripts/build_norito_xcframework.sh \
   --lockfile-path /absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock
 ```
 
-Every Apple slice includes the mandatory privacy and KAGEMUSHA support and
+Every Apple slice includes the mandatory privacy support and
 records the fixed `privacy-production-enabled` provenance marker. There is no
 enable/disable option. Provider, hardware, proving and release qualification
 still require their respective evidence.
@@ -470,7 +381,7 @@ ABI-25 admission. It cannot be selected together with the external/release input
 iOS and Release compilation reject it. It is never accepted by the canonical
 three-slice validator, pin owner, archive owner, or release publication.
 
-The KAGEMUSHA V1 pull-request lane preserves that build envelope while avoiding a
+The Apple pull-request lane preserves that build envelope while avoiding a
 hosted-runner timeout: five isolated macOS jobs each build one attested target
 library, and the sole Swift assembler accepts them only when their independent
 archive digests and exact source, lock, toolchain, SDK, deployment-target, and
@@ -482,25 +393,20 @@ Cargo invocation.
 
 CI runs `.github/workflows/mobile_sdk_artifacts.yml` to authenticate the exact
 external Apple artifact, enforce mandatory missing-artifact rejection, run the
-Swift suite, package the final ZIP, and lint the checksum-pinned CocoaPods binary
-and source pods without a missing-tool skip.
+complete Swift suite, package the final ZIP, and validate SwiftPM consumers.
+Release validation must include an ordinary application package that depends on
+the public `IrohaSwift` product and executes native operations without unsafe
+linker flags, as well as the packaged XCFramework ZIP consumer.
 
-### CocoaPods
+### SwiftPM delivery
 
-```ruby
-pod 'IrohaSwift', :path => '/path/to/iroha/IrohaSwift'
-```
-
-`IrohaSwift` declares an exact same-version dependency on the generated
-`NoritoBridge` binary pod. `IrohaSwift/VERSION` owns both pod versions, the
-canonical `v<version>` tag, and the archive name. That podspec pins
-`NoritoBridge-v<version>.xcframework.zip` from the canonical `v<version>` release
-with its exact SHA-256 and vendored-XCFramework path. The lint wrapper consumes
-the packaged ZIP through an explicit package-local `file://` source, validates
-the closed package inventory, and builds both pods. Do not treat this lint as
-public installation evidence: CocoaPods may still consult configured spec
-sources. Publish the immutable release asset and both specs, then capture a clean
-registry `pod install` and Release build before advertising the coordinate (see
+SwiftPM is the sole supported Swift delivery path; CocoaPods support is retired.
+`IrohaSwift/VERSION` owns the Swift package version, canonical `v<version>` tag,
+and `NoritoBridge-v<version>.xcframework.zip` name. Materialize that authenticated
+framework before resolving the path-based binary target. The package's ordinary
+native export references preserve runtime symbol lookup without unsafe flags.
+Public installation evidence requires the immutable asset, reviewed package
+source, an installed Release consumer, and signed provenance (see
 [`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md)).
 
 Usage:
@@ -767,21 +673,16 @@ helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair`
 convenience APIs are Ed25519-only while native-backed algorithms use
 `NoritoBridge`.
 
-### KAGEMUSHA peer transport V1
+### Peer transport V1
 
-`KagemushaNoritoV1` is the sole peer-payment codec namespace. It carries the
-canonical three-message exchange—direct request, proof-bearing payment, and
-durable acknowledgement—plus independently framed mint authorization, mint credit,
-and redemption voucher values through bounded Norito archives or `kgm1:` text.
-The payment carries the terminal commit certificate and paired proof; its
-proof-independent body digest binds the output and actual encrypted credit.
-Each request binds one exact amount and a fresh recipient encryption key;
-distinct valid payments against the same request remain acceptable. Exposed
-credits cannot be cancelled. QR, NFC, and Nearby
-all use the same canonical bytes from
-`../fixtures/offline/kagemusha_v1.json`; no transport has a second codec.
-Public proofs and payment envelopes remain constant-size as aggregate history
-grows, and there is no hop, input, origin, ancestry, or proof-depth field.
+The QR, NFC, and Nearby carriers (`IrohaPeerWireV1`, `IrohaPeerQRV1`,
+`IrohaPeerNfcV1`, `IrohaPeerNearbyV1`, with the platform adapters in
+`IrohaSwiftMobileTransports`) move complete KAGEMUSHA wallet V1 envelope frames
+inside IPM1 messages ([kagemusha_wallet_wire_v1.md](../specs/kagemusha_wallet_wire_v1.md)
+§6); no transport has a second codec. A carrier checks each frame only
+structurally (`KagemushaWalletWireV1.inspectEnvelope`); its framing is outside every
+digest and signature and grants no authority, so the wallet still performs typed
+decoding and signature verification.
 
 ### Petal Stream optical transport
 
@@ -1727,9 +1628,7 @@ if #available(iOS 15.0, macOS 12.0, *) {
 ```
 
 Generic shield, shielded-transfer, and unshield instructions are not part of
-the first-release SDK surface. Wallets use the typed, proof-bound KAGEMUSHA V1
-top-up and redemption flows; the underlying proof codecs remain available to
-those flows without exposing generic transaction builders.
+the first-release SDK surface.
 
 `ProofAttachment` emits registry-bound envelopes (`backend`, `proof_b64`, `vk_ref`, optional
 `vk_commitment_hex`/`envelope_hash_hex`); embedded key bytes are not accepted by the Swift builder.
@@ -2470,9 +2369,9 @@ The release process for the Norito Swift bindings is documented in
 [`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md). Follow the
 authenticated external-artifact build, validation, and packaging flow there.
 `Package.swift` uses that exact local/external path and does not use a remote
-URL/checksum binary target. CocoaPods uses the same archive through the generated
-checksum-pinned `NoritoBridge` binary pod; public registry/install evidence remains
-external. Generated artifacts stay untracked, and the resulting release asset
+URL/checksum binary target. Authenticate the immutable XCFramework ZIP and run an
+ordinary SwiftPM Release consumer before claiming installation readiness.
+Generated artifacts stay untracked, and the resulting release asset
 uses the SemVer in `IrohaSwift/VERSION`; it need not numerically equal the
 `norito` Rust crate version. The release binds Rust inputs through the reviewed
 commit, source fingerprint, and root lockfile.

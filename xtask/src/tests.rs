@@ -12,6 +12,29 @@ fn kagami_bundle_selects_native_cli_profile_and_one_explicit_authority() {
         parse_command(["xtask", "kagami-bundle", "--profile", "debug"].into_iter().map(String::from)).unwrap(),
         CommandKind::KagamiBundle { profile, .. } if profile == "debug"
     ));
+    let input = std::env::temp_dir().join("cli-installer-profile.nrt");
+    let path = input.to_string_lossy();
+    assert!(
+        parse_command(
+            [
+                "xtask",
+                "kagami-bundle",
+                "--network-profiles",
+                path.as_ref()
+            ]
+            .into_iter()
+            .map(String::from)
+        )
+        .is_err(),
+        "default release rejects caller authority"
+    );
+    assert!(matches!(
+        parse_command([
+            "xtask", "kagami-bundle", "--profile", "debug", "--network-profiles", path.as_ref(),
+        ].into_iter().map(String::from)).unwrap(),
+        CommandKind::KagamiBundle { network_profiles: Some(selected), profile, .. }
+            if selected == input && profile == "debug"
+    ));
     for arguments in [
         vec!["xtask", "kagami-bundle", "--profile", "local-release"],
         vec!["xtask", "kagami-bundle", "--kagami", "other"],
@@ -42,10 +65,26 @@ fn mochi_bundle_rejects_local_release_profile_during_argument_parsing() {
 fn mochi_bundle_profiles_require_one_explicit_installer_artifact() {
     let input = std::env::temp_dir().join("installer-profile.nrt");
     let path = input.to_string_lossy();
+    assert!(
+        parse_command(
+            ["xtask", "mochi-bundle", "--network-profiles", path.as_ref()]
+                .into_iter()
+                .map(String::from)
+        )
+        .is_err(),
+        "release authority cannot come from a caller override"
+    );
     let command = parse_command(
-        ["xtask", "mochi-bundle", "--network-profiles", path.as_ref()]
-            .into_iter()
-            .map(String::from),
+        [
+            "xtask",
+            "mochi-bundle",
+            "--profile",
+            "debug",
+            "--network-profiles",
+            path.as_ref(),
+        ]
+        .into_iter()
+        .map(String::from),
     )
     .unwrap();
     assert!(

@@ -306,85 +306,6 @@ validator options use the exact TypeScript camelCase names; snake_case option
 aliases and alternate `payload`/`noritoBytes` byte fields are rejected before
 native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
-## KAGEMUSHA SDK boundary
-
-The JavaScript package exposes the sole `Kagemusha` namespace. It models the
-three-message direct request, committed payment, and durable acknowledgement
-exchange, plus mint
-authorization/credit binding and typed encrypted-credit opening, AAD, and
-envelope codecs. Sender recovery reproduces the same hardware-committed
-canonical payment bytes from the durable outbox.
-
-Model fields are immutable after validation. Byte getters return defensive
-copies, including fields reached through nested models; canonical backing
-values remain private to the codec module.
-
-```js
-import { Kagemusha } from "@iroha/iroha-js/kagemusha";
-```
-
-The root entry point re-exports that same namespace; no parallel product alias
-or version-suffixed product subpath is published.
-
-Requests bind one exact positive amount and the recipient's fresh encryption
-key. Strict canonical Norito and unpadded `kgm1:` decoders enforce per-message
-bounds. `validateCompleteExchange` is the sole public spend-exchange validator: it
-requires the exact request, payment, and acknowledgement
-and caps their combined transport at 9,211 raw bytes or 12,288 `kgm1:` text
-bytes.
-
-A committed payment carries its hardware commit certificate and post-commit
-`PaymentProof`, whose semantic digest binds the request, output, and actual
-ciphertext. Distinct valid payments against the same reusable request remain
-acceptable; exposed credits cannot be cancelled.
-
-The namespace is codec and orchestration support only. Monetary proving,
-signing, encryption, decryption, and hardware state changes must come from the
-release-pinned native implementation. No public predecessor/successor link or
-software money-crypto fallback is exposed.
-
-`DeviceMintStageCommand` and `DeviceMintStageResult` describe operation 16 at
-the host/native boundary. `encodeDeviceMintStageCommandShape` and
-`decodeDeviceMintStageCommandShapeExact` check the exact nested authorization
-and mint-credit archives, their derived credit ID, and their public bindings.
-The command is bounded to 65,536 bytes, each nested archive to 7,936 bytes, and
-the result to 128 bytes. The result codecs accept an optional command for
-credit-ID binding. These codecs do not execute a device transition or
-authenticate a result: the qualified native response authenticator remains
-mandatory, and private openings and complete Guard certificates stay native.
-
-Top-up is payer-signed in the first-release protocol. Build the sole
-`TopUpKagemushaV1` instruction with
-`Kagemusha.buildTopUpInstruction(request)` (or obtain its exact framed
-`InstructionBox` with `encodeTopUpInstruction`), place exactly that instruction
-in a normal transaction, and sign it with the payer. Submit the resulting
-canonical version-1 `SignedTransaction` bytes with the same exact binary
-operation ID embedded in the request:
-
-```js
-await torii.submitKagemushaTopUp(signedTransaction, request.operationId);
-```
-
-The SDK sends those bytes unchanged to `POST /v1/kagemusha/top-up` and uses the
-lowercase hexadecimal operation ID as `Idempotency-Key`. There is no unsigned
-top-up overload, wrapper envelope, or server-signing path. The embedded top-up
-request may be up to 16 KiB so a full paired mint-authorization proof fits;
-the enclosing transaction uses Torii's normal signed-transaction ingress
-limit. `Kagemusha.topUpInstructionWireId` is the exact
-`iroha.kagemusha.v1.top_up` registry ID. The standard instruction transaction
-builder signs the exact nine-field canonical transaction payload. Redemption retains its typed request submission
-surface. Both submission methods require the exact operation resource in
-`Location`: HTTP 202 is accepted only with a pending status and a positive
-`Retry-After`, while HTTP 200 is accepted only for applied or rejected status
-without `Retry-After`. Applied monetary results remain inaccessible in the
-returned wrapper until a caller-pinned finality verifier authenticates them.
-
-`getKagemushaReadiness` reads the universally compiled four-field readiness
-projection: `kagemusha_handoff_v1`, wire version `1`, secure-device lifecycle
-version `1`, and `ready: true`. Monetary transitions still require a qualified
-non-forking hardware profile; successful transport decoding alone grants no
-monetary authority.
-
 ## Petal Stream optical transport
 
 `@iroha/iroha-js/petal` is Petal Stream, the animated optical transport used to
@@ -3649,9 +3570,8 @@ part of the portable registry tarball.
 
 Node.js clients can register confidential assets and schedule policy
 transitions without hand-writing Norito payloads. ABI V1 does not expose
-generic shield, transfer, or unshield instructions: wallets use the typed,
-proof-bound `Kagemusha` mint and redemption operations described above.
-The underlying confidential proof helpers remain available for those typed flows.
+generic shield, transfer, or unshield instructions; the instruction builders
+and codec reject them.
 
 ```js
 import { buildRegisterZkAssetTransaction } from "@iroha/iroha-js";
@@ -4490,11 +4410,6 @@ Asset and RWA quantities use the stricter `QuantityInput` surface:
 `KotodamaQuantity`, an exact canonical quantity string, or `bigint`. JavaScript
 `number` is deliberately rejected, and strings are never trimmed or rewritten;
 for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
-
-`Kagemusha` exposes canonical wire encoding and public binding checks, not a
-cryptographic proof verifier, software prover, or fallback for device authority.
-Peer-transfer keys and state transitions remain hardware-bound; applications
-must obtain and verify transition proofs through a qualified wallet implementation.
 
 Account permissions use the shared collection cursor:
 

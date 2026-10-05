@@ -164,14 +164,18 @@ where
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"target\":")?;
-        <Id as JsonSerialize>::json_serialize_to(&self.target, out)?;
-        out.push_str(",\"key\":")?;
-        <Name as JsonSerialize>::json_serialize_to(&self.key, out)?;
-        out.push_str(",\"value\":")?;
-        <Json as JsonSerialize>::json_serialize_to(&self.value, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"target\":")?;
+            <Id as JsonSerialize>::json_serialize_to(&self.target, out)?;
+            out.push_str(",\"key\":")?;
+            <Name as JsonSerialize>::json_serialize_to(&self.key, out)?;
+            out.push_str(",\"value\":")?;
+            <Json as JsonSerialize>::json_serialize_to(&self.value, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -2841,3 +2845,19 @@ pub mod prelude {
 
 #[cfg(test)]
 mod captured_event_boundary_identity_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{account, audit};
+
+    #[test]
+    fn original_metadata_event_checked_container_retains_borrowed_json_and_depth() {
+        audit(&MetadataChanged {
+            target: account(61),
+            key: "original".parse().unwrap(),
+            value: iroha_primitives::json::Json::new(vec![1_u64, 2]),
+        });
+    }
+}

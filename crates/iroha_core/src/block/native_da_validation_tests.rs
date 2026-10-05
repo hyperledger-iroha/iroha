@@ -476,10 +476,15 @@ fn native_validation_enforces_height_aware_da_policy_before_lane_creation() {
     let height = fixture.chain.height() + 1;
     let correct = crate::da::active_proof_policy_bundle_at_height(&nexus, height);
     let heightless = crate::da::active_proof_policy_bundle(&nexus);
-    assert!(correct.policies.iter().all(|policy| policy.lane_id != lane));
+    assert!(
+        correct
+            .policies()
+            .iter()
+            .all(|policy| policy.lane_id != lane)
+    );
     assert!(
         heightless
-            .policies
+            .policies()
             .iter()
             .any(|policy| policy.lane_id == lane)
     );

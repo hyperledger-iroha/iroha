@@ -25,7 +25,7 @@ pub(super) fn execute_pool(
         .find(|entry| entry.name == entrypoint)
         .unwrap();
     let schema = descriptor.argument_schema.as_ref().unwrap();
-    let encoded = ivm::encode_argument_record_from_json(schema, &arguments).unwrap();
+    let encoded = ivm_abi::arguments::encode_argument_record_from_json(schema, &arguments).unwrap();
     let arguments = ivm::prepare_argument_record_with_gas_limit(
         schema,
         std::sync::Arc::from(encoded),
@@ -123,7 +123,8 @@ pub(super) fn execute_signed_pool(
         .argument_schema
         .as_ref()
         .unwrap();
-    let arguments = ivm::encode_argument_record_from_json(schema, &arguments).unwrap();
+    let arguments =
+        ivm_abi::arguments::encode_argument_record_from_json(schema, &arguments).unwrap();
     execute_signed_body(
         block,
         signer,
@@ -160,8 +161,8 @@ fn pool_bin_quantity(
     bin: i128,
 ) -> Quantity {
     let scope = hex::encode(Hash::new(pool.to_string().as_bytes()).as_ref());
-    let key =
-        ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(bin)).unwrap();
+    let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(bin))
+        .unwrap();
     let relative = ivm::host::canonical_state_map_path(&field.parse().unwrap(), &key).unwrap();
     let key: iroha_model_base::state_path::StatePath =
         format!("sc/{scope}/{relative}").parse().unwrap();

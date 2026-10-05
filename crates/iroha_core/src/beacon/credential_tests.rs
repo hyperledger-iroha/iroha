@@ -119,7 +119,12 @@ fn credential_fixture(
                 .map(|share| (share.authenticated_session(), share.signer_index())),
             budget,
         )?;
-        encode_global_beacon_partial_signer_credential_v1(&mut prepared, &sessions)?;
+        encode_global_beacon_partial_signer_credential_v1(
+            &mut prepared,
+            sessions
+                .iter()
+                .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+        )?;
         prepared.into_credential().map_err(|(_, error)| error)
     };
     produce().map_err(|error| match error {

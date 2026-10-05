@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from iroha_native import load_crypto_extension
 from iroha_python import (
     SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
     CompleteReplicationOrderInstruction,
@@ -26,6 +27,7 @@ _PROVIDER_ID = "10" * 32
 _PROVIDER_OWNER = (
     "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 )
+_COMPLETION_SIGNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 _POLICY_ID = "21" * 32
 _PREDECESSOR_DIGEST = "32" * 32
 _POLICY_DIGEST = "43" * 32
@@ -69,6 +71,7 @@ def _authority(
 ) -> ProviderIngestCompletionAuthorityV1:
     return ProviderIngestCompletionAuthorityV1(
         provider_owner=provider_owner,
+        completion_signer=_COMPLETION_SIGNER,
         signer_policy=ProviderIngestCompletionSignerPolicyV1(
             policy_id=_POLICY_ID,
             revision=revision,
@@ -125,6 +128,7 @@ def test_replication_instruction_payloads_use_exact_rust_fields() -> None:
             "completion_epoch": 27,
             "expected_authority": {
                 "provider_owner": _PROVIDER_OWNER,
+                "completion_signer": _COMPLETION_SIGNER,
                 "signer_policy": {
                     "policy_id": _POLICY_ID,
                     "revision": 2,
@@ -143,6 +147,33 @@ def test_replication_instruction_payloads_use_exact_rust_fields() -> None:
 
     expire = ExpireReplicationOrderInstruction(_ORDER_ID, 29)
     assert decode_replication_order_instruction(expire.to_payload()) == expire
+
+
+def test_completion_authority_requires_its_exact_registered_signer() -> None:
+    authority = _authority()
+    assert authority.provider_owner != authority.completion_signer
+    assert ProviderIngestCompletionAuthorityV1.from_payload(authority.to_payload()) == authority
+    native = load_crypto_extension()
+    finalized_anchor = ProviderIngestFinalizedAnchorV1(41, _BLOCK_HASH).to_payload()
+    native.Instruction.complete_replication_order(
+        _ORDER_ID, _PROVIDER_ID, 27, authority.to_payload(), 3, finalized_anchor
+    )
+    missing_signer = authority.to_payload()
+    del missing_signer["completion_signer"]
+    with pytest.raises(ValueError, match="completion_signer"):
+        ProviderIngestCompletionAuthorityV1.from_payload(missing_signer)
+    with pytest.raises(ValueError):
+        native.Instruction.complete_replication_order(
+            _ORDER_ID, _PROVIDER_ID, 27, missing_signer, 3, finalized_anchor
+        )
+    malformed_signer = authority.to_payload()
+    malformed_signer["completion_signer"] = f" {_COMPLETION_SIGNER}"
+    with pytest.raises(ValueError, match="exact canonical I105"):
+        ProviderIngestCompletionAuthorityV1.from_payload(malformed_signer)
+    with pytest.raises(ValueError):
+        native.Instruction.complete_replication_order(
+            _ORDER_ID, _PROVIDER_ID, 27, malformed_signer, 3, finalized_anchor
+        )
 
 
 def test_replication_instruction_decoders_are_schema_closed() -> None:

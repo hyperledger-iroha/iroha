@@ -155,6 +155,23 @@ impl PrivateDirectory {
         })
     }
 
+    /// Retain this same native directory custody, sharing its already-open ancestor handles.
+    ///
+    /// The original and returned owners are revalidated. This neither resolves another path nor
+    /// creates directories, changes permissions, or duplicates retained directory handles. Native
+    /// identity and ownership checks remain active on both owners for their entire lifetimes.
+    ///
+    /// # Errors
+    /// Refuses changed directory or ancestor custody and native revalidation errors.
+    pub fn retain(&self) -> io::Result<Self> {
+        self.revalidate()?;
+        let retained = Self {
+            inner: self.inner.clone(),
+        };
+        retained.revalidate()?;
+        Ok(retained)
+    }
+
     /// The absolute retained directory path, for display and explicit child-process arguments.
     pub fn path(&self) -> &Path {
         self.inner.path()

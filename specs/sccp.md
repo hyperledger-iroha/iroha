@@ -3129,7 +3129,7 @@ third-party endpoints; nothing is operated by the project. Every flow verifies
 before paying: attestation signatures against the destination's on-chain
 roster digest, Merkle paths, and inbound and void proofs through the same
 `iroha_sccp` verifier Taira runs. Every flow journals its raw evidence and
-state transitions through `iroha_wallet::operation_journal`, keyed by
+state transitions through `iroha_operation_journal`, keyed by
 `NetworkId`, before submitting anything, so it resumes after a crash.
 
 ### 7.1 Taira → external
@@ -3313,7 +3313,7 @@ the control step of step 5.
     cell/BoC builders and wallet-v5 messages. These are FFI-exportable for SDK
     bridges;
   - `journal.rs`: the resumable journal keyed by `NetworkId`, built on
-    `iroha_wallet::operation_journal`. The resumable, journaled flows of §7
+    `iroha_operation_journal`. The resumable, journaled flows of §7
     that write through it are still to be built (TODO(ws51));
   - `config.rs`: the client-config `[sccp]` table (file-only): endpoint lists,
     timeouts and pinned deployments per `NetworkId`.

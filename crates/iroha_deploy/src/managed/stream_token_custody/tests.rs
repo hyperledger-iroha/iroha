@@ -337,12 +337,13 @@ fn invalid_enrollment_interval_cannot_reserve_or_replace_original_journal() {
     let temporary = tempfile::tempdir().unwrap();
     let directory = PrivateDirectory::open_or_create(temporary.path().join("enroll")).unwrap();
     let excessive = make_original(45_000);
-    assert!(journal::publish_intent(&directory, &excessive).is_err());
-    assert!(journal::read_intent(&directory).unwrap().is_none());
+    assert!(journal::publish_body_intent(&directory, &excessive).is_err());
+    assert!(journal::read_body_intent(&directory).unwrap().is_none());
     let valid = make_original(20_000);
-    journal::publish_intent(&directory, &valid).unwrap();
+    assert!(journal::publish_intent(&directory, &valid).is_err()); // Configure owner cannot publish Enroll.
+    journal::publish_body_intent(&directory, &valid).unwrap();
     let saved = directory.read("original.nrt", 256 * 1024).unwrap();
-    assert!(journal::publish_intent(&directory, &excessive).is_err());
+    assert!(journal::publish_body_intent(&directory, &excessive).is_err());
     assert_eq!(
         directory
             .read("original.nrt", 256 * 1024)
@@ -350,7 +351,7 @@ fn invalid_enrollment_interval_cannot_reserve_or_replace_original_journal() {
             .as_slice(),
         saved.as_slice()
     );
-    let restored = journal::read_intent(&directory).unwrap().unwrap();
+    let restored = journal::read_body_intent(&directory).unwrap().unwrap();
     let Action::Enroll { validity, .. } = restored.action else {
         panic!("enroll");
     };

@@ -177,7 +177,7 @@ struct Transfer<'a> {
     destination_after: Field<'a, Quantity>,
 }
 #[derive(norito::Encode)]
-struct Supply<'a> {
+struct SupplyChange<'a> {
     balance: Balance<'a>,
     amount: Field<'a, Quantity>,
     balance_before: Field<'a, Quantity>,
@@ -190,9 +190,9 @@ enum Kind<'a> {
     #[codec(index = 0)]
     Transfer(Transfer<'a>),
     #[codec(index = 1)]
-    Mint(Supply<'a>),
+    Mint(SupplyChange<'a>),
     #[codec(index = 2)]
-    Burn(Supply<'a>),
+    Burn(SupplyChange<'a>),
     #[codec(index = 3)]
     Retire(Asset<'a>),
 }
@@ -239,7 +239,7 @@ impl<'a> From<FastpqExecutionBalanceRefV1<'a>> for Balance<'a> {
         }
     }
 }
-impl<'a> From<FastpqExecutionSupplyChangeRefV1<'a>> for Supply<'a> {
+impl<'a> From<FastpqExecutionSupplyChangeRefV1<'a>> for SupplyChange<'a> {
     fn from(v: FastpqExecutionSupplyChangeRefV1<'a>) -> Self {
         Self {
             balance: v.balance.into(),

@@ -24,6 +24,7 @@ napi = { version = "3.5.1", default-features = false, features = ["napi6", "toki
 napi-derive = { version = "3.3.2", default-features = false, features = ["type-def"] }
 iroha_crypto = { workspace = true, features = ["node-crypto", "sm", "gost", "pqc"], default-features = false }
 ivm = { workspace = true }
+ivm_abi = { workspace = true }
 iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-stark", "zk-preverify"] }
 iroha_data_model = { workspace = true, features = ["application-model", "transparent_api", "gost", "sm", "bls"], default-features = false }
 iroha_primitives = { workspace = true }

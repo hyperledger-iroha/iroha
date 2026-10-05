@@ -344,7 +344,7 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
         |b, _| b.iter(|| std::hint::black_box(maximum.cmp(&scale_28))),
     );
     for (label, value) in [("minimum", BigInt::zero()), ("maximum", maximum_int)] {
-        let envelope = ivm::numeric_tlv::encode_int(&value).expect("numeric envelope");
+        let envelope = ivm_abi::numeric_tlv::encode_int(&value).expect("numeric envelope");
         let frame_bytes = envelope.len() - 39;
         let validation_work =
             ivm::numeric_gas::numeric_frame_validation_work(frame_bytes).expect("validation work");
@@ -405,7 +405,7 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
                     || IVM::new(u64::MAX),
                     |mut vm| {
                         std::hint::black_box(value.twos_byte_len());
-                        let envelope = ivm::numeric_tlv::encode_int(value)
+                        let envelope = ivm_abi::numeric_tlv::encode_int(value)
                             .expect("encode calibration envelope");
                         // Output byte gas covers both canonical construction
                         // and publication into VM-owned memory.  Keep the

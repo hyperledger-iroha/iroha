@@ -1,9 +1,9 @@
 """Independent, bounded raw Apple App Attest and Android KeyMint evidence checks.
 
-This module does not issue KAGEMUSHA certificates. A raw attestation proves neither
-the exact distributed app binary nor a current Android revocation state. The
-certificate signer must stay disconnected until those inputs and issuer-signed
-preparation verification are implemented and tested.
+This module issues nothing. A raw attestation proves neither the exact
+distributed app binary nor a current Android revocation state; callers select
+every scope value independently and run the live revocation check
+(``revocation.py``) themselves.
 """
 
 from __future__ import annotations
@@ -31,9 +31,6 @@ MAX_ANDROID_CHAIN_ENVELOPE = 128 * 1024
 ANDROID_CHAIN_MAGIC = b"KMCA\x01"
 TRANSCRIPT_DOMAIN = b"iroha:kagemusha:v1:app-device-attestation-challenge\0"
 DEVICE_KEY_REFERENCE_DOMAIN = b"iroha:kagemusha:v1:device-key-reference\0"
-PREPARATION_DOMAIN = b"iroha:kagemusha:v1:app-enrollment-preparation\0"
-PREPARATION_BYTES = 1 + 8 + 8 + 6 * 32 + 64
-PREPARATION_TTL_MS = 120_000
 APPLE_NONCE_OID = "1.2.840.113635.100.8.2"
 ANDROID_KEY_DESCRIPTION_OID = "1.3.6.1.4.1.11129.2.1.17"
 KEYMINT_VERSIONS = {100, 200, 300, 400, 500}
@@ -73,6 +70,16 @@ class AttestationRejected(ValueError):
     """Raw evidence does not match the independently selected scope."""
 
 
+class VerificationUnavailable(AttestationRejected):
+    """A live verification dependency could not answer.
+
+    Raised when Google's revocation status, the Play Integrity decoder or its
+    OAuth token is unavailable. The evidence is not known to be bad. It stays
+    an ``AttestationRejected`` so every generic handler fails closed; callers
+    report it as a retryable unavailability rather than as rejected evidence.
+    """
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise AttestationRejected(message)
@@ -81,24 +88,6 @@ def require(condition: bool, message: str) -> None:
 def fixed32(value: bytes, name: str) -> bytes:
     require(len(value) == 32 and any(value), f"invalid {name}")
     return value
-
-
-def app_attest_release_digest(category: int, bundle_version: str) -> bytes:
-    """Match the model's exact signed App Attest release-digest preimage."""
-    require(type(category) is int and category in (2, 3, 4, 5)
-            and type(bundle_version) is str,
-            "invalid Apple signed distribution values")
-    try:
-        version = bundle_version.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise AttestationRejected("invalid Apple signed bundle version") from error
-    require(0 < len(version) <= 128 and b"\0" not in version,
-            "invalid Apple signed bundle version")
-    return hashlib.sha256(
-        b"iroha:kagemusha:v1:app-attest-release\0"
-        + category.to_bytes(4, "little")
-        + len(version).to_bytes(2, "little") + version
-    ).digest()
 
 
 def device_key_reference(public_key_sec1: bytes) -> bytes:
@@ -110,7 +99,7 @@ def device_key_reference(public_key_sec1: bytes) -> bytes:
 
 @dataclass(frozen=True)
 class Selection:
-    """Values selected from authenticated release and issuer preparation, never evidence."""
+    """Values selected from an authenticated release and challenge, never from evidence."""
 
     client_nonce: bytes
     server_nonce: bytes
@@ -178,41 +167,50 @@ def patch_level_yyyymm(value: int) -> int | None:
     return None
 
 
-def require_android_patch_floor(levels: AndroidPatchLevels, floor_yyyymm: int) -> None:
-    """Apply an authenticated enrollment patch floor to verified patch levels.
+def validate_android_patch_floor(floor_yyyymm: int) -> int:
+    """Check a configured enrollment patch floor (YYYYMM) and return it.
 
-    The hardware-enforced OS patch level must be present. Every reported OS,
-    vendor or boot patch level must parse and be at least ``floor_yyyymm``;
-    a vendor or boot level of zero or an absent tag means "not reported".
-    ``levels`` must come from a ``RawPlatformProof`` whose chain verified.
-
-    TODO: carry the floor in the Native-selected Android policy (the Rust
-    hardware-profile owner and ``native_policy_projection.py``) and call this
-    from ``ordinary_provider.GovernedOrdinaryEvidenceProvider.prepare_raw``;
-    spec §2.2 requires an enrollment patch policy.
+    A malformed floor is a configuration fault, so this raises rather than
+    letting every device appear to miss the policy.
     """
-    require(type(levels) is AndroidPatchLevels, "verified Android patch levels absent")
     require(type(floor_yyyymm) is int and patch_level_yyyymm(floor_yyyymm) == floor_yyyymm,
             "invalid Android patch floor")
-    require(type(levels.os_patch_level) is int and levels.os_patch_level != 0,
-            "hardware-enforced Android OS patch level absent")
-    for name, level in (("OS", levels.os_patch_level), ("vendor", levels.vendor_patch_level),
-                        ("boot", levels.boot_patch_level)):
+    return floor_yyyymm
+
+
+def android_patch_policy_met(levels: AndroidPatchLevels, floor_yyyymm: int) -> bool:
+    """Whether verified patch levels meet an enrollment floor.
+
+    This is the evidence-record fact ``PATCH_POLICY_MET`` (fact bit 4,
+    ``specs/kagemusha_wallet_wire_v1.md`` §3.1). Android enrollment does not
+    require that bit, so an unmet policy is a recorded fact, not a rejection.
+    The policy is met when the hardware-enforced OS patch level is present and
+    every reported OS, vendor or boot level parses and is at least
+    ``floor_yyyymm``; a vendor or boot level of zero or an absent tag means
+    "not reported". ``levels`` must come from a ``RawPlatformProof`` whose
+    chain verified. Only an invalid floor or levels object raises.
+
+    TODO(G5): carry the floor in the wallet enrollment policy and set the
+    ``PATCH_POLICY_MET`` fact from this predicate when the credential issuer
+    builds the enrollment evidence record
+    (``specs/kagemusha_single_design_proposal.md`` §2.2 "enrollment patch
+    policy"). No issuer exists in this package yet.
+    """
+    require(type(levels) is AndroidPatchLevels
+            and all(level is None or type(level) is int
+                    for level in (levels.os_patch_level, levels.vendor_patch_level,
+                                  levels.boot_patch_level)),
+            "verified Android patch levels absent")
+    floor = validate_android_patch_floor(floor_yyyymm)
+    if levels.os_patch_level is None or levels.os_patch_level == 0:
+        return False
+    for level in (levels.os_patch_level, levels.vendor_patch_level, levels.boot_patch_level):
         if level is None or level == 0:
             continue
         normalized = patch_level_yyyymm(level)
-        require(normalized is not None, f"unparsable Android {name} patch level")
-        require(normalized >= floor_yyyymm, f"Android {name} patch level is below the enrollment floor")
-
-
-@dataclass(frozen=True)
-class IssuerPreparation:
-    """An issuer-signed nonce pair; release credential fields remain separately selected."""
-
-    client_nonce: bytes
-    server_nonce: bytes
-    issued_at_ms: int
-    expires_at_ms: int
+        if normalized is None or normalized < floor:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -449,55 +447,6 @@ def public_key_pem(spki_der: bytes) -> bytes:
     encoded = base64.b64encode(spki_der)
     lines = b"\n".join(encoded[index : index + 64] for index in range(0, len(encoded), 64))
     return b"-----BEGIN PUBLIC KEY-----\n" + lines + b"\n-----END PUBLIC KEY-----\n"
-
-
-def verify_issuer_preparation(
-    token: bytes, selection: Selection, account_canonical: str,
-    issuer_policy_id: bytes,
-    issuer_public_spki_der: bytes, issuer_public_spki_sha256: bytes,
-    trusted_time_ms: int, openssl_path: Path,
-    *, require_fresh: bool = True,
-) -> IssuerPreparation:
-    """Verify the 273-byte preparation using only pre-attestation values."""
-    require(len(token) == PREPARATION_BYTES and token[0] == 1, "invalid preparation frame")
-    selection.transcript()
-    fixed32(issuer_policy_id, "issuer policy")
-    require(account_canonical and len(account_canonical.encode("utf-8")) <= 512,
-            "invalid prepared account")
-    require(len(issuer_public_spki_der) <= 512 and hashlib.sha256(issuer_public_spki_der).digest()
-            == fixed32(issuer_public_spki_sha256, "issuer key pin"), "untrusted issuer key")
-    spki = children(der_one(issuer_public_spki_der))
-    require(len(spki) == 2, "invalid issuer public key")
-    algorithm = children(spki[0])
-    require(len(algorithm) == 1 and oid(algorithm[0]) == "1.3.101.112"
-            and len(primitive(spki[1], 3)) == 33 and primitive(spki[1], 3)[0] == 0,
-            "issuer key is not Ed25519")
-    issued = int.from_bytes(token[1:9], "little")
-    expires = int.from_bytes(token[9:17], "little")
-    client_nonce, server_nonce = token[17:49], token[49:81]
-    require(issued > 0 and expires == issued + PREPARATION_TTL_MS
-            and issued <= trusted_time_ms
-            and (not require_fresh or trusted_time_ms < expires)
-            and client_nonce == selection.client_nonce
-            and server_nonce == selection.server_nonce
-            and token[81:209] == (selection.release_id + selection.hardware_profile_id
-                                  + selection.attested_key_id + selection.lane_id),
-            "expired or substituted preparation")
-    message = (PREPARATION_DOMAIN + token[1:209] + issuer_policy_id
-               + hashlib.sha256(account_canonical.encode("utf-8")).digest())
-    require(openssl_path.is_absolute() and openssl_path.is_file(), "invalid verification environment")
-    with tempfile.TemporaryDirectory(prefix="kagemusha-preparation-") as temporary:
-        directory = Path(temporary)
-        (directory / "issuer.pem").write_bytes(public_key_pem(issuer_public_spki_der))
-        (directory / "message.bin").write_bytes(message)
-        (directory / "signature.bin").write_bytes(token[209:])
-        result = subprocess.run(
-            [str(openssl_path), "pkeyutl", "-verify", "-pubin", "-inkey", str(directory / "issuer.pem"),
-             "-rawin", "-in", str(directory / "message.bin"), "-sigfile", str(directory / "signature.bin")],
-            stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=False,
-        )
-        require(result.returncode == 0, "issuer preparation signature rejected")
-    return IssuerPreparation(client_nonce, server_nonce, issued, expires)
 
 
 def _certificate_valid_at(der: bytes, trusted_time_ms: int) -> bool:

@@ -39,17 +39,22 @@ mod contract_return_stack;
 mod core_host;
 mod cuda;
 #[cfg(any(feature = "cuda", test))]
-#[path = "cuda_dispatch/bn254_cost.rs"]
-mod cuda_bn254_cost;
+#[path = "cuda_dispatch/cost.rs"]
+mod cuda_cost;
 #[cfg(feature = "cuda")]
 mod cuda_dispatch;
 // Exercise the production admission state machine without requiring PTX artifacts.
 #[cfg(all(test, not(feature = "cuda")))]
 #[path = "cuda_dispatch/admission.rs"]
 mod cuda_admission_tests;
+#[cfg(feature = "cuda")]
+mod cuda_artifact;
+#[cfg(any(feature = "cuda", test))]
+mod cuda_build_policy;
 #[cfg(test)]
-#[path = "cuda_provenance.rs"]
-mod cuda_provenance_tests;
+mod cuda_bundle_files;
+#[cfg(any(feature = "cuda", test))]
+mod cuda_provenance;
 mod decoder;
 mod dev_env;
 pub mod encoding;
@@ -133,8 +138,7 @@ pub use crate::field_dispatch::{clear_field_impl_for_tests, set_field_impl_for_t
 pub use crate::stack_policy::IvmStackPolicy;
 // Publicly expose gas schedule helper for tests and tooling.
 pub use crate::argument_record::{
-    PreparedArgumentRecord, argument_record_decode_count, argument_record_from_json,
-    encode_argument_record_from_json, prepare_argument_record_with_gas_limit,
+    PreparedArgumentRecord, argument_record_decode_count, prepare_argument_record_with_gas_limit,
     reset_argument_record_decode_count, validate_argument_record,
 };
 pub use crate::gas::{cost_of, cost_of_with_vector_len};
@@ -239,8 +243,6 @@ pub use ivm_abi::error_types;
 pub use ivm_abi::state_cursor;
 /// Canonical schemas and records used for durable Kotodama V1 state values.
 pub use ivm_abi::state_value;
-#[cfg(test)]
-mod ptx_tests;
 /// Public Norito-typed request envelopes for VRF syscalls.
 pub mod vrf;
 /// Optional acceleration policy applied at runtime by hosts.
@@ -321,7 +323,8 @@ pub fn set_acceleration_config(cfg: AccelerationConfig) {
     // CUDA policy
     #[cfg(feature = "cuda")]
     {
-        let installed = iroha_accel::cuda::CudaProcess::install(cfg.resource_limits).is_ok();
+        let installed = crate::cuda_artifact::eligible()
+            && iroha_accel::cuda::CudaProcess::install(cfg.resource_limits).is_ok();
         crate::cuda_dispatch::configure(cfg.enable_cuda && installed, cfg.max_gpus);
         crate::cuda::set_cuda_enabled(cfg.enable_cuda);
     }

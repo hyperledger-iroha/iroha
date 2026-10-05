@@ -279,8 +279,8 @@ coordinator factory; no production implementation/registration of that second
 factory is present in the Kotlin sources. SDK framing, APDU transport and provider
 interfaces do not supply the missing qualified backend. Current-source native
 artifacts and cross-SDK executions remain required; `dist/NoritoBridge.xcframework`
-is absent in this checkout at this assessment. Sources:
-[Swift bridge](../IrohaSwift/Sources/IrohaSwift/KagemushaCoreCoordinatorBridgeV1.swift),
+is absent in this checkout at this assessment. The Swift coordinator bridge and
+adapter have since been deleted with the old Swift KAGEMUSHA surface. Sources:
 [Android factory](../kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaAndroidAuthenticatedHardwareProviderFactoryV1.kt).
 
 Durable history, coordinator WAL, response-evidence retention and recovery
@@ -514,7 +514,8 @@ source-sealed monetary XCFramework.
   coordinator tests pass against the pinned native host library. C# also now rejects missing-state re-bootstrap, journal rollback
   and recovery equivocation. Current-source native execution is still required.
   Sources: [Core reservation](../crates/iroha_core_zk/src/kagemusha_v1_state/coordinator_operation_store.rs#L274)
-  and [C# ID admission/recovery](../csharp/src/Hyperledger.Iroha.Sdk/Kagemusha/KagemushaWalletV1.cs#L1014).
+  and C# ID admission/recovery in `csharp/src/Hyperledger.Iroha.Sdk/Kagemusha/KagemushaWalletV1.cs`
+  (deleted with the old C# KAGEMUSHA surface).
 - **KGM-03 — Medium, bridge response substitution.** Outbox release admitted a
   structurally valid response for a different canonical installed envelope.
   Match the exact request envelope before returning backend results and preserve
@@ -528,7 +529,8 @@ source-sealed monetary XCFramework.
   of an expired request. The verifier now requires four explicit boundaries and
   the release report requires `clock_rollback`, including for signed reports.
   Focused mutation tests pass. Source:
-  [clock boundary verification](../scripts/verify_kagemusha_v1_physical_device.py#L774).
+  `scripts/verify_kagemusha_v1_physical_device.py` (clock boundary verification; deleted
+  with the old release-evidence tooling).
 - **KGM-05 — Release blocker, physical provenance closure.** The release manifest
   now requires the full raw transcript, OEM attestation, governed trust roots,
   independently pinned observer policy and native OEM verification report. It
@@ -541,7 +543,8 @@ source-sealed monetary XCFramework.
   Actual admitted OEM verifiers, roots and
   physical runs remain required for every enabled profile. See the
   [exact closure contract](kagemusha_v1_physical_evidence.md) and
-  [release verifier](../scripts/verify_kagemusha_v1_release_evidence.py#L2109).
+  release verifier `scripts/verify_kagemusha_v1_release_evidence.py` (deleted with the
+  old release-evidence tooling).
 - **KGM-06 — Medium, JavaScript model mutation.** A public internal-value getter
   exposed mutable WeakMap backing data behind frozen canonical models. The
   getter is removed and only internal encoders access backing values. Public

@@ -146,6 +146,10 @@ impl<T: inline::InlineValue + SerializePayload + for<'de> norito::DeserializePay
             ready: false,
         })
     }
+    #[cfg(test)]
+    pub(super) fn extraction_scaffolding_bytes(&self) -> usize {
+        self.spans.capacity() * std::mem::size_of::<SequenceSpan>()
+    }
     pub(super) fn decode(&mut self, bytes: &[u8]) -> DecodeResult<()> {
         self.ready = false;
         exact_count(bytes, self.values.capacity())?;

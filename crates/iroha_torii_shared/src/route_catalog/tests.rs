@@ -449,162 +449,38 @@ mod tests {
         ),
     ];
     #[test]
-    fn final_kagemusha_catalog_is_valid_and_unique() {
-        let catalog = RouteCatalog::new(kagemusha::ROUTES);
-        assert_eq!(catalog.validate(), Ok(()));
-        let ids: BTreeSet<_> = catalog
-            .routes()
-            .iter()
-            .map(|route| route.stable_route_id())
-            .collect();
-        let method_paths: BTreeSet<_> = catalog
-            .routes()
-            .iter()
-            .map(|route| (route.method(), route.path()))
-            .collect();
-        assert_eq!(ids.len(), kagemusha::ROUTES.len());
-        assert_eq!(method_paths.len(), kagemusha::ROUTES.len());
-    }
-    #[test]
     fn canonical_catalog_satisfies_closed_security_axes() {
         assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
     #[test]
-    fn kagemusha_routes_are_mandatory_without_features_and_project_to_mcp() {
-        let catalog = RouteCatalog::new(kagemusha::ROUTES);
-        let complete = BTreeSet::from([
-            "kagemusha.readiness",
-            "kagemusha.top_up",
-            "kagemusha.redeem",
-            "kagemusha.operation",
-            "kagemusha.authority_state",
-            "ledger.resource_names_state",
-            "ledger.authority_originals",
-            "kagemusha.ordinary_wallet_current",
-            "kagemusha.ordinary_mint_issuer_purpose",
-            "kagemusha.ordinary_mint_finalized",
-            "kagemusha.ordinary_mint_credit",
-        ]);
-        assert_eq!(complete.len(), 11);
-        for enabled in [EnabledFeatures::none(), EnabledFeatures::new(&["app_api"])] {
-            for projection in [
-                CatalogProjection::Mounted,
-                CatalogProjection::OpenApi,
-                CatalogProjection::Sdk,
-            ] {
-                let projected = catalog.project(projection, enabled);
-                assert_eq!(projected.len(), complete.len());
-                assert_eq!(
-                    projected
-                        .iter()
-                        .map(|route| route.stable_route_id())
-                        .collect::<BTreeSet<_>>(),
-                    complete,
-                    "every node and authored client surface must expose all eleven native KAGEMUSHA and original-carrier routes"
-                );
-            }
-        }
-        assert_eq!(
-            kagemusha::RESOURCE_NAMES_STATE.admission(),
-            AdmissionPolicy::AuthenticatedAccount
-        );
-        assert_eq!(
-            kagemusha::RESOURCE_NAMES_STATE.authentication(),
-            AuthenticationPolicy::CanonicalAccountSignature
-        );
-        assert_eq!(
-            kagemusha::RESOURCE_NAMES_STATE.effect(),
-            RouteEffect::ReadOnly
-        );
-        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.method(), HttpMethod::Post);
-        assert_eq!(
-            kagemusha::AUTHORITY_ORIGINALS.admission(),
-            AdmissionPolicy::AuthenticatedAccount
-        );
-        assert_eq!(
-            kagemusha::AUTHORITY_ORIGINALS.authentication(),
-            AuthenticationPolicy::CanonicalAccountSignature
-        );
-        assert_eq!(
-            kagemusha::AUTHORITY_ORIGINALS.effect(),
-            RouteEffect::ReadOnly
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_WALLET_CURRENT.path(),
-            "/v1/kagemusha/ordinary/current-wallet"
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_WALLET_CURRENT.feature_gate(),
-            FeatureGate::Always
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_WALLET_CURRENT.projections(),
-            RouteProjections::OPENAPI_AND_SDK
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_WALLET_CURRENT.method(),
-            HttpMethod::Post
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_WALLET_CURRENT.admission(),
-            AdmissionPolicy::AuthenticatedAccount
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_WALLET_CURRENT.authentication(),
-            AuthenticationPolicy::CanonicalAccountSignature
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_WALLET_CURRENT.effect(),
-            RouteEffect::ReadOnly
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.path(),
-            "/v1/kagemusha/ordinary/mint-issuer-purpose"
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.feature_gate(),
-            FeatureGate::Always
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.projections(),
-            RouteProjections::OPENAPI_AND_SDK
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.method(),
-            HttpMethod::Post
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.admission(),
-            AdmissionPolicy::AuthenticatedAccount
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.authentication(),
-            AuthenticationPolicy::CanonicalAccountSignature
-        );
-        assert_eq!(
-            kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.effect(),
-            RouteEffect::ReadOnly
-        );
-        for (route, signed_target, exact_path) in [
+    fn ledger_original_carriers_are_mandatory_signed_reads_outside_mcp() {
+        const LEDGER_CARRIERS: &[RouteDescriptor] =
+            &[core::RESOURCE_NAMES_STATE, core::AUTHORITY_ORIGINALS];
+        let carriers = [
             (
-                kagemusha::ORDINARY_MINT_FINALIZED,
-                crate::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_ROUTE_V1,
-                "/v1/kagemusha/ordinary/top-up/finality",
+                core::RESOURCE_NAMES_STATE,
+                "ledger.resource_names_state",
+                HttpMethod::Get,
+                format!(
+                    "{}{{challenge}}",
+                    crate::resource_names_state::NATIVE_RESOURCE_NAMES_STATE_ROUTE_PREFIX_V1
+                ),
             ),
             (
-                kagemusha::ORDINARY_MINT_CREDIT,
-                crate::ordinary_mint_finalized::ORDINARY_MINT_CREDIT_ROUTE_V1,
-                "/v1/kagemusha/ordinary/top-up/credit",
+                core::AUTHORITY_ORIGINALS,
+                "ledger.authority_originals",
+                HttpMethod::Post,
+                crate::authority_originals::NATIVE_AUTHORITY_ORIGINALS_ROUTE_V1.to_owned(),
             ),
-        ] {
-            assert_eq!(signed_target, exact_path);
-            assert_eq!(route.path(), signed_target);
-            assert_eq!(route.route_match(), RouteMatch::Exact);
+        ];
+        for (route, stable_route_id, method, signed_target) in &carriers {
+            assert_eq!(route.stable_route_id(), *stable_route_id);
+            assert_eq!(route.method(), *method);
+            assert_eq!(route.path(), signed_target.as_str());
             assert_eq!(route.surface(), ApiSurface::Public);
             assert_eq!(route.listener(), Listener::Torii);
             assert_eq!(route.feature_gate(), FeatureGate::Always);
             assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
-            assert_eq!(route.method(), HttpMethod::Post);
             assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
             assert_eq!(
                 route.authentication(),
@@ -612,28 +488,39 @@ mod tests {
             );
             assert_eq!(route.effect(), RouteEffect::ReadOnly);
             assert!(route.cors_options());
+            assert_eq!(
+                core::INFO_ROUTES
+                    .iter()
+                    .filter(|candidate| candidate.stable_route_id() == *stable_route_id)
+                    .count(),
+                1,
+                "{stable_route_id} is mounted by the core ledger route group"
+            );
+            assert_eq!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .filter(|candidate| candidate.stable_route_id() == *stable_route_id)
+                    .count(),
+                1,
+                "{stable_route_id} is cataloged exactly once"
+            );
         }
-        assert_ne!(
-            crate::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_ROUTE_V1,
-            crate::ordinary_mint_finalized::ORDINARY_MINT_CREDIT_ROUTE_V1
-        );
-        let mcp = catalog.project(CatalogProjection::Mcp, EnabledFeatures::none());
-        assert_eq!(mcp.len(), 5);
-        assert_eq!(
-            mcp.iter()
-                .map(|route| route.stable_route_id())
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from([
-                "kagemusha.readiness",
-                "kagemusha.top_up",
-                "kagemusha.redeem",
-                "kagemusha.operation",
-                "kagemusha.authority_state",
-            ]),
-            "signed original-carrier endpoints are available through their native SDK transport"
-        );
+        let catalog = RouteCatalog::new(LEDGER_CARRIERS);
+        assert_eq!(catalog.validate(), Ok(()));
+        for enabled in [EnabledFeatures::none(), EnabledFeatures::new(&["app_api"])] {
+            for projection in [
+                CatalogProjection::Mounted,
+                CatalogProjection::OpenApi,
+                CatalogProjection::Sdk,
+            ] {
+                assert_eq!(catalog.project(projection, enabled).len(), carriers.len());
+            }
+            assert!(
+                catalog.project(CatalogProjection::Mcp, enabled).is_empty(),
+                "signed original carriers stay on their native SDK transport"
+            );
+        }
     }
-
     #[test]
     fn canonical_catalog_retires_global_sumeragi_rbc_and_collectors() {
         assert!(

@@ -808,3 +808,109 @@ def test_sample_fault_injection_is_dev_only_and_rejects_normal_dependency(
         in error
         for error in errors
     ), errors
+
+
+@pytest.mark.parametrize("mutation", ("remove", "optional", "weak", "wrong-platform", "extra-feature", "normal-only", "alias"))
+def test_mandatory_daemon_cuda_target_dependency_is_exact(mutation: str) -> None:
+    document = _guarded_document("irohad_lib")
+    assert _guarded_errors("irohad_lib", document) == []
+    changed = copy.deepcopy(document)
+    scope = 'cfg(any(target_os = "linux", target_os = "windows"))'
+    row = changed["target"][scope]["dependencies"]["ivm"]
+    if mutation == "remove":
+        del changed["target"][scope]["dependencies"]["ivm"]
+    elif mutation == "optional":
+        row["optional"] = True
+    elif mutation == "weak":
+        row["features"] = ["cuda?"]
+    elif mutation == "wrong-platform":
+        changed["target"]['cfg(target_os = "macos")'] = changed["target"].pop(scope)
+    elif mutation == "extra-feature":
+        row["features"] = ["cuda", "cuda-hardware-tests"]
+    elif mutation == "normal-only":
+        changed["dependencies"]["ivm"]["features"] = ["cuda"]
+        del changed["target"][scope]["dependencies"]["ivm"]
+    else:
+        changed["features"]["ivm-cuda"] = ["ivm/cuda"]
+    assert any("mandatory daemon CUDA" in error for error in _guarded_errors("irohad_lib", changed))
+
+
+def test_contextual_cuda_pins_both_exact_dependency_members() -> None:
+    document = _guarded_document("ivm")
+    assert _guarded_errors("ivm", document) == []
+    assert FEATURE_HYGIENE.EXPECTED_FEATURES["ivm"]["cuda"] == (
+        "dep:cust", "iroha_accel/cuda",
+    )
+    assert "cuda" in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES["ivm"]
+    assert "cuda" not in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES["ivm"]
+    assert "cuda" not in FEATURE_HYGIENE.local_default_feature_closure(
+        FEATURE_HYGIENE.cargo_visible_features(document)
+    )
+    for members in (
+        [], ["dep:cust"], ["iroha_accel/cuda"],
+        ["cust", "iroha_accel/cuda"],
+        ["dep:cust", "iroha_accel?/cuda"],
+        ["iroha_accel/cuda", "dep:cust"],
+        ["dep:cust", "iroha_accel/cuda", "cuda-hardware-tests"],
+    ):
+        changed = copy.deepcopy(document)
+        changed["features"]["cuda"] = members
+        assert changed != document
+        assert any(
+            "feature `cuda` must be ['dep:cust', 'iroha_accel/cuda']" in error
+            for error in _guarded_errors("ivm", changed)
+        ), members
+
+
+def test_daemon_mutation_testing_is_empty_explicit_and_excluded_from_defaults() -> None:
+    document = _guarded_document("irohad_lib")
+    assert _guarded_errors("irohad_lib", document) == []
+    assert FEATURE_HYGIENE.EXPECTED_FEATURES["irohad_lib"]["mutation-testing"] == ()
+    assert document["features"]["mutation-testing"] == []
+    assert "mutation-testing" in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES["irohad_lib"]
+    assert "mutation-testing" not in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES["irohad_lib"]
+    assert "mutation-testing" not in FEATURE_HYGIENE.local_default_feature_closure(
+        FEATURE_HYGIENE.cargo_visible_features(document)
+    )
+    changed = copy.deepcopy(document)
+    changed["features"]["mutation-testing"] = ["iroha_core/mutation-testing"]
+    assert any(
+        "feature `mutation-testing` must be []" in error
+        for error in _guarded_errors("irohad_lib", changed)
+    )
+    for aggregate in ("default", "daemon"):
+        changed = copy.deepcopy(document)
+        changed["features"][aggregate].append("mutation-testing")
+        assert any(
+            "explicit opt-in feature `mutation-testing` is reachable from `default`" in error
+            for error in _guarded_errors("irohad_lib", changed)
+        ), aggregate
+
+
+def test_daemon_mutation_dependency_is_nonshipping_even_through_an_alias(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+    assert not any(
+        owner == "irohad_lib" and feature == "mutation-testing"
+        for _consumer, owner, feature in
+        FEATURE_HYGIENE.NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST
+    )
+    for section in ("dependencies", "build-dependencies", "dev-dependencies"):
+        rows = _member_rows()
+        if section != "dependencies":
+            rows.extend(["", f"[{section}]"])
+        rows.append(
+            'daemon_owner = { package = "irohad_lib", version = "0.1.0", '
+            'default-features = false, features = ["mutation-testing"] }'
+        )
+        _write_member(tmp_path, "crates/consumer", rows)
+        errors = FEATURE_HYGIENE.check_repository(tmp_path)
+        if section == "dev-dependencies":
+            assert errors == []
+        else:
+            assert any(
+                f"package `consumer` [{section}] dependency `daemon_owner` "
+                "(package `irohad_lib`) selects explicit opt-in feature `mutation-testing` "
+                "from a non-dev dependency declaration" in error
+                for error in errors
+            ), (section, errors)

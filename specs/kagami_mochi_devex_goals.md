@@ -129,9 +129,19 @@ existing finality/custody fixtures use the portable owner. Native whole-service 
 execution are still qualification gates.
 
 Authenticated provider-inventory reads retain the daemon's original live inventory and recheck
-native archive, order, completion authority and admission before and after reading. The manager
-reader selects exactly three original providers and performs a final same-view join. This source
-path requires native validation together with pin submission and the publication installer.
+native archive, order, completion authority and admission before and after reading. The publisher
+uses its own ordinary SDK identity to acquire complete original signed attestations from at least
+three independently selected provider origins before constructing registration payloads. Its
+immutable checkpoint binds every original attestation and the complete canonical storage request;
+recovery never substitutes compact references or refetches missing anchored originals. The native
+paid pin coordinator retains original requests, fee authorization, signatures and ordinary Queue
+submission. The concrete storage backend stages exact finalized seed bytes through the existing
+publisher-source owner and reports completion only from actual native provider workers. Generated
+TLS selection binds the original network, provider, certificate and dedicated listener port.
+Stock startup now selects the complete configured publication installation, opens its original
+journal/seed/clock/pin custody before binding the private listener, and uses fresh native discovery
+for each of the original three providers. The generated runtime installs this configuration only
+on the seed peer after aggregate activation. These source paths require combined native validation.
 
 ## Qualification and documentation
 
@@ -260,10 +270,33 @@ component material but cannot select native state or replace missing committed b
 custody renewal withdraws Ready before a finite bounded turn, then reuses the original paid
 readiness receipt across an owned restart. All three providers must remain current; unchanged
 providers keep their original monotonic enrollment timers across another provider's renewal.
-Remaining work includes native renewal and interrupted-bootstrap authorization qualification,
-authenticated cross-provider reads of original native attestations, the
-native pin/outbox-to-Queue coordinator and production publication-service installation. Three-provider
-cold publication, DNS timeout/rebinding and revocation coverage, and the complete
+Catalog startup retains each native-selected predecessor component before renewal and reconciles
+an already-applied original renewal before strict current-use rendering. Initial startup and
+purpose-closed renewal authorization share one finite epoch/claim owner. A later owned turn may
+retire an expired, canonically proven unsigned wallet request while preserving its still-valid
+attester body and original fees. If that body has expired, the sole custody body history can
+retain a successor before attester signing, using fresh native predecessor evidence and live
+purpose-closed authorization. The history permits at most 64 bodies and 64 aggregate dispatch
+reservations. Paid payloads and signed envelopes remain immutable and retain exact recovery.
+Completing an already-reserved successor that expired during downtime consumes that turn's one
+replacement claim; attempting another body in the same turn returns `ReplacementLimit`. A later
+fresh invocation may advance that unused body. Missing anchored local material refuses without
+reconstruction.
+Generic observation failures still use bounded retries because the existing source/SDK errors
+conflate transport and proof rejection. Native qualification of this composed unsigned-body
+recovery remains pending, alongside renewal and interrupted-bootstrap authorization qualification,
+qualification of the implemented native paid pin coordinator and publisher acquisition of original
+signed attestations, and the implemented stock publication-service and generated runtime projection.
+The explicit generated publication API accepts the original client image, namespace binding and
+owner-paid fee intent, exact prepared three-provider transport, and generation-bound journal/cache
+paths. First use advances the original anchored wallet namespace parent; resume and recovery
+retain the original request and cannot authorize another namespace transaction. Kagami
+`package publish` and the Mochi Packages view call this same API and display its canonical
+result, diagnostic and exit status. Resume uses the original operation without reopening source
+files. Managed contract builds use the original generation build cache, separate from publication
+cache; local source, bytecode and local-only packages perform no cache I/O. The implemented
+frontend handoff and three-provider cold publication still require qualification, together with
+DNS timeout/rebinding and revocation coverage, and the complete
 HTTP/TLS, JSON, CAR and cache 64 MiB peak-RSS gate. Local-package smoke and isolated transport or allocation tests do not
 establish that combined result.
 Native provider ingest now carries a mandatory governed completion signer independently

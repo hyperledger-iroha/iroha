@@ -716,41 +716,49 @@ impl FastJsonWrite for FilterExpr {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"args\":")?;
-        out.begin_container()?;
-        out.push('[')?;
-        match self {
-            Self::And(list) | Self::Or(list) => {
-                for (index, nested) in list.iter().enumerate() {
-                    if index != 0 {
-                        out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"args\":")?;
+            out.begin_container()?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push('[')?;
+                match self {
+                    Self::And(list) | Self::Or(list) => {
+                        for (index, nested) in list.iter().enumerate() {
+                            if index != 0 {
+                                out.push(',')?;
+                            }
+                            nested.json_serialize_to(out)?;
+                        }
                     }
-                    nested.json_serialize_to(out)?;
+                    Self::Not(inner) => inner.json_serialize_to(out)?,
+                    Self::Eq(field, operand)
+                    | Self::Ne(field, operand)
+                    | Self::Lt(field, operand)
+                    | Self::Lte(field, operand)
+                    | Self::Gt(field, operand)
+                    | Self::Gte(field, operand) => {
+                        field.json_serialize_to(out)?;
+                        out.push(',')?;
+                        operand.json_serialize_to(out)?;
+                    }
+                    Self::In(field, values) | Self::Nin(field, values) => {
+                        field.json_serialize_to(out)?;
+                        out.push(',')?;
+                        values.json_serialize_to(out)?;
+                    }
+                    Self::Exists(field) | Self::IsNull(field) => field.json_serialize_to(out)?,
                 }
-            }
-            Self::Not(inner) => inner.json_serialize_to(out)?,
-            Self::Eq(field, operand)
-            | Self::Ne(field, operand)
-            | Self::Lt(field, operand)
-            | Self::Lte(field, operand)
-            | Self::Gt(field, operand)
-            | Self::Gte(field, operand) => {
-                field.json_serialize_to(out)?;
-                out.push(',')?;
-                operand.json_serialize_to(out)?;
-            }
-            Self::In(field, values) | Self::Nin(field, values) => {
-                field.json_serialize_to(out)?;
-                out.push(',')?;
-                values.json_serialize_to(out)?;
-            }
-            Self::Exists(field) | Self::IsNull(field) => field.json_serialize_to(out)?,
-        }
-        out.push_str("],\"op\":")?;
+                out.push_str("],\"op\":")?;
+                Ok(())
+            })();
+            out.end_container();
+            result?;
+            self.op_name().json_serialize_to(out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        self.op_name().json_serialize_to(out)?;
-        out.push('}')?;
-        out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1034,5 +1042,41 @@ mod tests {
         let canonical = json::to_string(&expr.to_json_value()).expect("canonical");
         let payload = norito::codec::encode_adaptive(&format!(" {canonical}"));
         assert!(norito::codec::decode_adaptive::<FilterExpr>(&payload).is_err());
+    }
+}
+
+#[cfg(test)]
+mod service_depth_tests {
+    //! Owning checked service writers keep the caller depth on exact refusals.
+    use super::*;
+    use crate::service_checked_writer_test_support::audit;
+    use norito::json::FastJsonWrite;
+
+    #[test]
+    fn original_filter_all_variants_keep_nested_args_and_exact_refusal_depth() {
+        let field = || FieldPath::from("metadata.tier");
+        let literal = || Value::from("é");
+        let values = [
+            FilterExpr::And(vec![FilterExpr::Exists(field())]),
+            FilterExpr::Or(vec![FilterExpr::IsNull(field())]),
+            FilterExpr::Not(Box::new(FilterExpr::Eq(field(), literal()))),
+            FilterExpr::Eq(field(), literal()),
+            FilterExpr::Ne(field(), literal()),
+            FilterExpr::Lt(field(), Value::from(7_u64)),
+            FilterExpr::Lte(field(), Value::from(7_u64)),
+            FilterExpr::Gt(field(), Value::from(7_u64)),
+            FilterExpr::Gte(field(), Value::from(7_u64)),
+            FilterExpr::In(field(), vec![literal()]),
+            FilterExpr::Nin(field(), vec![literal()]),
+            FilterExpr::Exists(field()),
+            FilterExpr::IsNull(field()),
+        ];
+        for source in &values {
+            source
+                .validate()
+                .expect("original supported filter grammar");
+            let expected = norito::json::to_json(&source.to_json_value()).unwrap();
+            audit(&expected, |sink| source.write_json_to(sink));
+        }
     }
 }

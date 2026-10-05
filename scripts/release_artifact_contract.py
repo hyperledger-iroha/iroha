@@ -1353,6 +1353,76 @@ def format_artifact_spec(descriptor: Mapping[str, object]) -> str:
     )
 
 
+@dataclass(frozen=True)
+class ReviewedCudaBundlePins:
+    """Public source-approved identities; metadata alone grants no native authority."""
+
+    public_key_sha256: str
+    manifest_sha256: str
+
+
+def read_reviewed_cuda_bundle_pins(repository: Path) -> ReviewedCudaBundlePins | None:
+    """Read only the one closed literal declaration through stable source custody.
+
+    Rust owns signed V1 admission. This reader neither parses that format nor
+    derives approval from supplied bundle bytes, environment values or receipts.
+    The enclosing release source seal authenticates this current source owner.
+    """
+    _, payload = stable_read_relative(
+        repository, "crates/ivm/src/cuda_build_policy.rs",
+        max_size=2 * 1024 * 1024, return_payload=True,
+    )
+    assert payload is not None
+    try:
+        source = payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ReleaseArtifactError("CUDA approval source must be UTF-8") from error
+    declarations = re.findall(r"\b(?:const|static)\s+REVIEWED_CUDA_BUNDLE_PINS\b", source)
+    pattern = re.compile(
+        r"(?m)^pub\(crate\) const REVIEWED_CUDA_BUNDLE_PINS: "
+        r"Option<ReviewedCudaBundlePins>\s*=\s*"
+        r'(None|Some\(ReviewedCudaBundlePins\s*\{\s*'
+        r'public_key_sha256:\s*"([0-9a-f]{64})",\s*'
+        r'manifest_sha256:\s*"([0-9a-f]{64})",?\s*\}\))\s*;'
+    )
+    matches = list(pattern.finditer(source))
+    if len(declarations) != 1 or len(matches) != 1:
+        _fail("CUDA approval must be one literal REVIEWED_CUDA_BUNDLE_PINS declaration")
+    match = matches[0]
+    if match[1] == "None":
+        return None
+    if match[2] == "0" * 64 or match[3] == "0" * 64:
+        _fail("CUDA source approval pins must be nonzero lowercase SHA256")
+    return ReviewedCudaBundlePins(match[2], match[3])
+
+
+def require_release_cuda_source_inputs(
+    repository: Path, target: str,
+) -> ReviewedCudaBundlePins | None:
+    """Compare held source identities to approval; absent CUDA cannot ship.
+
+    This preserves the closed prebuilt record, not a second bundle codec. Exact
+    signature, PTX and generation verification remains solely Rust admission.
+    """
+    pins = read_reviewed_cuda_bundle_pins(repository)
+    if release_ivm_backend(target) == "metal":
+        return None
+    if pins is None:
+        _fail("shipping CUDA requires source-approved REVIEWED_CUDA_BUNDLE_PINS; current None is unqualified")
+    bundle_info, _ = stable_read_relative(
+        repository, "crates/ivm/cuda/provenance.v1",
+        max_size=16 * 1024, return_payload=False,
+    )
+    key_info, _ = stable_read_relative(
+        repository, "crates/ivm/cuda/provenance.v1.pub",
+        max_size=32, return_payload=False,
+    )
+    if key_info.size != 32 or key_info.sha256 != pins.public_key_sha256:
+        _fail("source CUDA public key differs from source approval")
+    if bundle_info.sha256 != pins.manifest_sha256:
+        _fail("source CUDA manifest differs from source approval")
+    return pins
+
 
 def release_ivm_backend(target: str) -> str:
     """Select the shipping backend from the reviewed target, never the build host."""
@@ -1371,7 +1441,7 @@ def release_ivm_backend(target: str) -> str:
 
 
 def release_acceleration_features(target: str, selected: Iterable[str]) -> tuple[str, ...]:
-    """Add the mandatory daemon backend to the exact shipping Cargo selection."""
+    """Keep exact shipping selection; target dependencies own daemon CUDA."""
 
     features = tuple(selected)
     if any(
@@ -1380,8 +1450,10 @@ def release_acceleration_features(target: str, selected: Iterable[str]) -> tuple
         for value in features
     ) or len(set(features)) != len(features):
         raise ReleaseArtifactError("release features must be unique Cargo tokens")
-    required = ("irohad/ivm-cuda",) if release_ivm_backend(target) == "cuda" else ()
-    return tuple(sorted(set(features).union(required)))
+    release_ivm_backend(target)
+    if any(value.split("/")[-1] == "ivm-cuda" for value in features):
+        _fail("retired daemon ivm-cuda feature is prohibited")
+    return tuple(sorted(features))
 
 
 def validate_release_acceleration(
@@ -1391,7 +1463,7 @@ def validate_release_acceleration(
     trusted_cuda_key_sha256: str | None,
     cuda_bundle_sha256: str | None,
 ) -> None:
-    """Check authenticated build provenance against independent release inputs.
+    """Check authenticated build provenance against source-approved inputs.
 
     This verifies inclusion and exact build-input identity, not physical execution
     or artifact signing correctness. CUDA build admission verifies the signed

@@ -4,19 +4,20 @@ title: FASTPQ Metal Kernel Suite
 
 # FASTPQ Metal Kernel Suite
 
-The Apple Silicon backend prefers a single build-generated `fastpq.metallib`
-that contains every Metal Shading Language (MSL) kernel exercised by the
-prover. The same sources are embedded as a runtime-compilation fallback, so a
-missing build artifact does not make visible Metal hardware unavailable. This
-note explains the available entry points, their threadgroup limits, and the
-determinism guarantees that make the GPU path interchangeable with the scalar
-fallback.
+The Apple Silicon backend requires one privately admitted immutable compiled
+`fastpq.metallib`. Discovery and the common loader check its independently reviewed
+length/digest, eight ordered source inputs, target/language/producer identity and
+all sixteen entry points before device setup or private staging. No genuine
+approved bytes/pins are supplied in the current source: the bundle is `None`, so
+Metal eligibility is absent. Ordinary builds and runtime never compile Metal
+source or resolve a library path.
 
-The canonical implementation lives under
-`crates/fastpq_prover/metal/kernels/` and is compiled by
-`crates/fastpq_prover/build.rs` whenever `fastpq-gpu` is enabled on macOS.
-Runtime metadata (`metal_kernel_descriptors`) mirrors the information below so
-benchmarks and diagnostics can surface the same facts programmatically.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:1】【crates/fastpq_prover/metal/kernels/poseidon.metal:1】【crates/fastpq_prover/build.rs:1】【crates/fastpq_prover/src/metal.rs:248】
+The canonical sources remain under `crates/fastpq_prover/metal/`. Their sole
+explicit offline producer is `scripts/build_fastpq_metal_bundle.py`; its output is
+an unqualified candidate, never its own admission authority or signed provenance.
+The existing context owners retain queues, pipelines, clearing buffers and sticky
+uncertain-completion refusal. Driver allocations, supported artifact packaging,
+complete calibration, hardware parity and uncertain-input recovery remain open.
 
 Goldilocks Poseidon kernels use an explicit three-scalar-word state structure.
 On Apple Metal 32023.883, the previous `ulong3` arrays produced incorrect
@@ -45,6 +46,11 @@ an end-to-end prover or production performance qualification.
 | `bn254_fft_columns` | BN254 FFT over one canonical-limb column | Pipeline limit | — | A cooperative single threadgroup uses packed `n - 1` stage twiddles and deterministic Montgomery arithmetic.【crates/fastpq_prover/metal/kernels/bn254.metal:257】
 | `bn254_lde_columns` | BN254 coset LDE over one canonical-limb column | Pipeline limit | — | A cooperative single threadgroup performs coset scaling and the packed-twiddle FFT; the host bounds retained command buffers while dispatching columns.【crates/fastpq_prover/metal/kernels/bn254.metal:313】
 | `bn254_poseidon_hash_words` | BN254 Poseidon word-batch hashing | 128 threads | — | Converts canonical limbs to Montgomery form, hashes the requested word slices, and returns canonical BN254 digest bytes.【crates/fastpq_prover/metal/kernels/bn254.metal:532】
+
+| `fastpq_digest384_last_fields` | Six-lane last-fields continuation | Pipeline limit | — | Preserves canonical field-word and state order. |
+| `digest384_hash_frames_v1` | Canonical framed six-lane Digest384 | Pipeline limit | — | Processes admitted complete byte frames. |
+| `digest384_indexed_first_coordinate_v1` | Indexed first-coordinate Digest384 | Pipeline limit | — | Preserves indexed ordered digest geometry. |
+| `fastpq_sha3_256_continuations` | SHA3-256 byte continuation | Pipeline limit | — | Uses the original continuation kernel and exact byte length. |
 
 The descriptors are available at runtime via
 `fastpq_prover::metal_kernel_descriptors()` for tooling that wants to display
@@ -85,31 +91,35 @@ dispatchers; their migration needs separate shape, coset and lifetime controls.
 
 ## Metallib generation
 
-`build.rs` first resolves and executes both `metal -v` and `metallib -v`. It
-never installs Xcode components or clears system caches. Unless
-`FASTPQ_SKIP_GPU_BUILD` opts out, an available toolchain compiles the
-individual `.metal` sources into non-empty `.air` objects and links them into a
-non-empty `fastpq.metallib`, exporting every entry point listed above. Probe
-diagnostics identify Xcode selection/license remediation and the explicit
-manual component-install command. If the toolchain is unavailable or offline
-compilation fails, the runtime concatenates the prelude, parameters,
-field helpers, and all kernel translation units into self-contained MSL 2.4
-source and creates the same pipelines through
-`MTLDevice::new_library_with_source`.
-The build script passes the generated Cargo `OUT_DIR` path to the crate at compile
-time, so a release loads that library while it remains present. A packaged or
-relocated release with a stale path selects the embedded fallback instead;
-`FASTPQ_METAL_LIB` is only a debug/dev override, not production configuration.【crates/fastpq_prover/build.rs:210】【crates/fastpq_prover/src/metal.rs:2475】
+Ordinary macOS Cargo builds do not run `xcrun`, `metal` or `metallib`. The
+explicit producer captures all eight exact source owners and compiles all six
+translation units in a fresh retained generation directory. It checks actual
+compiler/linker versions and file digests, successful natural terminal exits,
+fresh non-empty outputs and source/tool currentness before create-only publication.
+It verifies that the real compiler advertises `-fno-fast-math` before using that
+option with the original `-std=macos-metal2.4 -O3` flags. No timeout, signal,
+automatic cleanup, installation or download is performed.
 
-For parity with CI runs you can regenerate the library manually:
+Select an installed full Xcode toolchain before explicitly producing a candidate:
 
 ```bash
-export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
-xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
-xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon.metal -o "$OUT_DIR/poseidon.air"
-xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/bn254.metal -o "$OUT_DIR/bn254.air"
-xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
+python3 scripts/build_fastpq_metal_bundle.py \
+  --target aarch64-apple-darwin --output target/fastpq-metal-candidate
 ```
+
+The output parent must already exist; the candidate path must be new. `--skip`
+is explicit non-generation without source, output or tool access. Generation
+metadata is published last and records an unqualified candidate. Retained partial
+outputs never become an admitted library. Independent target/pin review, repeated
+genuine generation, all sixteen real pipeline loads and complete output parity
+are still required. A producer receipt alone does not enable Metal.
+
+The common loader uses only admitted compiled bytes through
+`MTLDevice::new_library_with_data`; it does not read runtime files or compile MSL.
+This does not qualify driver-internal compilation or allocation behavior. Required
+GPU policies keep their original operational refusal; optional policies keep
+existing deterministic CPU behavior. Sticky `CompletionUncertain` remains a safety
+boundary, not a claim that eventual original-input recovery is complete.
 
 ## Threadgroup sizing heuristics
 

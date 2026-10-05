@@ -49,8 +49,9 @@ The first-release workspace emits the canonical `iroha` client, `irohad`
 validator daemon, and standalone `sorafs_governance_dag` service. Run
 `make build`, or set a deployment profile explicitly with
 `BUILD_PROFILE=deploy bash scripts/build_canonical_binaries.sh --target <triple>`.
-Linux deployment builds also require the independently reviewed
-`IVM_CUDA_TRUSTED_KEY_SHA256` public-key fingerprint and the signed PTX bundle.
+Linux deployment builds require the independently reviewed source-owned signer
+and exact manifest pins plus the complete signed PTX bundle; current `None`
+approval cannot ship.
 The target selects CUDA on Linux and default Metal on macOS; the build host does
 not select the backend. Ordinary development builds do not require CUDA tooling
 or a driver. Deterministic release bundles
@@ -83,8 +84,7 @@ components, such as the external software signer binary:
 ```bash
 docker build \
   --build-arg CONFIG_PROFILE=taira \
-  --build-arg FEATURES=external-software-signer-bin,irohad/ivm-cuda \
-  --build-arg IVM_CUDA_TRUSTED_KEY_SHA256=<reviewed-public-key-sha256> \
+  --build-arg FEATURES=external-software-signer-bin \
   -t hyperledger/iroha:taira-local .
 ```
 
@@ -170,23 +170,24 @@ qualifying that deployment.
 
 ## Release acceleration contract
 
-The canonical Linux Docker definitions and Nix daemon derivations include
-`irohad/ivm-cuda` with signed bundled PTX. Docker takes the reviewed public key
-fingerprint as `IVM_CUDA_TRUSTED_KEY_SHA256`; Nix `mkIroha` takes the explicit
-`cudaTrustedKeySha256` argument. Missing trust inputs fail before the release
-build. The reviewed CI input is forwarded from the non-secret repository
-configuration value `IVM_CUDA_TRUSTED_KEY_SHA256`; this change does not supply
-or approve its value. No producer downloads or compiles kernels at startup.
+The Linux/Windows daemon's mandatory target dependency selects the existing IVM
+CUDA feature; macOS retains Metal. Docker and Nix retain an inventory-only
+preflight for all thirteen fixed regular, non-symlink bundle files. Rust owns the
+single canonical authenticated admission relation and rejects supplied material
+without genuine source approval. Ordinary Cargo with absent approval and absent
+material remains CPU-capable in every profile; strict shipping CUDA refuses.
+No recipe forwards a CUDA trust environment value, compiler mode, daemon alias
+or caller-selected public-key pin.
 
-The bundle/image wrappers and pipeline take `--trusted-cuda-key-sha256` as an
-independent release input for CUDA targets. The single prebuilt provenance V1
-record includes `acceleration` with exactly `ivm_features`,
-`cuda_trusted_key_sha256`, and `cuda_bundle_sha256`. Features are sorted and
-unique; CUDA targets require `cuda`, `default`, and `metal` (the default Metal
-feature is inert off macOS). The bundle digest is SHA-256 of the exact signed
-`crates/ivm/cuda/provenance.v1` source manifest. The public-key source must hash
-to the independent trust input. macOS records require default Metal and null
-CUDA identities. Retired records missing this field are rejected.
+The private source-owned `REVIEWED_CUDA_BUNDLE_PINS` is literally `None` until an
+independent review can approve the genuine signer and exact signed manifest.
+Python release owners use one stable source metadata reader and compare both
+pins with held source/prebuilt identities; metadata provides no native authority.
+The single prebuilt V1 `acceleration` record still contains exactly
+`ivm_features`, `cuda_trusted_key_sha256`, and `cuda_bundle_sha256`, with sorted
+unique production features. CUDA targets require `cuda`, `default` and `metal`;
+macOS requires default Metal and null CUDA identities. Old daemon alias tokens
+and incomplete records are rejected directly.
 
 These checks bind a reviewed prebuilt to the target and source bundle. The IVM
 build gate verifies signatures and every source/PTX identity; physical kernel

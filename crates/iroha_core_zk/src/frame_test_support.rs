@@ -26,8 +26,8 @@ mod tests {
             "iroha_core_zk::stark::StarkProofV1"
         );
         assert_eq!(
-            relocated_rust_path("iroha_core::zk::kagemusha_v1_state::LaneBinding"),
-            "iroha_core_zk::kagemusha_v1_state::LaneBinding"
+            relocated_rust_path("iroha_core::zk::confidential_v2::ConfidentialMerklePathV2"),
+            "iroha_core_zk::confidential_v2::ConfidentialMerklePathV2"
         );
         assert_eq!(
             relocated_rust_path("iroha_core::other::T"),

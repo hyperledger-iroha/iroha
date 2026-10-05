@@ -41,8 +41,9 @@ funded before construction and survive all update timers. Native readback retain
 its original physical owner and destination; after taking both destination locks,
 it rechecks policy, quarantine and the CPU baseline before copying any leaves,
 then completes canonical refresh under that owner. Refusal leaves both original
-representations unchanged. Configured operator floors remain effective. BN254 batches use the bounded CUDA
-cost path described below. Other helpers still use fixed workload thresholds;
+representations unchanged. Configured operator floors remain effective. BN254 and
+Poseidon batches use the bounded CUDA cost path described below. Other helpers
+still use fixed workload thresholds;
 complete signed cost profiles remain open release work.
 An individual Keccak permutation or AES round runs on the CPU because its
 transfer and launch cost exceeds the work. AES round batches use one GPU batch
@@ -273,16 +274,19 @@ The patched `cust_raw` boundary loads the CUDA driver at runtime. A CPU-only
 machine can start a CUDA-enabled binary without a driver. Linux loads
 `libcuda.so.1` (including the WSL system path); Windows restricts
 `nvcuda.dll` to System32. Missing drivers or symbols leave the CPU path
-available. CUDA is not yet a default Cargo feature because the required ten
-checked-in PTX files and signed provenance are absent.
+available. Linux/Windows daemon dependencies now select the existing CUDA
+feature automatically; macOS retains Metal. The one private source-owned
+`REVIEWED_CUDA_BUNDLE_PINS` is currently `None`. Genuine absence permits
+CPU-capable ordinary builds in every profile; supplied unreviewed, partial or
+malformed material is an integrity error. Cargo and startup invoke no CUDA tool
+and obtain no approval from environment values.
 
-`build.rs` has three explicit build-time modes:
-
-- `bundled` (default for CUDA builds) copies validated checked-in PTX and fails
-  if any family is missing.
-- `generate` invokes `nvcc` only for a qualification candidate.
-- `check` regenerates every family and requires byte identity with its bundled
-  artifact.
+One immutable optional owner retains the exact ten-family authenticated bytes.
+The build and runtime adapters share the sole canonical signed V1 relation.
+Runtime absence refuses before CUDA discovery/private staging and grants no
+native completion or calibrated-profile credit. Shipping and required-hardware
+gates refuse without genuine source approval and actual completions. Explicit
+two-run candidate generation uses only the existing offline producer.
 
 The ten source families are AES, bitonic sort, BN254, Poseidon, SHA-256,
 SHA-256 leaves, SHA-256 pair reduction, SHA-3, signature, and vector. The
@@ -308,19 +312,38 @@ through compound operations. There is no second GPU manager or parallel
 admission registry. Native batch helpers fill caller destinations only after
 complete result validation; ordinary helpers handle qualified CPU fallback.
 
-Ordinary BN254 addition, subtraction and multiplication retain separate inline
-cost profiles in each original device policy owner. Profiles bind the exact
-qualified PTX and actual CPU backend. Public synthetic operands are measured at
-64, 256, 1,024 and 4,096 elements, with three trials per size. GPU timings include
-the adapter's extra input scan, transfers, launch, waits, result validation,
-copyback and staging cleanup. Both results must match the independent field
-relation. Conservative CPU/GPU trial bounds require a ten-percent estimated win;
-bounded interpolation compares eligible devices only within the sampled span.
-Outside it, ordinary batches use CPU. There is no last-sample extrapolation.
+BN254 Poseidon V1 CPU parameters have one canonical fixed-byte owner in
+`iroha_zkp_poseidon::poseidon::bn254_v1`: the existing complete AXT fixture's
+621 full fields, width/rate 3/2 and 6/5, x^5, 8 full + 56 partial rounds and the
+original dense MDS. Strict canonical field initialization, width-explicit exports,
+IVM four-limb banks and FastPQ flattened host banks use fixed inline arrays;
+the pinned original generator is test-only. Full-field digest/oracle and
+fresh-process allocation controls cover this finite parameter scope. GPU
+request buffers, uploads, device ownership, cancellation, signed artifacts and
+physical native qualification remain separate open gates. No hash domain,
+opcode, gas, default, wire or native kernel/profile changes follow from fixed
+parameter ownership.
+
+Ordinary BN254 addition, subtraction and multiplication, and Poseidon2/6 batches,
+retain five separate inline cost profiles in each original device policy owner.
+Profiles bind the exact independently admitted PTX and actual CPU field backend.
+Public synthetic operands are measured at 64, 256, 1,024 and 4,096 elements, with
+three trials per size. GPU timings include transfers, launch, waits, complete
+result validation, copyback and staging cleanup; BN254 includes its extra input
+scan and Poseidon includes parameter packing/uploads. BN254 results must match
+the independent field relation, and both Poseidon results must match fixed public
+known answers checked by the separate circuit reference suite. Conservative
+CPU/GPU trial bounds require a ten-percent estimated win; bounded interpolation
+ranks currently qualified candidates only within the sampled span. This is
+bounded calibrated selection, not a global optimality or release qualification
+claim. Outside the sampled span, ordinary batches use CPU. There is no
+last-sample extrapolation.
 
 One nonblocking scheduler admits at most one new candidate per ordinary call,
 rotates the first device between calls and shares an eight-second pass deadline
-checked between native operations. Scratch arrays reserve original process-host
+checked between complete attempts. This deadline does not forcibly cancel a
+synchronous CPU computation or native kernel already in progress. Scratch arrays
+reserve original process-host
 credit before allocation. Local pressure, policy changes and unstable timing
 defer selection with a cooldown, preserving successful kernel admission. Native
 faults retain existing quarantine, and a completed parity mismatch quarantines
@@ -343,10 +366,14 @@ performance without the separate comparisons and candidate qualification.
 IVM Metal no-copy buffers, command permits and Rust registry records use this
 common resource envelope. These controls do not establish FASTPQ Metal physical
 custody or remove its separate runtime-compilation path. CUDA cost ranking beyond
-these BN254 samples, authenticated performance profiles, complete fastest-path coverage, opaque native
+these BN254/Poseidon samples, authenticated performance profiles, complete fastest-path
+coverage, opaque native
 pipeline accounting and physical resource qualification remain open.
 
-BN254 profile/state tests run without a GPU and do not qualify native selection.
+Shared profile/state and fixed Poseidon CPU tests run without a GPU and do not
+qualify native selection. Unit tests, admission probes and locally measured
+profiles neither supply the missing thirteen signed bundle artifacts nor qualify
+physical GPU performance.
 The missing genuine signed PTX bundle still prevents the CUDA-enabled consumer
 build, so the native calibration adapter and selected path require that build and
 physical device evidence before release.

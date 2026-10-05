@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     PreparedArgumentRecord, PreparedContract, ProgramMetadata, Registers,
-    argument_record::{encode_argument_record_from_json, prepare_argument_record_with_gas_limit},
+    argument_record::prepare_argument_record_with_gas_limit,
     encoding::wide::{encode_halt, encode_ri, encode_sys, encode_syscallx},
     execution_memory::ExecutionMemoryLease,
     execution_packets::{INSTRUCTION_WINDOWS, NativeInvocation, instruction_clocks},
@@ -14,6 +14,7 @@ use crate::{
 };
 use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use iroha_primitives::json::Json;
+use ivm_abi::arguments::encode_argument_record_from_json;
 use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::{
     any::Any,
@@ -412,8 +413,14 @@ fn native_delayed_finish_uses_original_batch_and_preserves_every_original_packet
         let mut parent =
             ExecutionMemoryLease::reserve(&original, NativeInvocation::allocation_plan().unwrap())
                 .unwrap();
-        NativeInvocation::run_unit_root(contract.clone(), "main", GAS, &mut parent, &original)
-            .unwrap()
+        NativeInvocation::run_public_leaf_root(
+            contract.clone(),
+            "main",
+            GAS,
+            &mut parent,
+            &original,
+        )
+        .unwrap()
     };
     let plain = run();
     assert!(!IVM::native_register_trace_enabled_for_test());

@@ -82,6 +82,8 @@ fn selected(
 #[test]
 fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_offline() {
     let _guard = crate::managed::native_test_guard();
+    // TODO: Remove these payload-free phase markers after the ordinary-stack failure is isolated.
+    eprintln!("custody-selected phase: generation-start");
     let temporary = tempfile::tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
     let prepared = crate::localnet::prepare_localnet_at(
@@ -92,18 +94,22 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
         None,
     )
     .unwrap();
+    eprintln!("custody-selected phase: generation-complete owner-open");
     let mut owner = ManagedStreamTokenCustody::open(
         &prepared,
         crate::managed::native_operation::test_support::provider_id(&prepared, 0),
     )
     .unwrap();
+    eprintln!("custody-selected phase: owner-open-complete");
     let mut policy = super::transport_tests::policy(&owner);
     // Wide original interval avoids timing-sensitive signing in this component fixture.
     policy.active_until_unix_ms = now_ms().unwrap() + 1_200_000;
     policy.max_validity_ms = 600_000;
     policy.max_anchor_age_ms = 600_000;
     owner.validate_policy(&policy).unwrap();
+    eprintln!("custody-selected phase: native-fixture-start");
     let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
+    eprintln!("custody-selected phase: native-fixture-complete");
     let manager = owner.authority.config.clone();
     let log = quote_instructions(
         &native,
@@ -113,7 +119,9 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
             "custody prerequisites".into(),
         ))],
     );
+    eprintln!("custody-selected phase: paid-log-start");
     assert_eq!(native.chain.commit(vec![log]), vec![true]);
+    eprintln!("custody-selected phase: paid-log-complete");
     let asset = AssetDefinitionId::parse_address_literal(
         crate::genesis::profile::TAIRA_XOR_ASSET_DEFINITION_ID,
     )
@@ -126,85 +134,101 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
     drop(ports);
     let mut retained = Vec::new();
     for (name, height) in [("configure", 3), ("enroll", 4)] {
+        if name == "configure" {
+            eprintln!("custody-selected phase: configure-current-start");
+        } else {
+            eprintln!("custody-selected phase: enroll-current-start");
+        }
         let checkpoint = native.observe(&owner.authority);
         let state = current(&native, &owner, &policy, &checkpoint);
-        let selection = owner.selection(&policy.binding, &state).unwrap();
-        let checkpoint = checkpoint_bytes(&checkpoint).unwrap();
+        eprintln!("custody-selected phase: current-complete original-selection-start");
         let now = now_ms().unwrap();
-        let (action, utc) = if name == "configure" {
+        let (original, utc, body) = if name == "configure" {
             assert!(state.current().is_none());
-            (Action::Configure(policy.clone()), now + 600_000)
+            let original = Original {
+                selection: owner.selection(&policy.binding, &state).unwrap(),
+                action: Action::Configure(policy.clone()),
+                checkpoint: checkpoint_bytes(&checkpoint).unwrap(),
+            };
+            let directory = owner.authority.directory.ensure_child(name).unwrap();
+            journal::publish_intent(&directory, &original).unwrap();
+            (original, now + 600_000, None)
         } else {
-            let state = state.current().unwrap();
-            assert_eq!(state.control().policy, policy);
-            assert_eq!(state.record().execution_height, 3);
-            assert!(state.control().active_head.is_none());
+            let selected_state = state.current().unwrap();
+            assert_eq!(selected_state.control().policy, policy);
+            assert_eq!(selected_state.record().execution_height, 3);
+            assert!(selected_state.control().active_head.is_none());
             let interval = ManagedCustodyEnrollmentInterval {
                 issued_at_unix_ms: now,
                 expires_at_unix_ms: now + 600_000,
                 deadline_unix_ms: now + 600_000,
             };
-            let statement = SignerCustodyStatementV1 {
-                magic: SIGNER_CUSTODY_MAGIC_V1,
-                version: SIGNER_CUSTODY_VERSION_V1,
-                binding: policy.binding.clone(),
-                authority: policy.attester_authority.clone(),
-                anchor: state.anchor(),
-                sequence: state.control().next_sequence,
-                predecessor_digest: state.control().predecessor_digest,
-                issued_at_unix_ms: interval.issued_at_unix_ms,
-                expires_at_unix_ms: interval.expires_at_unix_ms,
-                evidence_digest: owner
-                    .evidence_digest(&policy, &selection, &checkpoint)
-                    .unwrap(),
-                revoked: false,
-            };
-            let key = owner.attester().unwrap();
-            let attestation =
-                Signature::new(key.private_key(), &statement.signing_payload().unwrap())
-                    .payload()
-                    .try_into()
-                    .unwrap();
-            (
-                Action::Enroll {
-                    anchor: state.anchor(),
-                    selected_at_unix_ms: now,
-                    validity: journal::EnrollmentValidity::from_interval(interval),
-                    enrollment: encode(
-                        &SignerCustodyRecordV1 {
-                            statement,
-                            attestation,
-                        },
-                        16 * 1024,
-                    )
-                    .unwrap(),
-                },
+            let unsigned = owner
+                .unsigned_enrollment(&policy, &state, &checkpoint, interval, now)
+                .unwrap();
+            eprintln!("custody-selected phase: enrollment-body-start");
+            let history = owner.bootstrap_native_body(
+                &native,
+                CustodyPurpose::InitialEnroll,
+                unsigned,
                 interval.deadline_unix_ms,
-            )
+                &options,
+            );
+            eprintln!("custody-selected phase: enrollment-body-complete");
+            let original = history.dispatch().unwrap().1.clone();
+            (original, interval.deadline_unix_ms, Some(history))
         };
-        let original = Original {
-            selection,
-            action,
-            checkpoint,
-        };
+        eprintln!("custody-selected phase: original-validation-start");
         owner
             .validate_original(&original, CustodyPurpose::initial(&original.action))
             .unwrap();
-        let directory = owner.authority.directory.ensure_child(name).unwrap();
-        journal::publish_intent(&directory, &original).unwrap();
+        eprintln!("custody-selected phase: original-validation-complete");
+        let directory = match &body {
+            Some(history) => {
+                PrivateDirectory::open_exact(history.dispatch().unwrap().0.path()).unwrap()
+            }
+            None => owner.authority.directory.open_child(name).unwrap(),
+        };
+        let outer = owner.authority.directory.open_child(name).unwrap();
+        let outer_bytes = outer
+            .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+            .unwrap();
         let mut peers = UnavailablePeers::start(&prepared);
-        assert!(matches!(
-            selected(&mut owner, &policy, &original, &options),
-            Err(crate::managed::Error::Bootstrap(
-                ManagedBootstrapFailure::TransitionPending
-            ))
-        ));
+        eprintln!("custody-selected phase: missing-wallet-recovery-start");
+        if name == "configure" {
+            assert!(matches!(
+                selected(&mut owner, &policy, &original, &options),
+                Err(crate::managed::Error::Bootstrap(
+                    ManagedBootstrapFailure::TransitionPending
+                ))
+            ));
+        } else {
+            // The anchored body is retained local intent; no wallet dispatch exists yet.
+            let progress = selected(&mut owner, &policy, &original, &options)
+                .unwrap()
+                .unwrap();
+            assert_eq!(progress.transaction_status, OperationStatus::Absent);
+            assert!(progress.finalized.is_none() && progress.current.is_none());
+        }
         assert!(!directory.path().join("attempts").exists());
         assert!(peers.requests.lock().unwrap().is_empty());
         peers.finish();
+        eprintln!("custody-selected phase: missing-wallet-recovery-complete");
         let account = AccountService::new(manager.clone()).unwrap();
-        journal::explicit(&directory, &original, utc, &options, &account).unwrap();
-        let original = journal::required_original(&directory).unwrap();
+        let fixed_scope = HistoryScope::FixedBody;
+        let scope = body
+            .as_ref()
+            .map_or(&fixed_scope, |history| history.dispatch().unwrap().2);
+        eprintln!("custody-selected phase: explicit-selection-start");
+        journal::explicit(&directory, &original, utc, &options, &account, scope).unwrap();
+        eprintln!("custody-selected phase: explicit-selection-complete");
+        let original = match &body {
+            Some(_) => owner
+                .required_enrollment(CustodyPurpose::InitialEnroll)
+                .unwrap(),
+            None => journal::required_original(&directory).unwrap(),
+        };
+        eprintln!("custody-selected phase: retained-selection-complete readonly-recovery-start");
         let original_bytes = std::fs::read(directory.path().join("original.nrt")).unwrap();
         let path = original.directory().path().join("transaction");
         let mut peers = UnavailablePeers::start(&prepared);
@@ -236,6 +260,7 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
         assert!(peers.requests.lock().unwrap().is_empty());
         peers.finish();
 
+        eprintln!("custody-selected phase: readonly-recovery-complete failed-quote-start");
         let request = original
             .request(original.terms.signing_deadline(options.deadline).unwrap())
             .unwrap();
@@ -260,6 +285,7 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
         );
         assert!(!path.join("payload.json").exists() && !path.join("operation.json").exists());
         assert!(!path.join("submission.json").exists());
+        eprintln!("custody-selected phase: failed-quote-complete repeated-readonly-start");
         peers.requests.lock().unwrap().clear();
         for _ in 0..2 {
             let progress = selected(&mut owner, &policy, &original, &options)
@@ -279,6 +305,7 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
             assert!(peers.requests.lock().unwrap().is_empty());
         }
         peers.finish();
+        eprintln!("custody-selected phase: repeated-readonly-complete paid-prepare-start");
         let mut http = NativeReadHttp::start_config(&manager, Arc::clone(native.chain.state()));
         match original
             .request(original.terms.signing_deadline(options.deadline).unwrap())
@@ -292,10 +319,12 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
             }
         }
         .unwrap();
+        eprintln!("custody-selected phase: paid-prepare-complete signed-wallet-verification-start");
         let signed = owner
             .verify_wallet(original.directory(), &original, options.deadline)
             .unwrap();
         http.finish();
+        eprintln!("custody-selected phase: signed-wallet-verified payload-prefix-start");
         crate::managed::native_operation::test_support::preparation::payload_retained(
             &prepared,
             &path,
@@ -311,6 +340,11 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
                 .unwrap()
             },
             |advance| {
+                if advance {
+                    eprintln!("custody-selected phase: payload-prefix-submit-callback");
+                } else {
+                    eprintln!("custody-selected phase: payload-prefix-observe-callback");
+                }
                 owner
                     .advance(
                         CustodyPurpose::initial(&original.action),
@@ -339,6 +373,7 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
                 .unwrap();
             },
         );
+        eprintln!("custody-selected phase: payload-prefix-complete");
         assert_eq!(
             http.requests
                 .lock()
@@ -351,7 +386,9 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
         let wire = signed.encode_wire_v1().unwrap();
         let operation = std::fs::read(path.join("operation.json")).unwrap();
         assert!(!path.join("submission.json").exists());
+        eprintln!("custody-selected phase: original-paid-commit-start");
         assert_eq!(native.chain.commit(vec![signed.clone()]), vec![true]);
+        eprintln!("custody-selected phase: original-paid-commit-complete carrier-start");
         let carrier = native.observe(&owner.authority);
         assert_eq!(carrier.checkpoint().height(), height);
         let finalized = verify_carrier(&carrier, &signed).unwrap();
@@ -364,8 +401,19 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
                 PublishMode::CreateNew,
             )
             .unwrap();
-        retained.push((name, original, original_bytes, wire, operation, finalized));
+        eprintln!("custody-selected phase: exact-carrier-retained");
+        retained.push((
+            name,
+            directory.path().join("original.nrt"),
+            outer_bytes,
+            original,
+            original_bytes,
+            wire,
+            operation,
+            finalized,
+        ));
     }
+    eprintln!("custody-selected phase: both-actions-complete offline-reopen-start");
     drop(owner);
     let mut peers = UnavailablePeers::start(&prepared);
     for _ in 0..2 {
@@ -374,21 +422,29 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
             crate::managed::native_operation::test_support::provider_id(&prepared, 0),
         )
         .unwrap();
-        for (name, original, original_bytes, wire, operation, finalized) in &retained {
+        eprintln!("custody-selected phase: offline-owner-open-complete");
+        for (name, body_path, outer_bytes, original, original_bytes, wire, operation, finalized) in
+            &retained
+        {
             let options = original
                 .terms
                 .options(Instant::now() + Duration::from_secs(30));
+            eprintln!("custody-selected phase: offline-exact-carrier-recovery-start");
             let report = selected(&mut owner, &policy, original, &options)
                 .unwrap()
                 .unwrap();
+            eprintln!("custody-selected phase: offline-exact-carrier-recovery-complete");
             assert_eq!(report.transaction_status, OperationStatus::Applied);
             assert_eq!(report.finalized, Some(*finalized));
             assert!(report.current.is_none());
             let directory = owner.authority.directory.open_child(name).unwrap();
             assert_eq!(
-                &std::fs::read(directory.path().join("original.nrt")).unwrap(),
-                original_bytes
+                &directory
+                    .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+                    .unwrap(),
+                outer_bytes
             );
+            assert_eq!(&std::fs::read(body_path).unwrap(), original_bytes);
             let path = original.directory().path().join("transaction");
             assert_eq!(
                 &std::fs::read(path.join("operation.json")).unwrap(),
@@ -407,4 +463,5 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
         assert!(peers.requests.lock().unwrap().is_empty());
     }
     peers.finish();
+    eprintln!("custody-selected phase: complete");
 }

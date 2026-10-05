@@ -65,7 +65,11 @@ use std::{
     time::Duration,
 };
 use url::Url;
+mod generated_local;
 pub(crate) mod provider_inventory;
+pub(crate) use generated_local::load_bound_generated_publication_runtime_v1;
+pub use generated_local::{GeneratedPublicationContextV1, GeneratedPublicationNamespaceIntentV1};
+
 const MAX_CLIENT_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_DELEGATION_BYTES: u64 = 256 * 1024;
 const MAX_DELEGATION_BYTES_USIZE: usize = 256 * 1024;
@@ -1269,7 +1273,7 @@ fn provider_attestation_set_checkpoint_relative_path(
     operation_id: PublicationOperationIdV1,
     generation: u8,
 ) -> PathBuf {
-    Path::new("publication-v1").join(format!(
+    Path::new(iroha_musubi_service::publication_client_journal::DIRECTORY_NAME).join(format!(
         "{operation_id}.location-{generation:02}.provider-set.norito"
     ))
 }
@@ -1330,7 +1334,7 @@ fn provider_attestation_checkpoint_relative_path(
     // Unlike the stable set anchor, an exact registration instruction includes the current CAS
     // revision. Keep revision-specific signed transactions disjoint so a safe rebase cannot
     // collide with an immutable checkpoint prepared against an older finalized revision.
-    Path::new("publication-v1").join(format!(
+    Path::new(iroha_musubi_service::publication_client_journal::DIRECTORY_NAME).join(format!(
         "{operation_id}.l{generation:02}.t{attempt:02}.r{expected_location_revision:016x}.p{}.a{}.norito",
         hex::encode(provider_id.as_bytes()),
         hex::encode(attestation_digest.as_bytes())
@@ -1762,7 +1766,7 @@ where
     let config_bytes = read_bounded_platform_config_v1(&config_path).map_err(|_| {
         ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_CONFIG_INVALID")
     })?;
-    load_production_publication_runtime_from_bytes_v1(&config_path, &config_bytes, validator)
+    load_production_publication_runtime_from_bytes_v1(&config_path, &config_bytes, None, validator)
 }
 /// Load a production runtime only when the selected platform configuration still matches the
 /// exact image used by the preceding authenticated resolution phase.
@@ -1791,11 +1795,12 @@ where
             "MUSUBI_PUBLICATION_CONFIG_CHANGED",
         ));
     }
-    load_production_publication_runtime_from_bytes_v1(config_path, &config_bytes, validator)
+    load_production_publication_runtime_from_bytes_v1(config_path, &config_bytes, None, validator)
 }
 fn load_production_publication_runtime_from_bytes_v1<V>(
     config_path: &Path,
     config_bytes: &[u8],
+    generated: Option<iroha_musubi_service::GeneratedLocalPublicationTransportV1>,
     validator: V,
 ) -> Result<LoadedProductionPublicationRuntimeV1<V>, ProductionPublicationConfigurationErrorV1>
 where
@@ -1817,13 +1822,16 @@ where
         ));
     }
     let parsed = parse_publication_config(config_path, &signing, &publication)?;
-    let http = signing
-        .publication_runtime_client(parsed.request_timeout)
-        .map_err(|_| {
-            ProductionPublicationConfigurationErrorV1::new(
-                "MUSUBI_PUBLICATION_RUNTIME_AUTH_INVALID",
-            )
-        })?;
+    let http = match generated {
+        Some(selection) => {
+            generated_local::validate_routes(&parsed, &selection)?;
+            signing.generated_publication_runtime_client(selection, parsed.request_timeout)
+        }
+        None => signing.publication_runtime_client(parsed.request_timeout),
+    }
+    .map_err(|_| {
+        ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_RUNTIME_AUTH_INVALID")
+    })?;
     let bindings = parsed.bindings.clone();
     let services = ProductionPublicationRuntimeV1 {
         read,
@@ -2123,7 +2131,7 @@ mod tests {
         thread,
     };
     use tempfile::tempdir;
-    fn test_network_id(byte: u8) -> NetworkId {
+    pub(super) fn test_network_id(byte: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([byte; Hash::LENGTH]),
         ))
@@ -2217,10 +2225,37 @@ private_key = "{}"
             let _guard = ChainDiscriminantGuard::enter(369);
             norito::json::to_vec(page).expect("encode archive page")
         };
+        serve_json_once("200 OK", response)
+    }
+    pub(super) fn serve_json_once(
+        status: &'static str,
+        response: Vec<u8>,
+    ) -> (Url, thread::JoinHandle<Vec<u8>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().expect("loopback address");
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("one finalized query");
+            let end = std::time::Instant::now() + Duration::from_secs(3);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < end =>
+                    {
+                        thread::sleep(Duration::from_millis(2))
+                    }
+                    Err(error) => panic!("one finalized query: {error}"),
+                }
+            };
+            // Accepted sockets can inherit the listener's nonblocking mode on supported hosts.
+            // The fixture's finite read/write timeouts require an explicitly blocking stream.
+            stream
+                .set_nonblocking(false)
+                .expect("blocking query stream");
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .expect("query read timeout");
@@ -2229,6 +2264,10 @@ private_key = "{}"
             let (header_end, content_length) = loop {
                 let read = stream.read(&mut buffer).expect("read query request");
                 assert_ne!(read, 0, "query ended before its headers");
+                assert!(
+                    request.len().saturating_add(read) <= 16 * 1024,
+                    "bounded headers"
+                );
                 request.extend_from_slice(&buffer[..read]);
                 let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n")
                 else {
@@ -2243,6 +2282,7 @@ private_key = "{}"
                             .then(|| value.trim().parse::<usize>().expect("content length"))
                     })
                     .unwrap_or(0);
+                assert!(content_length <= 128 * 1024, "bounded body");
                 break (header_end + 4, content_length);
             };
             while request.len() < header_end + content_length {
@@ -2253,7 +2293,7 @@ private_key = "{}"
             let request_body = request[header_end..header_end + content_length].to_vec();
             write!(
                 stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 response.len()
             )
             .expect("write response headers");
@@ -2294,6 +2334,9 @@ private_key = "{}"
         response: MusubiStorageCoordinationResponseV1,
         attestations: Vec<MusubiProviderBundleVerificationAttestationV1>,
         page: MusubiArchiveLocationPageV1,
+    }
+    pub(super) fn original_request_fixture() -> PublicationRequestV1 {
+        rebase_fixture().request
     }
     fn rebase_fixture() -> RebaseFixture {
         let torii_url = "http://127.0.0.1:9/".parse().expect("dummy URL");

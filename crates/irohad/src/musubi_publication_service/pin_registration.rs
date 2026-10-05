@@ -295,7 +295,10 @@ pub(super) fn manifest_codec_refusal(
     error: sorafs_manifest::ManifestDecodeError,
 ) -> MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
     match error {
-        sorafs_manifest::ManifestDecodeError::Decode { source } => codec_refusal(source),
+        sorafs_manifest::ManifestDecodeError::Decode { source }
+        | sorafs_manifest::ManifestDecodeError::CanonicalEncoding { source } => {
+            codec_refusal(source)
+        }
         _ => MusubiPublicationFinalizedPinRegistrationReadErrorV1::Invalid,
     }
 }
@@ -660,6 +663,37 @@ mod tests {
             Err(MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(_))
         ));
         assert!(exact_successful_pin_transaction(&transaction, &block).unwrap());
+    }
+
+    #[test]
+    fn manifest_codec_refusal_preserves_allocation_and_rejects_invalid_wire() {
+        use MusubiPublicationFinalizedPinRegistrationReadErrorV1::{Deferred, Invalid};
+        use sorafs_manifest::ManifestDecodeError;
+
+        for error in [
+            ManifestDecodeError::Decode {
+                source: norito::Error::AllocationFailed { bytes: 64 },
+            },
+            ManifestDecodeError::CanonicalEncoding {
+                source: norito::Error::AllocationFailed { bytes: 64 },
+            },
+        ] {
+            assert_eq!(
+                manifest_codec_refusal(error),
+                Deferred(ivm::error::ExecutionDeferral::AllocationUnavailable.into())
+            );
+        }
+        for error in [
+            ManifestDecodeError::NonCanonicalEncoding,
+            ManifestDecodeError::Decode {
+                source: norito::Error::LengthMismatch,
+            },
+            ManifestDecodeError::CanonicalEncoding {
+                source: norito::Error::LengthMismatch,
+            },
+        ] {
+            assert_eq!(manifest_codec_refusal(error), Invalid);
+        }
     }
 
     #[test]

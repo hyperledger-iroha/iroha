@@ -7,8 +7,8 @@ Usage:
   scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] --lockfile-path <absolute-path> [--apple-only|--android-only] [--require-built-android] [--allow-dirty-source] [--local-integration]
 
 Validate the sole first-release mobile SDK surface:
-  - exact KAGEMUSHA V1 C/header exports;
-  - source-complete Swift, Kotlin, and mirrored Java V1 codecs/transports;
+  - canonical NoritoBridge C/header exports and retired export rejection;
+  - current Swift and Kotlin SDK packaging;
   - source-authenticated NoritoBridge XCFramework manifest and slices; and
   - optional built Android jars/AARs with both qualified native ABIs.
 USAGE
@@ -436,7 +436,7 @@ require_literal() {
   fi
 }
 
-KAGEMUSHA_C_SYMBOLS=(
+RETIRED_KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_v1_payment_request_validate
   connect_norito_kagemusha_v1_payment_validate
   connect_norito_kagemusha_v1_acknowledgement_validate
@@ -479,9 +479,10 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_reserve_finality_hint_v1
   connect_norito_kagemusha_reserve_finality_verify_v1
   connect_norito_kagemusha_top_up_signed_request_validate_v1
+  connect_norito_kagemusha_device_response_authenticator_v1_verify
 )
 
-RESERVE_FINALITY_JNI_SYMBOLS=(
+RETIRED_RESERVE_FINALITY_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeHint
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeVerify
@@ -489,7 +490,7 @@ RESERVE_FINALITY_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeValidate
 )
 
-ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS=(
+RETIRED_ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1
   Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1
   Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1
@@ -524,7 +525,44 @@ ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS=(
 )
 
 REQUIRED_PROTOCOL_C_SYMBOLS=(
+  connect_norito_bridge_abi_version
+  connect_norito_domain_id_validate_v1
+  connect_norito_free
+  connect_norito_chain_discriminant_scope_enter
+  connect_norito_chain_discriminant_scope_exit
+  connect_norito_encode_transfer_signed_transaction
+  connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg
+  connect_norito_encode_transfer_instruction_box
+  connect_norito_detached_transaction_scaffold_inspect_v1
+  connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
+  connect_norito_canonical_json_blake3_v1
+  connect_norito_encode_account_onboarding_plan_body_v1
+  connect_norito_alias_instruction_round_trip_v1
+  connect_norito_account_read_permission_multisig_payload_hash
+  connect_norito_account_read_permission_multisig_finalize
+  connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1
+  connect_norito_parliament_timed_ovn_verify_casting_proof_v1
+  connect_norito_parliament_timed_ovn_registration_from_proof_v1
+  connect_norito_parliament_timed_ovn_ballot_from_proof_v1
+  iroha_privacy_compiled_profile_catalog_v1
+  iroha_privacy_validate_compiled_profile_catalog_v1
+  iroha_privacy_exact12_fixture_bundle_v1
+  iroha_privacy_validate_exact12_fixture_bundle_v1
+  iroha_privacy_validate_exact12_capability_manifest_v1
+  iroha_privacy_free_buffer
+  connect_norito_sorafs_reference_validate_bundle_json
+  connect_norito_sorafs_reference_validate_governance_json
+  connect_norito_sorafs_reference_validate_governance_dag_block_json
+  connect_norito_sorafs_reference_validate_governance_dag_head_chain_json
+  connect_norito_validation_fee_current_policy_proof_request_v1
+  connect_norito_validation_fee_current_policy_proof_verify_v1
+  connect_norito_retail_fee_intent_hash_v1
+  connect_norito_retail_fee_assessment_marker_v1
+  connect_norito_retail_fee_assessment_decode_v1
+  connect_norito_private_settlement_committee_proof_response_verify_v1
   connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
+  connect_norito_private_settlement_audit_approval_response_verify_v1
+  connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json
 )
 RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
   connect_norito_private_settlement_auditor_capsule_response
@@ -543,12 +581,6 @@ check_source_contract() {
   if [[ -f "$gate" ]] && ! bash "$gate"; then
     fail "NoritoBridge C/Rust export parity failed"
   fi
-
-  require_file "$ROOT_DIR/fixtures/offline/kagemusha_v1.json" "shared KAGEMUSHA V1 fixture"
-  require_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/KagemushaWireV1.swift" "Swift KAGEMUSHA V1 codec"
-  require_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/KagemushaDeviceLifecycleBridgeV1.swift" "Swift hardware lifecycle bridge"
-  require_file "$ROOT_DIR/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWireV1.kt" "Kotlin KAGEMUSHA V1 codec"
-  require_file "$ROOT_DIR/kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaDeviceLifecycleBridgeV1.kt" "Kotlin hardware lifecycle bridge"
 }
 
 check_binary_symbols() {
@@ -567,15 +599,25 @@ check_binary_symbols() {
   fi
   [[ -n "$symbols" ]] || { fail "$label has no inspectable exported symbols"; return; }
   local symbol
-  for symbol in "${KAGEMUSHA_C_SYMBOLS[@]}"; do
-    if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
-      fail "$label is missing $symbol"
+  for symbol in "${RETIRED_KAGEMUSHA_C_SYMBOLS[@]}"; do
+    if grep -Eq "^_?${symbol}$" <<<"$symbols"; then
+      fail "$label exposes retired KAGEMUSHA C symbol $symbol"
     fi
   done
   if [[ "$nm_mode" == "elf" ]]; then
-    for symbol in "${RESERVE_FINALITY_JNI_SYMBOLS[@]}" "${ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS[@]}"; do
-      if ! grep -Fxq -- "$symbol" <<<"$symbols"; then
-        fail "$label is missing $symbol"
+    for symbol in "${RETIRED_RESERVE_FINALITY_JNI_SYMBOLS[@]}" "${RETIRED_ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS[@]}"; do
+      if grep -Eq "^${symbol%_native*}_" <<<"$symbols"; then
+        fail "$label exposes retired KAGEMUSHA JNI class ${symbol%_native*}"
+      fi
+    done
+    local retired_jni_prefix
+    for retired_jni_prefix in \
+      Java_org_hyperledger_iroha_sdk_offline_Kagemusha \
+      Java_org_hyperledger_iroha_sdk_offline_probe_Kagemusha \
+      Java_org_hyperledger_iroha_sdk_offline_wallet_Kagemusha \
+      Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_; do
+      if grep -Eq "^${retired_jni_prefix}" <<<"$symbols"; then
+        fail "$label exposes a retired KAGEMUSHA JNI namespace"
       fi
     done
   fi
@@ -592,11 +634,8 @@ check_binary_symbols() {
   if grep -Eq "^_?${RETIRED_KAGEMUSHA_C_PREFIX}" <<<"$symbols"; then
     fail "$label exposes a retired KAGEMUSHA C namespace"
   fi
-  local observed_kagemusha expected_kagemusha
-  observed_kagemusha="$(grep -E '^_?connect_norito_kagemusha_' <<<"$symbols" | sed 's/^_//' | sort -u || true)"
-  expected_kagemusha="$(printf '%s\n' "${KAGEMUSHA_C_SYMBOLS[@]}" | sort -u)"
-  if [[ "$observed_kagemusha" != "$expected_kagemusha" ]]; then
-    fail "$label KAGEMUSHA export inventory is not exact"
+  if grep -Eq '^_?connect_norito_kagemusha_' <<<"$symbols"; then
+    fail "$label exposes a retired KAGEMUSHA C namespace"
   fi
 }
 

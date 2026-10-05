@@ -4788,6 +4788,15 @@ impl Iroha {
                 native_provider_attestation_inventory.clone(),
             )
         });
+        let musubi_publication_factory =
+            musubi_publication_service::stock_installation::select_factory(
+                &config.musubi_publication,
+                musubi_publication_context.as_ref(),
+                shared_sorafs_cache.clone(),
+                musubi_publication_factory,
+                emergency_fast,
+            )
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
         let private_settlement_availability_signer = state
             .nexus_snapshot()
             .atomic_private_settlement
@@ -9105,10 +9114,7 @@ fn validate_genesis_execution_offline(
         .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))?;
     let initial_committee_size = initial_configs
         .iter()
-        .find_map(|(_, slot)| match slot {
-            iroha_sumeragi::types::ConfigSlot::Ready(config) => Some(config.committee.n()),
-            iroha_sumeragi::types::ConfigSlot::PendingBoundary { .. } => None,
-        })
+        .find_map(|(_, slot)| slot.ready().map(|config| config.committee.n()))
         .ok_or_else(|| {
             Report::new(MainError::Config)
                 .attach("executed native genesis has no authenticated ready committee")
@@ -11876,7 +11882,7 @@ mod tests {
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let fixture = offline_semantic_genesis_fixture([]);
-            validate_genesis_execution_offline(
+            let bootstrap = validate_genesis_execution_offline(
                 &fixture.config,
                 &fixture.genesis,
                 &fixture.authority,
@@ -11886,6 +11892,7 @@ mod tests {
                 None,
             )
             .expect("valid genesis should execute in the disposable overlay");
+            assert_eq!(bootstrap.initial_committee_size, 4);
         }
         /// `--check-config --json` with a local signed genesis reports `ready` and exactly the
         /// genesis-bound values the running network attests: the signed context hashes, the

@@ -911,16 +911,20 @@ pub mod action {
             out: &mut dyn json::JsonWriteSink,
         ) -> Result<(), json::BoundedJsonError> {
             out.begin_container()?;
-            out.push('{')?;
-            match self {
-                Repeats::Indefinitely => out.push_str("\"Indefinitely\":null")?,
-                Repeats::Exactly(count) => {
-                    out.push_str("\"Exactly\":")?;
-                    json::JsonSerialize::json_serialize_to(count, out)?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push('{')?;
+                match self {
+                    Repeats::Indefinitely => out.push_str("\"Indefinitely\":null")?,
+                    Repeats::Exactly(count) => {
+                        out.push_str("\"Exactly\":")?;
+                        json::JsonSerialize::json_serialize_to(count, out)?;
+                    }
                 }
-            }
-            out.push('}')?;
+                out.push('}')?;
+                Ok(())
+            })();
             out.end_container();
+            result?;
             Ok(())
         }
     }
@@ -1238,5 +1242,18 @@ mod frame_owner_identity_tests {
         crate::frame_owner_identity_tests::assert_bidirectional::<
             super::action::TimeTriggerRetryPolicy,
         >("iroha_data_model::trigger::model::action::model::TimeTriggerRetryPolicy");
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_trigger_repeats_checked_container_retains_every_variant_and_depth() {
+        audit(&action::Repeats::Indefinitely);
+        audit(&action::Repeats::Exactly(17));
     }
 }

@@ -19,15 +19,8 @@ mod account_address;
 mod committed_transaction_inclusion;
 mod confidential_prover;
 mod gpu;
-#[cfg(unix)]
-mod kagemusha_hardware_evidence;
-mod kagemusha_signed_app_preparation;
-mod kagemusha_testnet_native_startup;
-mod kagemusha_testnet_observation;
 
 include!("platform_jni/part_1.rs");
 include!("platform_jni/part_2.rs");
 include!("platform_jni/part_3.rs");
 include!("platform_jni/private_settlement.rs");
-
-include!("platform_jni/kagemusha_reserve_finality.rs");

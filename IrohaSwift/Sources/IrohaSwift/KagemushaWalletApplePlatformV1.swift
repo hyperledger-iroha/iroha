@@ -4,35 +4,48 @@ import Security
 // iPhone platform adapter of the KAGEMUSHA wallet Advance provider (G2 design rev 2, iOS;
 // specs/kagemusha_single_design_proposal.md §§1.2, 2.2, 2.3, 4.2).
 //
-// The Rust provider (`crates/iroha_core_zk/src/kagemusha_v1_state/wallet_advance_v1`) owns
-// custody bytes, marker selection, reconciliation, the role-checked signer and low-S
-// normalization. This adapter supplies only what its `KagemushaWalletPlatformV1` trait needs
-// from the phone: the Secure Enclave payment key (probe, generate, sign, delete), the
-// keychain rollback anchor, protected-storage state, the custody root path, the boot
-// identity and the sleep-inclusive monotonic clock.
+// The Rust provider (`crates/iroha_core_zk/src/kagemusha_wallet_advance_v1`) owns
+// custody bytes, marker selection, reconciliation, the role-checked signer, low-S
+// normalization and the monotonic clock. This adapter supplies only what its
+// `KagemushaWalletPlatformV1` trait needs from the phone: the Secure Enclave payment key
+// (probe, generate, sign, delete, enumerate), the keychain rollback anchor, protected-storage
+// state, the custody root path and the boot identity.
 //
 // Every probe answers present, absent or unavailable. Absent is only the keychain's
 // `errSecItemNotFound` observed while protected data was available before and after the
 // query; every other error is unavailable and never read as absence.
 //
 // TODO(G2-bridge): connect_norito_bridge registers this adapter as the C vtable behind the
-// Rust `KagemushaWalletPlatformV1` (wallet_advance_v1/platform.rs). The vtable-facing methods
-// stay internal so app code reaches the payment key and the anchor only through the Rust
-// provider: `keySign` with arbitrary bytes would bypass the role-checked receipt signer.
+// Rust `KagemushaWalletPlatformV1` (kagemusha_wallet_advance_v1/platform.rs). The
+// vtable-facing methods stay internal so app code reaches the payment key and the anchor only
+// through the Rust provider: `keySign` with arbitrary bytes would bypass the role-checked
+// receipt signer. The bridge obtains the custody root path (which verifies the canary) before
+// any storage answer.
+//
+// TODO(G2-iOS): device tests: Secure Enclave key generation and signing under
+// kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly (the error domain and code of a signature
+// attempted while locked); kSecAttrTokenID and kSecAttrAccessGroup as match attributes of
+// SecItemCopyMatching and SecItemDelete, and the access group of a generated key read back;
+// enumeration returning application tags; the canary's class read back as Complete; EPERM on
+// the canary while locked and on the first-unlock probe before the first unlock.
 
 /// Reason a platform answer is not definitive; never absence.
 ///
-/// Maps one-to-one onto Rust `KagemushaWalletUnavailableV1` (`Locked`, `Io`, `Platform`,
-/// `KeyUnusable`).
+/// Each case is the Rust `KagemushaWalletUnavailableV1` variant of the same name. The Rust
+/// `Busy` (custody lock) and `PermanentlyInvalidated` (Android Keystore) never arise here.
 public enum KagemushaWalletAppleUnavailableV1: Error, Equatable, Hashable, Sendable {
   /// Protected data or the keychain is locked (`errSecInteractionNotAllowed`, or the
   /// Complete-class canary refused with `EPERM`).
   case locked
+  /// The device has not been unlocked since it booted: the first-unlock probe is refused with
+  /// `EPERM` as well as the canary.
+  case beforeFirstUnlock
   /// A POSIX error, or `0` when none is available.
   case io(Int32)
   /// An `OSStatus`, or a ``KagemushaWalletAppleStatusV1`` code.
   case platform(Int32)
-  /// The payment key exists but cannot be used or refused to sign.
+  /// The payment key exists but cannot be used: its public key cannot be exported, or it does
+  /// not support ECDSA P-256 / SHA-256 signing.
   case keyUnusable
 }
 
@@ -49,19 +62,36 @@ public enum KagemushaWalletAppleStatusV1 {
   public static let paymentKeyNotPersisted: Int32 = 0x4B47_0004
   /// The keychain returned a result of an unexpected shape.
   public static let malformedKeychainResult: Int32 = 0x4B47_0005
-  /// No device passcode is set; the passcode-bound anchor cannot exist.
+  /// No device passcode is set; the passcode-bound custody items cannot exist.
   public static let passcodeNotSet: Int32 = 0x4B47_0006
-  /// The custody root or its canary is not the expected kind of entry.
+  /// The custody root or its canary is not the expected kind of entry, or the canary is not in
+  /// the Complete protection class.
   public static let invalidCustodyRoot: Int32 = 0x4B47_0007
   /// An anchor value is empty or larger than the Rust bound.
   public static let invalidAnchorValue: Int32 = 0x4B47_0008
-  /// The Mach continuous clock has no usable timebase.
-  public static let clockUnavailable: Int32 = 0x4B47_0009
+  /// A Security call failed with an error outside `NSOSStatusErrorDomain` (CryptoTokenKit,
+  /// LocalAuthentication); the domain and code go to the diagnostic log.
+  public static let nonOSStatusError: Int32 = 0x4B47_0009
+  /// The OS does not enforce file data protection here (macOS, Mac Catalyst, an iPhone app on
+  /// a Mac), so protected-data state cannot be observed.
+  public static let dataProtectionUnavailable: Int32 = 0x4B47_000A
+  /// The custody root has not been prepared and its canary verified in this process.
+  public static let custodyRootNotPrepared: Int32 = 0x4B47_000B
+}
+
+/// Why the adapter's keychain access group could not be derived.
+public enum KagemushaWalletAppleConfigurationErrorV1: Error, Equatable, Sendable {
+  /// The App ID prefix is not 10 uppercase letters or digits.
+  case invalidApplicationIdentifierPrefix
+  /// The main bundle has no bundle identifier.
+  case missingBundleIdentifier
 }
 
 /// Wallet slot identity: 32 nonzero bytes chosen by the Rust provider. Its keychain name
 /// `kgm-w1-<64 lowercase hex>` is the payment key's application tag and the anchor's account.
 public struct KagemushaWalletAppleSlotV1: Equatable, Hashable, Sendable {
+  static let keychainNamePrefix = "kgm-w1-"
+
   /// Slot bytes.
   public let bytes: Data
 
@@ -71,8 +101,18 @@ public struct KagemushaWalletAppleSlotV1: Equatable, Hashable, Sendable {
     self.bytes = Data(bytes)
   }
 
+  /// Strict parse of a payment key's application tag (``keychainName``).
+  init?(applicationTag tag: Data) {
+    let bytes = Array(tag)
+    let prefix = Array(Self.keychainNamePrefix.utf8)
+    guard bytes.count == prefix.count + 64, bytes.starts(with: prefix),
+      let raw = kagemushaWalletAppleParseHex(bytes[prefix.count...])
+    else { return nil }
+    self.init(raw)
+  }
+
   /// `kgm-w1-<slot hex>`.
-  public var keychainName: String { "kgm-w1-" + kagemushaWalletAppleHex(bytes) }
+  public var keychainName: String { Self.keychainNamePrefix + kagemushaWalletAppleHex(bytes) }
 
   /// Application tag of the payment key.
   var applicationTag: Data { Data(keychainName.utf8) }
@@ -173,17 +213,20 @@ enum KagemushaWalletAppleRemoveOutcomeV1: Equatable {
 /// iPhone platform adapter of the KAGEMUSHA wallet Advance provider.
 ///
 /// - The payment key is a Secure Enclave P-256 key (`kSecAttrTokenIDSecureEnclave`) stored
-///   permanently under the slot's tag with `.privateKeyUsage` and
-///   `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. It is never bound to user presence,
-///   biometry or the passcode (spec §2.3), never replaced, and signs only as DER through
+///   permanently under the slot's tag with `.privateKeyUsage` only. It is never bound to user
+///   presence or biometry (spec §2.3), never replaced, and signs only as DER through
 ///   `SecKeyCreateSignature(.ecdsaSignatureMessageX962SHA256)`; Rust normalizes to low S and
 ///   verifies before any byte is written.
-/// - The rollback anchor is one generic-password item per slot in
-///   `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`, created add-only and read inside
-///   protected-data brackets. Its value is the Rust-encoded `{generation, marker_file_digest}`.
+/// - The rollback anchor is one generic-password item per slot, created add-only and read
+///   inside protected-data brackets. Its value is the Rust-encoded
+///   `{generation, marker_file_digest}`.
+/// - Both custody items use ``custodyAccessibility`` (never backed up, synced or migrated) and
+///   the app's own keychain access group, never a shared one.
 /// - Protected-data state is the readability of a Complete-class canary in the custody root.
 ///
-/// App extensions cannot reach the custody root and must not use this adapter.
+/// Only an iPhone or iPad app on its own device can construct it: elsewhere file data
+/// protection is not enforced. App extensions cannot reach the custody root and must not use
+/// this adapter.
 public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   /// Keychain service of the rollback anchor items.
   public static let anchorService = "org.hyperledger.iroha.kagemusha.wallet.v1.marker-anchor"
@@ -191,62 +234,126 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   static let anchorMaxBytes = 256
   /// Rust `KagemushaWalletAnchorPolicyV1::Keychain` tag: this platform keeps an anchor.
   static let anchorPolicyTag: UInt8 = 1
-  /// Accessibility of the payment key: usable after the first unlock, never migrated.
-  static let paymentKeyAccessibility = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+  /// Accessibility of both custody keychain items, the payment key and the rollback anchor:
+  /// never backed up, synced, escrowed or migrated (spec §4.2: no backup, restore or
+  /// device-transfer path may carry keys or markers); usable only while unlocked, which every
+  /// Advance needs anyway because it reads the anchor; rendered useless if the passcode is
+  /// removed or reset (lost custody, warned before enrollment, spec §2.3).
+  // TODO(owner Q6): the owner has not confirmed this class. Under the alternative A' both items
+  // switch together to kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly: it survives passcode
+  // removal, but Apple copies such items into same-device backups and safety then relies on
+  // undocumented Secure Enclave restore behavior.
+  static let custodyAccessibility = kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly
   /// Access-control flags of the payment key: Secure Enclave private-key use only, with no
-  /// user-presence, biometry or passcode constraint (spec §2.3).
+  /// user-presence, biometry or passcode-entry constraint (spec §2.3).
   static let paymentKeyAccessFlags: SecAccessControlCreateFlags = [.privateKeyUsage]
-  /// Accessibility of the rollback anchor: never backed up, synced or escrowed; readable only
-  /// while unlocked; rendered useless if the passcode is removed or reset (lost custody,
-  /// warned before enrollment).
-  // TODO(owner Q6): the owner has not confirmed this class. The alternative
-  // kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly survives passcode removal but is copied
-  // into same-device backups and relies on undocumented Secure Enclave restore behavior.
-  static let anchorAccessibility = kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly
 
+  /// Keychain access group of every item the adapter adds or queries: the app's own
+  /// application identifier `<App ID prefix>.<bundle id>`, so no extension or other app of the
+  /// team sharing a group reaches the payment key or the anchor through a default group.
+  let accessGroup: String
   let system: KagemushaWalletAppleSystemV1
-  let appAttest: any KagemushaAppAttestServiceV1
+  let appAttest: any KagemushaWalletAppAttestServiceV1
   private let generationLock = NSLock()
+  private let rootStateLock = NSLock()
+  private var rootVerified = false
 
-  /// Adapter over the system keychain, Secure Enclave and file system. `appAttest` is the App
-  /// Attest service of enrollment step E5 (``attestEnrollment(slot:paymentPublicKey:challengeDigest:keyBindingDigest:)``);
-  /// generation is refused where it is unsupported.
-  public convenience init(appAttest: any KagemushaAppAttestServiceV1) {
-    self.init(appAttest: appAttest, system: .live)
+  #if os(iOS) && !targetEnvironment(macCatalyst)
+  /// Adapter over the system keychain, Secure Enclave and file system.
+  ///
+  /// - Parameters:
+  ///   - appAttest: App Attest service of enrollment step E5
+  ///     (``attestEnrollment(slot:paymentPublicKey:challengeDigest:)``); key generation is
+  ///     refused where it is unsupported.
+  ///   - applicationIdentifierPrefix: the app's App ID prefix (normally its Team ID); with the
+  ///     main bundle identifier it names the app's own keychain access group.
+  /// - Throws: ``KagemushaWalletAppleConfigurationErrorV1``.
+  public convenience init(
+    appAttest: any KagemushaWalletAppAttestServiceV1, applicationIdentifierPrefix: String
+  ) throws {
+    let group = try KagemushaWalletApplePlatformV1.keychainAccessGroup(
+      applicationIdentifierPrefix: applicationIdentifierPrefix,
+      bundleIdentifier: Bundle.main.bundleIdentifier)
+    self.init(appAttest: appAttest, accessGroup: group, system: .live)
   }
 
-  #if os(iOS) && canImport(DeviceCheck)
+  #if canImport(DeviceCheck)
   /// Adapter using the system App Attest service.
-  public convenience init() {
-    self.init(appAttest: KagemushaAppleAppAttestServiceV1())
+  ///
+  /// - Throws: ``KagemushaWalletAppleConfigurationErrorV1``.
+  public convenience init(applicationIdentifierPrefix: String) throws {
+    try self.init(
+      appAttest: KagemushaWalletAppleAppAttestServiceV1(),
+      applicationIdentifierPrefix: applicationIdentifierPrefix)
   }
   #endif
+  #endif
 
-  init(appAttest: any KagemushaAppAttestServiceV1, system: KagemushaWalletAppleSystemV1) {
+  init(
+    appAttest: any KagemushaWalletAppAttestServiceV1, accessGroup: String,
+    system: KagemushaWalletAppleSystemV1
+  ) {
     self.appAttest = appAttest
+    self.accessGroup = accessGroup
     self.system = system
+  }
+
+  /// `<prefix>.<bundle id>` for a 10-character uppercase alphanumeric App ID prefix.
+  static func keychainAccessGroup(applicationIdentifierPrefix prefix: String, bundleIdentifier: String?)
+    throws -> String
+  {
+    let bytes = Array(prefix.utf8)
+    guard bytes.count == 10,
+      bytes.allSatisfy({ (0x30...0x39).contains($0) || (0x41...0x5A).contains($0) })
+    else { throw KagemushaWalletAppleConfigurationErrorV1.invalidApplicationIdentifierPrefix }
+    guard let bundleIdentifier, !bundleIdentifier.isEmpty else {
+      throw KagemushaWalletAppleConfigurationErrorV1.missingBundleIdentifier
+    }
+    return prefix + "." + bundleIdentifier
+  }
+
+  /// Whether ``custodyRootPath()`` last succeeded in this process, which verified the canary.
+  var custodyRootVerified: Bool {
+    get {
+      rootStateLock.lock()
+      defer { rootStateLock.unlock() }
+      return rootVerified
+    }
+    set {
+      rootStateLock.lock()
+      rootVerified = newValue
+      rootStateLock.unlock()
+    }
+  }
+
+  /// Report a condition to the diagnostic log.
+  func diagnose(_ event: String, slot: KagemushaWalletAppleSlotV1? = nil, detail: String? = nil) {
+    system.diagnostic(
+      KagemushaWalletAppleDiagnosticV1(event: event, slot: slot?.keychainName, detail: detail))
   }
 
   // MARK: - Protected data
 
   /// Whether protected data is available now: the Complete-class canary opens and reads.
-  /// `EPERM` is ``KagemushaWalletAppleUnavailableV1/locked``; a missing canary or any other
-  /// error is `io` (prepare the root first with ``custodyRootPath()``).
+  /// `EPERM` is ``KagemushaWalletAppleUnavailableV1/locked`` or
+  /// ``KagemushaWalletAppleUnavailableV1/beforeFirstUnlock``; any other error is `io`.
+  /// Unavailable until ``custodyRootPath()`` has verified the canary in this process.
   func storageState() -> Result<Void, KagemushaWalletAppleUnavailableV1> {
+    guard system.dataProtectionEnforced() else {
+      return .failure(.platform(KagemushaWalletAppleStatusV1.dataProtectionUnavailable))
+    }
+    guard custodyRootVerified else {
+      return .failure(.platform(KagemushaWalletAppleStatusV1.custodyRootNotPrepared))
+    }
     switch custodyRootURL() {
     case .failure(let reason):
       return .failure(reason)
     case .success(let root):
-      return Self.storageState(
-        errno: system.probeReadable(root.appendingPathComponent(Self.canaryName).path))
-    }
-  }
-
-  static func storageState(errno code: Int32) -> Result<Void, KagemushaWalletAppleUnavailableV1> {
-    switch code {
-    case 0: return .success(())
-    case EPERM: return .failure(.locked)
-    default: return .failure(.io(code))
+      switch system.probeReadable(root.appendingPathComponent(Self.canaryName).path) {
+      case 0: return .success(())
+      case EPERM: return .failure(lockedReason())
+      case let code: return .failure(.io(code))
+      }
     }
   }
 
@@ -265,19 +372,27 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
 
   // MARK: - Payment key
 
-  /// Keychain query matching the slot's payment key.
-  static func paymentKeyQuery(_ slot: KagemushaWalletAppleSlotV1) -> [String: Any] {
+  /// Keychain query matching every Secure Enclave payment key of the adapter's access group.
+  func paymentKeyClassQuery() -> [String: Any] {
     [
       kSecClass as String: kSecClassKey,
       kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
       kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-      kSecAttrApplicationTag as String: slot.applicationTag,
+      kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
+      kSecAttrAccessGroup as String: accessGroup,
       kSecUseDataProtectionKeychain as String: true,
     ]
   }
 
+  /// Keychain query matching the slot's payment key.
+  func paymentKeyQuery(_ slot: KagemushaWalletAppleSlotV1) -> [String: Any] {
+    var query = paymentKeyClassQuery()
+    query[kSecAttrApplicationTag as String] = slot.applicationTag
+    return query
+  }
+
   /// `SecKeyCreateRandomKey` attributes of the slot's Secure Enclave payment key.
-  static func paymentKeyGenerationAttributes(
+  func paymentKeyGenerationAttributes(
     _ slot: KagemushaWalletAppleSlotV1, _ request: KagemushaWalletAppleKeyGenerationRequestV1,
     accessControl: SecAccessControl
   ) -> [String: Any] {
@@ -290,6 +405,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
         kSecAttrIsPermanent as String: true,
         kSecAttrApplicationTag as String: slot.applicationTag,
         kSecAttrLabel as String: request.label,
+        kSecAttrAccessGroup as String: accessGroup,
         kSecAttrAccessControl as String: accessControl,
       ] as [String: Any],
     ]
@@ -300,9 +416,9 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
     var error: Unmanaged<CFError>?
     guard
       let access = SecAccessControlCreateWithFlags(
-        nil, paymentKeyAccessibility, paymentKeyAccessFlags, &error)
+        nil, custodyAccessibility, paymentKeyAccessFlags, &error)
     else {
-      return .failure(.platform(KagemushaWalletAppleSystemV1.status(of: error?.takeRetainedValue())))
+      return .failure(unavailable(KagemushaWalletAppleSecurityErrorV1(error?.takeRetainedValue())))
     }
     return .success(access)
   }
@@ -320,7 +436,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   func lookupPaymentKey(_ slot: KagemushaWalletAppleSlotV1)
     -> KagemushaWalletAppleProbeV1<PaymentKeyItem>
   {
-    var query = Self.paymentKeyQuery(slot)
+    var query = paymentKeyQuery(slot)
     query[kSecReturnRef as String] = true
     query[kSecReturnAttributes as String] = true
     query[kSecMatchLimit as String] = kSecMatchLimitAll
@@ -330,23 +446,24 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
     case errSecItemNotFound: return .absent
     default: return .unavailable(Self.unavailable(status))
     }
-    guard let items = result as? [[String: Any]], !items.isEmpty,
-      let reference = items[0][kSecValueRef as String]
-    else {
-      system.diagnostic("kagemusha wallet: malformed payment-key lookup for \(slot.keychainName)")
+    guard let items = result as? [[String: Any]], !items.isEmpty else {
+      diagnose("malformed payment-key lookup", slot: slot)
       return .unavailable(.platform(KagemushaWalletAppleStatusV1.malformedKeychainResult))
     }
     guard items.count == 1 else {
-      system.diagnostic("kagemusha wallet: \(items.count) payment keys under \(slot.keychainName)")
+      diagnose("ambiguous payment key", slot: slot, detail: "\(items.count) items")
       return .unavailable(.platform(KagemushaWalletAppleStatusV1.ambiguousPaymentKey))
     }
-    let object = reference as AnyObject
-    guard CFGetTypeID(object) == SecKeyGetTypeID() else {
+    guard let reference = items[0][kSecValueRef as String],
+      CFGetTypeID(reference as AnyObject) == SecKeyGetTypeID()
+    else {
+      diagnose("malformed payment-key lookup", slot: slot)
       return .unavailable(.platform(KagemushaWalletAppleStatusV1.malformedKeychainResult))
     }
+    let object = reference as AnyObject
     let key = object as! SecKey
     guard let publicKey = Self.x963PublicKey(of: key) else {
-      system.diagnostic("kagemusha wallet: payment key \(slot.keychainName) is unusable")
+      diagnose("payment key public key cannot be exported", slot: slot)
       return .unavailable(.keyUnusable)
     }
     return .present(
@@ -372,8 +489,8 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
 
   /// Generate the slot's payment key (Rust `key_generate`). The provider calls it only after a
   /// definitive absent probe; the adapter probes again under its lock and never replaces a
-  /// key. Generation is refused without a Secure Enclave or App Attest support. Any unknown
-  /// outcome is unavailable, so the provider probes again before acting.
+  /// key. Generation is refused without a Secure Enclave, App Attest support or a device
+  /// passcode. Any unknown outcome is unavailable, so the provider probes again before acting.
   func keyGenerate(
     _ slot: KagemushaWalletAppleSlotV1, _ request: KagemushaWalletAppleKeyGenerationRequestV1
   ) -> KagemushaWalletAppleKeyGenerationV1 {
@@ -390,23 +507,33 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
     guard appAttest.isSupported else {
       return .unavailable(.platform(KagemushaWalletAppleStatusV1.appAttestUnsupported))
     }
+    if system.passcodeSet() == false {
+      return .unavailable(.platform(KagemushaWalletAppleStatusV1.passcodeNotSet))
+    }
     let accessControl: SecAccessControl
     switch Self.paymentKeyAccessControl() {
     case .success(let access): accessControl = access
     case .failure(let reason): return .unavailable(reason)
     }
-    let (createdKey, status) = system.keychain.createRandomKey(
-      Self.paymentKeyGenerationAttributes(slot, request, accessControl: accessControl))
+    let (createdKey, error) = system.keychain.createRandomKey(
+      paymentKeyGenerationAttributes(slot, request, accessControl: accessControl))
     guard let created = createdKey else {
-      return status == errSecDuplicateItem ? .alreadyPresent : .unavailable(Self.unavailable(status))
+      let failure = error ?? KagemushaWalletAppleSecurityErrorV1(nil)
+      if failure.osStatus == errSecDuplicateItem { return .alreadyPresent }
+      return .unavailable(securityFailure("payment key generation failed", slot: slot, failure))
     }
-    guard let publicKey = Self.x963PublicKey(of: created) else { return .unavailable(.keyUnusable) }
+    guard let publicKey = Self.x963PublicKey(of: created) else {
+      diagnose("generated payment key public key cannot be exported", slot: slot)
+      return .unavailable(.keyUnusable)
+    }
     switch keyProbe(slot) {
     case .present(let stored) where stored == publicKey:
       return .generated(publicKey: publicKey)
     case .present:
+      diagnose("generated payment key differs from the stored key", slot: slot)
       return .unavailable(.platform(KagemushaWalletAppleStatusV1.ambiguousPaymentKey))
     case .absent:
+      diagnose("generated payment key not found under its tag", slot: slot)
       return .unavailable(.platform(KagemushaWalletAppleStatusV1.paymentKeyNotPersisted))
     case .unavailable(let reason):
       return .unavailable(reason)
@@ -415,26 +542,37 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
 
   /// Sign `preimage` with the slot's payment key (Rust `key_sign`): the Secure Enclave signs
   /// `SHA-256(preimage)` and returns strict DER. Only the Rust role-checked signers construct
-  /// preimages; this method stays internal for that reason.
+  /// preimages; this method stays internal for that reason. It is not bracketed, so a locked
+  /// keychain is told apart from one not yet unlocked since boot.
   func keySign(_ slot: KagemushaWalletAppleSlotV1, preimage: Data)
     -> Result<Data, KagemushaWalletAppleUnavailableV1>
   {
+    let signed: Result<Data, KagemushaWalletAppleUnavailableV1>
     switch lookupPaymentKey(slot) {
-    case .present(let item): return Self.sign(item.key, preimage: preimage)
-    case .absent: return .failure(.platform(errSecItemNotFound))
-    case .unavailable(let reason): return .failure(reason)
+    case .present(let item): signed = sign(item.key, slot: slot, preimage: preimage)
+    case .absent: signed = .failure(.platform(errSecItemNotFound))
+    case .unavailable(let reason): signed = .failure(reason)
     }
+    if case .failure(.locked) = signed { return .failure(lockedReason()) }
+    return signed
   }
 
   /// DER ECDSA P-256 / SHA-256 over `preimage` with `key`.
-  static func sign(_ key: SecKey, preimage: Data) -> Result<Data, KagemushaWalletAppleUnavailableV1> {
+  func sign(_ key: SecKey, slot: KagemushaWalletAppleSlotV1, preimage: Data)
+    -> Result<Data, KagemushaWalletAppleUnavailableV1>
+  {
     let algorithm = SecKeyAlgorithm.ecdsaSignatureMessageX962SHA256
-    guard SecKeyIsAlgorithmSupported(key, .sign, algorithm) else { return .failure(.keyUnusable) }
+    guard SecKeyIsAlgorithmSupported(key, .sign, algorithm) else {
+      diagnose("payment key does not support ECDSA P-256 SHA-256 signing", slot: slot)
+      return .failure(.keyUnusable)
+    }
     var error: Unmanaged<CFError>?
     guard let signature = SecKeyCreateSignature(key, algorithm, preimage as CFData, &error) as Data?
     else {
-      let status = KagemushaWalletAppleSystemV1.status(of: error?.takeRetainedValue())
-      return .failure(status == errSecInteractionNotAllowed ? .locked : .keyUnusable)
+      return .failure(
+        securityFailure(
+          "payment key signing failed", slot: slot,
+          KagemushaWalletAppleSecurityErrorV1(error?.takeRetainedValue())))
     }
     return .success(signature)
   }
@@ -443,7 +581,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   /// Removed only when a bracketed probe afterwards finds no key.
   func keyDelete(_ slot: KagemushaWalletAppleSlotV1) -> KagemushaWalletAppleRemoveOutcomeV1 {
     if case .failure(let reason) = storageState() { return .notRemoved(reason) }
-    let status = system.keychain.delete(Self.paymentKeyQuery(slot))
+    let status = system.keychain.delete(paymentKeyQuery(slot))
     guard status == errSecSuccess || status == errSecItemNotFound else {
       return Self.definitelyNotPerformed(status)
         ? .notRemoved(Self.unavailable(status)) : .uncertain(Self.unavailable(status))
@@ -455,23 +593,67 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
     }
   }
 
+  /// Slots of every payment key in the adapter's access group, sorted by slot bytes (design
+  /// R10: a payment-key item whose slot has no files is `LostCustody(KeyWithoutMarker)` after
+  /// delete and reinstall). Empty only for `errSecItemNotFound` inside protected-data
+  /// brackets. Tags are parsed strictly; a key with another tag is not a wallet key, and a
+  /// malformed `kgm-w1-` tag is reported and never read as a slot.
+  // TODO(G2-bridge): expose as a vtable entry once the Rust trait gains the key enumeration
+  // that reconcile.rs `TODO(G2-iOS)` (R10, KeyWithoutMarker) asks for.
+  func keyEnumerate() -> Result<[KagemushaWalletAppleSlotV1], KagemushaWalletAppleUnavailableV1> {
+    let answer = bracketed { () -> KagemushaWalletAppleProbeV1<[KagemushaWalletAppleSlotV1]> in
+      var query = paymentKeyClassQuery()
+      query[kSecReturnAttributes as String] = true
+      query[kSecMatchLimit as String] = kSecMatchLimitAll
+      let (status, result) = system.keychain.copyMatching(query)
+      switch status {
+      case errSecSuccess: break
+      case errSecItemNotFound: return .absent
+      default: return .unavailable(Self.unavailable(status))
+      }
+      guard let items = result as? [[String: Any]] else {
+        diagnose("malformed payment-key enumeration")
+        return .unavailable(.platform(KagemushaWalletAppleStatusV1.malformedKeychainResult))
+      }
+      var slots = Set<KagemushaWalletAppleSlotV1>()
+      let walletPrefix = Data(KagemushaWalletAppleSlotV1.keychainNamePrefix.utf8)
+      for item in items {
+        guard let tag = item[kSecAttrApplicationTag as String] as? Data else { continue }
+        if let slot = KagemushaWalletAppleSlotV1(applicationTag: tag) {
+          slots.insert(slot)
+        } else if tag.starts(with: walletPrefix) {
+          diagnose("malformed wallet payment-key tag", detail: "\(tag.count) bytes")
+        }
+      }
+      return .present(slots.sorted { $0.bytes.lexicographicallyPrecedes($1.bytes) })
+    }
+    switch answer {
+    case .present(let slots): return .success(slots)
+    case .absent: return .success([])
+    case .unavailable(let reason): return .failure(reason)
+    }
+  }
+
   // MARK: - Rollback anchor
 
-  /// Keychain query matching the slot's anchor item.
-  static func anchorQuery(_ slot: KagemushaWalletAppleSlotV1) -> [String: Any] {
+  /// Keychain query matching the slot's anchor item. With the access group pinned, the
+  /// keychain's uniqueness of (group, service, account, synchronizable) leaves at most one
+  /// match.
+  func anchorQuery(_ slot: KagemushaWalletAppleSlotV1) -> [String: Any] {
     [
       kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: anchorService,
+      kSecAttrService as String: Self.anchorService,
       kSecAttrAccount as String: slot.keychainName,
+      kSecAttrAccessGroup as String: accessGroup,
       kSecAttrSynchronizable as String: false,
       kSecUseDataProtectionKeychain as String: true,
     ]
   }
 
   /// `SecItemAdd` attributes of the slot's anchor item holding `value`.
-  static func anchorAddAttributes(_ slot: KagemushaWalletAppleSlotV1, value: Data) -> [String: Any] {
+  func anchorAddAttributes(_ slot: KagemushaWalletAppleSlotV1, value: Data) -> [String: Any] {
     var attributes = anchorQuery(slot)
-    attributes[kSecAttrAccessible as String] = anchorAccessibility
+    attributes[kSecAttrAccessible as String] = Self.custodyAccessibility
     attributes[kSecValueData as String] = value
     return attributes
   }
@@ -492,19 +674,20 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
     if system.passcodeSet() == false {
       return .notPublished(.failed(.platform(KagemushaWalletAppleStatusV1.passcodeNotSet)))
     }
-    return Self.addOutcome(system.keychain.add(Self.anchorAddAttributes(slot, value: value)))
+    return Self.addOutcome(system.keychain.add(anchorAddAttributes(slot, value: value)))
   }
 
   /// Read the slot's anchor item (Rust `anchor_read`) inside protected-data brackets.
   func anchorRead(_ slot: KagemushaWalletAppleSlotV1) -> KagemushaWalletAppleProbeV1<Data> {
     bracketed {
-      var query = Self.anchorQuery(slot)
+      var query = anchorQuery(slot)
       query[kSecReturnData as String] = true
       query[kSecMatchLimit as String] = kSecMatchLimitOne
       let (status, result) = system.keychain.copyMatching(query)
       switch status {
       case errSecSuccess:
         guard let data = result as? Data else {
+          diagnose("malformed anchor read", slot: slot)
           return .unavailable(.platform(KagemushaWalletAppleStatusV1.malformedKeychainResult))
         }
         return .present(data)
@@ -526,7 +709,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
     }
     if case .failure(let reason) = storageState() { return .notPublished(.failed(reason)) }
     return Self.updateOutcome(
-      system.keychain.update(Self.anchorQuery(slot), [kSecValueData as String: value]))
+      system.keychain.update(anchorQuery(slot), [kSecValueData as String: value]))
   }
 
   // MARK: - Status mapping
@@ -535,6 +718,27 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   /// other status (including `errSecItemNotFound` outside a probe) is `platform(status)`.
   static func unavailable(_ status: OSStatus) -> KagemushaWalletAppleUnavailableV1 {
     status == errSecInteractionNotAllowed ? .locked : .platform(status)
+  }
+
+  /// Reason of a failed Security call: an `OSStatus` as above; any other error domain is
+  /// ``KagemushaWalletAppleStatusV1/nonOSStatusError``, never a colliding `OSStatus`.
+  static func unavailable(_ error: KagemushaWalletAppleSecurityErrorV1)
+    -> KagemushaWalletAppleUnavailableV1
+  {
+    guard let status = error.osStatus else {
+      return .platform(KagemushaWalletAppleStatusV1.nonOSStatusError)
+    }
+    return unavailable(status)
+  }
+
+  /// Reason of a failed Security call, with a diagnostic carrying its domain and code unless
+  /// the keychain was merely locked.
+  func securityFailure(
+    _ event: String, slot: KagemushaWalletAppleSlotV1, _ error: KagemushaWalletAppleSecurityErrorV1
+  ) -> KagemushaWalletAppleUnavailableV1 {
+    let reason = Self.unavailable(error)
+    if reason != .locked { diagnose(event, slot: slot, detail: error.detail) }
+    return reason
   }
 
   /// Statuses with which the keychain refused before changing anything. Every other failure

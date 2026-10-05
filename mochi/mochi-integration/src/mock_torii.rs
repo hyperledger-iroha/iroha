@@ -89,7 +89,10 @@ fn canonical_block_stream_message() -> Vec<u8> {
             .expect("sign result-bearing mock block"),
     );
     block
-        .replace_signatures(std::collections::BTreeSet::from([final_signature]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([final_signature])
+                .expect("single finalized block signature"),
+        )
         .expect("replace result-bearing mock-block signature");
     {
         let mut final_signatures = block.signatures();

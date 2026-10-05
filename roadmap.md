@@ -7,13 +7,17 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
 
 ## Current priorities
 
-1. Rebuild and qualify the Nexus proposal projection, retained peer context,
-   telemetry/status retirement and restricted lane gossip on the real workload;
-   measure repeated accepted settlements.
+1. Complete Nexus fault/restart qualification and restricted lane isolation;
+   preserve original funded execution through publication and replay, qualify lane
+   retirement ownership, and reclaim physical storage only after retained global
+   history releases its certified dependencies.
 2. Complete original funded execution through State/World acquisition,
    certification, Kura publication and restart; finish DS-local State and AMX.
-3. Qualify Sumeragi and authenticated Linux artifacts; extend Taira's verified
-   four-validator readiness, paid writes and rolling restart to DPN/contracts.
+3. Qualify Sumeragi and authenticated Linux artifacts; Taira's deployment
+   owner manages cutover, live four-validator readiness, paid writes and restart
+   evidence, including DPN/contracts. This coding task owns H1–H5 in the
+   [Sumeragi handoff goals](specs/sumeragi_goals.md#active-handoff-completion-gates)
+   and works only in `/Users/takemiyamakoto/dev/iroha` on `optimizations`.
 4. Validate the combined fixture/runtime repairs through fresh workspace,
    genuine fixture and native SDK artifacts on one source candidate. Qualify the
    joint X509 relation and transcript privacy, and resolve its proving-time and
@@ -107,13 +111,14 @@ and [privacy closure](specs/privacy_first_release_closure.md).
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
 | C1 | Norito/derive closure | Norito/derives/primitives/MV | Explicit archive context, fallible aligned/scalar/tree allocations and owned values; retire unused adapters, share emitters, meet compile budgets/UI tests. |
-| C2 | Deterministic VM/compiler | IVM/Kotodama/hosts | G1–G8, ABI V1, fallible lifecycle/erasure and detached proof custody; anchored execution/private invocation/AXT; identical gas/traps/state/proofs, bounded caches and authenticated calibration. |
+| C2 | Deterministic VM/compiler | IVM/Kotodama/hosts | G1–G8, ABI V1, fallible lifecycle/erasure and detached proof custody; qualify integrated trigger-action relations, complete Musubi and membership/frontier capture and State/Kura publication, then native execution/private invocation/AXT; identical gas/traps/state/proofs, complete cache/index/control and host/native scratch allocation custody, retained observation recovery and authenticated calibration. |
 | C3 | Signature audit | Crypto/consumers | ML-DSA/SM2/GOST/FHE feature/lint/custody, mixed-torsion Ed25519, PoP and threshold-BLS/timed-OVN/side-channel review; Musubi State-reader prerequisites. |
 | C4 | FASTPQ/backend | Prover/verifier/reviewers | Masked 301-column/77-query SHA3/SHAKE DEEP ordinary/AXT relations and bounded work/RSS; preserve current maximum ordinary/AXT component proof passes while completing finalized-source admission, AIR/FRI/hash/qROM/privacy review, hardware/four-peer parity, embedded authenticated Metal and driver-loaded CUDA host. |
 | C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; qualify the joint X509 relation and transcript privacy, and complete its maximum proof within unchanged byte/RSS, literal address-space and 300-second limits; unsupported paths stay disabled. |
 | C6 | FHE/MKHE/Figure 9 | Crypto/model/proofs | Complete native40 correspondence/full-size eight-party replay; qPCS redesign within fixed work bounds, governed Figure 9 keys and independent measured ordinary-stack proofs. |
 | C7 | Acceleration | Native backends | Automatic target-appropriate daemon defaults, ten reproducible signed embedded CUDA PTX families, driverless daemon startup, actual CPU/Metal/CUDA KAT/root parity, authenticated library/device/calibration, fault quarantine, side-channel and RSS/throughput; unqualified T256/MKHE stay scalar. |
 | C8 | Kaigi sessions | Model/crypto/Core/SDKs | Complete authorization/usage circuits and account lifecycle/undo; keys/fixtures, suite-tagged HPKE, bounded accounting and authenticated relay recovery. |
+| C9 | Native PLONK/IPA prover | ZK/prover owners | Iroha-owned `iroha_pasta`, `iroha_plonk`, gadget and recursion crates replace vendored halo2-axiom/halo2curves-axiom/halo2-base, halo2-ecc and snark-verifier: byte parity against the vendored oracle where a consumer keeps its keys, KAGEMUSHA step/lineage/transport/CreditStatus relations first, every [inventoried consumer](specs/native_prover_migration_inventory.md) migrated with a planned live-network cutover, then the vendored stack and the temporary `iroha_plonk_oracle` deleted. |
 
 ## Services and deployment
 
@@ -130,7 +135,7 @@ and [privacy closure](specs/privacy_first_release_closure.md).
 | P8 | Inrou | Guest/runtime/deploy | Real Linux/AArch64/KVM escape/resource tests, authenticated bridge and four-replica canary; generated HF storage-only, governed guest compute. |
 | P9 | Taira/DPN/BPNG | CLI/daemon/operators | Signed observer join, disposable four-peer convergence/guest tests; current reset/readiness/write/restart, beacon custody and paid physical DPN. BPNG retained-history/catch-up, anchored quorum reads, additive catalog and API22/FE17 commissioning. |
 | P10 | Native Torii MCP | Routes/SDK/CLI | One protocol/listener, exact authority/mutation/retry registry, bounded prepare/external signing and scratch simulation; four-peer auth/cache/cancellation. |
-| P11 | Governed compute/developer tools | Mochi/Kagami/deploy/Core | [One-command developer experience](specs/kagami_mochi_devex_goals.md): persistent config-free localnet, owner-private Taira attachment and contract deployment; shared services, native Windows/macOS/Linux bundles, exact recovery and measured startup. Qualify implemented interrupted-bootstrap authorization recovery and wallet cancellation; qualify automatic custody renewal with owned restart and the distinct-key ingest/activation graph, finish native pin/outbox submission and service installation, qualify the implemented authenticated provider-inventory handoff, then qualify three-provider cold registry publication and dependency resolution with governed admission, normal TLS/DNS, revocation and the complete 64 MiB fetch-process RSS bound; retain signed native releases and reference-host p95 as separate gates. [Mochi](specs/mochi_architecture_plan.md): governed catalog/auth/replay, real IVM metering and Kiso pricing. |
+| P11 | Governed compute/developer tools | Mochi/Kagami/deploy/Core | [One-command developer experience](specs/kagami_mochi_devex_goals.md): persistent config-free localnet, owner-private Taira attachment and contract deployment; shared services, native Windows/macOS/Linux bundles, exact recovery and measured startup. Qualify implemented interrupted-bootstrap authorization recovery and wallet cancellation; qualify automatic custody renewal with owned restart and the distinct-key ingest/activation graph, qualify the implemented native paid pin coordinator, qualify the implemented stock publication-service selection, generated runtime configuration and explicit generated publication API, qualify the implemented Kagami and Mochi publication handoff, qualify the publisher's full signed provider-inventory retention and original TLS selection, then qualify three-provider cold registry publication and dependency resolution with governed admission, normal TLS/DNS, revocation and the complete 64 MiB fetch-process RSS bound; retain signed native releases and reference-host p95 as separate gates. [Mochi](specs/mochi_architecture_plan.md): governed catalog/auth/replay, real IVM metering and Kiso pricing. |
 | P12 | Economic Constitution | Economics/oracle/governance | Basket/oracle/intervention/reserve specification, bounded Phoenix/Producer Credit policies and reproducible default/capture/cartel simulations before stability claims. |
 
 Taira qualification preserves signed genesis, native control keys, source/artifact

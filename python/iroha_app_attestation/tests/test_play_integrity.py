@@ -1,11 +1,13 @@
 """Synthetic decoder boundary tests; no genuine Google verdict is claimed."""
 import hashlib
+import http.client
 import json
 import unittest
+import urllib.error
 from dataclasses import replace
 from unittest.mock import patch
-from iroha_app_attestation.attestation import AttestationRejected
-from iroha_app_attestation.play_integrity import GooglePlayIntegrityVerifier, MAX_RESPONSE_BYTES, PlayIntegrityPolicy, _verify_google_payload, request_hash_text
+from iroha_app_attestation.attestation import AttestationRejected, VerificationUnavailable
+from iroha_app_attestation.play_integrity import GooglePlayIntegrityVerifier, MAX_RESPONSE_BYTES, PlayIntegrityPolicy, PlayIntegrityUnavailable, _verify_google_payload, request_hash_text
 HASH = b'\x33'*32
 TOKEN = 'opaque.encrypted.token'
 TOKEN_SHA = hashlib.sha256(TOKEN.encode()).digest()
@@ -94,4 +96,36 @@ class PlayIntegrityTests(unittest.TestCase):
         for token in ('','secret\nheader',None):
             with self.subTest(token=token), self.assertRaises(AttestationRejected): GooglePlayIntegrityVerifier(lambda:token).verify(TOKEN,POLICY,HASH,10500)
         with self.assertRaises(AttestationRejected): GooglePlayIntegrityVerifier(lambda:'server-oauth').verify(payload(),POLICY,HASH,10500)
+    def test_only_decoder_http_400_rejects_and_outages_are_retryable(self):
+        def decode(failure=None, response=None, access=lambda:'server-oauth'):
+            with patch('iroha_app_attestation.play_integrity.urllib.request.build_opener') as build:
+                build.return_value.open.side_effect=failure; build.return_value.open.return_value=response
+                return GooglePlayIntegrityVerifier(access).decode(TOKEN,POLICY,HASH,10500)
+        self.assertTrue(issubclass(PlayIntegrityUnavailable,VerificationUnavailable))
+        self.assertTrue(issubclass(VerificationUnavailable,AttestationRejected))
+        with self.assertRaisesRegex(AttestationRejected,'rejected the token') as raised:
+            decode(urllib.error.HTTPError(Response.url,400,'INVALID_ARGUMENT',{},None))
+        self.assertNotIsInstance(raised.exception,VerificationUnavailable)
+        for failure in (urllib.error.HTTPError(Response.url,code,'decoder',{},None) for code in (302,401,403,404,429,500,503)):
+            with self.subTest(code=failure.code), self.assertRaisesRegex(PlayIntegrityUnavailable,'decoder unavailable') as raised: decode(failure)
+            self.assertIsNone(raised.exception.__cause__)
+        for failure in (urllib.error.URLError('offline'),OSError('reset'),TimeoutError(),http.client.IncompleteRead(b''),http.client.BadStatusLine('x')):
+            with self.subTest(failure=type(failure).__name__), self.assertRaisesRegex(PlayIntegrityUnavailable,'decoder unavailable'): decode(failure)
+        for change in ({'status':201},{'url':'https://attacker.example/decoder'},{'headers':{'Content-Type':'text/html'}},{'headers':{'Content-Type':'application/json','Content-Encoding':'gzip'}}):
+            response=Response()
+            for key,value in change.items(): setattr(response,key,value)
+            with self.subTest(change=list(change)), self.assertRaises(PlayIntegrityUnavailable): decode(response=response)
+        def oauth_outage(): raise OSError('synthetic private content must not escape')
+        for access in (oauth_outage,lambda:'',lambda:'secret\nheader',lambda:None):
+            with self.subTest(access=access), self.assertRaisesRegex(PlayIntegrityUnavailable,'token unavailable') as raised: decode(access=access)
+            self.assertIsNone(raised.exception.__cause__)
+        # Google answered: an oversized or non-matching verdict judges the token.
+        for body in (b' '*(MAX_RESPONSE_BYTES+1),encoded({})):
+            response=Response(); response.body=body
+            with self.subTest(body=body[:20]), self.assertRaises(AttestationRejected) as raised: decode(response=response)
+            self.assertNotIsInstance(raised.exception,VerificationUnavailable)
+        # Invalid local input is never reported as an outage.
+        with self.assertRaises(AttestationRejected) as raised:
+            GooglePlayIntegrityVerifier(lambda:'server-oauth').decode('bad\ntoken',POLICY,HASH,10500)
+        self.assertNotIsInstance(raised.exception,VerificationUnavailable)
 if __name__=='__main__': unittest.main()

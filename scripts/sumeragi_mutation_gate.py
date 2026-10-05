@@ -7,7 +7,7 @@ Purpose
     variable `SUMERAGI_MUTATION=<ID>` is set (see `crates/iroha_sumeragi/build.rs`). For each
     mutation this script builds the mutated crate and runs
 
-        SUMERAGI_MUTATION=<ID> cargo test -p iroha_sumeragi --release \\
+        SUMERAGI_MUTATION=<ID> cargo test --locked -p iroha_sumeragi --release \\
             --features mutation-testing,sim --lib -- <named det test(s)>
 
     expecting a FAILURE, then (unless --fast) the mutation's randomized scenario(s) with
@@ -49,6 +49,7 @@ Outputs
 Exit status
     0 when the baseline passes and no mutation survived or errored; 1 otherwise. With --strict
     (the literal §13.4 CI rule) a mutation killed only by its scenario also fails the gate.
+    Strict runs require the unmutated baseline; --skip-baseline is a diagnostic option.
 
 Examples
     scripts/sumeragi_mutation_gate.py --jobs 4
@@ -314,7 +315,9 @@ MUTATIONS = [
       ["det_s42_original_publication_recovery_halts"], []),
     m("MS43", "signing domains omit epoch identity and complete context", ["det_s43_every_signature_binds_epoch_and_complete_context"], []),
     m("MS44", "ordinary lag-two scheduling installs a future epoch", ["det_s44_lag_two_cannot_install_next_epoch_early"], []),
-    m("MS45", "EMPTY boundary omits mandatory attestation", ["det_s45_mandatory_boundary_attestation_survives_empty_paths"], []),
+    m("MS45", "request_authoring imposes a mandatory epoch-boundary attestation flag",
+      ["det_s45_unflagged_boundary_commits_without_attestation",
+       "det_s45_boundary_proposal_carries_only_the_builders_flag"], []),
     m("MS46", "header signatures omit application control", ["det_s46_control_witness_is_bound_by_header_hash_and_proposal_signature"], []),
     m("MS47", "real work invents an absent authenticated control response", ["det_s47_nonempty_work_waits_for_independent_control_and_preserves_attestation"], []),
     m("MS48", "control response accepts another exact source", ["det_s48_control_response_requires_exact_request_epoch_view_and_parent_source"], []),
@@ -682,11 +685,76 @@ CORE_MUTATIONS = [
       ["sumeragi::executor::preparation::tests::native_source_publication_change_retries_without_recovery_or_quarantine"]),
     m("HC99", "native source publication: replace the original local capacity refusal",
       ["block::valid::native_header_source_tests::native_local_refusal_after_source_publication_retains_original_capacity"]),
+    m("HC100", "election rank: bind candidate selection to E+1 instead of the frozen E+2 target",
+      ["sumeragi::epoch_election::tests::genuine_candidate_pools_choose_largest_equal_vote_committee"]),
+    m("HC101", "committee readiness: one funded target substitutes for every frozen target seat",
+      ["sumeragi::epoch_election::tests::prepared_boundary_readiness_requires_every_frozen_seat_custody"]),
+    m("HC102", "committee readiness: target quorum substitutes for the complete signed readiness roster",
+      ["sumeragi::epoch_election::tests::prepared_boundary_readiness_requires_every_frozen_seat_custody"]),
+    m("HC103", "retention: demand fresh incumbent BLS publications for the retained authority generation",
+      ["sumeragi::epoch_election::tests::frozen_boundary_refusal_returns_original_pool_and_does_not_need_fresh_incumbent_keys"]),
+    m("HC104", "DKG checkpoint: allow a foreign native clock to supply generation source authority",
+      ["beacon::dkg_local_seat::checkpoint_authority::tests::signed_genesis_authority_keeps_original_wider_cutoff_and_authenticates_no_h1_result"]),
+    m("HC108", "DKG checkpoint: extend the original signed genesis cutoff",
+      ["beacon::dkg_local_seat::checkpoint_authority::tests::signed_genesis_authority_keeps_original_wider_cutoff_and_authenticates_no_h1_result"]),
+    m("HC112", "DKG delivery restore: retire the original polynomial before its durable publication barriers",
+      ["beacon::dkg_local_seat::restore::tests::actual_native_heads_restore_original_delivery_then_acceptance_without_signing_or_growth"]),
+    m("HC113", "DKG acceptance restore: omit original signed capsule decryption and private component equality",
+      ["beacon::dkg_local_seat::restore::tests::original_signed_capsule_relation_is_checked_before_any_accepted_owner_or_row_moves"]),
+    m("HC114", "DKG aggregate authority: omit the actual finalized native-tip height binding",
+      ["beacon::dkg_local_seat::aggregate::tests::aggregate_checked_context_refuses_nonfinal_native_tip_zero_intent_and_changed_original_checkpoint"]),
+    m("HC115", "DKG aggregate production: erase original contributions and acknowledgments before durable handoff",
+      ["beacon::dkg_local_seat::aggregate::tests::actual_native_h4_aggregate_stays_original_until_explicit_retirement_and_restores_small_owner"]),
+    m("HC118", "native journal source: omit the original prepared source pool binding",
+      ["sumeragi::native_journal::tests::source_tests::native_reader_rejects_foreign_prepared_source_pool_before_decode_or_control_admission"]),
+    m("HC120", "signed evidence root: collapse original immutable-root JSON refusal into invalid input",
+      ["sumeragi::evidence::tests::original_signed_evidence_root_scope_refusal_stays_local_and_retries_same_state",
+       "sumeragi::evidence::tests::original_root_observation_refusal_keeps_pending_bytes_and_same_state_retry"]),
+    m("HC121", "quantity source: replace original invocation dataspace with temporary fee-storage namespace",
+      ["sumeragi::lanes::merge::tests::paid_quantity_source::paid_merged_lane_burn_keeps_original_nonuniversal_source",
+       "state::output_capacity::producer::internal::root_scope_tests::original_invocation_capture_keeps_fee_storage_separate_and_rejects_call_lane_confusion"]),
+    m("HC122", "lane registry: retain a retired historical ready store after its final reader closes",
+      ["sumeragi::lanes::registry::tests::retired_historical_ready_store_releases_last_owner_after_completed_reader"]),
+    m("HC123", "lane retirement: drop original pending read and publication owners before batch population",
+      ["sumeragi::lanes::registry::tests::retired_ready_store_preserves_original_read_refusal_before_batch_population",
+       "sumeragi::lanes::registry::tests::retired_ready_store_preserves_original_unfinished_publication_until_exact_retry",
+       "sumeragi::lanes::store::retirement_probe_tests::retirement_pending_work_probe_retains_each_held_mutex_without_waiting"]),
+    m("HC124", "lane opening: erase a historical join when its runtime recovery retires",
+      ["sumeragi::lanes::registry::tests::historical_join_of_runtime_opening_retains_original_recovery_after_lane_retirement"]),
+    m("HC125", "lane source tip: return cached height despite original read authentication failure or refusal",
+      ["sumeragi::lanes::registry::tests::ready_tip_preserves_same_original_authentication_failure_without_reopening",
+       "sumeragi::lanes::registry::tests::ready_tip_retains_original_pool_refusal_and_completed_read_until_normal_consumption"]),
+
+    m("HC126", "BLS admission: reuse a local key credential under a changed proof of possession",
+      ["sumeragi::crypto::tests::repeated_exact_pop_admission_retains_original_credential",
+       "sumeragi::crypto::tests::repeated_committee_admission_retains_owners_and_failed_batch_is_atomic"]),
+
+    m("HC127", "Core Nexus snapshot: write retained runtime undo without its explicit present-value frame",
+      ["state::tests::snapshot_runtime_requires_exact_retained_predecessor_and_roundtrips_both_cuts"]),
+
 ]
 
 
 # Daemon integration rules execute only in the owning daemon unit-test crate.
 DAEMON_MUTATIONS = [
+    m("HC105", "DKG generation restore: ignore original input marker or later producer intent",
+      ["beacon_bootstrap::seat_attempt::durable_tests::input_marker_or_later_intent_cannot_restore_generation_or_grant_a_new_interval"]),
+    m("HC106", "DKG generation restore: accept a replaced inherited input stream",
+      ["beacon_bootstrap::seat_attempt::durable_tests::generation_reload_rejects_foreign_provider_original_cutoff_fake_h1_result_and_replaced_input"]),
+    m("HC107", "DKG generation restore: replace original native expiry with a fresh caller interval",
+      ["beacon_bootstrap::seat_attempt::durable_deadline::tests::actual_native_boot_origin_freeze_restore_cannot_extend_admitted_deadline"]),
+    m("HC109", "DKG generation restore: treat visible complete files as already durable",
+      ["beacon_bootstrap::seat_attempt::durable::tests::visible_complete_original_head_is_synced_before_restored_claim_and_publication"]),
+    m("HC110", "DKG target proof: consume the once-verified original FIFO frame before durable preservation",
+      ["beacon_bootstrap::seat_attempt::finality::tests::original_verified_target_proof_publication_refusal_retains_frame_and_never_advances_twice"]),
+    m("HC111", "DKG later restore: ignore a surviving partial extraction or final-session intent",
+      ["beacon_bootstrap::seat_attempt::later_restore_tests::complete_original_later_head_never_reopens_partial_next_read_or_extraction_intent"]),
+    m("HC116", "DKG aggregate restore: omit original held-source file and directory durability barriers",
+      ["beacon_bootstrap::seat_attempt::aggregate_tests::original_complete_aggregate_and_four_output_heads_restore_genuine_h3_h4_ancestry_same_claim_and_exact_private_bytes"]),
+    m("HC117", "DKG aggregate export restore: treat a partial output set as an empty fresh destination",
+      ["beacon_bootstrap::seat_attempt::aggregate_tests::original_aggregate_head_rejects_partial_final_output_prefix_before_private_export_adoption"]),
+    m("HC119", "DKG native replay: pin a foreign charged proof source before checking its original pool",
+      ["beacon_bootstrap::seat_attempt::finality::tests::durable_native_replay_rejects_foreign_source_pool_without_pinning_or_advancing"]),
     m("HC93", "broker beacon operation: reconstruct the authenticated session at every phase",
       ["runtime_provider_broker::protocol::platform::tests::beacon_operation_reuses_original_graph_across_ingress_dispatch_and_response"]),
 ]
@@ -736,6 +804,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     env.pop("SUMERAGI_DAEMON_MUTATION", None)
     crate, features, mutation_env = package_options(args)
     env.pop("SUMERAGI_SIM_SEED", None)
+    env.pop("SUMERAGI_SIM_SEED_BASE", None)
     if mutation:
         env[mutation_env] = mutation
     if seeds is not None:
@@ -745,7 +814,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     env["CARGO_TARGET_DIR"] = str(target_dir)
     profile = getattr(args, "core_profile", None) if getattr(args, "core", False) else None
     profile_options = ["--profile", profile] if profile else ["--release"]
-    cmd = ["cargo", "test", "-p", crate, *profile_options, "--features", features, "--lib"]
+    cmd = ["cargo", "test", "--locked", "-p", crate, *profile_options, "--features", features, "--lib"]
     if no_run:
         cmd.append("--no-run")
     else:
@@ -763,6 +832,10 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
         out, _ = proc.communicate()
         code = None
     elapsed = time.monotonic() - started
+    # Spawning and completion processing also belong to this original deadline.
+    # Keep all output, but a naturally completed late command cannot qualify.
+    if timeout and elapsed > timeout:
+        code = None
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w") as f:
         f.write(f"$ {' '.join(cmd)}\n# {mutation_env}={mutation or ''} "
@@ -879,7 +952,7 @@ def evaluate_baseline(args, target_dir, mutations):
         result["verdict"] = "error"
         return result
     tests = sorted({t for mu in mutations for t in mu.tests})
-    named = run_step(args, target_dir, None, tests, None, args.timeout_test * 2,
+    named = run_step(args, target_dir, None, tests, None, args.timeout_test,
                      logs / "baseline.named.log")
     result["named"] = named.__dict__
     ok = named.status == "pass"
@@ -887,7 +960,7 @@ def evaluate_baseline(args, target_dir, mutations):
     if scenarios and not args.fast:
         filters = [SCENARIOS[s] for s in scenarios]
         scen = run_step(args, target_dir, None, filters, args.seeds,
-                        args.timeout_scenario * 3, logs / "baseline.scenario.log")
+                        args.timeout_scenario, logs / "baseline.scenario.log")
         result["scenario"] = scen.__dict__
         ok = ok and scen.status == "pass"
     result["verdict"] = "pass" if ok else "fail"
@@ -921,7 +994,7 @@ def main():
                              "(the literal §13.4 CI rule)")
     parser.add_argument("--core-profile", choices=("release", "test"),
                         help="Core-only build profile (default: release); identical for baseline and mutant")
-    parser.add_argument("--timeout-build", type=int, default=1800,
+    parser.add_argument("--timeout-build", type=int, default=1200,
                         help="seconds per build deadline (0 disables its deadline)")
     parser.add_argument("--timeout-test", type=int, default=900,
                         help="seconds per named-test deadline (0 disables its deadline)")
@@ -929,6 +1002,8 @@ def main():
                         help="seconds per scenario deadline (0 disables its deadline)")
     parser.add_argument("--list", action="store_true", help="print the mutation table and exit")
     args = parser.parse_args()
+    if args.strict and args.skip_baseline:
+        parser.error("--strict requires the unmutated baseline")
     if args.target_dir is None:
         name = ("sumeragi-daemon-mutants" if args.daemon else
                 "sumeragi-core-mutants" if args.core else "sumeragi-mutants")

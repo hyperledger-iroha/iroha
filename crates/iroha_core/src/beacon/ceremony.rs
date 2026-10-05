@@ -285,11 +285,10 @@ impl GlobalBeaconCeremonyPlanV1 {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Encode a test fixture seat's runtime credential from its aggregated private share.
     ///
-    /// `components` is the seat's own
-    /// [`LocalGlobalThresholdBeaconDkgSeatV1::finalize_private_share`] output
-    /// for `public`; the credential codec re-imports it against the public
-    /// transcript before writing the prepared secret frame. Production callers
-    /// prepare output before extracting the share and retain its owner on failure.
+    /// `components` is this seat's diagnostic aggregate from the same
+    /// side-effect-free arithmetic used by the production checkpoint. The
+    /// credential codec verifies its exact public equation before writing the
+    /// prepared secret frame. This fixture grants no native extraction authority.
     ///
     /// # Errors
     ///
@@ -330,7 +329,12 @@ impl GlobalBeaconCeremonyPlanV1 {
                 .map(|share| (share.authenticated_session(), share.signer_index())),
             budget,
         )?;
-        encode_global_beacon_partial_signer_credential_v1(&mut prepared, &inventory)?;
+        encode_global_beacon_partial_signer_credential_v1(
+            &mut prepared,
+            inventory
+                .iter()
+                .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+        )?;
         let credential = prepared.into_credential().map_err(|(_, error)| error)?;
         Ok(GlobalBeaconSeatCredentialV1 {
             binding: GlobalBeaconSeatBindingV1 {
@@ -440,8 +444,10 @@ pub struct DealtGlobalBeaconV1 {
 /// signed recipient key and dealer commitment at `start_height`, delivers its
 /// signed encrypted edges at `commitments_end_height`, accepts its inbound
 /// edges at `deliveries_end_height`, and the transcript finalizes at
-/// `acceptances_end_height`. Every dealer polynomial is erased once its edges
-/// are sealed; every seat aggregates only its own accepted contributions.
+/// `acceptances_end_height`. This test-only logical-clock fixture retires every
+/// dealer polynomial after all original edges enter the public reducer; every
+/// seat aggregates only its own accepted contributions. Filesystem durability
+/// and daemon restart qualification are separate requirements.
 ///
 /// # Errors
 ///
@@ -517,6 +523,11 @@ pub fn deal_global_beacon_at_logical_clock_v1(
             public.record_encrypted_share(delivery_height, edge)?;
         }
     }
+    // This fixture mirrors the complete public publication boundary. It does
+    // not establish the production publisher's file/directory durability.
+    for seat in &mut seats {
+        seat.retire_durably_published_dealer()?;
+    }
     let delivered = public.public_snapshot()?;
     let accepted_height = session.deliveries_end_height;
     for (seat, signer) in seats.iter_mut().zip(signers) {
@@ -546,8 +557,10 @@ pub fn deal_global_beacon_at_logical_clock_v1(
         },
     )?;
     let mut credentials = Vec::with_capacity(seats.len());
-    for mut seat in seats {
-        let components = seat.finalize_private_share(&sealed)?;
+    for seat in seats {
+        let components = seat
+            .aggregate_private_share(&sealed)?
+            .into_components_for_runtime_custody();
         credentials.push(plan.seat_credential(
             sealed.clone(),
             seat.seat_index(),

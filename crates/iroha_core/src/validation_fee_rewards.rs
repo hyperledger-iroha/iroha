@@ -1226,7 +1226,7 @@ pub(crate) fn publish_conversion_offers(
                 let base = "ValidationFeeConversion"
                     .parse()
                     .map_err(|e| fail(format!("invalid conversion base: {e}")))?;
-                let encoded_key = ivm::numeric_tlv::encode_int(
+                let encoded_key = ivm_abi::numeric_tlv::encode_int(
                     &iroha_primitives::bigint::BigInt::from_i128(index),
                 )
                 .map_err(|e| fail(e.to_string()))?;

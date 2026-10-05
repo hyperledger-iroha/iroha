@@ -165,7 +165,7 @@ fn main() {
         .expect("allocate asset TLV");
     let amount_pointer = vm
         .alloc_input_tlv(
-            &ivm::numeric_tlv::encode_quantity(&Quantity::from(50_u64))
+            &ivm_abi::numeric_tlv::encode_quantity(&Quantity::from(50_u64))
                 .expect("encode quantity TLV"),
         )
         .expect("allocate quantity TLV");

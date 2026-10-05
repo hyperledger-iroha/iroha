@@ -2,11 +2,13 @@
 #![allow(clippy::redundant_pub_crate)]
 pub(crate) mod admission;
 mod allocation;
+mod borrowed_payload;
 #[cfg(feature = "bls")]
 pub use allocation::PrepaidBlsSignatureError;
 pub use allocation::{ChargedSignature, SignatureAllocationError};
 #[cfg(feature = "bls")]
 pub use bls::BlsSigningError;
+pub use borrowed_payload::{BorrowedSignaturePayload, BorrowedSignaturePayloadError};
 #[cfg(feature = "bls")]
 pub(crate) mod bls;
 pub(crate) mod ed25519;
@@ -381,6 +383,14 @@ impl Signature {
         Ok(Self::from_bytes(payload))
     }
 
+    /// Check the canonical raw payload without copying or granting signature authority.
+    ///
+    /// # Errors
+    /// Rejects the same empty or all-zero payload as the canonical owned constructor.
+    pub fn validate_payload(payload: &[u8]) -> Result<(), SignaturePayloadError> {
+        validate_signature_payload(payload)
+    }
+
     /// Fallibly retain exact signature bytes at an admission boundary.
     ///
     /// # Errors
@@ -522,10 +532,16 @@ impl core::fmt::Display for SignaturePayloadError {
 impl std::error::Error for SignaturePayloadError {}
 
 pub(crate) fn validate_signature_payload(payload: &[u8]) -> Result<(), SignaturePayloadError> {
-    if payload.is_empty() {
+    validate_signature_payload_observation(payload.len(), payload.iter().any(|&byte| byte != 0))
+}
+fn validate_signature_payload_observation(
+    length: usize,
+    has_nonzero: bool,
+) -> Result<(), SignaturePayloadError> {
+    if length == 0 {
         return Err(SignaturePayloadError::Empty);
     }
-    if signature_payload_is_all_zero(payload) {
+    if !has_nonzero {
         return Err(SignaturePayloadError::AllZero);
     }
     Ok(())
@@ -568,10 +584,22 @@ pub(crate) fn signature_payload_geometry(bytes: &[u8]) -> Result<(usize, usize),
 /// Geometry accounting precedes this kernel exactly once in both callers.
 pub(crate) fn decode_signature_payload_elements(
     bytes: &[u8],
-    mut offset: usize,
+    offset: usize,
     destination: &mut [u8],
 ) -> Result<(), ncore::Error> {
-    for destination in destination {
+    visit_signature_payload_elements(bytes, offset, destination.len(), |index, byte| {
+        destination[index] = byte;
+    })
+}
+
+/// The sole canonical signature byte walk, shared by owning and borrowed custody.
+fn visit_signature_payload_elements(
+    bytes: &[u8],
+    mut offset: usize,
+    count: usize,
+    mut visit: impl FnMut(usize, u8),
+) -> Result<(), ncore::Error> {
+    for index in 0..count {
         let (elem_len, header_len) = ncore::inspect_len_from_slice(
             bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?,
         )?;
@@ -581,7 +609,8 @@ pub(crate) fn decode_signature_payload_elements(
         offset = offset
             .checked_add(header_len)
             .ok_or(ncore::Error::LengthMismatch)?;
-        *destination = *bytes.get(offset).ok_or(ncore::Error::LengthMismatch)?;
+        let byte = *bytes.get(offset).ok_or(ncore::Error::LengthMismatch)?;
+        visit(index, byte);
         offset = offset
             .checked_add(elem_len)
             .ok_or(ncore::Error::LengthMismatch)?;
@@ -1254,6 +1283,16 @@ mod tests {
             "unexpected all-zero bare signature error: {err}"
         );
     }
+    #[test]
+    fn borrowed_signature_validation_has_the_same_exact_payload_policy() {
+        for bytes in [Vec::new(), vec![0; 64], vec![7; 64], vec![0, 0, 1]] {
+            assert_eq!(
+                Signature::validate_payload(&bytes).is_ok(),
+                Signature::try_from_bytes(&bytes).is_ok()
+            );
+        }
+    }
+
     #[test]
     fn signature_try_from_bytes_accepts_nonzero_payload() {
         let signature =

@@ -3,7 +3,7 @@
   "source_files": [
     {
       "path": "javascript/iroha_js/package.json",
-      "sha256": "844bea24667a3df6d3be236e13e9bf008d321ba0c63ea4ef25d0cbe482fb15e9"
+      "sha256": "468607aa05533e5e60ad65ae07846c2db36d82509b93c6fb7f7ba5d6475b849d"
     },
     {
       "path": "javascript/iroha_js/test/fixtures/sorafs_native_suite_contract_v1.json",

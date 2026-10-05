@@ -10,7 +10,7 @@ use crate::{
     instruction::wide,
 };
 use iroha_allocation::AllocationBudget;
-use ivm_abi::call::CallTypeNodeV1;
+use ivm_abi::{call::CallTypeNodeV1, entrypoint::EntrypointValueKindV1};
 
 // Production native capture uses the fresh VM's disabled diagnostic logger.
 // This thread-local test observation exercises the same interpreter and packet
@@ -122,7 +122,7 @@ impl Recorder {
     }
     fn refusal(&mut self, reason: CaptureError) -> VMError {
         self.refusal = Some(reason);
-        // Private control signal. Only capture_unit_root installs this owner and
+        // Private control signal. Only capture_public_leaf_root installs this owner and
         // translates it back; this is never returned as a transaction verdict.
         VMError::ExecutionDeferred(crate::error::ExecutionDeferral::VerifierArtifactsUnavailable)
     }
@@ -180,7 +180,7 @@ impl IVM {
         (result, OBSERVED_REGISTER_EVENTS.get())
     }
 
-    pub(crate) fn capture_unit_root(
+    pub(crate) fn capture_public_leaf_root(
         contract: PreparedContract,
         selector: &str,
         initial_gas: u64,
@@ -209,7 +209,10 @@ impl IVM {
             .ok_or(CaptureError::Unsupported)?;
         if public.argument_schema.is_some()
             || !callable.arguments.nodes.is_empty()
-            || callable.results.nodes.as_slice() != [CallTypeNodeV1::Unit]
+            || !matches!(
+                callable.results.nodes.as_slice(),
+                [CallTypeNodeV1::Unit] | [CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)]
+            )
         {
             return Err(CaptureError::Unsupported);
         }
@@ -649,11 +652,11 @@ impl IVM {
                 );
             }
         }
-        // Actual Unit validation reads this memory after its NODE and WORD gas.
+        // Actual public-leaf validation reads this memory after its NODE and WORD gas.
         let bytes = self
             .memory
             .native_packet_cell(start & !15)
-            .expect("validated Unit has physical memory");
+            .expect("validated public leaf has physical memory");
         recorder.memory(first + 24, start & !15, false, bytes, bytes);
     }
 

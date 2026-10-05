@@ -137,6 +137,11 @@ fn render_report(report: &Report) -> Result<String> {
     Ok(output)
 }
 
+/// Send the bounded protocol result to stdout, independently of the diagnostic stream.
+fn write_report(context: &mut impl RunContext, report: &Report) -> Result<()> {
+    context.println_data(render_report(report)?)
+}
+
 pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
     ensure!(
         context.output_format() == CliOutputFormat::Json,
@@ -202,12 +207,10 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
     let client = builder.build()?;
     let outcome =
         client.poll_sumeragi_genesis_readiness(challenge, &node_id, &verifier, deadline)?;
-    context.println(render_report(&report(
-        &args,
-        network_id,
-        verifier.instance().0,
-        outcome,
-    )?)?)
+    write_report(
+        context,
+        &report(&args, network_id, verifier.instance().0, outcome)?,
+    )
 }
 
 #[cfg(test)]
@@ -328,5 +331,33 @@ mod tests {
         .unwrap();
         value.challenge = "a".repeat(MAX_OUTPUT_BYTES);
         assert!(render_report(&value).is_err());
+    }
+
+    #[test]
+    fn machine_report_uses_stdout_and_never_the_diagnostic_stream() {
+        let args = args();
+        let network =
+            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(args.genesis_hash));
+        let mut value = report(
+            &args,
+            network,
+            [7; 32],
+            GenesisFinalityReadiness::NotReady(Reason::GenesisUncommitted),
+        )
+        .unwrap();
+        let mut context = crate::tests::test_context(CliOutputFormat::Json);
+        write_report(&mut context, &value).unwrap();
+        assert_eq!(
+            context.write,
+            format!("{}\n", render_report(&value).unwrap()).as_bytes()
+        );
+        assert!(context.err_write.is_empty());
+        let parsed: norito::json::Value = norito::json::from_slice(&context.write).unwrap();
+        assert_eq!(parsed["state"].as_str(), Some("pending"));
+        context.write.clear();
+        value.challenge = "a".repeat(MAX_OUTPUT_BYTES);
+        assert!(write_report(&mut context, &value).is_err());
+        assert!(context.write.is_empty());
+        assert!(context.err_write.is_empty());
     }
 }

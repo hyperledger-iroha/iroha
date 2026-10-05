@@ -23365,7 +23365,7 @@ pub mod isi {
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&successor_roster);
             assert_ne!(authorization_roster_hash, successor_roster_hash);
 
-            let iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(incumbent) =
+            let iroha_data_model::sumeragi::epoch::BeaconEpochBindingV1::Installed(incumbent) =
                 authorization.beacon else {
                 panic!("the committed boundary must retain its installed incumbent beacon");
             };

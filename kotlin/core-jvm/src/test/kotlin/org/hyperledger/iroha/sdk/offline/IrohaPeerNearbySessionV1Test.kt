@@ -238,7 +238,7 @@ class IrohaPeerNearbySessionV1Test {
     }
 
     companion object {
-        private val PROFILE = IrohaPeerPayloadProfile.KAGEMUSHA_V1
+        private val PROFILE = IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1
         private val SENDER_SIGNER = Ed25519PrivateKeyParameters(ByteArray(32) { 7 }, 0)
         private val RECEIVER_SIGNER = Ed25519PrivateKeyParameters(ByteArray(32) { 8 }, 0)
         private val VERIFIER = IrohaPeerNearbySignatureVerifierV1 { role, certificate, bytes, signature ->
@@ -253,19 +253,17 @@ class IrohaPeerNearbySessionV1Test {
             }
         }
 
+        /** First `fixtures/kagemusha/wallet_v1_vectors.json` envelope of [kind], wrapped in IPM1. */
         private fun fixture(kind: IrohaPeerPayloadKind): IrohaPeerWireMessageV1 {
             var root = Paths.get("").toAbsolutePath()
-            while (root != null && !Files.isRegularFile(root.resolve("fixtures/offline/kagemusha_v1.json"))) {
+            while (root != null && !Files.isRegularFile(root.resolve("fixtures/kagemusha/wallet_v1_vectors.json"))) {
                 root = root.parent
             }
             val json = JsonParser.parse(String(Files.readAllBytes(
-                requireNotNull(root).resolve("fixtures/offline/kagemusha_v1.json")), Charsets.UTF_8)) as Map<*, *>
-            val section = when (kind) {
-                IrohaPeerPayloadKind.REQUEST -> "payment_request"
-                IrohaPeerPayloadKind.PAYMENT -> "payment"
-                IrohaPeerPayloadKind.ACKNOWLEDGEMENT -> "acknowledgement"
-            }
-            val hex = (json[section] as Map<*, *>)["norito_hex"] as String
+                requireNotNull(root).resolve("fixtures/kagemusha/wallet_v1_vectors.json")), Charsets.UTF_8)) as Map<*, *>
+            val vector = (json["envelopes"] as List<*>).map { it as Map<*, *> }
+                .first { (it["tag"] as Number).toInt() == kind.code }
+            val hex = vector["canonical_hex"] as String
             val bytes = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
             return IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(PROFILE, kind, 1, bytes))
         }

@@ -14,6 +14,8 @@ struct TrackingAllocator;
 thread_local! {
     static TRACKING: Cell<bool> = const { Cell::new(false) };
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+    static REFUSE: Cell<Option<Layout>> = const { Cell::new(None) };
+    static REFUSE_SKIP_MATCHES: Cell<usize> = const { Cell::new(0) };
 }
 #[global_allocator]
 static ALLOCATOR: TrackingAllocator = TrackingAllocator;
@@ -27,6 +29,26 @@ fn record_allocation() {
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record_allocation();
+        if REFUSE
+            .try_with(|next| {
+                if next.get() == Some(layout) {
+                    REFUSE_SKIP_MATCHES.with(|skip| {
+                        if skip.get() == 0 {
+                            next.set(None);
+                            true
+                        } else {
+                            skip.set(skip.get() - 1);
+                            false
+                        }
+                    })
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false)
+        {
+            return std::ptr::null_mut();
+        }
         // SAFETY: the allocation request is delegated unchanged to `System`.
         unsafe { System.alloc(layout) }
     }
@@ -131,3 +153,18 @@ fn large_block_signature_streams_without_payload_scratch() {
     assert_preallocated_serialization_does_not_allocate(&signature);
     assert_preallocated_serialization_does_not_allocate(&wire);
 }
+
+#[path = "block_signature_serialization_allocations/certificate_custody.rs"]
+mod certificate_custody;
+
+#[path = "block_signature_serialization_allocations/da_policy_custody.rs"]
+mod da_policy_custody;
+
+#[path = "block_signature_serialization_allocations/da_commitment_custody.rs"]
+mod da_commitment_custody;
+
+#[path = "block_signature_serialization_allocations/pulse_inline_custody.rs"]
+mod pulse_inline_custody;
+
+#[path = "block_signature_serialization_allocations/header_inline_custody.rs"]
+mod header_inline_custody;

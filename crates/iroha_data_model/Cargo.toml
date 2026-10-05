@@ -50,6 +50,10 @@ iroha_macro = { workspace = true }
 iroha_version = { workspace = true }
 iroha_schema = { workspace = true }
 iroha_zkp_poseidon = { workspace = true }
+# KAGEMUSHA wallet V1 computes its σ-field values natively with the RP57 Poseidon of the
+# Pasta `Fp` field: `credit_id`, the state commitment, chains, map, blacklist, quota-window
+# and credit-digest trees, and the packed-byte `proof_digest` and Payment digests.
+iroha_pasta = { workspace = true }
 hex = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 

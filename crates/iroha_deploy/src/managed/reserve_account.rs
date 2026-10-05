@@ -182,6 +182,7 @@ impl ManagedReserveAccountRegistration {
             &directory,
             purpose,
             original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
             authorization,
             deadline,
             None,
@@ -284,6 +285,7 @@ impl ManagedReserveAccountRegistration {
             &directory,
             Purpose::ReserveAccount(self.authority.provider_id()?),
             original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
         )?;
         history.require_fees(fees)?;
         self.advance_original(deadline, mode, false).map(Some)

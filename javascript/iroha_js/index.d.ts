@@ -1,6 +1,5 @@
 import type { Buffer } from "buffer";
 import type { BrowserFeePayment } from "./transaction-codec.js";
-import type { Kagemusha } from "./kagemusha.js";
 import { OperatorSigningContext } from "./operator-request.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./dist/blockProofTypes.js";
@@ -26,9 +25,9 @@ export interface TairaTestnetProfile {
   readonly toriiBaseUrl: "https://taira.sora.org";
   readonly chainId: "fc56984b-2be7-431d-840e-21514d1883f0";
   readonly i105Discriminant: 369;
-  readonly kagemushaAssetDefinitionId: "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
-  readonly kagemushaAssetAlias: "ds#boi.is";
-  readonly kagemushaAssetScale: 2;
+  readonly dsAssetDefinitionId: "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+  readonly dsAssetAlias: "ds#boi.is";
+  readonly dsAssetScale: 2;
   readonly xorAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
   readonly xorAssetAlias: "xor#universal";
   readonly xorAssetScale: 9;
@@ -79,39 +78,6 @@ export type JsonValue =
   | string
   | JsonValue[]
   | { [key: string]: JsonValue };
-
-export interface KagemushaReadinessV1 {
-  readonly kagemusha_handoff_capability: "kagemusha_handoff_v1";
-  readonly wire_version: 1;
-  readonly device_lifecycle_version: 1;
-  readonly ready: boolean;
-}
-
-export type KagemushaOperationKindV1 = "top_up" | "redemption";
-export type KagemushaOperationStateV1 = "pending" | "applied" | "rejected";
-export interface KagemushaOperationRejectionV1 {
-  readonly code:
-    | "invalid_request"
-    | "unauthorized"
-    | "insufficient_online_balance"
-    | "invalid_proof"
-    | "hardware_policy_rejected"
-    | "identity_conflict"
-    | "reserve_underflow"
-    | "arithmetic_overflow"
-    | "internal_failure";
-  readonly detailDigest: Uint8Array;
-}
-export interface UnverifiedKagemushaOperationStatusV1 {
-  readonly operationId: Uint8Array;
-  readonly kind: KagemushaOperationKindV1;
-  readonly state: KagemushaOperationStateV1;
-  readonly rejection: KagemushaOperationRejectionV1 | null;
-  verifyAgainst<T>(
-    trustAnchor: unknown,
-    verifier: (status: JsonValue, trustAnchor: unknown) => T | Promise<T>,
-  ): Promise<T>;
-}
 
 export const CRYPTO_ALGORITHMS: Readonly<{
   ED25519: "ed25519";
@@ -6125,15 +6091,9 @@ export interface SumeragiEvidenceAppliedPenaltyStatus {
   details: { height: ToriiU64 };
 }
 
-export interface SumeragiEvidenceCancelledPenaltyStatus {
-  status: "cancelled";
-  details: { height: ToriiU64 };
-}
-
 export type SumeragiEvidencePenaltyStatus =
   | SumeragiEvidencePendingPenaltyStatus
-  | SumeragiEvidenceAppliedPenaltyStatus
-  | SumeragiEvidenceCancelledPenaltyStatus;
+  | SumeragiEvidenceAppliedPenaltyStatus;
 
 export interface SumeragiEvidenceOffender {
   signer: number;
@@ -10402,22 +10362,6 @@ export declare class ToriiBrowserClient {
     accountId: string,
     options?: ToriiBrowserRequestOptions,
   ): Promise<unknown>;
-  getKagemushaReadiness(
-    options?: { signal?: AbortSignal },
-  ): Promise<KagemushaReadinessV1>;
-  submitKagemushaTopUp(
-    signedTransaction: VersionedSignedTransactionV1,
-    operationId: ArrayBuffer | ArrayBufferView,
-    options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedKagemushaOperationStatusV1>;
-  submitKagemushaRedemption(
-    request: Kagemusha.RedemptionRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedKagemushaOperationStatusV1>;
-  getKagemushaOperation(
-    operationId: string | ArrayBuffer | ArrayBufferView,
-    options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedKagemushaOperationStatusV1>;
   getExplorerAccount(
     accountId: string,
     options?: Record<string, unknown>,
@@ -10675,22 +10619,6 @@ export declare class ToriiClient {
   /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`). */
   accountTransactions(accountId: string): ToriiHistoryCollection<ToriiTransactionRow, ToriiCollectionRequestOptions>;
   getAccountCapabilities(options?: { signal?: AbortSignal }): Promise<AccountCapabilitiesV1>;
-  getKagemushaReadiness(
-    options?: { signal?: AbortSignal },
-  ): Promise<KagemushaReadinessV1>;
-  submitKagemushaTopUp(
-    signedTransaction: VersionedSignedTransactionV1,
-    operationId: ArrayBuffer | ArrayBufferView,
-    options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedKagemushaOperationStatusV1>;
-  submitKagemushaRedemption(
-    request: Kagemusha.RedemptionRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedKagemushaOperationStatusV1>;
-  getKagemushaOperation(
-    operationId: string | ArrayBuffer | ArrayBufferView,
-    options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedKagemushaOperationStatusV1>;
   getExplorerRwaDetail<T = ToriiExplorerRwa>(
     rwaId: string,
     options?: { signal?: AbortSignal },
@@ -13835,7 +13763,6 @@ export const NumericV1: {
 export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
-export { Kagemusha } from "./kagemusha.js";
 
 /** Exact independently reviewed target and canonical native argument record. */
 export interface CanonicalMultisigContractCallInput {

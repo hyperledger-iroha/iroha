@@ -832,3 +832,174 @@ fn original_npos_policy_refusal_cannot_prune_retained_evidence() {
     assert_eq!(pending.bytes, 0);
     assert!(state.evidence_preparation_budget().reserved_bytes() < reserved);
 }
+
+#[test]
+fn original_signed_evidence_root_scope_refusal_stays_local_and_retries_same_state() {
+    use crate::execution_attempt::ExecutionAttemptError as Attempt;
+    use crate::sumeragi::{evidence_history, lanes::routing};
+    use ivm::error::ExecutionDeferral;
+
+    // Genesis execution and this genuinely signed QC pair precede any caller limit.
+    let chain = chain();
+    let state = chain.state();
+    let native = conflict(&chain, 2);
+    let original = Evidence::from_native(&native).unwrap();
+    let view = state.view();
+    let generation = state.state_view_generation();
+    let tip = view.native_execution_tip().unwrap();
+    let genesis_hash = chain.genesis().hash();
+    let execution_pool = state.ivm_execution_budget();
+    let preparation_pool = state.evidence_preparation_budget();
+    let execution_reserved = execution_pool.reserved_bytes();
+    let preparation_reserved = preparation_pool.reserved_bytes();
+    let root = routing::read_routing_root_scope(view.world())
+        .unwrap()
+        .unwrap();
+    let expected = evidence_history::verify_from_state(&view, &native, |_, _| Ok(())).unwrap();
+    let original_tip = expected.tip();
+    let original_instance = expected.instance();
+    let original_epoch = expected.epoch();
+    let original_generation = expected.authority_generation();
+    let original_attribution = expected.into_attribution();
+    let unlimited =
+        || norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 64);
+    let refusal = || norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+
+    // The canonical reader itself proves that the metadata is valid but locally refused.
+    // JSON cumulative limits have no AllocationBudget release owner; invent none.
+    let original_local = norito::with_decode_limits_scope(refusal(), || {
+        routing::read_routing_root_scope(view.world()).unwrap_err()
+    });
+    assert_eq!(
+        original_local.reason(),
+        ExecutionDeferral::ActiveMemoryCapacity
+    );
+    assert!(original_local.allocation_refusal().is_none());
+
+    for nested in [false, true] {
+        let read = || {
+            norito::with_decode_limits_scope(refusal(), || {
+                evidence_history::verify_from_state(&view, &native, |_, _| {
+                    panic!("a refused immutable root must not acquire historical authority")
+                })
+            })
+        };
+        let error = if nested {
+            norito::with_decode_limits_scope(unlimited(), read)
+        } else {
+            read()
+        }
+        .unwrap_err();
+        let evidence_history::NativeEvidenceError::History(Attempt::Deferred(local)) = &error
+        else {
+            panic!("original signed root decode refusal was erased: {error:?}")
+        };
+        assert_eq!(local, &original_local);
+        let admission = EvidenceAdmissionError::from(error);
+        assert!(admission::retryable(&admission));
+        let classified = classify(admission);
+        assert!(
+            matches!(classified, crate::block::BlockValidationError::ExecutionDeferred(local)
+                if local == original_local),
+            "root refusal must not become signed-input rejection or storage recovery"
+        );
+        assert_eq!(execution_pool.reserved_bytes(), execution_reserved);
+        assert_eq!(preparation_pool.reserved_bytes(), preparation_reserved);
+        assert_eq!(state.state_view_generation(), generation);
+        assert_eq!(view.native_execution_tip(), Some(tip));
+        assert_eq!(chain.genesis().hash(), genesis_hash);
+        assert_eq!(
+            routing::read_routing_root_scope(view.world()).unwrap(),
+            Some(root)
+        );
+        assert_eq!(Evidence::from_native(&native).unwrap(), original);
+    }
+
+    // This is the same retained State and QC pair, without clearing or replacing any source.
+    let retried = evidence_history::verify_from_state(&view, &native, |_, _| Ok(())).unwrap();
+    assert_eq!(retried.tip(), original_tip);
+    assert_eq!(retried.instance(), original_instance);
+    assert_eq!(retried.epoch(), original_epoch);
+    assert_eq!(retried.authority_generation(), original_generation);
+    assert!(retried.matches_attribution(&original_attribution));
+    assert_eq!(execution_pool.reserved_bytes(), execution_reserved);
+    assert_eq!(preparation_pool.reserved_bytes(), preparation_reserved);
+}
+
+#[test]
+fn original_root_observation_refusal_keeps_pending_bytes_and_same_state_retry() {
+    use crate::execution_attempt::ExecutionAttemptError as Attempt;
+    use crate::sumeragi::lanes::routing;
+    use ivm::error::ExecutionDeferral;
+
+    let chain = chain();
+    let state = chain.state();
+    let native = conflict(&chain, 2);
+    let original = Evidence::from_native(&native).unwrap();
+    let view = state.view();
+    let generation = state.state_view_generation();
+    let tip = view.native_execution_tip();
+    let budget = state.evidence_preparation_budget();
+    let baseline = budget.reserved_bytes();
+    let ceiling = 1024 * 1024;
+    let limits =
+        |allocation| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64);
+    let policy_bytes = norito::with_decode_limits_scope(limits(ceiling), || {
+        assert!(horizon(view.world()).unwrap().is_some());
+        let norito::Error::TotalAllocationExceeded { attempted, limit } =
+            norito::core::reserve_decode_allocation(ceiling + 1).unwrap_err()
+        else {
+            panic!("non-charging original policy allocation probe")
+        };
+        assert_eq!(limit, u64::try_from(ceiling).unwrap());
+        usize::try_from(attempted).unwrap() - ceiling - 1
+    });
+    assert!(policy_bytes > 0);
+    let expected = norito::with_decode_limits_scope(limits(policy_bytes), || {
+        assert!(horizon(view.world()).unwrap().is_some());
+        routing::read_routing_root_scope(view.world()).unwrap_err()
+    });
+    assert_eq!(expected.reason(), ExecutionDeferral::ActiveMemoryCapacity);
+    assert!(expected.allocation_refusal().is_none());
+    let error = norito::with_decode_limits_scope(limits(policy_bytes), || observe(state, &native))
+        .unwrap_err();
+    assert!(
+        matches!(&error, EvidenceAdmissionError::History(Attempt::Deferred(local)) if *local == expected),
+        "real root observation lost original decode refusal: {error:?}"
+    );
+    assert!(admission::retryable(&error));
+    assert_eq!(budget.reserved_bytes(), baseline);
+    {
+        let pending = state.native_pending_evidence.lock();
+        assert!(pending.entries.is_none());
+        assert_eq!(pending.bytes, 0);
+    }
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(view.native_execution_tip(), tip);
+    assert_eq!(Evidence::from_native(&native).unwrap(), original);
+    drop(view);
+
+    assert!(observe(state, &native).unwrap());
+    let retained = budget.reserved_bytes();
+    assert!(retained > baseline);
+    let original_frame = {
+        let pending = state.native_pending_evidence.lock();
+        let entries = pending.entries.as_ref().unwrap().as_slice();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].frame.as_slice(), original.native_frame());
+        assert_eq!(entries[0].key, evidence_key(&original));
+        assert_eq!(entries[0].subject_height, 2);
+        assert!(entries[0].lane.is_none());
+        assert_eq!(pending.bytes, original.native_frame().len());
+        entries[0].frame.as_slice().as_ptr()
+    };
+    assert!(!observe(state, &native).unwrap());
+    let pending = state.native_pending_evidence.lock();
+    let entries = pending.entries.as_ref().unwrap().as_slice();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].frame.as_slice().as_ptr(), original_frame);
+    assert_eq!(entries[0].frame.as_slice(), original.native_frame());
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.view().native_execution_tip(), tip);
+}

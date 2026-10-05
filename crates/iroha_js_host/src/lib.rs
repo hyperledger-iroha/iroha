@@ -235,42 +235,6 @@ const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 pub fn connect_norito_bridge_abi_version() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
 }
-/// Return the sole KAGEMUSHA native contract revision.
-#[napi(js_name = "kagemushaV1NativeContractRevision")]
-pub fn kagemusha_v1_native_contract_revision() -> u32 {
-    1
-}
-/// Fail-closed validation for exact KAGEMUSHA V1 operation-status JSON.
-///
-/// Applied results are rejected here because terminal validation requires a
-/// caller-pinned finality trust anchor; this boundary validates only pending
-/// and rejected status envelopes.
-#[napi(js_name = "kagemushaV1OperationStatusJsonValidate")]
-pub fn kagemusha_v1_operation_status_json_validate(status_json: Uint8Array) -> napi::Result<()> {
-    use iroha::client::{KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KagemushaOperationStatusV1};
-
-    let bytes = status_json.as_ref();
-    if bytes.is_empty() || bytes.len() > KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!(
-                "KAGEMUSHA V1 operation-status JSON must contain 1..={KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1} bytes"
-            ),
-        ));
-    }
-    let status = json::from_slice::<KagemushaOperationStatusV1>(bytes).map_err(|error| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid KAGEMUSHA V1 operation-status JSON: {error}"),
-        )
-    })?;
-    status.validate().map_err(|error| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid KAGEMUSHA V1 operation status: {error}"),
-        )
-    })
-}
 fn validation_fee_fixed_hash(value: &Uint8Array, label: &str) -> napi::Result<[u8; 32]> {
     let bytes: [u8; 32] = value.as_ref().try_into().map_err(|_| {
         napi::Error::new(
@@ -6367,8 +6331,8 @@ pub fn encode_contract_argument_record_json(
         json::from_value(schema_value).map_err(norito_to_napi)?;
     let payload_value = json::parse_value(&payload_json).map_err(norito_to_napi)?;
     let payload: Json = json::from_value(payload_value).map_err(norito_to_napi)?;
-    let record =
-        ivm::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
+    let record = ivm_abi::arguments::encode_argument_record_from_json(&schema, &payload)
+        .map_err(norito_to_napi)?;
     Ok(Buffer::from(record))
 }
 /// Validate and return the exact canonical `VersionedSignedTransaction` V1 wire.
@@ -7733,11 +7697,6 @@ pub fn build_precommit_trigger_action(
 }
 #[cfg(test)]
 mod tests {
-    macro_rules! assert_napi_error_contains {
-        ($result:expr, $message:literal, $reason:literal) => {
-            assert!($result.err().expect($message).reason.contains($reason));
-        };
-    }
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,
@@ -7745,35 +7704,6 @@ mod tests {
     }
     fn test_network_id_bytes(label: &[u8]) -> Uint8Array {
         Uint8Array::from(test_network_id(label).as_bytes().to_vec())
-    }
-    #[test]
-    fn kagemusha_v1_status_json_napi_boundary_validates_exact_structure() {
-        use iroha_data_model::isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationKindV1, KagemushaOperationStateV1,
-            KagemushaOperationStatusV1,
-        };
-
-        let pending = norito::json::to_vec(&KagemushaOperationStatusV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            operation_id: [0x11; 32],
-            kind: KagemushaOperationKindV1::TopUp,
-            state: KagemushaOperationStateV1::Pending,
-            result: None,
-            rejection: None,
-        })
-        .expect("encode canonical Pending status");
-        kagemusha_v1_operation_status_json_validate(Uint8Array::from(pending))
-            .expect("canonical Pending status");
-
-        for invalid in [
-            br"{}".as_slice(),
-            br#"{"state":"pending","value":{"operation_id":"00"}}"#.as_slice(),
-        ] {
-            assert!(
-                kagemusha_v1_operation_status_json_validate(Uint8Array::from(invalid.to_vec()))
-                    .is_err()
-            );
-        }
     }
     #[test]
     fn crypto_algorithm_parser_accepts_exact_canonical_labels() {

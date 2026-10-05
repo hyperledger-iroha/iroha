@@ -31,7 +31,7 @@ fn unwrap_some_word(vm: &IVM) -> u64 {
     words[0]
 }
 fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
-    ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
+    ivm_abi::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
 fn make_account_tlv(account: &AccountId) -> Vec<u8> {
     make_tlv(

@@ -67,7 +67,7 @@ fn add_argument_host(program: &[u8]) -> DefaultHost {
         .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
         .expect("benchmark entrypoint has an argument schema");
     let payload = Json::from(norito::json!({"a": "4", "b": "7"}));
-    let payload = ivm::encode_argument_record_from_json(schema, &payload)
+    let payload = ivm_abi::arguments::encode_argument_record_from_json(schema, &payload)
         .expect("encode canonical benchmark argument record");
     let key: Name = "trigger_event_json"
         .parse()
@@ -103,8 +103,9 @@ fn bench_kotodama(c: &mut Criterion) {
         .expect("benchmark entrypoint has an argument schema")
         .clone();
     let argument_json = Json::from(norito::json!({"a": "4", "b": "7"}));
-    let argument_record = ivm::encode_argument_record_from_json(&argument_schema, &argument_json)
-        .expect("encode canonical benchmark argument record");
+    let argument_record =
+        ivm_abi::arguments::encode_argument_record_from_json(&argument_schema, &argument_json)
+            .expect("encode canonical benchmark argument record");
     let prepared =
         ivm::prepare_contract(Arc::from(code.clone())).expect("prepare benchmark contract once");
     assert_eq!(prepared.entrypoint_pc("add"), Some(pc));

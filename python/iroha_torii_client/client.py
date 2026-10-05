@@ -127,7 +127,6 @@ from .client_status_models import (
     PeerTelemetryLocation,
     QueueConfig,
     SumeragiEvidenceAppliedPenaltyStatus,
-    SumeragiEvidenceCancelledPenaltyStatus,
     SumeragiEvidenceListPage,
     SumeragiEvidencePenaltyDetails,
     SumeragiEvidencePenaltyStatus,
@@ -145,7 +144,6 @@ from .governance_proposals import GovernanceProposalResult
 from .governance_proposals import _contract_address as _canonical_contract_address
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .norito_frame import (
-    decode_norito_frame_payload,
     schema_hash_for_type_name,
     validate_norito_frame,
 )
@@ -209,9 +207,9 @@ class TairaTestnetProfile:
     torii_base_url: str = "https://taira.sora.org"
     chain_id: str = "fc56984b-2be7-431d-840e-21514d1883f0"
     i105_discriminant: int = 369
-    kagemusha_asset_definition_id: str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
-    kagemusha_asset_alias: str = "ds#boi.is"
-    kagemusha_asset_scale: int = 2
+    ds_asset_definition_id: str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+    ds_asset_alias: str = "ds#boi.is"
+    ds_asset_scale: int = 2
     xor_asset_definition_id: str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
     xor_asset_alias: str = "xor#universal"
     xor_asset_scale: int = 9
@@ -758,7 +756,6 @@ __all__ = [
     "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidencePendingPenaltyStatus",
     "SumeragiEvidenceAppliedPenaltyStatus",
-    "SumeragiEvidenceCancelledPenaltyStatus",
     "SumeragiEvidenceOffender",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
@@ -768,9 +765,6 @@ __all__ = [
     "KaigiRelayDomainMetrics",
     "KaigiRelayDetail",
     "KaigiRelayHealthSnapshot",
-    "KagemushaReadinessV1",
-    "KagemushaOperationRejectionV1",
-    "UnverifiedKagemushaOperationStatusV1",
     "AppApiTransactionDraft",
     "SubscriptionPlanCreateResult",
     "SubscriptionCreateResult",
@@ -1749,40 +1743,10 @@ class RuntimeUpgradeTxResponse:
 
 
 
-_KAGEMUSHA_READINESS_PATH = "/v1/kagemusha/readiness"
-_KAGEMUSHA_TOP_UP_PATH = "/v1/kagemusha/top-up"
-_KAGEMUSHA_REDEEM_PATH = "/v1/kagemusha/redeem"
-_KAGEMUSHA_OPERATION_PATH_PREFIX = "/v1/kagemusha/operations/"
-_OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
-_OFFLINE_MAX_U128 = (1 << 128) - 1
 _SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES = 1 * 1024
 _SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES = 1 * 1024 * 1024
 _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
-_OFFLINE_MAX_JSON_DEPTH = 128
-_KAGEMUSHA_READINESS_MAX_BYTES_V1 = 4 * 1024
-_KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1 = 8 * 1024
-_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024
-_KAGEMUSHA_WIRE_VERSION = 1
-_KAGEMUSHA_DEVICE_LIFECYCLE_VERSION = 1
-_KAGEMUSHA_HANDOFF_CAPABILITY = "kagemusha_handoff_v1"
-
-
-def _kagemusha_request_timeout(value: Optional[float], context: str) -> Optional[float]:
-    if value is not None and (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or value <= 0
-    ):
-        raise ValueError(f"{context}.timeout must be a positive finite number")
-    return value
-
-
-
-
-
-
 
 
 def _offline_canonical_account_id_bytes(value: Any, context: str) -> bytes:
@@ -1827,102 +1791,6 @@ def _fee_quote_asset_sort_key(asset_definition_id: str) -> bytes:
         len(BASE58_ALPHABET),
     )
     return payload[1:17]
-
-
-def _offline_required(mapping: Mapping[str, Any], field: str, context: str) -> Any:
-    if field not in mapping:
-        raise RuntimeError(f"{context}.{field} is required")
-    return mapping[field]
-
-
-def _offline_mapping(value: Any, context: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise RuntimeError(f"{context} must be an object")
-    return value
-
-
-def _offline_exact_object_fields(
-    mapping: Mapping[str, Any],
-    context: str,
-    *,
-    required: Sequence[str],
-    optional: Sequence[str] = (),
-) -> None:
-    required_fields = set(required)
-    allowed_fields = required_fields | set(optional)
-    missing = required_fields - mapping.keys()
-    if missing:
-        field = min(missing)
-        raise RuntimeError(f"{context}.{field} is required")
-    unexpected = set(mapping) - allowed_fields
-    if unexpected:
-        field = min(unexpected)
-        raise RuntimeError(f"{context}.{field} is not part of the first-release contract")
-
-
-def _offline_unsigned(
-    value: Any,
-    context: str,
-    maximum: int,
-    *,
-    positive: bool = False,
-) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise RuntimeError(f"{context} must be an integer")
-    if value < 0 or (positive and value == 0) or value > maximum:
-        lower = 1 if positive else 0
-        raise RuntimeError(f"{context} must be between {lower} and {maximum}")
-    return value
-
-
-def _snapshot_offline_json(
-    value: Any,
-    context: str,
-    ancestors: Optional[set[int]] = None,
-    depth: int = 0,
-) -> Any:
-    if depth > _OFFLINE_MAX_JSON_DEPTH:
-        raise RuntimeError(f"{context} exceeds the maximum JSON nesting depth")
-    if value is None or isinstance(value, (str, bool)):
-        if isinstance(value, str):
-            _offline_exact_string(value, context, non_empty=False)
-        return value
-    if isinstance(value, int):
-        return _offline_unsigned(value, context, _OFFLINE_MAX_U128)
-    if isinstance(value, Decimal):
-        if not value.is_finite():
-            raise RuntimeError(f"{context} must not contain non-finite numbers")
-        return value
-    if isinstance(value, float):
-        raise RuntimeError(f"{context} must not contain floating-point numbers")
-
-    active = ancestors if ancestors is not None else set()
-    identity = id(value)
-    if identity in active:
-        raise RuntimeError(f"{context} must not contain a cycle")
-    active.add(identity)
-    try:
-        if isinstance(value, Mapping):
-            result: Dict[str, Any] = {}
-            for key, item in value.items():
-                if not isinstance(key, str):
-                    raise RuntimeError(f"{context} keys must be strings")
-                _offline_exact_string(key, f"{context} key", non_empty=False)
-                result[key] = _snapshot_offline_json(
-                    item,
-                    f"{context}.{key}",
-                    active,
-                    depth + 1,
-                )
-            return result
-        if isinstance(value, (list, tuple)):
-            return [
-                _snapshot_offline_json(item, f"{context}[{index}]", active, depth + 1)
-                for index, item in enumerate(value)
-            ]
-    finally:
-        active.remove(identity)
-    raise RuntimeError(f"{context} contains an unsupported {type(value).__name__} value")
 
 
 def _offline_json_object_without_duplicates(
@@ -1984,296 +1852,6 @@ def taira_local_signing_context(deployed_network_id: str) -> ToriiLocalSigningCo
         )
     )
 
-
-@dataclass(frozen=True)
-class KagemushaReadinessV1:
-    """Closed KAGEMUSHA V1 readiness response."""
-
-    kagemusha_handoff_capability: str
-    wire_version: int
-    device_lifecycle_version: int
-    ready: bool
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "KagemushaReadinessV1":
-        """Decode the exact universally compiled capability projection."""
-
-        context = "KAGEMUSHA readiness response"
-        record = _offline_mapping(payload, context)
-        _offline_exact_object_fields(
-            record,
-            context,
-            required=(
-                "kagemusha_handoff_capability",
-                "wire_version",
-                "device_lifecycle_version",
-                "ready",
-            ),
-        )
-        capability = _offline_exact_string(
-            _offline_required(record, "kagemusha_handoff_capability", context),
-            f"{context}.kagemusha_handoff_capability",
-        )
-        if capability != _KAGEMUSHA_HANDOFF_CAPABILITY:
-            raise RuntimeError(
-                f"{context}.kagemusha_handoff_capability must be "
-                f"{_KAGEMUSHA_HANDOFF_CAPABILITY}"
-            )
-        wire_version = _offline_unsigned(
-            _offline_required(record, "wire_version", context),
-            f"{context}.wire_version",
-            _OFFLINE_MAX_U32,
-            positive=True,
-        )
-        if wire_version != _KAGEMUSHA_WIRE_VERSION:
-            raise RuntimeError(
-                f"{context}.wire_version must be "
-                f"{_KAGEMUSHA_WIRE_VERSION}"
-            )
-        device_lifecycle_version = _offline_unsigned(
-            _offline_required(record, "device_lifecycle_version", context),
-            f"{context}.device_lifecycle_version",
-            _OFFLINE_MAX_U32,
-            positive=True,
-        )
-        if device_lifecycle_version != _KAGEMUSHA_DEVICE_LIFECYCLE_VERSION:
-            raise RuntimeError(
-                f"{context}.device_lifecycle_version must be "
-                f"{_KAGEMUSHA_DEVICE_LIFECYCLE_VERSION}"
-            )
-        ready = _offline_required(record, "ready", context)
-        if type(ready) is not bool:
-            raise RuntimeError(f"{context}.ready must be a boolean")
-        return cls(
-            kagemusha_handoff_capability=_KAGEMUSHA_HANDOFF_CAPABILITY,
-            wire_version=_KAGEMUSHA_WIRE_VERSION,
-            device_lifecycle_version=_KAGEMUSHA_DEVICE_LIFECYCLE_VERSION,
-            ready=ready,
-        )
-
-
-_KAGEMUSHA_OPERATION_KINDS = frozenset(("top_up", "redemption"))
-_KAGEMUSHA_OPERATION_STATES = frozenset(("pending", "applied", "rejected"))
-_KAGEMUSHA_REJECTION_CODES = frozenset(
-    (
-        "invalid_request",
-        "unauthorized",
-        "insufficient_online_balance",
-        "invalid_proof",
-        "hardware_policy_rejected",
-        "identity_conflict",
-        "reserve_underflow",
-        "arithmetic_overflow",
-        "internal_failure",
-    )
-)
-
-
-@dataclass(frozen=True)
-class KagemushaOperationRejectionV1:
-    """Stable terminal failure metadata without free-form diagnostics."""
-
-    code: str
-    detail_digest: bytes
-
-
-@dataclass(frozen=True)
-class UnverifiedKagemushaOperationStatusV1:
-    """Structurally valid status whose applied monetary result remains private."""
-
-    operation_id: bytes
-    kind: str
-    state: str
-    rejection: Optional[KagemushaOperationRejectionV1]
-    _source: Mapping[str, Any] = field(repr=False, compare=False)
-
-    @classmethod
-    def from_payload(
-        cls, payload: Mapping[str, Any]
-    ) -> "UnverifiedKagemushaOperationStatusV1":
-        """Validate the closed outer operation envelope without trusting finality."""
-
-        context = "KAGEMUSHA V1 operation status"
-        source = _snapshot_offline_json(payload, context)
-        record = _offline_mapping(source, context)
-        _offline_exact_object_fields(
-            record,
-            context,
-            required=("version", "operation_id", "kind", "state", "result", "rejection"),
-        )
-        if _offline_unsigned(record["version"], f"{context}.version", _OFFLINE_MAX_U32) != 1:
-            raise RuntimeError(f"{context}.version must be 1")
-        operation_id = _kagemusha_fixed_bytes(record["operation_id"], f"{context}.operation_id")
-        kind = _kagemusha_tagged_unit(
-            record["kind"], "kind", _KAGEMUSHA_OPERATION_KINDS, f"{context}.kind"
-        )
-        state = _kagemusha_tagged_unit(
-            record["state"], "state", _KAGEMUSHA_OPERATION_STATES, f"{context}.state"
-        )
-        rejection: Optional[KagemushaOperationRejectionV1] = None
-        if state == "pending":
-            if record["result"] is not None or record["rejection"] is not None:
-                raise RuntimeError(f"{context} pending state cannot contain a result or rejection")
-        elif state == "applied":
-            if not isinstance(record["result"], Mapping) or record["rejection"] is not None:
-                raise RuntimeError(f"{context} applied state has an invalid terminal envelope")
-        else:
-            if record["result"] is not None:
-                raise RuntimeError(f"{context} rejected state cannot contain a result")
-            rejected = _offline_mapping(record["rejection"], f"{context}.rejection")
-            _offline_exact_object_fields(
-                rejected,
-                f"{context}.rejection",
-                required=("code", "detail_digest"),
-            )
-            rejection = KagemushaOperationRejectionV1(
-                code=_kagemusha_tagged_unit(
-                    rejected["code"],
-                    "code",
-                    _KAGEMUSHA_REJECTION_CODES,
-                    f"{context}.rejection.code",
-                ),
-                detail_digest=_kagemusha_fixed_bytes(
-                    rejected["detail_digest"], f"{context}.rejection.detail_digest"
-                ),
-            )
-        return cls(operation_id, kind, state, rejection, record)
-
-    def verify_against(
-        self,
-        trust_anchor: object,
-        verifier: Callable[[Mapping[str, Any], object], Any],
-    ) -> Any:
-        """Release the full status only through a caller-pinned finality verifier."""
-
-        if trust_anchor is None:
-            raise TypeError("KAGEMUSHA V1 finality trust anchor is required")
-        if not callable(verifier):
-            raise TypeError("KAGEMUSHA V1 finality verifier must be callable")
-        return verifier(_snapshot_offline_json(self._source, "operation status"), trust_anchor)
-
-
-def _kagemusha_fixed_bytes(value: Any, context: str) -> bytes:
-    if (
-        not isinstance(value, list)
-        or len(value) != 32
-        or any(isinstance(item, bool) or not isinstance(item, int) or item < 0 or item > 255 for item in value)
-        or not any(value)
-    ):
-        raise RuntimeError(f"{context} must be one nonzero 32-byte array")
-    return bytes(value)
-
-
-def _kagemusha_tagged_unit(
-    value: Any, tag: str, allowed: frozenset[str], context: str
-) -> str:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(record, context, required=(tag, "value"))
-    selected = record[tag]
-    if not isinstance(selected, str) or selected not in allowed or record["value"] is not None:
-        raise RuntimeError(f"{context} is invalid")
-    return selected
-
-
-def _kagemusha_operation_id_hex(value: Union[str, bytes, bytearray, memoryview]) -> str:
-    if isinstance(value, str):
-        if re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
-            raise ValueError("KAGEMUSHA V1 operation ID must be 64 lowercase hexadecimal characters")
-        return value
-    if not isinstance(value, (bytes, bytearray, memoryview)):
-        raise TypeError("KAGEMUSHA V1 operation ID must be bytes-like or lowercase hexadecimal")
-    raw = bytes(value)
-    if len(raw) != 32 or not any(raw):
-        raise ValueError("KAGEMUSHA V1 operation ID must be one nonzero 32-byte value")
-    return raw.hex()
-
-
-def _require_kagemusha_submission_response(
-    response: requests.Response,
-    status: UnverifiedKagemushaOperationStatusV1,
-    operation_id: str,
-) -> None:
-    """Enforce the exact HTTP/status pairing for one KAGEMUSHA submission replay."""
-
-    expected_location = f"{_KAGEMUSHA_OPERATION_PATH_PREFIX}{operation_id}"
-    if response.headers.get("Location") != expected_location:
-        raise RuntimeError(
-            f"KAGEMUSHA V1 operation response Location must be {expected_location}"
-        )
-    retry_after = response.headers.get("Retry-After")
-    if response.status_code == 202:
-        if status.state != "pending":
-            raise RuntimeError("KAGEMUSHA V1 HTTP 202 response must be pending")
-        if (
-            not isinstance(retry_after, str)
-            or re.fullmatch(r"[0-9]+", retry_after) is None
-            or re.search(r"[1-9]", retry_after) is None
-        ):
-            raise RuntimeError(
-                "KAGEMUSHA V1 HTTP 202 response must have a positive Retry-After"
-            )
-        return
-    if response.status_code == 200:
-        if status.state not in ("applied", "rejected"):
-            raise RuntimeError(
-                "KAGEMUSHA V1 HTTP 200 response must be applied or rejected"
-            )
-        if retry_after is not None:
-            raise RuntimeError(
-                "KAGEMUSHA V1 HTTP 200 response must not have Retry-After"
-            )
-        return
-    raise RuntimeError("KAGEMUSHA V1 submission response must use HTTP 200 or 202")
-
-
-def _kagemusha_compact_field(payload: bytes, offset: int, context: str) -> Tuple[bytes, int]:
-    length = 0
-    shift = 0
-    for index in range(10):
-        if offset >= len(payload):
-            raise ValueError(f"{context} is truncated")
-        byte = payload[offset]
-        offset += 1
-        if index == 9 and byte & 0xFE:
-            raise ValueError(f"{context} length exceeds u64")
-        length |= (byte & 0x7F) << shift
-        if not byte & 0x80:
-            if index and byte == 0:
-                raise ValueError(f"{context} length is not minimally encoded")
-            end = offset + length
-            if end > len(payload):
-                raise ValueError(f"{context} length exceeds the request body")
-            return payload[offset:end], end
-        shift += 7
-    raise ValueError(f"{context} length exceeds u64")
-
-
-def _kagemusha_command_body(
-    value: Union[bytes, bytearray, memoryview],
-    *,
-    schema: str,
-    maximum: int,
-    context: str,
-) -> Tuple[bytes, str]:
-    if not isinstance(value, (bytes, bytearray, memoryview)):
-        raise TypeError(f"{context} must be canonical Norito bytes")
-    body = bytes(value)
-    if not body or len(body) > maximum:
-        raise ValueError(f"{context} exceeds its {maximum}-byte protocol bound")
-    payload = decode_norito_frame_payload(
-        body,
-        context=context,
-        expected_type_name=schema,
-        expected_padding_length=8,
-        expected_flags=0x02,
-    )
-    version, offset = _kagemusha_compact_field(payload, 0, f"{context}.version")
-    operation_id, _offset = _kagemusha_compact_field(
-        payload, offset, f"{context}.operation_id"
-    )
-    if version != b"\x01\x00":
-        raise ValueError(f"{context} version must be 1")
-    return body, _kagemusha_operation_id_hex(operation_id)
 
 
 
@@ -5333,241 +4911,6 @@ class ToriiClient(
             parse,
             "uaid manifests",
         )
-
-    # ------------------------------------------------------------------
-    # KAGEMUSHA V1 readiness
-    # ------------------------------------------------------------------
-    def get_kagemusha_readiness(
-        self, *, timeout: Optional[float] = None
-    ) -> KagemushaReadinessV1:
-        """Fetch the exact KAGEMUSHA V1 readiness response."""
-
-        response = self._request(
-            "GET",
-            _KAGEMUSHA_READINESS_PATH,
-            headers={"Accept": "application/json"},
-            stream=True,
-            allow_redirects=False,
-            timeout=_kagemusha_request_timeout(timeout, "get_kagemusha_readiness"),
-        )
-        self._expect_status(
-            response,
-            {200},
-            maximum_body_bytes=_KAGEMUSHA_READINESS_MAX_BYTES_V1,
-            context="KAGEMUSHA V1 readiness",
-        )
-        payload = self._offline_json_response(
-            response,
-            "KAGEMUSHA V1 readiness response",
-            maximum_body_bytes=_KAGEMUSHA_READINESS_MAX_BYTES_V1,
-        )
-        return KagemushaReadinessV1.from_payload(payload)
-
-    def submit_kagemusha_top_up(
-        self,
-        signed_transaction: bytes,
-        operation_id: bytes,
-        *,
-        timeout: Optional[float] = None,
-    ) -> UnverifiedKagemushaOperationStatusV1:
-        """Submit one exact payer-signed KAGEMUSHA V1 top-up transaction."""
-
-        if type(signed_transaction) is not bytes:
-            raise TypeError("signed_transaction must be exact immutable bytes")
-        if len(signed_transaction) < 2 or signed_transaction[0] != 1:
-            raise ValueError(
-                "signed_transaction must be a non-empty version-1 SignedTransaction"
-            )
-        if type(operation_id) is not bytes:
-            raise TypeError("operation_id must be exact immutable bytes")
-        operation_id_hex = _kagemusha_operation_id_hex(operation_id)
-        return self._submit_kagemusha_operation(
-            _KAGEMUSHA_TOP_UP_PATH,
-            "top_up",
-            signed_transaction,
-            operation_id_hex,
-            timeout=timeout,
-        )
-
-    def submit_kagemusha_redemption(
-        self,
-        request: Union[bytes, bytearray, memoryview],
-        *,
-        timeout: Optional[float] = None,
-    ) -> UnverifiedKagemushaOperationStatusV1:
-        """Submit one exact canonical KAGEMUSHA V1 full or partial redemption intent."""
-
-        body, operation_id = _kagemusha_command_body(
-            request,
-            schema="iroha.torii.v1.kagemusha.redeem.request",
-            maximum=_KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
-            context="KAGEMUSHA V1 redemption request",
-        )
-        return self._submit_kagemusha_operation(
-            _KAGEMUSHA_REDEEM_PATH,
-            "redemption",
-            body,
-            operation_id,
-            timeout=timeout,
-        )
-
-    def get_kagemusha_operation(
-        self,
-        operation_id: Union[str, bytes, bytearray, memoryview],
-        *,
-        timeout: Optional[float] = None,
-    ) -> UnverifiedKagemushaOperationStatusV1:
-        """Read one operation while withholding any unverified monetary result."""
-
-        expected_id = _kagemusha_operation_id_hex(operation_id)
-        response = self._request(
-            "GET",
-            f"{_KAGEMUSHA_OPERATION_PATH_PREFIX}{expected_id}",
-            headers={"Accept": "application/json"},
-            stream=True,
-            allow_retry=False,
-            allow_redirects=False,
-            timeout=_kagemusha_request_timeout(timeout, "get_kagemusha_operation"),
-        )
-        self._expect_status(
-            response,
-            {200},
-            maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-            context="KAGEMUSHA V1 operation response",
-        )
-        status = UnverifiedKagemushaOperationStatusV1.from_payload(
-            self._offline_json_response(
-                response,
-                "KAGEMUSHA V1 operation response",
-                maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-            )
-        )
-        if status.operation_id.hex() != expected_id:
-            raise RuntimeError("KAGEMUSHA V1 response operation ID does not match the resource")
-        return status
-
-    def _submit_kagemusha_operation(
-        self,
-        path: str,
-        kind: str,
-        body: bytes,
-        operation_id: str,
-        *,
-        timeout: Optional[float],
-    ) -> UnverifiedKagemushaOperationStatusV1:
-        response = self._request(
-            "POST",
-            path,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/x-norito",
-                "Idempotency-Key": operation_id,
-            },
-            data=body,
-            stream=True,
-            allow_retry=False,
-            allow_redirects=False,
-            timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_operation"),
-        )
-        self._expect_status(
-            response,
-            {200, 202},
-            maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-            context="KAGEMUSHA V1 operation response",
-        )
-        status = UnverifiedKagemushaOperationStatusV1.from_payload(
-            self._offline_json_response(
-                response,
-                "KAGEMUSHA V1 operation response",
-                maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-            )
-        )
-        if status.operation_id.hex() != operation_id or status.kind != kind:
-            raise RuntimeError("KAGEMUSHA V1 response does not match the submitted operation")
-        _require_kagemusha_submission_response(response, status, operation_id)
-        return status
-
-    @staticmethod
-    def _offline_json_response_with_bytes(
-        response: requests.Response,
-        context: str,
-        *,
-        maximum_body_bytes: int,
-    ) -> Tuple[Mapping[str, Any], bytes]:
-        if (
-            isinstance(maximum_body_bytes, bool)
-            or not isinstance(maximum_body_bytes, int)
-            or maximum_body_bytes <= 0
-        ):
-            raise ValueError(f"{context} byte-size bound must be a positive integer")
-        try:
-            content_type = response.headers.get("Content-Type", "")
-            media_type = content_type.split(";", 1)[0].strip().lower()
-            if media_type != "application/json":
-                raise RuntimeError(f"{context} must use Content-Type application/json")
-
-            raw_content_length = response.headers.get("Content-Length")
-            if raw_content_length is not None:
-                if not isinstance(raw_content_length, str) or re.fullmatch(
-                    r"(?:0|[1-9][0-9]*)", raw_content_length
-                ) is None:
-                    raise RuntimeError(
-                        f"{context} Content-Length must be a canonical unsigned decimal integer"
-                    )
-                maximum_literal = str(maximum_body_bytes)
-                if len(raw_content_length) > len(maximum_literal) or (
-                    len(raw_content_length) == len(maximum_literal)
-                    and raw_content_length > maximum_literal
-                ):
-                    raise RuntimeError(
-                        f"{context} exceeds {maximum_body_bytes} bytes"
-                    )
-
-            bounded_body = bytearray()
-            for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
-                if not chunk:
-                    continue
-                if not isinstance(chunk, (bytes, bytearray)):
-                    raise RuntimeError(f"{context} yielded a non-byte response chunk")
-                if len(chunk) > maximum_body_bytes - len(bounded_body):
-                    raise RuntimeError(
-                        f"{context} exceeds {maximum_body_bytes} bytes"
-                    )
-                bounded_body.extend(chunk)
-            body = bytes(bounded_body)
-        finally:
-            response.close()
-        try:
-            text = body.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise RuntimeError(f"{context} must be valid UTF-8 JSON") from error
-        try:
-            payload = json.loads(
-                text,
-                object_pairs_hook=_offline_json_object_without_duplicates,
-                parse_float=Decimal,
-                parse_constant=_offline_reject_json_constant,
-            )
-        except (ValueError, RecursionError) as error:
-            raise RuntimeError(f"{context} contains invalid JSON: {error}") from error
-        payload = _snapshot_offline_json(payload, context)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError(f"{context} must be a JSON object")
-        return payload, body
-
-    @staticmethod
-    def _offline_json_response(
-        response: requests.Response,
-        context: str,
-        *,
-        maximum_body_bytes: int,
-    ) -> Mapping[str, Any]:
-        payload, _body = ToriiClient._offline_json_response_with_bytes(
-            response,
-            context,
-            maximum_body_bytes=maximum_body_bytes,
-        )
-        return payload
 
     # ------------------------------------------------------------------
     # Sumeragi telemetry
@@ -10789,7 +10132,7 @@ class ToriiClient(
                     details=None,
                 )
             )
-        elif penalty_literal in {"applied", "cancelled"}:
+        elif penalty_literal == "applied":
             penalty_details = ToriiClient._ensure_mapping(
                 penalty["details"], f"{context}.penalty_status.details"
             )
@@ -10807,19 +10150,13 @@ class ToriiClient(
                     f"{context}.penalty_status.details.height must be a non-negative JSON u64"
                 )
             typed_details = SumeragiEvidencePenaltyDetails(height=penalty_height)
-            if penalty_literal == "applied":
-                penalty_status = SumeragiEvidenceAppliedPenaltyStatus(
-                    status="applied",
-                    details=typed_details,
-                )
-            else:
-                penalty_status = SumeragiEvidenceCancelledPenaltyStatus(
-                    status="cancelled",
-                    details=typed_details,
-                )
+            penalty_status = SumeragiEvidenceAppliedPenaltyStatus(
+                status="applied",
+                details=typed_details,
+            )
         else:
             raise RuntimeError(
-                f"{context}.penalty_status.status must be pending, applied, or cancelled"
+                f"{context}.penalty_status.status must be pending or applied"
             )
         return SumeragiEvidenceRecord(
             kind="NativeSumeragiEvidence",

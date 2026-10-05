@@ -20,7 +20,9 @@
 //! back this operational retirement. Core's committed-state retirement gates
 //! remain the authority for deciding when an old share may be removed.
 
+mod parliament_funding;
 mod prepared;
+pub use parliament_funding::RuntimeParliamentTleCredentialFundingErrorV1;
 mod provisioning_command;
 pub use prepared::{
     RuntimePreparedGlobalBeaconCredentialV1, prepare_global_beacon_transition_credential_v1,
@@ -117,6 +119,8 @@ pub enum RuntimeConsensusThresholdSignerCredentialErrorV1 {
     DecodeResource(norito::core::DecodeAttemptError),
     /// Original prepared-output or share-import failure, retaining local source identity.
     Output(GlobalBeaconCredentialEncodeErrorV1),
+    /// Exact local refusal constructing the original Parliament decoded graph.
+    ParliamentFunding(RuntimeParliamentTleCredentialFundingErrorV1),
 }
 
 impl fmt::Display for RuntimeConsensusThresholdSignerCredentialErrorV1 {
@@ -127,6 +131,7 @@ impl fmt::Display for RuntimeConsensusThresholdSignerCredentialErrorV1 {
             Self::Encoding => "consensus threshold-signer runtime credential encoding failed",
             Self::Session(_) => "consensus threshold-signer original session admission failed",
             Self::Output(_) => "consensus threshold-signer prepared output failed",
+            Self::ParliamentFunding(_) => "Parliament credential backing is unavailable",
             Self::DecodeResource(_) => {
                 "consensus threshold-signer credential decoder is unavailable"
             }
@@ -140,6 +145,7 @@ impl std::error::Error for RuntimeConsensusThresholdSignerCredentialErrorV1 {
             Self::Session(error) => Some(error),
             Self::DecodeResource(error) => Some(error),
             Self::Output(error) => Some(error),
+            Self::ParliamentFunding(error) => Some(error),
             _ => None,
         }
     }
@@ -228,6 +234,7 @@ impl RuntimeParliamentTleShareProvisioningV1 {
 }
 
 #[derive(NoritoSerialize, NoritoDeserialize)]
+#[norito(decode_fields)]
 struct RuntimeParliamentTleShareCredentialWireV1 {
     public_session: TleKeySessionPublicStateV1,
     participant_index: u16,
@@ -239,6 +246,7 @@ struct RuntimeParliamentTleShareCredentialWireV1 {
     name = "irohad::external_software_signer::consensus_threshold::RuntimeParliamentTleSignerCredentialWireV1",
     frame = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_signer_credential"
 )]
+#[norito(decode_fields)]
 struct RuntimeParliamentTleSignerCredentialWireV1 {
     header: ConsensusThresholdCredentialHeaderV1,
     sessions: Vec<RuntimeParliamentTleShareCredentialWireV1>,
@@ -260,6 +268,37 @@ struct RuntimeParliamentTlePublicInventoryWireV1 {
     slot: u16,
     network_id: NetworkId,
     sessions: Vec<RuntimeParliamentTlePublicInventoryEntryWireV1>,
+}
+
+#[derive(NoritoSerialize)]
+struct ParliamentPublicInventoryEntryViewV1<'a> {
+    public_session: norito::core::PayloadRef<'a, TleKeySessionPublicStateV1>,
+    participant_index: u16,
+}
+struct ParliamentPublicInventoryEntriesV1<'a>(&'a [RuntimeParliamentTleShareCredentialWireV1]);
+impl norito::core::SerializePayload for ParliamentPublicInventoryEntriesV1<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        norito::core::write_element_sequence::<ParliamentPublicInventoryEntryViewV1<'_>, _>(
+            writer,
+            self.0
+                .iter()
+                .map(|session| ParliamentPublicInventoryEntryViewV1 {
+                    public_session: norito::core::PayloadRef(&session.public_session),
+                    participant_index: session.participant_index,
+                }),
+        )
+    }
+}
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::external_software_signer::consensus_threshold::RuntimeParliamentTlePublicInventoryWireV1",
+    frame = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory"
+)]
+struct ParliamentPublicInventoryViewV1<'a> {
+    version: u16,
+    slot: u16,
+    network_id: NetworkId,
+    sessions: ParliamentPublicInventoryEntriesV1<'a>,
 }
 
 fn parliament_tle_public_inventory_wire_v1(
@@ -593,6 +632,7 @@ impl RuntimeConsensusThresholdSignerBackendsV1 {
                         tle_credential,
                         catalog.network_id(),
                         configured,
+                        budget,
                     )?);
                 }
                 _ => {}
@@ -652,6 +692,7 @@ impl RuntimeConsensusThresholdSignerBackendsV1 {
                         &bytes,
                         catalog.network_id(),
                         configured,
+                        budget,
                     )?);
                 }
                 _ => {}
@@ -754,59 +795,65 @@ fn decode_parliament_tle_credential_v1(
     bytes: &[u8],
     network_id: &NetworkId,
     configured: &IrohaRuntimeProviderBindingV1,
+    budget: &AllocationBudget,
 ) -> Result<
     Arc<RuntimeParliamentTlePartialReleaseSignerBackendV1>,
     RuntimeConsensusThresholdSignerCredentialErrorV1,
 > {
-    let wire: RuntimeParliamentTleSignerCredentialWireV1 =
-        decode_consensus_threshold_credential_v1(bytes)?;
-    let qualification = validate_credential_header_v1(
-        &wire.header,
-        IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
-        network_id,
-        configured,
-    )?;
-    validate_consensus_threshold_session_count_v1(wire.sessions.len())?;
-    if wire.sessions.windows(2).any(|pair| {
-        pair[0]
-            .public_session
-            .key_session_id
-            .cmp(&pair[1].public_session.key_session_id)
-            .then_with(|| pair[0].participant_index.cmp(&pair[1].participant_index))
-            .is_ge()
-    }) {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    let public_inventory = parliament_tle_public_inventory_wire_v1(
-        *network_id,
-        wire.sessions
-            .iter()
-            .map(|session| (session.public_session.clone(), session.participant_index)),
-    )?;
-    if consensus_threshold_public_inventory_digest_v1(&public_inventory)?
-        != qualification.policy_digest
-    {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    let custody = Arc::new(RuntimeTleReleaseShareCustodyV1::new());
-    for session in wire.sessions {
-        if session.public_session.network_id != *network_id.as_bytes() {
+    let funded = parliament_funding::decode(bytes, budget)?;
+    let funded = funded.try_map(|wire| {
+        let qualification = validate_credential_header_v1(
+            &wire.header,
+            IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
+            network_id,
+            configured,
+        )?;
+        validate_consensus_threshold_session_count_v1(wire.sessions.len())?;
+        if wire.sessions.windows(2).any(|pair| {
+            pair[0]
+                .public_session
+                .key_session_id
+                .cmp(&pair[1].public_session.key_session_id)
+                .then_with(|| pair[0].participant_index.cmp(&pair[1].participant_index))
+                .is_ge()
+        }) {
             return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
         }
-        custody
-            .import_components(
-                session.public_session,
-                session.participant_index,
-                session.components.into_zeroizing(),
-            )
-            .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
-    }
-    Ok(Arc::new(
-        RuntimeParliamentTlePartialReleaseSignerBackendV1 {
+        let public_inventory = ParliamentPublicInventoryViewV1 {
+            version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
+            slot: IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id(),
+            network_id: *network_id,
+            sessions: ParliamentPublicInventoryEntriesV1(&wire.sessions),
+        };
+        if consensus_threshold_public_inventory_digest_v1(&public_inventory)?
+            != qualification.policy_digest
+        {
+            return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
+        }
+        let custody = Arc::new(RuntimeTleReleaseShareCustodyV1::new());
+        for session in wire.sessions {
+            if session.public_session.network_id != *network_id.as_bytes() {
+                return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
+            }
+            custody
+                .import_components(
+                    session.public_session,
+                    session.participant_index,
+                    session.components.into_zeroizing(),
+                )
+                .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
+        }
+        Ok(RuntimeParliamentTleDecodedGraphV1 {
             handle: wire.header.handle,
             qualification,
             custody,
-        },
+        })
+    })?;
+    // TODO: fund outer std Arc controls, Core BTreeMap nodes and supervisor
+    // I/O backing with exact original owners. This ledger covers only the
+    // decoded handle/session graph and its actual fixed charge-ledger backing.
+    Ok(Arc::new(
+        RuntimeParliamentTlePartialReleaseSignerBackendV1 { funded },
     ))
 }
 
@@ -898,17 +945,21 @@ impl GlobalBeaconPartialSignerBrokerBackendV1 for RuntimeGlobalBeaconPartialSign
     }
 }
 
-struct RuntimeParliamentTlePartialReleaseSignerBackendV1 {
+struct RuntimeParliamentTleDecodedGraphV1 {
     handle: String,
     qualification: ConsensusSignerProviderQualificationV1,
     custody: Arc<RuntimeTleReleaseShareCustodyV1>,
+}
+
+struct RuntimeParliamentTlePartialReleaseSignerBackendV1 {
+    funded: parliament_funding::FundedOwner<RuntimeParliamentTleDecodedGraphV1>,
 }
 
 impl ParliamentTlePartialReleaseSignerBrokerBackendV1
     for RuntimeParliamentTlePartialReleaseSignerBackendV1
 {
     fn handle(&self) -> &str {
-        &self.handle
+        &self.funded.get().handle
     }
 
     fn qualification(
@@ -917,7 +968,7 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
         ConsensusSignerProviderQualificationV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     > {
-        Ok(self.qualification)
+        Ok(self.funded.get().qualification)
     }
 
     fn attest_partial_release_capability(
@@ -928,7 +979,9 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
         iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     > {
-        self.custody
+        self.funded
+            .get()
+            .custody
             .attest_partial_release_capability(session, expected_participant_index)
             .map_err(|error| match error {
                 iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unavailable => {
@@ -946,7 +999,9 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
         projection: &ValidatedTleReleaseProjectionV1,
     ) -> Result<TlePartialReleaseShareV1, ParliamentTlePartialReleaseSignerBrokerBackendErrorV1>
     {
-        self.custody
+        self.funded
+            .get()
+            .custody
             .sign_projected_partial_release(projection)
             .map_err(|_| ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)
     }
@@ -977,7 +1032,11 @@ impl RuntimeProviderBrokerBackendRegistryV1 for RuntimeConsensusThresholdSignerB
                         .parliament_tle
                         .as_deref()
                         .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
-                    exact_backend_binding_v1(configured, backend.handle(), backend.qualification)?;
+                    exact_backend_binding_v1(
+                        configured,
+                        backend.handle(),
+                        backend.funded.get().qualification,
+                    )?;
                     if requested_tle {
                         return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
                     }
@@ -1024,6 +1083,237 @@ fn exact_backend_binding_v1(
 pub(crate) mod tests {
     fn test_credential_budget() -> AllocationBudget {
         AllocationBudget::new(256 * 1024 * 1024)
+    }
+
+    fn parliament_funding_fixture_v1() -> (
+        IrohaRuntimeProviderBindingsV1,
+        Zeroizing<Vec<u8>>,
+        TleFixtureV1,
+    ) {
+        let network = network_id_v1(0xC1);
+        let fixture = tle_fixture_v1(network, 0xC2);
+        let provisions = vec![RuntimeParliamentTleShareProvisioningV1::new(
+            fixture.validated.public_state().clone(),
+            1,
+            Zeroizing::new(*fixture.components),
+        )];
+        let digest =
+            parliament_tle_partial_release_signer_inventory_digest_v1(network, &provisions)
+                .expect("exact Parliament funding fixture inventory");
+        let catalog = tle_catalog_v1(digest);
+        let bytes = encode_parliament_tle_partial_release_signer_credential_v1(
+            network, HANDLE, REVISION, digest, provisions,
+        )
+        .expect("canonical Parliament funding fixture");
+        (catalog, bytes, fixture)
+    }
+
+    #[test]
+    fn parliament_prepaid_fields_preserve_canonical_frame_and_borrowed_inventory() {
+        let (catalog, bytes, fixture) = parliament_funding_fixture_v1();
+        let pool = test_credential_budget();
+        let foreign = AllocationBudget::new(pool.limit_bytes());
+        let funded = parliament_funding::decode(&bytes, &pool).unwrap();
+        assert!(funded.belongs_to(&pool));
+        assert!(!funded.belongs_to(&foreign));
+        assert_eq!(foreign.reserved_bytes(), 0);
+        assert_eq!(
+            norito::encode_canonical(funded.get()).unwrap(),
+            bytes.as_slice()
+        );
+        assert_eq!(
+            funded.get().sessions[0].public_session,
+            *fixture.validated.public_state()
+        );
+        let view = ParliamentPublicInventoryViewV1 {
+            version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
+            slot: IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id(),
+            network_id: *catalog.network_id(),
+            sessions: ParliamentPublicInventoryEntriesV1(&funded.get().sessions),
+        };
+        let owning = parliament_tle_public_inventory_wire_v1(
+            *catalog.network_id(),
+            [(fixture.validated.public_state().clone(), 1)],
+        )
+        .unwrap();
+        assert_eq!(
+            norito::encode_canonical(&view).unwrap(),
+            norito::encode_canonical(&owning).unwrap()
+        );
+        assert_eq!(
+            consensus_threshold_public_inventory_digest_v1(&view).unwrap(),
+            consensus_threshold_public_inventory_digest_v1(&owning).unwrap()
+        );
+        assert!(pool.reserved_bytes() > 0);
+        drop(funded);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn parliament_decoded_graph_stays_charged_through_final_registry_reader() {
+        let (catalog, bytes, fixture) = parliament_funding_fixture_v1();
+        let pool = test_credential_budget();
+        let backend = decode_parliament_tle_credential_v1(
+            &bytes,
+            catalog.network_id(),
+            catalog.iter().next().unwrap(),
+            &pool,
+        )
+        .unwrap();
+        assert!(backend.funded.belongs_to(&pool));
+        assert_eq!(Arc::strong_count(&backend.funded.get().custody), 1);
+        let retained = pool.reserved_bytes();
+        assert!(retained > 0);
+        let registry = RuntimeConsensusThresholdSignerBackendsV1 {
+            global_beacon: None,
+            parliament_tle: Some(backend),
+        };
+        pool.set_limit_bytes(0);
+        let another = registry.clone();
+        assert_eq!(
+            pool.reserved_bytes(),
+            retained,
+            "cloning charges the same graph once"
+        );
+        registry
+            .parliament_tle
+            .as_ref()
+            .unwrap()
+            .attest_partial_release_capability(&fixture.validated, 1)
+            .unwrap();
+        let final_reader = another.resolve(&catalog).unwrap();
+        drop(registry);
+        drop(another);
+        assert_eq!(
+            pool.reserved_bytes(),
+            retained,
+            "trait dispatch retains the original owner"
+        );
+        drop(final_reader);
+        assert_eq!(
+            pool.reserved_bytes(),
+            0,
+            "only final reclamation releases graph credit"
+        );
+    }
+
+    #[test]
+    fn parliament_actual_backing_shortage_keeps_original_refusal_and_retries_same_bytes() {
+        let (catalog, bytes, _) = parliament_funding_fixture_v1();
+        let input_hash = Hash::new(bytes.as_slice());
+        let funded_probe = test_credential_budget();
+        let probe = parliament_funding::decode(&bytes, &funded_probe).unwrap();
+        let peak = funded_probe.peak_reserved_bytes();
+        assert!(peak > parliament_funding::preparation_bytes() + HANDLE.len());
+        drop(probe);
+        assert_eq!(funded_probe.reserved_bytes(), 0);
+
+        let pool = AllocationBudget::new(peak - 1);
+        let error = decode_parliament_tle_credential_v1(
+            &bytes,
+            catalog.network_id(),
+            catalog.iter().next().unwrap(),
+            &pool,
+        )
+        .err()
+        .expect("one byte below actual admitted peak must refuse");
+        let RuntimeConsensusThresholdSignerCredentialErrorV1::ParliamentFunding(
+            RuntimeParliamentTleCredentialFundingErrorV1::Storage(
+                iroha_allocation::ChargedBufferError::Admission(
+                    iroha_allocation::AllocationRefusal::Capacity {
+                        reserved_bytes,
+                        limit_bytes,
+                        ..
+                    },
+                ),
+            ),
+        ) = &error
+        else {
+            panic!("physical funding refusal must remain typed and local");
+        };
+        assert!(*reserved_bytes > 0);
+        assert_eq!(*limit_bytes, peak - 1);
+        assert_eq!(
+            pool.reserved_bytes(),
+            0,
+            "failed DTO owners are reclaimed before refund"
+        );
+        assert!(!error.to_string().contains(HANDLE));
+        assert_eq!(Hash::new(bytes.as_slice()), input_hash);
+        drop(error);
+        pool.set_limit_bytes(peak);
+        let retried = decode_parliament_tle_credential_v1(
+            &bytes,
+            catalog.network_id(),
+            catalog.iter().next().unwrap(),
+            &pool,
+        )
+        .unwrap();
+        assert!(retried.funded.belongs_to(&pool));
+        assert_eq!(Hash::new(bytes.as_slice()), input_hash);
+        drop(retried);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn parliament_invalid_private_share_refunds_only_after_decoded_graph_retirement() {
+        let (catalog, bytes, _) = parliament_funding_fixture_v1();
+        let mut wire: RuntimeParliamentTleSignerCredentialWireV1 =
+            decode_consensus_threshold_credential_v1(&bytes).unwrap();
+        wire.sessions[0].components =
+            ConsensusThresholdSecretScalarTripleV1::from_zeroizing(Zeroizing::new([[0; 32]; 3]));
+        let invalid = encode_consensus_threshold_secret_credential_v1(&wire).unwrap();
+        let pool = test_credential_budget();
+        assert!(matches!(
+            decode_parliament_tle_credential_v1(
+                &invalid,
+                catalog.network_id(),
+                catalog.iter().next().unwrap(),
+                &pool,
+            ),
+            Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
+        ));
+        assert_eq!(pool.reserved_bytes(), 0);
+        assert!(pool.peak_reserved_bytes() > parliament_funding::preparation_bytes());
+    }
+
+    #[test]
+    fn parliament_prepaid_import_preserves_existing_committee_profiles_through_maximum() {
+        for committee in [
+            4,
+            7,
+            iroha_crypto::threshold_bls::THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1,
+        ] {
+            let network = network_id_v1(0xD1);
+            let fixture = tle_fixture_with_committee_v1(network, committee as u8 + 0x20, committee);
+            let provisions = vec![RuntimeParliamentTleShareProvisioningV1::new(
+                fixture.validated.public_state().clone(),
+                1,
+                fixture.components,
+            )];
+            let digest =
+                parliament_tle_partial_release_signer_inventory_digest_v1(network, &provisions)
+                    .unwrap();
+            let catalog = tle_catalog_v1(digest);
+            let bytes = encode_parliament_tle_partial_release_signer_credential_v1(
+                network, HANDLE, REVISION, digest, provisions,
+            )
+            .unwrap();
+            let pool = test_credential_budget();
+            let backend = decode_parliament_tle_credential_v1(
+                &bytes,
+                catalog.network_id(),
+                catalog.iter().next().unwrap(),
+                &pool,
+            )
+            .unwrap();
+            backend
+                .attest_partial_release_capability(&fixture.validated, 1)
+                .unwrap();
+            assert!(backend.funded.belongs_to(&pool));
+            drop(backend);
+            assert_eq!(pool.reserved_bytes(), 0);
+        }
     }
     use super::*;
     use crate::external_software_signer::ExternalSoftwareSignerBackendsV1;
@@ -1279,7 +1569,12 @@ pub(crate) mod tests {
                     .map(|share| (share.authenticated_session(), share.signer_index())),
                 budget,
             )?;
-            encode_global_beacon_partial_signer_credential_v1(&mut prepared, &shares)?;
+            encode_global_beacon_partial_signer_credential_v1(
+                &mut prepared,
+                shares
+                    .iter()
+                    .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+            )?;
             prepared.into_credential().map_err(|(_, error)| error)
         };
         produce().map_err(|error| match error {
@@ -1547,9 +1842,11 @@ pub(crate) mod tests {
         let producer_budget = test_credential_budget();
         let budget = test_credential_budget();
         use iroha_data_model::isi::kagemusha_v1::{
-            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-            KagemushaMintFinalityAuthorityGenerationV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
             KagemushaMintFinalitySeatReadinessContextV1,
+        };
+        use iroha_data_model::sumeragi::epoch::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
         };
         let network_id = network_id_v1(0xC1);
         let mut peers = (1..=4_u8)
@@ -1674,6 +1971,7 @@ pub(crate) mod tests {
             &credential,
             catalog.network_id(),
             catalog.iter().next().expect("one TLE binding"),
+            &test_credential_budget(),
         )
         .expect("decode broker-roundtrip TLE credential");
         let registry = RuntimeConsensusThresholdSignerBackendsV1 {
@@ -2541,6 +2839,7 @@ pub(crate) mod tests {
                 &reordered_credential,
                 tle_catalog.network_id(),
                 tle_catalog.iter().next().expect("one TLE binding"),
+                &test_credential_budget(),
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -2613,6 +2912,7 @@ pub(crate) mod tests {
                 &rebound,
                 catalog.network_id(),
                 catalog.iter().next().expect("one TLE binding"),
+                &test_credential_budget(),
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -2736,6 +3036,7 @@ pub(crate) mod tests {
                     &substituted,
                     catalog.network_id(),
                     catalog.iter().next().expect("one binding"),
+                    &test_credential_budget(),
                 ),
                 Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
             ));
@@ -3174,7 +3475,12 @@ pub(crate) mod tests {
         .unwrap();
         let original = Hash::new(bytes.as_slice());
         let failed = norito::with_decode_limits_scope(limits, || {
-            decode_parliament_tle_credential_v1(&bytes, &network, catalog.iter().next().unwrap())
+            decode_parliament_tle_credential_v1(
+                &bytes,
+                &network,
+                catalog.iter().next().unwrap(),
+                &test_credential_budget(),
+            )
         })
         .err()
         .expect("actual inherited TLE decoder limit");
@@ -3189,13 +3495,22 @@ pub(crate) mod tests {
             error.kind(),
             norito::core::DecodeAttemptErrorKind::EnclosingLimit
         );
-        let backend =
-            decode_parliament_tle_credential_v1(&bytes, &network, catalog.iter().next().unwrap())
-                .unwrap();
+        let backend = decode_parliament_tle_credential_v1(
+            &bytes,
+            &network,
+            catalog.iter().next().unwrap(),
+            &test_credential_budget(),
+        )
+        .unwrap();
         assert_eq!(Hash::new(bytes.as_slice()), original);
         drop(backend);
         assert!(matches!(
-            decode_parliament_tle_credential_v1(&[], &network, catalog.iter().next().unwrap()),
+            decode_parliament_tle_credential_v1(
+                &[],
+                &network,
+                catalog.iter().next().unwrap(),
+                &test_credential_budget(),
+            ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
     }

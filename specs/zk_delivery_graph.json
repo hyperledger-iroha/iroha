@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "source_commit": "f94d3d9724f97ff3d579e2ca66ae3239f15b2850",
-  "source_plan_available": false,
+  "source_commit": "1c4f9014bc6f753ac5df08fdad1d71aedf9b8604",
+  "source_plan_available": true,
   "start_immediately": [
     "F.1",
     "F.2",
@@ -11,19 +11,25 @@
     "R.1",
     "X.1",
     "H.1",
-    "V.1"
+    "V.1",
+    "B.1",
+    "G.1",
+    "M.1",
+    "R.0",
+    "T.1",
+    "E.1"
   ],
   "tasks": [
     {
       "id": "F.1",
-      "title": "Canonical operation and consumer inventory",
+      "title": "Complete operation and admission-route inventory",
       "owner": "Data model and protocol owners",
       "requires": [],
       "outputs": [
-        "Map every Exact12 protocol and the RAM-LFE, SoraCloud, settlement and AXT operations to one native ISI, verifier, state owner, permission, Kotodama binding and supported SDK entrypoint."
+        "Map every r6 product, Exact12 protocol, general RAM-LFE class/opening, SoraCloud job, WG, AXT, IVM proof, Kaigi and voting operation through native ISI, handler, semantic relation, permissions and all SDK consumers; inventory generic verification, preverification, VK registration, genesis and restore."
       ],
       "acceptance": [
-        "No operation or existing consumer is silently omitted. Identify retired routes and test-only references. Reconcile the unavailable r6 identifiers if that source is recovered; do not claim the original 52 tasks were preserved."
+        "Every retained source requirement and historical finding has a task mapping. Audit native versus in-circuit digest use, BN254 Poseidon parameters and obsolete PQ-library replacements with deterministic vectors. Unbound uploaded keys, source hashes and global catalog membership cannot choose a proof guarantee."
       ],
       "status": "planned"
     },
@@ -33,10 +39,10 @@
       "owner": "Consensus, IVM and configuration",
       "requires": [],
       "outputs": [
-        "Define proof, transaction, block, RS16, transport, VM memory, scratch, queued effects and deterministic verification-work budgets including Norito overhead."
+        "Define proof, signed attachments, transaction, block, RS16, transport, VM handles, decoded scratch, retained queued effects and deterministic work budgets including Norito overhead."
       ],
       "acceptance": [
-        "For every accepted operation identify an actual path through every limit. Boundary and one-over cases agree across admission, proposer, follower and VM. Wall-clock time never determines consensus validity."
+        "Actual maximum paths and exact/one-over tests agree across SDK admission, VM, proposer and follower. Missing local resources defer without rejection/vote; malformed carried evidence rejects deterministically. Derive RAM-LFE budgets from its full workload; preserve separately fixed X509 bounds and distinguish engineering time targets."
       ],
       "status": "planned"
     },
@@ -46,107 +52,108 @@
       "owner": "Ledger economics and protocol owners",
       "requires": [],
       "outputs": [
-        "Classify private issuance, transparent supply changes, deposits, withdrawals, reserves, settlement and inter-pool movement for every value-bearing protocol."
+        "Classify private issuance, transparent supply changes, deposits, withdrawals, reserves, settlement and inter-pool movement for every value-bearing protocol. Define retained-state readability, cancellation/expiry, failure atomicity and asset exits under ordinary key/policy revocation and correction."
       ],
       "acceptance": [
-        "Name the independently checked invariant, authorized issuance source, remaining exposure after erroneous proof acceptance, and mutation test for each economic effect. A reserve cap is never labeled proof soundness."
+        "Name the independently checked invariant, authorized issuance source, remaining exposure after erroneous proof acceptance, and mutation test for each economic effect. A reserve cap is never labeled proof soundness. Root publication/history follow canonical policy without a generic suspension switch."
       ],
       "status": "planned"
     },
     {
       "id": "F.4",
-      "title": "Non-gating runtime and document contract",
+      "title": "Committed validity and non-gating runtime",
       "owner": "Core, SDK and documentation owners",
       "requires": [],
       "outputs": [
-        "Separate protocol validity and authenticated configuration from review status, qualification receipts and administrative activation bits."
+        "Move validity-affecting windows, expiry/skew rules, proof limits and relation-selecting keys into committed State; remove review/activation prerequisites across Core, Torii, SDKs, genesis and restore as each path is rebuilt."
       ],
       "acceptance": [
-        "Specify removal of review/activation prerequisites from runtime availability and SDK calls. Preserve signatures, permissions, valid keys, revocation, finality, replay and resource checks; reconcile contradictory current documents when implementation changes."
+        "No environment, node-local configuration, feature, binary/source digest, chain-ID production flag, readiness certificate or all-protocol manifest changes validity or availability. Completed capabilities run through ordinary deployment. Preserve cryptography, permissions, key revocation, replay, finality and deterministic limits; feature/config parity tests compare roots, effects and gas."
       ],
       "status": "planned"
     },
     {
       "id": "I.1",
-      "title": "Ordered multi-action transaction intent",
+      "title": "Ordered intents and signed attachment schema",
       "owner": "Data model and executor",
       "requires": [
-        "F.1"
+        "F.1",
+        "F.2"
       ],
       "outputs": [
-        "Replace exactly-one privacy submission with one canonical ordered multi-action intent and shared Norito vectors."
+        "Define canonical proof-free ordered intent descriptors, per-action statement/role/authority bindings and signed inline attachment occurrences for large proofs and admitted key material."
       ],
       "acceptance": [
-        "Bind network, authority, complete unsigned payload and per-action index, protocol and statement without circular proof hashes. Reject reordering, substitution, omission and replay. Retire superseded first-release layouts without fallback decoders."
+        "Proofs bind the normalized intent excluding generated proof bytes/digests to avoid circularity; the transaction signature covers the complete canonical proof-bearing payload. Reject reorder/substitute/omit/duplicate/replay. Specify attachment type, index, length and hash checks and regenerate all first-release fixtures without a fallback decoder."
       ],
       "status": "planned"
     },
     {
       "id": "I.2",
-      "title": "Signed contract proof declarations",
+      "title": "Invocation-scoped attachment and action handles",
       "owner": "Executor and IVM host",
       "requires": [
         "I.1"
       ],
       "outputs": [
-        "Allow contracts to consume signed predeclared proof actions through the same transaction-intent contract."
+        "Retain immutable authenticated attachments under host custody and expose typed small handles scoped to transaction, authorized invocation and committed action index."
       ],
       "acceptance": [
-        "An action matches its declaration and invocation scope and is consumed once; undeclared, changed, duplicated and unconsumed declarations fail atomically. Cover conditional calls, nested contracts and mixed ordinary instructions."
+        "No large proof is copied into guest heap or fetched from an external RPC. Wrong type/role, cross-transaction/invocation, changed, reused, missing or unconsumed declarations fail atomically; nested calls preserve exact authority and lifetime. A proof attachment is data, never a reusable verification capability."
       ],
       "status": "planned"
     },
     {
       "id": "I.3",
-      "title": "Canonical native ISI bridge",
+      "title": "Typed canonical native ISI bridge",
       "owner": "IVM and Core executor",
       "requires": [
         "I.2",
         "F.2"
       ],
       "outputs": [
-        "Route canonical InstructionBox calls from IVM to the existing native executor for the complete declared ISI surface."
+        "Use typed operation tags on the canonical ABI V1 instruction bridge with typed Kotodama builtins; materialize signed attachment-backed payloads in the host and route every declared ISI through its existing executor."
       ],
       "acceptance": [
-        "Authorized native and contract execution produce equivalent permitted effects. Preserve contract subject and delegated permissions without granting signer powers implicitly; reject malformed payloads and unauthorized administrative operations."
+        "Keep ordered queued execution in one StateTransaction. Return PendingAction tokens, not proof-success values; effects/results become authoritative only in the final receipt. No same-invocation branch on unapplied effects. Verify-only primitives grant no authorization; native/contract permissions and effects agree, including administrative calls."
       ],
       "status": "planned"
     },
     {
       "id": "I.4",
-      "title": "Deterministic bridge charging and rollback",
+      "title": "Deterministic charging and receipt correlation",
       "owner": "IVM and transaction runtime",
       "requires": [
         "I.3",
         "F.2"
       ],
       "outputs": [
-        "Account for decode, proof verification, storage, temporary memory and queued effects across all supported pointer sources."
+        "Charge signed bytes, attachment acquisition, decode/verification scratch, retained queue memory, storage and gas under one deterministic budget; correlate each PendingAction with its actual finalized result."
       ],
       "acceptance": [
-        "Maximum valid heap, input and literal paths execute within measured bounds; invalid and over-budget requests fail before effects commit. Failure in a later action rolls back all earlier ledger effects and charges follow the canonical fee policy."
+        "Test full-size proofs with small guest handles across input/heap/literal paths, ownership cleanup on all faults, duplicate and oversized attachments, later-action rollback and recoverable pending outcomes. Local timeout or memory shortage never becomes a different certified transaction result."
       ],
       "status": "planned"
     },
     {
       "id": "I.5",
-      "title": "ABI V1 and typed Kotodama surface",
+      "title": "ABI V1 and typed Kotodama regeneration",
       "owner": "IVM ABI and Kotodama",
       "requires": [
         "I.3",
         "I.4"
       ],
       "outputs": [
-        "Publish typed calls and update argument descriptors, ABI hash, manifests and relevant goldens for the expanded bridge."
+        "Replace development-only bridge tags/docs, regenerate typed builtins, operation descriptors, ABI hash/manifests, syscall and pointer metadata and all affected SDK artifacts."
       ],
       "acceptance": [
-        "Remain ABI V1. Change number-list goldens only when numbers change. Compile and execute representative bindings for all operation families, with unknown numbers and unsupported pointer types rejected deterministically."
+        "Remain ABI V1. Update abi_syscall_list order and number goldens if changed, abi_hash_versions, pointer_type_ids and policy tests when affected, manifest positive/mismatch admission tests and crates/ivm/docs/syscalls.md. Cover every exposed family and final added syscalls in M.1/M.2; first-release incompatible changes use T.1."
       ],
       "status": "planned"
     },
     {
       "id": "I.6",
-      "title": "Atomic native and contract batch delivery",
+      "title": "Atomic native and Kotodama composition",
       "owner": "Core integration",
       "requires": [
         "I.5",
@@ -154,10 +161,10 @@
         "P.5"
       ],
       "outputs": [
-        "Deliver direct and Kotodama transactions containing multiple privacy actions through one atomic executor."
+        "Deliver several privacy actions mixed with ordinary ISIs in one signed atomic transaction, both directly and through typed Kotodama attachment handles."
       ],
       "acceptance": [
-        "Demonstrate genuine supported proofs, cross-action binding, ordinary-instruction composition, duplicate rejection and later-action rollback. This component delivery does not claim all twelve engines or platforms are qualified."
+        "Genuine proofs exercise exact intent/authority binding, nested invocation scopes, queued result semantics, duplicate/unconsumed actions and later-failure rollback on four validators. Large-payload coverage is owned by X.4; each product delivery extends this same contract rather than a new execution route."
       ],
       "status": "planned"
     },
@@ -191,17 +198,19 @@
     },
     {
       "id": "C.3",
-      "title": "Secure encrypted computation profiles",
+      "title": "Secure RNS-BGV candidate and cost model",
       "owner": "FHE cryptography owners",
       "requires": [
         "C.1",
-        "F.2"
+        "C.2",
+        "F.2",
+        "E.1"
       ],
       "outputs": [
-        "Replace the known-insecure exact BFV construction with explicitly specified secure encryption, parameter and noise semantics."
+        "Implement and cost the genuine exact modular RNS-BGV starting candidate, secure key/encrypt/decrypt, relinearization, modulus switching and automorphisms; derive distributions, estimator assumptions and explicit rounding/noise failure bounds. Use secure randomness and bounded clearing owners for every secret buffer."
       ],
       "acceptance": [
-        "Actual key/encrypt/evaluate/decrypt controls cover admitted maxima and malformed inputs; no plaintext fallback or refresh-zero surrogate. State security assumptions and unresolved analyses; signatures and test success cannot repair an insecure equation."
+        "Compare F257 sparse-slot representation with a measured alternative/batching modulus, including equality exponentiation, broadcasts/key switching, scalar-subalgebra input proof, masking and unused-output zeroing. Use independent arithmetic/decryption vectors. No depth-16/+10 heuristic, exact-lift BFV, plaintext fallback or unmeasured flooding constants establish security. Verify secret erasure on success, error and unwind."
       ],
       "status": "planned"
     },
@@ -223,124 +232,135 @@
     },
     {
       "id": "C.5",
-      "title": "ZK-AMS production relation and arithmetic adoption",
+      "title": "ZK-AMS native40 and MKHE completion",
       "owner": "ZK-AMS and qPCS owners",
       "requires": [
         "C.2",
         "C.4",
-        "H.2",
-        "F.2"
+        "B.2",
+        "F.2",
+        "I.5",
+        "S.1"
       ],
       "outputs": [
-        "Migrate shared arithmetic while retaining BGV/MKHE semantics, and complete actual-source replay, composite admission and bounded qPCS/FRI work."
+        "Migrate shared production RNS/NTT/key-switch arithmetic while retaining distinct BGV/MKHE wire and collective semantics; complete native40 source correspondence, bounded qPCS, production composite verifier, phases II/III and account provisioning."
       ],
       "acceptance": [
-        "Use genuine full-size source/proof pairs, malicious-party controls, decryption-share checks and phase-two/three cases. Preserve whole-proof limits and reject treating fixture proofs or test-only collective machinery as production completion."
+        "Genuine full-size eight-party replay, malicious collective keys/shares, full source/proof pairs and resource controls satisfy operation-v1. Preserve independent test-only oracles and distinguish them from production. Choose a PCS within unchanged whole-proof bounds; fixture proofs and arbitrary key uploads cannot substitute."
       ],
       "status": "planned"
     },
     {
       "id": "C.6",
-      "title": "SoraCloud FHE bootstrap delivery",
+      "title": "SoraCloud full-bootstrap delivery",
       "owner": "SoraCloud and FHE owners",
       "requires": [
-        "C.2",
-        "C.3",
-        "F.2"
+        "C.8",
+        "F.4",
+        "I.5",
+        "S.1",
+        "C.9"
       ],
       "outputs": [
-        "Deliver genuine noise-refresh bootstrap with ciphertext, key, parameter, artifact and output binding."
+        "Deliver actual full-bootstrap jobs using C.8, complete bootstrap-key, SoraCloud full-execution and BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1 arithmetic role proofs/registration, exact bindings and removal of audit/activation predicates."
       ],
       "acceptance": [
-        "Actual maximum supported inputs preserve plaintext and demonstrate refresh and deterministic validation; malformed relations fail. No RAM-LFE application task, phone flow or staffing item is a prerequisite."
+        "Operation-v1 covers genuine maximum bootstrap/noise reduction, role/key/input substitutions and every bootstrap-specific model/Core/Torii/restore refusal site from the refreshed census. Combine with C.9's ordinary relations to close all four AIRs/five roles; zero-refresh and worker signatures are insufficient. No RAM-LFE or threshold prerequisite."
       ],
       "status": "planned"
     },
     {
       "id": "C.7",
-      "title": "SoraCloud threshold computation delivery",
+      "title": "SoraCloud threshold opening delivery",
       "owner": "SoraCloud and threshold owners",
       "requires": [
         "C.4",
-        "F.2"
+        "B.2",
+        "F.2",
+        "F.4",
+        "I.5",
+        "S.1",
+        "S.2"
       ],
       "outputs": [
-        "Integrate threshold custody and decryption with SoraCloud job authorization and durable lifecycle."
+        "Deliver authorized threshold opening with proofs of share correctness, consent, roster/key epoch, ciphertext/request binding and authenticated bounded key custody."
       ],
       "acceptance": [
-        "Cover unauthorized job, malicious share, rotation/revocation, participant loss and interrupted recovery. Depend on shared threshold primitives, not RAM-LFE delivery or unrelated bootstrap completion."
+        "Operation-v1 includes malicious/duplicate/missing/wrong-epoch shares, insufficient threshold, revocation and interrupted recovery without audit artifacts. Incidental cache absence cannot change validity. No dependency on RAM-LFE application delivery or bootstrap completion."
       ],
       "status": "planned"
     },
     {
       "id": "R.1",
-      "title": "Phone-control trust and lifecycle contract",
+      "title": "Provider-backed phone-control contract",
       "owner": "Identity and SDK owners",
       "requires": [],
       "outputs": [
-        "Specify the proposed phone-control provider credential, challenge interaction, privacy leakage, revocation, renewal and number recycling."
+        "Use the user-selected verification-provider credential: a fresh SMS/carrier challenge produces a short-lived credential bound to beneficiary AccountId, network, policy, nonce and validity."
       ],
       "acceptance": [
-        "Resolve the external trust choice explicitly; number syntax and nullifier uniqueness are insufficient. Credential binds beneficiary, network, policy, nonce and bounded validity. Canonicality-attestor removal must not silently reappear as an audit approval gate."
+        "Specify provider trust/key/revocation policy, challenge replay prevention, number recycling, issuer compromise and SIM takeover exposure. Provider learns the number; prove the credential privately against the encrypted canonical input. Canonicality alone is not control; no reviewer approval or canonicality-attestor gate returns."
       ],
       "status": "planned"
     },
     {
       "id": "R.2",
-      "title": "Private identifier and ownership relation",
+      "title": "Private phone-control and uniqueness relation",
       "owner": "Identity cryptography",
       "requires": [
         "R.1",
-        "C.3",
-        "H.2"
+        "R.0",
+        "R.3",
+        "R.8",
+        "B.2"
       ],
       "outputs": [
-        "Bind canonical E.164, encrypted number, fresh phone-control credential and stable secret-keyed nullifier in one statement."
+        "Prove canonical E.164, current provider credential, encrypted input, authorized beneficiary and keyed phone-nullifier consistency under the same complete policy and opening statement."
       ],
       "acceptance": [
-        "Reject wrong beneficiary/network/policy, forged or expired/revoked credential, mismatched encrypted input and replay. Equivalent numbers and randomized encryptions have one identity; key rotation preserves uniqueness without revealing the number."
+        "Wrong beneficiary/network/policy/key, forged/revoked/expired credential, inconsistent ciphertext, replay and competing live claims fail. Randomized encryption preserves stable identity; key rotation preserves uniqueness. The identifier PRF key stays outside evaluator custody and unauthorized enumeration is tested."
       ],
       "status": "planned"
     },
     {
       "id": "R.3",
-      "title": "Complete RAM-LFE program relation",
+      "title": "Program-hiding affine execution relation",
       "owner": "RAM-LFE and FHE owners",
       "requires": [
-        "C.2",
-        "C.3",
-        "H.2",
+        "R.0",
+        "R.11",
+        "B.2",
         "F.2"
       ],
       "outputs": [
-        "Implement actual encrypted program semantics, output binding and secure refresh using the shared arithmetic owner."
+        "Implement affine.v1 with LoadInput, LoadState, StoreState, LoadConst, Add, AddPlain, SubPlain, MulPlain and Output; prove hidden tape, initialization, all transitions, encodings, bounds and ordered outputs under the full authoritative policy."
       ],
       "acceptance": [
-        "Prove execution rather than an input/output commitment alone. Test invalid trace, substituted program/key/input/output and real maximum workloads; plaintext keyed evaluation and OPRF-only behavior cannot substitute."
+        "No ciphertext multiplication/refresh enters this class. Fixed public padded shapes conceal the committed program within the specified leakage bound. Test class/policy/key/context substitutions, private-witness mutations and actual equality-free affine workloads; a binding-only receipt is not execution."
       ],
       "status": "planned"
     },
     {
       "id": "R.4",
-      "title": "Identifier claim state transition",
+      "title": "Phone claim lifecycle and direct replacement",
       "owner": "Core identity",
       "requires": [
         "R.2",
-        "R.3",
+        "R.12",
         "F.3",
         "F.4"
       ],
       "outputs": [
-        "Preserve exclusive live bindings, mandatory bounded expiry, revocation and explicit renewal/reassignment rules under native ISIs."
+        "Apply verified identifier claims with exclusive live binding, mandatory bounded expiry, authorized renewal/revocation/reassignment; remove PhoneRetailCanonicalityAttestationV1 and pinned canonicality signatures when their genuine relation replacement lands."
       ],
       "acceptance": [
-        "Bind proof to authenticated claimant and current state. Test competing claims, expiry eviction, authorized revocation, recycled-number reassignment, key rotation and recovery. Expiry uses the earliest applicable credential, receipt, key and policy bound."
+        "Expiry uses the earliest relevant credential, opening, receipt, key and policy bound. Test competing claims, eviction, number recycling, key rotation and stale lookups; separate domainless AccountId registration from alias permissions. No permanent-squatting claim is assumed and no signature substitutes for decryption/PRF proof."
       ],
       "status": "planned"
     },
     {
       "id": "R.5",
-      "title": "One-call private phone delivery",
+      "title": "One-call private phone claim delivery",
       "owner": "Identity, SDK and integration",
       "requires": [
         "R.4",
@@ -348,26 +368,27 @@
         "S.1"
       ],
       "outputs": [
-        "Deliver one call that obtains a challenge response, encrypts, proves, submits and returns a finalized phone binding."
+        "Deliver provider challenge, encryption, execution proof, verified opening, ClaimIdentifier, lookup and actual account result in one call using operation-v1."
       ],
       "acceptance": [
-        "Caller interaction uses a callback within the same operation. Test challenge denial, cancellation, unknown submission outcome, safe resume and payment resolution to the verified binding. Document provider-visible data and number-recycling behavior."
+        "All supported SDK fixtures/examples plus direct/prepared/Kotodama four-validator effects, cold restart and full current-genesis replay pass. Test challenge denial, cancellation, unknown outcome/read-only resume and phone-payment resolution; ordinary Taira deployment exposes the implemented route without extra activation."
       ],
       "status": "planned"
     },
     {
       "id": "R.6",
-      "title": "Retire the plaintext RAM-LFE backend",
+      "title": "Retire plaintext and signed-receipt backends",
       "owner": "Crypto, schema and SDK owners",
       "requires": [
         "C.1",
+        "R.12",
         "R.5"
       ],
       "outputs": [
-        "Remove HkdfSha3_512PrfV1 and its RAM-LFE tags, dispatch, schemas, fixtures and SDK paths after all inventoried callers have replacements."
+        "Remove HkdfSha3_512PrfV1, its RAM-LFE policy/evaluator/tag branches, obsolete Signed execution mode, resolver signing material and replaced exact-lift consumers across model, Core, Torii, bridge, generators, SDKs and fixtures."
       ],
       "acceptance": [
-        "No retained consumer uses the retired backend or alias; old tags fail consistently. Move required plaintext-PRF behavior to an explicitly non-RAM-LFE role. Preserve unrelated HKDF key derivation and Java-consumer assertion coverage through Kotlin."
+        "Inventory every importer before deletion; all have genuine replacements and old tags reject without aliases. Preserve unrelated HKDF derivation and independent test oracles. Kotlin owns Java-consumer capability/fixture migration. Do not delete a real consumer merely to make the census empty."
       ],
       "status": "planned"
     },
@@ -404,35 +425,36 @@
     },
     {
       "id": "P.3",
-      "title": "Private conservation and proof relations",
+      "title": "Common private economic test contract",
       "owner": "Value-bearing privacy protocol owners",
       "requires": [
         "F.3",
         "P.1",
-        "H.2"
+        "B.1"
       ],
       "outputs": [
-        "Complete ownership, ranges, nullifiers, conservation and issuance authorization for Orchard, private IVM, PQ-MASP, FCMP++, confidential assets and settlement."
+        "Define reusable relation mutation and ledger-effect tests for ownership, range, nullifiers, issuance, asset isolation and private/public conservation, preserving existing reserve controls."
       ],
       "acceptance": [
-        "Each relation has real positive and adversarial proofs and named mutations. Distinguish fraudulent private balances, reserve theft and transparent minting; public caps do not claim to eliminate hidden inflation or protect every depositor."
+        "Each value-bearing product consumes these controls and supplies genuine protocol-specific proofs in its own task. Erroneous-verifier harnesses are test-only; distinguish private inflation, reserve theft and transparent minting without claiming a public cap proves hidden conservation."
       ],
       "status": "planned"
     },
     {
       "id": "P.4",
-      "title": "Credential and authorization relation completion",
+      "title": "Typed credential and proof composition contract",
       "owner": "Credential and authorization owners",
       "requires": [
         "P.1",
-        "H.2",
-        "F.2"
+        "B.1",
+        "F.2",
+        "F.5"
       ],
       "outputs": [
-        "Complete ZK-ACE, PGC, VeRange composition, Vega/Figure 9, Jindo and Bootle/Lantern statement, key and lifecycle requirements."
+        "Specify typed verify-only and ledger-composition behavior for credential, range and commitment roles, with authoritative key/issuer/context derivation and common privacy/resource controls."
       ],
       "acceptance": [
-        "Genuine full-shape proofs cover authority, issuer revocation, key custody, replay, ranges and context binding as applicable. Record security assumptions and composition limits; component verification cannot confer stronger application guarantees."
+        "Role/statement/parameter substitution and unbound VK uploads reject; primitive verification does not invent financial effects or reusable authorization. Product tasks own actual algorithms, maximum proofs, issuer lifecycle and independent deliveries."
       ],
       "status": "planned"
     },
@@ -454,7 +476,7 @@
     },
     {
       "id": "P.6",
-      "title": "Exact12 lifecycle and economic integration",
+      "title": "Exact12 and additional-product reconciliation",
       "owner": "Privacy integration",
       "requires": [
         "P.2",
@@ -462,13 +484,27 @@
         "P.4",
         "P.5",
         "C.5",
-        "X.3"
+        "X.4",
+        "P.7",
+        "P.8",
+        "P.9",
+        "P.10",
+        "P.11",
+        "P.12",
+        "P.13",
+        "P.14",
+        "P.15",
+        "P.16",
+        "P.17",
+        "P.18",
+        "P.19",
+        "P.20"
       ],
       "outputs": [
-        "Exercise all twelve protocols through their canonical native owner with lifecycle and economic assertions."
+        "Reconcile exact twelve registered protocols plus confidential assets, Kaigi, voting and settlement against their independently delivered operation-v1 flows."
       ],
       "acceptance": [
-        "Every protocol has a real supported success case and applicable tamper, stale-source, replay, authorization and rollback cases. Classify missing engine work explicitly; no count based solely on enum registration or skipped tests."
+        "Every listed product has genuine positive, maximum, mutation, authorization, stale-context, replay and rollback evidence. Missing engines/platforms remain failures or unexecuted work; inventory completion never controls availability of another finished product."
       ],
       "status": "planned"
     },
@@ -487,168 +523,179 @@
     },
     {
       "id": "X.2",
-      "title": "Canonical maximum-proof delivery parameters",
+      "title": "Implement canonical maximum-proof transport",
       "owner": "Consensus, configuration and X509",
       "requires": [
         "F.2",
         "P.1"
       ],
       "outputs": [
-        "Propose a 16 MiB block payload default with coordinated RS16/transport/sync bounds; preserve the 9,437,184-byte proof ceiling and test the 10 MiB transaction envelope budget."
+        "Implement the selected 16 MiB block payload default with committed genesis parameters, RS16 geometry, frame/sync/storage/proposer bounds and 10 MiB signed-transaction cap; keep proof ceiling 9,437,184 bytes."
       ],
       "acceptance": [
-        "Measure the entire maximum canonical signed transaction. It must fit the chosen transaction limit with framing and supported signatures; if it does not, resolve the parameter design explicitly before claiming delivery. No off-chain proof-fetch bypass."
+        "Measure maximum complete canonical envelopes with supported signatures and framing. The remaining 1 MiB over the proof ceiling must contain all required context; reject oversize atomically. If it cannot fit, redesign the canonical envelope or make an explicit documented parameter change rather than silently raising caps. Exact/one-over and inconsistent-parameter tests agree across peers."
       ],
       "status": "planned"
     },
     {
       "id": "X.3",
-      "title": "Complete maximum X509 construction",
+      "title": "Complete bounded joint X509 construction",
       "owner": "X509 cryptography and performance",
       "requires": [
         "X.1",
-        "H.2",
-        "F.2"
+        "B.2",
+        "F.2",
+        "E.1"
       ],
       "outputs": [
-        "Complete the joint certificate/CRL/ownership/disclosure relation and produce genuine maximum supported proofs within unchanged proof and prover resource targets."
+        "Complete MAIN/CA ECDSA-to-DER/RFC semantics, correlated-opening hiding, joint transcript reduction, holder linkability/nullifiers and certificate leakage; optimize actual maximum proof generation without reducing coverage."
       ],
       "acceptance": [
-        "Independent verifier, wrong-genesis, all nonce substitutions, mutation and privacy analysis accompany exact bytes, wall time, RSS and address-space records. Preserve the 300-second proving target; report failure without shrinking supported coverage or relabeling success."
+        "Retain q=136 unless a full joint reduction coherently updates masks/descriptors/DER degrees/IO inequalities/CA digests/fixtures. Distinguish classical-ROM/qROM and work-normalized/absolute claims; P-256 is classical. Preserve proof 9,437,184 bytes, 300-second target/CRL age, server RSS 12 GiB and enforced address space 32 GiB; measure worker counts and full phase attribution."
       ],
       "status": "planned"
     },
     {
       "id": "X.4",
-      "title": "Maximum X509 finality and restart delivery",
+      "title": "Maximum X509 usable delivery",
       "owner": "X509 and four-peer integration",
       "requires": [
         "X.2",
         "X.3",
+        "X.5",
+        "X.6",
         "I.5",
         "S.1",
-        "V.1"
+        "P.5"
       ],
       "outputs": [
-        "Submit the maximum proof through native and contract routes and the one-call builder into canonical signed blocks."
+        "Deliver maximum supported credentials through the shipping holder-controlled prover, signed attachment-based Kotodama/direct/prepared ISIs and all SDKs to four-validator finality, canonical persistence, cold restart and replay."
       ],
       "acceptance": [
-        "Four validators reach finality, persist, restart and independently verify the exact committed proof/statement. Capture proof, transaction and block sizes separately; oversized or tampered requests fail without ledger effects."
+        "Operation-v1 verifies exact proof/statement after restart, wrong genesis/nonce/corruption and over-limit rejection without effects, recording proof/transaction/block sizes separately. On the final candidate run idle/advancing four-peer temporal cases, same-block order/restart/permission/livelock, at least 100 rotations and maximum-proof submissions and 3 successful rollover cycles; measure real supersession/deadline and privacy results without activation artifacts or external proof fetch."
       ],
       "status": "planned"
     },
     {
       "id": "H.1",
-      "title": "Hash and WG measurement specification",
+      "title": "Primitive candidate and workload specification",
       "owner": "Cryptographic profile and benchmark owners",
       "requires": [],
       "outputs": [
-        "Identify the WG workload from the source plan, candidate algorithms, security parameters and representative/maximal workloads."
+        "Inventory native versus in-circuit digests and define exploratory security/cost comparisons for shared proofs and product-specific roles; WG candidate measurement is explicitly owned by G.2."
       ],
       "acceptance": [
-        "Preserve current protocol-specific primitives unless an explicit justified replacement is selected. Exploratory benchmarks are labeled exploratory. Resolve the meaning and boundaries of WG before claiming that workload is covered."
+        "Select canonical native commitments consistently across catalog, Kaigi, spentness, MKHE, SDKs and fixtures; retain mathematically distinct families where needed. BN254 Poseidon and PQ dependency repairs get vectors. Exploratory measurements may guide choices and never count as final candidate qualification."
       ],
       "status": "planned"
     },
     {
       "id": "H.2",
-      "title": "Freeze candidate algorithm and profile",
+      "title": "Freeze semantic profiles before final measurements",
       "owner": "Cryptographic profile owners",
       "requires": [
-        "H.1"
+        "H.1",
+        "B.1"
       ],
       "outputs": [
-        "Choose the candidate hash algorithms and full profile before final proof/benchmark measurements; regenerate affected identities and fixtures."
+        "Select the shared backend transcript and applicable native/in-circuit profiles from explicit security design and exploratory measurements; regenerate canonical semantic identities and fixtures."
       ],
       "acceptance": [
-        "Specify transcript/commitment ordering, security and composition assumptions, work accounting and exact source/profile digests. A material algorithm/profile change creates a new candidate; there is no runtime reviewer-signoff condition."
+        "Build/source hashes remain evidence metadata, not transaction truth. No old transcript is kept for proof-byte compatibility. WG tree/hash is selected separately after G.2, then frozen in G.3. Changed algorithms invalidate affected final measurements and never require a runtime reviewer token."
       ],
       "status": "planned"
     },
     {
       "id": "H.3",
-      "title": "Measure the frozen candidate",
+      "title": "Final frozen-candidate measurements",
       "owner": "Performance and hardware owners",
       "requires": [
-        "H.2"
+        "H.2",
+        "G.3",
+        "E.1"
       ],
       "outputs": [
-        "Measure the selected WG/hash workload on the exact candidate with reproducible inputs, artifacts and configuration."
+        "Measure final selected native and in-circuit workloads, including actual WG witnesses, on exact frozen source/profile/artifact/configuration and named hardware."
       ],
       "acceptance": [
-        "Record algorithm/profile/source/artifact identity, workload, platform, warm/cold policy and actual timing/resource samples. Prior measurements cannot qualify a changed hash. Unsupported hardware remains explicitly unmeasured."
+        "Record workload/worker/platform/load/warm-cold conditions and observed time/bytes/RSS. Distinguish projections, engineering targets, consensus bounds and actual enforced resources. This aggregate evidence does not block an independently complete usable product."
       ],
       "status": "planned"
     },
     {
       "id": "A.1",
-      "title": "Finalized source and settlement binding",
+      "title": "D7 finalized source and current issuer contract",
       "owner": "FASTPQ, AXT and State owners",
       "requires": [
         "F.1",
-        "F.3"
+        "F.3",
+        "G.1"
       ],
       "outputs": [
-        "Specify authoritative finalized anchors, complete source/spend effects, participant intent and recovery identity for ordinary and AXT execution."
+        "Bind exact successful source execution, ordered transaction set and transfer occurrence through D7/WG/certified-result openings; specify current destination issuer authority separately from historical anchors."
       ],
       "acceptance": [
-        "Reject self-asserted roots, substituted source/amount/authority, stale or wrong-network anchors and replay. Define atomicity and terminal recovery using committed protocol state."
+        "ordinary new_root is ordinary_writes_root, not combined post_state_root; test mixed KAGEMUSHA top-ups. Bind current transaction-view policy/key/asset incarnation/code/ABI/counter/generation/expiry/pending transitions, fresh issuer signature and atomic nonce/source-occurrence/budget consumption."
       ],
       "status": "planned"
     },
     {
       "id": "A.2",
-      "title": "Complete ordinary execution relation",
+      "title": "Complete ordinary FASTPQ effect relation",
       "owner": "IVM and FASTPQ proof owners",
       "requires": [
         "A.1",
-        "H.2",
-        "F.2"
+        "B.2",
+        "F.2",
+        "G.4"
       ],
       "outputs": [
-        "Complete native execution proofs and full-effect ordinary admission with bounded source custody and private masking."
+        "Implement full-effect ordinary FASTPQ admission with authentic original funding/source custody and bounded hiding construction; migrate RaceV1/classed callers through the shared backend where applicable."
       ],
       "acceptance": [
-        "Real maximum ordinary proofs and independent verification cover actual execution, original funding and authoritative State. Binding-only circuits and replay commitments cannot substitute; resource and hardware evidence remains candidate-specific."
+        "Real maximum proofs and independent replay reject source/spend/root/ordered-effect substitutions. Prove actual effects rather than commitments, preserve resource caps and current-State checks, and keep component, hardware and network evidence distinct."
       ],
       "status": "planned"
     },
     {
       "id": "A.3",
-      "title": "Anchored AXT native delivery",
+      "title": "Anchored AXT and private invocation delivery",
       "owner": "AXT, Core and integration",
       "requires": [
         "A.2",
+        "G.4",
         "I.5",
-        "P.2"
+        "P.2",
+        "S.1"
       ],
       "outputs": [
-        "Implement anchored private invocation/AXT through the canonical native executor and transaction contract."
+        "Deliver exact anchored source-to-destination spends and private invocation through current issuer checks, native ISIs and operation-v1; publish effects and recovery outcomes atomically and durably."
       ],
       "acceptance": [
-        "Four-peer success, wrong/stale anchor, intent substitution, invalid participant, replay and restart cases preserve atomic effects and terminal outcomes. Keep concrete source/settlement latency failures visible."
+        "Test every publication crash boundary, duplicate/reordered requests, wrong source/amount/network/lane, expired anchors, revocation/rotation between anchor/inclusion and earlier same block, equal-byte restoration after revoke, mixed roots and once-only spend. Measure max batches, p99 prove/submit/inclusion, verify/bytes/RSS on four peers."
       ],
       "status": "planned"
     },
     {
       "id": "A.4",
-      "title": "Retire the superseded driver",
+      "title": "Retire all superseded proof drivers",
       "owner": "Runtime, SDK and packaging owners",
       "requires": [
         "A.3",
-        "V.2"
+        "V.2",
+        "B.3"
       ],
       "outputs": [
-        "Delete superseded driver code, wiring, configuration, exports, examples and packaging after anchored replacement and caller coverage exist."
+        "Delete superseded driver files and remaining wiring/config/exports/packaging after all source consumers, including anchored AXT, use canonical replacements."
       ],
       "acceptance": [
-        "Every supported former caller uses the replacement and its tests. No compatibility shim or parallel production driver remains. Deletion depends on anchored AXT delivery and replacement coverage, not merely ordinary execution."
+        "No consumer or usable delivery depends on deletion. Move still-used IO/limit/CLI/observer/accelerator utilities before removal; preserve behavior tests and workspace compilation. No compatibility shim or live fallback remains for a replaced semantic role."
       ],
       "status": "planned"
     },
     {
       "id": "S.1",
-      "title": "One-call atomic SDK core",
+      "title": "One-call and prepared SDK core",
       "owner": "Rust client and shared native owners",
       "requires": [
         "F.1",
@@ -656,10 +703,10 @@
         "F.2"
       ],
       "outputs": [
-        "Provide typed local prepare/prove/sign/submit/finality operations and explicit atomic batch support over one signed transaction."
+        "Provide shared prepare/prove/local-verify/build/sign/submit/finality and durable-operation handling, with a mandatory high-level call and advanced prepared canonical ISI form for external signing, batches and contracts."
       ],
       "acceptance": [
-        "Use configured account/signer context, secure randomness and private witness ownership. Reject oversized batches early without splitting. Unknown network outcomes return recoverable pending identities; completion means verified finality, not HTTP acceptance."
+        "All six SDK families share semantic contracts, fixtures and typed errors; per-capability bindings ship in each functional delivery, without waiting for aggregate ports/conformance. Secure custody/randomness and correct pending/cancel/read-only recovery remain default; no silent batch splitting or private upload."
       ],
       "status": "planned"
     },
@@ -697,8 +744,8 @@
     },
     {
       "id": "S.4",
-      "title": "Swift and C sharp delivery",
-      "owner": "Swift, C sharp and bridge owners",
+      "title": "Swift and C# delivery",
+      "owner": "Swift, C# and bridge owners",
       "requires": [
         "S.1",
         "S.2",
@@ -731,7 +778,7 @@
     },
     {
       "id": "S.6",
-      "title": "Complete SDK conformance delivery",
+      "title": "Aggregate SDK conformance evidence",
       "owner": "All SDK and integration owners",
       "requires": [
         "S.3",
@@ -740,65 +787,76 @@
         "P.6",
         "X.4",
         "R.5",
+        "R.7",
+        "R.9",
+        "R.10",
         "C.6",
         "C.7",
-        "A.3"
+        "C.9",
+        "A.3",
+        "M.3",
+        "G.5"
       ],
       "outputs": [
-        "Demonstrate the single canonical SDK capability matrix across Rust, Kotlin/Java/Android, Swift, JavaScript, Python and C sharp."
+        "Reconcile the per-capability Rust, Kotlin/Java/Android, Swift, JavaScript, Python and C# deliveries and their canonical examples, fixtures, installed native artifacts and recovery results."
       ],
       "acceptance": [
-        "Each supported operation has real direct/native and relevant contract examples, identical intent/wire fixtures, typed rejection, unknown-outcome recovery and finality evidence. Unsupported platform capabilities are visible and remain outstanding."
+        "Each capability already supplies operation-v1 when it lands. This aggregate catches drift across products/platforms and cannot delay any finished operation. Unsupported platform performance and physical-device qualification remain explicitly unexecuted."
       ],
       "status": "planned"
     },
     {
       "id": "V.1",
-      "title": "Plan and graph integrity checks",
+      "title": "Plan source coverage and graph checks",
       "owner": "Planning and tooling owners",
       "requires": [],
       "outputs": [
-        "Maintain one machine-readable task graph and matching plan tables with one shared validator."
+        "Maintain the final plan, graph and self-contained r6 requirement/finding reconciliation with a single checker."
       ],
       "acceptance": [
-        "Check identifiers, dependencies, cycles, true roots, delivery reachability and named ordering constraints. Text/JSON formats run identical checks and exit consistently. Passing this checker means structural consistency only."
+        "Validate true roots, cycles, delivery reachability, required/forbidden ancestry, per-delivery operation-v1, all23 r6 findings, every earlier F report and original task mapping. Both output formats execute identical checks. Missing ignored dist sources do not break validation; mappings are traceability, not semantic proof."
       ],
       "status": "planned"
     },
     {
       "id": "V.2",
-      "title": "Four-peer execution and recovery coverage",
+      "title": "Four-peer atomic execution and recovery",
       "owner": "Integration and runtime owners",
       "requires": [
         "I.6",
         "S.1",
         "P.5",
-        "A.3"
+        "A.3",
+        "T.1"
       ],
       "outputs": [
-        "Exercise representative real native/contract/SDK transactions and anchored AXT on one four-validator candidate."
+        "Exercise representative real direct/prepared/Kotodama/SDK transactions and anchored AXT on a fixed four-validator candidate, extending each product's own network controls."
       ],
       "acceptance": [
-        "Verify finality, permissions, replay, batch rollback, retained history and restart recovery. Preserve signed RS16 custody and exact Sumeragi committees/quorums; network faults in protocol testing use the deterministic simulator."
+        "Verify finality, exact authority, replay, queued-result correlation, batch rollback, retained current history and crash/restart. Preserve signed RS16 and exact Sumeragi committees/quorums; protocol fault mutations run in the deterministic simulator. No aggregate test result grants activation authority."
       ],
       "status": "planned"
     },
     {
       "id": "V.3",
-      "title": "Complete current-candidate proof evidence",
+      "title": "Complete proof and relation evidence",
       "owner": "Protocol testing owners",
       "requires": [
         "P.6",
         "C.5",
         "X.3",
         "A.2",
-        "H.2"
+        "A.3",
+        "M.3",
+        "R.9",
+        "R.10",
+        "B.2"
       ],
       "outputs": [
-        "Re-run all twelve engines and coupled ordinary/AXT constructions against exact candidate source and fixtures."
+        "Re-run all retained product relations, complete IVM and ordinary/AXT proofs against exact current source/profiles and canonical fixtures."
       ],
       "acceptance": [
-        "Actual proofs, adversarial relations, serialization roundtrips and resource controls preserve substantive assertions. Report passed, failed and unexecuted cases separately; earlier component receipts cannot certify changed source."
+        "Keep real maximum proofs, direct witness/constraint mutations, malformed input, serialization and resource cases; preserve every substantive assertion. Report passed/failed/unexecuted separately. A changed artifact cannot inherit an old pass or be qualified by enum counts."
       ],
       "status": "planned"
     },
@@ -828,13 +886,16 @@
         "V.2",
         "X.4",
         "R.6",
-        "A.4"
+        "A.4",
+        "G.5",
+        "C.9",
+        "T.1"
       ],
       "outputs": [
-        "Run installed native SDK, phone, SoraCloud, X509, atomic batch and AXT workflows with finality and restart on the combined candidate."
+        "Run combined installed product flows and verify every retained requirement, old backend/driver/route retirement and first-release history boundary."
       ],
       "acceptance": [
-        "Publish exact artifacts, results and remaining platform gaps. Verify old backend/driver/routes and aliases are absent; no success is inferred from component counts or a structural graph check."
+        "Actual native artifacts, four-peer effects/restart/replay, capability-scoped SDK results and remaining device gaps are recorded. No global manifest, source hash, review signoff or aggregate conformance result controls runtime availability."
       ],
       "status": "planned"
     },
@@ -845,7 +906,8 @@
       "requires": [
         "V.3",
         "V.4",
-        "V.5"
+        "V.5",
+        "V.1"
       ],
       "outputs": [
         "Reconcile changed-source tests, build/lint/format/codec/ABI and SDK results, current blockers and public documentation."
@@ -854,68 +916,996 @@
         "An evidence record states what is implemented, tested, failed and unknown; no automatic release-readiness claim. Review completion is not a runtime admission predicate or deployment activation gate."
       ],
       "status": "planned"
+    },
+    {
+      "id": "B.1",
+      "title": "Reusable FASTPQ AIR interface and migration inventory",
+      "owner": "Proof backend",
+      "requires": [],
+      "outputs": [
+        "Expose typed semantic AIR, field, public-IO, work-limit and observer interfaces over the current q77 engine; enumerate every production consumer and duplicate owner."
+      ],
+      "acceptance": [
+        "Inventory ordinary/AXT, RaceV1/classed RaceV1, all IVM step chips, generic verification, SoraCloud VK/BFV, X509 MAIN/CA, notes/PQ-MASP/settlement/ZK-ACE and conditional ZK-AMS qPCS. Keep Halo2, Bulletproofs, lattice PCS and Spartan/Nova distinct."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "B.2",
+      "title": "Shared STARK engine and checked security accounting",
+      "owner": "Proof backend",
+      "requires": [
+        "B.1",
+        "H.2",
+        "F.2",
+        "E.1",
+        "F.5"
+      ],
+      "outputs": [
+        "Generalize actual field/AIR/composition-DEEP/masking/commitment-multiproof/FRI/transcript-grinding/allocation/acceleration code into one owner; unify checked work-security and FRI theorem accounting including commitment error."
+      ],
+      "acceptance": [
+        "Resolve fold/rate omissions; test transcript and relation/constraint mutations, honest/adversarial corpora, bounded allocation, device-failure cleanup and actual maximum shapes. CPU/ARM/Metal/CUDA semantic proof/root parity uses fixed randomness where defined; algebraic sums alone do not establish Fiat-Shamir or hiding."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "B.3",
+      "title": "Exhaustive shared-backend consumer replacement",
+      "owner": "Proof backend and all consumers",
+      "requires": [
+        "B.2",
+        "A.3",
+        "M.2",
+        "X.3",
+        "R.9",
+        "C.9",
+        "C.6",
+        "P.15",
+        "P.18",
+        "P.19",
+        "P.20",
+        "C.5",
+        "C.7",
+        "R.10"
+      ],
+      "outputs": [
+        "Migrate every B.1 source importer, helper, test/fuzz target, CLI trace builder, limit, observer and accelerator utility; delete each duplicate only after its actual callers move."
+      ],
+      "acceptance": [
+        "Per-role migration ships with that capability and no consumer waits for aggregate deletion. Final inventory is empty of duplicate production semantics, not empty through lost consumers; workspace builds and preserved behavioral assertions verify replacement. Refresh proof-byte goldens intentionally without old-verifier branches."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "G.1",
+      "title": "Complete authenticated State and root contract",
+      "owner": "State, Kura and Sumeragi",
+      "requires": [],
+      "outputs": [
+        "Inventory every authoritative persisted execution table and define one State-owned keyed commitment with inclusion, absence and complete-range witnesses, canonical result-root ordering and atomic publication custody."
+      ],
+      "acceptance": [
+        "Reuse the existing table catalog/publication owner. Specify Sumeragi E51 changes and non-circular result/header/certificate binding. All table mutations must affect the appropriate root; no unowned shadow root or compatibility layout survives."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "G.2",
+      "title": "Measure native and in-circuit State candidates",
+      "owner": "State and proof backend",
+      "requires": [
+        "G.1",
+        "B.1",
+        "E.1"
+      ],
+      "outputs": [
+        "Prototype candidate trees/hashes and measure native update/storage and actual in-circuit inclusion/absence/range witnesses using the AIR interface before selecting the construction."
+      ],
+      "acceptance": [
+        "Compare representative and maximum workloads, proof/verification time, bytes and memory under named hardware/load. Label projections and revise them when actual measurements disagree; benchmark identity freezes each experiment but does not predetermine the winning algorithm."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "G.3",
+      "title": "Selected State commitment and publication",
+      "owner": "State, Kura and Sumeragi",
+      "requires": [
+        "G.2",
+        "F.4"
+      ],
+      "outputs": [
+        "Choose and freeze the tree/hash and semantic root schema from G.2; implement complete table coverage, canonical E51/result layout and authenticated atomic publication/recovery."
+      ],
+      "acceptance": [
+        "Final measurements use the frozen selection. Differential dual-root calculation is test-only; no retained LtHash/old-root compatibility branch. Cover crash/publication boundaries, genesis replay, mutation of every table and randomized four-validator root agreement."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "G.4",
+      "title": "Carried historical witnesses and committed bounds",
+      "owner": "State and transaction runtime",
+      "requires": [
+        "G.3",
+        "F.2",
+        "F.4"
+      ],
+      "outputs": [
+        "Use committed root history, anchor ages and witness/work caps; validate carried witnesses and result openings solely against transaction bytes and current replicated State."
+      ],
+      "acceptance": [
+        "Missing/malformed carried evidence rejects deterministically; missing local Kura/DA/certificate/cache resources defer without rejection/vote and authenticated corruption enters recovery. Test ages 1/W/W+1, cap boundaries, range omissions, empty/different caches, policy changes, retention warnings after replay and W changes, and a named local-validity simulator mutation."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "G.5",
+      "title": "Independent WG witness assertion delivery",
+      "owner": "State and SDK integration",
+      "requires": [
+        "G.4",
+        "I.5",
+        "S.1",
+        "T.1"
+      ],
+      "outputs": [
+        "Ship a small native witness-assertion operation with operation-v1 before AXT or full IVM proof completion."
+      ],
+      "acceptance": [
+        "Four-peer effects, restart/current-genesis replay, inclusion/absence/complete-range adversaries and cache independence pass. Size committed history from measured proving/preparation/submission/inclusion plus margins on loaded and idle chains; configured cadence is not a wall-clock bound. Emergency Fast stays read-only; unimplemented snapshot restore is not a prerequisite."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M.1",
+      "title": "Complete IVM semantic and proof coverage inventory",
+      "owner": "IVM and proof owners",
+      "requires": [],
+      "outputs": [
+        "Inventory all 90 currently listed opcodes, every current and added abi_syscall_list entry, ABI_V1_SYSCALL_METADATA/syscall_name, VmTrapKind and NumericFault against whole-invocation relation obligations."
+      ],
+      "acceptance": [
+        "Default syscall exclusions are empty. Include typed values, initialization, ordering/pointers, calls/copyback, fault/gas/padding, vector/parallel/precompile/continuation/recursion and private masking. Distinguish prepare rejection, interpreter/syscall traps and host invariants; unknown/unmapped semantics keep completion open."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M.2",
+      "title": "Complete native IVM proved-invocation ISI",
+      "owner": "IVM, Core and proof backend",
+      "requires": [
+        "M.1",
+        "B.2",
+        "G.4",
+        "I.5",
+        "F.2",
+        "S.1"
+      ],
+      "outputs": [
+        "Prove complete invocation semantics from signed intent, active code/manifest/entrypoint, initialized arguments, finalized context, all read dependencies and exact returns/effects/events/gas; replace the separate IvmProved executable with one canonical native ISI."
+      ],
+      "acceptance": [
+        "Recheck reads against current State before effects. VRF_EPOCH_SEED proves authenticated point/range/absence reads, fallback and conflicts. Cover terminal/faulting outcomes, remove SM feature/local-config semantic switches, and require fresh actual-invocation proofs for later triggers. No re-execution, attestation, different zkVM or stored old-anchor proof substitutes."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M.3",
+      "title": "Full IVM differential and real-proof corpus",
+      "owner": "IVM validation",
+      "requires": [
+        "M.2",
+        "E.1"
+      ],
+      "outputs": [
+        "Preserve r6's seeded minimums and measure scalar/memory/calls/crypto/storage/AXT representation before optimizing it."
+      ],
+      "acceptance": [
+        "One million programs EACH for scalar/control, memory, calls, faults and whole invocation; at least 1,000 actual proofs per class;10,000 host comparisons per syscall plus an actual proof of each;100,000 random/edge precompile inputs and one million vector/parallel programs. Zero divergences, field/constraint mutations, hardware parity and operation-v1 four-peer invocation/restart; do not delete semantics to fit budgets."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "R.0",
+      "title": "RAM-LFE roles leakage classes and policy",
+      "owner": "RAM-LFE cryptography and Core",
+      "requires": [],
+      "outputs": [
+        "Specify program owner/evaluator, encryption-key owner, authorized opener and validators/collusion; exact plaintext/class semantics, function/initializer commitments, canonical V1 policy/receipt/opening and cleartext reference."
+      ],
+      "acceptance": [
+        "Bind full authoritative policy, function identity independent of key rotation, keys/profile/class/semantic relation, network/beneficiary, initialized memory, ciphertexts, receipt, expiry and replay. State resets within each execution; persistent cross-request mutation needs its own authenticated prior/next-state order and is outside this contract."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "R.11",
+      "title": "Circuit privacy and client well-formedness",
+      "owner": "RAM-LFE cryptography",
+      "requires": [
+        "R.0",
+        "C.3",
+        "B.1"
+      ],
+      "outputs": [
+        "Implement a concrete circuit-private evaluation/sanitization construction with fixed padded public shapes and client proofs of admitted ciphertext/key well-formedness and input constraints from the first usable slice."
+      ],
+      "acceptance": [
+        "Separate encryption secrecy, hidden-function privacy, proof ZK, output authorization and opening guarantees. Test malicious/adaptive inputs, timing/access/proof-shape leakage and evaluator enumeration; keep the identifier PRF key outside evaluator custody and enforce authorized-query policy. Ordinary FHE or ZK alone cannot hide ciphertext/output leakage. Preserve secure randomness and clearing ownership; test key/witness/program erasure on success, error and unwind."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "R.8",
+      "title": "Verifiable decryption opening and identifier PRF",
+      "owner": "RAM-LFE crypto and Core",
+      "requires": [
+        "R.0",
+        "C.3",
+        "B.2"
+      ],
+      "outputs": [
+        "Prove that the exact evaluated ciphertext decrypts to the committed ordered output and registered opening/PRF key commitment; compose output authorization and phone-nullifier derivation under one statement."
+      ],
+      "acceptance": [
+        "Test swapped ciphertext/output/key/context/beneficiary, unauthorized opener, wrong PRF and canonicality. Opener/resolver/committee signatures never replace decryption, execution or derivation proofs. Verification uses the same semantic verifier at preflight, final ISI and persisted-state admission."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "R.12",
+      "title": "General affine execution and opening delivery",
+      "owner": "RAM-LFE, Torii and SDK",
+      "requires": [
+        "R.3",
+        "R.8",
+        "I.6",
+        "S.1",
+        "F.4",
+        "T.1"
+      ],
+      "outputs": [
+        "Ship general ramLfe.execute through a native execution/result ISI, genuine proof, required verified opening and actual result using operation-v1; register supported policies without activation."
+      ],
+      "acceptance": [
+        "All SDK/direct/prepared/Kotodama routes cover local encryption, evaluation, proof/preflight/opening, four-peer result, cold restart/full canonical replay and pending/cancel/recovery. It does not depend on phone credentials, bounded programs, refresh, threshold, X509, full IVM proof or SoraCloud."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "R.7",
+      "title": "Bounded RAM-LFE class and usable flow",
+      "owner": "RAM-LFE crypto and SDK",
+      "requires": [
+        "R.12",
+        "C.3"
+      ],
+      "outputs": [
+        "Implement bounded.v1 with all eleven tape instructions including Mul and complete SelectEqZero lowering, actual operand depth/equality exponentiation/select multiplication and a derived leveled noise/work plan."
+      ],
+      "acceptance": [
+        "Prove class membership, all tape/slot/register/memory/depth/output limits, integer/RNS carries/quotients/rounding/key switching, malformed private transitions and class substitution. Extend operation-v1 immediately, including opening and any available threshold mode; refresh remains independent later work."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "R.9",
+      "title": "Refresh RAM-LFE class and usable flow",
+      "owner": "RAM-LFE crypto and SDK",
+      "requires": [
+        "R.7",
+        "C.8"
+      ],
+      "outputs": [
+        "Implement refresh.v1 with genuine noise-reducing refresh plus its complete hidden-program proof, limits between refreshes and total refresh count; extend the same native/SDK path."
+      ],
+      "acceptance": [
+        "Demonstrate repeated refresh and correct output/noise on maximum supported workloads with opening, class-substitution and malformed-witness controls. Adding encrypted zero is not bootstrap. Failed cost projections trigger construction work; refresh stays mandatory and supported-class threshold tests extend with this slice."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "R.10",
+      "title": "RAM-LFE threshold opening delivery",
+      "owner": "RAM-LFE threshold and SDK",
+      "requires": [
+        "C.4",
+        "R.8",
+        "R.12",
+        "S.2"
+      ],
+      "outputs": [
+        "Integrate verifiable threshold shares, bounded combining, consent/custody and key epochs into the same RAM-LFE opening/PRF statement and operation-v1."
+      ],
+      "acceptance": [
+        "Support every implemented class, extend test vectors when bounded/refresh land, reject bad/missing/duplicate/wrong-epoch shares and bind request/ciphertext/policy. Threshold can ship for affine before refresh. Retire the superseded single-authority mode when committee mode replaces that role; no signature substitutes for proven shares."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "C.8",
+      "title": "Shared bootstrap arithmetic and complete proof",
+      "owner": "FHE and proof backend",
+      "requires": [
+        "C.2",
+        "C.3",
+        "B.2",
+        "E.1"
+      ],
+      "outputs": [
+        "Implement published genuine noise-refresh arithmetic with complete RNS/rounding/key-switch relation below RAM-LFE and SoraCloud applications."
+      ],
+      "acceptance": [
+        "Actual repeated-refresh decryption/noise vectors and maximum proof/work/custody tests validate one shared owner. Consumers keep distinct program/job statements; this task has no RAM-LFE application or threshold dependency."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "C.9",
+      "title": "SoraCloud add multiply rotate and role integration",
+      "owner": "SoraCloud, model and SDK",
+      "requires": [
+        "C.2",
+        "C.3",
+        "B.2",
+        "I.5",
+        "S.1",
+        "F.4",
+        "T.1"
+      ],
+      "outputs": [
+        "Ship genuine add/multiply/rotate with ordinary input-admission/public-key relations and shared role schema/dispatch. Inventory all four witness AIRs and five typed roles, assigning bootstrap key/full-execution/arithmetic implementation to C.8/C.6."
+      ],
+      "acceptance": [
+        "Operation-v1 covers ordinary job input/output/keys/profile/effects and model/Core/Torii/restored-State with a regenerated refusal census. Role substitution/public-padding proofs reject. Bootstrap-specific success/restore closure belongs to C.6 and does not delay this slice. Validator work is deterministic/bounded; offload needs genuine proof, and bounded key custody is cache-independent."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "X.5",
+      "title": "Shipping holder-controlled X509 prover",
+      "owner": "Credentials and native SDK",
+      "requires": [
+        "X.1",
+        "S.1"
+      ],
+      "outputs": [
+        "Provide wallet/mobile/desktop/server proving with subject signing key retained by the wallet, paired-host enrollment, mutually authenticated encrypted handoff, exact job binding and local verification."
+      ],
+      "acceptance": [
+        "Test host substitution, MITM, replay/tampering, host revocation and witness erasure; document compromised authorized-host leakage. Measure actual supported-device memory and server worker configurations. A shipping holder-controlled path is part of X.4, not an optional benchmark tool."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "X.6",
+      "title": "X509 CRL publication and temporal lifecycle",
+      "owner": "Credentials, State and consensus",
+      "requires": [
+        "X.1",
+        "F.4",
+        "E.1"
+      ],
+      "outputs": [
+        "Implement deterministic newest-eligible CRL selection and supersession across merged CRL/policy/anchor events; derive end-to-end deadlines from signed CA times, earliest certificate expiry and public presentation window."
+      ],
+      "acceptance": [
+        "Budget observation/preparation/proving/publication jitter/submission/clock margin; test deterministic sequential/overlapped selection, spacing/skipped CRLs, withholding, slow issuers, near expiry and merged-event starvation. Resolve quiet-chain semantics: no empty blocks or claimed 300-second wall-clock freshness from blocktime/wallet TTL alone. Native temporal controls cover date boundaries, same-block order, revocation precedence and permissions; X.4 owns final maximum-proof/rollover network measurements."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "T.1",
+      "title": "First-release history and coherent cutover",
+      "owner": "Core, genesis, SDK and deployment",
+      "requires": [],
+      "outputs": [
+        "Preserve replay of the current canonical genesis/schema; deliberately incompatible first-release changes regenerate fixtures/manifests/ABI artifacts and define fresh-genesis testnet cutover or contract redeployment as appropriate."
+      ],
+      "acceptance": [
+        "Never add old-layout decoders/verifier branches/migration shims or claim old history replays in a new incompatible binary. Retain current-genesis cold restart/full canonical-block replay; authenticated snapshot restore is separate unfinished work and not a gate. Editing this plan authorizes no live reset/deployment. Retain diagnostic evidence of obsolete histories without shipping their decoders; a future authenticated checkpoint specifies its verified suffix and cannot retroactively validate discarded history."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "E.1",
+      "title": "Reproducible phase and resource harness",
+      "owner": "Performance and tooling",
+      "requires": [],
+      "outputs": [
+        "Provide one complete phase tree for proof/verification/native/SDK flows with inclusive/exclusive wall and CPU times, worker count/load, allocations/live buffers, ciphertext/key/proof bytes, peak RSS and enforced address-space observations."
+      ],
+      "acceptance": [
+        "Unattributed proving time is at most 1%; record cache/warm-cold policy, named reference hardware, source/artifact/profile/config identity and raw failures. Separate projections, local scheduling and consensus limits. Salvage only unchanged scoped evidence; generated logs remain untracked and evidence cleanup cannot erase failures. Never record private witnesses, secret keys or hidden programs; include device thermal state where applicable."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.7",
+      "title": "Kaigi authorization and usage delivery",
+      "owner": "Kaigi and privacy",
+      "requires": [
+        "P.4",
+        "F.4",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Complete authorization/usage relations, retained account participation, canonical key/schema/HPKE binding, bounded accounting and authenticated relay recovery. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Test backend/semantic-role/key substitution, authorization/usage lifecycle, revoked participants, replay and rollback. Canonical native digests and committed relation-selecting VK identities cannot depend on local config; private material is never logged."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.8",
+      "title": "Complete private election delivery",
+      "owner": "Voting and governance",
+      "requires": [
+        "P.4",
+        "F.4",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Complete credential-linked ballots and closed-corpus tally relations, correct backend/role dispatch, nullifiers, weights/revotes, encryption and key custody across the real election phases. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Replace the unconditional ballot rejection with real relations and permissions, not a removed safety check alone. Test invalid credential/weight/tally corpus, replay/revote rules, deadlines, custody and restoration; one call exposes durable distributed progress without pretending one consensus round."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.9",
+      "title": "Confidential asset delivery",
+      "owner": "Confidential assets and Halo2",
+      "requires": [
+        "P.1",
+        "P.2",
+        "P.3",
+        "I.5",
+        "S.1",
+        "P.5",
+        "F.5"
+      ],
+      "outputs": [
+        "Complete the existing Halo2 circuits and native shield/transfer/unshield flows with amount, ownership, conservation and unlinkability semantics. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Preserve optional-input behavior without caller-supplied dummy witnesses. Exercise malicious amounts/authority, nullifier reuse, reserve/issuance limits, cross-asset attacks, full redemption and prepared/Kotodama batch rollback."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.10",
+      "title": "Anonymous PGC bootstrap and payment delivery",
+      "owner": "PGC and wallets",
+      "requires": [
+        "P.2",
+        "P.4",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Complete existing bootstrap AND payment relations and ledger integration with anonymity/recipient bounds, malicious-party controls and complete wallet behavior. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Exercise issuer/recipient/authority substitutions, malformed public keys, ranges, replay and lifecycle. Do not count bootstrap alone as PGC completion or use all-product readiness to hide an implemented payment path."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.11",
+      "title": "VeRange ledger composition delivery",
+      "owner": "Range proofs and ledger",
+      "requires": [
+        "P.1",
+        "P.4",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Deliver named typed range verification and a specified ledger-composition operation with bounded aggregation and explicit composition soundness. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Canonical statement/range/aggregation limits and adversarial witnesses reject; the native primitive returns typed verification without invented financial effects. The composed ledger use checks current authority and cannot reuse a prior generic verification token."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.12",
+      "title": "Jindo polynomial commitment delivery",
+      "owner": "Jindo and ledger",
+      "requires": [
+        "P.1",
+        "P.4",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Complete native polynomial commitment/verification with checked qROM extractor loss, polynomial-count limits and a real typed ledger use. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Exercise count/degree/context/role substitution and false openings, maximum aggregation and verifier resources. State the actual security model; arithmetic thresholds or unbound uploaded keys cannot be advertised as a complete extractor/composition argument."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.13",
+      "title": "Bootle Lantern credential delivery",
+      "owner": "Lattice credentials",
+      "requires": [
+        "P.1",
+        "P.4",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Complete specialization reduction, parameter/sampling construction and native issuer register/rotate/revoke plus issue/present operations. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Test malicious samples/keys/issuers, credential binding, stale revocation, replay, custody and privacy. Registration creates immediately usable valid policy state; independent reduction/review evidence does not become a runtime activation switch."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.14",
+      "title": "Vega Figure 9 credential delivery",
+      "owner": "Vega and credentials",
+      "requires": [
+        "P.1",
+        "P.4",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Complete governed credential keys, rotation, independent vectors and full Figure 9/age-proof behavior with typed issuance/presentation. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Use authentic key/credential/proof vectors at maximum supported shape and test age/range/issuer/policy/context substitution, revocation, replay and private witness erasure. Scope security labels to the actual weakest property."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.15",
+      "title": "ZK-ACE authorization delivery",
+      "owner": "ZK-ACE and proof backend",
+      "requires": [
+        "P.4",
+        "B.2",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Move every authorization caller to the shared FASTPQ adapter, complete qROM/multi-target derivation and select identity/replay in-circuit digests from actual server/device cost and security analysis. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Test full six-lane identity/replay semantics, malformed roles, private-witness/constraint attacks and authoritative current policy. Missing cryptographic evidence remains explicit; no qualification signer or all-protocol manifest gates completed runtime paths."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.16",
+      "title": "Orchard shield transfer unshield delivery",
+      "owner": "Orchard and wallets",
+      "requires": [
+        "P.1",
+        "P.2",
+        "P.3",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Use canonical current Orchard vectors for full shield/transfer/unshield, exact per-pool turnstile and explicitly committed supply/issuance caps. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Test ownership/range/conservation, authorized issuance, reserve overdraw, wrong pool/asset, nullifier reuse and later-action rollback. A pool cap bounds its declared public exposure, not every hidden relation defect."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.17",
+      "title": "FCMP++ wallet transfer delivery",
+      "owner": "FCMP++ and wallets",
+      "requires": [
+        "P.1",
+        "P.2",
+        "P.3",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Complete full wallet transfers, membership/range/linkability/conservation and all input/output boundaries; specify any added public bridge rather than assuming one exists. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Test cross-authority and cross-asset attacks, maximum rings/actions, nullifier/key-image reuse, malformed inputs and private conservation. If a bridge is implemented, exact reserve/issuance checks and isolated exposure bounds are mandatory."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.18",
+      "title": "IVM private note delivery",
+      "owner": "Private notes and proof backend",
+      "requires": [
+        "B.2",
+        "P.1",
+        "P.2",
+        "P.3",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Provide one shared FASTPQ adapter with in-relation spend authorization, unlinkability, action/asset conservation and complete note lifecycle; implement the chosen encryption design. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Preserve public reserve accounting and distinguish existing X25519 confidentiality from PQ claims. Test ownership/program/authority, dummy-free redemption, malformed note/proof, replay and cross-asset leakage; state the weakest combined security property."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.19",
+      "title": "PQ-MASP delivery",
+      "owner": "PQ-MASP and wallets",
+      "requires": [
+        "B.2",
+        "P.1",
+        "P.2",
+        "P.3",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Provide one shared FASTPQ adapter and complete spend authorization, unlinkability, action/asset conservation and wallet flow while preserving existing ML-KEM encryption. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Test all private action/asset boundaries, nullifier/range/ownership mutations, ciphertext/proof binding and cross-authority attacks. Any new public bridge gets a specified reserve/issuance contract; do not silently replace PQ encryption with a classical path."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "P.20",
+      "title": "Atomic private settlement delivery",
+      "owner": "Settlement and State",
+      "requires": [
+        "B.2",
+        "G.4",
+        "P.1",
+        "P.2",
+        "P.3",
+        "I.5",
+        "S.1",
+        "P.5"
+      ],
+      "outputs": [
+        "Complete the full settlement flow with in-relation authorization, balanced effects, source/custody binding, unlinkability, chosen encryption and native/SDK final-result recovery. Ship operation-v1 with genuine maximum proofs, direct witness/constraint mutations, all supported SDKs, four-peer effects and current-genesis restart/replay."
+      ],
+      "acceptance": [
+        "Distinguish the settlement hybrid audit wrap from note encryption. Test participant/amount/source substitutions, atomic failure, durability/replay and native four-peer recovery; measure actual proof-through-settlement latency and retain current targets without treating local elapsed time as consensus validity."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "F.5",
+      "title": "Canonical crypto primitives and dependency replacement",
+      "owner": "Crypto, model and SDK owners",
+      "requires": [
+        "H.2"
+      ],
+      "outputs": [
+        "Implement the selected canonical native digest consistently across catalog commitments, Kaigi authorization, confidential spentness, MKHE proof hashes, schemas, SDKs and fixtures; complete BN254 Poseidon parameter correction and replace obsolete PQ-library dependencies."
+      ],
+      "acceptance": [
+        "Independent deterministic vectors and role/context substitution tests cover actual consumers; update manifests/lockfile together and remove superseded implementations directly. Security labels reflect each actual weakest composition. Digest choice remains semantic committed profile data, never a source-file identity."
+      ],
+      "status": "planned"
     }
   ],
   "deliveries": [
     {
       "id": "D.ISI",
-      "title": "Atomic native ISI and Kotodama path",
+      "title": "Atomic native and Kotodama composition",
       "requires": [
         "I.6",
-        "P.5"
-      ]
+        "S.1",
+        "T.1"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
     },
     {
-      "id": "D.CLOUD",
-      "title": "SoraCloud bootstrap and threshold services",
+      "id": "D.WG",
+      "title": "Independent complete-State witness assertion",
       "requires": [
-        "C.6",
-        "C.7",
-        "S.2"
-      ]
+        "G.5"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.RAM_AFFINE",
+      "title": "General affine encrypted execution and opening",
+      "requires": [
+        "R.12"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
     },
     {
       "id": "D.PHONE",
-      "title": "Verified private phone claims and backend retirement",
+      "title": "Verified private phone claim and backend replacement",
       "requires": [
         "R.5",
         "R.6"
-      ]
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.RAM_BOUNDED",
+      "title": "Bounded encrypted program delivery",
+      "requires": [
+        "R.7"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.RAM_REFRESH",
+      "title": "Genuine refresh encrypted program delivery",
+      "requires": [
+        "R.9"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.RAM_THRESHOLD",
+      "title": "RAM-LFE threshold opening",
+      "requires": [
+        "R.10"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.CLOUD_BASIC",
+      "title": "SoraCloud add multiply rotate",
+      "requires": [
+        "C.9"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.CLOUD_BOOTSTRAP",
+      "title": "SoraCloud full bootstrap",
+      "requires": [
+        "C.6"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.CLOUD_THRESHOLD",
+      "title": "SoraCloud threshold opening",
+      "requires": [
+        "C.7"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
     },
     {
       "id": "D.X509",
-      "title": "Maximum X509 proof through finality and restart",
+      "title": "Maximum X509 through holder prover and finality",
       "requires": [
         "X.4"
-      ]
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
     },
     {
       "id": "D.AXT",
-      "title": "Anchored AXT and superseded driver removal",
+      "title": "Anchored AXT with current issuer authority",
       "requires": [
-        "A.4"
-      ]
+        "A.3"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.IVM_PROOF",
+      "title": "Complete proved IVM invocation",
+      "requires": [
+        "M.2",
+        "M.3"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.ACE",
+      "title": "ZK-ACE authorization",
+      "requires": [
+        "P.15"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.PGC",
+      "title": "Anonymous PGC bootstrap and payment",
+      "requires": [
+        "P.10"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.RANGE",
+      "title": "VeRange verification and ledger composition",
+      "requires": [
+        "P.11"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.AMS",
+      "title": "ZK-AMS native40 and composite use",
+      "requires": [
+        "C.5"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.VEGA",
+      "title": "Vega Figure 9 credentials",
+      "requires": [
+        "P.14"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.JINDO",
+      "title": "Jindo polynomial commitment use",
+      "requires": [
+        "P.12"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.BOOTLE",
+      "title": "Bootle Lantern issue and present",
+      "requires": [
+        "P.13"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.ORCHARD",
+      "title": "Orchard monetary operations",
+      "requires": [
+        "P.16"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.FCMP",
+      "title": "FCMP++ wallet transfers",
+      "requires": [
+        "P.17"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.IVMNOTE",
+      "title": "Private IVM note operations",
+      "requires": [
+        "P.18"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.PQMASP",
+      "title": "PQ-MASP operations",
+      "requires": [
+        "P.19"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.CONFIDENTIAL",
+      "title": "Confidential asset operations",
+      "requires": [
+        "P.9"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.KAIGI",
+      "title": "Kaigi authorization and usage",
+      "requires": [
+        "P.7"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.VOTING",
+      "title": "Private ballot and tally",
+      "requires": [
+        "P.8"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.SETTLEMENT",
+      "title": "Atomic private settlement",
+      "requires": [
+        "P.20"
+      ],
+      "kind": "functional",
+      "surface_contract": "operation-v1"
+    },
+    {
+      "id": "D.RETIREMENT",
+      "title": "Completed first-release driver and backend replacement",
+      "requires": [
+        "A.4",
+        "R.6",
+        "T.1"
+      ],
+      "kind": "evidence"
     },
     {
       "id": "D.PROOFS",
-      "title": "All twelve protocols and coupled proof evidence",
+      "title": "Combined current-candidate proof evidence",
       "requires": [
         "V.3"
-      ]
+      ],
+      "kind": "evidence"
     },
     {
       "id": "D.SDK",
-      "title": "Complete retained SDK contract",
+      "title": "Combined retained-SDK evidence",
       "requires": [
-        "S.6"
-      ]
+        "S.6",
+        "S.2"
+      ],
+      "kind": "evidence"
     },
     {
       "id": "D.EVIDENCE",
-      "title": "Combined candidate evidence and remaining gaps",
+      "title": "Combined implementation and qualification record",
       "requires": [
         "V.6"
-      ]
+      ],
+      "kind": "evidence"
     }
   ],
   "constraints": {
@@ -933,12 +1923,88 @@
         "I.4"
       ],
       [
+        "M.2",
+        "I.5"
+      ],
+      [
+        "M.2",
+        "G.4"
+      ],
+      [
         "R.5",
         "R.1"
       ],
       [
+        "R.5",
+        "R.8"
+      ],
+      [
+        "R.12",
+        "R.11"
+      ],
+      [
+        "R.12",
+        "R.8"
+      ],
+      [
+        "R.7",
+        "R.12"
+      ],
+      [
+        "R.9",
+        "C.8"
+      ],
+      [
+        "R.10",
+        "C.4"
+      ],
+      [
+        "R.10",
+        "R.8"
+      ],
+      [
         "R.6",
-        "R.5"
+        "R.12"
+      ],
+      [
+        "G.2",
+        "B.1"
+      ],
+      [
+        "G.3",
+        "G.2"
+      ],
+      [
+        "G.4",
+        "G.3"
+      ],
+      [
+        "A.3",
+        "G.4"
+      ],
+      [
+        "A.4",
+        "A.3"
+      ],
+      [
+        "A.4",
+        "B.3"
+      ],
+      [
+        "C.3",
+        "C.2"
+      ],
+      [
+        "C.6",
+        "C.8"
+      ],
+      [
+        "C.7",
+        "C.4"
+      ],
+      [
+        "C.9",
+        "B.2"
       ],
       [
         "X.4",
@@ -949,25 +2015,49 @@
         "X.3"
       ],
       [
+        "X.4",
+        "X.5"
+      ],
+      [
+        "X.4",
+        "X.6"
+      ],
+      [
+        "X.4",
+        "P.5"
+      ],
+      [
         "H.3",
         "H.2"
       ],
       [
-        "A.4",
+        "H.3",
+        "G.3"
+      ],
+      [
+        "V.3",
         "A.3"
       ],
       [
-        "A.4",
-        "V.2"
-      ],
-      [
-        "S.6",
-        "X.4"
+        "C.6",
+        "C.9"
       ]
     ],
     "forbidden_ancestors": [
       {
         "task": "C.2",
+        "prefix": "R."
+      },
+      {
+        "task": "C.3",
+        "prefix": "R."
+      },
+      {
+        "task": "C.4",
+        "prefix": "R."
+      },
+      {
+        "task": "C.5",
         "prefix": "R."
       },
       {
@@ -977,13 +2067,351 @@
       {
         "task": "C.7",
         "prefix": "R."
+      },
+      {
+        "task": "C.8",
+        "prefix": "R."
+      },
+      {
+        "task": "C.9",
+        "prefix": "R."
+      },
+      {
+        "task": "R.12",
+        "prefix": "X."
+      },
+      {
+        "task": "R.12",
+        "prefix": "M."
+      },
+      {
+        "task": "R.12",
+        "prefix": "G."
+      },
+      {
+        "task": "R.12",
+        "prefix": "A."
+      },
+      {
+        "task": "R.12",
+        "prefix": "C.6"
+      },
+      {
+        "task": "R.12",
+        "prefix": "C.7"
+      },
+      {
+        "task": "R.12",
+        "prefix": "R.1",
+        "exact": true
+      },
+      {
+        "task": "R.12",
+        "prefix": "R.2",
+        "exact": true
+      },
+      {
+        "task": "R.12",
+        "prefix": "R.5",
+        "exact": true
+      },
+      {
+        "task": "R.12",
+        "prefix": "R.7",
+        "exact": true
+      },
+      {
+        "task": "R.12",
+        "prefix": "R.9",
+        "exact": true
+      },
+      {
+        "task": "R.12",
+        "prefix": "R.10",
+        "exact": true
+      },
+      {
+        "task": "C.7",
+        "prefix": "C.8"
+      },
+      {
+        "task": "C.7",
+        "prefix": "C.6"
+      },
+      {
+        "task": "C.6",
+        "prefix": "C.4"
+      },
+      {
+        "task": "C.6",
+        "prefix": "C.7"
+      },
+      {
+        "task": "C.9",
+        "prefix": "C.8"
+      },
+      {
+        "task": "C.9",
+        "prefix": "C.4"
+      },
+      {
+        "task": "G.5",
+        "prefix": "A."
+      },
+      {
+        "task": "G.5",
+        "prefix": "M."
+      },
+      {
+        "task": "R.10",
+        "prefix": "R.9"
+      },
+      {
+        "task": "R.7",
+        "prefix": "R.9"
       }
     ],
     "non_gating_tasks": [
       "H.3",
       "V.4",
-      "V.6"
+      "V.6",
+      "S.6",
+      "A.4",
+      "B.3",
+      "P.6",
+      "V.3",
+      "V.5"
     ],
     "runtime_admission_task": "P.5"
+  },
+  "revision": 8,
+  "status": "ready_for_development",
+  "developer_surface_contract": {
+    "id": "operation-v1",
+    "native_isi": true,
+    "kotodama": true,
+    "one_call_sdk": true,
+    "prepared_form": true,
+    "four_validator_restart": true,
+    "supported_sdks": [
+      "Rust",
+      "Kotlin/Java/Android",
+      "Swift",
+      "JavaScript",
+      "Python",
+      "C#"
+    ],
+    "atomic_semantics": "An ordinary operation or explicit batch is one atomic signed transaction. IVM queues effects and returns PendingAction tokens; actual outcomes arrive in the final receipt. No silent splitting.",
+    "progress_semantics": "A single high-level invocation may orchestrate real distributed stages and return a durable pending handle. Reconcile original outcomes before retry; expose cancellation and partial completion without inventing cross-transaction atomicity.",
+    "documentation": "Each functional delivery includes typed native ISI+Kotodama, mandatory one-call+advanced prepared form, all six SDK families and canonical fixtures, genuine proof and four-validator effect/cold-restart/current-genesis replay. Per-slice SDK work is owned by that delivery; S.3-S.6 reconcile common ports and aggregate evidence rather than gate it."
+  },
+  "required_task_ids": [
+    "B.1",
+    "B.2",
+    "B.3",
+    "G.1",
+    "G.2",
+    "G.3",
+    "G.4",
+    "G.5",
+    "M.1",
+    "M.2",
+    "M.3",
+    "R.0",
+    "R.3",
+    "R.7",
+    "R.8",
+    "R.9",
+    "R.10",
+    "R.11",
+    "R.12",
+    "C.8",
+    "C.9",
+    "X.5",
+    "X.6",
+    "P.7",
+    "P.8",
+    "P.9",
+    "T.1",
+    "E.1",
+    "F.5"
+  ],
+  "reconciliation_baseline": {
+    "requirement_ids": [
+      "REQ-001",
+      "REQ-002",
+      "REQ-003",
+      "REQ-004",
+      "REQ-005",
+      "REQ-006",
+      "REQ-007",
+      "REQ-008",
+      "REQ-009",
+      "REQ-010",
+      "REQ-011",
+      "REQ-012",
+      "REQ-013",
+      "REQ-014",
+      "REQ-015",
+      "REQ-016",
+      "REQ-017",
+      "REQ-018",
+      "REQ-019",
+      "REQ-020",
+      "REQ-021",
+      "REQ-022",
+      "REQ-023",
+      "REQ-024",
+      "REQ-025",
+      "REQ-026",
+      "REQ-027",
+      "REQ-028",
+      "REQ-029",
+      "REQ-030",
+      "REQ-031",
+      "REQ-032",
+      "REQ-033",
+      "REQ-034",
+      "REQ-035",
+      "REQ-036",
+      "REQ-037",
+      "REQ-038",
+      "REQ-039",
+      "REQ-040",
+      "REQ-041",
+      "REQ-042",
+      "REQ-043",
+      "REQ-044",
+      "REQ-045",
+      "REQ-046",
+      "REQ-047",
+      "REQ-048",
+      "REQ-049",
+      "REQ-050",
+      "REQ-051",
+      "REQ-052",
+      "REQ-053",
+      "REQ-054",
+      "REQ-055",
+      "REQ-056",
+      "REQ-057",
+      "REQ-058",
+      "REQ-059",
+      "REQ-060",
+      "REQ-061",
+      "REQ-062",
+      "REQ-063",
+      "REQ-064",
+      "REQ-065",
+      "REQ-066",
+      "REQ-067",
+      "REQ-068",
+      "REQ-069",
+      "REQ-070",
+      "REQ-071",
+      "REQ-072",
+      "REQ-073",
+      "REQ-074",
+      "REQ-075",
+      "REQ-076",
+      "REQ-077",
+      "REQ-078",
+      "REQ-079",
+      "REQ-080",
+      "REQ-081",
+      "REQ-082",
+      "REQ-083",
+      "REQ-084",
+      "REQ-085",
+      "REQ-086",
+      "REQ-087",
+      "REQ-088",
+      "REQ-089",
+      "REQ-090",
+      "REQ-091",
+      "REQ-092",
+      "REQ-093",
+      "REQ-094",
+      "REQ-095",
+      "REQ-096",
+      "REQ-097",
+      "REQ-098",
+      "REQ-099",
+      "REQ-100",
+      "REQ-101",
+      "REQ-102",
+      "REQ-103",
+      "REQ-104",
+      "REQ-105",
+      "REQ-106",
+      "REQ-107",
+      "REQ-108",
+      "REQ-109",
+      "REQ-110",
+      "REQ-111",
+      "REQ-112",
+      "REQ-113",
+      "REQ-114",
+      "REQ-115",
+      "REQ-116",
+      "REQ-117",
+      "REQ-118",
+      "REQ-119"
+    ],
+    "original_task_ids": [
+      "S.0",
+      "S.1",
+      "S.2",
+      "F.0",
+      "F.1",
+      "F.2",
+      "F.3",
+      "G.0",
+      "G.1",
+      "G.2",
+      "G.3",
+      "A.0",
+      "A.1",
+      "I.0",
+      "I.1",
+      "I.2",
+      "I.3",
+      "R.0",
+      "R.1",
+      "R.2",
+      "R.3",
+      "R.4",
+      "R.5",
+      "R.6",
+      "R.7",
+      "C.0",
+      "C.1",
+      "C.2",
+      "X.0",
+      "X.1",
+      "X.2",
+      "X.3",
+      "W.OR",
+      "W.NF",
+      "W.FC",
+      "W.PG",
+      "W.VR",
+      "W.JI",
+      "W.BL",
+      "W.AC",
+      "W.VG",
+      "W.ZA",
+      "W.CV",
+      "W.KG",
+      "W.ZV",
+      "D.0",
+      "E.F",
+      "E.R",
+      "E.G",
+      "E.X",
+      "E.W",
+      "M.0"
+    ],
+    "ledger_inventory_sha256": "224122c9908cf16222641c34800f84eea3cc4e55a0e68d05953ebdd984ca9bae"
   }
 }

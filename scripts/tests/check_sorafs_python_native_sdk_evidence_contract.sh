@@ -17,6 +17,15 @@ workflow = Path(sys.argv[2]).read_text(encoding="utf-8")
 required_runner_tokens = (
     'NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi25.json"',
     'tests/client_hard_cut_contract_test.py',
+    'SOURCE_BEFORE_PIN=',
+    'SOURCE_BEFORE_ARTIFACT=',
+    'tests/account_identity_native_v1_test.py',
+    'tests/requests_deadline_test.py',
+    'tests/staking_preparation_test.py',
+    'tests/validator_staking_test.py',
+    'SOURCE_RECEIPT_SEAL=',
+    'Python native source qualification may not contain skipped tests',
+    'verify_source_delivery',
     'IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1 \\\n"${VENV_PYTHON}" -m pytest',
     'VERIFY_EVIDENCE_ARGS=()',
     'if [[ -n "${SORAFS_PYTHON_SDK_EVIDENCE_DIR:-}" ]]; then',
@@ -33,7 +42,10 @@ skip_audit = runner.index(
 )
 retention = runner.index("VERIFY_EVIDENCE_ARGS=()")
 verification = runner.rindex("  verify \\")
-if not skip_audit < retention < verification:
+source_skip_audit = runner.index("Python native source qualification may not contain skipped tests")
+source_pin = runner.index("SOURCE_BEFORE_PIN=")
+build = runner.index("-m maturin build")
+if not source_pin < build or not skip_audit < source_skip_audit < retention < verification:
     raise SystemExit(
         "Python native evidence must be retained only by final post-test verification"
     )

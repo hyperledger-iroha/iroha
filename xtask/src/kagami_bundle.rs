@@ -1,10 +1,7 @@
 //! Assemble the two matching native CLI programs without a desktop build dependency.
 
-use crate::workspace_root;
-use iroha_deploy::{
-    bootstrap::InstalledNetworkProfiles,
-    managed::{InstalledRuntime, KagamiBundleLayout, admit_native_program},
-};
+use crate::{network_profiles, workspace_root};
+use iroha_deploy::managed::{InstalledRuntime, KagamiBundleLayout, admit_native_program};
 use iroha_fs::{FileSnapshot, OwnerDirectory, PublishMode, RetainedFile};
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
@@ -55,8 +52,17 @@ pub(crate) fn bundle(
     profile: &str,
     profiles: Option<&Path>,
 ) -> Result<PathBuf, Box<dyn Error>> {
+    bundle_at(&workspace_root(), output, profile, profiles)
+}
+
+fn bundle_at(
+    source_root: &Path,
+    output: &Path,
+    profile: &str,
+    profiles: Option<&Path>,
+) -> Result<PathBuf, Box<dyn Error>> {
     validate_profile(profile)?;
-    let profiles = profiles.map(InstalledNetworkProfiles::load).transpose()?;
+    let profiles = network_profiles::select(source_root, profile, profiles)?;
     let package = output.join(format!(
         "kagami-{}-{}-{profile}",
         env::consts::OS,
@@ -68,7 +74,7 @@ pub(crate) fn bundle(
     // Reuse Cargo's active target and native jobserver; the daemon keeps its standard features.
     let mut child = Command::new("cargo")
         .args(build_args(profile))
-        .current_dir(workspace_root())
+        .current_dir(source_root)
         .stdout(Stdio::piped())
         .spawn()?;
     let stream = child
@@ -187,7 +193,7 @@ fn publish(
     source: &BTreeMap<String, PathBuf>,
     package: &Path,
     profile: &str,
-    profiles: Option<&InstalledNetworkProfiles>,
+    profiles: Option<&network_profiles::Selection>,
 ) -> Result<(), Box<dyn Error>> {
     publish_checked(source, package, profile, profiles, &mut || Ok(()))
 }
@@ -196,10 +202,11 @@ fn publish_checked(
     source: &BTreeMap<String, PathBuf>,
     package: &Path,
     profile: &str,
-    profiles: Option<&InstalledNetworkProfiles>,
+    profiles: Option<&network_profiles::Selection>,
     before_publication: &mut dyn FnMut() -> Result<(), Box<dyn Error>>,
 ) -> Result<(), Box<dyn Error>> {
     validate_profile(profile)?;
+    network_profiles::require_for_profile(profile, profiles)?;
     let mut programs = PROGRAMS
         .into_iter()
         .map(|name| {
@@ -216,9 +223,7 @@ fn publish_checked(
             Ok((filename, file, snapshot, hash))
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-    let profile_bytes = profiles
-        .map(InstalledNetworkProfiles::encode_installation)
-        .transpose()?;
+    let profile_bytes = profiles.map(network_profiles::Selection::bytes);
     let parent =
         OwnerDirectory::open_or_create(package.parent().ok_or("CLI package has no parent")?)?;
     let staging = parent.create_private_child(format!(
@@ -229,7 +234,7 @@ fn publish_checked(
     let runtime = staging.create_child("bin")?;
     let mut retained_outputs = Vec::new();
     for (filename, file, snapshot, hash) in &mut programs {
-        let mut copied = runtime.open_append(filename)?;
+        let mut copied = runtime.open_append(filename.as_str())?;
         file.file_mut().seek(SeekFrom::Start(0))?;
         io::copy(file.file_mut(), &mut copied)?;
         #[cfg(unix)]
@@ -239,7 +244,7 @@ fn publish_checked(
         }
         copied.sync_all()?;
         drop(copied);
-        let mut copied = RetainedFile::open_regular(runtime.path().join(filename))?;
+        let mut copied = RetainedFile::open_regular(runtime.path().join(filename.as_str()))?;
         let copied_snapshot = copied.snapshot()?;
         admit_native_program(&mut copied)?;
         if digest(&mut copied)? != *hash
@@ -254,18 +259,21 @@ fn publish_checked(
     if let Some(bytes) = profile_bytes {
         runtime.write_atomic(
             iroha_deploy::bootstrap::NETWORK_PROFILES_FILENAME,
-            &bytes,
+            bytes,
             PublishMode::CreateNew,
         )?;
         retained_outputs.push(retain_output(
             &runtime
                 .path()
                 .join(iroha_deploy::bootstrap::NETWORK_PROFILES_FILENAME),
-            hex::encode(Sha256::digest(&bytes)),
+            hex::encode(Sha256::digest(bytes)),
         )?);
     }
+    if let Some(profiles) = profiles {
+        profiles.verify_installed(&KagamiBundleLayout::profiles_path(staging.path()))?;
+    }
     InstalledRuntime::from_directory(runtime.path())?;
-    let manifest = inventory(staging.path(), profile)?;
+    let manifest = inventory(staging.path(), profile, profiles)?;
     let manifest_bytes = json::to_vec(&manifest)?;
     staging.write_atomic("manifest.json", &manifest_bytes, PublishMode::CreateNew)?;
     retained_outputs.push(retain_output(
@@ -287,7 +295,10 @@ fn publish_checked(
             return Err("CLI package output changed before atomic publication".into());
         }
     }
-    if inventory(staging.path(), profile)? != manifest {
+    if let Some(profiles) = profiles {
+        profiles.verify_installed(&KagamiBundleLayout::profiles_path(staging.path()))?;
+    }
+    if inventory(staging.path(), profile, profiles)? != manifest {
         return Err("CLI package contents changed before atomic publication".into());
     }
     staging.rename_to_sibling(
@@ -297,7 +308,11 @@ fn publish_checked(
     Ok(())
 }
 
-fn inventory(package: &Path, profile: &str) -> Result<Value, Box<dyn Error>> {
+fn inventory(
+    package: &Path,
+    profile: &str,
+    profiles: Option<&network_profiles::Selection>,
+) -> Result<Value, Box<dyn Error>> {
     let mut files = Vec::new();
     for entry in WalkDir::new(package).follow_root_links(false) {
         let entry = entry?;
@@ -337,6 +352,10 @@ fn inventory(package: &Path, profile: &str) -> Result<Value, Box<dyn Error>> {
             Value::String("iroha.kagami-bundle.v1".into()),
         ),
         ("profile".into(), Value::String(profile.into())),
+        (
+            "network_profiles".into(),
+            profiles.map_or(Value::Null, network_profiles::Selection::provenance),
+        ),
         (
             "target".into(),
             Value::String(format!("{}-{}", env::consts::OS, env::consts::ARCH)),

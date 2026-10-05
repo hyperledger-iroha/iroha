@@ -324,3 +324,52 @@ fn bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame() {
     drop(input);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[test]
+fn original_recorded_stream_generation_restores_only_the_same_empty_inherited_source() {
+    let pool = AllocationBudget::new(1024);
+    let (mut writer, mut receiver) = input(256, &pool);
+    let source = receiver.source_identity().unwrap();
+    let fd = receiver.descriptor.as_raw_fd();
+    let deadline = receiver.deadline;
+    receiver.restore_empty_cursor(7, 128, source).unwrap();
+    assert_eq!(receiver.generation(), 7);
+    assert_eq!(receiver.maximum, 128);
+    assert_eq!(receiver.descriptor.as_raw_fd(), fd);
+    assert_eq!(receiver.deadline, deadline);
+    receiver.restore_empty_cursor(7, 128, source).unwrap();
+    assert!(matches!(
+        receiver.restore_empty_cursor(8, 128, source),
+        Err(FrameReadError::Custody)
+    ));
+    let mut foreign = source;
+    foreign[1] ^= 1;
+    assert!(matches!(
+        receiver.restore_empty_cursor(7, 128, foreign),
+        Err(FrameReadError::Custody)
+    ));
+    writer.write_all(&3u32.to_be_bytes()[..1]).unwrap();
+    assert!(!receiver.read_ready().unwrap());
+    assert_eq!(receiver.header_read, 1);
+    assert!(matches!(
+        receiver.restore_empty_cursor(7, 256, source),
+        Err(FrameReadError::Phase)
+    ));
+    assert_eq!(receiver.maximum, 128);
+    assert_eq!(receiver.generation(), 7);
+    assert_eq!(receiver.header_read, 1);
+    writer.write_all(&3u32.to_be_bytes()[1..]).unwrap();
+    writer.write_all(b"old").unwrap();
+    receiver.read_until_complete().unwrap();
+    let pointer = receiver.frame().unwrap().as_ptr();
+    assert!(matches!(
+        receiver.restore_empty_cursor(7, 256, source),
+        Err(FrameReadError::Phase)
+    ));
+    assert_eq!(receiver.frame().unwrap().as_ptr(), pointer);
+    assert_eq!(receiver.frame().unwrap(), b"old");
+    assert_eq!(receiver.deadline, deadline);
+    assert_eq!(receiver.descriptor.as_raw_fd(), fd);
+    drop(receiver);
+    assert_eq!(pool.reserved_bytes(), 0);
+}

@@ -6505,9 +6505,10 @@ pub(crate) mod valid {
         /// - Replacement signatures contain duplicate signatures
         pub fn replace_signatures(
             &mut self,
-            signatures: BTreeSet<BlockSignature>,
+            signatures: iroha_data_model::block::BlockSignatures,
             topology: &Topology,
-        ) -> WithEvents<Result<BTreeSet<BlockSignature>, SignatureVerificationError>> {
+        ) -> WithEvents<Result<iroha_data_model::block::BlockSignatures, SignatureVerificationError>>
+        {
             let mut seen = BTreeSet::new();
             for signature in &signatures {
                 let signer = match usize::try_from(signature.index()) {
@@ -6968,12 +6969,12 @@ pub(crate) mod valid {
             ));
             block.replace_header_for_testing(header);
             let block_hash = block.hash();
-            let signatures = signers
-                .iter()
-                .map(|(index, private_key)| {
+            let signatures = iroha_data_model::block::BlockSignatures::try_from_iter(
+                signers.iter().map(|(index, private_key)| {
                     BlockSignature::new(*index, checked_block_signature(private_key, block_hash))
-                })
-                .collect();
+                }),
+            )
+            .expect("at most 31 block signatures");
             block
                 .replace_signatures(signatures)
                 .expect("replace signatures after refreshing confidential test sidecar");
@@ -7439,7 +7440,11 @@ pub(crate) mod valid {
                 checked_block_signature(spoofing_key.private_key(), block_hash),
             ));
             let err = block
-                .replace_signatures(signatures, &topology)
+                .replace_signatures(
+                    iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+                        .expect("at most 31 block signatures"),
+                    &topology,
+                )
                 .unpack(|_| {})
                 .unwrap_err();
             assert_eq!(
@@ -7475,7 +7480,11 @@ pub(crate) mod valid {
                 checked_block_signature(wrong.private_key(), block_hash),
             ));
             let err = block
-                .replace_signatures(signatures, &topology)
+                .replace_signatures(
+                    iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+                        .expect("at most 31 block signatures"),
+                    &topology,
+                )
                 .unpack(|_| {})
                 .unwrap_err();
             assert_eq!(err, SignatureVerificationError::UnknownSignature);
@@ -7507,7 +7516,11 @@ pub(crate) mod valid {
                 checked_block_signature(key_pairs[2].private_key(), block_hash),
             ));
             let err = block
-                .replace_signatures(signatures, &topology)
+                .replace_signatures(
+                    iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+                        .expect("at most 31 block signatures"),
+                    &topology,
+                )
                 .unpack(|_| {})
                 .unwrap_err();
             assert_eq!(err, SignatureVerificationError::UnknownSignature);
@@ -7563,7 +7576,11 @@ pub(crate) mod valid {
                 checked_block_signature(bogus_set_b.private_key(), block_hash),
             ));
             let err = block
-                .replace_signatures(signatures, &topology)
+                .replace_signatures(
+                    iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+                        .expect("at most 31 block signatures"),
+                    &topology,
+                )
                 .unpack(|_| {})
                 .unwrap_err();
             assert_eq!(err, SignatureVerificationError::UnknownSignature);
@@ -7656,7 +7673,11 @@ pub(crate) mod valid {
                 checked_block_signature(key_pairs[1].private_key(), block_hash),
             ));
             let err = block
-                .replace_signatures(replacement, &topology)
+                .replace_signatures(
+                    iroha_data_model::block::BlockSignatures::try_from_iter(replacement)
+                        .expect("at most 31 block signatures"),
+                    &topology,
+                )
                 .unpack(|_| {})
                 .unwrap_err();
             assert_eq!(
@@ -7754,10 +7775,15 @@ pub(crate) mod valid {
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
             block
                 .block
-                .replace_signatures(BTreeSet::from([BlockSignature::new(
-                    0,
-                    SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(&[0_u8; 96])),
-                )]))
+                .replace_signatures(
+                    iroha_data_model::block::BlockSignatures::try_from_iter([BlockSignature::new(
+                        0,
+                        SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(
+                            &[0_u8; 96],
+                        )),
+                    )])
+                    .expect("at most 31 block signatures"),
+                )
                 .expect("replace block signature fixture");
             let mut world = World::new();
             insert_consensus_key(
@@ -7967,11 +7993,16 @@ pub(crate) mod valid {
                 .unpack(|_| {})
                 .into();
             let signed_header = block.header();
-            let mut substituted = block
+            let original = block
                 .da_proof_policies()
-                .expect("builder must attach default policies")
-                .clone();
-            substituted.policies[0].alias.push_str("-substituted");
+                .expect("builder must attach default policies");
+            let mut changed_policies = original.policies().to_vec();
+            changed_policies[0].alias.push_str("-substituted");
+            let substituted = DaProofPolicyBundle::from_untrusted_parts(
+                original.version(),
+                original.policy_hash(),
+                changed_policies,
+            );
             block.set_da_proof_policies(Some(substituted));
             block.replace_header_for_testing(signed_header);
             assert!(matches!(
@@ -8333,7 +8364,10 @@ pub(crate) mod valid {
                 checked_block_signature(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), block.hash()),
             );
             block
-                .replace_signatures([signature].into_iter().collect())
+                .replace_signatures(
+                    iroha_data_model::block::BlockSignatures::try_from_iter([signature])
+                        .expect("at most 31 block signatures"),
+                )
                 .expect("replace signature after changing test header");
             assert_eq!(
                 check_genesis_block(&block, &genesis_account),
@@ -8366,15 +8400,14 @@ pub(crate) mod valid {
             let mut noncanonical_index = proposal.clone();
             noncanonical_index
                 .replace_signatures(
-                    [BlockSignature::new(
+                    iroha_data_model::block::BlockSignatures::try_from_iter([BlockSignature::new(
                         1,
                         checked_block_signature(
                             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
                             noncanonical_index.hash(),
                         ),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    )])
+                    .expect("at most 31 block signatures"),
                 )
                 .expect("replace the proposal signature index for the adversarial fixture");
             assert_eq!(
@@ -8387,12 +8420,11 @@ pub(crate) mod valid {
             let forged_hash = forged.hash();
             forged
                 .replace_signatures(
-                    [BlockSignature::new(
+                    iroha_data_model::block::BlockSignatures::try_from_iter([BlockSignature::new(
                         0,
                         checked_block_signature(unrelated.private_key(), forged_hash),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    )])
+                    .expect("at most 31 block signatures"),
                 )
                 .expect("replace the proposal signature for the adversarial fixture");
             assert_eq!(
@@ -8607,11 +8639,11 @@ mod event {
             }
         }
     }
-    impl WithEvents<Result<BTreeSet<BlockSignature>, SignatureVerificationError>> {
+    impl WithEvents<Result<iroha_data_model::block::BlockSignatures, SignatureVerificationError>> {
         pub fn unpack<F: FnMut(PipelineEventBox)>(
             self,
             f: F,
-        ) -> Result<BTreeSet<BlockSignature>, SignatureVerificationError> {
+        ) -> Result<iroha_data_model::block::BlockSignatures, SignatureVerificationError> {
             match self.0 {
                 Ok(ok) => Ok(ok),
                 Err(err) => Err(WithEvents::new(err).unpack(f)),
@@ -10212,7 +10244,7 @@ seiyaku DynamicAccessCounter {
             "both co-batched contract calls must succeed: {results:?}"
         );
         let encoded_key =
-            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
                 .expect("encode canonical StateMap int key");
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_id = contract_address.to_string();
@@ -10478,7 +10510,7 @@ seiyaku DynamicTarget {
             "all dynamic-target calls must succeed: {results:?}"
         );
         let encoded_key =
-            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))
                 .expect("encode canonical StateMap int key");
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
@@ -10496,7 +10528,7 @@ seiyaku DynamicTarget {
             "a key selected during live re-execution must retain source-order conflict semantics"
         );
         let guarded_key =
-            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(3))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(3))
                 .expect("encode canonical guarded StateMap int key");
         let guarded_path: StatePath =
             format!("sc/{scope_digest}/Counters/{}", hex::encode(guarded_key))

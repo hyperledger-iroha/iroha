@@ -693,6 +693,16 @@ pub(super) fn peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
         .collect()
 }
 
+/// The authenticated finality roster reached through the four admitted public TLS origins.
+pub(super) fn public_peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
+    let mut selected = peers(inventory)?;
+    for (peer, client) in selected.iter_mut().zip(&inventory.validator_clients) {
+        reset::validate_validator_public_origin(&client.torii_origin)?;
+        peer.torii_origin.clone_from(&client.torii_origin);
+    }
+    Ok(selected)
+}
+
 fn observe_new(
     observer: &mut AuthenticatedHeightObserverV1,
     clients: &[Client; 4],
@@ -775,6 +785,32 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             &self.admitted.inventory,
         )?;
         beacon_observation_clients(&config, &self.admitted.inventory, &operator_key, deadline)
+    }
+
+    /// Use the same admitted signer and operator custody for public challenged finality.
+    pub(super) fn beacon_public_clients(&self, deadline: Instant) -> Result<[Client; 4]> {
+        let inventory = &self.admitted.inventory;
+        let operator_key =
+            retained_beacon_operator_key(self.runtime.validator_operator_key.as_ref(), inventory)?;
+        let config = load_client_config_for_inventory(
+            &self.runtime.client_config,
+            "public finality signer",
+            inventory,
+        )?;
+        inventory
+            .validator_clients
+            .iter()
+            .map(|selected| {
+                reset::validate_validator_public_origin(&selected.torii_origin)?;
+                let mut peer = config.clone();
+                peer.torii_api_url = selected.torii_origin.parse()?;
+                signed_beacon_client(peer, &operator_key, deadline)
+            })
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .map_err(|_| {
+                eyre!("public finality requires exactly four admitted TLS client contexts")
+            })
     }
 
     fn beacon_daemon(&self) -> Result<PathBuf> {

@@ -1258,7 +1258,7 @@ public struct ToriiGovernanceKagemushaReleaseApprovalV1: Decodable, Sendable, Eq
     )
     let container = try decoder.container(keyedBy: CodingKeys.self)
     publicKey = try container.decode(String.self, forKey: .publicKey)
-    _ = try governanceKagemushaPublicKeyOrderV1(
+    _ = try governancePublicKeyOrderV1(
       publicKey, codingPath: container.codingPath + [CodingKeys.publicKey])
     signature = try container.decode(String.self, forKey: .signature)
     guard !signature.isEmpty, signature.utf8.count.isMultiple(of: 2),

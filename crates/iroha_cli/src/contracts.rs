@@ -1067,13 +1067,13 @@ fn prepare_local_contract_arguments(
             descriptor.name
         )),
         (Some(schema), Some(payload)) => {
-            let canonical =
-                ivm::encode_argument_record_from_json(schema, payload).map_err(|err| {
-                    eyre!(
-                        "payload for entrypoint `{}` does not match its argument schema: {err}",
-                        descriptor.name
-                    )
-                })?;
+            let canonical = ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
+                .map_err(|err| {
+                eyre!(
+                    "payload for entrypoint `{}` does not match its argument schema: {err}",
+                    descriptor.name
+                )
+            })?;
             ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), gas_limit)
                 .map(Some)
                 .map_err(|err| {
@@ -1789,7 +1789,7 @@ fn normalize_local_contract_payload(
                 field_object.insert(field.name.clone(), field_value.clone());
                 let field_payload =
                     iroha_primitives::json::Json::from(norito::json::Value::Object(field_object));
-                ivm::encode_argument_record_from_json(&field_schema, &field_payload).map_err(
+                ivm_abi::arguments::encode_argument_record_from_json(&field_schema, &field_payload).map_err(
                     |error| {
                         eyre!(
                             "contract payload field `{}` does not match the declared schema: {error}",
@@ -1799,7 +1799,7 @@ fn normalize_local_contract_payload(
                 )?;
             }
             let payload = iroha_primitives::json::Json::from(payload.clone());
-            ivm::encode_argument_record_from_json(schema, &payload).map_err(|error| {
+            ivm_abi::arguments::encode_argument_record_from_json(schema, &payload).map_err(|error| {
                 eyre!(
                     "contract payload for entrypoint `{}` does not match its exact argument schema: {error}",
                     descriptor.name
@@ -1905,9 +1905,9 @@ mod tests {
             nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
         };
         let schema_bytes = norito::to_bytes(&schema).expect("encode state int schema");
-        let envelope = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
-            i128::from(value),
-        ))
+        let envelope = ivm_abi::numeric_tlv::encode_int(
+            &iroha_primitives::bigint::BigInt::from_i128(i128::from(value)),
+        )
         .expect("encode canonical state int pointer");
         norito::to_bytes(&StateValueRecordV1 {
             schema_hash: state_value_schema_hash_v1(&schema_bytes),
@@ -2749,7 +2749,7 @@ mod tests {
             .expect("bump argument schema")
             .clone();
         let manifest = verified.manifest.signed(&authority_key_pair);
-        let argument_bytes = ivm::encode_argument_record_from_json(
+        let argument_bytes = ivm_abi::arguments::encode_argument_record_from_json(
             &argument_schema,
             &iroha_primitives::json::Json::from(
                 norito::json::from_str::<norito::json::Value>(&payload_json).expect("payload json"),

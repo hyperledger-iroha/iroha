@@ -127,6 +127,5 @@ export {
   tryNormalizeAssetDefinitionId,
   tryNormalizeI105AccountId,
 } from "./index.js";
-export { Kagemusha } from "./kagemusha.js";
 
 export { buildCanonicalMultisigContractCall } from "./index.js";

@@ -105,7 +105,7 @@ fn public_return_collectors_preserve_actual_read_capacity_and_retry() {
 #[test]
 fn pointer_return_preserves_refusal_at_each_tracked_read_boundary() {
     let (mut vm, budget) = funded_return_vm();
-    let envelope = ivm::numeric_tlv::encode_int(&BigInt::from_i128(42)).unwrap();
+    let envelope = ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(42)).unwrap();
     let pointer = vm
         .alloc_heap(u64::try_from(envelope.len()).unwrap())
         .unwrap();

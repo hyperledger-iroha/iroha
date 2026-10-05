@@ -1,5 +1,6 @@
 //! Escrow grouping parity, optional membership and original publication custody.
 
+use super::test_support::*;
 use super::*;
 use crate::{
     kura::Kura,
@@ -11,78 +12,10 @@ use crate::{
             leaf::{LeafError, LeafLimits},
         },
     },
-    test_allocations::allocations_during,
 };
 use iroha_crypto::Hash;
-use iroha_data_model::{
-    account::Account, asset::AssetDefinitionId, escrow::AssetEscrowKind, prelude::Registrable,
-};
-use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::Storage;
-
-fn id() -> EscrowId {
-    EscrowId::new(Hash::new(b"exact escrow groups"))
-}
-
-fn fixture(buyer: bool) -> World {
-    let mut world = World::with(
-        [],
-        [
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
-            Account::new(BOB_ID.clone()).build(&BOB_ID),
-        ],
-        [],
-    );
-    let record = AssetEscrowRecord {
-        id: id(),
-        seller: ALICE_ID.clone(),
-        buyer: buyer.then(|| BOB_ID.clone()),
-        asset_definition: AssetDefinitionId::derive_from_components(
-            DomainId::try_new("escrowgroups", "universal").unwrap(),
-            "token".parse().unwrap(),
-        ),
-        amount: Quantity::one(),
-        custody: ALICE_ID.clone(),
-        status: AssetEscrowStatus::Open,
-        kind: AssetEscrowKind::Marketplace,
-        remaining_amount: Quantity::one(),
-        release_authority: None,
-        expires_at_ms: None,
-        evidence_hashes: Vec::new(),
-        conditions: Vec::new(),
-        created_at_ms: 1,
-        accepted_at_ms: None,
-        payment_sent_at_ms: None,
-        disputed_at_ms: None,
-        closed_at_ms: None,
-        resolution: None,
-    };
-    world.asset_escrows.insert(id(), record);
-    world.rebuild_escrow_indexes();
-    world
-}
-
-fn check(world: &World, work: u64) -> Result<(), GroupedOwnershipError> {
-    let mut result = None;
-    assert_eq!(
-        allocations_during(|| result = Some(CheckedEscrows::capture(world, work).map(|_| ()))),
-        0
-    );
-    result.unwrap()
-}
-
-fn corrupt(index: &'static str, previous: bool, mismatch: GroupMismatch) -> GroupedOwnershipError {
-    GroupedOwnershipError::Corrupt {
-        index,
-        image: if previous {
-            GroupImage::Predecessor
-        } else {
-            GroupImage::Current
-        },
-        mismatch,
-    }
-}
 
 #[test]
 fn optional_buyer_changes_and_rollback_preserve_exact_original_images() {
@@ -101,7 +34,7 @@ fn optional_buyer_changes_and_rollback_preserve_exact_original_images() {
             tx.apply();
             block.commit();
         }
-        assert_eq!(check(&world, 1024), Ok(()));
+        assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
         let mut source_snapshot = String::new();
         crate::state::snapshot_storage::serialize(&world.asset_escrows, &mut source_snapshot);
         world.asset_escrows = norito::json::from_str::<
@@ -113,8 +46,8 @@ fn optional_buyer_changes_and_rollback_preserve_exact_original_images() {
         // Decode the actual canonical snapshot before rebuilding. Keep the real
         // predecessor, including a buyer appearing or disappearing, for rollback.
         world.rebuild_escrow_indexes();
-        assert_eq!(check(&world, 1024), Ok(()));
-        let checked = CheckedEscrows::capture(&world, 1024).unwrap();
+        assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
+        let checked = CheckedEscrows::capture(&world, TEST_WORK_ALLOWANCE).unwrap();
         assert_eq!(checked.rows().get(&id()), Some(&replacement));
         assert_eq!(
             get_at(checked.rows(), GroupImage::Predecessor, &id()),
@@ -123,7 +56,7 @@ fn optional_buyer_changes_and_rollback_preserve_exact_original_images() {
         assert!(checked.matches_current().unwrap());
         drop(checked);
         world.block_and_revert().commit();
-        assert_eq!(check(&world, 1024), Ok(()));
+        assert_eq!(check(&world, TEST_WORK_ALLOWANCE), Ok(()));
         assert_eq!(world.asset_escrows.view().get(&id()), Some(&original));
     }
 }
@@ -159,7 +92,7 @@ fn every_group_rejects_missing_members_in_both_native_images() {
                 _ => unreachable!(),
             };
             assert_eq!(
-                check(&world, 1024),
+                check(&world, TEST_WORK_ALLOWANCE),
                 Err(corrupt(name, previous, GroupMismatch::MissingMember))
             );
         }
@@ -183,7 +116,7 @@ fn absent_buyers_cannot_have_empty_foreign_or_deleted_source_membership() {
                 block.commit();
             }
             assert_eq!(
-                check(&world, 1024),
+                check(&world, TEST_WORK_ALLOWANCE),
                 Err(corrupt(
                     "world.asset_escrows_by_buyer",
                     previous,
@@ -200,7 +133,7 @@ fn absent_buyers_cannot_have_empty_foreign_or_deleted_source_membership() {
 
 #[test]
 fn local_work_counts_buyerless_sources_and_absent_undo_rows() {
-    for (buyer, exact) in [(false, 14), (true, 18)] {
+    for (buyer, exact, delta) in [(false, 824, 335), (true, 1366, 402)] {
         let world = fixture(buyer);
         assert_eq!(check(&world, exact), Ok(()));
         assert_eq!(
@@ -213,10 +146,10 @@ fn local_work_counts_buyerless_sources_and_absent_undo_rows() {
             block.commit();
         }
         assert_eq!(
-            check(&world, exact + 2),
+            check(&world, exact + delta - 1),
             Err(GroupedOwnershipError::WorkLimit)
         );
-        assert_eq!(check(&world, exact + 3), Ok(()));
+        assert_eq!(check(&world, exact + delta), Ok(()));
     }
 }
 
@@ -224,7 +157,7 @@ fn local_work_counts_buyerless_sources_and_absent_undo_rows() {
 fn every_original_reader_detects_even_an_empty_index_publication() {
     for index in 0..4 {
         let world = fixture(false);
-        let checked = CheckedEscrows::capture(&world, 1024).unwrap();
+        let checked = CheckedEscrows::capture(&world, TEST_WORK_ALLOWANCE).unwrap();
         match index {
             0 => world.asset_escrows.block().commit(),
             1 => world.asset_escrows_by_seller.block().commit(),

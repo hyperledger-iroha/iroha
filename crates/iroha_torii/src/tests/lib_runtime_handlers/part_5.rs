@@ -1498,7 +1498,12 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
         );
     }
     let conflicting = Asset::new(asset_id, Quantity::from(43_u32));
-    let mut budget = super::torii_local_routed_read_budget(&app).expect("local routed-read budget");
+    let owner = super::try_acquire_query_fanout_memory(&app).expect("complete source owner");
+    let mut budget = super::COLLECTION_READ_MEMORY_RESERVATION
+        .sync_scope(owner.clone(), || {
+            super::torii_local_routed_read_budget(&app)
+        })
+        .expect("local routed-read budget");
     let expected =
         super::torii_bounded_routed_read_source_payload::<Asset, _>(&expected, &mut budget)
             .expect("bound expected asset payload");

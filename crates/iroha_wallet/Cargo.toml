@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 iroha = { workspace = true }
 iroha_fs = { workspace = true }
+iroha_operation_journal = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["json", "rand"] }
 iroha_data_model = { workspace = true, default-features = false }
 iroha_executor_data_model = { workspace = true }

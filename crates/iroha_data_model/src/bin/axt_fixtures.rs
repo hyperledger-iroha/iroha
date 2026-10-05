@@ -506,13 +506,13 @@ fn build_envelope_fixture(
 fn build_poseidon_fixture() -> PoseidonConstantsFixture {
     let width3 = bn254_poseidon_params_width3();
     let width6 = bn254_poseidon_params_width6();
-    let encode_rounds = |rounds: Vec<[[u8; 32]; 3]>| {
+    let encode_rounds = |rounds: [[[u8; 32]; 3]; 64]| {
         rounds
             .into_iter()
             .map(|round| round.into_iter().map(encode).collect())
             .collect()
     };
-    let encode_rounds6 = |rounds: Vec<[[u8; 32]; 6]>| {
+    let encode_rounds6 = |rounds: [[[u8; 32]; 6]; 64]| {
         rounds
             .into_iter()
             .map(|round| round.into_iter().map(encode).collect())

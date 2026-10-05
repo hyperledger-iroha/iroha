@@ -3,6 +3,9 @@
 /// Why the exact retained bootstrap cannot advance under this worker's authorization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ManagedBootstrapFailure {
+    /// Original local custody or previously published component material is missing or invalid.
+    #[error("original retained service material is missing or invalid; recovery cannot replace it")]
+    RetainedMaterial,
     /// The original worker was stopped; cancellation cannot authorize any successor.
     #[error("bootstrap startup was cancelled")]
     Cancelled,

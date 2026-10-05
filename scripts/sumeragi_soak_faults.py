@@ -52,6 +52,8 @@ FILLER_NAME = ".sumeragi-soak-disk-filler"
 RTO_MS = 200.0
 MAX_RETRANSMISSIONS = 5
 CHUNK_BYTES = 64 * 1024
+# At most 1 MiB of delayed chunks per direction; a full queue backpressures TCP.
+PROXY_QUEUE_CHUNKS = 16
 
 
 # ---------------------------------------------------------------------------------------------
@@ -380,35 +382,49 @@ class ProxyNetwork:
         pair: tuple[asyncio.StreamWriter, asyncio.StreamWriter],
     ) -> None:
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[Optional[tuple[float, bytes]]] = asyncio.Queue()
-        deliver = asyncio.ensure_future(self._deliver(queue, writer, pair))
-        last_due = 0.0
-        try:
-            while True:
-                data = await reader.read(CHUNK_BYTES)
-                if not data:
-                    break
-                condition = self.conditions.get()
-                if condition.reset > 0 and self.rng.random() < condition.reset:
+        queue: asyncio.Queue[Optional[tuple[float, bytes]]] = asyncio.Queue(
+            maxsize=PROXY_QUEUE_CHUNKS
+        )
+
+        async def receive() -> None:
+            last_due = 0.0
+            try:
+                while True:
+                    data = await reader.read(CHUNK_BYTES)
+                    if not data:
+                        break
+                    condition = self.conditions.get()
+                    if condition.reset > 0 and self.rng.random() < condition.reset:
+                        with self.stats.lock:
+                            self.stats.resets += 1
+                        for side in pair:
+                            _abort(side)
+                        break
+                    delay_ms, losses = chunk_delay_ms(condition, self.rng)
                     with self.stats.lock:
-                        self.stats.resets += 1
-                    for side in pair:
-                        _abort(side)
-                    break
-                delay_ms, losses = chunk_delay_ms(condition, self.rng)
-                with self.stats.lock:
-                    self.stats.chunks += 1
-                    self.stats.bytes += len(data)
-                    self.stats.lost_chunks += 1 if losses else 0
-                # In order, like TCP: a chunk never overtakes an earlier one.
-                last_due = max(last_due, loop.time() + delay_ms / 1000.0)
-                await queue.put((last_due, data))
-        except (ConnectionError, OSError):
-            for side in pair:
-                _abort(side)
-        finally:
+                        self.stats.chunks += 1
+                        self.stats.bytes += len(data)
+                        self.stats.lost_chunks += 1 if losses else 0
+                    # In order, like TCP: a chunk never overtakes an earlier one.
+                    last_due = max(last_due, loop.time() + delay_ms / 1000.0)
+                    await queue.put((last_due, data))
+            except (ConnectionError, OSError):
+                for side in pair:
+                    _abort(side)
             await queue.put(None)
-            await deliver
+
+        tasks = [
+            asyncio.ensure_future(receive()),
+            asyncio.ensure_future(self._deliver(queue, writer, pair)),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            # A stopped delivery must not leave reception blocked on a full queue.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     @staticmethod
     async def _deliver(

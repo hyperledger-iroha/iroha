@@ -4,10 +4,12 @@
 //! zeroizing aggregate scalar triple owned by one signer seat. Its header binds
 //! the exact runtime-provider qualification (slot, handle, revision and public
 //! inventory digest) and the genesis-derived network identity. The producer
-//! ([`encode_global_beacon_partial_signer_credential_v1`]) and the runtime
-//! importer ([`decode_global_beacon_partial_signer_credential_v1`]) replay the
-//! same Core share-import checks, so a credential is neither written nor loaded
-//! unless every share matches its public transcript and seat.
+//! ([`encode_global_beacon_partial_signer_credential_v1`]) checks every canonical
+//! secret component against its exact validated public transcript and seat through
+//! the existing deterministic commitment equation. The runtime importer
+//! ([`decode_global_beacon_partial_signer_credential_v1`]) also performs its genuine
+//! partial-signing capability self-test. Credential production does not generate
+//! an unpersisted randomized proof or encode any proof into the credential wire.
 //!
 //! The consensus-threshold framing (header, secret scalar triple, public
 //! inventory digest and bounded canonical encoding) is shared with the
@@ -165,6 +167,7 @@ impl From<GlobalThresholdBeaconSessionError> for GlobalBeaconCredentialImportErr
 
 /// Public header framing every consensus-threshold signer credential.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[norito(decode_fields)]
 pub struct ConsensusThresholdCredentialHeaderV1 {
     /// Fixed credential magic `IRTHR001`.
     pub magic: [u8; 8],
@@ -237,25 +240,30 @@ impl ConsensusThresholdCredentialHeaderV1 {
 ///
 /// It has no `Clone` or `Debug` surface and scrubs itself on drop.
 #[derive(NoritoSerialize, NoritoDeserialize)]
-pub struct ConsensusThresholdSecretScalarTripleV1([[u8; 32]; 3]);
+#[norito(decode_fields)]
+pub struct ConsensusThresholdSecretScalarTripleV1 {
+    components: [[u8; 32]; 3],
+}
 
 impl ConsensusThresholdSecretScalarTripleV1 {
     /// Move a zeroizing triple into its wire owner, scrubbing the source.
     #[must_use]
     pub fn from_zeroizing(mut components: Zeroizing<[[u8; 32]; 3]>) -> Self {
-        Self(std::mem::take(&mut *components))
+        Self {
+            components: std::mem::take(&mut *components),
+        }
     }
 
     /// Move the triple back into a zeroizing owner, scrubbing the wire owner.
     #[must_use]
     pub fn into_zeroizing(mut self) -> Zeroizing<[[u8; 32]; 3]> {
-        Zeroizing::new(std::mem::take(&mut self.0))
+        Zeroizing::new(std::mem::take(&mut self.components))
     }
 }
 
 impl Drop for ConsensusThresholdSecretScalarTripleV1 {
     fn drop(&mut self) {
-        self.0.zeroize();
+        self.components.zeroize();
     }
 }
 
@@ -389,6 +397,41 @@ pub struct RuntimeGlobalBeaconShareProvisioningV1 {
     components: ConsensusThresholdSecretScalarTripleV1,
 }
 
+/// Borrowed canonical credential source tied to its original public and scalar owners.
+///
+/// This view neither copies nor transfers secret custody or attests signing capability.
+/// The sole credential encoder verifies its exact prepared session pointer, seat,
+/// canonical scalar triple and public commitment before writing original output.
+#[derive(Clone, Copy)]
+pub struct GlobalBeaconCredentialSourceV1<'a> {
+    session: &'a ValidatedGlobalThresholdBeaconSessionV1,
+    seat: u16,
+    components: &'a [[u8; 32]; 3],
+}
+impl<'a> GlobalBeaconCredentialSourceV1<'a> {
+    pub(in crate::beacon) fn new(
+        session: &'a ValidatedGlobalThresholdBeaconSessionV1,
+        seat: u16,
+        components: &'a [[u8; 32]; 3],
+    ) -> Self {
+        Self {
+            session,
+            seat,
+            components,
+        }
+    }
+    /// Borrow the exact original authenticated public session owner.
+    #[must_use]
+    pub fn authenticated_session(self) -> &'a ValidatedGlobalThresholdBeaconSessionV1 {
+        self.session
+    }
+    /// Return the one-based seat without exposing private components.
+    #[must_use]
+    pub const fn signer_index(self) -> u16 {
+        self.seat
+    }
+}
+
 impl RuntimeGlobalBeaconShareProvisioningV1 {
     /// Retain one sealed public transcript and consume its zeroizing aggregate share.
     #[must_use]
@@ -402,6 +445,16 @@ impl RuntimeGlobalBeaconShareProvisioningV1 {
             signer_index,
             components: ConsensusThresholdSecretScalarTripleV1::from_zeroizing(components),
         }
+    }
+
+    /// Borrow the original scalar and public owners for the single canonical encoder.
+    #[must_use]
+    pub fn credential_source(&self) -> GlobalBeaconCredentialSourceV1<'_> {
+        GlobalBeaconCredentialSourceV1::new(
+            &self.public_session,
+            self.signer_index,
+            &self.components.components,
+        )
     }
 
     /// Complete public DKG transcript this share belongs to, borrowed from its original owner.
@@ -672,7 +725,7 @@ fn decode_global_beacon_inventory_v1(
             .import_components(
                 public_session.clone(),
                 session.signer_index,
-                Zeroizing::new(session.components.0),
+                Zeroizing::new(session.components.components),
             )
             .map_err(|_| ConsensusThresholdCredentialErrorV1::Rejected)?;
         shares.push(RuntimeGlobalBeaconShareProvisioningV1 {
@@ -721,3 +774,44 @@ fn global_beacon_session_binding_v1(
 #[cfg(test)]
 #[path = "credential_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod prepared_scalar_wire_tests {
+    use super::*;
+
+    #[test]
+    fn scalar_triple_keeps_its_exact_single_positional_field_payload() {
+        let wire = ConsensusThresholdSecretScalarTripleV1::from_zeroizing(Zeroizing::new([
+            [0x11; 32], [0x22; 32], [0x33; 32],
+        ]));
+        let mut payload = Vec::new();
+        norito::core::serialize_to_writer(&wire, &mut payload).unwrap();
+        let mut expected = vec![99];
+        for component in [[0x11; 32], [0x22; 32], [0x33; 32]] {
+            expected.push(32);
+            expected.extend_from_slice(&component);
+        }
+        assert_eq!(payload, expected);
+        assert_eq!(*wire.into_zeroizing(), [[0x11; 32], [0x22; 32], [0x33; 32]]);
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn named_private_scalar_storage_is_scrubbed_by_the_original_drop() {
+        let mut wire = std::mem::ManuallyDrop::new(
+            ConsensusThresholdSecretScalarTripleV1::from_zeroizing(Zeroizing::new([[0x77; 32]; 3])),
+        );
+        let bytes = std::ptr::addr_of!(wire.components).cast::<u8>();
+        // SAFETY: the ManuallyDrop keeps this stack allocation live. Calling
+        // the original destructor once neither frees nor moves these inline
+        // bytes; inspect only their byte representation, never a dropped T.
+        unsafe {
+            std::mem::ManuallyDrop::drop(&mut wire);
+            assert!(
+                std::slice::from_raw_parts(bytes, 96)
+                    .iter()
+                    .all(|byte| *byte == 0)
+            );
+        }
+    }
+}

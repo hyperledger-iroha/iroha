@@ -49,7 +49,7 @@ fn without_allocations<T>(run: impl FnOnce() -> T) -> T {
 }
 
 fn check_error(world: &World) -> AliasOwnershipError {
-    without_allocations(|| CheckedAccountAliases::capture(world, 128))
+    without_allocations(|| CheckedAccountAliases::capture(world, 16_777_216))
         .err()
         .unwrap()
 }
@@ -64,7 +64,8 @@ fn native_alias_transfer_keeps_exact_current_and_predecessor_readers() {
     reverse.insert(BOB_ID.clone(), BTreeSet::from([alias("merchant")]));
     aliases.commit();
     reverse.commit();
-    let checked = without_allocations(|| CheckedAccountAliases::capture(&world, 128)).unwrap();
+    let checked =
+        without_allocations(|| CheckedAccountAliases::capture(&world, 16_777_216)).unwrap();
     assert_eq!(checked.aliases().get(&alias("merchant")), Some(&*BOB_ID));
     assert_eq!(
         get_at(
@@ -159,7 +160,7 @@ fn primary_labels_and_raw_private_labels_are_checked_without_allocations() {
     world
         .accounts
         .insert(ALICE_ID.clone(), AccountValue::new(details));
-    drop(without_allocations(|| CheckedAccountAliases::capture(&world, 128)).unwrap());
+    drop(without_allocations(|| CheckedAccountAliases::capture(&world, 16_777_216)).unwrap());
     for owner in [&*ALICE_ID, &*BOB_ID] {
         let mut world = fixture();
         let mut details = AccountDetails::default();
@@ -205,9 +206,12 @@ fn physical_absent_preimages_are_charged_and_equal_dependency_writes_are_detecte
         BTreeMap::from([(alias("merchant"), ALICE_ID.clone())]),
         BTreeMap::from([(alias("transient"), None)]),
     );
-    // Two accounts, one alias, one reverse row and its member per image; plus
-    // the one physical absent preimage in the predecessor scan.
-    for bound in 0..11 {
+    // The original row-only boundary was 11. Full controller/alias comparisons,
+    // complete lookup tails and both tombstone scans cost 796, independently:
+    // unchanged two-account fixture 722 + 2*((1+17+18) + 1).
+    let exact = test_support::exact_world_work(&world);
+    assert_eq!(exact, 796);
+    for bound in 0..exact {
         assert_eq!(
             without_allocations(|| CheckedAccountAliases::capture(&world, bound))
                 .err()
@@ -215,9 +219,10 @@ fn physical_absent_preimages_are_charged_and_equal_dependency_writes_are_detecte
             AliasOwnershipError::WorkLimit
         );
     }
-    drop(without_allocations(|| CheckedAccountAliases::capture(&world, 11)).unwrap());
+    drop(without_allocations(|| CheckedAccountAliases::capture(&world, exact)).unwrap());
     for accounts in [true, false] {
-        let checked = without_allocations(|| CheckedAccountAliases::capture(&world, 128)).unwrap();
+        let checked =
+            without_allocations(|| CheckedAccountAliases::capture(&world, 16_777_216)).unwrap();
         if accounts {
             let mut block = world.accounts.block();
             block.insert(ALICE_ID.clone(), block.get(&*ALICE_ID).unwrap().clone());
@@ -278,4 +283,69 @@ fn scoped_alias_capture_consumes_the_checked_source_before_leaf_allocation() {
         .unwrap();
     assert_eq!(snapshot.table_id(), "world.account_aliases");
     assert_eq!(snapshot.row_count(), 1);
+}
+
+#[test]
+fn each_original_alias_publication_precedes_every_validation_outcome() {
+    for source in 0..3 {
+        for outcome in 0..3 {
+            let world = fixture();
+            let checked = CheckedAccountAliases::capture(&world, 16_777_216).unwrap();
+            match source {
+                0 => world.accounts.block().commit(),
+                1 => world.account_aliases.block().commit(),
+                2 => world.account_aliases_by_account.block().commit(),
+                _ => unreachable!(),
+            }
+            let result = match outcome {
+                0 => Ok(()),
+                1 => Err(AliasOwnershipError::WorkLimit),
+                2 => Err(corrupt(
+                    AliasImage::Predecessor,
+                    AliasMismatch::PrivateLabel,
+                )),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                without_allocations(|| checked.finish_validation(result)).err(),
+                Some(AliasOwnershipError::Publication(
+                    PublicationPreparationError::Changed
+                ))
+            );
+        }
+    }
+}
+
+#[test]
+fn original_alias_busy_refusal_precedes_later_change_work_and_corruption() {
+    for mismatch in [false, true] {
+        let world = fixture();
+        let checked = CheckedAccountAliases::capture(&world, 16_777_216).unwrap();
+        world.account_aliases.block().commit();
+        world.account_aliases_by_account.block().commit();
+        let detached = world
+            .accounts
+            .block()
+            .try_detach(|_| Ok::<_, ()>(()))
+            .unwrap();
+        let prepared = detached
+            .try_prepare_publication(&world.accounts, |_, _| Ok::<_, ()>(()))
+            .unwrap_or_else(|(_, error, _)| panic!("original preparation: {error:?}"));
+        let error = checked
+            .accounts
+            .try_matches_current(&world.accounts)
+            .unwrap_err();
+        assert!(matches!(error, PublicationPreparationError::Busy(_)));
+        let result = if mismatch {
+            Err(corrupt(AliasImage::Current, AliasMismatch::ForeignAlias))
+        } else {
+            Err(AliasOwnershipError::WorkLimit)
+        };
+        assert_eq!(
+            without_allocations(|| checked.finish_validation(result)).err(),
+            Some(AliasOwnershipError::Publication(error))
+        );
+        drop(prepared);
+        without_allocations(|| CheckedAccountAliases::capture(&world, 16_777_216)).unwrap();
+    }
 }

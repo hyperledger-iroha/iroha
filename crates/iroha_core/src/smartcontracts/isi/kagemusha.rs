@@ -34,13 +34,13 @@ use halo2_base::gates::circuit::BaseCircuitParams;
 use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_crypto::HashOf;
+use iroha_data_model::sumeragi::epoch::{ValidatorEpochAuthorizationV1, ValidatorEpochDecisionV1};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinitionId, AssetId},
     isi::kagemusha_v1::{
         KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1, KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
         KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
         KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
     },
@@ -333,7 +333,7 @@ pub trait KagemushaV1RuntimeVerifier: std::any::Any + Send + Sync {
         &self,
         release_id: [u8; 32],
         authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
-        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        authorization: &ValidatorEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String>;
 
     /// Terminally reverify a stored checkpoint under the installed release and an independently
@@ -341,7 +341,7 @@ pub trait KagemushaV1RuntimeVerifier: std::any::Any + Send + Sync {
     fn verify_mint_authority_checkpoint(
         &self,
         release_id: [u8; 32],
-        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        authorization: &ValidatorEpochAuthorizationV1,
         checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<(), String>;
 
@@ -412,7 +412,7 @@ impl KagemushaV1RuntimeVerifier for RejectAllKagemushaV1RuntimeVerifier {
         &self,
         _release_id: [u8; 32],
         _authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
-        _authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        _authorization: &ValidatorEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String> {
         Err("authenticated Kagemusha V1 mint authority is unavailable".to_owned())
     }
@@ -420,7 +420,7 @@ impl KagemushaV1RuntimeVerifier for RejectAllKagemushaV1RuntimeVerifier {
     fn verify_mint_authority_checkpoint(
         &self,
         _release_id: [u8; 32],
-        _authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        _authorization: &ValidatorEpochAuthorizationV1,
         _checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<(), String> {
         Err("authenticated Kagemusha V1 mint checkpoint verifier is unavailable".to_owned())
@@ -1213,7 +1213,7 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
     release_id: [u8; 32],
     genesis_authorization_id: [u8; 32],
     authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
-    authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+    authorization: &ValidatorEpochAuthorizationV1,
 ) -> Result<KagemushaMintCertificateWitnessV1, String> {
     authorization
         .validate_against_authority(authority_generation)
@@ -1222,7 +1222,7 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
         .authorization_id()
         .map_err(|error| format!("failed to digest Kagemusha genesis authorization: {error}"))?;
     if release_id == [0; 32]
-        || authorization.decision != KagemushaMintFinalityEpochDecisionV1::Genesis
+        || authorization.decision != ValidatorEpochDecisionV1::Genesis
         || actual_authorization_id != genesis_authorization_id
     {
         return Err(
@@ -1345,15 +1345,13 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
 mod mint_authority_bootstrap_tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        NetworkId,
-        isi::kagemusha_v1::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1},
-    };
+    use iroha_data_model::NetworkId;
+    use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1};
     use iroha_model_base::peer::PeerId;
 
     fn genesis() -> (
         KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityEpochAuthorizationV1,
+        ValidatorEpochAuthorizationV1,
     ) {
         let mut validators = (1_u8..=4)
             .map(|seed| {
@@ -1375,7 +1373,7 @@ mod mint_authority_bootstrap_tests {
             generation: 0,
             validators,
         };
-        let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 64)
+        let authorization = ValidatorEpochAuthorizationV1::genesis(&authority, 64)
             .expect("valid genesis authorization");
         (authority, authorization)
     }
@@ -1435,7 +1433,7 @@ mod mint_authority_bootstrap_tests {
         let mut changed_authority = authority.clone();
         changed_authority.generation += 1;
         assert!(build([1; 32], pinned_id, &changed_authority, &authorization).is_err());
-        let retained = KagemushaMintFinalityEpochAuthorizationV1 {
+        let retained = ValidatorEpochAuthorizationV1 {
             epoch: 1,
             first_height: 65,
             last_height: 128,
@@ -1444,7 +1442,7 @@ mod mint_authority_bootstrap_tests {
                 session_id: [3; 32],
                 transcript_hash: [4; 32],
             }),
-            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+            decision: ValidatorEpochDecisionV1::Retain,
             ..authorization
         };
         retained.validate_successor(&authorization).unwrap();
@@ -1543,7 +1541,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         &self,
         release_id: [u8; 32],
         authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
-        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        authorization: &ValidatorEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String> {
         let runtime = self
             .releases
@@ -1579,7 +1577,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
     fn verify_mint_authority_checkpoint(
         &self,
         release_id: [u8; 32],
-        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        authorization: &ValidatorEpochAuthorizationV1,
         checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<(), String> {
         let runtime = self
@@ -1599,7 +1597,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             || checkpoint.genesis_authorization_id
                 != runtime.verifier.mint_genesis_authorization_id()
             || (checkpoint.step == KagemushaMintAuthorityStepV1::Bootstrap)
-                != (authorization.decision == KagemushaMintFinalityEpochDecisionV1::Genesis)
+                != (authorization.decision == ValidatorEpochDecisionV1::Genesis)
         {
             return Err("stored mint checkpoint differs from the independently selected authorization or release".to_owned());
         }

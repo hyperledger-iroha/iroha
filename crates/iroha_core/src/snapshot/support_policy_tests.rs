@@ -835,11 +835,11 @@ async fn staged_snapshot_wsv_hash_injects_committed_event_buffer() {
 #[tokio::test]
 async fn staged_snapshot_wsv_hash_projects_deferred_storage_and_undo_history() {
     let staged = br#"{"world":{"axt_replay_ledger":{"blocks":{"expired":1},"revert":{}},"smart_contract_state":{"blocks":{"quota":[1]},"revert":{}}},"other":{"axt_replay_ledger":{"keep":true}}}"#;
-    let replay = r#"{"revert":{"expired":1},"blocks":{}}"#;
-    let quota = r#"{"revert":{"quota":[1]},"blocks":{"quota":[2]}}"#;
+    let replay = r#"{"revert":{"expired":{"value":1}},"blocks":{}}"#;
+    let quota = r#"{"revert":{"quota":{"value":[1]}},"blocks":{"quota":[2]}}"#;
     // Independently spelled canonical bytes also prove that the override is
     // restricted to the exact World field, and keeps storage undo history.
-    let canonical = br#"{"other":{"axt_replay_ledger":{"keep":true}},"world":{"axt_replay_ledger":{"blocks":{},"revert":{"expired":1}},"smart_contract_state":{"blocks":{"quota":[2]},"revert":{"quota":[1]}}}}"#;
+    let canonical = br#"{"other":{"axt_replay_ledger":{"keep":true}},"world":{"axt_replay_ledger":{"blocks":{},"revert":{"expired":{"value":1}}},"smart_contract_state":{"blocks":{"quota":[2]},"revert":{"quota":{"value":[1]}}}}}"#;
     let actual = canonical_snapshot_wsv_hash_with_overrides(
         staged,
         CanonicalWsvOverrides {

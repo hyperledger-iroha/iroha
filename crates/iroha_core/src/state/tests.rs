@@ -7410,12 +7410,15 @@ fn finish_autoscale_fixture(
         .expect("empty autoscale fixture retains explicit result metadata");
     let keypair = crate::state::checked_keypair();
     block
-        .replace_signatures(BTreeSet::from([
-            iroha_data_model::block::BlockSignature::new(
-                0,
-                iroha_crypto::SignatureOf::from_hash(keypair.private_key(), block.hash()),
-            ),
-        ]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([
+                iroha_data_model::block::BlockSignature::new(
+                    0,
+                    iroha_crypto::SignatureOf::from_hash(keypair.private_key(), block.hash()),
+                ),
+            ])
+            .expect("at most 31 block signatures"),
+        )
         .expect("fixture signature covers the completed proposal");
     block.validate_proposal_commitments().unwrap();
     block.validate_execution_result_structure().unwrap();
@@ -7457,7 +7460,7 @@ fn autoscale_da_fixture_finishes_results_after_attachments() {
     assert_eq!(block.committed_fragment_count(), None);
     let signer = finish_autoscale_fixture(&mut block, 3);
     assert_eq!(block.committed_fragment_count(), Some(3));
-    assert_eq!(block.da_commitments().unwrap().commitments, vec![record]);
+    assert_eq!(block.da_commitments().unwrap().commitments(), vec![record]);
     block.validate_proposal_commitments().unwrap();
     block.validate_execution_result_structure().unwrap();
     block.validate_output_merkle_cache().unwrap();
@@ -16550,7 +16553,7 @@ state_test! { sync hydrate_da_indexes_retains_unknown_lane_bundle_without_active
     {
         let commitments = state.da_commitments().expect("completed DA history read");
         let_row! { stored_bundle = commitments .bundle_at(signed_block.header().height().get()) .expect("committed bundle retained") };
-        assert_eq!(stored_bundle.commitments, vec![record.clone()]);
+        assert_eq!(stored_bundle.commitments(), vec![record.clone()]);
         assert!(
             commitments.get_committed_by_key(&key).is_some(),
             "unknown-lane commitment identity should stay available for committed validation"
@@ -16807,7 +16810,7 @@ state_test! { sync da_commitment_lookup_hydrates_from_kura_after_state_restart
     );
     let commitments = restarted.da_commitments().expect("completed DA history read");
     let_row! { stored_bundle = commitments .bundle_at(signed.header().height().get()) .expect("replayed commitment bundle should be retained by block height") };
-    assert_eq!(stored_bundle.commitments, vec![record]);
+    assert_eq!(stored_bundle.commitments(), vec![record]);
 }
 state_test! { sync block_and_revert_requires_fresh_da_shard_cursor
     let lane0 = LaneConfig::default();
@@ -26102,7 +26105,7 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
             .sign(ALICE_KEYPAIR.private_key());
         let mut source = iroha_data_model::block::builder::BlockBuilder::new(block.as_ref().header());
         source.push_transaction(signed);
-        let mut source = source.build(BTreeSet::new()).canonical_resultless_proposal().expect("valid fixture proposal projection");
+        let mut source = source.build(iroha_data_model::block::BlockSignatures::default()).canonical_resultless_proposal().expect("valid fixture proposal projection");
         let entrypoint_hash = source.external_entrypoints_cloned().next().unwrap().hash();
         source.set_execution_context(Some(iroha_data_model::block::BlockExecutionContextBundle::new(
             vec![iroha_data_model::block::ExternalExecutionContext::new(
@@ -27397,7 +27400,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
     let_row! { (code, mut manifest) = KotodamaCompiler::new() .compile_source_with_manifest(src) .expect("compile contract-call trigger probe") };
     let parsed = ivm::ProgramMetadata::parse(&code).expect("parse trigger contract artifact");
     let_row! { argument_schema = parsed .contract_interface .as_ref() .and_then(|interface| { interface .entrypoints .iter() .find(|entrypoint| entrypoint.name == "run") }) .and_then(|entrypoint| entrypoint.argument_schema.as_ref()) .expect("parameterized trigger callback schema") };
-    let_row! { callback_arguments = ivm::encode_argument_record_from_json( argument_schema, &Json::from(norito::json!({ "marker": "9" })), ) .expect("encode trigger callback arguments") };
+    let_row! { callback_arguments = ivm_abi::arguments::encode_argument_record_from_json( argument_schema, &Json::from(norito::json!({ "marker": "9" })), ) .expect("encode trigger callback arguments") };
     let_row! { callback_arguments = ContractArgumentRecord::try_new(callback_arguments) .expect("bounded trigger callback arguments") };
     let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
     let_row! { contract_address = ContractAddress::derive(state.network_id_ref(), &ALICE_ID, 0, DataSpaceId::UNIVERSAL) .expect("derive contract address") };

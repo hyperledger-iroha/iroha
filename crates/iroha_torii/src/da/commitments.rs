@@ -242,7 +242,7 @@ fn build_proof_from_store(
     let target = find_in_store(store, request)?;
     let bundle = store.bundle_at(target.location.block_height)?;
     let index = usize::try_from(target.location.index_in_bundle).ok()?;
-    if bundle.commitments.get(index) != Some(&target.commitment) {
+    if bundle.commitments().get(index) != Some(&target.commitment) {
         return None;
     }
     build_da_commitment_proof(bundle, target.location.block_height, index)
@@ -280,7 +280,7 @@ fn build_active_proof_from_state(
     Ok((|| {
         let bundle = block.as_ref().da_commitments()?;
         let index = usize::try_from(target.location.index_in_bundle).ok()?;
-        if bundle.commitments.get(index) != Some(&target.commitment) {
+        if bundle.commitments().get(index) != Some(&target.commitment) {
             return None;
         }
         let policies = block.as_ref().da_proof_policies()?.clone();
@@ -549,7 +549,7 @@ mod tests {
         for record in &records {
             assert!(
                 committed_policies
-                    .policies
+                    .policies()
                     .iter()
                     .any(|policy| policy.lane_id == record.lane_id)
             );
@@ -862,7 +862,7 @@ mod tests {
         let bundle = store
             .bundle_at(proof.location.block_height)
             .expect("committed bundle present");
-        assert_eq!(bundle.commitments.as_slice(), &[stale_duplicate, later]);
+        assert_eq!(bundle.commitments(), &[stale_duplicate, later]);
         let mut header = BlockHeader::new(
             NonZeroU64::new(proof.location.block_height).expect("non-zero height"),
             None,
@@ -933,7 +933,7 @@ mod tests {
             super::handler_list_commitments(State(app.clone()), NoritoJson(request))
                 .await
                 .expect("handler should succeed");
-        assert_eq!(response.policies.version, DaProofPolicyBundle::VERSION_V1);
+        assert_eq!(response.policies.version(), DaProofPolicyBundle::VERSION_V1);
     }
     #[tokio::test]
     async fn list_handler_enforces_exact_limit_maximum() {
@@ -996,14 +996,14 @@ mod tests {
         let JsonBody(bundle) = super::handler_list_proof_policies(State(app.clone()))
             .await
             .expect("handler should succeed");
-        assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
+        assert_eq!(bundle.version(), DaProofPolicyBundle::VERSION_V1);
         assert!(
-            !bundle.policies.is_empty(),
+            !bundle.policies().is_empty(),
             "expected policies derived from lane configuration"
         );
         let nexus_snapshot = app.state.nexus_snapshot();
         let primary = nexus_snapshot.lane_config.primary();
-        let first = &bundle.policies[0];
+        let first = &bundle.policies()[0];
         assert_eq!(first.lane_id, primary.lane_id);
         assert_eq!(first.dataspace_id, primary.dataspace_id);
         assert_eq!(first.alias, primary.alias);
@@ -1016,11 +1016,11 @@ mod tests {
             .await
             .expect("handler should succeed");
         assert!(
-            !bundle.policies.is_empty(),
+            !bundle.policies().is_empty(),
             "expected proof policies in bundle response"
         );
-        assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
-        assert_ne!(bundle.policy_hash, Hash::prehashed([0; 32]));
+        assert_eq!(bundle.version(), DaProofPolicyBundle::VERSION_V1);
+        assert_ne!(bundle.policy_hash(), Hash::prehashed([0; 32]));
     }
     #[tokio::test]
     async fn proof_policy_handler_ignores_stale_runtime_lane_geometry() {
@@ -1032,14 +1032,14 @@ mod tests {
             .expect("handler should succeed");
         assert!(
             bundle
-                .policies
+                .policies()
                 .iter()
                 .any(|policy| policy.lane_id == LaneId::new(0)),
             "default lane policy must remain visible"
         );
         assert!(
             !bundle
-                .policies
+                .policies()
                 .iter()
                 .any(|policy| policy.lane_id == stale_lane),
             "stale runtime-only lane must not appear in active proof policies"
@@ -1086,13 +1086,16 @@ mod tests {
             .expect("handler should succeed");
         assert!(
             bundle
-                .policies
+                .policies()
                 .iter()
                 .any(|policy| policy.lane_id == LaneId::new(0)),
             "default lane policy must remain visible"
         );
         assert!(
-            !bundle.policies.iter().any(|policy| policy.lane_id == lane),
+            !bundle
+                .policies()
+                .iter()
+                .any(|policy| policy.lane_id == lane),
             "an uncommitted autoscale overlay must not introduce an authoritative policy"
         );
     }
@@ -1121,7 +1124,7 @@ mod tests {
         assert!(
             !list_response
                 .policies
-                .policies
+                .policies()
                 .iter()
                 .any(|policy| policy.lane_id == lane),
             "list response policies must also ignore the uncommitted lane"

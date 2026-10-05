@@ -50,7 +50,7 @@ It uses the local snapshot repository when it exists and otherwise uses the
 in-repo project dependency. Set `irohaAndroidVersion` to match the
 published coordinates when consuming from Maven.
 
-The Java peer facades reuse the Kotlin SDK artifacts published as
+The Java facades reuse the Kotlin SDK artifacts published as
 `org.hyperledger.iroha.sdk:core-jvm` and `client-android`. Their Maven version
 is pinned by `irohaKotlinSdkVersion` in `gradle.properties`; update that pin
 when publishing a new compatible Kotlin transport release. An explicit
@@ -58,16 +58,6 @@ when publishing a new compatible Kotlin transport release. An explicit
 `irohaSdkVersion` property and finally `irohaAndroidVersion` when the more
 specific properties are absent. Composite builds substitute the in-tree
 Kotlin projects while preserving these exact coordinates in generated POMs.
-
-KAGEMUSHA reserve top-ups are payer-signed transactions. Construct the sole
-transaction instruction with `TopUpKagemushaV1Instruction`, sign the
-transaction through `TransactionBuilder`, then call
-`KagemushaToriiClientV1.submitTopUp(signedTransaction, operationId)` with the
-embedded request's exact nonzero 32-byte operation ID. The client forwards the
-canonical versioned signed bytes unchanged to `/v1/kagemusha/top-up` and uses
-the lowercase operation ID as `Idempotency-Key`. No unsigned or request-only
-top-up API exists. `KagemushaNoritoV1` enforces the 16 KiB embedded-request
-ceiling needed by the maximum fixed-shape paired proof.
 
 ## DA commitment and pin-intent proofs
 
@@ -119,59 +109,16 @@ described in the [Kotlin SDK README](../../kotlin/README.md#native-sumeragi-stat
 Java consumer tests live in `kotlin/core-jvm/src/test/java`; the separate Java
 release leg executes those tests against the same canonical production SDK.
 
-## KAGEMUSHA V1 (Java)
+## Peer carriers and KAGEMUSHA wallet wire
 
-`KagemushaNoritoV1` delegates to the canonical Kotlin KAGEMUSHA wire codec. Both SDKs encode
-the same three-message payment exchange—direct request, proof-bearing payment, and durable
-acknowledgement—with `kgm1:` as the sole text transport. The request owns the fresh recipient
-encryption key and exact amount; payment carries the commit certificate and post-commit paired
-proof. Mint authorization, mint credit, and redemption vouchers are independently framed archives.
-Exposed credits cannot be cancelled. QR, NFC, and Nearby consume
-`../../fixtures/offline/kagemusha_v1.json`.
-Public wire size and verification work do not grow with balance history.
-
-Before requesting, sending, minting, or redeeming offline value, the app must durably
-save a fresh nonzero 32-byte operation identity and its exact action parameters, then
-pass that identity to the corresponding reservation and execution calls. An identical
-retry retains the same identity; a lost native return must never cause the app to
-allocate a replacement. The authenticated provider rejects a substituted reservation
-identity before executing a device operation. Payment and redemption reservations
-carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
-archive, shared with the native outgoing-operation index.
-
-`KagemushaCoreCoordinatorFrameV1` mirrors Kotlin's strict schema-2 codec, and the
-Android `KagemushaCoreCoordinatorBridgeV1` facade delegates native open/invoke to
-Kotlin. `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the
-typed coordinator through the same Kotlin native adapter and context checks.
-`KagemushaCoreCoordinatorArchiveV1` mirrors the pure canonical projection codecs.
-Public selectors never recreate verified native capabilities; the qualified backend
-must authenticate the journal, release and actual proof. Device-reply admission
-retains its original response authenticator for independent native verification.
-Missing native authority remains unavailable, and no software backend or stock
-factory is supplied. See the
-[native integration contract](../../specs/kagemusha_device_bridge_v1.md).
-
-`KagemushaWalletV1` mirrors the canonical Kotlin aggregate wallet. It requires an
-`KagemushaHardwareProviderV1` implementing the complete non-forking journal, exact-next counter,
-trusted-time, recovery, inbox, outbox, and rotation contract. Staging returns a durable ACK, sends
-and redemptions require the native provider to fold only the staged credits needed to cover the
-amount. Unrelated backlog must not delay an already-covered spend. Singular-fold and stable-
-snapshot drain APIs impose no cumulative count limit; continuous background scheduling remains
-an integration requirement. A drain releases the lane after each credit for queued foreground work;
-concurrent epoch rotation interrupts it and requires a new pass with a fresh watermark.
-Missing ACKs leave only a byte-identical retry record while the sender
-successor stays usable. Stock platform keystores are online-only and
-never trigger a software fallback.
-Staging advances native inbox bookkeeping, not the monetary-state journal. Core's typed mint
-reservation/inbox implementation is under validation; its SDK-to-OEM operation-16 adapter is
-still required. A completed MintFold is a separate proved transition, not a staging result.
-Managed KAGEMUSHA X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
-not perform scalar multiplication or low-order probing; the shared native core authenticates
-canonical X25519 elements during object and complete three-message exchange validation before monetary use.
-Both the logical sequence and hardware journal revision are per epoch. Exact-successor rotation
-carries balance and replay state, replaces the device-policy binding, resets both counters to zero,
-and remains callable with saturated counters and pending receipts. The native provider must
-arrange rollover before counter exhaustion; the managed wallet does not schedule automatic rotation.
+This SDK has no Java peer-transport or KAGEMUSHA implementation. Java consumers
+call the canonical Kotlin types in `org.hyperledger.iroha.sdk.offline` directly:
+the QR, NFC and Nearby carriers (`IrohaPeerQRCodecV1`, `IrohaPeerNfcV1`,
+`IrohaPeerNearbySessionV1` and the shared `IrohaPeerWireMessageV1` envelope) in
+`core-jvm`, their Android adapters in `client-android`, and
+`KagemushaWalletWireV1` in `core-jvm`. The wire contract is
+[KAGEMUSHA wallet wire V1](../../specs/kagemusha_wallet_wire_v1.md); Java-source
+consumer tests live in `kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/offline/`.
 
 ## Fee quotes and sponsorship
 
@@ -792,6 +739,16 @@ Android Keystore fallback backend), Norito codec round-trips that verify typed
 instruction decoding, transaction builder signing, and HTTP client serialization
 paths to keep the Java pathways aligned.
 
+`connect_norito_bridge` exports JNI only for the Kotlin SDK classes
+(`org.hyperledger.iroha.sdk.*`). The Java `NativeSignerBridge`,
+`SorafsReferenceValidators` and `AtomicPrivateSettlementNativeResponseVerifierV1`
+declare no native methods: they keep their Java argument checks and delegate to the
+Kotlin owners, so native availability and the ABI-25 / signer-contract-7
+requirements come from the Kotlin SDK. `NativeBridgeDelegationTests` rejects any
+new Java `native` declaration. Native-dependent harness mains (ML-DSA, SoraFS
+reference validators, native ZK signing) need a host build of the bridge; run them
+with `IROHA_NATIVE_LIBRARY_PATH=<dir containing the library> ./gradlew :core:test`.
+
 ### Publishing snapshots (AND9)
 
 Run
@@ -1293,6 +1250,12 @@ need to enforce StrongBox-only keys or user-authentication requirements while
 retaining an explicit deterministic software provider for other signing paths.
 If your desktop JVM lacks built-in Ed25519 support, configure the software
 provider with BouncyCastle required.
+The Android Keystore backend is offered only on keystore2 (API 31+). It decides
+whether an alias exists through `KeyStore.getKey(alias, null)` alone, because
+`containsAlias`/`getEntry` report Keystore errors as absent aliases and generating
+under an occupied alias replaces its key. `load` throws instead of returning empty
+when the Keystore cannot answer, so `generateOrLoad` never overwrites a key it could
+not see.
 Hardware-backed keys remain non-extractable; for user-managed accounts that must
 roam across devices, prefer `SOFTWARE_ONLY` (or `withSoftwareProvider`) and use
 `exportDeterministicKey(...)` / `importDeterministicKey(...)` to move key

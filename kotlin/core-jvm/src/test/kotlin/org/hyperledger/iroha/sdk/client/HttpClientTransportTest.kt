@@ -1451,7 +1451,7 @@ class HttpClientTransportTest {
     fun contractCallBoundaryConsumesSharedRustArgumentRecordFixture() {
         val fixture = loadSharedFixture("fixtures/kotodama/entrypoint_argument_record_v1.json")
         assertEquals("EntrypointArgumentRecordV1", fixture["codec"])
-        assertEquals("ivm::encode_argument_record_from_json", fixture["generator"])
+        assertEquals("ivm_abi::arguments::encode_argument_record_from_json", fixture["generator"])
         val schema = obj(fixture, "entrypoint_argument_schema_v1")
         assertTrue(Regex("[0-9a-f]{64}").matches(string(schema, "schema_hash_hex")))
         val record = obj(fixture, "entrypoint_argument_record_v1")

@@ -39,3 +39,6 @@ pub mod provisioning;
 pub mod secret_toml;
 pub mod shell;
 pub mod verify;
+
+#[cfg(test)]
+mod service_checked_writer_test_support;

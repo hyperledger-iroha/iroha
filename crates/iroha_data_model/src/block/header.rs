@@ -37,7 +37,7 @@ mod model {
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
     )]
-    #[norito(deny_unknown_fields)]
+    #[norito(deny_unknown_fields, decode_fields)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::block::header::model::BlockHeader")]
     pub struct BlockHeader {
@@ -114,6 +114,7 @@ mod model {
     }
 }
 pub use self::model::{BlockHeader, BlockSignature};
+mod inline_child;
 /// Payload-only tuple adapters for block headers and signatures.
 ///
 /// Framed messages use the public [`BlockHeader`] and [`BlockSignature`] codecs.
@@ -400,16 +401,22 @@ pub mod wire {
     }
     impl<'de> ncore::DeserializePayload<'de> for BlockSignatureWire {
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-            let (index, payload): (u64, Vec<u8>) =
-                <(u64, Vec<u8>) as ncore::DeserializePayload>::deserialize(archived.cast());
-            Self(index, payload)
+            Self::try_deserialize(archived).expect("canonical block signature record")
         }
         fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-            let (index, payload) =
-                <(u64, Vec<u8>) as ncore::DeserializePayload>::try_deserialize(archived.cast())?;
-            Ok(Self(index, payload))
+            let record = <BlockSignatureRecord as ncore::DeserializePayload>::try_deserialize(
+                archived.cast(),
+            )?;
+            Ok(Self(record.index, record.payload))
         }
     }
+}
+/// Sole positional signature leaf shared by owned and prepared destinations.
+#[derive(norito::codec::Decode, norito::codec::Encode)]
+#[norito(decode_fields)]
+pub(super) struct BlockSignatureRecord {
+    pub(super) index: u64,
+    pub(super) payload: Vec<u8>,
 }
 // Conversions between BlockHeader and its wire mapping for tests and explicit transports.
 impl From<BlockHeader> for wire::BlockHeaderWire {
@@ -483,11 +490,15 @@ impl TryFrom<wire::BlockSignatureWire> for BlockSignature {
         checked_block_signature_from_wire(&value)
     }
 }
+pub(super) fn validate_block_signature_payload(payload: &[u8]) -> Result<(), ncore::Error> {
+    Signature::validate_payload(payload)
+        .map_err(|error| ncore::Error::Message(format!("invalid block signature payload: {error}")))
+}
 fn checked_block_signature_from_wire(
     value: &wire::BlockSignatureWire,
 ) -> Result<BlockSignature, ncore::Error> {
-    let signature = Signature::try_from_bytes(&value.1)
-        .map_err(|err| ncore::Error::Message(format!("invalid block signature payload: {err}")))?;
+    validate_block_signature_payload(&value.1)?;
+    let signature = Signature::try_from_bytes_for_admission(&value.1)?;
     Ok(BlockSignature::new(
         value.0,
         SignatureOf::from_signature(signature),
@@ -653,15 +664,15 @@ mod tests {
         payload: Vec<u8>,
         flags: u8,
     }
-    fn sample_block_signature_set() -> std::collections::BTreeSet<BlockSignature> {
-        let mut set = std::collections::BTreeSet::new();
+    fn sample_block_signature_set() -> crate::block::BlockSignatures {
+        let mut set = crate::block::BlockSignatures::default();
         for (idx, fill) in [0x11_u8, 0x7f_u8, 0xe3_u8].into_iter().enumerate() {
             let payload = [fill; 64];
             let signature =
                 Signature::try_from_bytes(&payload).expect("nonzero block-signature codec fixture");
             let block_signature =
                 BlockSignature::new(idx as u64, SignatureOf::from_signature(signature));
-            set.insert(block_signature);
+            set.try_insert(block_signature).unwrap();
         }
         set
     }
@@ -670,7 +681,7 @@ mod tests {
         SamplePayload { payload, flags }
     }
     fn sample_block_signature_vec() -> Vec<BlockSignature> {
-        sample_block_signature_set().into_iter().collect()
+        sample_block_signature_set().iter().cloned().collect()
     }
     fn sample_block_signature_payload() -> SamplePayload {
         let set = sample_block_signature_set();
@@ -867,18 +878,18 @@ mod tests {
         // The actual equality is checked in block_signature_getters_and_roundtrip.
     }
     #[test]
-    fn block_signature_btreeset_roundtrip() {
+    fn block_signature_ordered_collection_roundtrip() {
         let keypair = checked_random_keypair();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
             .expect("checked block-header btreeset fixture signature");
         let block_signature = BlockSignature::new(7, signature);
-        let mut set = std::collections::BTreeSet::new();
-        set.insert(block_signature.clone());
+        let mut set = crate::block::BlockSignatures::default();
+        set.try_insert(block_signature.clone()).unwrap();
         let encoded = norito::to_bytes(&set).expect("encode btreeset");
         let payload = &encoded[norito::core::Header::SIZE..];
-        let decoded = decode_adaptive::<std::collections::BTreeSet<BlockSignature>>(payload)
-            .expect("decode btreeset");
+        let decoded =
+            decode_adaptive::<crate::block::BlockSignatures>(payload).expect("decode btreeset");
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded.iter().next().unwrap(), &block_signature);
     }
@@ -886,9 +897,8 @@ mod tests {
     fn block_signature_packed_decode_repro() {
         let sample = sample_block_signature_payload();
         let _flags_guard = norito::core::DecodeFlagsGuard::enter(sample.flags);
-        let decoded =
-            decode_adaptive::<std::collections::BTreeSet<BlockSignature>>(&sample.payload)
-                .expect("decode packed BTreeSet<BlockSignature>");
+        let decoded = decode_adaptive::<crate::block::BlockSignatures>(&sample.payload)
+            .expect("decode packed crate::block::BlockSignatures");
         assert_eq!(decoded, sample_block_signature_set());
     }
     #[test]

@@ -20,14 +20,12 @@ use crate::{
     },
 };
 use iroha_allocation::AllocationBudget;
+use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1};
 use iroha_data_model::{
     NetworkId,
     isi::{
         consensus_keys::{ThresholdKeyLifecycleActionV1, ThresholdKeyLifecycleCertificateV1},
-        kagemusha_v1::{
-            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-            KagemushaMintFinalityAuthorityGenerationV1,
-        },
+        kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     },
     nexus::{
         ValidatorCandidateKeysV1, ValidatorCommitteePreparationV1, ValidatorCommitteeStatusV1,
@@ -151,7 +149,7 @@ pub fn verify_validator_committee_selection_evidence_v1(
 ) -> Result<VerifiedValidatorCommitteeSelectionV1, NativeJournalError> {
     check_evidence_size(evidence, limits)?;
     with_verified_native_journal(
-        &evidence.finality_journal,
+        (&evidence.finality_journal).into(),
         chain_id,
         &network,
         limits,
@@ -367,7 +365,7 @@ pub fn verify_validator_committee_provisioning_evidence_v1(
     // TODO: the journal source and nested decoded public graphs still need retained pool
     // ledgers. Typed errors and admitted block/session controls do not fund those graphs.
     with_verified_native_journal(
-        &evidence.finality_journal,
+        (&evidence.finality_journal).into(),
         chain_id,
         &network,
         limits,

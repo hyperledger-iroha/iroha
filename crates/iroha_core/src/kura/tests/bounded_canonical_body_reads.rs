@@ -122,21 +122,29 @@ fn authenticated_da_body_read_refuses_oversized_occupied_file_without_repair() {
     let kura = chain.kura();
     canonical_physical_seed_da_suffix(kura, &blocks);
     let (retained, bytes) = kura
-        .read_authenticated_execution_wire(&receipt, wire_len)
+        .read_authenticated_execution_wire(
+            &receipt,
+            wire_len,
+            &chain.state().ivm_execution_budget(),
+        )
         .unwrap()
         .unwrap();
     assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
         &retained, original
     ));
-    assert_eq!(bytes, wire);
+    assert_eq!(bytes.as_slice(), wire);
     let path = kura.block_store.lock().da_block_path(2);
     let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
     file.write_all(&[0]).unwrap();
     file.sync_all().unwrap();
     assert_eq!(fs::metadata(&path).unwrap().len(), wire_len + 1);
     assert!(
-        kura.read_authenticated_execution_wire(&receipt, wire_len)
-            .is_err()
+        kura.read_authenticated_execution_wire(
+            &receipt,
+            wire_len,
+            &chain.state().ivm_execution_budget()
+        )
+        .is_err()
     );
     assert_eq!(
         fs::metadata(path).unwrap().len(),

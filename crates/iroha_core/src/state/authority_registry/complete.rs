@@ -35,6 +35,38 @@ pub(in crate::state) mod frozen_verifying_keys;
 #[path = "complete/frozen_proofs.rs"]
 pub(in crate::state) mod frozen_proofs;
 
+#[path = "complete/frozen_domain_ownership.rs"]
+pub(in crate::state) mod frozen_domain_ownership;
+
+#[path = "complete/frozen_account_identity.rs"]
+pub(in crate::state) mod frozen_account_identity;
+
+#[path = "complete/frozen_account_aliases.rs"]
+pub(in crate::state) mod frozen_account_aliases;
+
+#[path = "complete/frozen_contract_subjects.rs"]
+pub(in crate::state) mod frozen_contract_subjects;
+
+mod frozen_account_rekeys;
+#[path = "complete/frozen_escrows.rs"]
+pub(in crate::state) mod frozen_escrows;
+#[path = "complete/frozen_nfts_rwas.rs"]
+mod frozen_nfts_rwas;
+mod frozen_repo_agreements;
+#[path = "complete/frozen_trigger_actions.rs"]
+mod frozen_trigger_actions;
+#[path = "complete/frozen_trigger_contracts.rs"]
+mod frozen_trigger_contracts;
+
+#[path = "complete/frozen_assets.rs"]
+pub(in crate::state) mod frozen_assets;
+
+#[path = "complete/frozen_asset_definitions.rs"]
+pub(in crate::state) mod frozen_asset_definitions;
+
+#[path = "complete/frozen_contract_aliases.rs"]
+pub(in crate::state) mod frozen_contract_aliases;
+
 #[path = "complete/frozen_validation_fee_proposals.rs"]
 pub(in crate::state) mod frozen_validation_fee_proposals;
 

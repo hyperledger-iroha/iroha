@@ -266,33 +266,41 @@ impl json::JsonSerialize for AssetPermissionManifest {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"activation_epoch\":")?;
-        self.activation_epoch.json_serialize_to(out)?;
-        out.push_str(",\"dataspace\":")?;
-        self.dataspace.as_u64().json_serialize_to(out)?;
-        out.push_str(",\"entries\":")?;
-        out.begin_container()?;
-        out.push('[')?;
-        for (index, entry) in self.entries.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"activation_epoch\":")?;
+            self.activation_epoch.json_serialize_to(out)?;
+            out.push_str(",\"dataspace\":")?;
+            self.dataspace.as_u64().json_serialize_to(out)?;
+            out.push_str(",\"entries\":")?;
+            out.begin_container()?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push('[')?;
+                for (index, entry) in self.entries.iter().enumerate() {
+                    if index != 0 {
+                        out.push(',')?;
+                    }
+                    entry_json_serialize_to(entry, out)?;
+                }
+                out.push(']')?;
+                Ok(())
+            })();
+            out.end_container();
+            result?;
+            if let Some(expiry_epoch) = self.expiry_epoch {
+                out.push_str(",\"expiry_epoch\":")?;
+                expiry_epoch.json_serialize_to(out)?;
             }
-            entry_json_serialize_to(entry, out)?;
-        }
-        out.push(']')?;
+            out.push_str(",\"issued_ms\":")?;
+            self.issued_ms.json_serialize_to(out)?;
+            out.push_str(",\"uaid\":")?;
+            json::write_json_display_to(&self.uaid, out)?;
+            out.push_str(",\"version\":")?;
+            u64::from(u16::from(self.version)).json_serialize_to(out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        if let Some(expiry_epoch) = self.expiry_epoch {
-            out.push_str(",\"expiry_epoch\":")?;
-            expiry_epoch.json_serialize_to(out)?;
-        }
-        out.push_str(",\"issued_ms\":")?;
-        self.issued_ms.json_serialize_to(out)?;
-        out.push_str(",\"uaid\":")?;
-        json::write_json_display_to(&self.uaid, out)?;
-        out.push_str(",\"version\":")?;
-        u64::from(u16::from(self.version)).json_serialize_to(out)?;
-        out.push('}')?;
-        out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -304,16 +312,20 @@ fn entry_json_serialize_to(
     // `manifest_to_json_value` uses BTreeMap objects. Keep the same sorted key
     // order without constructing an owned response-sized Value graph.
     out.begin_container()?;
-    out.push_str("{\"effect\":")?;
-    effect_json_serialize_to(&entry.effect, out)?;
-    if let Some(notes) = &entry.notes {
-        out.push_str(",\"notes\":")?;
-        json::write_json_string_to(notes, out)?;
-    }
-    out.push_str(",\"scope\":")?;
-    scope_json_serialize_to(&entry.scope, out)?;
-    out.push('}')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        out.push_str("{\"effect\":")?;
+        effect_json_serialize_to(&entry.effect, out)?;
+        if let Some(notes) = &entry.notes {
+            out.push_str(",\"notes\":")?;
+            json::write_json_string_to(notes, out)?;
+        }
+        out.push_str(",\"scope\":")?;
+        scope_json_serialize_to(&entry.scope, out)?;
+        out.push('}')?;
+        Ok(())
+    })();
     out.end_container();
+    result?;
     Ok(())
 }
 
@@ -322,47 +334,51 @@ fn scope_json_serialize_to(
     out: &mut dyn json::JsonWriteSink,
 ) -> Result<(), json::BoundedJsonError> {
     out.begin_container()?;
-    out.push('{')?;
-    let mut has_field = if let Some(asset) = &scope.asset {
-        out.push_str("\"asset\":")?;
-        json::write_json_display_to(asset, out)?;
-        true
-    } else {
-        false
-    };
-    if let Some(dataspace) = scope.dataspace {
-        if has_field {
-            out.push(',')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        out.push('{')?;
+        let mut has_field = if let Some(asset) = &scope.asset {
+            out.push_str("\"asset\":")?;
+            json::write_json_display_to(asset, out)?;
+            true
+        } else {
+            false
+        };
+        if let Some(dataspace) = scope.dataspace {
+            if has_field {
+                out.push(',')?;
+            }
+            out.push_str("\"dataspace\":")?;
+            dataspace.as_u64().json_serialize_to(out)?;
+            has_field = true;
         }
-        out.push_str("\"dataspace\":")?;
-        dataspace.as_u64().json_serialize_to(out)?;
-        has_field = true;
-    }
-    if let Some(method) = &scope.method {
-        if has_field {
-            out.push(',')?;
+        if let Some(method) = &scope.method {
+            if has_field {
+                out.push(',')?;
+            }
+            out.push_str("\"method\":")?;
+            json::write_json_display_to(method, out)?;
+            has_field = true;
         }
-        out.push_str("\"method\":")?;
-        json::write_json_display_to(method, out)?;
-        has_field = true;
-    }
-    if let Some(program) = &scope.program {
-        if has_field {
-            out.push(',')?;
+        if let Some(program) = &scope.program {
+            if has_field {
+                out.push(',')?;
+            }
+            out.push_str("\"program\":")?;
+            json::write_json_display_to(program, out)?;
+            has_field = true;
         }
-        out.push_str("\"program\":")?;
-        json::write_json_display_to(program, out)?;
-        has_field = true;
-    }
-    if let Some(role) = scope.role {
-        if has_field {
-            out.push(',')?;
+        if let Some(role) = scope.role {
+            if has_field {
+                out.push(',')?;
+            }
+            out.push_str("\"role\":")?;
+            json::write_json_string_to(role_label(role), out)?;
         }
-        out.push_str("\"role\":")?;
-        json::write_json_string_to(role_label(role), out)?;
-    }
-    out.push('}')?;
+        out.push('}')?;
+        Ok(())
+    })();
     out.end_container();
+    result?;
     Ok(())
 }
 
@@ -371,32 +387,44 @@ fn effect_json_serialize_to(
     out: &mut dyn json::JsonWriteSink,
 ) -> Result<(), json::BoundedJsonError> {
     out.begin_container()?;
-    match effect {
-        ManifestEffect::Allow(allowance) => {
-            out.push_str("{\"Allow\":{")?;
-            out.begin_container()?;
-            if let Some(max_amount) = &allowance.max_amount {
-                out.push_str("\"max_amount\":")?;
-                json::write_json_display_to(max_amount, out)?;
-                out.push(',')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        match effect {
+            ManifestEffect::Allow(allowance) => {
+                out.push_str("{\"Allow\":{")?;
+                out.begin_container()?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    if let Some(max_amount) = &allowance.max_amount {
+                        out.push_str("\"max_amount\":")?;
+                        json::write_json_display_to(max_amount, out)?;
+                        out.push(',')?;
+                    }
+                    out.push_str("\"window\":")?;
+                    json::write_json_string_to(window_label(allowance.window), out)?;
+                    out.push_str("}}")?;
+                    Ok(())
+                })();
+                out.end_container();
+                result?;
             }
-            out.push_str("\"window\":")?;
-            json::write_json_string_to(window_label(allowance.window), out)?;
-            out.push_str("}}")?;
-            out.end_container();
-        }
-        ManifestEffect::Deny(directive) => {
-            out.push_str("{\"Deny\":{")?;
-            out.begin_container()?;
-            if let Some(reason) = &directive.reason {
-                out.push_str("\"reason\":")?;
-                json::write_json_string_to(reason, out)?;
+            ManifestEffect::Deny(directive) => {
+                out.push_str("{\"Deny\":{")?;
+                out.begin_container()?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    if let Some(reason) = &directive.reason {
+                        out.push_str("\"reason\":")?;
+                        json::write_json_string_to(reason, out)?;
+                    }
+                    out.push_str("}}")?;
+                    Ok(())
+                })();
+                out.end_container();
+                result?;
             }
-            out.push_str("}}")?;
-            out.end_container();
         }
-    }
+        Ok(())
+    })();
     out.end_container();
+    result?;
     Ok(())
 }
 
@@ -2090,6 +2118,47 @@ mod tests {
                 }
                 other => panic!("expected allow when no matching deny exists, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn original_manifest_checked_container_retains_all_five_levels_and_original_entries() {
+        let value = cbdc_manifest_fixture();
+        let source = value.entries.as_ptr();
+        crate::checked_container_refusal_controls::audit(&value);
+        assert_eq!(value.entries.as_ptr(), source);
+    }
+
+    #[test]
+    fn original_manifest_entry_checked_container_retains_notes_effect_scope_and_depth() {
+        let value = cbdc_manifest_fixture();
+        for entry in &value.entries {
+            let original = json::to_json(&entry_to_json_value(entry)).unwrap();
+            crate::checked_container_refusal_controls::audit_write(&original, |out| {
+                entry_json_serialize_to(entry, out)
+            });
+        }
+    }
+
+    #[test]
+    fn original_manifest_scope_checked_container_retains_all_original_fields_and_depth() {
+        let value = cbdc_manifest_fixture();
+        for entry in &value.entries {
+            let original = json::to_json(&scope_to_json_value(&entry.scope)).unwrap();
+            crate::checked_container_refusal_controls::audit_write(&original, |out| {
+                scope_json_serialize_to(&entry.scope, out)
+            });
+        }
+    }
+
+    #[test]
+    fn original_manifest_effect_checked_container_retains_both_nested_variants_and_depth() {
+        let value = cbdc_manifest_fixture();
+        for entry in &value.entries {
+            let original = json::to_json(&effect_to_json_value(&entry.effect)).unwrap();
+            crate::checked_container_refusal_controls::audit_write(&original, |out| {
+                effect_json_serialize_to(&entry.effect, out)
+            });
         }
     }
 }

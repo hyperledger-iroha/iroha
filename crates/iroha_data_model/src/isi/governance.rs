@@ -14,8 +14,6 @@ use crate::{
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, ContractEmergencyHoldProposalV1,
         ContractLifecycleGovernanceProposalV1, GlobalDataTriggerPermissionGovernanceProposalV1,
-        KagemushaVerifierPolicyInstallProposalV1, KagemushaVerifierReleaseActivateProposalV1,
-        KagemushaVerifierReleaseInstallProposalV1, KagemushaVerifierReleaseRetireProposalV1,
     },
     isi::sorafs::SorafsProviderGovernanceActionV1,
     prelude::*,
@@ -25,7 +23,7 @@ use crate::{
 };
 use iroha_primitives::numeric::Quantity;
 use norito::codec::{Decode, Encode};
-use std::{cmp::Ordering, string::String, vec::Vec};
+use std::{string::String, vec::Vec};
 
 /// Attempt-based SORA Parliament instruction surface.
 pub mod parliament;
@@ -141,78 +139,6 @@ pub struct ProposeGlobalDataTriggerPermissionGovernance {
     pub proposal: GlobalDataTriggerPermissionGovernanceProposalV1,
 }
 impl crate::seal::Instruction for ProposeGlobalDataTriggerPermissionGovernance {}
-/// Propose the first governed KAGEMUSHA verifier signer policy through Parliament.
-#[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
-)]
-#[norito_schema(
-    name = "iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1"
-)]
-pub struct ProposeKagemushaVerifierPolicyInstallV1 {
-    /// Exact policy, network, operator, and empty-registry predecessor.
-    pub proposal: KagemushaVerifierPolicyInstallProposalV1,
-}
-
-impl PartialOrd for ProposeKagemushaVerifierPolicyInstallV1 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.encode().cmp(&other.encode()))
-    }
-}
-impl crate::seal::Instruction for ProposeKagemushaVerifierPolicyInstallV1 {}
-/// Propose one threshold-authenticated KAGEMUSHA verifier release as standby.
-#[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
-)]
-#[norito_schema(
-    name = "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1"
-)]
-pub struct ProposeKagemushaVerifierReleaseInstallV1 {
-    /// Exact network, operator, predecessor, and signed release evidence.
-    pub proposal: KagemushaVerifierReleaseInstallProposalV1,
-}
-
-impl PartialOrd for ProposeKagemushaVerifierReleaseInstallV1 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.encode().cmp(&other.encode()))
-    }
-}
-impl crate::seal::Instruction for ProposeKagemushaVerifierReleaseInstallV1 {}
-/// Propose first activation of the sole governed KAGEMUSHA standby release.
-#[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
-)]
-#[norito_schema(
-    name = "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1"
-)]
-pub struct ProposeKagemushaVerifierReleaseActivateV1 {
-    /// Exact network, operator, full registry predecessor, and standby target.
-    pub proposal: KagemushaVerifierReleaseActivateProposalV1,
-}
-
-impl PartialOrd for ProposeKagemushaVerifierReleaseActivateV1 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.encode().cmp(&other.encode()))
-    }
-}
-impl crate::seal::Instruction for ProposeKagemushaVerifierReleaseActivateV1 {}
-/// Propose retirement of one never-activated governed KAGEMUSHA standby release.
-#[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
-)]
-#[norito_schema(
-    name = "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1"
-)]
-pub struct ProposeKagemushaVerifierReleaseRetireV1 {
-    /// Exact network, operator, full registry predecessor, and standby target.
-    pub proposal: KagemushaVerifierReleaseRetireProposalV1,
-}
-
-impl PartialOrd for ProposeKagemushaVerifierReleaseRetireV1 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.encode().cmp(&other.encode()))
-    }
-}
-impl crate::seal::Instruction for ProposeKagemushaVerifierReleaseRetireV1 {}
 /// Propose a runtime upgrade manifest through governance.
 ///
 /// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
@@ -559,18 +485,6 @@ impl_governance_decode_from_slice!(ProposeContractEmergencyHold {
 impl_governance_decode_from_slice!(ProposeGlobalDataTriggerPermissionGovernance {
     proposal: GlobalDataTriggerPermissionGovernanceProposalV1,
 });
-impl_governance_decode_from_slice!(ProposeKagemushaVerifierPolicyInstallV1 {
-    proposal: KagemushaVerifierPolicyInstallProposalV1,
-});
-impl_governance_decode_from_slice!(ProposeKagemushaVerifierReleaseInstallV1 {
-    proposal: KagemushaVerifierReleaseInstallProposalV1,
-});
-impl_governance_decode_from_slice!(ProposeKagemushaVerifierReleaseActivateV1 {
-    proposal: KagemushaVerifierReleaseActivateProposalV1,
-});
-impl_governance_decode_from_slice!(ProposeKagemushaVerifierReleaseRetireV1 {
-    proposal: KagemushaVerifierReleaseRetireProposalV1,
-});
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     manifest: RuntimeUpgradeManifest,
 });
@@ -634,25 +548,6 @@ mod tests {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked governance fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
-    }
-    fn kagemusha_install_proposal() -> KagemushaVerifierPolicyInstallProposalV1 {
-        let signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
-            .expect("derive checked signer");
-        KagemushaVerifierPolicyInstallProposalV1 {
-            proposal_operator: account(1),
-            network_id: NetworkId::from_genesis_hash(
-                HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"KAGEMUSHA governed policy instruction fixture network",
-                )),
-            ),
-            expected_predecessor: crate::kagemusha::KagemushaGovernedVerifierRegistryV1::default(),
-            authority_policy: crate::kagemusha::KagemushaReleaseAuthorityPolicyV1 {
-                version: crate::kagemusha::KAGEMUSHA_WIRE_VERSION_V1,
-                authority_set_id: [0x62; 32],
-                threshold: 1,
-                authorized_signers: vec![signer.public_key().clone()],
-            },
-        }
     }
     fn window() -> AtWindow {
         AtWindow {
@@ -1133,9 +1028,6 @@ mod tests {
                 action: GlobalDataTriggerPermissionGovernanceActionV1::Grant,
             },
         });
-        assert_slice_roundtrip(ProposeKagemushaVerifierPolicyInstallV1 {
-            proposal: kagemusha_install_proposal(),
-        });
         assert_slice_roundtrip(CastZkBallot {
             election_id: "referendum-1".to_owned(),
             proof_b64: "AQID".to_owned(),
@@ -1204,12 +1096,6 @@ mod tests {
                     authority: account(2),
                     action: GlobalDataTriggerPermissionGovernanceActionV1::Revoke,
                 },
-            },
-        );
-        assert_registry_decodes(
-            &registry,
-            ProposeKagemushaVerifierPolicyInstallV1 {
-                proposal: kagemusha_install_proposal(),
             },
         );
         assert_registry_decodes(

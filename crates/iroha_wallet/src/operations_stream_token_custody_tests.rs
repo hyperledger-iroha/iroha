@@ -270,11 +270,18 @@ fn configure_and_enroll_retain_one_canonical_instruction_and_exact_original_wire
     }
     assert_eq!(transport.quotes.load(Ordering::SeqCst), 2);
     assert_eq!(transport.submissions.load(Ordering::SeqCst), 0);
-    assert!(
-        service
-            .prepare_stream_token_custody_configure(&configure, &configured)
-            .is_err()
+    let original_signed_record = std::fs::read(configured.join("operation.json")).unwrap();
+    let reused = service
+        .prepare_stream_token_custody_configure(&configure, &configured)
+        .unwrap();
+    assert_eq!(reused.status, OperationStatus::Prepared);
+    assert_eq!(
+        std::fs::read(configured.join("operation.json")).unwrap(),
+        original_signed_record,
+        "preparation must retain the exact original signature and authorization"
     );
+    assert_eq!(transport.quotes.load(Ordering::SeqCst), 2);
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 0);
 }
 
 #[test]

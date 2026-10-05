@@ -3,9 +3,15 @@
 //! Sharing State's execution pool is local resource policy, never proof of
 //! authoritative publication. Capacity failure retains the exact pool refusal.
 
-use super::super::account_alias_ownership::{AliasOwnershipError, CheckedAccountAliases};
-use super::super::account_identity_ownership::{CheckedAccountIdentities, IdentityOwnershipError};
-use super::super::domain_ownership::{CheckedDomainOwnership, DomainOwnershipError};
+use super::super::account_alias_ownership::{
+    ACCOUNT_ALIAS_WORK_PER_ROW, AliasOwnershipError, CheckedAccountAliases,
+};
+use super::super::account_identity_ownership::{
+    ACCOUNT_IDENTITY_WORK_PER_ROW, CheckedAccountIdentities, IdentityOwnershipError,
+};
+use super::super::domain_ownership::{
+    CheckedDomainOwnership, DOMAIN_OWNER_WORK_PER_ROW, DomainOwnershipError,
+};
 use super::*;
 use mv::PublicationPreparationError;
 
@@ -25,10 +31,13 @@ pub(crate) fn capture_domains_table_once(
         return Ok(None);
     }
     let budget = state.ivm_execution_budget();
-    // Eight inspected rows/members per retained-row allowance is local capture
-    // policy, not gas or validity. A larger prior image can require a larger
-    // admitted bound even when the current table would fit the retention limit.
-    let checked = CheckedDomainOwnership::capture(&state.world, limits.max_rows.saturating_mul(8));
+    // The named single-Ed25519/max-domain reference is local capture policy.
+    // Wider controllers and quadratic prior images can require more admitted
+    // work without changing controller, row, gas or ledger validity rules.
+    let checked = CheckedDomainOwnership::capture(
+        &state.world,
+        limits.max_rows.saturating_mul(DOMAIN_OWNER_WORK_PER_ROW),
+    );
     // A partially published World may expose individually stable maps that do
     // not yet belong to one State cut. Do not label that observation corruption.
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
@@ -46,24 +55,26 @@ pub(crate) fn capture_domains_table_once(
         limits,
         &budget,
         domains.domains().iter(),
-    )?;
-    if !domains.matches_current()? {
-        return Ok(None);
-    }
+    );
+    let current = domains.matches_current();
     drop(domains);
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
         return Ok(None);
     }
-    Ok(Some(snapshot))
+    if !current? {
+        return Ok(None);
+    }
+    Ok(Some(snapshot?))
 }
 
 /// Capture the actual `world.accounts` table without claiming State finality.
 ///
 /// Retain the original account and identity-index readers, checking their exact
 /// current and predecessor relations before encoding the same account rows.
-/// Every physical row and inspected opaque member consumes local work, bounded
-/// to eight times the admitted row allowance. `None` means State or native
-/// publication overlapped this read. Neither result supplies finalized authority.
+/// Every physical advance and complete borrowed comparison is prepaid. The
+/// named Single Ed25519 reference is local work policy; wider keys, vectors and
+/// quadratic original images may need a larger admitted allowance. `None` means
+/// State or native publication overlapped this read. Neither result supplies finalized authority.
 pub(crate) fn capture_accounts_table_once(
     state: &State,
     limits: LeafLimits,
@@ -73,8 +84,12 @@ pub(crate) fn capture_accounts_table_once(
         return Ok(None);
     }
     let budget = state.ivm_execution_budget();
-    let checked =
-        CheckedAccountIdentities::capture(&state.world, limits.max_rows.saturating_mul(8));
+    let checked = CheckedAccountIdentities::capture(
+        &state.world,
+        limits
+            .max_rows
+            .saturating_mul(ACCOUNT_IDENTITY_WORK_PER_ROW),
+    );
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
         return Ok(None);
     }
@@ -90,15 +105,16 @@ pub(crate) fn capture_accounts_table_once(
         limits,
         &budget,
         accounts.accounts().iter(),
-    )?;
-    if !accounts.matches_current()? {
-        return Ok(None);
-    }
+    );
+    let current = accounts.matches_current();
     drop(accounts);
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
         return Ok(None);
     }
-    Ok(Some(snapshot))
+    if !current? {
+        return Ok(None);
+    }
+    Ok(Some(snapshot?))
 }
 
 /// Capture one actual authoritative World table from a stable State generation.
@@ -111,8 +127,10 @@ pub(crate) fn capture_accounts_table_once(
 /// finalized anchor or permission to admit private or remote transactions.
 /// Both current and predecessor aliases, account primary labels and reverse
 /// membership are checked through retained original native readers. The local
-/// work allowance is eight inspections per admitted table-row allowance;
-/// accounts without aliases still consume work and can require a larger bound.
+/// work reference funds one Single Ed25519 primary account, a maximum-width
+/// domainful alias and its reverse member in both images. Wider controllers,
+/// extra implicit accounts and quadratic history may require more local work;
+/// the reference changes no name, controller, row, gas or ledger validity rule.
 pub(crate) fn capture_account_alias_table_once(
     state: &State,
     limits: LeafLimits,
@@ -122,7 +140,10 @@ pub(crate) fn capture_account_alias_table_once(
         return Ok(None);
     }
     let budget = state.ivm_execution_budget();
-    let checked = CheckedAccountAliases::capture(&state.world, limits.max_rows.saturating_mul(8));
+    let checked = CheckedAccountAliases::capture(
+        &state.world,
+        limits.max_rows.saturating_mul(ACCOUNT_ALIAS_WORK_PER_ROW),
+    );
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
         return Ok(None);
     }
@@ -138,15 +159,25 @@ pub(crate) fn capture_account_alias_table_once(
         limits,
         &budget,
         aliases.aliases().iter(),
-    )?;
-    if !aliases.matches_current()? {
-        return Ok(None);
-    }
+    );
+    finish_alias_encoding(state, generation, aliases, snapshot)
+}
+
+fn finish_alias_encoding(
+    state: &State,
+    generation: u64,
+    aliases: CheckedAccountAliases<'_>,
+    snapshot: Result<CanonicalTablePairedSnapshot, LeafError>,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    let current = aliases.matches_current();
     drop(aliases);
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
         return Ok(None);
     }
-    Ok(Some(snapshot))
+    if !current? {
+        return Ok(None);
+    }
+    Ok(Some(snapshot?))
 }
 
 #[cfg(test)]
@@ -285,6 +316,66 @@ mod tests {
             );
             crossbeam_epoch::pin().flush();
             std::thread::yield_now();
+        }
+    }
+}
+
+#[cfg(test)]
+mod alias_fence_tests {
+    use super::*;
+    use crate::{
+        kura::Kura, query::store::LiveQueryStore,
+        state::authority_registry::account_alias_ownership::test_support::fixture,
+    };
+
+    #[test]
+    fn alias_encoding_refusal_keeps_native_and_state_fences() {
+        for changed in 0..5 {
+            let state = State::new_for_testing(
+                fixture(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let generation = state.state_view_generation();
+            let checked = CheckedAccountAliases::capture(&state.world, 16_777_216).unwrap();
+            let snapshot = CanonicalTableLeafSet::paired_table_from_rows(
+                "world.account_aliases",
+                LeafLimits {
+                    max_tables: 1,
+                    max_rows: 0,
+                    max_payload_bytes: 4096,
+                    max_ordered_table_bytes: 8192,
+                    max_streamed_value_bytes: 8192,
+                },
+                &state.ivm_execution_budget(),
+                checked.aliases().iter(),
+            );
+            assert!(matches!(&snapshot, Err(LeafError::RowLimit)));
+            match changed {
+                0 => {}
+                1 => state.world.accounts.block().commit(),
+                2 => state.world.account_aliases.block().commit(),
+                3 => state.world.account_aliases_by_account.block().commit(),
+                4 => {
+                    let mut publication = state.state_view_publication();
+                    let guard = publication.begin();
+                    assert!(
+                        finish_alias_encoding(&state, generation, checked, snapshot)
+                            .unwrap()
+                            .is_none()
+                    );
+                    drop(guard);
+                    drop(publication);
+                    continue;
+                }
+                _ => unreachable!(),
+            }
+            let result = finish_alias_encoding(&state, generation, checked, snapshot);
+            if changed == 0 {
+                assert_eq!(result.err(), Some(LeafError::RowLimit));
+            } else {
+                assert!(result.unwrap().is_none());
+            }
         }
     }
 }

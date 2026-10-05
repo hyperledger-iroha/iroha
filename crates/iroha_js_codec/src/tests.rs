@@ -685,40 +685,6 @@ fn all_browser_nft_market_instruction_families_preserve_native_fixture_frames() 
 }
 
 #[test]
-fn browser_kagemusha_top_up_roundtrips_existing_native_identity_fixture() {
-    let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
-    let fixtures: Value = json::from_json(include_str!(
-        "../../../crates/iroha_data_model/tests/fixtures/instruction_record_generated_identity_frames.json"
-    )).expect("native instruction identity fixtures");
-    let row = fixtures
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| {
-            row["nominal"].as_str() == Some("iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1")
-        })
-        .unwrap();
-    let frame =
-        hex::decode(row["cases"][0]["frame"].as_str().unwrap()).expect("native top-up frame");
-    let instruction = iroha_data_model::isi::decode_instruction_from_pair(
-        iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1::WIRE_ID,
-        &frame,
-    )
-    .expect("native top-up instruction");
-    let value = instruction_to_json_value(&instruction).expect("native top-up JSON");
-    let payload = value["TopUpKagemushaV1"].as_object().unwrap();
-    for field in payload.keys() {
-        let mut missing = payload.clone();
-        missing.remove(field);
-        assert_strict_rejection(&object([("TopUpKagemushaV1", Value::Object(missing))]));
-    }
-    assert_strict_rejection(&Value::String(
-        STANDARD.encode(norito::encode_canonical(&instruction).unwrap()),
-    ));
-    assert_typed_instruction_roundtrip(&instruction, &value);
-}
-
-#[test]
 fn set_parameter_explicit_json_roundtrips_through_both_native_encodings() {
     let parameter = CustomParameter::new(
         "codec_fixture".parse().expect("parameter name"),

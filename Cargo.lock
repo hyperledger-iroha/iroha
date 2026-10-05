@@ -4659,6 +4659,7 @@ dependencies = [
  "iroha_torii_shared",
  "irohad_lib",
  "ivm",
+ "ivm_abi",
  "kotodama_lang",
  "mint_rose_trigger_data_model",
  "nonzero_ext",
@@ -4829,6 +4830,7 @@ dependencies = [
  "iroha_wallet",
  "iroha_zkp_halo2",
  "ivm",
+ "ivm_abi",
  "kotodama_lang",
  "norito",
  "pathdiff",
@@ -4919,7 +4921,6 @@ dependencies = [
  "iroha_primitives",
  "iroha_torii_shared",
  "iroha_version",
- "ivm",
  "ivm_abi",
  "ivm_artifact_admission",
  "kotodama_lang",
@@ -4982,6 +4983,7 @@ dependencies = [
  "iroha_version",
  "iroha_zkp_halo2",
  "ivm",
+ "ivm_abi",
  "kaigi_zk",
  "kotodama_lang",
  "mv",
@@ -5057,6 +5059,7 @@ dependencies = [
 name = "iroha_core_timed_ovn"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "arrayvec",
  "iroha_crypto",
  "iroha_data_model",
  "norito",
@@ -5198,6 +5201,7 @@ dependencies = [
  "iroha_data_model_derive",
  "iroha_macro",
  "iroha_model_base",
+ "iroha_pasta",
  "iroha_primitives",
  "iroha_schema",
  "iroha_sumeragi",
@@ -5261,6 +5265,8 @@ dependencies = [
  "iroha_fs",
  "iroha_genesis",
  "iroha_model_base",
+ "iroha_musubi_service",
+ "iroha_operation_journal",
  "iroha_primitives",
  "iroha_storage_client",
  "iroha_sumeragi",
@@ -5270,6 +5276,7 @@ dependencies = [
  "iroha_wallet",
  "kotodama_lang",
  "libc",
+ "mv",
  "norito",
  "rand 0.9.4",
  "rcgen",
@@ -5440,6 +5447,7 @@ dependencies = [
  "iroha_torii_shared",
  "iroha_version",
  "ivm",
+ "ivm_abi",
  "kaigi_zk",
  "kotodama_lang",
  "napi",
@@ -5498,6 +5506,20 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing-subscriber",
  "zeroize",
+]
+
+[[package]]
+name = "iroha_kagemusha_proof"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "ff",
+ "iroha_pasta",
+ "iroha_plonk",
+ "iroha_plonk_gadgets",
+ "norito",
+ "rand_chacha 0.3.1",
+ "rayon",
+ "rustix 1.1.4",
 ]
 
 [[package]]
@@ -5574,16 +5596,28 @@ dependencies = [
  "iroha_data_model",
  "iroha_fs",
  "iroha_model_base",
+ "iroha_operation_journal",
  "iroha_service_model",
  "iroha_telemetry",
- "iroha_wallet",
  "norito",
+ "rcgen",
  "reqwest",
- "rustix 1.1.4",
  "sorafs_car",
  "sorafs_manifest",
  "tempfile",
  "url",
+]
+
+[[package]]
+name = "iroha_operation_journal"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "eyre",
+ "hex",
+ "iroha_fs",
+ "norito",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -5628,12 +5662,72 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_pasta"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "blake2",
+ "criterion",
+ "ff",
+ "group",
+ "halo2curves",
+ "pasta_curves",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "rayon",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "iroha_petal"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "flate2",
  "hex",
  "norito",
+]
+
+[[package]]
+name = "iroha_plonk"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "blake2",
+ "ff",
+ "group",
+ "iroha_pasta",
+ "norito",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "rayon",
+ "sha2",
+]
+
+[[package]]
+name = "iroha_plonk_gadgets"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "ff",
+ "iroha_pasta",
+ "iroha_plonk",
+ "norito",
+ "rand_chacha 0.3.1",
+]
+
+[[package]]
+name = "iroha_plonk_oracle"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "halo2-axiom",
+ "halo2-base",
+ "iroha_pasta",
+ "iroha_plonk",
+ "norito",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "rayon",
+ "sha2",
+ "snark-verifier",
 ]
 
 [[package]]
@@ -5760,6 +5854,7 @@ dependencies = [
  "iroha_config_base",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_operation_journal",
  "iroha_sccp",
  "iroha_sccp_rpc",
  "iroha_wallet",
@@ -6001,6 +6096,7 @@ dependencies = [
  "iroha_version",
  "iroha_zkp_halo2",
  "ivm",
+ "ivm_abi",
  "jsonwebtoken",
  "kotodama_lang",
  "libc",
@@ -6085,6 +6181,7 @@ dependencies = [
  "iroha_executor_data_model",
  "iroha_fs",
  "iroha_model_base",
+ "iroha_operation_journal",
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_torii_shared",
@@ -6182,6 +6279,7 @@ dependencies = [
  "iroha_core_zk",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_deploy",
  "iroha_executor_data_model",
  "iroha_fs",
  "iroha_futures",
@@ -6190,18 +6288,19 @@ dependencies = [
  "iroha_logger",
  "iroha_model_base",
  "iroha_musubi_service",
+ "iroha_operation_journal",
  "iroha_p2p",
  "iroha_panic_hook",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_sccp_rpc",
  "iroha_storage_client",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",
  "iroha_torii_shared",
  "iroha_version",
- "iroha_wallet",
  "ivm",
  "mv",
  "norito",
@@ -6219,6 +6318,7 @@ dependencies = [
  "supports-color",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tokio-rustls",
  "toml 0.9.12+spec-1.1.0",
@@ -6346,10 +6446,12 @@ dependencies = [
 name = "ivm_abi"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "hex",
  "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_model_base",
+ "iroha_primitives",
  "norito",
 ]
 
@@ -7156,12 +7258,14 @@ dependencies = [
  "kotodama_surface",
  "kotodama_toolchain",
  "norito",
+ "rcgen",
  "rustix 1.1.4",
  "sorafs_car",
  "sorafs_manifest",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "url",
+ "zeroize",
 ]
 
 [[package]]

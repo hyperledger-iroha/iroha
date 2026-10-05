@@ -3,15 +3,19 @@
 
 package org.hyperledger.iroha.sdk.offline.wallet
 
+// Upcall results of the KAGEMUSHA wallet platform adapter. They are internal: only the Rust
+// JNI adapter reads them (by name, so `consumer-rules.pro` keeps them), and app code has no
+// route to the payment key through this module.
+
 /**
  * Reason an Android platform answer is not definitive. It is never absence.
  *
  * The kinds mirror the Rust `KagemushaWalletUnavailableV1` of
- * `crates/iroha_core_zk/src/kagemusha_v1_state/wallet_advance_v1/platform.rs` one to one, so the
+ * `crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/platform.rs` one to one, so the
  * bridge maps [kind] and [code] without interpretation. [code] is the OS error for [Kind.IO] and
  * one of the `PLATFORM_*` constants for [Kind.PLATFORM]; it is 0 for every other kind.
  */
-class KagemushaWalletAndroidUnavailableV1 private constructor(
+internal class KagemushaWalletAndroidUnavailableV1 private constructor(
     @JvmField val kind: Kind,
     @JvmField val code: Int,
 ) {
@@ -46,11 +50,20 @@ class KagemushaWalletAndroidUnavailableV1 private constructor(
 
     override fun toString(): String = "KagemushaWalletAndroidUnavailableV1($kind, $code)"
 
+    // TODO(G2-bridge): the Rust `KagemushaWalletKeyGenerationV1` has no non-retryable refusal, so
+    // the permanent answers below (PLATFORM_STRONGBOX_UNAVAILABLE, PLATFORM_BACKUP_ENABLED,
+    // PLATFORM_KEYSTORE_UNSUPPORTED) reach enrollment as `Unavailable` and are retried until the
+    // challenge expires. Add a `Refused(reason)` outcome to platform.rs and map these codes to it.
     companion object {
-        /** Keystore access threw; the entry state is unknown. */
+        /**
+         * Keystore access threw; the entry state is unknown. On keystore2 a permanently
+         * invalidated key also lands here when it is read through `getKey`, because AOSP rethrows
+         * `KeyPermanentlyInvalidatedException` as an `UnrecoverableKeyException` without a cause;
+         * only signing reports [PERMANENTLY_INVALIDATED].
+         */
         const val PLATFORM_KEYSTORE: Int = 1
 
-        /** A present key's certificate or attestation chain could not be read. */
+        /** A present key's attestation chain could not be read or is malformed. */
         const val PLATFORM_CERTIFICATE: Int = 2
 
         /** The key to sign with is definitively absent; reconcile classifies the loss. */
@@ -59,23 +72,24 @@ class KagemushaWalletAndroidUnavailableV1 private constructor(
         /** Key generation failed with an unknown outcome; probe again before acting. */
         const val PLATFORM_GENERATION_FAILED: Int = 4
 
-        /** The enrollment profile requires StrongBox and the device has none. */
+        /** Permanent: the enrollment profile requires StrongBox and the device has none. */
         const val PLATFORM_STRONGBOX_UNAVAILABLE: Int = 5
 
-        /** The slot's enrollment intent is not durable, so its alias is not yet recorded. */
-        const val PLATFORM_INTENT_NOT_DURABLE: Int = 6
-
-        /** The slot's enrollment intent could not be read. */
-        const val PLATFORM_INTENT_UNAVAILABLE: Int = 7
-
-        /** The application allows backup or has its own backup agent; enrollment is refused. */
-        const val PLATFORM_BACKUP_ENABLED: Int = 8
+        /** Permanent: the app's backup or device-transfer set is not provably empty. */
+        const val PLATFORM_BACKUP_ENABLED: Int = 6
 
         /** Signing failed for a reason other than the key itself. */
-        const val PLATFORM_SIGN_FAILED: Int = 9
+        const val PLATFORM_SIGN_FAILED: Int = 7
 
         /** `UserManager` or the no-backup directory could not be queried. */
-        const val PLATFORM_STORAGE: Int = 10
+        const val PLATFORM_STORAGE: Int = 8
+
+        /**
+         * Permanent: API level below 31. Keystore1 `getKey` reads every daemon error as "no key"
+         * (`KeyStore.contains` returns false on any `exist` error or `RemoteException`), so no
+         * definitive absence exists there.
+         */
+        const val PLATFORM_KEYSTORE_UNSUPPORTED: Int = 9
 
         @JvmField val LOCKED = KagemushaWalletAndroidUnavailableV1(Kind.LOCKED, 0)
         @JvmField val BEFORE_FIRST_UNLOCK = KagemushaWalletAndroidUnavailableV1(Kind.BEFORE_FIRST_UNLOCK, 0)
@@ -94,7 +108,7 @@ class KagemushaWalletAndroidUnavailableV1 private constructor(
 }
 
 /** Hardware key policy of one enrollment; [tag] equals Rust `KagemushaWalletKeyProfileV1::tag`. */
-enum class KagemushaWalletAndroidKeyProfileV1(@JvmField val tag: Int) {
+internal enum class KagemushaWalletAndroidKeyProfileV1(@JvmField val tag: Int) {
     /** StrongBox only: a device without StrongBox refuses enrollment. */
     SECURE_ELEMENT(1),
 
@@ -109,7 +123,7 @@ enum class KagemushaWalletAndroidKeyProfileV1(@JvmField val tag: Int) {
 }
 
 /** Hardware that holds a generated payment key. */
-enum class KagemushaWalletAndroidSecurityLevelV1 {
+internal enum class KagemushaWalletAndroidSecurityLevelV1 {
     /** Android StrongBox. */
     STRONGBOX,
 
@@ -118,9 +132,9 @@ enum class KagemushaWalletAndroidSecurityLevelV1 {
 }
 
 /** Tri-state probe of one slot's payment key. */
-sealed class KagemushaWalletAndroidKeyProbeV1 {
+internal sealed class KagemushaWalletAndroidKeyProbeV1 {
     /** The key exists; its public key is the canonical 65-byte uncompressed P-256 point. */
-    class Present internal constructor(publicKeySec1: ByteArray) : KagemushaWalletAndroidKeyProbeV1() {
+    class Present(publicKeySec1: ByteArray) : KagemushaWalletAndroidKeyProbeV1() {
         private val point = publicKeySec1.copyOf()
 
         /** The canonical uncompressed SEC1 public key. */
@@ -129,23 +143,21 @@ sealed class KagemushaWalletAndroidKeyProbeV1 {
         override fun toString(): String = "Present"
     }
 
-    /** `KeyStore.getKey` definitively reported no key under the slot's alias. */
+    /** `KeyStore.getKey` (keystore2) definitively reported no key under the slot's alias. */
     object Absent : KagemushaWalletAndroidKeyProbeV1() {
         override fun toString(): String = "Absent"
     }
 
     /** No definitive answer; retry. Never absence. */
-    class Unavailable internal constructor(
-        @JvmField val reason: KagemushaWalletAndroidUnavailableV1,
-    ) : KagemushaWalletAndroidKeyProbeV1() {
+    class Unavailable(@JvmField val reason: KagemushaWalletAndroidUnavailableV1) : KagemushaWalletAndroidKeyProbeV1() {
         override fun toString(): String = "Unavailable($reason)"
     }
 }
 
 /** Outcome of one payment-key generation request. */
-sealed class KagemushaWalletAndroidKeyGenerationV1 {
+internal sealed class KagemushaWalletAndroidKeyGenerationV1 {
     /** A new key was generated under the slot's alias and checked against the request. */
-    class Generated internal constructor(
+    class Generated(
         publicKeySec1: ByteArray,
         @JvmField val securityLevel: KagemushaWalletAndroidSecurityLevelV1,
     ) : KagemushaWalletAndroidKeyGenerationV1() {
@@ -163,17 +175,15 @@ sealed class KagemushaWalletAndroidKeyGenerationV1 {
     }
 
     /** No key was generated, or the outcome is unknown; probe again before acting. */
-    class Unavailable internal constructor(
-        @JvmField val reason: KagemushaWalletAndroidUnavailableV1,
-    ) : KagemushaWalletAndroidKeyGenerationV1() {
+    class Unavailable(@JvmField val reason: KagemushaWalletAndroidUnavailableV1) : KagemushaWalletAndroidKeyGenerationV1() {
         override fun toString(): String = "Unavailable($reason)"
     }
 }
 
 /** Outcome of one payment-key signature. */
-sealed class KagemushaWalletAndroidSignatureV1 {
+internal sealed class KagemushaWalletAndroidSignatureV1 {
     /** The platform's strict DER `SHA256withECDSA` signature, unmodified; Rust freezes it. */
-    class Der internal constructor(der: ByteArray) : KagemushaWalletAndroidSignatureV1() {
+    class Der(der: ByteArray) : KagemushaWalletAndroidSignatureV1() {
         private val bytes = der.copyOf()
 
         /** The DER signature. */
@@ -183,39 +193,33 @@ sealed class KagemushaWalletAndroidSignatureV1 {
     }
 
     /** The key did not sign; the operation stays pending. */
-    class Unavailable internal constructor(
-        @JvmField val reason: KagemushaWalletAndroidUnavailableV1,
-    ) : KagemushaWalletAndroidSignatureV1() {
+    class Unavailable(@JvmField val reason: KagemushaWalletAndroidUnavailableV1) : KagemushaWalletAndroidSignatureV1() {
         override fun toString(): String = "Unavailable($reason)"
     }
 }
 
 /** Outcome of one payment-key deletion (custody deletion only). */
-sealed class KagemushaWalletAndroidRemoveV1 {
+internal sealed class KagemushaWalletAndroidRemoveV1 {
     /** The key is definitively absent. */
     object Removed : KagemushaWalletAndroidRemoveV1() {
         override fun toString(): String = "Removed"
     }
 
     /** The key is still present. */
-    class NotRemoved internal constructor(
-        @JvmField val reason: KagemushaWalletAndroidUnavailableV1,
-    ) : KagemushaWalletAndroidRemoveV1() {
+    class NotRemoved(@JvmField val reason: KagemushaWalletAndroidUnavailableV1) : KagemushaWalletAndroidRemoveV1() {
         override fun toString(): String = "NotRemoved($reason)"
     }
 
     /** Whether the key is gone is unknown. */
-    class Uncertain internal constructor(
-        @JvmField val reason: KagemushaWalletAndroidUnavailableV1,
-    ) : KagemushaWalletAndroidRemoveV1() {
+    class Uncertain(@JvmField val reason: KagemushaWalletAndroidUnavailableV1) : KagemushaWalletAndroidRemoveV1() {
         override fun toString(): String = "Uncertain($reason)"
     }
 }
 
 /** Tri-state export of one payment key's attestation chain, leaf first. */
-sealed class KagemushaWalletAndroidAttestationChainV1 {
+internal sealed class KagemushaWalletAndroidAttestationChainV1 {
     /** The DER certificates of the attestation chain, leaf first. */
-    class Present internal constructor(chainDer: List<ByteArray>) : KagemushaWalletAndroidAttestationChainV1() {
+    class Present(chainDer: List<ByteArray>) : KagemushaWalletAndroidAttestationChainV1() {
         private val chain = chainDer.map { it.copyOf() }
 
         /** Copies of the DER certificates, leaf first. */
@@ -230,64 +234,20 @@ sealed class KagemushaWalletAndroidAttestationChainV1 {
     }
 
     /** No definitive answer; retry. Never absence. */
-    class Unavailable internal constructor(
-        @JvmField val reason: KagemushaWalletAndroidUnavailableV1,
-    ) : KagemushaWalletAndroidAttestationChainV1() {
-        override fun toString(): String = "Unavailable($reason)"
-    }
-}
-
-/** Boot identity text: the lowercase hyphenated UUID of `/proc/sys/kernel/random/boot_id`. */
-sealed class KagemushaWalletAndroidBootIdV1 {
-    /** The validated boot UUID; the bridge hashes it with `kagemusha_wallet_boot_id_from_text_v1`. */
-    class Present internal constructor(@JvmField val uuid: String) : KagemushaWalletAndroidBootIdV1() {
-        override fun toString(): String = "Present"
-    }
-
-    /** The boot identity cannot be read; every file is then treated as written in this boot. */
-    class Unavailable internal constructor(
-        @JvmField val reason: KagemushaWalletAndroidUnavailableV1,
-    ) : KagemushaWalletAndroidBootIdV1() {
+    class Unavailable(@JvmField val reason: KagemushaWalletAndroidUnavailableV1) : KagemushaWalletAndroidAttestationChainV1() {
         override fun toString(): String = "Unavailable($reason)"
     }
 }
 
 /** Custody root path, or why it is not available now. */
-sealed class KagemushaWalletAndroidCustodyRootV1 {
+internal sealed class KagemushaWalletAndroidCustodyRootV1 {
     /** Absolute canonical path of the custody root; Rust creates the directory durably. */
-    class Present internal constructor(@JvmField val path: String) : KagemushaWalletAndroidCustodyRootV1() {
+    class Present(@JvmField val path: String) : KagemushaWalletAndroidCustodyRootV1() {
         override fun toString(): String = "Present($path)"
     }
 
     /** Credential-encrypted storage is not available; retry. */
-    class Unavailable internal constructor(
-        @JvmField val reason: KagemushaWalletAndroidUnavailableV1,
-    ) : KagemushaWalletAndroidCustodyRootV1() {
+    class Unavailable(@JvmField val reason: KagemushaWalletAndroidUnavailableV1) : KagemushaWalletAndroidCustodyRootV1() {
         override fun toString(): String = "Unavailable($reason)"
     }
-}
-
-/** Durable state of a slot's enrollment intent, as the Rust provider reports it. */
-enum class KagemushaWalletAndroidIntentStateV1 {
-    /** `intent.norito` naming the slot is durable. */
-    DURABLE,
-
-    /** The slot has no durable intent. */
-    ABSENT,
-
-    /** The intent could not be read; retry. */
-    UNAVAILABLE,
-}
-
-/**
- * Hook confirming that the Rust provider has made a slot's enrollment intent durable.
- *
- * The slot is a fresh random identity and the Keystore alias is derived from it
- * (`kgm-w1-<slot hex>`), so a durable intent records the alias before any key exists under it.
- * The adapter calls this immediately before generating and generates only on
- * [KagemushaWalletAndroidIntentStateV1.DURABLE]; a thrown exception counts as unavailable.
- */
-fun interface KagemushaWalletAndroidIntentGateV1 {
-    /** Durable state of the intent of [slot] (32 bytes; the callee must not retain the array). */
-    fun intentState(slot: ByteArray): KagemushaWalletAndroidIntentStateV1
 }

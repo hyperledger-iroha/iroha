@@ -119,65 +119,55 @@ fn response(rows: Vec<CommittedTransaction>) -> Vec<u8> {
 }
 
 #[test]
-fn kagemusha_testnet_anchor_requires_signed_consecutive_chain_from_independent_context() {
+fn checkpoint_page_requires_signed_consecutive_chain_from_independent_context() {
     let fixture = Fixture::new(false);
-    let chain = fixture.chain_json();
-    let anchor = crate::kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-        fixture.network(), &fixture.checkpoint, &chain,
-    ).unwrap();
-    assert_eq!(anchor.network_id, fixture.network());
-    assert_eq!(anchor.checkpoint.height(), 3);
-    assert_eq!(anchor.checkpoint.block_hash(), fixture.block.hash());
-    #[cfg(unix)]
-    {
-        let mut pinned = None;
-        let (newly_pinned, returned) =
-            crate::kagemusha_testnet_finality_chain_v1::verify_then_pin_chain(
-                fixture.network(),
-                &fixture.checkpoint,
-                &chain,
-                |verified| {
-                    pinned = Some(verified.anchor().clone());
-                    Ok(true)
-                },
-            )
-            .unwrap();
-        assert!(newly_pinned);
-        assert_eq!(Some(returned.clone()), pinned);
-        let (newly_pinned, retried) =
-            crate::kagemusha_testnet_finality_chain_v1::verify_then_pin_chain(
-                fixture.network(),
-                &fixture.checkpoint,
-                &chain,
-                |_| Ok(false),
-            )
-            .unwrap();
-        assert!(!newly_pinned);
-        assert_eq!(retried, returned);
-    }
+    let page = verify_checkpoint_page(
+        fixture.network(),
+        &fixture.checkpoint,
+        &fixture.proofs,
+        MAX_CHAIN_PROOFS,
+        MAX_CHAIN_JSON_BYTES,
+    )
+    .unwrap();
+    assert_eq!(page.checkpoint().network_id(), fixture.network());
+    assert_eq!(page.checkpoint().height(), 3);
+    assert_eq!(page.checkpoint().block_hash(), fixture.block.hash());
+
     let wrong_checkpoint = build_checkpoint(&fixture.chain.state().view(), 1).unwrap();
-    assert!(crate::kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-        fixture.network(), &wrong_checkpoint, &chain,
-    ).is_err());
+    assert!(
+        verify_checkpoint_page(
+            fixture.network(),
+            &wrong_checkpoint,
+            &fixture.proofs,
+            MAX_CHAIN_PROOFS,
+            MAX_CHAIN_JSON_BYTES,
+        )
+        .is_err()
+    );
     let wrong_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
         b"foreign inclusion network",
     )));
-    assert!(crate::kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-        wrong_network, &fixture.checkpoint, &chain,
-    ).is_err());
-    let repeated =
-        json::to_vec(&vec![fixture.proofs[0].clone(), fixture.proofs[0].clone()]).unwrap();
-    assert!(crate::kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-        fixture.network(), &fixture.checkpoint, &repeated,
-    ).is_err());
-    #[cfg(unix)]
-    {
-        let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
-        let publication = gate.dispatch().unwrap();
-        assert!(crate::kagemusha_testnet_finality_chain_v1::pin_kagemusha_testnet_authenticated_finality_chain_v1(
-            &publication.permit(), [0x71; 32], fixture.network(), &fixture.checkpoint, &chain,
-        ).is_err());
-    }
+    assert!(
+        verify_checkpoint_page(
+            wrong_network,
+            &fixture.checkpoint,
+            &fixture.proofs,
+            MAX_CHAIN_PROOFS,
+            MAX_CHAIN_JSON_BYTES,
+        )
+        .is_err()
+    );
+    let repeated = [fixture.proofs[0].clone(), fixture.proofs[0].clone()];
+    assert!(
+        verify_checkpoint_page(
+            fixture.network(),
+            &fixture.checkpoint,
+            &repeated,
+            MAX_CHAIN_PROOFS,
+            MAX_CHAIN_JSON_BYTES,
+        )
+        .is_err()
+    );
 }
 
 #[test]

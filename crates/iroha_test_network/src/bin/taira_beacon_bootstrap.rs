@@ -434,6 +434,22 @@ fn limits() -> NativeFinalityLimits {
 }
 
 fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinalityJournal> {
+    native_journal_with_deadline(binding, height, None)
+}
+
+// The ordinary reader and ceremony reader share the same source verification.
+// Only a ceremony caller supplies its retained enclosing absolute deadline.
+fn native_journal_with_deadline(
+    binding: &Binding,
+    height: Option<u64>,
+    deadline: Option<Instant>,
+) -> Result<NativeFinalityJournal> {
+    if let Some(deadline) = deadline {
+        ensure!(
+            Instant::now() < deadline,
+            "native phase finality deadline elapsed"
+        );
+    }
     // Keep native verification off accumulated asynchronous poll frames, as in
     // the maintained conductor fixture. This is a joined default-stack worker.
     std::thread::scope(|scope| {
@@ -453,6 +469,12 @@ fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinali
                 let mut blocks = Vec::new();
                 let mut total = 0_usize;
                 for at in 1..=height {
+                    if let Some(deadline) = deadline {
+                        ensure!(
+                            Instant::now() < deadline,
+                            "native phase finality deadline elapsed"
+                        );
+                    }
                     let mut index = [BlockIndex {
                         start: 0,
                         length: 0,
@@ -487,6 +509,12 @@ fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinali
                         block.header().height().get() == 1,
                         "native genesis height differs"
                     );
+                    if let Some(deadline) = deadline {
+                        ensure!(
+                            Instant::now() < deadline,
+                            "native phase finality deadline elapsed"
+                        );
+                    }
                     return Ok(journal);
                 }
                 let mut cursor = NativeJournalCursor::new(
@@ -504,12 +532,18 @@ fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinali
                 .map_err(|error| eyre!(error))?;
                 ensure!(
                     cursor
-                        .advance(&journal)
+                        .advance((&journal).into())
                         .map_err(|error| eyre!(error))?
                         .height()
                         == height,
                     "native phase height differs"
                 );
+                if let Some(deadline) = deadline {
+                    ensure!(
+                        Instant::now() < deadline,
+                        "native phase finality deadline elapsed"
+                    );
+                }
                 Ok(journal)
             })
             .join()
@@ -711,7 +745,16 @@ async fn recover_applied(
     label: &str,
     expected_height: u64,
     discriminant: u16,
+    deadline: Instant,
 ) -> Result<()> {
+    ensure!(
+        Instant::now() < deadline,
+        "native transaction recovery deadline elapsed"
+    );
+    let client = client.with_request_deadline(deadline);
+    let remaining = deadline
+        .saturating_duration_since(Instant::now())
+        .min(ACTION_TIMEOUT);
     let hash = transaction.hash();
     let outcome = std::thread::scope(|scope| {
         scope
@@ -720,7 +763,7 @@ async fn recover_applied(
                 client.wait_for_transaction_applied(
                     hash,
                     TransactionWaitOptions {
-                        timeout: ACTION_TIMEOUT,
+                        timeout: remaining,
                         poll_interval: Duration::from_millis(500),
                     },
                 )
@@ -728,6 +771,10 @@ async fn recover_applied(
             .join()
             .map_err(|_| eyre!("transaction recovery worker panicked"))?
     })?;
+    ensure!(
+        Instant::now() < deadline,
+        "native transaction recovery deadline elapsed"
+    );
     ensure!(
         outcome.block_height == Some(expected_height),
         "transaction applied at another height"
@@ -746,8 +793,14 @@ async fn submit_once(
     label: &str,
     expected_height: u64,
     discriminant: u16,
+    deadline: Instant,
 ) -> Result<()> {
-    let dispatch_client = client.with_request_deadline(Instant::now() + ACTION_TIMEOUT);
+    let deadline = deadline.min(Instant::now() + ACTION_TIMEOUT);
+    ensure!(
+        Instant::now() < deadline,
+        "native transaction submission deadline elapsed"
+    );
+    let dispatch_client = client.with_request_deadline(deadline);
     let account = dispatch_client.account_client()?;
     let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
         instructions,
@@ -789,6 +842,7 @@ async fn submit_once(
         label,
         expected_height,
         discriminant,
+        deadline,
     )
     .await
 }
@@ -980,6 +1034,7 @@ async fn run(args: Args) -> Result<()> {
                 &label,
                 height,
                 args.binding.chain_discriminant,
+                Instant::now() + ACTION_TIMEOUT,
             )
             .await?;
             let journal = native_journal(&args.binding, Some(height))?;
@@ -1055,15 +1110,22 @@ async fn run(args: Args) -> Result<()> {
             &args.binding.daemon,
             limits(),
             5,
-            |height, snapshot| {
+            |height, snapshot, deadline| {
                 let binding = args.binding.clone();
                 let output = args.output.clone();
                 let client = client.clone();
                 let roster = roster.clone();
                 async move {
+                    ensure!(
+                        Instant::now() < deadline,
+                        "native phase callback deadline elapsed"
+                    );
                     ensure!((2..=4).contains(&height), "unexpected native DKG phase");
                     ensure!(
-                        native_journal(&binding, None)?.blocks.len() as u64 == height - 1,
+                        native_journal_with_deadline(&binding, None, Some(deadline))?
+                            .blocks
+                            .len() as u64
+                            == height - 1,
                         "completed public DKG phase has lost its exact predecessor boundary"
                     );
                     let (audit, public_bytes) = phase_audit(&binding, &roster, height, &snapshot)?;
@@ -1084,9 +1146,9 @@ async fn run(args: Args) -> Result<()> {
                         &label,
                         height,
                         binding.chain_discriminant,
+                        deadline,
                     )
                     .await?;
-                    let deadline = Instant::now() + ACTION_TIMEOUT;
                     loop {
                         let native = native_config(&binding.validator_configs[0], &binding)?;
                         let mut store = BlockStore::open_read_only(Kura::canonical_storage_path(
@@ -1101,7 +1163,16 @@ async fn run(args: Args) -> Result<()> {
                         );
                         tokio::time::sleep(Duration::from_millis(250)).await;
                     }
-                    let journal = native_journal(&binding, Some(height))?;
+                    ensure!(
+                        Instant::now() < deadline,
+                        "native phase callback deadline elapsed"
+                    );
+                    let journal =
+                        native_journal_with_deadline(&binding, Some(height), Some(deadline))?;
+                    ensure!(
+                        Instant::now() < deadline,
+                        "native phase callback deadline elapsed"
+                    );
                     let phase_args = Args {
                         binding: binding.clone(),
                         output: output.clone(),
@@ -1116,6 +1187,10 @@ async fn run(args: Args) -> Result<()> {
                         binding.chain_discriminant,
                     )?;
                     retain_phase_journal(&output, height, &journal)?;
+                    ensure!(
+                        Instant::now() < deadline,
+                        "native phase callback deadline elapsed"
+                    );
                     Ok(journal)
                 }
             },
@@ -1255,6 +1330,7 @@ async fn run(args: Args) -> Result<()> {
             "install",
             5,
             args.binding.chain_discriminant,
+            Instant::now() + ACTION_TIMEOUT,
         )
         .await?;
     } else {
@@ -1265,6 +1341,7 @@ async fn run(args: Args) -> Result<()> {
             "install",
             5,
             args.binding.chain_discriminant,
+            Instant::now() + ACTION_TIMEOUT,
         )
         .await?;
     }
@@ -1306,7 +1383,8 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use iroha_core::beacon::{
-        LocalGlobalThresholdBeaconDkgSeatV1, ceremony::global_beacon_genesis_dkg_session_v1,
+        LocalGlobalThresholdBeaconDkgSeatV1, PreparedLocalGlobalThresholdBeaconDkgSeatV1,
+        ceremony::global_beacon_genesis_dkg_session_v1,
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::block::BlockHeader;
@@ -1345,16 +1423,20 @@ mod tests {
                 validator_configs: Vec::new(),
             };
             let session = global_beacon_genesis_dkg_session_v1(network_id, &roster).unwrap();
+            let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
             let mut local = signers
                 .iter()
                 .enumerate()
                 .map(|(index, signer)| {
-                    LocalGlobalThresholdBeaconDkgSeatV1::new(
+                    PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
                         session,
                         &roster,
                         u16::try_from(index + 1).unwrap(),
                         signer,
+                        &budget,
                     )
+                    .unwrap()
+                    .generate(signer)
                     .unwrap()
                 })
                 .collect::<Vec<_>>();
@@ -1364,20 +1446,21 @@ mod tests {
                 .collect::<Vec<_>>();
             let keys = publications
                 .iter()
-                .map(|(key, _)| key.clone())
+                .map(|(key, _)| (**key).clone())
                 .collect::<Vec<_>>();
             let commitments = publications
                 .iter()
-                .map(|(_, commitment)| commitment.clone())
+                .map(|(_, commitment)| (**commitment).clone())
                 .collect::<Vec<_>>();
             let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
-            let mut public = GlobalThresholdBeaconDkgStateV1::new(session, &crypto).unwrap();
+            let mut public =
+                GlobalThresholdBeaconDkgStateV1::new(session, &crypto, &budget).unwrap();
             for key in &keys {
-                public.record_recipient_key(1, key.clone()).unwrap();
+                public.record_recipient_key(1, key).unwrap();
             }
             for commitment in &commitments {
                 public
-                    .record_dealer_commitment(1, commitment.clone(), &crypto)
+                    .record_dealer_commitment(1, commitment, &crypto)
                     .unwrap();
             }
             let committed = public.public_snapshot().unwrap();
@@ -1385,6 +1468,11 @@ mod tests {
                 for edge in seat.deliver(&keys, &commitments, 2, signer).unwrap() {
                     public.record_encrypted_share(2, edge).unwrap();
                 }
+            }
+            // Logical audit fixture mirrors completed original public publication;
+            // the daemon owns the actual file/directory durability requirement.
+            for seat in &mut local {
+                seat.retire_durably_published_dealer().unwrap();
             }
             let delivered = public.public_snapshot().unwrap();
             for (seat, signer) in local.iter_mut().zip(&signers) {
@@ -1398,7 +1486,18 @@ mod tests {
                 public.public_snapshot().is_err(),
                 "acceptance snapshot must precede consuming finalization"
             );
-            (binding, roster, [committed, delivered, accepted])
+            let phases = [
+                committed.record().clone(),
+                delivered.record().clone(),
+                accepted.record().clone(),
+            ];
+            drop(committed);
+            drop(delivered);
+            drop(accepted);
+            drop(local);
+            drop(public);
+            assert_eq!(budget.reserved_bytes(), 0);
+            (binding, roster, phases)
         });
         &FIXTURE
     }

@@ -51,6 +51,7 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami localnet up\n",
     "  kagami dataspace up acme --network taira\n",
     "  kagami contract deploy hello.ko\n",
+    "  kagami package publish .\n",
     "  kagami context list\n",
     "  kagami wizard\n",
     "  kagami localnet generate --out-dir ./localnet\n",
@@ -63,6 +64,9 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            if let Some(status) = error.downcast_ref::<developer::PublicationExit>() {
+                return ExitCode::from(status.0);
+            }
             eprintln!("{error:?}");
             ExitCode::FAILURE
         }
@@ -116,6 +120,9 @@ enum Command {
     /// Build and deploy native IVM contracts in one invocation
     #[command(subcommand)]
     Contract(developer::ContractCommand),
+    /// Publish native Musubi packages through an exact generated local environment
+    #[command(subcommand)]
+    Package(developer::PackageCommand),
     /// Internal native process-owner entry point
     #[command(name = "_managed-worker", hide = true)]
     ManagedWorker(developer::WorkerArgs),
@@ -174,6 +181,7 @@ impl<T: Write> RunArgs<T> for Command {
             Dataspace(args) => args.run(writer),
             Context(args) => args.run(writer),
             Contract(args) => args.run(writer),
+            Package(args) => args.run(writer),
             ManagedWorker(args) => args.run(writer),
             Docker(args) => args.run(writer),
             Keys(args) => args.run(writer),

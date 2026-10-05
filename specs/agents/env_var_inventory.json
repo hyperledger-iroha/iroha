@@ -1,9 +1,9 @@
 {
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
-  "generated_at": "2026-10-01T02:35:15Z",
+  "generated_at": "2026-10-04T07:44:17Z",
   "root": "iroha",
-  "total_refs": 893,
-  "unique_vars": 209,
+  "total_refs": 868,
+  "unique_vars": 202,
   "variables": {
     "CARGO": {
       "counts": {
@@ -297,14 +297,14 @@
     },
     "CARGO_CFG_TARGET_OS": {
       "counts": {
-        "build": 6,
+        "build": 5,
         "prod": 2,
         "tool": 2
       },
       "paths": [
         {
           "context": "let target_os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_default();",
-          "line": 40,
+          "line": 22,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -331,12 +331,6 @@
           "line": 684,
           "path": "crates/iroha_crypto/src/bin/sm_perf_check.rs",
           "scope": "prod"
-        },
-        {
-          "context": "let target_os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_default();",
-          "line": 676,
-          "path": "crates/ivm/build.rs",
-          "scope": "build"
         },
         {
           "context": "let target_os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_default();",
@@ -409,7 +403,7 @@
       "paths": [
         {
           "context": "let fastpq_gpu_feature = env::var_os(\"CARGO_FEATURE_FASTPQ_GPU\").is_some();",
-          "line": 19,
+          "line": 17,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         }
@@ -422,7 +416,7 @@
       "paths": [
         {
           "context": "&& env::var_os(\"CARGO_FEATURE_METAL\").is_some()",
-          "line": 90,
+          "line": 71,
           "path": "crates/ivm/build.rs",
           "scope": "test"
         }
@@ -2525,13 +2519,13 @@
         },
         {
           "context": "let manifest_dir = PathBuf::from(env::var(\"CARGO_MANIFEST_DIR\")?);",
-          "line": 398,
+          "line": 379,
           "path": "crates/ivm/build.rs",
           "scope": "build"
         },
         {
           "context": "let manifest_dir = PathBuf::from(env::var(\"CARGO_MANIFEST_DIR\")?);",
-          "line": 529,
+          "line": 512,
           "path": "crates/ivm/build.rs",
           "scope": "build"
         },
@@ -3630,7 +3624,7 @@
       "paths": [
         {
           "context": "env::var_os(\"CUDA_HOME\")",
-          "line": 342,
+          "line": 90,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -3667,7 +3661,7 @@
       "paths": [
         {
           "context": ".or_else(|| env::var_os(\"CUDA_PATH\"))",
-          "line": 343,
+          "line": 91,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -3699,12 +3693,12 @@
     },
     "CXX": {
       "counts": {
-        "build": 4
+        "build": 3
       },
       "paths": [
         {
           "context": "env::var_os(\"CXX\").is_some()",
-          "line": 386,
+          "line": 134,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -3712,12 +3706,6 @@
           "context": "env::var_os(\"CXX\").is_some()",
           "line": 130,
           "path": "crates/gpuzstd_cuda/build.rs",
-          "scope": "build"
-        },
-        {
-          "context": "env::var_os(\"CXX\").is_some()",
-          "line": 833,
-          "path": "crates/ivm/build.rs",
           "scope": "build"
         },
         {
@@ -3791,26 +3779,6 @@
         }
       ]
     },
-    "FASTPQ_METAL_LIB": {
-      "counts": {
-        "prod": 1,
-        "test": 1
-      },
-      "paths": [
-        {
-          "context": "option_env!(\"FASTPQ_METAL_LIB\")",
-          "line": 1262,
-          "path": "crates/fastpq_prover/src/backend.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "option_env!(\"FASTPQ_METAL_LIB\"),",
-          "line": 3115,
-          "path": "crates/fastpq_prover/src/metal.rs",
-          "scope": "test"
-        }
-      ]
-    },
     "FASTPQ_RESOURCE_OUTPUT_DIR": {
       "counts": {
         "test": 1
@@ -3831,7 +3799,7 @@
       "paths": [
         {
           "context": "let skip_gpu_build = env::var_os(\"FASTPQ_SKIP_GPU_BUILD\").is_some();",
-          "line": 41,
+          "line": 34,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         }
@@ -4041,12 +4009,12 @@
     },
     "HOST_CXX": {
       "counts": {
-        "build": 4
+        "build": 3
       },
       "paths": [
         {
           "context": "|| env::var_os(\"HOST_CXX\").is_some()",
-          "line": 387,
+          "line": 135,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -4054,12 +4022,6 @@
           "context": "|| env::var_os(\"HOST_CXX\").is_some()",
           "line": 131,
           "path": "crates/gpuzstd_cuda/build.rs",
-          "scope": "build"
-        },
-        {
-          "context": "|| env::var_os(\"HOST_CXX\").is_some()",
-          "line": 834,
-          "path": "crates/ivm/build.rs",
           "scope": "build"
         },
         {
@@ -5105,58 +5067,6 @@
         }
       ]
     },
-    "IVM_CUDA_GENCODE": {
-      "counts": {
-        "build": 1
-      },
-      "paths": [
-        {
-          "context": "env::var(\"IVM_CUDA_GENCODE\").unwrap_or_else(|_| DEFAULT_CUDA_GENCODE.to_string());",
-          "line": 679,
-          "path": "crates/ivm/build.rs",
-          "scope": "build"
-        }
-      ]
-    },
-    "IVM_CUDA_NVCC": {
-      "counts": {
-        "build": 1
-      },
-      "paths": [
-        {
-          "context": "let executable = env::var(\"IVM_CUDA_NVCC\")",
-          "line": 673,
-          "path": "crates/ivm/build.rs",
-          "scope": "build"
-        }
-      ]
-    },
-    "IVM_CUDA_NVCC_EXTRA": {
-      "counts": {
-        "build": 1
-      },
-      "paths": [
-        {
-          "context": "let extra_flags = env::var(\"IVM_CUDA_NVCC_EXTRA\")",
-          "line": 680,
-          "path": "crates/ivm/build.rs",
-          "scope": "build"
-        }
-      ]
-    },
-    "IVM_CUDA_PTX_MODE": {
-      "counts": {
-        "build": 1
-      },
-      "paths": [
-        {
-          "context": "match env::var(\"IVM_CUDA_PTX_MODE\") {",
-          "line": 657,
-          "path": "crates/ivm/build.rs",
-          "scope": "build"
-        }
-      ]
-    },
     "IVM_CUDA_SELFTEST_TRACE": {
       "counts": {
         "test": 1
@@ -5164,22 +5074,9 @@
       "paths": [
         {
           "context": "if std::env::var_os(\"IVM_CUDA_SELFTEST_TRACE\").is_some() {",
-          "line": 131,
+          "line": 158,
           "path": "crates/ivm/src/cuda.rs",
           "scope": "test"
-        }
-      ]
-    },
-    "IVM_CUDA_TRUSTED_KEY_SHA256": {
-      "counts": {
-        "build": 1
-      },
-      "paths": [
-        {
-          "context": "let trusted_key_sha256 = env::var(\"IVM_CUDA_TRUSTED_KEY_SHA256\").map_err(",
-          "line": 587,
-          "path": "crates/ivm/build.rs",
-          "scope": "build"
         }
       ]
     },
@@ -5767,32 +5664,13 @@
         }
       ]
     },
-    "NVCC": {
-      "counts": {
-        "build": 1
-      },
-      "paths": [
-        {
-          "context": ".or_else(|_| env::var(\"NVCC\"))",
-          "line": 674,
-          "path": "crates/ivm/build.rs",
-          "scope": "build"
-        }
-      ]
-    },
     "OUT_DIR": {
       "counts": {
-        "build": 6,
-        "prod": 15,
-        "test": 8
+        "build": 5,
+        "prod": 6,
+        "test": 6
       },
       "paths": [
-        {
-          "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\").map_err(|err| err.to_string())?);",
-          "line": 151,
-          "path": "crates/fastpq_prover/build.rs",
-          "scope": "build"
-        },
         {
           "context": "let out_dir = PathBuf::from(env::var_os(\"OUT_DIR\").expect(\"Cargo must provide OUT_DIR\"));",
           "line": 46,
@@ -5825,80 +5703,26 @@
         },
         {
           "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\")?);",
-          "line": 393,
+          "line": 374,
           "path": "crates/ivm/build.rs",
           "scope": "build"
         },
         {
           "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\")?);",
-          "line": 468,
+          "line": 449,
           "path": "crates/ivm/build.rs",
           "scope": "build"
         },
         {
           "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\")?);",
-          "line": 532,
+          "line": 515,
           "path": "crates/ivm/build.rs",
           "scope": "build"
         },
         {
-          "context": "concat!(include_str!(concat!(env!(\"OUT_DIR\"), \"/aes.ptx\")), \"\\0\").as_bytes(),",
-          "line": 12,
-          "path": "crates/ivm/src/cuda/aes_api.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "include_str!(concat!(env!(\"OUT_DIR\"), \"/bitonic_sort.ptx\")),",
-          "line": 11,
-          "path": "crates/ivm/src/cuda/bitonic_api.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "concat!(include_str!(concat!(env!(\"OUT_DIR\"), \"/bn254.ptx\")), \"\\0\").as_bytes(),",
-          "line": 12,
-          "path": "crates/ivm/src/cuda/bn254_api.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "concat!(include_str!(concat!(env!(\"OUT_DIR\"), \"/sha256.ptx\")), \"\\0\").as_bytes(),",
-          "line": 12,
-          "path": "crates/ivm/src/cuda/hash_api.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "concat!(include_str!(concat!(env!(\"OUT_DIR\"), \"/sha3.ptx\")), \"\\0\").as_bytes(),",
-          "line": 20,
-          "path": "crates/ivm/src/cuda/hash_api.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "include_str!(concat!(env!(\"OUT_DIR\"), \"/sha256_leaves.ptx\")),",
-          "line": 13,
-          "path": "crates/ivm/src/cuda/merkle_api.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "include_str!(concat!(env!(\"OUT_DIR\"), \"/sha256_pairs_reduce.ptx\")),",
-          "line": 25,
-          "path": "crates/ivm/src/cuda/merkle_api.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "include_str!(concat!(env!(\"OUT_DIR\"), \"/poseidon.ptx\")),",
-          "line": 12,
-          "path": "crates/ivm/src/cuda/poseidon_api.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "include_str!(concat!(env!(\"OUT_DIR\"), \"/signature.ptx\")),",
-          "line": 14,
-          "path": "crates/ivm/src/cuda/signature_api.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "concat!(include_str!(concat!(env!(\"OUT_DIR\"), \"/vector.ptx\")), \"\\0\").as_bytes(),",
-          "line": 16,
-          "path": "crates/ivm/src/cuda/vector_api.rs",
+          "context": "include!(concat!(env!(\"OUT_DIR\"), \"/cuda_bundle.rs\"));",
+          "line": 31,
+          "path": "crates/ivm/src/cuda_artifact.rs",
           "scope": "prod"
         },
         {
@@ -5912,18 +5736,6 @@
           "line": 144,
           "path": "crates/ivm/src/ivm.rs",
           "scope": "prod"
-        },
-        {
-          "context": "let out_dir = env!(\"OUT_DIR\");",
-          "line": 6,
-          "path": "crates/ivm/src/ptx_tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let out_dir = env!(\"OUT_DIR\");",
-          "line": 6,
-          "path": "crates/ivm/tests/ptx_kernels.rs",
-          "scope": "test"
         },
         {
           "context": "let out_dir = PathBuf::from(env::var_os(\"OUT_DIR\").expect(\"Cargo supplies OUT_DIR\"));",
@@ -6056,7 +5868,7 @@
     },
     "PROFILE": {
       "counts": {
-        "build": 2,
+        "build": 1,
         "test": 3
       },
       "paths": [
@@ -6070,12 +5882,6 @@
           "context": "let profile = if env::var(\"PROFILE\").ok().as_deref() == Some(\"release\") {",
           "line": 49,
           "path": "crates/iroha_test_samples/build.rs",
-          "scope": "build"
-        },
-        {
-          "context": "reject_generated_release_ptx(mode, &env::var(\"PROFILE\").unwrap_or_default())?;",
-          "line": 535,
-          "path": "crates/ivm/build.rs",
           "scope": "build"
         },
         {
@@ -6469,7 +6275,7 @@
       "paths": [
         {
           "context": "env::var_os(\"SystemRoot\").map(PathBuf::from)",
-          "line": 824,
+          "line": 830,
           "path": "crates/fastpq_prover/src/backend.rs",
           "scope": "prod"
         },
@@ -6497,7 +6303,7 @@
     "TARGET": {
       "counts": {
         "prod": 1,
-        "test": 2,
+        "test": 1,
         "tool": 2
       },
       "paths": [
@@ -6508,14 +6314,8 @@
           "scope": "prod"
         },
         {
-          "context": "if let Ok(target) = env::var(\"TARGET\") {",
-          "line": 78,
-          "path": "crates/ivm/build.rs",
-          "scope": "test"
-        },
-        {
           "context": "if env::var(\"TARGET\").is_ok_and(|target| target.contains(\"apple-darwin\"))",
-          "line": 89,
+          "line": 70,
           "path": "crates/ivm/build.rs",
           "scope": "test"
         },

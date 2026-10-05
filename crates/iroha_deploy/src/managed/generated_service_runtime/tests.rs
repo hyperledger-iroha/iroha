@@ -97,7 +97,16 @@ struct Genuine {
 }
 impl Genuine {
     fn new(name: &str, full_parent: bool, short_initial: bool) -> Self {
+        Self::with_material_preflight(name, full_parent, short_initial, false)
+    }
+    fn with_material_preflight(
+        name: &str,
+        full_parent: bool,
+        short_initial: bool,
+        retain_before_first_render: bool,
+    ) -> Self {
         assert!(!full_parent || !short_initial);
+        assert!(!retain_before_first_render || full_parent);
         let (temporary, prepared, peers) = fixture(name);
         // Native wallet readers own these original loopback ports during preparation.
         drop(peers);
@@ -253,25 +262,61 @@ impl Genuine {
                 (3..=31).collect::<Vec<_>>()
             );
         }
-        let components = std::array::from_fn(|index| {
+        let enrollments = std::array::from_fn(|index| {
             let provider = selection.plans[index].provider_id();
             let custody = ManagedStreamTokenCustody::open(&prepared, provider).unwrap();
-            let enrollment = custody
+            custody
                 .retained_initial_enrollment(
                     &selection.policies.providers[index].custody,
                     selection.initial(index).unwrap(),
                     options.deadline,
                 )
-                .unwrap();
-            ProviderComponent::retain(
-                &owner.authority.directory,
-                selection.identity(&owner.authority, index).unwrap(),
-                enrollment,
-                None,
-                Retention::PublishCurrent,
-            )
-            .unwrap()
+                .unwrap()
         });
+        let components = if retain_before_first_render {
+            assert!(!owner.authority.directory.path().join("providers").exists());
+            let before = owner.authority.directory.entries(8).unwrap();
+            let mut parent = ManagedServiceBootstrap::open(&prepared).unwrap();
+            let ServiceBootstrapProgress::Complete(history) =
+                parent.recover(options.deadline).unwrap()
+            else {
+                panic!("material preflight requires exact complete native history")
+            };
+            drop(parent);
+            // Use the shared post-selection material owner with actual historical originals.
+            // This does not emulate native discovery or claim current HTTP eligibility.
+            let (_, components, required) = owner
+                .retain_selected_components(
+                    RuntimeSelection::read(&owner.authority).unwrap(),
+                    &history,
+                    enrollments,
+                    options.deadline,
+                )
+                .unwrap();
+            assert_eq!(required.originals(), carriers);
+            let mut expected = before;
+            expected.push("providers".into());
+            expected.sort();
+            assert_eq!(owner.authority.directory.entries(8).unwrap(), expected);
+            components
+        } else {
+            enrollments
+                .into_iter()
+                .enumerate()
+                .map(|(index, enrollment)| {
+                    ProviderComponent::retain(
+                        &owner.authority.directory,
+                        selection.identity(&owner.authority, index).unwrap(),
+                        enrollment,
+                        None,
+                        Retention::PublishCurrent,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap_or_else(|_| panic!("exactly three original provider components"))
+        };
         Self {
             _temporary: temporary,
             prepared,
@@ -433,6 +478,7 @@ fn catalog_first_launch_retains_exact_siblings_roles_topology_and_originals_with
         let config = actual(&revision, index);
         assert!(config.torii.sorafs_discovery.discovery_enabled);
         assert!(config.torii.sorafs_discovery.admission.is_some());
+        assert!(config.musubi_publication.installation.is_none());
         assert_eq!(config.nexus.lane_catalog.lane_count().get(), 1);
         assert_eq!(config.torii.sorafs_storage.enabled, index < 3);
         assert!(!config.torii.sorafs_storage.stream_tokens.enabled);
@@ -756,7 +802,7 @@ fn token_projection_uses_exact_policies_credentials_and_fee_intent_without_claim
 #[test]
 fn private_publication_bounds_and_changed_bytes_fail_without_partial_authority() {
     let temporary = tempfile::tempdir().unwrap();
-    let root = PrivateDirectory::open_or_create(temporary.path()).unwrap();
+    let root = PrivateDirectory::open_or_create(temporary.path().join("runtime")).unwrap();
     assert!(retain_exact(&root, "bound", &[7; 5], 4).is_err());
     assert!(retain_exact(&root, "bound", &[], 4).is_err());
     assert!(root.entries(8).unwrap().is_empty());
@@ -1300,6 +1346,20 @@ fn renewal_projection_keeps_receipt_namespace_and_original_fees_after_refused_pa
         .native
         .unwrap()
     };
+    let publication = |text: &str| {
+        config::parse(
+            crate::secret_toml::parse_table(text, "renewal publication projection").unwrap(),
+            &destination,
+            true,
+        )
+        .unwrap()
+        .musubi_publication
+    };
+    assert_eq!(
+        publication(&first),
+        fixture.selection.publication.installation_config()
+    );
+    assert_eq!(publication(&first), publication(&renewed));
     let original_binding = parse(&first);
     let renewed_binding = parse(&renewed);
     assert_ne!(
@@ -1682,7 +1742,8 @@ fn runtime_retains_all_twenty_nine_original_transactions_and_same_block_distinct
 #[test]
 fn readonly_runtime_retention_refuses_absence_without_creating_files_or_receipt_namespace() {
     let temporary = tempfile::tempdir().unwrap();
-    let directory = PrivateDirectory::open_exact(temporary.path()).unwrap();
+    let private = PrivateDirectory::open_or_create(temporary.path().join("runtime")).unwrap();
+    let directory = PrivateDirectory::open_exact(private.path()).unwrap();
     assert!(
         retain_revision_file(
             &directory,
@@ -1878,6 +1939,234 @@ fn prior_aggregate_prevents_mixed_successor_repair_and_reference_audit_is_bounde
     assert_eq!(
         runtime.read(&prior_name, MAX_MANIFEST_BYTES).unwrap(),
         original
+    );
+    no_http(&peers);
+}
+
+#[test]
+fn publication_projection_installs_exact_original_only_on_ready_seed_peer_and_preserves_custody() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Genuine::new("runtime-publication-projection", false, false);
+    let peers = fixture.peers();
+    let plan = &fixture.selection.publication;
+    let expected = plan.installation_config();
+    let root = PrivateDirectory::open_exact(&expected.custody_root).unwrap();
+    let before = root.entries(8).unwrap();
+    for index in 0..4 {
+        let (text, destination) = fixture.render(index, &fixture.components);
+        let actual = config::parse(
+            crate::secret_toml::parse_table(&text, "publication projection").unwrap(),
+            &destination,
+            true,
+        )
+        .unwrap();
+        if index == 0 {
+            assert_eq!(actual.musubi_publication, expected);
+            let selected = actual.musubi_publication.installation.as_ref().unwrap();
+            assert_eq!(
+                selected.seed_provider,
+                fixture.selection.plans[0].provider_id()
+            );
+            assert_eq!(
+                selected.ingress_broker,
+                fixture
+                    .owner
+                    .authority
+                    .provider_inventory(fixture.selection.plans[0].provider_id())
+                    .unwrap()
+                    .authority(Role::IssuerOperator)
+                    .unwrap()
+                    .account
+            );
+            assert_eq!(selected.pin_session, plan.session_id());
+            assert_eq!(
+                &actual
+                    .musubi_publication
+                    .paid_pin_policy(&selected.ingress_broker)
+                    .transaction_authority,
+                plan.pin_authority()
+            );
+            assert_ne!(&selected.ingress_broker, plan.pin_authority());
+        } else {
+            assert!(actual.musubi_publication.installation.is_none());
+        }
+        assert!(!destination.exists());
+    }
+    assert_eq!(root.entries(8).unwrap(), before);
+    let original =
+        iroha_fs::read_private(&fixture.prepared.peers[0].config_path, MAX_CONFIG_BYTES).unwrap();
+    let mut changed = crate::secret_toml::parse_table(
+        std::str::from_utf8(&original).unwrap(),
+        "refused original installation",
+    )
+    .unwrap();
+    changed.insert(
+        "musubi_publication".into(),
+        toml::Value::Table(plan.configuration_table().unwrap()),
+    );
+    let changed = zeroize::Zeroizing::new(toml::to_string(&changed).unwrap());
+    let destination = fixture.prepared.peers[0]
+        .config_path
+        .with_file_name("refused-publication-projection.toml");
+    assert!(
+        config::render(
+            &fixture.owner.authority,
+            &fixture.selection,
+            &fixture.intent(&fixture.components),
+            Some(&fixture.components),
+            0,
+            changed.as_bytes(),
+            &destination,
+            &fixture.owner.authority.directory,
+            Some(fixture.components[0].directory()),
+        )
+        .is_err()
+    );
+    assert!(!destination.exists());
+    assert_eq!(root.entries(8).unwrap(), before);
+    let originals = fixture.prepared.peers.iter().map(|peer| {
+        let bytes = iroha_fs::read_private(&peer.config_path, MAX_CONFIG_BYTES).unwrap();
+        config::parse(
+            crate::secret_toml::parse_table(
+                std::str::from_utf8(&bytes).unwrap(),
+                "original publication absence",
+            )
+            .unwrap(),
+            &peer.config_path,
+            false,
+        )
+        .unwrap()
+    });
+    for original in originals {
+        assert!(original.musubi_publication.installation.is_none());
+    }
+    no_http(&peers);
+}
+
+#[test]
+fn catalog_material_preflight_preserves_original_heads_before_first_stream_render() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture =
+        Genuine::with_material_preflight("runtime-pre-first-render-material", true, false, true);
+    let peers = fixture.peers();
+    assert_eq!(fixture.carriers.len(), 29);
+    assert_eq!(fixture.catalog.stage(), GeneratedRuntimeStage::Catalog);
+    assert!(fixture.catalog.required_transactions().is_empty());
+    fixture.owner.validate(&fixture.catalog).unwrap();
+    let before = fixture.owner.authority.directory.entries(8).unwrap();
+    let retained = std::array::from_fn::<_, 3, _>(|index| {
+        let component = &fixture.components[index];
+        assert_eq!(component.selection().sequence, 1);
+        assert_eq!(
+            component.enrollment().bytes(),
+            fixture.initial(index).bytes()
+        );
+        let directory = component.directory();
+        (
+            directory.identity().unwrap(),
+            directory.entries(8).unwrap(),
+            directory
+                .open_child("stream-token-receipts")
+                .unwrap()
+                .identity()
+                .unwrap(),
+            directory
+                .read(
+                    format!("component-{}.nrt", hex::encode(component.digest())),
+                    MAX_MANIFEST_BYTES,
+                )
+                .unwrap()
+                .to_vec(),
+        )
+    });
+    let recover_material = || {
+        let mut parent = ManagedServiceBootstrap::open(&fixture.prepared).unwrap();
+        let ServiceBootstrapProgress::Complete(history) =
+            parent.recover(fixture.options.deadline).unwrap()
+        else {
+            panic!("all twenty-nine original native carriers remain required")
+        };
+        drop(parent);
+        fixture.owner.retain_selected_components(
+            RuntimeSelection::read(&fixture.owner.authority).unwrap(),
+            &history,
+            std::array::from_fn(|index| fixture.initial(index)),
+            fixture.options.deadline,
+        )
+    };
+    let (_, recovered, required) = recover_material().unwrap();
+    assert_eq!(required.originals(), fixture.carriers);
+    assert_eq!(
+        required.observation_floor().unwrap(),
+        *fixture.carriers.last().unwrap()
+    );
+    for (index, component) in recovered.iter().enumerate() {
+        let directory = component.directory();
+        assert_eq!(component.digest(), fixture.components[index].digest());
+        assert_eq!(directory.identity().unwrap(), retained[index].0);
+        assert_eq!(directory.entries(8).unwrap(), retained[index].1);
+        assert_eq!(
+            directory
+                .open_child("stream-token-receipts")
+                .unwrap()
+                .identity()
+                .unwrap(),
+            retained[index].2
+        );
+        assert_eq!(
+            directory
+                .read(
+                    format!("component-{}.nrt", hex::encode(component.digest())),
+                    MAX_MANIFEST_BYTES,
+                )
+                .unwrap()
+                .as_slice(),
+            retained[index].3
+        );
+    }
+    assert_eq!(
+        fixture.owner.authority.directory.entries(8).unwrap(),
+        before
+    );
+    no_http(&peers);
+
+    // Even before a StreamTokens aggregate exists, committed component custody is not repairable.
+    let component = &fixture.components[1];
+    for name in [
+        "stream-token-receipts".to_owned(),
+        custody_name(component.selection().bytes_digest),
+    ] {
+        let original = component.directory().path().join(name);
+        let held = original.with_extension("held");
+        std::fs::rename(&original, &held).unwrap();
+        let names = component.directory().entries(8).unwrap();
+        assert!(matches!(
+            recover_material(),
+            Err(crate::managed::Error::Bootstrap(
+                crate::managed::ManagedBootstrapFailure::RetainedMaterial
+            ))
+        ));
+        assert!(!original.exists());
+        assert_eq!(component.directory().entries(8).unwrap(), names);
+        assert_eq!(
+            fixture.owner.authority.directory.entries(8).unwrap(),
+            before
+        );
+        no_http(&peers);
+        std::fs::rename(&held, &original).unwrap();
+    }
+    component.validate().unwrap();
+    fixture.owner.validate(&fixture.catalog).unwrap();
+    // A material-only result never bypasses current-use qualification or yields a launch revision.
+    assert!(
+        fixture
+            .owner
+            .prepare_current_stream_tokens(Instant::now())
+            .is_err()
+    );
+    assert_eq!(
+        fixture.owner.authority.directory.entries(8).unwrap(),
+        before
     );
     no_http(&peers);
 }

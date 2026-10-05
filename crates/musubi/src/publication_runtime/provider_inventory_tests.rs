@@ -410,3 +410,48 @@ fn publisher_inventory_rejects_every_signed_original_binding_substitution() {
         .is_err()
     );
 }
+
+#[test]
+fn retired_daemon_inventory_controls_use_the_sole_publisher_selection_owner() {
+    use provider_inventory::parse_attestation_origin;
+    let original = parse_attestation_origin("http://127.0.0.1:8182/").unwrap();
+    assert_eq!(original.port(), Some(8182));
+    assert_eq!(
+        parse_attestation_origin("https://provider.example:9443/")
+            .unwrap()
+            .port(),
+        Some(9443)
+    );
+    for raw in [
+        "http://provider.example/",
+        "http://localhost/",
+        "http://10.0.0.1/",
+        "https://provider.example:0/",
+        "https://user:secret@provider.example/",
+        "https://provider.example/other",
+        "https://provider.example/?q=1",
+        "https://provider.example/#f",
+    ] {
+        assert!(parse_attestation_origin(raw).is_err(), "{raw}");
+    }
+    let root = tempdir().unwrap();
+    let (_, mut config) = write_client_config(&root.path().join("client.toml"), "");
+    assert_eq!(
+        parse_provider_gateways(&config.provider_gateways)
+            .unwrap()
+            .len(),
+        3
+    );
+    let selected = config.provider_gateways[2].provider_id.clone();
+    config.provider_gateways[2].provider_id = config.provider_gateways[0].provider_id.clone();
+    assert!(parse_provider_gateways(&config.provider_gateways).is_err());
+    config.provider_gateways[2].provider_id = "00".repeat(32);
+    assert!(parse_provider_gateways(&config.provider_gateways).is_err());
+    config.provider_gateways[2].provider_id = selected;
+    assert_eq!(
+        parse_provider_gateways(&config.provider_gateways)
+            .unwrap()
+            .len(),
+        3
+    );
+}

@@ -181,8 +181,8 @@ pub fn trusted_contract_intent(
     let (arguments, payload) = match &descriptor.argument_schema {
         Some(schema) => {
             let canonical = Json::from_norito_value_ref(&payload)?;
-            let bytes =
-                ivm::encode_argument_record_from_json(schema, &canonical).map_err(|error| {
+            let bytes = ivm_abi::arguments::encode_argument_record_from_json(schema, &canonical)
+                .map_err(|error| {
                     eyre!("arguments do not match the verified entrypoint schema: {error}")
                 })?;
             (

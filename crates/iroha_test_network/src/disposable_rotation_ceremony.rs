@@ -273,7 +273,7 @@ fn verify_input(
         "rotation DKG misses the preparation cutoff"
     );
     verifier
-        .advance(&evidence.finality_journal)
+        .advance((&evidence.finality_journal).into())
         .map_err(|error| eyre!(error))?;
     Ok((
         GlobalThresholdBeaconDkgSessionV1 {
@@ -392,7 +392,7 @@ fn advance_native_phase(
     );
     ensure!(
         cursor
-            .advance(journal)
+            .advance(journal.into())
             .map_err(|error| eyre!(error))?
             .height()
             == height,
@@ -627,24 +627,75 @@ fn write_owner_private_key(path: &Path, signer: &KeyPair) -> Result<fs::File> {
 
 #[allow(
     unsafe_code,
-    reason = "the disposable supervisor transfers three already opened owner-private descriptors to fixed native child FDs"
+    reason = "the disposable supervisor transfers already opened owner-private inputs to fixed native child descriptors"
 )]
+fn inherit_native_descriptors<const N: usize>(
+    command: &mut tokio::process::Command,
+    descriptors: [(i32, i32); N],
+) {
+    // Every native destination in this module is below this duplication floor.
+    assert!(descriptors.iter().all(|(_, target)| *target <= FINALITY_FD));
+    unsafe {
+        command.as_std_mut().pre_exec(move || {
+            // Pin all inputs before replacing a destination. Even identity mappings
+            // use a distinct source so dup2 clears close-on-exec on the fixed target.
+            // These descriptor operations are async-signal-safe and allocate nothing.
+            let mut pinned = [-1; N];
+            for (index, (source, _)) in descriptors.into_iter().enumerate() {
+                let descriptor =
+                    nix::libc::fcntl(source, nix::libc::F_DUPFD_CLOEXEC, FINALITY_FD + 1);
+                if descriptor < 0 {
+                    let error = std::io::Error::last_os_error();
+                    for descriptor in pinned {
+                        if descriptor >= 0 {
+                            nix::libc::close(descriptor);
+                        }
+                    }
+                    return Err(error);
+                }
+                pinned[index] = descriptor;
+            }
+            for (source, (_, target)) in pinned.into_iter().zip(descriptors) {
+                if nix::libc::dup2(source, target) < 0 {
+                    let error = std::io::Error::last_os_error();
+                    for descriptor in pinned {
+                        nix::libc::close(descriptor);
+                    }
+                    return Err(error);
+                }
+            }
+            for descriptor in pinned {
+                nix::libc::close(descriptor);
+            }
+            Ok(())
+        });
+    }
+}
+
 fn inherit_rotation_descriptors(
     command: &mut tokio::process::Command,
     key: i32,
     public: i32,
     finality: i32,
 ) {
-    unsafe {
-        command.as_std_mut().pre_exec(move || {
-            for (source, target) in [(key, KEY_FD), (public, PUBLIC_FD), (finality, FINALITY_FD)] {
-                if nix::libc::dup2(source, target) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            Ok(())
-        });
-    }
+    inherit_native_descriptors(
+        command,
+        [(key, KEY_FD), (public, PUBLIC_FD), (finality, FINALITY_FD)],
+    );
+}
+
+// Open the child input as read-only without waiting for a writer. Retain the
+// parent writer before spawning so the child cannot observe a transient EOF.
+fn open_native_phase_fifo(path: &Path) -> Result<(fs::File, fs::File)> {
+    let reader = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(path)?;
+    let writer = fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(path)?;
+    Ok((reader, writer))
 }
 
 fn spawn_seat(
@@ -673,14 +724,8 @@ fn spawn_seat(
         &finality_path,
         nix::sys::stat::Mode::from_bits_truncate(0o600),
     )?;
-    let public_fifo = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&public_path)?;
-    let finality_fifo = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&finality_path)?;
+    let (public_fifo, public_writer) = open_native_phase_fifo(&public_path)?;
+    let (finality_fifo, finality_writer) = open_native_phase_fifo(&finality_path)?;
     let private_log = |name| -> Result<fs::File> {
         Ok(fs::OpenOptions::new()
             .write(true)
@@ -736,8 +781,6 @@ fn spawn_seat(
     drop(key);
     drop(public_fifo);
     drop(finality_fifo);
-    let public_writer = fs::OpenOptions::new().write(true).open(&public_path)?;
-    let finality_writer = fs::OpenOptions::new().write(true).open(&finality_path)?;
     Ok(SeatProcess {
         validator: seat.id(),
         signer_index,
@@ -864,14 +907,8 @@ fn spawn_genesis_seat(
         &finality_path,
         nix::sys::stat::Mode::from_bits_truncate(0o600),
     )?;
-    let public_fifo = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&public_path)?;
-    let finality_fifo = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&finality_path)?;
+    let (public_fifo, public_writer) = open_native_phase_fifo(&public_path)?;
+    let (finality_fifo, finality_writer) = open_native_phase_fifo(&finality_path)?;
     let private_log = |name| -> Result<fs::File> {
         Ok(fs::OpenOptions::new()
             .write(true)
@@ -934,8 +971,8 @@ fn spawn_genesis_seat(
         validator: seat.id(),
         signer_index,
         child,
-        public_writer: fs::OpenOptions::new().write(true).open(&public_path)?,
-        finality_writer: fs::OpenOptions::new().write(true).open(&finality_path)?,
+        public_writer,
+        finality_writer,
         attempt_path: owner_root
             .path()
             .join(attempt_child_name(session, signer_index)),
@@ -1186,14 +1223,8 @@ fn spawn_genesis_config_seat(
         &finality_path,
         nix::sys::stat::Mode::from_bits_truncate(0o600),
     )?;
-    let public_fifo = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&public_path)?;
-    let finality_fifo = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&finality_path)?;
+    let (public_fifo, public_writer) = open_native_phase_fifo(&public_path)?;
+    let (finality_fifo, finality_writer) = open_native_phase_fifo(&finality_path)?;
     let private_log = |name| -> Result<fs::File> {
         Ok(fs::OpenOptions::new()
             .write(true)
@@ -1256,8 +1287,8 @@ fn spawn_genesis_config_seat(
         validator: seat.validator.clone(),
         signer_index,
         child,
-        public_writer: fs::OpenOptions::new().write(true).open(&public_path)?,
-        finality_writer: fs::OpenOptions::new().write(true).open(&finality_path)?,
+        public_writer,
+        finality_writer,
         attempt_path: owner_root
             .path()
             .join(attempt_child_name(session, signer_index)),
@@ -1356,14 +1387,7 @@ async fn sign_genesis_draft(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    unsafe {
-        command.as_std_mut().pre_exec(move || {
-            if nix::libc::dup2(key.as_raw_fd(), KEY_FD) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    inherit_native_descriptors(&mut command, [(key.as_raw_fd(), KEY_FD)]);
     let waited = timeout(PROCESS_TIMEOUT, command.status()).await;
     let consumed = retire_one_shot_genesis_descriptor(&one_shot_path)?;
     let status = waited??;
@@ -1412,14 +1436,7 @@ async fn sign_rotation_draft(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    unsafe {
-        command.as_std_mut().pre_exec(move || {
-            if nix::libc::dup2(key.as_raw_fd(), KEY_FD) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    inherit_native_descriptors(&mut command, [(key.as_raw_fd(), KEY_FD)]);
     let status = timeout(PROCESS_TIMEOUT, command.status()).await??;
     ensure!(
         status.success(),
@@ -1550,18 +1567,10 @@ pub async fn prepare_disposable_pending_custody(
         command.arg("--current-catalog").arg(path);
     }
     let retained_fd = current.as_ref().map(std::os::fd::AsRawFd::as_raw_fd);
-    unsafe {
-        command.as_std_mut().pre_exec(move || {
-            if nix::libc::dup2(share.as_raw_fd(), KEY_FD) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if let Some(source) = retained_fd {
-                if nix::libc::dup2(source, 200) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            Ok(())
-        });
+    if let Some(source) = retained_fd {
+        inherit_native_descriptors(&mut command, [(share.as_raw_fd(), KEY_FD), (source, 200)]);
+    } else {
+        inherit_native_descriptors(&mut command, [(share.as_raw_fd(), KEY_FD)]);
     }
     let status = timeout(PROCESS_TIMEOUT, command.status()).await??;
     ensure!(
@@ -1596,7 +1605,7 @@ pub async fn run_disposable_genesis_dkg<F, Fut>(
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
-    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1) -> Fut,
+    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1, Instant) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
     let (bundle, session, roster, verifier) = verify_genesis_input(network, limits)?;
@@ -1641,7 +1650,7 @@ where
 /// validator configs from an external disposable localnet generator. The
 /// signed voter order, h1 authority and every phase finality proof are
 /// revalidated before any credential is returned. The phase callback receives
-/// the merged signed public snapshot; plaintext shares remain in their seat.
+/// the same fixed ceremony deadline and the merged signed public snapshot; plaintext shares remain in their seat.
 /// No signer key is read into
 /// an argument or environment value.
 ///
@@ -1660,7 +1669,7 @@ pub async fn run_disposable_genesis_dkg_from_configs<F, Fut>(
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
-    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1) -> Fut,
+    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1, Instant) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
     ensure!(
@@ -1735,6 +1744,29 @@ where
     .await
 }
 
+// Preserve the original ceremony deadline across callback construction and execution.
+// The postcheck also rejects a synchronous Ready poll that consumed the deadline.
+// Dropping this wait does not stop a dedicated read thread: its same absolute
+// deadline still governs HTTP reads and it must naturally retire its original work.
+async fn await_ceremony_finality<T, F, Fut>(height: u64, deadline: Instant, next: F) -> Result<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    ensure!(
+        Instant::now() < deadline,
+        "rotation H{height} finality callback deadline elapsed"
+    );
+    let outcome = tokio::time::timeout_at(deadline.into(), next())
+        .await
+        .map_err(|_| eyre!("rotation H{height} finality callback deadline elapsed"))?;
+    ensure!(
+        Instant::now() < deadline,
+        "rotation H{height} finality callback deadline elapsed"
+    );
+    outcome
+}
+
 async fn run_genesis_dkg_with_seats<F, Fut, S>(
     bundle: NativeGenesisProvisioningBundle,
     session: GlobalThresholdBeaconDkgSessionV1,
@@ -1746,7 +1778,7 @@ async fn run_genesis_dkg_with_seats<F, Fut, S>(
     mut spawn_seat: S,
 ) -> Result<DisposableGenesisDkgOutput>
 where
-    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1) -> Fut,
+    F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1, Instant) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
     S: FnMut(
         &Path,
@@ -1819,7 +1851,8 @@ where
     )?;
     let commitments = public.public_snapshot()?;
     broadcast_public(&mut processes, commitments.record(), deadline)?;
-    let proof = next_finality(2, commitments).await?;
+    let proof =
+        await_ceremony_finality(2, deadline, || next_finality(2, commitments, deadline)).await?;
     advance_native_phase(&mut verifier, &proof, 2)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
@@ -1828,7 +1861,8 @@ where
     merge_deliveries(&mut public, &deliveries, &crypto)?;
     let delivered = public.public_snapshot()?;
     broadcast_public(&mut processes, delivered.record(), deadline)?;
-    let proof = next_finality(3, delivered).await?;
+    let proof =
+        await_ceremony_finality(3, deadline, || next_finality(3, delivered, deadline)).await?;
     advance_native_phase(&mut verifier, &proof, 3)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
@@ -1840,7 +1874,8 @@ where
     public.finalize(session.acceptances_end_height, &crypto)?;
     let assembled = public.into_finalized()?;
     broadcast_public(&mut processes, assembled.record(), deadline)?;
-    let proof = next_finality(4, accepted).await?;
+    let proof =
+        await_ceremony_finality(4, deadline, || next_finality(4, accepted, deadline)).await?;
     advance_native_phase(&mut verifier, &proof, 4)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     proofs.push(proof);
@@ -2008,7 +2043,7 @@ pub async fn run_disposable_rotation_dkg<F, Fut>(
     mut next_finality: F,
 ) -> Result<DisposableRotationDkgOutput>
 where
-    F: FnMut(u64) -> Fut,
+    F: FnMut(u64, Instant) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
     ensure!(provider_revision != 0, "provider revision must be positive");
@@ -2059,7 +2094,10 @@ where
         verifier.allocation_budget(),
     )?;
     broadcast_public(&mut processes, public.public_snapshot()?.record(), deadline)?;
-    let proof = next_finality(session.commitments_end_height).await?;
+    let proof = await_ceremony_finality(session.commitments_end_height, deadline, || {
+        next_finality(session.commitments_end_height, deadline)
+    })
+    .await?;
     advance_native_phase(&mut verifier, &proof, session.commitments_end_height)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     phase_proofs.push(proof);
@@ -2067,7 +2105,10 @@ where
     let deliveries = wait_for_snapshots(&mut processes, "deliveries.norito", deadline).await?;
     merge_deliveries(&mut public, &deliveries, &crypto)?;
     broadcast_public(&mut processes, public.public_snapshot()?.record(), deadline)?;
-    let proof = next_finality(session.deliveries_end_height).await?;
+    let proof = await_ceremony_finality(session.deliveries_end_height, deadline, || {
+        next_finality(session.deliveries_end_height, deadline)
+    })
+    .await?;
     advance_native_phase(&mut verifier, &proof, session.deliveries_end_height)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     phase_proofs.push(proof);
@@ -2077,7 +2118,10 @@ where
     public.finalize(session.acceptances_end_height, &crypto)?;
     let assembled = public.into_finalized()?;
     broadcast_public(&mut processes, assembled.record(), deadline)?;
-    let proof = next_finality(session.acceptances_end_height).await?;
+    let proof = await_ceremony_finality(session.acceptances_end_height, deadline, || {
+        next_finality(session.acceptances_end_height, deadline)
+    })
+    .await?;
     advance_native_phase(&mut verifier, &proof, session.acceptances_end_height)?;
     broadcast_finality(&mut processes, &proof, verifier.limits(), deadline)?;
     phase_proofs.push(proof);
@@ -2222,6 +2266,336 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn ceremony_finality_callback_preserves_original_deadline_before_late_refusal() {
+        let deadline = Instant::now() + Duration::from_millis(10);
+        let result = await_ceremony_finality(9, deadline, || async {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            Err::<NativeFinalityJournal, _>(eyre!("original late callback sentinel"))
+        })
+        .await;
+        let error = result.expect_err("a late callback must not replenish the ceremony");
+        assert!(
+            error
+                .to_string()
+                .contains("rotation H9 finality callback deadline elapsed")
+        );
+    }
+
+    #[tokio::test]
+    async fn ceremony_finality_callback_never_starts_after_original_deadline() {
+        let called = std::cell::Cell::new(false);
+        let result = await_ceremony_finality(9, Instant::now(), || {
+            called.set(true);
+            std::future::ready(Err::<NativeFinalityJournal, _>(eyre!(
+                "original unused sentinel"
+            )))
+        })
+        .await;
+        assert!(result.is_err());
+        assert!(
+            !called.get(),
+            "an expired ceremony must not start a fresh callback attempt"
+        );
+    }
+
+    #[tokio::test]
+    async fn ceremony_finality_callback_retains_same_early_original_error() {
+        let original = eyre!(std::io::Error::other("original callback refusal"));
+        let identity = core::ptr::from_ref(original.downcast_ref::<std::io::Error>().unwrap());
+        let error = await_ceremony_finality(9, Instant::now() + PROCESS_TIMEOUT, || {
+            std::future::ready(Err::<NativeFinalityJournal, _>(original))
+        })
+        .await
+        .expect_err("the original early refusal must survive");
+        assert!(core::ptr::eq(
+            error.downcast_ref::<std::io::Error>().unwrap(),
+            identity
+        ));
+    }
+
+    #[tokio::test]
+    async fn ceremony_finality_callback_rejects_synchronous_late_completion() {
+        let deadline = Instant::now() + Duration::from_millis(10);
+        let error = await_ceremony_finality(9, deadline, || async {
+            // A Ready poll can consume the deadline without yielding to the timer.
+            std::thread::sleep(Duration::from_millis(40));
+            Err::<NativeFinalityJournal, _>(eyre!("original synchronously late sentinel"))
+        })
+        .await
+        .expect_err("a synchronous poll must not return an answer after its deadline");
+        assert!(
+            error
+                .to_string()
+                .contains("rotation H9 finality callback deadline elapsed")
+        );
+    }
+
+    /// Exercise the production handoff in a child without modifying parent descriptors.
+    #[allow(
+        unsafe_code,
+        reason = "the fixture owns the duplicated descriptors and only installs them in its child before exec"
+    )]
+    async fn observe_rotation_descriptor_handoff(
+        source_targets: [i32; 3],
+        close_on_exec: bool,
+        destinations: usize,
+    ) -> std::process::Output {
+        use std::os::fd::{FromRawFd as _, OwnedFd};
+
+        let root = tempfile::tempdir().unwrap();
+        let mut owned = Vec::new();
+        for (index, bytes) in [b"key-record".as_slice(), b"public-frame", b"finality-frame"]
+            .into_iter()
+            .enumerate()
+        {
+            let path = root.path().join(format!("input-{index}"));
+            fs::write(&path, bytes).unwrap();
+            let file = fs::File::open(path).unwrap();
+            let copy = unsafe {
+                nix::libc::fcntl(
+                    file.as_raw_fd(),
+                    nix::libc::F_DUPFD_CLOEXEC,
+                    FINALITY_FD + 1,
+                )
+            };
+            assert!(
+                copy > FINALITY_FD,
+                "pin fixture descriptors above all destinations"
+            );
+            owned.push(unsafe { OwnedFd::from_raw_fd(copy) });
+        }
+        let originals = [
+            owned[0].as_raw_fd(),
+            owned[1].as_raw_fd(),
+            owned[2].as_raw_fd(),
+        ];
+        let script = match destinations {
+            1 => {
+                r#"set -eu
+ test "$(/bin/cat /dev/fd/198)" = key-record
+"#
+            }
+            2 => {
+                r#"set -eu
+ test "$(/bin/cat /dev/fd/198)" = key-record
+ test "$(/bin/cat /dev/fd/200)" = public-frame
+"#
+            }
+            3 => {
+                r#"set -eu
+ test "$(/bin/cat /dev/fd/198)" = key-record
+ test "$(/bin/cat /dev/fd/201)" = public-frame
+ test "$(/bin/cat /dev/fd/202)" = finality-frame
+"#
+            }
+            _ => panic!("fixture supports the exact one-, two- and three-input native commands"),
+        };
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(script)
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        unsafe {
+            command.as_std_mut().pre_exec(move || {
+                for index in 0..originals.len() {
+                    if nix::libc::dup2(originals[index], source_targets[index]) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if close_on_exec
+                        && nix::libc::fcntl(
+                            source_targets[index],
+                            nix::libc::F_SETFD,
+                            nix::libc::FD_CLOEXEC,
+                        ) < 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+        match destinations {
+            1 => inherit_native_descriptors(&mut command, [(source_targets[0], KEY_FD)]),
+            2 => inherit_native_descriptors(
+                &mut command,
+                [(source_targets[0], KEY_FD), (source_targets[1], 200)],
+            ),
+            3 => inherit_rotation_descriptors(
+                &mut command,
+                source_targets[0],
+                source_targets[1],
+                source_targets[2],
+            ),
+            _ => unreachable!("fixture checked its exact destination count"),
+        }
+        let output = command.output().await.unwrap();
+        drop(owned);
+        output
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_rotation_descriptor_handoff_preserves_overlapping_sources() {
+        let output =
+            observe_rotation_descriptor_handoff([PUBLIC_FD, KEY_FD, FINALITY_FD], false, 3).await;
+        assert!(
+            output.status.success(),
+            "overlapping source descriptors must retain all three original inputs: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_rotation_descriptor_handoff_clears_close_on_exec_for_fixed_sources() {
+        let output =
+            observe_rotation_descriptor_handoff([KEY_FD, PUBLIC_FD, FINALITY_FD], true, 3).await;
+        assert!(
+            output.status.success(),
+            "fixed source descriptors must survive exec with their original inputs: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_pending_descriptor_handoff_preserves_overlapping_sources() {
+        let output =
+            observe_rotation_descriptor_handoff([200, KEY_FD, FINALITY_FD], false, 2).await;
+        assert!(
+            output.status.success(),
+            "pending and retained custody inputs must survive overlap: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_single_descriptor_handoff_clears_close_on_exec() {
+        let output =
+            observe_rotation_descriptor_handoff([KEY_FD, PUBLIC_FD, FINALITY_FD], true, 1).await;
+        assert!(
+            output.status.success(),
+            "the fixed signer descriptor must survive exec: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Inspect the actual peer spawn paths without claiming a completed DKG.
+    async fn observe_native_peer_phase_handoff(genesis: bool) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root =
+            super::super::disposable_runtime_provider_broker::new_disposable_owner_private_root()
+                .unwrap();
+        let python = std::process::Command::new("python3")
+            .args(["-c", "import sys; print(sys.executable)"])
+            .output()
+            .unwrap();
+        assert!(python.status.success());
+        let python = String::from_utf8(python.stdout).unwrap();
+        let python = format!("'{}'", python.trim().replace('\'', "'\"'\"'"));
+        let script = root.path().join("observe-peer-phase-handoff.sh");
+        let consume = if genesis { ": > ./provision.fd198" } else { "" };
+        fs::write(
+            &script,
+            format!(
+                r#"#!/bin/sh
+set -eu
+test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
+{consume}
+{python} -c 'import fcntl, os; assert fcntl.fcntl(201, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY; assert fcntl.fcntl(202, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY'
+"#,
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let network = NetworkBuilder::new()
+            .with_peers(4)
+            .with_base_seed(if genesis {
+                "native_genesis_phase_input"
+            } else {
+                "native_rotation_phase_input"
+            })
+            .build();
+        let seat = &network.validators()[0];
+        let roster = network
+            .validators()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        let session = genesis_dkg_session(network.network_id(), &roster);
+        let limits = NativeFinalityLimits {
+            block_bytes: 1024,
+            journal_bytes: 4096,
+            block_count: 8,
+            allocated_bytes: 8192,
+        };
+        let mut process = if genesis {
+            let paths =
+                ["request", "manifest", "signed", "public-key"].map(|name| root.path().join(name));
+            spawn_genesis_seat(
+                &script,
+                seat,
+                1,
+                &session,
+                &paths,
+                369,
+                &network.chain_id(),
+                limits,
+            )
+        } else {
+            let input = DisposableRotationProofInput {
+                network_id: network.network_id(),
+                chain_id: network.chain_id(),
+                finality_limits: limits,
+                target_epoch: 2,
+                transition_id: CryptoHash::new(b"native rotation descriptor fixture"),
+            };
+            spawn_seat(
+                &script,
+                seat,
+                1,
+                &session,
+                &root.path().join("selection"),
+                &input,
+                1,
+            )
+        }
+        .unwrap();
+        assert!(
+            timeout(Duration::from_secs(5), process.child.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            fs::metadata(process.owner_root.path().join("identity.private"))
+                .unwrap()
+                .len(),
+            71
+        );
+        if genesis {
+            assert!(
+                retire_one_shot_genesis_descriptor(
+                    &process.owner_root.path().join("provision.fd198")
+                )
+                .unwrap()
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_rotation_peer_seat_hands_read_only_phases_to_owned_child() {
+        observe_native_peer_phase_handoff(false).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_genesis_peer_seat_hands_read_only_phases_to_owned_child() {
+        observe_native_peer_phase_handoff(true).await;
+    }
+
     #[test]
     fn public_reducer_admission_retains_original_ceremony_pool_and_retry() {
         use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseRegistration};
@@ -2413,6 +2787,40 @@ mod tests {
             iroha_config::parameters::validate_production_runtime_handle(&provider_handle(peer))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn native_phase_fifo_uses_read_only_input_and_keeps_writer_alive() {
+        use std::io::Read as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("phase.fifo");
+        nix::unistd::mkfifo(
+            &path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        let (mut reader, mut writer) = open_native_phase_fifo(&path).unwrap();
+        // SAFETY: both descriptors are live owned files; F_GETFL only reads flags.
+        #[allow(unsafe_code)]
+        let (read_flags, write_flags) = unsafe {
+            (
+                nix::libc::fcntl(reader.as_raw_fd(), nix::libc::F_GETFL),
+                nix::libc::fcntl(writer.as_raw_fd(), nix::libc::F_GETFL),
+            )
+        };
+        assert!(read_flags >= 0 && write_flags >= 0);
+        assert_eq!(read_flags & nix::libc::O_ACCMODE, nix::libc::O_RDONLY);
+        assert_eq!(write_flags & nix::libc::O_ACCMODE, nix::libc::O_WRONLY);
+        assert_ne!(read_flags & nix::libc::O_NONBLOCK, 0);
+        let mut observed = [0; 5];
+        assert_eq!(
+            reader.read(&mut observed).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        writer.write_all(b"phase").unwrap();
+        reader.read_exact(&mut observed).unwrap();
+        assert_eq!(&observed, b"phase");
     }
 
     #[test]
@@ -2769,6 +3177,16 @@ mod tests {
         let (seat, _, network, chain) =
             genesis_config_key_fixture(root.path(), Algorithm::BlsNormal);
         let script = root.path().join("observe-key-handoff.sh");
+        let python = std::process::Command::new("python3")
+            .args(["-c", "import sys; print(sys.executable)"])
+            .output()
+            .expect("Python 3 is required to inspect inherited native FIFO access modes");
+        assert!(
+            python.status.success(),
+            "resolve the Python 3 test interpreter"
+        );
+        let python = String::from_utf8(python.stdout).unwrap();
+        let python = format!("'{}'", python.trim().replace('\'', "'\"'\"'"));
         let memory_bound = iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get();
         let script_body = format!(
             r#"#!/bin/sh
@@ -2786,6 +3204,7 @@ test "$key" = 1
 test "$memory" = 1
 test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
 : > ./provision.fd198
+{python} -c 'import fcntl, os; assert fcntl.fcntl(201, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY; assert fcntl.fcntl(202, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY'
 "#,
         );
         fs::write(&script, script_body.as_bytes()).unwrap();

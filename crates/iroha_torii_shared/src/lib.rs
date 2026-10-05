@@ -2601,3 +2601,6 @@ mod captured_frame_identity_tests {
 
 #[cfg(test)]
 mod native_page_consumer_tests;
+
+#[cfg(test)]
+mod service_checked_writer_test_support;

@@ -289,3 +289,16 @@ and retain successful cleanup through every enclosing writer. Standalone and
 prepaid capture use this same kernel. World and TriggerSet now compose these slots;
 consuming commit and enclosing State/runtime transfers remain open. See the
 capture custody record.
+
+
+The first-release JSON snapshot schema distinguishes undo presence from the
+original value. A Cell emits `{"revert":null,"blocks":CURRENT}` when no
+predecessor is retained and `{"revert":{"value":PREVIOUS},"blocks":CURRENT}`
+when one is retained, including `PREVIOUS = null`. A Storage undo map omits
+untouched keys, emits `"key":null` for an absent preimage and emits
+`"key":{"value":PREVIOUS}` for a present preimage. Its current map retains the
+ordinary value representation. The sole streaming parser requires exactly one
+`value` member for a present undo and rejects unwrapped retired values. Nested
+payload schemas remain responsible for distinguishing their own value states.
+Live, attached and detached originals use this same framing without copying
+their values. Admission and authenticated restoration remain separate.

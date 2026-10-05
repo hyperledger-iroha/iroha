@@ -15,7 +15,7 @@ use crate::{
     },
 };
 use iroha_crypto::KeyPair;
-use std::{collections::BTreeSet, num::NonZeroU64};
+use std::num::NonZeroU64;
 
 const CHAIN: &str = "portable-finality-test";
 
@@ -35,7 +35,7 @@ fn extend(
         0,
     ));
     builder.push_transaction(tx);
-    let mut block = builder.build(BTreeSet::new());
+    let mut block = builder.build(crate::block::BlockSignatures::default());
     let output = if succeeds {
         Ok(Vec::default())
     } else {

@@ -293,57 +293,10 @@ mantissa plus an explicit scale. Higher-level ledger helpers additionally
 accept `Decimal` because it is a lossless host value and normalize it before
 calling the codec.
 
-## KAGEMUSHA
+## Petal Stream optical transport
 
-`Kagemusha` is the sole typed Python codec/orchestration namespace for the
-KAGEMUSHA wire-version-1 request, committed payment, and acknowledgement
-exchange. A request binds one positive exact amount and the recipient's
-hardware-backed encryption key. A committed payment binds the request, sender
-before/after commitments, unique credit ID, trusted commit time, encrypted
-credit, hardware commit certificate, and constant-size recursive
-`PaymentProof`. The acknowledgement binds the request and payment to a durable
-inbox receipt. Payment and redemption values expose nullifiers and hiding
-commitments, never private balance openings or replay paths. The namespace also
-covers mint authorization/credit binding, terminal redemption vouchers, and
-typed encrypted-credit opening, AAD, and envelope values.
-
-IPM1 uses only the frozen one-byte tags `1..=3` exposed by
-`Kagemusha.ipm1_payload_kinds`; `decode_ipm1_payload` is the single generic
-peer-message decoder. Canonical Norito and unpadded `kgm1:` parsers enforce
-per-message bounds before decoding. `validate_complete_exchange` enforces the
-sole complete three-message bound of 9,211 raw / 12,288 `kgm1:` text bytes.
-There is no intent/ticket decoder, compatibility alias, or alternate text
-prefix.
-
-Monetary proving, signing, encryption, decryption, and secure-device state
-changes remain native-only. Python exposes no public predecessor/successor
-state links and no software money-crypto fallback.
-
-`DeviceMintStageCommand` and `DeviceMintStageResult` describe operation 16 at
-the host/native boundary. `encode_device_mint_stage_command_shape` and
-`decode_device_mint_stage_command_shape_exact` validate the exact nested
-authorization and mint-credit archives, their derived credit ID, and their
-public bindings. The command is bounded to 65,536 bytes, each nested archive
-to 7,936 bytes, and the result to 128 bytes. Result codecs optionally bind the
-credit ID to a supplied command. They do not execute a device transition or
-authenticate a result; the qualified native response authenticator remains
-mandatory, and private openings and complete Guard certificates stay native.
-
-`Kagemusha.build_top_up_instruction(request)` builds the sole
-`iroha.kagemusha.v1.top_up` instruction. Its `to_instruction()` method crosses
-the standard native `Instruction` boundary so the payer can include exactly
-that instruction in a normal signed transaction; `encode_top_up_instruction`
-and `decode_top_up_instruction` provide the exact framed `InstructionBox`
-codec. The embedded request ceiling is 16 KiB, which accommodates the complete
-paired mint-authorization proof. No unsigned or server-signed top-up envelope
-exists. `Kagemusha.top_up_instruction_wire_id` is the exact
-`iroha.kagemusha.v1.top_up` registry ID. The standard `TransactionBuilder`
-signs the exact nine-field canonical payload, including the complete top-up request.
-
-### Petal Stream optical transport
-
-KAGEMUSHA peer messages can also travel over Petal Stream, the animated
-Sakura-storm optical transport. Its stream encoder, renderer, camera decoder
+Peer messages and other bounded payloads can travel over Petal Stream, the
+animated Sakura-storm optical transport. Its stream encoder, renderer, camera decoder
 and scan session live in the separate pure-standard-library package
 [`iroha-petal`](../iroha_petal/README.md) (`python/iroha_petal`), which
 `iroha_python` does not import.
@@ -647,8 +600,6 @@ signing_client.register_zk_asset_and_wait(
 ```
 
 Asset registration binds the optional confidential unshield verifier role.
-KAGEMUSHA V1 uses its own reserve-backed mint-fold and redemption-voucher
-protocol rather than those confidential-asset instructions.
 
 For local confidential proofs, `ConfidentialProver` chooses the canonical key
 and transfer/full-redemption/change relation internally. `ConfidentialInput`,
@@ -2581,6 +2532,7 @@ complete = CompleteReplicationOrderInstruction(
     completion_epoch=27,
     expected_authority=ProviderIngestCompletionAuthorityV1(
         provider_owner=provider_owner,
+        completion_signer=completion_signer,
         signer_policy=ProviderIngestCompletionSignerPolicyV1(
             policy_id=policy_id,
             revision=2,
@@ -2800,7 +2752,35 @@ ordered balance set before returning the plan for review. There is one dispatch
 with no retry or redirect. Execution must recompute all monetary effects and
 preconditions before any signed plan changes ledger balances.
 
-Python preparation currently inherits Requests connect/read inactivity timeouts.
-A slow response can exceed the configured duration while it keeps delivering
-bytes. Absolute deadline qualification remains open in the canonical transport
-owner; the byte limit alone does not bound elapsed time.
+Python preparation uses one original absolute deadline, including request
+preparation, worker startup, headers, body and validation. On POSIX, its owned
+Requests worker prepares the request and resolves the original Session and
+ambient authentication, proxy, TLS and certificate settings exactly once, so
+NETRC reads and system proxy discovery share the same deadline. A bounded Norito
+pipe returns the exact prepared request metadata and at most
+256 KiB. Deadline expiry terminates and reaps only that worker. Cleanup allows
+up to 1.2 seconds beyond the deadline. Before starting the worker, the parent
+requires the exact ToriiClient and rejects relevant instance method overrides,
+custom client/default-header storage and altered request graphs before parent
+header copying, formatting or virtual dispatch. The original request graph is
+admitted against the existing staking schemas before its sole canonical codec
+runs. It requires exact standard Session and nested storage types and rejects custom
+adapters, hooks, cookies, authentication callbacks, non-string Session parameter
+mappings and modified pool settings without invoking their methods. Scalar and
+collection bounds, including the 512 KiB IPC envelope, are checked before the
+full encoder runs. The worker bounds the prepared URL before dispatch and rejects
+compressed responses and response cookie mutation before reading their bodies.
+The same worker runs the canonical native SoraFS alias-proof policy. Successful
+outcomes retain the exact alias evaluation and increment the current client
+counters once. Standard warning logging runs only in that worker, through owned
+duplicates of the admitted stream descriptors; the parent never writes, flushes
+or closes the original log stream. A blocked log sink shares the original
+deadline. Timed-out operations do not publish a completed alias evaluation.
+Custom warning callbacks, logger/handler/filter subclasses, nonstandard streams,
+custom formatters and custom counter storage are rejected before dispatch. The
+bounded route supports standard Logger/RootLogger chains, NullHandler and
+StreamHandler with the default message formatter, including the standard
+last-resort stderr handler. Other client routes retain their configured hooks.
+Configured ordinary request headers (including API authorization) are preserved.
+Other platforms are explicitly unsupported by this bounded owner. There are no
+redirects, retries, transport fallback or credentials in IPC files/arguments.

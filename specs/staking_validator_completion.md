@@ -30,24 +30,39 @@ retention keeps the current key generation without claiming forward security.
 Missing target readiness cannot change the frozen roster in place. Missing the
 current quorum does not authorize weakened voting rules.
 
-The current measured compiler artifact of the production DLMM pool is 71,201 bytes.
-Its nested artifact charge alone is 4,556,864 gas at the existing 64-gas-per-byte
-price, exceeding the default four-million-gas block limit before execution.
-The compiler and pool inputs were unchanged across that component measurement;
-the wider workspace changed during the build and is not a qualified candidate.
-Private numeric-literal helper folding, literal register reuse, a shared
-swap-direction body and direct operands at the existing metered numeric and state consumers
-reduce the artifact without changing its public interface or gas prices.
-Dead-operand register allocation is included in that measurement and passes the
-focused compiler checks; VM and actual Core payout checks remain, and the
-reduction does not yet close this gap.
-The latest retained actual Core payout diagnostic measured 4,720,196 gas with a
-71,397-byte pool artifact. That wider Core cohort failed nine tests and its sources
-changed during execution, so the measurement establishes no candidate qualification.
-The latest compiler output has not been remeasured through Core. The component fixture authenticates a finite
-eight-million-gas limit in its original signed genesis. TODO: finish optimizing and qualify the enacted
-payout under the default policy on the disposable network; the component limit
-does not establish that the default policy can execute the payout.
+The latest recorded compiler artifact of the production DLMM pool is 58,457 bytes,
+including 32,360 bytes of code. Direct CS1 callable metadata compaction removes
+1,360 bytes from the 59,817-byte artifact after numeric operand staging removed
+168 bytes from the 59,985-byte artifact. Complete schemas, permissions, access
+hints, literal payloads, callable frames and original metered consumers remain.
+Seven codec, three allocation and two compiler controls pass for CS1, together
+with both JavaScript tape controls. Complete genuine native outputs are recorded;
+mandatory reproduction rejects the obsolete captures, whose replacement awaits
+the public schema format before canonical publication. The earlier full compiler
+library run passed 1,241 controls and failed one spill-shape fixture that still
+expected removed zero instructions. Its exact correction preserves reload
+registers, lifetimes, operand order and independent original-zero comparisons;
+a fresh full run with regenerated fixtures is pending.
+The current IVM run passed seven of eight local cases; the map recorder's exact
+diagnostic allocation was underfunded before execution and its repaired fixture
+awaits a fresh run. Full compiler and VM candidate qualification remain open.
+
+The artifact's nested byte charge alone is 3,741,248 gas at the unchanged
+64-gas-per-byte price, leaving 258,752 gas within the default four-million-gas
+block limit. A state read requires at least 524,304 gas before its path prefix to
+escrow the unchanged maximum 512-KiB value allowance. Refunded actual consumption
+does not establish that this original temporary reservation fits. Further artifact
+reduction is required before the maintained default-limit gate can pass.
+The latest actual default-limit Core preview, using the 59,985-byte artifact,
+failed with `OutOfGas` before the signed callback. An explicit ignored diagnostic
+using that artifact measured 3,983,636 gas with an eight-million-gas VM against the
+same default-policy signed genesis and discarded all effects and overlays. That
+diagnostic cannot qualify the signed callback or change the default allowance;
+the fresh 58,457-byte artifact still requires the actual default-limit gate.
+The strict workspace source inventory refuses an unsafe nested checkout path;
+component measurements do not establish candidate or network qualification.
+TODO: qualify the actual enacted payout under the default policy on the
+disposable network, including all original byte and execution charges.
 
 Canonical XOR means the asset authenticated for the particular network, not a
 second token named XOR. Taira's public identity and an operator-provisioned Nexus
@@ -402,9 +417,61 @@ same generated canonical field walk and source bounds; the native cursor uses
 the same complete finality verifier. Journal indexes retain actual backing from
 the original pool. TODO: fund the nested decoded SignedBlock and result graphs
 through their complete physical lifetime.
-These changes await compilation, Core and daemon runtime qualification.
-Process exit still cancels the in-memory export owner; this does not establish
-restart recovery for an unfinished DKG attempt.
+These changes await fresh compilation, Core and daemon runtime qualification.
+The crypto layer prepares encrypted private checkpoint banks before secret
+production. Core derives checkpoint authority only from the exact signed genesis
+body or verified committee selection and the original native finality cursor.
+The canonical source record distinguishes signed genesis authorization from an
+executed native tip; genesis provisioning never supplies a fictitious result.
+The authenticated attempt cutoff extends beyond the acceptance window and cannot
+be renewed by restoration.
+
+The daemon publishes an immutable producer intent before secret production,
+then the original private checkpoint, signed public output and complete phase
+head. All original file and directory barriers complete before phase advancement
+or secret retirement. The AEAD binds the intent, original claim and inherited
+input identities. Restoration verifies the same source names and inodes before
+and after syncing their held descriptors; a visible complete head alone is not
+durable evidence. An original same-boot monotonic expiry cannot become a new
+interval on restart.
+
+Bounded generation, delivery and acceptance restoration reconstruct the original
+prepared owners without RNG, re-signing, FIFO reopening or deadline renewal.
+Each completed later intent binds the exact preserved input/native proof hashes
+and inherited stream generations; restore replays genuine native ancestry and
+checks every original signed capsule, acknowledgment and private equation before
+installing that phase. Independent canonical output decoder banks preserve their
+source identity through refusal. All exact raw file extents are admitted on the
+original pool before the first private restore, and original file/directory
+barriers complete before polynomial retirement or claim adoption.
+
+A completed final aggregate now has a distinct checked native-finality context,
+immutable extraction intent and encrypted aggregate/head files. Its original
+96-byte scalar leaf and separate ciphertext/work/control backing remain charged
+through a move-only export owner. The actual aggregation and nonce execute once;
+individual contributions and acknowledgments remain until every original file
+and directory barrier completes. The obsolete phase-four intent format and its
+unused bank are removed directly.
+
+Completed aggregate reload prepares only the final-session public decoder and
+small aggregate bank. Nine exact original raw source extents precede private
+restore. The original accepted head, intent, input marker and output bindings
+remain checked; genuine H3→H4 native proofs authenticate their contexts. All same
+held descriptors, named inodes and the parent directory are checked on both sides
+of their actual sync barriers before claim or export adoption. The inherited
+stream advances to its original empty generation and the same-boot expiry only
+tightens. Provider handle/revision and the original sealed public owner bind the
+four exact outputs; reload accepts only no outputs or a complete verified set,
+without rewriting published bytes, RNG, signing or reconstructing erased private
+phase graphs. The aggregate/export source controls await compilation and runtime.
+
+An input marker or unfinished later producer cannot reopen a preceding phase.
+TODO: restore partial input/producers and interrupted partial final outputs;
+fund nested decoded native proof graphs; authenticate a rollback-resistant phase
+head independently; and complete genuine 31-seat preparation and restore under
+unchanged physical caps. The later restore source controls await compilation and runtime.
+All-seat process restart and real-network preparation remain unqualified; source
+integration and component controls do not establish those outcomes.
 The public reducer requires all `n` distinct
 commitments and all `n²` distinct signed acceptances before the finalized
 acceptance cutoff. It derives the transcript from those exact commitments; a

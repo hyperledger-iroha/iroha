@@ -21,11 +21,51 @@ pub struct ChargedShared<T>(Shared<T, AllocationCharge>);
 pub struct ReservedChargedShared<T>(Reserved<T, AllocationCharge>);
 
 impl<T> ReservedChargedShared<T> {
+    /// Whether this exact original shell retains the supplied finite pool.
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.0.charge().belongs_to(budget)
+    }
+
     /// Move the original payload into its already allocated shell without allocating.
     pub fn initialize(self, value: T) -> ChargedShared<T> {
         ChargedShared(self.0.initialize(value))
     }
 }
+
+/// Refusal to allocate one shared shell from its exact original layout charge.
+/// Every failure returns the same charge, without refunding or reacquiring it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SharedFromChargeError {
+    /// Size or alignment differs from the actual concrete shared allocation.
+    LayoutMismatch {
+        /// Layout required by the concrete payload, reference count and charge.
+        expected: Layout,
+        /// Layout retained by the original charge.
+        actual: Layout,
+    },
+    /// Physical allocation refused the already prepaid concrete shared layout.
+    Allocator {
+        /// Exact layout refused by the allocator.
+        layout: Layout,
+    },
+}
+impl fmt::Display for SharedFromChargeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LayoutMismatch { expected, actual } => write!(
+                f,
+                "shared shell requires {expected:?} but original charge covers {actual:?}"
+            ),
+            Self::Allocator { layout } => write!(
+                f,
+                "failed to allocate {} prepaid shared bytes with alignment {}",
+                layout.size(),
+                layout.align()
+            ),
+        }
+    }
+}
+impl std::error::Error for SharedFromChargeError {}
 
 /// Local failure before a complete shared allocation can be returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +104,38 @@ impl<T> ChargedShared<T> {
     /// This is nonzero even for a zero-sized payload; it includes reference custody.
     pub fn allocation_layout() -> Layout {
         Shared::<T, AllocationCharge>::layout()
+    }
+
+    /// Allocate one shell using its already admitted exact original charge.
+    ///
+    /// No capacity is acquired, refunded or substituted. A refused allocation
+    /// returns the identical charge, allowing the original partial owner to retry
+    /// without releasing sibling allocations or granting replacement credit.
+    ///
+    /// # Errors
+    /// Rejects a size/alignment mismatch before allocator work, or returns the
+    /// original charge and exact layout on physical allocation refusal.
+    pub fn reserve_from_charge(
+        charge: AllocationCharge,
+    ) -> Result<ReservedChargedShared<T>, (AllocationCharge, SharedFromChargeError)> {
+        let expected = Self::allocation_layout();
+        if charge.layout() != expected {
+            let actual = charge.layout();
+            return Err((
+                charge,
+                SharedFromChargeError::LayoutMismatch { expected, actual },
+            ));
+        }
+        Reserved::try_new(charge)
+            .map(ReservedChargedShared)
+            .map_err(|(charge, error)| {
+                (
+                    charge,
+                    SharedFromChargeError::Allocator {
+                        layout: error.layout(),
+                    },
+                )
+            })
     }
 
     /// Reserve the exact physical shell before entering a consuming transition.

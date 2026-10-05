@@ -22,7 +22,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
-    ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
+    ivm_abi::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
 fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().unwrap();

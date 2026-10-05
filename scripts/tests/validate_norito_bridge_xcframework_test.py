@@ -10,6 +10,7 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -217,16 +218,156 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
             encoding="utf-8"
         )
-        checker_inventory = checker.split("KAGEMUSHA_C_SYMBOLS=(\n", 1)[1].split(
+        checker_inventory = checker.split("RETIRED_KAGEMUSHA_C_SYMBOLS=(\n", 1)[1].split(
             "\n)", 1
         )[0]
         self.assertEqual(
             checker_inventory.split(),
             [
-                symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                symbol for symbol in validator.EXPECTED_FORBIDDEN_SYMBOLS
                 if symbol.startswith("connect_norito_kagemusha_")
             ],
         )
+
+    def test_current_mobile_protocol_inventory_matches_required_bridge_exports(self) -> None:
+        checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
+            encoding="utf-8"
+        )
+        inventory = checker.split("REQUIRED_PROTOCOL_C_SYMBOLS=(\n", 1)[1].split(
+            "\n)", 1
+        )[0]
+        self.assertEqual(
+            inventory.split(),
+            [
+                symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                if not symbol.startswith("soranet_mldsa_")
+            ],
+        )
+        builder = (ROOT / "scripts/build_norito_xcframework.sh").read_text(
+            encoding="utf-8"
+        )
+        forbidden = builder.split('  "forbidden_symbols": [', 1)[1].split(
+            "\n  ],", 1
+        )[0]
+        retired_auditor_symbol = "_".join((
+            "connect_norito_private_settlement_auditor_capsule_response", "verify", "v1"
+        ))
+        forbidden = forbidden.replace(
+            '"$RETIRED_AUDITOR_CAPSULE_VERIFY_SYMBOL"', f'"{retired_auditor_symbol}"'
+        )
+        self.assertEqual(
+            re.findall(r'"([a-z][a-z0-9_]+)"', forbidden),
+            validator.EXPECTED_FORBIDDEN_SYMBOLS,
+        )
+
+    def check_mobile_binary_symbols(
+        self, symbols: list[str], mode: str = "apple"
+    ) -> subprocess.CompletedProcess[str]:
+        """Exercise the packaging guard with an explicit exported symbol table."""
+        checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
+            encoding="utf-8"
+        )
+        inventories = "RETIRED_KAGEMUSHA_C_SYMBOLS=(\n" + checker.split(
+            "RETIRED_KAGEMUSHA_C_SYMBOLS=(\n", 1
+        )[1].split("check_source_contract() {", 1)[0]
+        guard = "check_binary_symbols() {" + checker.split(
+            "check_binary_symbols() {", 1
+        )[1].split("\ncheck_apple() {", 1)[0]
+        program = (
+            'set -euo pipefail\nFAILURES=0\n'
+            'fail() { printf "%s\\n" "$1" >&2; FAILURES=$((FAILURES + 1)); }\n'
+            'nm() { printf "%s\\n" "$MOCK_EXPORTED_SYMBOLS"; }\n'
+            + inventories + guard
+            + '\ncheck_binary_symbols fixture fixture "$1"\n'
+            + '[[ "$FAILURES" -eq 0 ]]\n'
+        )
+        return subprocess.run(
+            ["/bin/bash", "-s", "--", mode], input=program, text=True,
+            capture_output=True,
+            env={"PATH": "/usr/bin:/bin", "MOCK_EXPORTED_SYMBOLS": "\n".join(symbols)},
+            check=False,
+        )
+
+    def test_mobile_binary_guard_requires_current_exports(self) -> None:
+        current = [
+            symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+            if not symbol.startswith("soranet_mldsa_")
+        ]
+        for mode in ("apple", "elf"):
+            with self.subTest(mode=mode):
+                result = self.check_mobile_binary_symbols(current, mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        for missing in (
+            "connect_norito_bridge_abi_version",
+            "connect_norito_domain_id_validate_v1",
+            "connect_norito_validation_fee_current_policy_proof_verify_v1",
+            "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
+            "iroha_privacy_validate_exact12_capability_manifest_v1",
+        ):
+            with self.subTest(missing=missing):
+                result = self.check_mobile_binary_symbols(
+                    [symbol for symbol in current if symbol != missing]
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"missing {missing}", result.stderr)
+
+    def test_mobile_binary_guard_rejects_retired_c_and_jni_exports(self) -> None:
+        checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
+            encoding="utf-8"
+        )
+        current = [
+            symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+            if not symbol.startswith("soranet_mldsa_")
+        ]
+        retired_c = [
+            symbol for symbol in validator.EXPECTED_FORBIDDEN_SYMBOLS
+            if symbol.startswith("connect_norito_kagemusha_")
+        ]
+        for symbol in (
+            *retired_c,
+            "connect_norito_kagemusha_unlisted_v1",
+            "connect_norito_offline_cash_unlisted_v1",
+        ):
+            for mode in ("apple", "elf"):
+                with self.subTest(symbol=symbol, mode=mode):
+                    exported = "_" + symbol if mode == "apple" else symbol
+                    result = self.check_mobile_binary_symbols([*current, exported], mode)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("retired KAGEMUSHA", result.stderr)
+        retired_jni = []
+        for inventory in (
+            "RETIRED_RESERVE_FINALITY_JNI_SYMBOLS",
+            "RETIRED_ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS",
+        ):
+            entries = checker.split(inventory + "=(\n", 1)[1].split("\n)", 1)[0]
+            retired_jni.extend(entries.split())
+        self.assertTrue(retired_jni)
+        unlisted = retired_jni[0].rsplit("_native", 1)[0] + "_nativeUnlistedV1"
+        for symbol in (
+            *retired_jni,
+            unlisted,
+            "Java_org_hyperledger_iroha_sdk_offline_KagemushaFirstDeviceHardwareEvidenceJniV1_nativeUnlistedV1",
+            "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaUnlistedJniV1_nativeUnlistedV1",
+            "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaUnlistedJniV1_nativeUnlistedV1",
+            "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeUnlistedV1",
+        ):
+            with self.subTest(symbol=symbol):
+                result = self.check_mobile_binary_symbols([*current, symbol], "elf")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("retired KAGEMUSHA JNI", result.stderr)
+
+    def test_retired_kagemusha_exports_cannot_be_required(self) -> None:
+        for symbol in validator.EXPECTED_FORBIDDEN_SYMBOLS:
+            if not symbol.startswith("connect_norito_kagemusha_"):
+                continue
+            with self.subTest(symbol=symbol):
+                self.assertNotIn(symbol, validator.EXPECTED_REQUIRED_SYMBOLS)
+                self.payload["required_symbols"] = [
+                    *validator.EXPECTED_REQUIRED_SYMBOLS, symbol
+                ]
+                self.write_manifest()
+                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                    self.validate()
 
     def write_manifest(self) -> None:
         self.manifest.write_text(
@@ -358,9 +499,14 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
     def test_accepts_only_the_canonical_inventory(self) -> None:
         self.validate()
 
-    def test_rejects_manifest_missing_current_domain_or_mldsa_exports(self) -> None:
+    def test_rejects_manifest_missing_current_domain_fee_settlement_or_mldsa_exports(self) -> None:
         for missing in (
             "connect_norito_domain_id_validate_v1",
+            "connect_norito_validation_fee_current_policy_proof_request_v1",
+            "connect_norito_validation_fee_current_policy_proof_verify_v1",
+            "connect_norito_private_settlement_committee_proof_response_verify_v1",
+            "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
+            "connect_norito_private_settlement_audit_approval_response_verify_v1",
             "soranet_mldsa_parameters",
             "soranet_mldsa_generate_keypair",
             "soranet_mldsa_sign",
@@ -375,18 +521,18 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
                     self.validate()
 
-    def test_rejects_manifests_missing_either_mint_stage_export(self) -> None:
+    def test_rejects_manifests_omitting_either_retired_mint_stage_export(self) -> None:
         for missing in (
             "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
             "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
         ):
             with self.subTest(missing=missing):
-                self.payload["required_symbols"] = [
-                    symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                self.payload["forbidden_symbols"] = [
+                    symbol for symbol in validator.EXPECTED_FORBIDDEN_SYMBOLS
                     if symbol != missing
                 ]
                 self.write_manifest()
-                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                with self.assertRaisesRegex(validator.ValidationError, "forbidden symbol inventory"):
                     self.validate()
 
     def test_rejects_manifest_missing_authoritative_privacy_capability_validator(self) -> None:
@@ -398,14 +544,16 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
             self.validate()
 
-    def test_rejects_manifest_missing_top_up_request_binding(self) -> None:
-        self.payload["required_symbols"] = [symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
-            if symbol != "connect_norito_kagemusha_top_up_signed_request_validate_v1"]
+    def test_rejects_manifest_omitting_retired_top_up_request_binding(self) -> None:
+        self.payload["forbidden_symbols"] = [
+            symbol for symbol in validator.EXPECTED_FORBIDDEN_SYMBOLS
+            if symbol != "connect_norito_kagemusha_top_up_signed_request_validate_v1"
+        ]
         self.write_manifest()
-        with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+        with self.assertRaisesRegex(validator.ValidationError, "forbidden symbol inventory"):
             self.validate()
 
-    def test_rejects_manifest_missing_iphone_coordinator_or_state_observer(self) -> None:
+    def test_rejects_manifest_omitting_retired_coordinator_or_state_observer(self) -> None:
         for missing in (
             "connect_norito_kagemusha_core_coordinator_close_v1",
             "connect_norito_kagemusha_ordinary_runtime_startup_v1",
@@ -419,26 +567,26 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "connect_norito_kagemusha_testnet_native_startup_activate_v1",
         ):
             with self.subTest(missing=missing):
-                self.payload["required_symbols"] = [
-                    symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                self.payload["forbidden_symbols"] = [
+                    symbol for symbol in validator.EXPECTED_FORBIDDEN_SYMBOLS
                     if symbol != missing
                 ]
                 self.write_manifest()
-                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                with self.assertRaisesRegex(validator.ValidationError, "forbidden symbol inventory"):
                     self.validate()
 
-    def test_rejects_manifests_missing_either_reserve_finality_export(self) -> None:
+    def test_rejects_manifests_omitting_either_retired_reserve_finality_export(self) -> None:
         for missing in (
             "connect_norito_kagemusha_reserve_finality_hint_v1",
             "connect_norito_kagemusha_reserve_finality_verify_v1",
         ):
             with self.subTest(missing=missing):
-                self.payload["required_symbols"] = [
-                    symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                self.payload["forbidden_symbols"] = [
+                    symbol for symbol in validator.EXPECTED_FORBIDDEN_SYMBOLS
                     if symbol != missing
                 ]
                 self.write_manifest()
-                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                with self.assertRaisesRegex(validator.ValidationError, "forbidden symbol inventory"):
                     self.validate()
 
     def test_repository_provenance_rejects_dirty_source_without_allowance(self) -> None:

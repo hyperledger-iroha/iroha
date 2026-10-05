@@ -46,7 +46,7 @@ pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), Error> {
 
 /// Preserve the canonical compact owner's nominal decode-work admission even
 /// when a caller already owns its initialized physical backing.
-pub(crate) fn reserve_compact_decode_backing(payload_bytes: usize) -> Result<usize, Error> {
+pub fn reserve_compact_decode_backing(payload_bytes: usize) -> Result<usize, Error> {
     let allocation_bytes = payload_bytes
         .checked_add(1)
         .ok_or(Error::AllocationFailed { bytes: u64::MAX })?;
@@ -130,7 +130,7 @@ impl PublicKeyCompact {
 /// The sole compact-byte parser and validator, with a caller-selected owner.
 /// Fixed scratch never becomes a retained allocation. Ordinary decoding and the
 /// prepared destination choose their owner only after the same validation.
-pub(crate) fn with_decoded_compact<R, E>(
+pub fn with_decoded_compact<R, E>(
     bytes: &[u8],
     exact: bool,
     retain: impl FnOnce(Algorithm, &[u8]) -> Result<R, E>,

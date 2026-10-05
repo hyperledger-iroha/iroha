@@ -1,5 +1,4 @@
 //! Account balances and exact, quoted native operations with durable submission evidence.
-use crate::operation_journal::Journal;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     blocking::{Client, funding::BalanceReport},
@@ -19,15 +18,18 @@ use iroha::{
     },
 };
 use iroha_model_base::metadata::Metadata;
+use iroha_operation_journal::Journal;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::FeeQuoteResponse;
 #[cfg(test)]
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use norito::json::{JsonDeserialize, JsonSerialize, Value};
+#[cfg(test)]
+use std::time::Duration;
 use std::{
     collections::BTreeMap,
     path::Path,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[path = "operations_preparation.rs"]
@@ -40,6 +42,8 @@ mod bounded;
 mod bounded_alias;
 #[path = "operations_gateway_setup.rs"]
 mod gateway_setup;
+#[path = "operations_musubi_namespace.rs"]
+mod musubi_namespace;
 #[path = "operations_private_root.rs"]
 mod private_root;
 #[path = "operations_provider_capacity.rs"]
@@ -67,6 +71,9 @@ use bounded_alias::AliasFeeBounds;
 pub use gateway_setup::{InitialGatewaySetupRequest, InitialGatewaySetupSelection};
 use iroha_data_model::private_dataspace::{
     PrivateDataspaceAnchor, PrivateDataspaceAnchorState, PrivateDataspaceRegistration,
+};
+pub use musubi_namespace::{
+    MusubiNamespaceBindingParent, MusubiNamespaceBindingRequest, MusubiNamespaceBindingSelection,
 };
 use private_root::BoundedTerms;
 pub use private_root::{
@@ -206,9 +213,12 @@ pub enum NativeOperationKind {
     InitialReputationPolicy,
     /// Sole owner-signed revision-one ingest authority Set with native absence CAS.
     InitialProviderIngestAuthority,
+    /// Sole immutable Musubi namespace binding, authorized by its actual current native owner.
+    MusubiNamespaceBinding,
 }
 
 enum OperationExpectation<'a> {
+    MusubiNamespace(musubi_namespace::MusubiNamespaceExpectation<'a>),
     Transfer(&'a TransferRequest),
     Alias(&'a AliasSetupPlanRequestV1, &'a FeePaymentIntent),
     ProviderIngest(provider_ingest::ProviderIngestExpectation<'a>),
@@ -226,6 +236,7 @@ enum OperationExpectation<'a> {
 impl OperationExpectation<'_> {
     fn verify(&self, record: &preparation::Selection<'_>) -> Result<()> {
         match self {
+            Self::MusubiNamespace(expected) => expected.verify(record),
             Self::Transfer(expected) => {
                 let NativeOperation::Transfer {
                     destination,
@@ -710,6 +721,10 @@ fn validate_transfer_request(request: &TransferRequest, authority: &AccountId) -
     deny_unknown_fields
 )]
 enum NativeOperation {
+    MusubiNamespaceBinding {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
     InitialProviderIngestAuthority {
         plan: Vec<u8>,
         terms: BoundedTerms,
@@ -781,7 +796,8 @@ impl NativeOperation {
             Self::PrivateRootRegistration { terms, .. } | Self::PrivateRootAnchor { terms, .. } => {
                 Some(terms)
             }
-            Self::StreamTokenCustodyConfigure { terms, .. }
+            Self::MusubiNamespaceBinding { terms, .. }
+            | Self::StreamTokenCustodyConfigure { terms, .. }
             | Self::StreamTokenCustodyEnroll { terms, .. }
             | Self::InitialReservePolicy { terms, .. }
             | Self::ReserveAccountRegistration { terms, .. }
@@ -801,7 +817,8 @@ impl NativeOperation {
     }
     fn principal(&self, authority: &AccountId) -> Result<BTreeMap<AssetId, Quantity>> {
         match self {
-            Self::PrivateRootRegistration { .. }
+            Self::MusubiNamespaceBinding { .. }
+            | Self::PrivateRootRegistration { .. }
             | Self::PrivateRootAnchor { .. }
             | Self::StreamTokenCustodyConfigure { .. }
             | Self::StreamTokenCustodyEnroll { .. }
@@ -840,6 +857,7 @@ impl NativeOperation {
     }
     fn kind(&self) -> NativeOperationKind {
         match self {
+            Self::MusubiNamespaceBinding { .. } => NativeOperationKind::MusubiNamespaceBinding,
             Self::InitialGatewaySetup { .. } => NativeOperationKind::InitialGatewaySetup,
             Self::InitialReputationPolicy { .. } => NativeOperationKind::InitialReputationPolicy,
             Self::InitialProviderIngestAuthority { .. } => {
@@ -867,6 +885,10 @@ impl NativeOperation {
     }
     fn instructions(&self, config: &Config) -> Result<Vec<InstructionBox>> {
         match self {
+            Self::MusubiNamespaceBinding { plan, terms } => {
+                terms.validate()?;
+                musubi_namespace::instructions(config, plan, terms.deadline_ms)
+            }
             Self::InitialProviderIngestAuthority { plan, terms } => {
                 terms.validate()?;
                 provider_ingest::instructions(config, plan, terms.deadline_ms)
@@ -976,6 +998,9 @@ fn transfer_report(
     evidence: Option<&Value>,
 ) -> OperationReport {
     let (kind, operation) = match &record.operation {
+        NativeOperation::MusubiNamespaceBinding { terms, .. } => {
+            ("musubi_namespace_binding", norito::json!({"terms": terms}))
+        }
         NativeOperation::InitialProviderIngestAuthority { terms, .. } => (
             "initial_provider_ingest_authority",
             norito::json!({"terms": terms}),

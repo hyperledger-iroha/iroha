@@ -118,7 +118,10 @@ fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBl
     );
     block
         .as_mut()
-        .replace_signatures(BTreeSet::from([signature]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([signature])
+                .expect("at most 31 block signatures"),
+        )
         .expect("replace signature after completing fixture execution metadata");
     block
         .commit(&topology, crate::block::reserve_block_for_tests())

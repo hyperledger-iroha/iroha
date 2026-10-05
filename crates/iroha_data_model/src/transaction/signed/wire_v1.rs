@@ -38,7 +38,7 @@ impl<'a> WireV1Plan<'a> {
     /// destination on error. This call neither flushes nor publishes a destination.
     ///
     /// # Errors
-    /// Returns the original codec/destination error, or LengthMismatch for a changed extent.
+    /// Returns the original codec/destination error, or `LengthMismatch` for a changed extent.
     pub fn write_to(&self, output: &mut impl Write) -> Result<(), Error> {
         let _layout = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         norito::core::serialize_to_writer_exact(&self.payload, output, self.length)

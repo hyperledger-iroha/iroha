@@ -288,16 +288,8 @@ def test_first_release_sdk_versions_are_final_and_swift_is_tag_pinned() -> None:
         for version in versions.values()
     )
 
-    podspec = (Path(__file__).resolve().parents[2] / "IrohaSwift/IrohaSwift.podspec").read_text(
-        encoding="utf-8"
-    )
-    assert "s.version          = version" in podspec
-    assert ':tag => "v#{version}"' in podspec
-    assert "s.dependency       'NoritoBridge', version" in podspec
-    assert ":branch" not in podspec
-    assert "File.symlink?(version_file)" in podspec
-    assert 'version_bytes == "#{version}\\n"' in podspec
-    assert "version.ascii_only?" in podspec
+    version_bytes = (Path(__file__).resolve().parents[2] / "IrohaSwift/VERSION").read_bytes()
+    assert version_bytes == versions["iroha-swift"].encode("ascii") + b"\n"
 
     for relative in ("IrohaSwift/README.md", "specs/sdk/swift/index.md"):
         install_doc = (Path(__file__).resolve().parents[2] / relative).read_text(

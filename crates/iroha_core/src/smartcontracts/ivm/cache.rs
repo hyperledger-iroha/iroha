@@ -1,3 +1,7 @@
+#[path = "cache/runtime_slot.rs"]
+mod runtime_slot;
+use runtime_slot::{IdleRuntimeBacking, IdleRuntimeSlot};
+
 use iroha_crypto::Hash;
 use ivm::ProgramMetadata;
 use ivm::analysis::{ProgramAnalysis, ProgramAnalysisError};
@@ -338,8 +342,8 @@ impl PreparedContractCache {
         let cached = self.with_store(|store| {
             let cached = store.nested_runtimes.get_mut(&key).and_then(|pool| {
                 pool.available
-                    .pop()
-                    .map(|runtime| (runtime.baseline, runtime.vm))
+                    .take()
+                    .map(|(runtime, backing)| (runtime.baseline, runtime.vm, backing))
             });
             if cached.is_some() {
                 store.stats.runtime_hits = store.stats.runtime_hits.saturating_add(1);
@@ -349,7 +353,7 @@ impl PreparedContractCache {
             }
             cached
         });
-        if let Some((baseline, mut vm)) = cached {
+        if let Some((baseline, mut vm, backing)) = cached {
             vm.activate_cached_runtime();
             vm.set_gas_limit(gas_limit);
             return Ok(PreparedRuntimeLease {
@@ -357,6 +361,7 @@ impl PreparedContractCache {
                 key,
                 baseline,
                 vm: Some(vm),
+                backing: Some(backing),
             });
         }
         let mut vm = ivm::IVM::try_new_with_memory_budget(gas_limit, &self.execution_budget)?;
@@ -375,7 +380,7 @@ impl PreparedContractCache {
         // outside the shared store mutex so another borrower can
         // resolve or return a prepared artifact while it is being built.
         let baseline = vm.try_runtime_template()?;
-        self.with_store(|store| {
+        let cacheable = self.with_store(|store| {
             // The artifact may have been evicted while the template was built.
             // Cache admission uses the current store, never the earlier lookup.
             let cacheable = store.capacity != 0 && store.entries.contains_key(&key.code_hash);
@@ -383,19 +388,38 @@ impl PreparedContractCache {
                 store.insert_nested_runtime(
                     key,
                     SharedRuntimePool {
-                        available: Vec::new(),
+                        available: IdleRuntimeSlot::empty(),
                     },
                 );
             }
+            store.can_return_runtime(key)
         });
+        // Optional retention never changes the completed cold VM/template admission.
+        // The fixed row is allocated before the lease and outside the store guard.
+        let backing = if cacheable && ivm::cache_memory::memory_stats().limit_bytes != 0 {
+            IdleRuntimeBacking::try_new(&self.execution_budget).ok()
+        } else {
+            None
+        };
         Ok(PreparedRuntimeLease {
             cache: self.clone(),
             key,
             baseline,
             vm: Some(vm),
+            backing,
         })
     }
-    fn return_runtime(&self, key: RuntimeKey, baseline: ivm::RuntimeTemplate, mut vm: ivm::IVM) {
+    fn return_runtime(
+        &self,
+        key: RuntimeKey,
+        baseline: ivm::RuntimeTemplate,
+        mut vm: ivm::IVM,
+        backing: Option<IdleRuntimeBacking>,
+    ) {
+        let Some(backing) = backing.filter(|backing| backing.belongs_to(&self.execution_budget))
+        else {
+            return;
+        };
         // A cache entry can disappear while its VM is borrowed. Do not reset
         // or admit that VM's allocations to retention if it no longer has a
         // prepared artifact or another borrower already filled the idle slot.
@@ -411,6 +435,7 @@ impl PreparedContractCache {
             if !store.can_return_runtime(key)
                 || !baseline.try_retain_cache_allocations()
                 || !vm.try_retain_cache_allocations()
+                || !backing.try_retain()
             {
                 return;
             }
@@ -419,12 +444,13 @@ impl PreparedContractCache {
                 .nested_runtimes
                 .entry(key)
                 .or_insert_with(|| SharedRuntimePool {
-                    available: Vec::new(),
+                    available: IdleRuntimeSlot::empty(),
                 });
             // One idle runtime per key is sufficient. Concurrent/re-entrant calls
             // may create extra workers, which are discarded as they return.
             if pool.available.is_empty() {
-                pool.available.push(PooledRuntime { baseline, vm });
+                pool.available
+                    .place(backing, PooledRuntime { baseline, vm });
             }
             store.touch_nested_runtime(key);
             store.evict_nested_runtimes();
@@ -492,16 +518,7 @@ impl PreparedContractStore {
                 .capacity()
                 .checked_mul(std::mem::size_of::<RuntimeKey>())?,
         ];
-        let bytes = values.into_iter().try_fold(0_usize, usize::checked_add)?;
-        self.nested_runtimes
-            .values()
-            .try_fold(bytes, |bytes, pool| {
-                bytes.checked_add(
-                    pool.available
-                        .capacity()
-                        .checked_mul(std::mem::size_of::<PooledRuntime>())?,
-                )
-            })
+        values.into_iter().try_fold(0_usize, usize::checked_add)
     }
     fn retain_index_or_clear(&mut self) {
         if self.entries.is_empty() && self.nested_runtimes.is_empty() {
@@ -764,10 +781,10 @@ impl ProgramSummary {
     }
 }
 struct RuntimePool {
-    available: Vec<PooledRuntime>,
+    available: IdleRuntimeSlot,
 }
 struct SharedRuntimePool {
-    available: Vec<PooledRuntime>,
+    available: IdleRuntimeSlot,
 }
 struct PooledRuntime {
     baseline: ivm::RuntimeTemplate,
@@ -789,6 +806,7 @@ pub struct PreparedRuntimeLease {
     key: RuntimeKey,
     baseline: ivm::RuntimeTemplate,
     vm: Option<ivm::IVM>,
+    backing: Option<IdleRuntimeBacking>,
 }
 impl Deref for PreparedRuntimeLease {
     type Target = ivm::IVM;
@@ -809,7 +827,7 @@ impl Drop for PreparedRuntimeLease {
     fn drop(&mut self) {
         if let Some(vm) = self.vm.take() {
             self.cache
-                .return_runtime(self.key, self.baseline.clone(), vm);
+                .return_runtime(self.key, self.baseline.clone(), vm, self.backing.take());
         }
     }
 }
@@ -823,6 +841,7 @@ pub struct RuntimeLease<'a> {
     key: RuntimeKey,
     baseline: ivm::RuntimeTemplate,
     vm: Option<ivm::IVM>,
+    backing: Option<IdleRuntimeBacking>,
 }
 impl Deref for RuntimeLease<'_> {
     type Target = ivm::IVM;
@@ -839,7 +858,7 @@ impl Drop for RuntimeLease<'_> {
     fn drop(&mut self) {
         if let Some(vm) = self.vm.take() {
             self.cache
-                .return_runtime(self.key, self.baseline.clone(), vm);
+                .return_runtime(self.key, self.baseline.clone(), vm, self.backing.take());
         }
     }
 }
@@ -1265,12 +1284,13 @@ impl IvmCache {
         gas_limit: u64,
         heap_limit: u64,
     ) -> Result<RuntimeLease<'a>, ivm::VMError> {
-        let (key, baseline, vm) = self.take_runtime(summary, gas_limit, heap_limit)?;
+        let (key, baseline, vm, backing) = self.take_runtime(summary, gas_limit, heap_limit)?;
         Ok(RuntimeLease {
             cache: self,
             key,
             baseline,
             vm: Some(vm),
+            backing,
         })
     }
     /// Check out a warmed runtime for a validated generic IVM program.
@@ -1295,16 +1315,16 @@ impl IvmCache {
         let cached = self.with_local(|local| {
             local.runtime_templates.get_mut(&key).and_then(|pool| {
                 pool.available
-                    .pop()
-                    .map(|runtime| (runtime.baseline, runtime.vm))
+                    .take()
+                    .map(|(runtime, backing)| (runtime.baseline, runtime.vm, backing))
             })
         });
-        let (baseline, vm) = if let Some((baseline, mut vm)) = cached {
+        let (baseline, vm, backing) = if let Some((baseline, mut vm, backing)) = cached {
             self.stats.runtime_hits = self.stats.runtime_hits.saturating_add(1);
             self.touch_runtime(key);
             vm.activate_cached_runtime();
             vm.set_gas_limit(gas_limit);
-            (baseline, vm)
+            (baseline, vm, Some(backing))
         } else {
             self.stats.runtime_misses = self.stats.runtime_misses.saturating_add(1);
             let mut vm = ivm::IVM::try_new_with_memory_budget(
@@ -1323,17 +1343,19 @@ impl IvmCache {
                 self.insert_runtime_pool(
                     key,
                     RuntimePool {
-                        available: Vec::new(),
+                        available: IdleRuntimeSlot::empty(),
                     },
                 );
             }
-            (baseline, vm)
+            let backing = self.prepare_runtime_backing(key);
+            (baseline, vm, backing)
         };
         Ok(RuntimeLease {
             cache: self,
             key,
             baseline,
             vm: Some(vm),
+            backing,
         })
     }
     fn take_runtime(
@@ -1341,7 +1363,15 @@ impl IvmCache {
         summary: &ProgramSummary,
         gas_limit: u64,
         heap_limit: u64,
-    ) -> Result<(RuntimeKey, ivm::RuntimeTemplate, ivm::IVM), ivm::VMError> {
+    ) -> Result<
+        (
+            RuntimeKey,
+            ivm::RuntimeTemplate,
+            ivm::IVM,
+            Option<IdleRuntimeBacking>,
+        ),
+        ivm::VMError,
+    > {
         #[cfg(test)]
         self.prepared_contracts.check_checkout_for_test()?;
         let stack_limit = stack_limit_for_gas(gas_limit);
@@ -1349,16 +1379,16 @@ impl IvmCache {
         let cached = self.with_local(|local| {
             local.runtime_templates.get_mut(&key).and_then(|pool| {
                 pool.available
-                    .pop()
-                    .map(|runtime| (runtime.baseline, runtime.vm))
+                    .take()
+                    .map(|(runtime, backing)| (runtime.baseline, runtime.vm, backing))
             })
         });
-        if let Some((baseline, mut vm)) = cached {
+        if let Some((baseline, mut vm, backing)) = cached {
             self.stats.runtime_hits = self.stats.runtime_hits.saturating_add(1);
             self.touch_runtime(key);
             vm.activate_cached_runtime();
             vm.set_gas_limit(gas_limit);
-            return Ok((key, baseline, vm));
+            return Ok((key, baseline, vm, Some(backing)));
         }
         self.stats.runtime_misses = self.stats.runtime_misses.saturating_add(1);
         let mut vm = ivm::IVM::try_new_with_memory_budget(
@@ -1379,11 +1409,22 @@ impl IvmCache {
             self.insert_runtime_pool(
                 key,
                 RuntimePool {
-                    available: Vec::new(),
+                    available: IdleRuntimeSlot::empty(),
                 },
             );
         }
-        Ok((key, baseline, vm))
+        let backing = self.prepare_runtime_backing(key);
+        Ok((key, baseline, vm, backing))
+    }
+    fn prepare_runtime_backing(&self, key: RuntimeKey) -> Option<IdleRuntimeBacking> {
+        if self.capacity == 0
+            || ivm::cache_memory::memory_stats().limit_bytes == 0
+            || !self.with_local(|local| local.can_return_runtime(key))
+        {
+            return None;
+        }
+        // No internal store guard is held while the exact original-pool row is allocated.
+        IdleRuntimeBacking::try_new(self.prepared_contracts.execution_budget()).ok()
     }
     /// Return a snapshot of cache counters.
     #[must_use]
@@ -1404,7 +1445,13 @@ impl IvmCache {
         key: RuntimeKey,
         baseline: ivm::RuntimeTemplate,
         mut vm: ivm::IVM,
+        backing: Option<IdleRuntimeBacking>,
     ) {
+        let Some(backing) = backing
+            .filter(|backing| backing.belongs_to(self.prepared_contracts.execution_budget()))
+        else {
+            return;
+        };
         if self.capacity == 0 || !self.with_local(|local| local.can_return_runtime(key)) {
             return;
         }
@@ -1415,10 +1462,11 @@ impl IvmCache {
             if !local.can_return_runtime(key)
                 || !baseline.try_retain_cache_allocations()
                 || !vm.try_retain_cache_allocations()
+                || !backing.try_retain()
             {
                 return false;
             }
-            local.return_runtime(key, baseline, vm);
+            local.return_runtime(key, baseline, vm, backing);
             true
         });
         if returned {
@@ -1499,16 +1547,7 @@ impl LocalCacheStore {
                 .capacity()
                 .checked_mul(std::mem::size_of::<RuntimeKey>())?,
         ];
-        let bytes = values.into_iter().try_fold(0_usize, usize::checked_add)?;
-        self.runtime_templates
-            .values()
-            .try_fold(bytes, |bytes, pool| {
-                bytes.checked_add(
-                    pool.available
-                        .capacity()
-                        .checked_mul(std::mem::size_of::<PooledRuntime>())?,
-                )
-            })
+        values.into_iter().try_fold(0_usize, usize::checked_add)
     }
     fn retain_index_or_clear(&mut self) {
         if self.summary_order.is_empty() && self.runtime_order.is_empty() {
@@ -1520,7 +1559,8 @@ impl LocalCacheStore {
             return;
         };
         // Conservatively keep the allocation high-water mark until the whole
-        // index is released, including empty B-tree roots and pool capacity.
+        // index is released, including empty B-tree roots. Runtime row backing
+        // is measured separately by its sole fixed ExecutionBuffer owner.
         self.index_memory
             .set_known_bytes(bytes.max(self.index_memory.bytes()));
         if !self.index_memory.try_retain() {
@@ -1568,15 +1608,22 @@ impl LocalCacheStore {
         self.evict_runtimes_if_needed();
         self.retain_index_or_clear();
     }
-    fn return_runtime(&mut self, key: RuntimeKey, baseline: ivm::RuntimeTemplate, vm: ivm::IVM) {
+    fn return_runtime(
+        &mut self,
+        key: RuntimeKey,
+        baseline: ivm::RuntimeTemplate,
+        vm: ivm::IVM,
+        backing: IdleRuntimeBacking,
+    ) {
         let pool = self
             .runtime_templates
             .entry(key)
             .or_insert_with(|| RuntimePool {
-                available: Vec::new(),
+                available: IdleRuntimeSlot::empty(),
             });
         if pool.available.is_empty() {
-            pool.available.push(PooledRuntime { baseline, vm });
+            pool.available
+                .place(backing, PooledRuntime { baseline, vm });
         }
         self.touch_runtime(key);
         self.evict_runtimes_if_needed();
