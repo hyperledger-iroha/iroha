@@ -358,15 +358,19 @@ impl JsonSerialize for RuntimeUpgradeId {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, byte) in self.0.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, byte) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                byte.json_serialize_to(out)?;
             }
-            byte.json_serialize_to(out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -402,16 +406,20 @@ impl JsonSerialize for RuntimeUpgradeStatus {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        match self {
-            Self::Proposed => out.push_str("{\"Proposed\":null")?,
-            Self::ActivatedAt(height) => {
-                out.push_str("{\"ActivatedAt\":")?;
-                height.json_serialize_to(out)?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            match self {
+                Self::Proposed => out.push_str("{\"Proposed\":null")?,
+                Self::ActivatedAt(height) => {
+                    out.push_str("{\"ActivatedAt\":")?;
+                    height.json_serialize_to(out)?;
+                }
+                Self::Canceled => out.push_str("{\"Canceled\":null")?,
             }
-            Self::Canceled => out.push_str("{\"Canceled\":null")?,
-        }
-        out.push('}')?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -607,3 +615,22 @@ mod tests {
 
 #[cfg(test)]
 mod captured_runtime_schema_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_runtime_upgrade_id_checked_container_retains_bytes_errors_and_depth() {
+        audit(&RuntimeUpgradeId([7; 32]));
+    }
+
+    #[test]
+    fn original_runtime_upgrade_status_checked_container_retains_every_variant_and_depth() {
+        audit(&RuntimeUpgradeStatus::Proposed);
+        audit(&RuntimeUpgradeStatus::ActivatedAt(17));
+        audit(&RuntimeUpgradeStatus::Canceled);
+    }
+}

@@ -104,6 +104,9 @@ pub(crate) enum LeafError {
     /// that validator's scratch/error custody remains separate from codec custody.
     #[error("State table source validation failed: {0}")]
     SourceValidation(String),
+    /// Trigger-local work, native source, fixed counter or exact codec refusal.
+    #[error(transparent)]
+    TriggerContracts(crate::smartcontracts::triggers::set::TriggerContractError),
     /// Exact domain-owner derivation failed or its local capture must be deferred.
     #[error("State domain-owner derivation failed: {0}")]
     DomainOwnership(#[from] super::domain_ownership::DomainOwnershipError),
@@ -140,6 +143,17 @@ pub(crate) enum LeafError {
     /// A hashed-key interval is invalid, excessive, incomplete, or forged.
     #[error("invalid State table hashed-key range proof: {0}")]
     InvalidRange(MerkleMapRangeError),
+}
+
+impl From<crate::smartcontracts::triggers::set::TriggerContractError> for LeafError {
+    fn from(error: crate::smartcontracts::triggers::set::TriggerContractError) -> Self {
+        match error {
+            crate::smartcontracts::triggers::set::TriggerContractError::Semantic(failure) => {
+                Self::SourceValidation(failure.original_message())
+            }
+            error => Self::TriggerContracts(error),
+        }
+    }
 }
 
 fn find_field(fields: &'static [Field], id: &str) -> Option<&'static Field> {

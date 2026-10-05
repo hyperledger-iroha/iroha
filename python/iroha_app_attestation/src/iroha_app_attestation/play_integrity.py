@@ -83,7 +83,7 @@ class PlayIntegrityProof:
 class DecodedPlayIntegrityEvidence:
     """Original server TLS response retained with its checked projection.
 
-    The durable issuer retains these bytes before publishing a certificate.
+    A caller that issues a credential from it must retain these bytes first.
     They are never an accepted mobile request field or a caller verdict grant.
     """
     google_response: bytes

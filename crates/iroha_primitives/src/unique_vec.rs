@@ -163,16 +163,19 @@ impl<T: JsonSerialize> JsonSerialize for UniqueVec<T> {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, value) in self.0.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, value) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                value.json_serialize_to(out)?;
             }
-            value.json_serialize_to(out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 impl<T> JsonDeserialize for UniqueVec<T>

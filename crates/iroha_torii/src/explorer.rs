@@ -3504,8 +3504,8 @@ mod tests {
         assert_explorer_wire(
             &dto,
             norito::json!({
-                "id":(def_id.to_string()), "owning_domain":null, "mintable":"Once", "logo":null,
-                "metadata":{"ticker":"ROSE"}, "owned_by":(ALICE_ID.to_string()), "assets":7,
+                "id": (def_id.to_string()), "owning_domain":null, "mintable":"Once", "logo":null,
+                "metadata":{"ticker":"ROSE"}, "owned_by": (ALICE_ID.to_string()), "assets":7,
                 "total_quantity":"100", "locked_quantity":null, "circulating_quantity":null
             }),
         );
@@ -3527,8 +3527,8 @@ mod tests {
         assert_explorer_wire(
             &dto,
             norito::json!({
-                "id":(asset_id.to_string()), "definition_id":(asset_id.definition().to_string()),
-                "account_id":(ALICE_ID.to_string()), "value":"42"
+                "id": (asset_id.to_string()), "definition_id": (asset_id.definition().to_string()),
+                "account_id": (ALICE_ID.to_string()), "value":"42"
             }),
         );
     }
@@ -3564,7 +3564,7 @@ mod tests {
         assert_explorer_wire(
             &dto,
             norito::json!({
-                "id":(nft_id.to_string()), "owned_by":(ALICE_ID.to_string()), "metadata":{"artist":"Alice"}
+                "id": (nft_id.to_string()), "owned_by": (ALICE_ID.to_string()), "metadata":{"artist":"Alice"}
             }),
         );
     }
@@ -3621,9 +3621,9 @@ mod tests {
         assert_explorer_wire(
             &dto,
             norito::json!({
-                "id":(id.to_string()), "owned_by":(ALICE_ID.to_string()), "quantity":"7", "held_quantity":"2",
+                "id": (id.to_string()), "owned_by": (ALICE_ID.to_string()), "quantity":"7", "held_quantity":"2",
                 "primary_reference":"https://example.org/certificate", "status":"held", "is_frozen":true,
-                "metadata":{}, "parents":[{"rwa":(id.to_string()),"quantity":"3"}]
+                "metadata":{}, "parents":[{"rwa": (id.to_string()),"quantity":"3"}]
             }),
         );
         let many = vec![parent; 2048];

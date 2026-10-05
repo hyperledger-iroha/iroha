@@ -375,7 +375,7 @@ impl State {
                 saw_da_commitments = true;
                 let policy_context = crate::da::ActiveLaneProofPolicyContext::new(&nexus);
                 let active_commitments = bundle
-                    .commitments
+                    .commitments()
                     .iter()
                     .filter_map(|record| {
                         let validation = policy_context
@@ -429,7 +429,7 @@ impl State {
                     .map(DaCommitmentKey::from_record)
                     .collect();
                 let identity_visible_keys: BTreeSet<_> = bundle
-                    .commitments
+                    .commitments()
                     .iter()
                     .filter(|record| {
                         let key = DaCommitmentKey::from_record(record);
@@ -479,7 +479,7 @@ impl State {
                     &mut hydrated.confidential_compute,
                     lane_config,
                     height_u64.get(),
-                    &bundle.commitments,
+                    bundle.commitments(),
                     |record| query_visible_keys.contains(&DaCommitmentKey::from_record(record)),
                 ) {
                     warn!(

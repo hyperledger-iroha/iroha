@@ -196,15 +196,19 @@ impl norito::json::FastJsonWrite for ConfidentialSpentnessPathV1 {
         output: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         output.begin_container()?;
-        output.push('[')?;
-        for (index, sibling) in self.0.iter().enumerate() {
-            if index != 0 {
-                output.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push('[')?;
+            for (index, sibling) in self.0.iter().enumerate() {
+                if index != 0 {
+                    output.push(',')?;
+                }
+                norito::json::FastJsonWrite::write_json_to(sibling, output)?;
             }
-            norito::json::FastJsonWrite::write_json_to(sibling, output)?;
-        }
-        output.push(']')?;
+            output.push(']')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1003,3 +1007,18 @@ mod tests {
 
 #[cfg(test)]
 mod captured_spentness_schema_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_spentness_path_checked_container_retains_full_original_path_and_depth() {
+        let digest = GoldilocksDigest384V1::new([7; 6]).unwrap();
+        let path = ConfidentialSpentnessPathV1::new([digest; CONFIDENTIAL_SPENTNESS_TREE_DEPTH_V1])
+            .unwrap();
+        audit(&path);
+    }
+}

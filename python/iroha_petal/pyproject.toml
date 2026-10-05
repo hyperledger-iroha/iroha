@@ -11,7 +11,7 @@ authors = [{name = "Hyperledger Iroha Contributors"}]
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 dependencies = []
-keywords = ["iroha", "petal", "optical", "qr", "kagemusha"]
+keywords = ["iroha", "petal", "optical", "qr"]
 classifiers = [
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",

@@ -1,13 +1,14 @@
-//! The M7 relation checks as real PIPA-v1 proofs (KAGEMUSHA step format on
+//! The relation checks as real PIPA-v1 proofs (KAGEMUSHA step format on
 //! Vesta, at the shape within the 3.5 KB budget):
 //!
 //! - an honest witness is proved and verified; a wrong public output is
 //!   rejected; a fixed recovery stream reproduces the proof bytes and a
 //!   different one changes them;
-//! - a mutated witness (overdraft, newer policy epoch, early accepted time,
-//!   `u128` overflow) is refused by [`SigmaProver::prove`] with its
-//!   violation, and the engine itself refuses it (a limb lookup input is
-//!   missing from its table);
+//! - a mutated witness (overdraft, a debit that ignores the lineage
+//!   `burned_total`, newer policy epoch, early accepted time, `u128`
+//!   overflow) is refused by [`SigmaProver::prove`] with its violation, and
+//!   the engine itself refuses it (a limb lookup input is missing from its
+//!   table);
 //! - a forger who zeroes the failing range checks so every lookup passes
 //!   gets a proof from the engine, and the verifier rejects it (the zeroed
 //!   check breaks the copy from the checked value);
@@ -15,26 +16,28 @@
 //!   statement.
 //!
 //! Every byte of a proof, flipped, is rejected; a proof on Pallas verifies
-//! too. All tests here prove for real and are ignored in debug builds.
+//! too; a forged identity proves only its own head; keys and proofs do not
+//! depend on the Rayon pool size. All tests here prove for real and are
+//! ignored in debug builds.
 
 mod common;
 
 use common::{
-    CHECK_SEED, RELATION_CASES, budget_shape, case_label, forged_witness, recovery,
-    relation_shapes, vesta_prover,
+    CHECK_SEED, RELATION_CASES, RELATION_CHECK_CASES, budget_shape, case_label, forged_witness,
+    recovery, relation_shapes, vesta_params, vesta_prover,
 };
 use ff::Field;
 use iroha_kagemusha_proof::{
-    Mutation, PrefixMode, ProofFormat, RelationShape, SigmaError, SigmaProver, StateLayout,
-    StepRelation, Violation, sample_witness,
+    ConsumerError, LineageView, Mutation, PrefixMode, ProofFormat, RelationShape, SigmaError,
+    SigmaProver, StateLayout, StepInputs, StepRelation, Violation, check_send, sample_witness,
 };
 use iroha_pasta::{Ep, Eq, Fp, Fq};
 use iroha_plonk::{ProverConfig, ProverError, create_proof, prove_circuit};
 use rayon::prelude::*;
 
 #[test]
-#[ignore = "24 cases with real proofs; run in release"]
-fn m7_relation_checks_as_real_proofs() {
+#[ignore = "28 cases with real proofs; run in release"]
+fn relation_checks_as_real_proofs() {
     let mut cases = 0;
     for relation in relation_shapes() {
         let shape = budget_shape(relation);
@@ -64,9 +67,9 @@ fn m7_relation_checks_as_real_proofs() {
                 let mut wrong = proof.public;
                 wrong.statement += Fp::ONE;
                 assert!(verifier.verify(&wrong, &proof.bytes).is_err(), "{label}");
-                if let Some(request) = &mut wrong.request {
+                if let Some(credit) = &mut wrong.credit_id {
                     wrong.statement = proof.public.statement;
-                    *request += Fp::ONE;
+                    *credit += Fp::ONE;
                     assert!(verifier.verify(&wrong, &proof.bytes).is_err(), "{label}");
                 }
                 assert_eq!(
@@ -137,7 +140,7 @@ fn m7_relation_checks_as_real_proofs() {
             cases += 1;
         }
     }
-    assert_eq!(cases, 24);
+    assert_eq!(cases, RELATION_CHECK_CASES);
 }
 
 /// Every byte of a proof, flipped in its lowest and highest bit, is rejected.
@@ -245,10 +248,102 @@ fn witnesses_of_the_other_step_are_refused() {
     );
     let receive = sample_witness::<Fp>(1, StepRelation::Receive, Mutation::None);
     let proof = prover.prove(&receive, recovery(1)).expect("proof");
-    let mut with_request = proof.public;
-    with_request.request = Some(Fp::ZERO);
+    let mut with_credit = proof.public;
+    with_credit.credit_id = Some(Fp::ZERO);
     assert_eq!(
-        prover.verifier().verify(&with_request, &proof.bytes),
+        prover.verifier().verify(&with_credit, &proof.bytes),
         Err(SigmaError::PublicShape)
     );
+}
+
+/// A forger proves a Send from a state with a substituted asset (consistent:
+/// the circuit recomputes everything). The proof verifies for its own
+/// statement, whose predecessor is not the real head; the statement the
+/// consumer builds for the real head does not verify.
+#[test]
+#[ignore = "real proofs of forged identities; run in release"]
+fn forged_identities_prove_only_their_own_head() {
+    let layout = StateLayout::TwoLevel;
+    let relation = RelationShape::new(StepRelation::Send, layout, PrefixMode::Folded);
+    let prover = vesta_prover(budget_shape(relation));
+    let verifier = prover.verifier();
+    let honest = sample_witness::<Fp>(CHECK_SEED, StepRelation::Send, Mutation::None);
+    let StepInputs::Send(send) = &honest.inputs else {
+        panic!("send");
+    };
+    let core = &honest.predecessor.core;
+    let view = LineageView {
+        head: honest.predecessor.commitment(layout),
+        wallet_id: core.identity.wallet_id,
+        credential: core.identity.credential,
+        scheme_id: core.identity.scheme_id,
+        enabled_controls: core.controls.enabled,
+        burned_total: send.lineage.burned_total,
+        pending_outgoing_root: send.lineage.pending_outgoing_root,
+    };
+    let mut forged = honest.clone();
+    forged.predecessor.core.identity.asset[0] ^= 0xa5;
+    let proof = prover.prove(&forged, recovery(6)).expect("forged proof");
+    assert_eq!(verifier.verify(&proof.public, &proof.bytes), Ok(()));
+    let request = forged.request_body();
+    let own = forged.statement(layout).expect("statement");
+    assert_eq!(
+        check_send(&view, layout, &request, &own),
+        Err(ConsumerError::Predecessor)
+    );
+    let mut claim = own;
+    claim.predecessor = view.head;
+    let public = check_send(&view, layout, &request, &claim).expect("the consumer's statement");
+    assert!(verifier.verify(&public, &proof.bytes).is_err());
+    println!(
+        "M12_FORGED case={} asset=substituted verdict=rejected",
+        relation.label()
+    );
+}
+
+/// Keys and proofs (with a fixed recovery stream) are identical on 1, 2, 4
+/// and 7 Rayon threads.
+#[test]
+#[ignore = "key generation and proofs on four pool sizes; run in release"]
+fn keys_and_proofs_do_not_depend_on_the_pool_size() {
+    for step in [StepRelation::Send, StepRelation::Receive] {
+        let shape = budget_shape(RelationShape::new(
+            step,
+            StateLayout::TwoLevel,
+            PrefixMode::Folded,
+        ));
+        let witness = sample_witness::<Fp>(CHECK_SEED, step, Mutation::None);
+        let mut seen: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = None;
+        for threads in [1, 2, 4, 7] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("pool");
+            let (vk, descriptor, proof) = pool.install(|| {
+                let prover = SigmaProver::<Eq>::keygen_with_params(
+                    shape,
+                    ProofFormat::KAGEMUSHA_STEP,
+                    vesta_params(shape.k),
+                )
+                .expect("keys");
+                let proof = prover.prove(&witness, recovery(7)).expect("proof");
+                let verifier = prover.verifier();
+                assert_eq!(verifier.verify(&proof.public, &proof.bytes), Ok(()));
+                (
+                    verifier.vk_bytes().to_vec(),
+                    verifier.descriptor_bytes().to_vec(),
+                    proof.bytes,
+                )
+            });
+            match &seen {
+                None => seen = Some((vk, descriptor, proof)),
+                Some(first) => assert_eq!(
+                    first,
+                    &(vk, descriptor, proof),
+                    "{step:?}: {threads} threads"
+                ),
+            }
+        }
+        println!("M12_POOLS step={step:?} threads=1,2,4,7 identical=true");
+    }
 }

@@ -152,6 +152,20 @@ def test_replication_instruction_payloads_use_exact_rust_fields() -> None:
     assert decode_replication_order_instruction(expire.to_payload()) == expire
 
 
+def test_completion_authority_requires_its_exact_registered_signer() -> None:
+    authority = _authority()
+    assert authority.provider_owner != authority.completion_signer
+    assert ProviderIngestCompletionAuthorityV1.from_payload(authority.to_payload()) == authority
+    missing_signer = authority.to_payload()
+    del missing_signer["completion_signer"]
+    with pytest.raises(ValueError, match="completion_signer"):
+        ProviderIngestCompletionAuthorityV1.from_payload(missing_signer)
+    malformed_signer = authority.to_payload()
+    malformed_signer["completion_signer"] = f" {_COMPLETION_SIGNER}"
+    with pytest.raises(ValueError, match="exact canonical I105"):
+        ProviderIngestCompletionAuthorityV1.from_payload(malformed_signer)
+
+
 def test_replication_instruction_decoders_are_schema_closed() -> None:
     with pytest.raises(TypeError):
         Instruction.complete_replication_order(  # type: ignore[call-arg]

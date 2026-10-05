@@ -117,7 +117,7 @@ impl FromStr for DaProofScheme {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaCommitmentRecord")]
 pub struct DaCommitmentRecord {
@@ -176,92 +176,11 @@ impl DaCommitmentRecord {
         }
     }
 }
-/// Bundle embedded into `SignedBlockWire` and hashed inside `BlockHeader`.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(decode_from_slice)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::da::commitment::DaCommitmentBundle")]
-pub struct DaCommitmentBundle {
-    /// Bundle layout version.
-    pub version: u16,
-    /// Canonically ordered commitment records contained in the block.
-    pub commitments: Vec<DaCommitmentRecord>,
-}
-impl DaCommitmentBundle {
-    /// Initial version identifier for on-chain bundles.
-    pub const VERSION_V1: u16 = 1;
-    /// Construct a bundle using the latest supported version and canonical order.
-    #[must_use]
-    pub fn new(mut commitments: Vec<DaCommitmentRecord>) -> Self {
-        commitments.sort();
-        Self {
-            version: Self::VERSION_V1,
-            commitments,
-        }
-    }
-    /// Returns `true` if there are no commitments in the bundle.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.commitments.is_empty()
-    }
-    /// Canonical Merkle root over the commitment records in this bundle.
-    ///
-    /// Leaves and internal nodes use distinct, versioned hash domains. Odd leaves are promoted
-    /// unchanged to the next layer instead of being duplicated.
-    #[must_use]
-    pub fn merkle_root(&self) -> Option<Hash> {
-        if self.commitments.is_empty() {
-            return None;
-        }
-        let mut layer: Vec<Hash> = self.commitments.iter().map(commitment_leaf_hash).collect();
-        while layer.len() > 1 {
-            let mut next = Vec::with_capacity(layer.len().div_ceil(2));
-            let mut iter = layer.chunks(2);
-            for pair in iter.by_ref() {
-                let combined = if pair.len() == 1 {
-                    pair[0]
-                } else {
-                    commitment_internal_hash(&pair[0], &pair[1])
-                };
-                next.push(combined);
-            }
-            layer = next;
-        }
-        layer.pop()
-    }
-    /// Header commitment to the V1 tree shape, leaf count, and Merkle root.
-    ///
-    /// This commitment can be reconstructed from a logarithmic membership
-    /// proof without the complete bundle.
-    #[must_use]
-    pub fn merkle_commitment(&self) -> Option<HashOf<Self>> {
-        let leaf_count = u32::try_from(self.commitments.len()).ok()?;
-        let root = self.merkle_root()?;
-        Some(commitment_merkle_commitment(
-            self.version,
-            leaf_count,
-            &root,
-        ))
-    }
-}
-impl Default for DaCommitmentBundle {
-    fn default() -> Self {
-        Self::new(Vec::new())
-    }
-}
+mod commitment_bundle;
+pub use commitment_bundle::{
+    DaCommitmentBundle, DaCommitmentCustodyError, PreparedDaCommitmentBundle,
+};
+
 /// Alias representing the retained policy class recorded on-chain.
 pub type RetentionClass = RetentionPolicy;
 /// Canonical key identifying a DA commitment across lanes/epochs.
@@ -569,7 +488,7 @@ mod tests {
         earlier.sequence = 1;
         let later = sample_record();
         let bundle = DaCommitmentBundle::new(vec![later.clone(), earlier.clone()]);
-        assert_eq!(bundle.commitments, vec![earlier, later]);
+        assert_eq!(bundle.commitments(), vec![earlier, later]);
     }
     #[test]
     fn bundle_new_makes_tree_commitment_independent_of_input_order() {
@@ -592,8 +511,8 @@ mod tests {
             records[0].clone(),
             records[1].clone(),
         ]);
-        assert_eq!(canonical.commitments, records);
-        assert_eq!(shuffled.commitments, canonical.commitments);
+        assert_eq!(canonical.commitments(), records);
+        assert_eq!(shuffled.commitments(), canonical.commitments());
         assert_eq!(shuffled.merkle_root(), canonical.merkle_root());
         assert_eq!(shuffled.merkle_commitment(), canonical.merkle_commitment());
     }

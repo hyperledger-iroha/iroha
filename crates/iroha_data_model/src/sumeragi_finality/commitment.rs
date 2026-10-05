@@ -5,8 +5,8 @@ use crate::{
     parameter::system::SumeragiParameters, transaction::signed::TransactionEntrypoint,
 };
 use crate::{
-    consensus::FinalizedGlobalThresholdBeaconPulseV1, isi::kagemusha_v1::BeaconEpochBindingV1,
-    parameter::system::ConsensusMode,
+    consensus::FinalizedGlobalThresholdBeaconPulseV1, parameter::system::ConsensusMode,
+    sumeragi::epoch::BeaconEpochBindingV1,
 };
 use iroha_crypto::{Hash, MerkleTreeCommitment};
 use iroha_sumeragi::{

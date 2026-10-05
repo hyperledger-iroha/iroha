@@ -11890,7 +11890,7 @@ mod tests {
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let fixture = offline_semantic_genesis_fixture([]);
-            validate_genesis_execution_offline(
+            let bootstrap = validate_genesis_execution_offline(
                 &fixture.config,
                 &fixture.genesis,
                 &fixture.authority,
@@ -11900,6 +11900,7 @@ mod tests {
                 None,
             )
             .expect("valid genesis should execute in the disposable overlay");
+            assert_eq!(bootstrap.initial_committee_size, 4);
         }
         /// `--check-config --json` with a local signed genesis reports `ready` and exactly the
         /// genesis-bound values the running network attests: the signed context hashes, the

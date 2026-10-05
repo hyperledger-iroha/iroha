@@ -63,5 +63,7 @@ mod struct_boundaries;
 #[path = "../struct_self_delimiting.rs"]
 mod struct_self_delimiting;
 
+#[path = "../json_container_cleanup.rs"]
+mod json_container_cleanup;
 #[path = "../json_object_field_order.rs"]
 mod json_object_field_order;

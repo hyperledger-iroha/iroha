@@ -178,8 +178,18 @@ pub(crate) fn verify_from_state(
         .get(0)
         .ok_or_else(|| invalid("signed genesis identity is absent"))?;
     let crypto = BlsCrypto::new();
-    let scope = super::lanes::routing::committed_root_scope(state.world())
-        .ok_or_else(|| invalid("signed immutable root scope is absent or malformed"))?;
+    // A genuine enclosing JSON refusal leaves original history authentication unfinished.
+    // Missing or malformed metadata still supplies no root authority.
+    let scope = if cfg!(all(test, sumeragi_core_mutation = "HC120")) {
+        super::lanes::routing::committed_root_scope(state.world())
+    } else {
+        super::lanes::routing::read_routing_root_scope(state.world()).map_err(|reason| {
+            NativeEvidenceError::History(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                reason,
+            ))
+        })?
+    }
+    .ok_or_else(|| invalid("signed immutable root scope is absent or malformed"))?;
     let instance = scope
         .instance_id(
             &crypto,

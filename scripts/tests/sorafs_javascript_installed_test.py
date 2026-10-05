@@ -75,7 +75,6 @@ def test_exact_global_projection_preserves_original_bytes_modes_and_nested_owner
     assert ordinary.archive_member == "dist/crc64Xz.js"
     assert ordinary.content == dict(projection.sources)["src/crc64Xz.js"]
     assert ordinary.mode == 0o644
-    assert "@iroha/iroha-js/dist/kagemushaAttestedV1.js" not in rows
     for path, owner in (("@noble/hashes/index.js", "node_modules/@noble/hashes"),
                         ("@scure/bip39/node_modules/@noble/hashes/index.js", "node_modules/@scure/bip39/node_modules/@noble/hashes")):
         assert rows[path].content == owner.encode()

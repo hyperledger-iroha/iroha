@@ -304,7 +304,15 @@ fn checked_resultless_comparison_binds_signatures_and_all_seven_payload_fields()
                 Hash::new(b"different exact routing plan");
         }),
         ("DA commitments", |block| {
-            block.payload.da_commitments.as_mut().unwrap().commitments[0].sequence += 1;
+            let original = block.payload.da_commitments.as_ref().unwrap();
+            let mut commitments = original.commitments().to_vec();
+            commitments[0].sequence += 1;
+            block.payload.da_commitments = Some(
+                crate::da::commitment::DaCommitmentBundle::from_untrusted_parts(
+                    original.version(),
+                    commitments,
+                ),
+            );
         }),
         ("DA proof policies", |block| {
             let original = block.payload.da_proof_policies.as_ref().unwrap();

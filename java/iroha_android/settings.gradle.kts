@@ -17,8 +17,8 @@ includeBuild("../norito_java") {
     }
 }
 
-// Reuse the default pure JVM transport state machines from Java instead of
-// maintaining a second cryptographic IPN1/NFC implementation.
+// Java facades and Java consumers call the canonical Kotlin core-jvm and
+// client-android implementations; no Java duplicate is maintained.
 includeBuild("../../kotlin") {
     name = "iroha_kotlin_sdk"
     dependencySubstitution {

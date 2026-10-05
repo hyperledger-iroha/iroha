@@ -37,7 +37,7 @@ mod model {
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
     )]
-    #[norito(deny_unknown_fields)]
+    #[norito(deny_unknown_fields, decode_fields)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::block::header::model::BlockHeader")]
     pub struct BlockHeader {
@@ -114,6 +114,7 @@ mod model {
     }
 }
 pub use self::model::{BlockHeader, BlockSignature};
+mod inline_child;
 /// Payload-only tuple adapters for block headers and signatures.
 ///
 /// Framed messages use the public [`BlockHeader`] and [`BlockSignature`] codecs.

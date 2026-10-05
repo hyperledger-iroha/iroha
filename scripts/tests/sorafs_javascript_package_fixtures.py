@@ -16,13 +16,13 @@ import sorafs_javascript_dependencies as dependencies
 CHECKSUM = b'{"component_control":"opaque original manifest; not native qualification"}'
 # Reviewed census of the captured candidate, shared by every SoraFS JavaScript
 # test so that adding or removing an SDK module changes it in one place.
-SOURCE_FILES = 240
-PROJECTED_MEMBERS = 237
-PROJECTED_DIST_MEMBERS = 198
-INSTALLED_MEMBERS = 256
+SOURCE_FILES = 236
+PROJECTED_MEMBERS = 233
+PROJECTED_DIST_MEMBERS = 195
+INSTALLED_MEMBERS = 252
 REQUIRED_OUTPUTS = (
     "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
-    "ivmArtifact.js", "kagemusha.js", "native.js", "nativeArtifactHash.js", "numericV1.js",
+    "ivmArtifact.js", "native.js", "nativeArtifactHash.js", "numericV1.js",
     "strictLosslessJson.js", "boundedByteSnapshot.js", "validationFeeTrust.js", "sorafsOrderbookPreflight.js", "sorafsOrderbookSubmission.js", "sorafsOrderbookSubmission.d.ts",
     "smartContractDeploymentSubmit.js", "sumeragiTyped.js", "tairaTestnetProfile.js",
     "toriiBrowserClient.js", "toriiClient.js", "toriiOptional.js", "kotodamaCompiler/index.js",

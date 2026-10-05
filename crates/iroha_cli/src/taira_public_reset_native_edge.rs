@@ -147,6 +147,11 @@ request = json.loads(body)
 owner = sys.modules['taira_native_nginx_apply']
 if action == 'apply': result = owner.apply_owned_publication(request)
 elif action == 'inspect': result = owner.inspect_owned_publication(request)
+elif action == 'inspect-effect': result = owner.inspect_owned_publication(request, allow_pending=True)
+elif action == 'inspect-vacant': result = owner.inspect_vacant_publication(request)
+elif action == 'inspect-terminal-vacant':
+    if set(request) != {'plan','journal'}: raise RuntimeError('terminal_vacant_request_fields')
+    result = owner.inspect_terminal_vacant_publication(request['plan'], request['journal'])
 elif action == 'forwarding': result = sys.modules['taira_native_validator_forwarding'].inspect_mac_forwarding(request['plan'], request['identity_receipt'])
 elif action == 'complete': result = sys.modules['taira_native_edge_completion'].complete(request)
 else: raise RuntimeError('native_action')
@@ -670,7 +675,7 @@ fn admit_previous_terminal(
     )?;
     protocol::validate_terminal_provenance(
         &capture.claims.completion,
-        &capture.claims.owned_publication,
+        capture.claims.owned_publication.as_ref(),
         &inventory,
         &lease.inventory_sha256,
         &lease.authorization_semantic_sha256,
@@ -692,6 +697,12 @@ pub(super) fn dispatch(
     admit_native_platform(admitted)?;
     edge.native_capability.validate(&admitted.inventory.hosts)?;
     if action == HostAction::Preflight {
+        if matches!(&edge.native_capability.incumbent.claims.completion,
+            host_pair::NativeEdgeCompletionProvenanceV1::Vacant) {
+            super::super::native_edge_prepare::retain_vacant_root(
+                &admitted.inventory.hosts.native_edge, &admitted.inventory.revision.commit,
+            )?;
+        }
         verify_native_artifacts(edge)?;
         return Ok(host_receipt(
             admitted,
@@ -905,6 +916,15 @@ fn admit_apply_plan(plan: &json::Value, edge: &EdgeV1) -> Result<()> {
             "native plan is not joined to the signed edge renderer artifact and installed destination"
         ));
     }
+    let publication = plan.get("publication").and_then(json::Value::as_object)
+        .ok_or_else(|| eyre!("native publication kind missing"))?;
+    if edge.is_vacant() {
+        if publication.len() != 1 || publication.get("kind").and_then(json::Value::as_str) != Some("create") {
+            return Err(eyre!("vacant native edge requires an explicit create publication"));
+        }
+    } else if publication.get("kind").and_then(json::Value::as_str) != Some("replace") {
+        return Err(eyre!("occupied native edge requires its exact admitted replacement"));
+    }
     plan_operation(plan)?;
     Ok(())
 }
@@ -1057,14 +1077,19 @@ fn reconcile_plan(plan: &json::Value) -> Result<json::Value> {
         .get("basename")
         .and_then(json::Value::as_str)
         .ok_or_else(|| eyre!("native plan basename missing"))?;
+    let journal_directory = plan.get("native")
+        .and_then(|value| value.get("directory"))
+        .and_then(|value| value.get("path"))
+        .and_then(json::Value::as_str)
+        .ok_or_else(|| eyre!("native publisher journal directory missing"))?;
     let journal = PublicPin::open(
-        &Path::new(directory).join(format!(".taira-native-nginx-apply-{op}.receipt.ndjson")),
+        &Path::new(journal_directory).join(format!(".taira-native-nginx-apply-{op}.receipt.ndjson")),
         MAX_PLAN as u64,
         true,
     )?;
     let publication =
         PublicPin::open(&Path::new(directory).join(basename), MAX_PLAN as u64, false)?;
-    result.as_object_mut().ok_or_else(|| eyre!("native plan object missing"))?.insert("publication".into(), norito::json!({ "kind": "reconcile", "prior": { "operation_id": op, "journal": (owner_reference(&journal)), "publication": (owner_reference(&publication)) } }));
+    result.as_object_mut().ok_or_else(|| eyre!("native plan object missing"))?.insert("publication".into(), norito::json!({ "kind": "reconcile", "prior": { "operation_id": op, "journal": (owner_reference(&journal)), "publication": { "identity": (native_identity_json(&publication.reference.file.identity)), "sha256": (publication.reference.sha256) } } }));
     Ok(result)
 }
 
@@ -1202,8 +1227,34 @@ fn no_effect_completion_plan(
     capsule: &NativeCapsule,
     operation: &NativeOperation,
 ) -> Result<protocol::NativeNginxCompletionPlanV1> {
+    if edge.is_vacant() {
+        let nginx = load_apply_plan(edge)?;
+        admit_apply_plan(&nginx, edge)?;
+        let intended = plan_operation(&nginx)?;
+        let observation = capsule.run(&operation.root, "inspect-vacant",
+            json::to_json(&nginx)?.as_bytes(), &[], admitted.action_deadline)?;
+        let observation: json::Value = json::from_slice(&observation)?;
+        let claims = &edge.native_capability.incumbent.claims;
+        if observation.get("owned_publication") != Some(&json::Value::Null)
+            || observation.get("phase").and_then(json::Value::as_str) != Some("vacant")
+            || observation.get("nginx_config").and_then(json::Value::as_str) != Some(claims.nginx_config.as_str())
+        {
+            return Err(eyre!("native no-effect rollback vacancy changed"));
+        }
+        let plan = protocol::NativeNginxCompletionPlanV1 {
+            schema: "iroha.taira.public-reset.native-nginx-completion-plan.v1".into(),
+            nginx,
+            publication_effect: protocol::NativePublicationEffectV1::VacantNotRequested {
+                intended_operation_id: intended.clone(),
+            },
+            completion_journal_basename: "native-completion.ndjson".into(),
+        };
+        plan.validate(&intended)?;
+        return Ok(plan);
+    }
     let request = protocol::read_native_public(
-        &edge.native_capability.incumbent_nginx_request,
+        edge.native_capability.incumbent_nginx_request.as_ref()
+            .ok_or_else(|| eyre!("occupied native edge lacks its exact incumbent request"))?,
         admitted.inventory.hosts.native_edge.owner_uid,
         MAX_PLAN,
     )?;
@@ -1224,7 +1275,7 @@ fn no_effect_completion_plan(
         )?
         .as_bytes(),
     )?;
-    if observed != edge.native_capability.incumbent.claims.owned_publication {
+    if &observed != edge.native_capability.incumbent.claims.owned_publication()? {
         return Err(eyre!("native no-effect rollback incumbent changed"));
     }
     let successor = load_apply_plan(edge)?;
@@ -1271,6 +1322,107 @@ fn no_effect_completion_plan(
     };
     plan.validate(&intended)?;
     Ok(plan)
+}
+
+fn terminal_vacant_completion_plan(
+    admitted: &HostAdmission,
+    edge: &EdgeV1,
+    capsule: &NativeCapsule,
+    operation: &NativeOperation,
+    selected: &json::Value,
+) -> Result<protocol::NativeNginxCompletionPlanV1> {
+    if !edge.is_vacant() {
+        return Err(eyre!("requested terminal vacancy requires an original vacant edge"));
+    }
+    let intended = plan_operation(selected)?;
+    let directory = selected.get("native").and_then(|value| value.get("directory"))
+        .and_then(|value| value.get("path")).and_then(json::Value::as_str)
+        .ok_or_else(|| eyre!("terminal publisher journal directory missing"))?;
+    let journal = PublicPin::open(&Path::new(directory)
+        .join(format!(".taira-native-nginx-apply-{intended}.receipt.ndjson")), MAX_PLAN as u64, true)?;
+    let observation = capsule.run(&operation.root, "inspect-terminal-vacant",
+        json::to_json(&norito::json!({"plan":selected,"journal":(owner_reference(&journal))}))?.as_bytes(),
+        &[], admitted.action_deadline)?;
+    let observed: json::Value = json::from_slice(&observation)?;
+    let terminal_phase = observed.get("terminal_phase").and_then(json::Value::as_str)
+        .ok_or_else(|| eyre!("terminal native publisher phase missing"))?;
+    let publisher_journal: NativePublicFileV1 = json::from_slice(json::to_json(
+        observed.get("publisher_journal").ok_or_else(|| eyre!("actual terminal publisher journal missing"))?
+    )?.as_bytes())?;
+    if observed.get("schema").and_then(json::Value::as_str)
+            != Some("iroha.taira.native-nginx-terminal-vacancy-inspection.v1")
+        || observed.get("owned_publication") != Some(&json::Value::Null)
+        || observed.get("phase").and_then(json::Value::as_str) != Some("vacant_publisher_terminal")
+        || observed.get("nginx_config").and_then(json::Value::as_str) != Some(edge.nginx_config.as_str())
+        || !matches!(terminal_phase, "rolled_back_unqualified" | "refused_before_publication")
+        || publisher_journal != journal.reference
+    {
+        return Err(eyre!("terminal publisher recovery changed its exact requested absent ownership"));
+    }
+    journal.revalidate()?;
+    let plan = protocol::NativeNginxCompletionPlanV1 {
+        schema: "iroha.taira.public-reset.native-nginx-completion-plan.v1".into(),
+        nginx: selected.clone(),
+        publication_effect: protocol::NativePublicationEffectV1::VacantPublisherTerminal {
+            intended_operation_id: intended.clone(), publisher_journal, terminal_phase: terminal_phase.into(),
+        },
+        completion_journal_basename: "native-completion.ndjson".into(),
+    };
+    plan.validate(&intended)?;
+    Ok(plan)
+}
+
+/// Recover a missing completion plan from current native owner custody, never
+/// from the durable request phase or the pre-effect publication intent alone.
+fn recover_completion_plan(
+    admitted: &HostAdmission,
+    edge: &EdgeV1,
+    capsule: &NativeCapsule,
+    operation: &NativeOperation,
+) -> Result<protocol::NativeNginxCompletionPlanV1> {
+    let selected = load_apply_plan(edge)?;
+    admit_apply_plan(&selected, edge)?;
+    let publication = plan_operation(&selected)?;
+    if operation.progress.publication_operation_id.as_ref() != Some(&publication) {
+        return Err(eyre!("completion recovery changed its intended native publisher"));
+    }
+    let owned = (|| -> Result<protocol::NativeNginxCompletionPlanV1> {
+        let nginx = reconcile_plan(&selected)?;
+        let observation = capsule.run(&operation.root, "inspect-effect",
+            json::to_json(&inspection_request(&nginx)?)?.as_bytes(), &[], admitted.action_deadline)?;
+        let observation: json::Value = json::from_slice(&observation)?;
+        let observed: host_pair::NativeOwnedPublicationV1 = json::from_slice(json::to_json(
+            observation.get("owned_publication").ok_or_else(|| eyre!("recovery has no actual publisher"))?
+        )?.as_bytes())?;
+        if observation.get("schema").and_then(json::Value::as_str)
+                != Some("iroha.taira.native-nginx-owned-publication-inspection.v1")
+            || !matches!(observation.get("phase").and_then(json::Value::as_str),
+                Some("publishing" | "published" | "context_checking" | "context_checked" | "reload_requested" | "awaiting_readiness"))
+            || observed.operation_id != publication
+            || observed.publication.file.path != edge.nginx_config
+            || observed.publication.sha256 != artifact(&edge.artifacts, "edge_config")?.sha256
+        {
+            return Err(eyre!("completion recovery differs from its actual unqualified publisher"));
+        }
+        let plan = protocol::NativeNginxCompletionPlanV1 {
+            schema: "iroha.taira.public-reset.native-nginx-completion-plan.v1".into(), nginx,
+            publication_effect: protocol::NativePublicationEffectV1::Owned,
+            completion_journal_basename: "native-completion.ndjson".into(),
+        };
+        plan.validate(&publication)?;
+        Ok(plan)
+    })();
+    match owned {
+        Ok(plan) => Ok(plan),
+        Err(error) if edge.is_vacant() => {
+            match terminal_vacant_completion_plan(admitted, edge, capsule, operation, &selected) {
+                Ok(plan) => Ok(plan),
+                Err(terminal_error) => no_effect_completion_plan(admitted, edge, capsule, operation)
+                    .wrap_err_with(|| format!("actual native ownership, terminal publisher or genuine no-effect absence is required: {error}; {terminal_error}")),
+            }
+        }
+        Err(error) => Err(error.wrap_err("occupied interrupted cutover requires actual successor ownership")),
+    }
 }
 
 fn completion_packet(
@@ -1433,6 +1585,12 @@ fn complete(
                 "native completion does not follow its durable terminal phase"
             ));
         }
+    }
+    if action == HostAction::Rollback
+        && !operation.root.entries(128)?.iter().any(|name| name == "completion-plan.json")
+    {
+        let plan = recover_completion_plan(admitted, edge, capsule, operation)?;
+        retain_exact(&operation.root, "completion-plan.json", json::to_json(&plan)?.as_bytes())?;
     }
     let plan: protocol::NativeNginxCompletionPlanV1 =
         json::from_slice(&operation.root.read("completion-plan.json", MAX_PLAN)?)?;
@@ -1613,4 +1771,90 @@ fn complete(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owned_completion_uses_actual_native_journal_and_closed_publication_reference() {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let root = super::super::super::private_custody_test_dir(".native-reconcile-");
+        let directory = root.path().join("includes");
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let op = "a".repeat(32);
+        let journal = root.path().join(format!(".taira-native-nginx-apply-{op}.receipt.ndjson"));
+        let mut opened = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&journal).unwrap();
+        opened.write_all(b"public actual publisher journal\n").unwrap();
+        drop(opened);
+        let publication = directory.join("first.conf");
+        let mut opened = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&publication).unwrap();
+        opened.write_all(b"public first publication\n").unwrap();
+        drop(opened);
+        let plan = norito::json!({"operation_id":op, "publication":{"kind":"create"},
+            "native":{"directory":{"path":(root.path().to_str().unwrap())}},
+            "destination":{"directory":{"path":(directory.to_str().unwrap())}, "basename":"first.conf"}});
+        let reconciled = reconcile_plan(&plan).unwrap();
+        let prior = reconciled.get("publication").unwrap().get("prior").unwrap();
+        assert_eq!(prior.get("journal").unwrap().get("path").unwrap().as_str(), journal.to_str());
+        assert_eq!(prior.get("publication").unwrap().as_object().unwrap().len(), 2);
+        assert!(prior.get("publication").unwrap().get("path").is_none());
+        assert_eq!(prior.get("publication").unwrap().get("sha256").unwrap().as_str(),
+            Some(sha256_hex(b"public first publication\n").as_str()));
+        fs::remove_file(&journal).unwrap();
+        assert!(reconcile_plan(&plan).is_err(), "create admission cannot fabricate actual ownership");
+    }
+
+    #[test]
+    fn apply_plan_binds_the_admitted_native_publication_destination() {
+        let inventory = super::super::super::sample_inventory_fixture();
+        let edge = &inventory.edge;
+        let selected = artifact(&edge.artifacts, "edge_config").unwrap();
+        let destination = Path::new(&edge.nginx_config);
+        let plan = norito::json!({
+            "schema": "iroha.taira.native-nginx-apply.plan.v1",
+            "provider": "macstadium-dublin",
+            "host_kind": "macos",
+            "publication": { "kind": "replace" },
+            "operation_id": ("a".repeat(32)),
+            "candidate": {
+                "path": (selected.remote_path),
+                "sha256": (selected.sha256)
+            },
+            "destination": {
+                "directory": {"path": (destination.parent().unwrap().to_str().unwrap())},
+                "basename": (destination.file_name().unwrap().to_str().unwrap())
+            }
+        });
+        admit_apply_plan(&plan, edge).expect("exact native publication destination");
+
+        let mut vacant = edge.clone();
+        vacant.initial_state = super::super::super::EdgeInitialStateV1::Vacant;
+        assert!(admit_apply_plan(&plan, &vacant).is_err());
+        let mut create = plan.clone();
+        create.as_object_mut().unwrap().insert("publication".into(), norito::json!({"kind":"create"}));
+        admit_apply_plan(&create, &vacant).expect("explicit first publication");
+        assert!(admit_apply_plan(&create, edge).is_err());
+        create.as_object_mut().unwrap().insert("publication".into(), norito::json!({"kind":"create", "prior":null}));
+        assert!(admit_apply_plan(&create, &vacant).is_err());
+
+        for (field, replacement) in [
+            (
+                "directory",
+                norito::json!({"path": "/another/native/publication"}),
+            ),
+            ("basename", json::Value::String("another.conf".into())),
+        ] {
+            let mut changed = plan.clone();
+            changed
+                .get_mut("destination")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), replacement);
+            assert!(admit_apply_plan(&changed, edge).is_err(), "{field}");
+        }
+    }
 }

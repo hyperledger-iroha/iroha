@@ -13,7 +13,6 @@ from iroha_app_attestation.attestation import (
     AttestationRejected,
     GOOGLE_FACTORY_2016_ROOT_SHA256,
     GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS,
-    PREPARATION_DOMAIN,
     Selection,
     _certificate_valid_at,
     certificate_key_extensions,
@@ -29,7 +28,6 @@ from iroha_app_attestation.attestation import (
     validate_android_patch_floor,
     verify_apple_raw,
     verify_android_raw,
-    verify_issuer_preparation,
     verify_pinned_chain,
 )
 
@@ -245,80 +243,6 @@ class AttestationTests(unittest.TestCase):
                        AndroidPatchLevels(300, 150000, 202609, 20260905.0, 20260901)):
             with self.subTest(levels=levels), self.assertRaisesRegex(AttestationRejected, "patch levels absent"):
                 android_patch_policy_met(levels, 202609)
-
-    def test_issuer_preparation_signature_binds_nonce_account_profile_lane_key_and_release(self) -> None:
-        executable = shutil.which("openssl")
-        if executable is None:
-            self.skipTest("OpenSSL CLI unavailable")
-        openssl = Path(executable).resolve()
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            def run(*args: str) -> None:
-                subprocess.run([str(openssl), *args], cwd=directory, capture_output=True, check=True)
-
-            run("genpkey", "-algorithm", "ED25519", "-out", "issuer.pem")
-            run("pkey", "-in", "issuer.pem", "-pubout", "-outform", "DER", "-out", "issuer.der")
-            issuer_key = (directory / "issuer.der").read_bytes()
-            account = "owner"
-            policy_id, release_id = b"\x05" * 32, b"\x06" * 32
-            selected = Selection(b"\x03" * 32, b"\x04" * 32, release_id,
-                                 b"\x07" * 32, b"\x08" * 32, b"\x09" * 32)
-            header = (b"\x01" + (1_000).to_bytes(8, "little") + (121_000).to_bytes(8, "little")
-                      + selected.client_nonce + selected.server_nonce + selected.release_id
-                      + selected.hardware_profile_id + selected.attested_key_id + selected.lane_id)
-            message = (PREPARATION_DOMAIN + header[1:] + policy_id
-                       + hashlib.sha256(account.encode()).digest())
-            self.assertEqual(len(message), 318)
-            self.assertEqual(hashlib.sha256(message).hexdigest(),
-                             "409f62d1db4cd8478b3d70dc2679350fcbdd7aa5743a1234b982ff03bd2095f7")
-            (directory / "message.bin").write_bytes(message)
-            run("pkeyutl", "-sign", "-inkey", "issuer.pem", "-rawin", "-in", "message.bin", "-out", "signature.bin")
-            token = header + (directory / "signature.bin").read_bytes()
-            args = (token, selected, account, policy_id,
-                    issuer_key, hashlib.sha256(issuer_key).digest(), 1_001, openssl)
-            verified = verify_issuer_preparation(*args)
-            self.assertEqual(verified.server_nonce, b"\x04" * 32)
-            with self.assertRaises(AttestationRejected):
-                verify_issuer_preparation(*args[:-2], 121_001, openssl)
-            self.assertEqual(
-                verify_issuer_preparation(*args[:-2], 121_001, openssl,
-                                          require_fresh=False).server_nonce,
-                selected.server_nonce,
-            )
-            android = Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
-                                selected.hardware_profile_id, b"\0" * 32, selected.lane_id)
-            android_header = header[:145] + b"\0" * 32 + header[177:]
-            (directory / "message.bin").write_bytes(
-                PREPARATION_DOMAIN + android_header[1:] + policy_id
-                + hashlib.sha256(account.encode()).digest())
-            run("pkeyutl", "-sign", "-inkey", "issuer.pem", "-rawin", "-in", "message.bin", "-out", "signature.bin")
-            android_token = android_header + (directory / "signature.bin").read_bytes()
-            self.assertEqual(verify_issuer_preparation(android_token, android, account, policy_id,
-                             issuer_key, hashlib.sha256(issuer_key).digest(), 1_001, openssl).server_nonce,
-                             selected.server_nonce)
-            for index, changed in (
-                (0, token[:49] + b"\x05" + token[50:]),
-                (1, Selection(b"\x07" * 32, selected.server_nonce, selected.release_id,
-                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
-                (1, Selection(selected.client_nonce, b"\x07" * 32, selected.release_id,
-                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
-                (1, Selection(selected.client_nonce, selected.server_nonce, b"\x07" * 32,
-                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
-                (1, Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
-                              b"\x0a" * 32, selected.attested_key_id, selected.lane_id)),
-                (1, Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
-                              selected.hardware_profile_id, b"\x0a" * 32, selected.lane_id)),
-                (1, Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
-                              selected.hardware_profile_id, selected.attested_key_id, b"\x0a" * 32)),
-                (2, "other account"),
-                (3, b"\x07" * 32),
-                (5, b"\x07" * 32),
-                (6, 121_000),
-            ):
-                mutated = list(args)
-                mutated[index] = changed
-                with self.subTest(index=index), self.assertRaises(AttestationRejected):
-                    verify_issuer_preparation(*mutated)
 
 
 if __name__ == "__main__":

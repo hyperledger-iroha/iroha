@@ -691,30 +691,35 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
             return Err(norito::json::BoundedJsonError::BodyTooLarge);
         }
         output.begin_container()?;
-        output.push('{')?;
-        let mut first = true;
-        for pair in torii_form_pairs(self.raw.as_bytes()) {
-            let key = torii_exact_form_component(pair.key, self.plan.component_limit_bytes)?;
-            let key_text = std::str::from_utf8(&key)
-                .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
-            if !first {
-                output.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push('{')?;
+            let mut first = true;
+            for pair in torii_form_pairs(self.raw.as_bytes()) {
+                let key = torii_exact_form_component(pair.key, self.plan.component_limit_bytes)?;
+                let key_text = std::str::from_utf8(&key)
+                    .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
+                if !first {
+                    output.push(',')?;
+                }
+                first = false;
+                norito::json::write_json_string_to(key_text, output)?;
+                drop(key);
+                output.push(':')?;
+                let value =
+                    torii_exact_form_component(pair.value, self.plan.component_limit_bytes)?;
+                let value = std::str::from_utf8(&value)
+                    .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
+                if self.coerce_scalars {
+                    torii_write_form_scalar(value, output)?;
+                } else {
+                    norito::json::write_json_string_to(value, output)?;
+                }
             }
-            first = false;
-            norito::json::write_json_string_to(key_text, output)?;
-            drop(key);
-            output.push(':')?;
-            let value = torii_exact_form_component(pair.value, self.plan.component_limit_bytes)?;
-            let value = std::str::from_utf8(&value)
-                .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
-            if self.coerce_scalars {
-                torii_write_form_scalar(value, output)?;
-            } else {
-                norito::json::write_json_string_to(value, output)?;
-            }
-        }
-        output.push('}')?;
+            output.push('}')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }
@@ -972,5 +977,42 @@ mod torii_routed_read_request_tests {
         assert!(!production.contains("url::form_urlencoded"));
         assert!(!production.contains("norito::json::Map"));
         assert!(!production.contains("norito::json::from_value"));
+    }
+}
+
+#[cfg(test)]
+mod service_request_depth_tests {
+    //! Owning checked service writers keep the caller depth on exact refusals.
+    use super::*;
+    use crate::service_checked_writer_test_support::{audit, error};
+    use norito::json::{BoundedJsonError, FastJsonWrite};
+
+    fn plan() -> ToriiRoutedReadRequestDecodePlan {
+        let phase = 64 * 1024;
+        ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
+            .unwrap()
+            .request_decode_plan()
+            .unwrap()
+    }
+    #[test]
+    fn original_form_json_keeps_original_decode_plan_and_input_refusal_depth() {
+        for coerce_scalars in [false, true] {
+            let source = ToriiRoutedReadFormJson {
+                raw: "name=%C3%A9&limit=7&enabled=true",
+                plan: plan(),
+                coerce_scalars,
+            };
+            let mut expected = String::new();
+            source.write_json(&mut expected);
+            audit(&expected, |sink| source.write_json_to(sink));
+        }
+        let source = ToriiRoutedReadFormJson {
+            raw: "name=%FF",
+            plan: plan(),
+            coerce_scalars: false,
+        };
+        error(BoundedJsonError::Unsupported, |sink| {
+            source.write_json_to(sink)
+        });
     }
 }

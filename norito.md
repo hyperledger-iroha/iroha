@@ -515,6 +515,30 @@ same decision. Unknown fields then use the same strict iterative subtree
 grammar, so an individually valid subtree cannot exceed the global limit by
 hiding beneath a typed outer object or array.
 
+Checked JSON writers stream into the original `JsonWriteSink`. Every container
+they successfully enter is released when the write returns, including byte,
+depth and unsupported-leaf refusals. A refused entry never releases an inherited
+level. Partial bytes and the exact original error remain with the sink owner;
+cleanup does not retry through an unbounded string or grant allocation credit.
+Generated empty tuple enum variants retain their tuple pattern and canonical
+tag/content bytes.
+
+The primitive signed BigInt slice decoder validates the borrowed canonical
+two's-complement payload before constructing native digits. It charges the
+inherited decode allocation scope once for the exact native backing, then uses
+one fallible allocation. Zero needs no backing; negative values use fixed
+bounded scratch instead of an additional byte vector. Signed-byte minimality,
+domain limits, advertised field layout and canonical wire bytes are unchanged.
+The archived BigInt adapter forwards the original typed decoder error so local
+allocation refusals retain their captured origin through enclosing records.
+
+An already classified canonical decode error retains the original attempt's
+admission outcome after its caller scope retires. Introducing its underlying
+error into a new canonical observer does not establish a new local origin;
+copied resource-limit numbers cannot establish one either. Portable checkpoint
+adapters consume the original captured classification without inventing a pool
+release owner or treating valid source bytes as a completed proof rejection.
+
 JSON field dispatch uses one key hash implementation for compile-time constants,
 the scalar parser, and the tape parser. With `crc-key-hash`, the portable
 Castagnoli byte update and runtime-detected ARM CRC or x86 SSE4.2 update use
@@ -1055,6 +1079,22 @@ Norito owns the single trait and primitive/tuple implementations; domain types
 own their implementations and MV owns only map serialization. Moving this
 contract does not change key spellings, decoding, or the map wire layout.
 
+
+## MV JSON Snapshot Undo
+
+The first-release MV JSON schema retains exact current and predecessor presence.
+For Cell, `revert:null` means there is no retained predecessor; a present
+predecessor is `revert:{"value":PREVIOUS}` even when `PREVIOUS` itself is null.
+For Storage, the undo object omits untouched keys; a key's null undo means its
+preimage was absent, while `{"value":PREVIOUS}` means its preimage was present.
+The current `blocks` values keep their ordinary JSON representation. The
+streaming decoder requires exactly one `value` member and rejects retired
+unwrapped undo values rather than guessing from a payload token. Object keys
+still use `JsonKeyCodec`; binary Norito and signed block wire formats do not
+change. Explicit native execution-tip records and compound encoded-blob
+snapshot records keep their existing separate schemas.
+
+
 ## MerkleTree Derived-Cache Encoding
 
 `iroha_crypto::MerkleTree<T>` never serializes its breadth-first internal-node
@@ -1271,3 +1311,27 @@ serializer ignores the write error. The framed helper includes the canonical
 header and alignment padding. Arbitrary work before a serializer emits bytes
 remains subject to the caller's source-specific work checks. Wire layouts and
 canonical comparisons are unchanged.
+
+### Complete callable schema body
+
+`ivm_abi::call::CallSchemaV1` has one CS1 body: magic `43533100`, a fixed
+little-endian `u64` count, then complete preorder nodes. The Norito header
+advertises the layout flags used by child strings, string vectors and the
+length-prefixed complete error descriptor; the decoder does not guess flags.
+Node tags are Struct=0, Tuple=1, Option=2, Result=3, List=4, Leaf=5, Unit=6,
+Error=7, StateCursor=8, StateRoot=9, Pointer=10 and SecretNumeric=11. Struct
+payloads are canonical String followed by Vec<String> in declaration order;
+Tuple uses `u32`, List uses `u8`, Leaf/StateCursor use one-byte public kind
+ordinals 0..13, and Pointer/SecretNumeric use `u16`. Zero-field nodes have no
+payload. Inline children retain all nominal identities, roles and constraints.
+
+The borrowed writer does not construct a second encoded graph. The decoder
+charges the original sequence/cumulative-element budget and the actual node
+Vec layout before reserving it, charges capacity excess, and uses the original
+canonical String, Vec<String> and error decoders with their active allocation,
+UTF-8, field and nesting limits. It validates the complete bounded forest before
+publication. Native allocator refusal remains distinct from malformed wire.
+Generic per-node enum wrappers and the previous vector body are retired; no
+alternate decoder remains. This changes the authenticated V1 semantic ABI hash,
+so all native artifact captures and generated ABI hash material must be produced
+from the changed compiler before their mandatory consumers pass.

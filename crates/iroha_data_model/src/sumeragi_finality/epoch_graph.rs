@@ -630,11 +630,16 @@ impl ConsensusSchedule {
                             "stored successor changes its network or mode".into(),
                         ));
                     }
-                    if matches!(config.epoch.authorization.decision,
-                        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain
-                        | crate::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::RetainAndCancel)
-                        && (config.epoch.authority != first.epoch.authority || config.epoch.committee != first.epoch.committee) {
-                        return Err(ScheduleError::Epoch("retained window replaces original authority credentials".into()));
+                    if matches!(
+                        config.epoch.authorization.decision,
+                        crate::sumeragi::epoch::ValidatorEpochDecisionV1::Retain
+                            | crate::sumeragi::epoch::ValidatorEpochDecisionV1::RetainAndCancel
+                    ) && (config.epoch.authority != first.epoch.authority
+                        || config.epoch.committee != first.epoch.committee)
+                    {
+                        return Err(ScheduleError::Epoch(
+                            "retained window replaces original authority credentials".into(),
+                        ));
                     }
                     context = &config.epoch;
                 }

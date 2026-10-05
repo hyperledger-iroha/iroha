@@ -22991,128 +22991,6 @@
         ],
         "type": "object"
       },
-      "KagemushaMintFinalityEpochAuthorizationV1": {
-        "additionalProperties": false,
-        "properties": {
-          "authority_generation": {
-            "description": "Generation whose paired-Pasta keys are authorized.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "authority_id": {
-            "description": "Exact immutable ordered authority commitment.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
-          },
-          "beacon": {
-            "$ref": "#/components/schemas/BeaconEpochBindingV1",
-            "description": "Exact installed beacon authority, or the explicit genesis bootstrap state."
-          },
-          "decision": {
-            "$ref": "#/components/schemas/KagemushaMintFinalityEpochDecisionV1",
-            "description": "Incumbent-certified disposition of the next scheduling epoch."
-          },
-          "epoch": {
-            "description": "Monotonic scheduling epoch, advanced even when the incumbent is retained.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "first_height": {
-            "description": "First governed height, inclusive.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "last_height": {
-            "description": "Last governed height, inclusive.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/Hash",
-            "description": "Exact genesis-derived network identity."
-          },
-          "previous_authorization_id": {
-            "description": "Previous authorization identity; zero only for genesis.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
-          },
-          "transition_id": {
-            "description": "Frozen attempt identity for activation or certified cancellation; otherwise zero.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
-          },
-          "version": {
-            "description": "Sole first-release layout version.",
-            "enum": [
-              1
-            ],
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "network_id",
-          "epoch",
-          "first_height",
-          "last_height",
-          "authority_generation",
-          "authority_id",
-          "beacon",
-          "previous_authorization_id",
-          "transition_id",
-          "decision"
-        ],
-        "type": "object"
-      },
-      "KagemushaMintFinalityEpochDecisionV1": {
-        "additionalProperties": false,
-        "properties": {
-          "kind": {
-            "enum": [
-              "genesis",
-              "activate",
-              "retain",
-              "retain_and_cancel"
-            ],
-            "type": "string"
-          },
-          "value": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "kind",
-          "value"
-        ],
-        "type": "object"
-      },
       "KagemushaMintFinalityPairedPossessionProofV1": {
         "additionalProperties": false,
         "properties": {
@@ -54998,7 +54876,7 @@
           "outcome": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/KagemushaMintFinalityEpochAuthorizationV1"
+                "$ref": "#/components/schemas/ValidatorEpochAuthorizationV1"
               },
               {
                 "type": "null"
@@ -55100,6 +54978,128 @@
           "min_nomination_bond",
           "max_validators",
           "epoch_length_blocks"
+        ],
+        "type": "object"
+      },
+      "ValidatorEpochAuthorizationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "authority_generation": {
+            "description": "Generation whose paired-Pasta keys are authorized.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "authority_id": {
+            "description": "Exact immutable ordered authority commitment.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "beacon": {
+            "$ref": "#/components/schemas/BeaconEpochBindingV1",
+            "description": "Exact installed beacon authority, or the explicit genesis bootstrap state."
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ValidatorEpochDecisionV1",
+            "description": "Incumbent-certified disposition of the next scheduling epoch."
+          },
+          "epoch": {
+            "description": "Monotonic scheduling epoch, advanced even when the incumbent is retained.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_height": {
+            "description": "First governed height, inclusive.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_height": {
+            "description": "Last governed height, inclusive.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact genesis-derived network identity."
+          },
+          "previous_authorization_id": {
+            "description": "Previous authorization identity; zero only for genesis.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "transition_id": {
+            "description": "Frozen attempt identity for activation or certified cancellation; otherwise zero.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "version": {
+            "description": "Sole first-release layout version.",
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "epoch",
+          "first_height",
+          "last_height",
+          "authority_generation",
+          "authority_id",
+          "beacon",
+          "previous_authorization_id",
+          "transition_id",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "ValidatorEpochDecisionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "genesis",
+              "activate",
+              "retain",
+              "retain_and_cancel"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
         ],
         "type": "object"
       },
@@ -82549,7 +82549,7 @@
         ],
         "summary": "Read one signed native alias or fee-program original family.",
         "tags": [
-          "KAGEMUSHA"
+          "Ledger"
         ],
         "x-iroha-max-request-bytes": 65536,
         "x-iroha-max-response-bytes": 134217728,
@@ -83327,7 +83327,7 @@
         ],
         "summary": "Read challenged complete native resource-name originals.",
         "tags": [
-          "KAGEMUSHA"
+          "Ledger"
         ],
         "x-iroha-max-response-bytes": 134217728,
         "x-iroha-norito-response-type": "iroha_torii_shared::resource_names_state::NativeResourceNamesStateV1",

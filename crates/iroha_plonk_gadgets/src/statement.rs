@@ -1,40 +1,39 @@
-//! **Prototype**: the step statement field encoding of the split-lineage step
-//! relations, and the canonical limb encodings of spec S6.
+//! The step statement field encoding of the split-lineage step relations
+//! (`specs/kagemusha_single_design_proposal.md` sections 3.1 and 3.2), and the
+//! canonical limb encodings of spec S6.
 //!
-//! The split-lineage design (step proofs `sigma_send`/`sigma_recv` on the
-//! payment path, the recursive lineage proof in the background;
-//! `specs/kagemusha_single_design_proposal.md` sections 3.1 and 3.2) is a
-//! proposal whose owner approval is pending. Nothing in this module is a
-//! protocol format: the domain and field order are prototype labels. No
-//! protocol path uses this module; a frozen encoding will get its own
-//! versioned type and vectors.
+//! The element order and the domain are the G1 wallet statement encoding
+//! (`KagemushaWalletStatementV1::field_items` in `iroha_data_model`, the
+//! `field_encodings` section of `fixtures/kagemusha/wallet_v1_vectors.json`):
+//! native and in-circuit encodings share those vectors (spec section 3.2).
 //!
-//! # Encoding (25 field elements of the proof's own parity `F`)
+//! # Encoding (29 field elements of the proof's own parity `F`)
 //!
 //! | index | field |
 //! | --- | --- |
 //! | 0 | version (1) |
-//! | 1 | relation id (`u128`; the caller's, distinct per relation) |
-//! | 2-3 | scheme id, two little-endian 128-bit limbs |
-//! | 4-5 | asset id limbs |
-//! | 6-7 | credential digest limbs |
-//! | 8 | successor lifecycle |
-//! | 9 | successor sequence |
-//! | 10 | predecessor state commitment |
-//! | 11 | successor state commitment |
+//! | 1-2 | relation id, two little-endian 128-bit limbs |
+//! | 3-4 | scheme id limbs |
+//! | 5-6 | asset id limbs |
+//! | 7-8 | credential digest limbs |
+//! | 9 | successor lifecycle |
+//! | 10 | successor sequence |
+//! | 11 | successor `next_load` |
 //! | 12 | enabled-controls mask |
 //! | 13 | `burned_total` taken from the predecessor's lineage proof (Send; 0 for Receive) |
 //! | 14 | pending-outgoing root taken from the predecessor's lineage proof (Send; 0 for Receive) |
-//! | 15 | effect tag (Send 3, Receive 4) |
-//! | 16-24 | the effect, zero padded to 9 fields |
+//! | 15 | predecessor state commitment |
+//! | 16 | successor state commitment |
+//! | 17 | effect tag (Send 3, Receive 4) |
+//! | 18-28 | the effect, zero padded to 11 fields |
 //!
 //! The state commitments are values of the proof's own field. The statement
 //! carries no other-parity component: a consumer on the other Pasta field
 //! compares these values through their canonical limbs
 //! ([`foreign_limbs`]), never through limbs a prover chose.
 //!
-//! The digest is the KAGEMUSHA sponge `hash_with_domain(kgspstm1, fields)`,
-//! 14 permutations, or 13 with the folded prefix. A verifier recomputes it
+//! The digest is the KAGEMUSHA sponge `hash_with_domain(kgwstmt1, fields)`,
+//! 16 permutations, or 15 with the folded prefix. A verifier recomputes it
 //! natively from the canonical statement, so every field in it is bound by
 //! the public digest.
 //!
@@ -60,13 +59,13 @@ use crate::{
 };
 
 /// Fields of the statement encoding.
-pub const STATEMENT_FIELDS: usize = 25;
+pub const STATEMENT_FIELDS: usize = 29;
 /// Fields before the effect.
-pub const STATEMENT_HEADER_FIELDS: usize = 16;
+pub const STATEMENT_HEADER_FIELDS: usize = 18;
 /// Fields of the effect union.
-pub const EFFECT_UNION_FIELDS: usize = 9;
-/// The prototype statement domain.
-pub const STATEMENT_DOMAIN: u64 = u64::from_le_bytes(*b"kgspstm1");
+pub const EFFECT_UNION_FIELDS: usize = 11;
+/// The statement domain (G1 `KAGEMUSHA_WALLET_STATEMENT_DOMAIN_V1`).
+pub const STATEMENT_DOMAIN: u64 = u64::from_le_bytes(*b"kgwstmt1");
 /// The statement version.
 pub const STATEMENT_VERSION: u64 = 1;
 
@@ -108,11 +107,11 @@ pub fn limb_fields<F: PastaField>(limbs: [u128; 2]) -> [F; 2] {
     limbs.map(F::from_u128)
 }
 
-/// The native prototype statement (own parity `F`).
+/// The native statement (own parity `F`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatementV1<F> {
-    /// The relation identifier.
-    pub relation_id: u128,
+    /// The 32-byte relation identity.
+    pub relation_id: [u8; 32],
     /// The step relation (its effect tag).
     pub step: StepRelation,
     /// The scheme identifier.
@@ -125,6 +124,8 @@ pub struct StatementV1<F> {
     pub lifecycle: u64,
     /// The successor sequence number.
     pub sequence: u128,
+    /// The successor `next_load`.
+    pub next_load: u128,
     /// The predecessor state commitment.
     pub predecessor: F,
     /// The successor state commitment.
@@ -142,7 +143,7 @@ pub struct StatementV1<F> {
 }
 
 impl<F: PoseidonField> StatementV1<F> {
-    /// The 25-field encoding, or `None` for more than
+    /// The 29-field encoding, or `None` for more than
     /// [`EFFECT_UNION_FIELDS`] effect fields.
     #[must_use]
     pub fn encode(&self) -> Option<[F; STATEMENT_FIELDS]> {
@@ -150,12 +151,14 @@ impl<F: PoseidonField> StatementV1<F> {
             return None;
         }
         let limbs = |bytes: &[u8; 32]| limb_fields::<F>(bytes_to_limbs(bytes));
+        let [relation_lo, relation_hi] = limbs(&self.relation_id);
         let [scheme_lo, scheme_hi] = limbs(&self.scheme_id);
         let [asset_lo, asset_hi] = limbs(&self.asset);
         let [credential_lo, credential_hi] = limbs(&self.credential);
         let mut fields = vec![
             F::from(STATEMENT_VERSION),
-            F::from_u128(self.relation_id),
+            relation_lo,
+            relation_hi,
             scheme_lo,
             scheme_hi,
             asset_lo,
@@ -164,11 +167,12 @@ impl<F: PoseidonField> StatementV1<F> {
             credential_hi,
             F::from(self.lifecycle),
             F::from_u128(self.sequence),
-            self.predecessor,
-            self.successor,
+            F::from_u128(self.next_load),
             F::from(self.enabled_controls),
             F::from_u128(self.burned_total),
             self.pending_outgoing_root,
+            self.predecessor,
+            self.successor,
             F::from(self.step.effect_tag()),
         ];
         fields.extend_from_slice(&self.effect);
@@ -199,6 +203,8 @@ pub struct StatementCells<'a, F: PastaField> {
     pub lifecycle: &'a Word<F>,
     /// The successor sequence number.
     pub sequence: &'a Word<F>,
+    /// The successor `next_load`.
+    pub next_load: &'a Word<F>,
     /// The predecessor state commitment.
     pub predecessor: &'a Word<F>,
     /// The successor state commitment.
@@ -216,6 +222,11 @@ pub struct StatementCells<'a, F: PastaField> {
     pub effect: &'a [Word<F>],
 }
 
+/// An optional cell as an absorbed input (the constant zero when absent).
+fn optional_input<F: PastaField>(cell: Option<&Word<F>>) -> AbsorbInput<'_, F> {
+    cell.map_or(AbsorbInput::Constant(F::ZERO), AbsorbInput::Word)
+}
+
 /// Hashes the statement encoding of `cells` for the relation `relation_id`
 /// of step `step` and returns the digest cell.
 ///
@@ -226,7 +237,7 @@ pub struct StatementCells<'a, F: PastaField> {
 pub fn statement_digest<F: PoseidonField>(
     sponge: &mut SpongeChip<F>,
     region: &mut Region<'_, F>,
-    relation_id: u128,
+    relation_id: &[u8; 32],
     step: StepRelation,
     cells: &StatementCells<'_, F>,
 ) -> Result<Word<F>, Error> {
@@ -234,11 +245,12 @@ pub fn statement_digest<F: PoseidonField>(
         return Err(Error::Synthesis);
     }
     let word = AbsorbInput::Word;
-    let optional =
-        |cell: Option<&Word<F>>| cell.map_or(AbsorbInput::Constant(F::ZERO), AbsorbInput::Word);
+    let optional = optional_input::<F>;
+    let [relation_lo, relation_hi] = limb_fields::<F>(bytes_to_limbs(relation_id));
     let mut inputs = vec![
         AbsorbInput::Constant(F::from(STATEMENT_VERSION)),
-        AbsorbInput::Constant(F::from_u128(relation_id)),
+        AbsorbInput::Constant(relation_lo),
+        AbsorbInput::Constant(relation_hi),
         word(cells.scheme_id[0]),
         word(cells.scheme_id[1]),
         word(cells.asset[0]),
@@ -247,11 +259,12 @@ pub fn statement_digest<F: PoseidonField>(
         word(cells.credential[1]),
         word(cells.lifecycle),
         word(cells.sequence),
-        word(cells.predecessor),
-        word(cells.successor),
+        word(cells.next_load),
         word(cells.enabled_controls),
         optional(cells.burned_total),
         optional(cells.pending_outgoing_root),
+        word(cells.predecessor),
+        word(cells.successor),
         AbsorbInput::Constant(F::from(step.effect_tag())),
     ];
     inputs.extend(cells.effect.iter().map(AbsorbInput::Word));
@@ -407,7 +420,7 @@ mod tests {
         );
         assert_eq!(StepRelation::Send.effect_tag(), 3);
         assert_eq!(StepRelation::Receive.effect_tag(), 4);
-        assert_eq!(STATEMENT_DOMAIN.to_le_bytes(), *b"kgspstm1");
+        assert_eq!(STATEMENT_DOMAIN.to_le_bytes(), *b"kgwstmt1");
     }
 
     #[test]
@@ -451,38 +464,47 @@ mod tests {
 
     #[test]
     fn statement_encoding_layout() {
+        let mut relation_id = [0_u8; 32];
+        relation_id[0] = 0x34;
+        relation_id[1] = 0x12;
+        relation_id[16] = 0x56;
         let statement = StatementV1::<Fq> {
-            relation_id: 0x1234,
+            relation_id,
             step: StepRelation::Send,
             scheme_id: [1; 32],
             asset: [3; 32],
             credential: [2; 32],
             lifecycle: 1,
             sequence: 9,
+            next_load: 6,
             predecessor: Fq::from(5u64),
             successor: Fq::from(7u64),
             enabled_controls: 0,
             burned_total: 40,
             pending_outgoing_root: Fq::from(11u64),
-            effect: vec![Fq::from(10u64); 9],
+            effect: vec![Fq::from(10u64); 11],
         };
         let fields = statement.encode().expect("encoding");
         assert_eq!(fields[0], Fq::ONE);
         assert_eq!(fields[1], Fq::from(0x1234u64));
+        assert_eq!(fields[2], Fq::from(0x56u64));
         assert_eq!(
-            [fields[2], fields[3]],
+            [fields[3], fields[4]],
             limb_fields(bytes_to_limbs(&[1; 32]))
         );
         assert_eq!(
-            [fields[6], fields[7]],
+            [fields[7], fields[8]],
             limb_fields(bytes_to_limbs(&[2; 32]))
         );
-        assert_eq!(fields[10], Fq::from(5u64));
-        assert_eq!(fields[11], Fq::from(7u64));
+        assert_eq!(fields[9], Fq::ONE);
+        assert_eq!(fields[10], Fq::from(9u64));
+        assert_eq!(fields[11], Fq::from(6u64));
         assert_eq!(fields[13], Fq::from(40u64));
         assert_eq!(fields[14], Fq::from(11u64));
-        assert_eq!(fields[15], Fq::from(3u64));
-        assert_eq!(fields[24], Fq::from(10u64));
+        assert_eq!(fields[15], Fq::from(5u64));
+        assert_eq!(fields[16], Fq::from(7u64));
+        assert_eq!(fields[17], Fq::from(3u64));
+        assert_eq!(fields[28], Fq::from(10u64));
         assert_eq!(
             statement.digest(),
             Some(iroha_pasta::poseidon::hash_with_domain(
@@ -492,7 +514,7 @@ mod tests {
         );
         let mut short = statement.clone();
         short.effect.truncate(5);
-        assert_eq!(short.encode().expect("encoding")[21], Fq::ZERO);
+        assert_eq!(short.encode().expect("encoding")[23], Fq::ZERO);
         let mut long = statement;
         long.effect = vec![Fq::ONE; EFFECT_UNION_FIELDS + 1];
         assert_eq!(long.encode(), None);

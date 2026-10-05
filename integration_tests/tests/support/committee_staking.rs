@@ -35,6 +35,9 @@ struct Observation {
     prepared: PublicLanePreparationV1,
     chain: Vec<CertifiedBlock>,
     supply: Quantity,
+    // A second unchanged read exposes the treasury and stake reserves without
+    // changing the signed monetary/claim plan returned by the primary read.
+    auxiliary: Option<PublicLanePreparationV1>,
 }
 
 impl Observation {
@@ -43,7 +46,29 @@ impl Observation {
             .balances
             .iter()
             .find(|row| &row.asset == asset)
+            .or_else(|| {
+                self.auxiliary
+                    .as_ref()?
+                    .balances
+                    .iter()
+                    .find(|row| &row.asset == asset)
+            })
             .ok_or_else(|| eyre!("prepared plan omitted exact custody asset {asset}"))
+    }
+
+    fn assets(&self) -> impl Iterator<Item = &PublicLanePreparationBalanceV1> {
+        self.prepared.balances.iter().chain(
+            self.auxiliary
+                .iter()
+                .flat_map(|view| &view.balances)
+                .filter(move |row| {
+                    !self
+                        .prepared
+                        .balances
+                        .iter()
+                        .any(|primary| primary.asset == row.asset)
+                }),
+        )
     }
 }
 
@@ -52,11 +77,127 @@ fn same_observed_tip(left: &PublicLanePreparationV1, right: &PublicLanePreparati
         && left.observed_block_hash == right.observed_block_hash
 }
 
+fn validate_joined_custody(
+    primary: &PublicLanePreparationV1,
+    auxiliary: &PublicLanePreparationV1,
+) -> Result<()> {
+    ensure!(
+        same_observed_tip(primary, auxiliary)
+            && primary.network_id == auxiliary.network_id
+            && primary.observed_ledger_time_ms == auxiliary.observed_ledger_time_ms
+            && primary.assumed_execution_height == auxiliary.assumed_execution_height
+            && primary.xor_asset_definition_id == auxiliary.xor_asset_definition_id,
+        "supplemental custody must identify the same complete committed observation"
+    );
+    for row in &auxiliary.balances {
+        if let Some(existing) = primary
+            .balances
+            .iter()
+            .find(|existing| existing.asset == row.asset)
+        {
+            ensure!(
+                existing == row,
+                "one finalized tip returned inconsistent exact custody reserves"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_treasury_custody(
+    escrow: &AssetId,
+    treasury: &AssetId,
+    fee_sink: &AccountId,
+    xor: &AssetDefinitionId,
+) -> Result<()> {
+    ensure!(
+        escrow == &AssetId::new(xor.clone(), escrow.account().clone())
+            && treasury == &AssetId::new(xor.clone(), fee_sink.clone())
+            && treasury != escrow,
+        "signed staking escrow and funded reward fee sink must retain distinct exact global XOR custody"
+    );
+    Ok(())
+}
+
+/// Read the positive treasury mint from the actual retained signed genesis.
+fn reward_treasury_from_signed_genesis(
+    genesis: &iroha_genesis::GenesisBlock,
+    xor: &AssetDefinitionId,
+    fee_sink: &AccountId,
+    escrow: &AssetId,
+) -> Result<AssetId> {
+    let mut treasury = None;
+    for transaction in genesis.0.external_transactions() {
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            continue;
+        };
+        for instruction in instructions {
+            let Some(iroha::data_model::isi::MintBox::Asset(mint)) =
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha::data_model::isi::MintBox>()
+            else {
+                continue;
+            };
+            if mint.destination.definition() != xor || mint.destination.account() != fee_sink {
+                continue;
+            }
+            ensure!(
+                !mint.object.is_zero(),
+                "signed reward treasury funding must be positive"
+            );
+            validate_treasury_custody(escrow, &mint.destination, fee_sink, xor)?;
+            if let Some(existing) = &treasury {
+                ensure!(
+                    existing == &mint.destination,
+                    "signed reward funding must retain one exact custody asset"
+                );
+            } else {
+                treasury = Some(mint.destination.clone());
+            }
+        }
+    }
+    treasury.ok_or_else(|| {
+        eyre!("signed genesis omitted positive XOR funding for the configured reward fee sink")
+    })
+}
+
+fn validate_treasury_bond_observation(
+    prepared: &PublicLanePreparationV1,
+    request: &PublicLanePreparationRequestV1,
+    network_id: NetworkId,
+    treasury: &AssetId,
+    escrow: &AssetId,
+) -> Result<()> {
+    let PublicLanePreparedPlanV1::Monetary(plan) = &prepared.plan else {
+        return Err(eyre!("treasury custody observation returned a claim"));
+    };
+    ensure!(
+        prepared.request == *request
+            && prepared.network_id == network_id
+            && plan.network_scope == PublicLaneMonetaryScopeV1::Network(network_id)
+            && plan.source_asset == *treasury
+            && plan.destination_asset == *escrow
+            && plan.amount == Quantity::from(1_u64)
+            && plan.has_canonical_shape()
+            && matches!(
+                &plan.precondition,
+                PublicLaneMonetaryPreconditionV1::Bond(_)
+            ),
+        "supplemental ordinary bond preparation lost its exact treasury and signed stake custody"
+    );
+    Ok(())
+}
+
 /// Retained real stake and the exact obligation committed by its pending request.
 pub(super) struct WithdrawalLifecycle {
     owner: Operator,
     escrow: AssetId,
     destination: AssetId,
+    reward_treasury: AssetId,
+    // An actual retained return-committee survivor stays registered after the
+    // departing owner has withdrawn. This is a read, never a new delegation.
+    reserve_validator: AccountId,
     pending: PublicLaneUnbonding,
     signed_genesis_hash: HashOf<iroha::data_model::block::BlockHeader>,
     network_id: NetworkId,
@@ -108,13 +249,34 @@ impl WithdrawalLifecycle {
             valid_for_blocks: EPOCH,
             operation,
         };
+        let treasury_request = PublicLanePreparationRequestV1 {
+            lane_id: LaneId::SINGLE,
+            valid_for_blocks: EPOCH,
+            operation: PublicLanePreparationOperationV1::Bond(PublicLanePrepareBondV1 {
+                validator: self.reserve_validator.clone(),
+                staker: self.reward_treasury.account().clone(),
+                amount: 1_u64.into(),
+            }),
+        };
         let deadline = Instant::now() + WAIT;
-        let (prepared, supply) = loop {
+        let (prepared, auxiliary, supply) = loop {
             ensure!(
                 Instant::now() < deadline,
                 "staking observation deadline elapsed"
             );
             let prepared = self.prepare_until(&request, deadline).await?;
+            let auxiliary = self.prepare_until(&treasury_request, deadline).await?;
+            validate_treasury_bond_observation(
+                &auxiliary,
+                &treasury_request,
+                self.network_id,
+                &self.reward_treasury,
+                &self.escrow,
+            )?;
+            if !same_observed_tip(&prepared, &auxiliary) {
+                continue;
+            }
+            validate_joined_custody(&prepared, &auxiliary)?;
             let supply = tokio::time::timeout_at(
                 deadline.into(),
                 read_on_dedicated_thread({
@@ -133,26 +295,38 @@ impl WithdrawalLifecycle {
             .await
             .wrap_err("real XOR supply observation exceeded its original deadline")?
             .wrap_err("real XOR supply observation worker failed")?;
-            // The definition query is a current-state read. Sandwich it between
-            // two identical prepared views so its supply shares their exact tip.
+            // The supply and supplemental reserve reads share the same tip as
+            // both unchanged primary reads. No plan or reserve row is synthesized.
+            let confirmed_auxiliary = self.prepare_until(&treasury_request, deadline).await?;
             let confirmed = self.prepare_until(&request, deadline).await?;
-            if !same_observed_tip(&prepared, &confirmed) {
+            if !same_observed_tip(&prepared, &confirmed)
+                || !same_observed_tip(&prepared, &confirmed_auxiliary)
+            {
                 continue;
             }
             ensure!(
-                prepared == confirmed,
+                prepared == confirmed && auxiliary == confirmed_auxiliary,
                 "one finalized staking tip returned inconsistent custody observations"
             );
-            break (prepared, supply);
+            validate_joined_custody(&confirmed, &confirmed_auxiliary)?;
+            break (prepared, auxiliary, supply);
         };
-        let (_, chain) = read_on_dedicated_thread({
-            let client = self.owner.client.clone();
-            let network_id = self.network_id;
-            let genesis = self.signed_genesis_hash;
-            let height = prepared.observed_height;
-            move || read_contiguous_finality_chain(&client, network_id, genesis, height)
-        })
+        let (_, chain) = tokio::time::timeout_at(
+            deadline.into(),
+            read_on_dedicated_thread({
+                let client = self.owner.client.clone();
+                let network_id = self.network_id;
+                let genesis = self.signed_genesis_hash;
+                let height = prepared.observed_height;
+                move || {
+                    read_contiguous_finality_chain_until(
+                        &client, network_id, genesis, height, deadline,
+                    )
+                }
+            }),
+        )
         .await
+        .wrap_err("staking observation finality exceeded its original read deadline")?
         .wrap_err("staking observation finality worker failed")?;
         let tip = chain
             .last()
@@ -166,7 +340,7 @@ impl WithdrawalLifecycle {
                 && prepared.observed_ledger_time_ms == tip.block_time_ms(),
             "staking observation does not identify the independently authenticated native tip"
         );
-        for row in &prepared.balances {
+        for row in prepared.balances.iter().chain(&auxiliary.balances) {
             ensure!(
                 row.balance >= row.stake_reserved.checked_add(&row.rewards_reserved)?,
                 "real XOR balance does not cover additive stake and reward reserves"
@@ -176,6 +350,7 @@ impl WithdrawalLifecycle {
             prepared,
             chain,
             supply,
+            auxiliary: Some(auxiliary),
         })
     }
 
@@ -545,6 +720,50 @@ fn assert_effects(
             && before.supply.checked_sub(fee)? == after.supply,
         "actual XOR movement, additive reserves or supply differ from principal/reward plus separate settled fees"
     );
+    for row in before
+        .assets()
+        .filter(|row| &row.asset != escrow && &row.asset != recipient)
+    {
+        let current = after.asset(&row.asset)?;
+        let settled_fee = if row.asset.account() == fee_payer {
+            fee.clone()
+        } else {
+            Quantity::zero()
+        };
+        ensure!(
+            row.balance.checked_sub(&settled_fee)? == current.balance
+                && row.stake_reserved == current.stake_reserved
+                && row.rewards_reserved == current.rewards_reserved,
+            "paid monetary work changed unrelated treasury or stake custody"
+        );
+    }
+    ensure!(
+        after.assets().all(|row| before.asset(&row.asset).is_ok()),
+        "paid monetary observation changed its exact custody asset set"
+    );
+    Ok(())
+}
+
+fn assert_reward_reservation(
+    before: &Observation,
+    after: &Observation,
+    treasury: &AssetId,
+    escrow: &AssetId,
+    recipient: &AssetId,
+    reward: &Quantity,
+    fee: &Quantity,
+) -> Result<()> {
+    let source = before.asset(treasury)?;
+    let reserved = after.asset(treasury)?;
+    ensure!(
+        source.balance.checked_sub(fee)? == reserved.balance
+            && source.stake_reserved == reserved.stake_reserved
+            && source.rewards_reserved.checked_add(reward)? == reserved.rewards_reserved
+            && before.asset(escrow)? == after.asset(escrow)?
+            && before.asset(recipient)? == after.asset(recipient)?
+            && before.supply.checked_sub(fee)? == after.supply,
+        "reward distribution must reserve existing treasury XOR and burn only its admin fee without consuming stake"
+    );
     Ok(())
 }
 
@@ -572,9 +791,29 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
     let xor: AssetDefinitionId = TAIRA_XOR.parse()?;
     let escrow = validator_xor_escrow(&network.genesis(), &xor)?;
     ensure!(
-        escrow.account() == &*ALICE_ID,
-        "funded treasury must own the exact shared XOR custody"
+        network.genesis().0.hash() == signed_genesis_hash,
+        "reward custody must come from the original retained signed genesis"
     );
+    let mut fee_sink = None;
+    for layer in network.config_layers() {
+        if let Some(value) = layer
+            .get("nexus")
+            .and_then(|value| value.get("fees"))
+            .and_then(|value| value.get("fee_sink_account_id"))
+        {
+            fee_sink = Some(AccountId::parse_encoded(value.as_str().ok_or_else(
+                || eyre!("reward fee sink configuration must be a canonical account string"),
+            )?)?);
+        }
+    }
+    let fee_sink = fee_sink.ok_or_else(|| eyre!("actual reward fee sink configuration missing"))?;
+    ensure!(
+        fee_sink == *ALICE_ID,
+        "the paid reward administrator must own the actual configured fee sink"
+    );
+    let reward_treasury =
+        reward_treasury_from_signed_genesis(&network.genesis(), &xor, &fee_sink, &escrow)?;
+    let reserve_validator = ingress.account_id();
     let parameters = read_on_dedicated_thread({
         let admin = admin.clone();
         move || Ok(admin.client().query_single(FindParameters)?)
@@ -614,6 +853,8 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
         destination: AssetId::with_scope(xor, owner.account.clone(), *escrow.scope()),
         owner,
         escrow,
+        reward_treasury,
+        reserve_validator,
         pending,
         signed_genesis_hash,
         network_id: network.network_id(),
@@ -678,7 +919,7 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
         RecordPublicLaneRewards {
             lane_id: LaneId::SINGLE,
             epoch: REWARD_EPOCH,
-            reward_asset: lifecycle.escrow.clone(),
+            reward_asset: lifecycle.reward_treasury.clone(),
             total_reward: reward.clone(),
             shares: vec![PublicLaneRewardShare {
                 account: lifecycle.owner.account.clone(),
@@ -691,6 +932,10 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
         true,
     )
     .await?;
+    ensure!(
+        record.authority() == lifecycle.reward_treasury.account(),
+        "the exact signed reward input must spend its own configured treasury fee"
+    );
     let claim = lifecycle
         .observe(PublicLanePreparationOperationV1::ClaimRewards(
             PublicLanePrepareClaimV1 {
@@ -709,18 +954,15 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
         None,
         lifecycle.escrow.definition(),
     )?;
-    let before = before_reward.asset(&lifecycle.escrow)?;
-    let reserved = claim.asset(&lifecycle.escrow)?;
-    let recipient_before = before_reward.asset(&lifecycle.destination)?;
-    let recipient_after = claim.asset(&lifecycle.destination)?;
-    ensure!(
-        before.balance.checked_sub(&fee)? == reserved.balance
-            && before.stake_reserved == reserved.stake_reserved
-            && before.rewards_reserved.checked_add(&reward)? == reserved.rewards_reserved
-            && recipient_before == recipient_after
-            && before_reward.supply.checked_sub(&fee)? == claim.supply,
-        "reward distribution must reserve funded treasury XOR without minting or consuming stake"
-    );
+    assert_reward_reservation(
+        &before_reward,
+        &claim,
+        &lifecycle.reward_treasury,
+        &lifecycle.escrow,
+        &lifecycle.destination,
+        &reward,
+        &fee,
+    )?;
     let PublicLanePreparedPlanV1::Claim(plan) = &claim.prepared.plan else {
         return Err(eyre!("reward read returned withdrawal"));
     };
@@ -728,7 +970,7 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
         plan.records.len() == 1
             && plan.records[0].epoch == REWARD_EPOCH
             && plan.sources.len() == 1
-            && plan.sources[0].source_asset == lifecycle.escrow
+            && plan.sources[0].source_asset == lifecycle.reward_treasury
             && plan.sources[0].destination_asset == lifecycle.destination
             && plan.sources[0].payout == reward
             && plan.fee_claim.is_none(),
@@ -757,7 +999,7 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
     assert_effects(
         &claim,
         &after_claim,
-        &lifecycle.escrow,
+        &lifecycle.reward_treasury,
         &lifecycle.destination,
         &reward,
         &Quantity::zero(),
@@ -792,7 +1034,7 @@ pub(super) async fn fund_rewards_and_schedule_withdrawal(
     assert_effects(
         &after_claim,
         &after_replay,
-        &lifecycle.escrow,
+        &lifecycle.reward_treasury,
         &lifecycle.destination,
         &Quantity::zero(),
         &Quantity::zero(),
@@ -875,6 +1117,7 @@ mod tests {
             },
             chain: Vec::new(),
             supply: supply.into(),
+            auxiliary: None,
         }
     }
 
@@ -1026,6 +1269,430 @@ mod tests {
             )
             .is_err()
         );
+        Ok(())
+    }
+
+    fn distinct_custody_observation(
+        treasury: u64,
+        escrow: u64,
+        recipient: u64,
+        stake: u64,
+        reward: u64,
+        supply: u64,
+    ) -> Observation {
+        let mut observed = observation(treasury, recipient, 0, reward, supply);
+        let xor = observed.prepared.xor_asset_definition_id.clone();
+        let escrow_account = AccountId::new(
+            KeyPair::from_seed(
+                b"committee-staking-distinct-escrow-control".to_vec(),
+                iroha::crypto::Algorithm::Ed25519,
+            )
+            .public_key()
+            .clone(),
+        );
+        observed
+            .prepared
+            .balances
+            .push(PublicLanePreparationBalanceV1 {
+                asset: AssetId::new(xor, escrow_account),
+                balance: escrow.into(),
+                stake_reserved: stake.into(),
+                rewards_reserved: Quantity::zero(),
+            });
+        observed
+    }
+
+    #[test]
+    fn reward_treasury_requires_exact_separate_xor_custody() -> Result<()> {
+        let observed = distinct_custody_observation(1_000, 900, 100, 800, 0, 2_000);
+        let treasury = &observed.prepared.balances[0].asset;
+        let escrow = &observed.prepared.balances[2].asset;
+        let xor = &observed.prepared.xor_asset_definition_id;
+        validate_treasury_custody(escrow, treasury, &ALICE_ID, xor)?;
+        assert!(validate_treasury_custody(escrow, escrow, &ALICE_ID, xor).is_err());
+        assert!(validate_treasury_custody(treasury, treasury, &ALICE_ID, xor).is_err());
+        assert!(validate_treasury_custody(escrow, treasury, &BOB_ID, xor).is_err());
+        let routed = AssetId::with_scope(
+            xor.clone(),
+            ALICE_ID.clone(),
+            iroha::data_model::asset::AssetBalanceScope::Dataspace(
+                iroha_model_base::topology::DataSpaceId::new(7),
+            ),
+        );
+        assert!(validate_treasury_custody(escrow, &routed, &ALICE_ID, xor).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn joined_custody_observations_require_exact_source_and_equal_overlap() -> Result<()> {
+        let observed = observation(1_000, 100, 0, 25, 1_100).prepared;
+        validate_joined_custody(&observed, &observed)?;
+        let mut changed = observed.clone();
+        changed.observed_height += 1;
+        assert!(validate_joined_custody(&observed, &changed).is_err());
+        changed = observed.clone();
+        changed.observed_block_hash = Hash::new(b"different complete committed source");
+        assert!(validate_joined_custody(&observed, &changed).is_err());
+        changed = observed.clone();
+        changed.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::new(b"foreign signed genesis"),
+        ));
+        assert!(validate_joined_custody(&observed, &changed).is_err());
+        changed = observed.clone();
+        changed.observed_ledger_time_ms += 1;
+        assert!(validate_joined_custody(&observed, &changed).is_err());
+        changed = observed.clone();
+        changed.balances[0].balance = 999_u64.into();
+        assert!(validate_joined_custody(&observed, &changed).is_err());
+        changed = observed.clone();
+        changed.balances[0].stake_reserved = 1_u64.into();
+        assert!(validate_joined_custody(&observed, &changed).is_err());
+        changed = observed.clone();
+        changed.balances[0].rewards_reserved = 26_u64.into();
+        assert!(validate_joined_custody(&observed, &changed).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn supplemental_bond_observation_requires_exact_treasury_and_signed_escrow() -> Result<()> {
+        let mut observed = distinct_custody_observation(1_000, 900, 100, 800, 0, 2_000).prepared;
+        let treasury = observed.balances[0].asset.clone();
+        let escrow = observed.balances[2].asset.clone();
+        let request = PublicLanePreparationRequestV1 {
+            lane_id: LaneId::SINGLE,
+            valid_for_blocks: EPOCH,
+            operation: PublicLanePreparationOperationV1::Bond(PublicLanePrepareBondV1 {
+                validator: BOB_ID.clone(),
+                staker: ALICE_ID.clone(),
+                amount: 1_u64.into(),
+            }),
+        };
+        observed.request = request.clone();
+        let PublicLanePreparedPlanV1::Monetary(plan) = &mut observed.plan else {
+            panic!("helper monetary plan");
+        };
+        plan.source_asset = treasury.clone();
+        plan.destination_asset = escrow.clone();
+        plan.amount = 1_u64.into();
+        plan.precondition = PublicLaneMonetaryPreconditionV1::Bond(
+            iroha::data_model::nexus::PublicLaneMonetaryBondV1 {
+                activation_height: 1,
+                peer_id: PeerId::new(
+                    KeyPair::from_seed(
+                        b"retained-survivor-custody-control".to_vec(),
+                        iroha::crypto::Algorithm::BlsNormal,
+                    )
+                    .public_key()
+                    .clone(),
+                ),
+            },
+        );
+        validate_treasury_bond_observation(
+            &observed,
+            &request,
+            observed.network_id,
+            &treasury,
+            &escrow,
+        )?;
+        let mut confused = observed.clone();
+        let PublicLanePreparedPlanV1::Monetary(plan) = &mut confused.plan else {
+            unreachable!()
+        };
+        plan.source_asset = escrow.clone();
+        assert!(
+            validate_treasury_bond_observation(
+                &confused,
+                &request,
+                observed.network_id,
+                &treasury,
+                &escrow
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn treasury_reward_reservation_burns_only_admin_fee_and_preserves_stake() -> Result<()> {
+        let before = distinct_custody_observation(1_000, 900, 100, 800, 0, 2_000);
+        let after = distinct_custody_observation(998, 900, 100, 800, 25, 1_998);
+        let treasury = &before.prepared.balances[0].asset;
+        let recipient = &before.prepared.balances[1].asset;
+        let escrow = &before.prepared.balances[2].asset;
+        assert_reward_reservation(
+            &before,
+            &after,
+            treasury,
+            escrow,
+            recipient,
+            &25_u64.into(),
+            &2_u64.into(),
+        )?;
+        for invalid in [
+            distinct_custody_observation(1_000, 898, 100, 800, 25, 1_998), // admin fee charged to stake escrow
+            distinct_custody_observation(998, 900, 100, 775, 25, 1_998), // reward consumes principal
+            distinct_custody_observation(973, 900, 125, 800, 0, 1_998), // reservation pays/mints prematurely
+            distinct_custody_observation(998, 900, 100, 800, 25, 2_000), // missing mandatory Burn
+        ] {
+            assert!(
+                assert_reward_reservation(
+                    &before,
+                    &invalid,
+                    treasury,
+                    escrow,
+                    recipient,
+                    &25_u64.into(),
+                    &2_u64.into()
+                )
+                .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reward_claim_pays_treasury_and_burns_recipient_fee_without_using_stake() -> Result<()> {
+        let before = distinct_custody_observation(998, 900, 100, 800, 25, 1_998);
+        let after = distinct_custody_observation(973, 900, 123, 800, 0, 1_996);
+        let treasury = &before.prepared.balances[0].asset;
+        let recipient = &before.prepared.balances[1].asset;
+        assert_effects(
+            &before,
+            &after,
+            treasury,
+            recipient,
+            &25_u64.into(),
+            &Quantity::zero(),
+            &25_u64.into(),
+            &BOB_ID,
+            &2_u64.into(),
+        )?;
+        for invalid in [
+            distinct_custody_observation(998, 875, 123, 800, 0, 1_996), // reward paid from stake
+            distinct_custody_observation(973, 898, 125, 800, 0, 1_996), // fee charged to stake
+            distinct_custody_observation(973, 900, 123, 775, 0, 1_996), // stake reserve released
+        ] {
+            assert!(
+                assert_effects(
+                    &before,
+                    &invalid,
+                    treasury,
+                    recipient,
+                    &25_u64.into(),
+                    &Quantity::zero(),
+                    &25_u64.into(),
+                    &BOB_ID,
+                    &2_u64.into()
+                )
+                .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_reward_replay_preserves_both_custodies_and_burns_only_recipient_fee() -> Result<()>
+    {
+        let before = distinct_custody_observation(973, 900, 123, 800, 0, 1_996);
+        let after = distinct_custody_observation(973, 900, 121, 800, 0, 1_994);
+        let treasury = &before.prepared.balances[0].asset;
+        let recipient = &before.prepared.balances[1].asset;
+        assert_effects(
+            &before,
+            &after,
+            treasury,
+            recipient,
+            &Quantity::zero(),
+            &Quantity::zero(),
+            &Quantity::zero(),
+            &BOB_ID,
+            &2_u64.into(),
+        )?;
+        let invalid = distinct_custody_observation(973, 898, 123, 800, 0, 1_994);
+        assert!(
+            assert_effects(
+                &before,
+                &invalid,
+                treasury,
+                recipient,
+                &Quantity::zero(),
+                &Quantity::zero(),
+                &Quantity::zero(),
+                &BOB_ID,
+                &2_u64.into()
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn supplemental_custody_rows_are_observed_without_rewriting_primary_plan() -> Result<()> {
+        let mut observed = observation(1_000, 100, 0, 25, 1_100);
+        let original = observed.prepared.clone();
+        let mut auxiliary = distinct_custody_observation(1_000, 900, 100, 800, 25, 2_000).prepared;
+        let escrow = auxiliary.balances[2].asset.clone();
+        // Supply is an independently sandwiched definition read, not a field of
+        // either preparation response. Only matching custody rows are joined.
+        validate_joined_custody(&observed.prepared, &auxiliary)?;
+        observed.auxiliary = Some(auxiliary.clone());
+        assert_eq!(observed.asset(&escrow)?.balance, Quantity::from(900_u64));
+        assert_eq!(observed.assets().count(), 3);
+        assert_eq!(observed.prepared, original);
+        auxiliary.balances[0].balance = 999_u64.into();
+        assert!(validate_joined_custody(&observed.prepared, &auxiliary).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reward_treasury_selects_actual_signed_four_validator_genesis_funding() -> Result<()> {
+        init_instruction_registry();
+        // Materialize the existing signed fixture only; never start a peer or
+        // submit an additional mint to a running ledger.
+        let network = NetworkBuilder::new()
+            .with_peers(4)
+            .with_auto_populated_trusted_peers()
+            .with_npos_consensus()
+            .with_npos_genesis_bootstrap(1_000_u64.into())
+            .with_base_seed("committee-treasury-signed-genesis-selection")
+            .build();
+        let genesis = network.genesis();
+        let original_hash = genesis.0.hash();
+        let original_wire = genesis.0.encode_wire()?;
+        let xor: AssetDefinitionId = TAIRA_XOR.parse()?;
+        // This original helper independently checks the four signed bond
+        // destinations, their principal and the sole canonical XOR definition.
+        let escrow = validator_xor_escrow(&genesis, &xor)?;
+        let expected = AssetId::new(xor.clone(), ALICE_ID.clone());
+        assert_ne!(escrow, expected);
+        for transaction in genesis.0.external_transactions() {
+            transaction.verify_signature()?;
+        }
+        for signature in genesis.0.signatures() {
+            signature.signature().verify_hash(
+                iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+                original_hash,
+            )?;
+        }
+        assert!(genesis.0.external_transactions().any(|transaction| {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                return false;
+            };
+            instructions.iter().any(|instruction| {
+                matches!(
+                    instruction.as_any().downcast_ref::<iroha::data_model::isi::MintBox>(),
+                    Some(iroha::data_model::isi::MintBox::Asset(mint))
+                        if mint.destination == expected && !mint.object.is_zero()
+                )
+            })
+        }));
+        assert_eq!(
+            reward_treasury_from_signed_genesis(&genesis, &xor, &ALICE_ID, &escrow)?,
+            expected,
+        );
+        assert_eq!(genesis.0.hash(), original_hash);
+        assert_eq!(genesis.0.encode_wire()?, original_wire);
+        Ok(())
+    }
+
+    fn signed_treasury_selection_carrier(
+        instructions: Vec<InstructionBox>,
+    ) -> Result<iroha_genesis::GenesisBlock> {
+        init_instruction_registry();
+        let key = KeyPair::from_seed(
+            b"committee-treasury-proposal-only-selection-control".to_vec(),
+            iroha::crypto::Algorithm::Ed25519,
+        );
+        let mut builder = TransactionBuilder::new_genesis(
+            AccountId::new(key.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(Duration::from_millis(1_000));
+        let transaction = builder
+            .with_instructions(instructions)
+            .try_sign(key.private_key())?;
+        transaction.verify_signature()?;
+        // Counterexamples are genuinely signed source carriers, deliberately
+        // unexecuted. They do not claim that malformed funding is valid genesis.
+        let block = SignedBlock::try_genesis(vec![transaction], key.private_key(), None, None)?;
+        for signature in block.signatures() {
+            signature
+                .signature()
+                .verify_hash(key.public_key(), block.hash())?;
+        }
+        Ok(iroha_genesis::GenesisBlock(block))
+    }
+
+    #[test]
+    fn reward_treasury_signed_sources_reject_absent_zero_foreign_scoped_and_conflicting_funding()
+    -> Result<()> {
+        let observed = distinct_custody_observation(1_000, 900, 100, 800, 0, 2_000);
+        let xor = observed.prepared.xor_asset_definition_id.clone();
+        let treasury = AssetId::new(xor.clone(), ALICE_ID.clone());
+        let escrow = observed.prepared.balances[2].asset.clone();
+        let scoped = AssetId::with_scope(
+            xor.clone(),
+            ALICE_ID.clone(),
+            iroha::data_model::asset::AssetBalanceScope::Dataspace(
+                iroha_model_base::topology::DataSpaceId::new(7),
+            ),
+        );
+        let mut foreign_uuid = [0xA7; 16];
+        foreign_uuid[6] = 0x47;
+        foreign_uuid[8] = 0x87;
+        let foreign_definition = AssetDefinitionId::from_uuid_bytes(foreign_uuid)?;
+        assert_ne!(foreign_definition, xor);
+        let foreign_asset = AssetId::new(foreign_definition, ALICE_ID.clone());
+        let foreign_account = AssetId::new(xor.clone(), BOB_ID.clone());
+        let mint = |asset: &AssetId, amount: u64| -> InstructionBox {
+            Mint::asset_quantity(amount, asset.clone()).into()
+        };
+        let cases = [
+            (
+                "absent",
+                vec![Register::account(Account::new(BOB_ID.clone())).into()],
+            ),
+            ("zero", vec![mint(&treasury, 0)]),
+            ("foreign definition", vec![mint(&foreign_asset, 1)]),
+            ("foreign account", vec![mint(&foreign_account, 1)]),
+            ("scoped", vec![mint(&scoped, 1)]),
+            (
+                "conflicting after exact",
+                vec![mint(&treasury, 1), mint(&scoped, 1)],
+            ),
+            (
+                "conflicting before exact",
+                vec![mint(&scoped, 1), mint(&treasury, 1)],
+            ),
+            (
+                "zero after exact",
+                vec![mint(&treasury, 1), mint(&treasury, 0)],
+            ),
+        ];
+        for (label, instructions) in cases {
+            let genesis = signed_treasury_selection_carrier(instructions)?;
+            let original_hash = genesis.0.hash();
+            let original_wire = genesis.0.encode_wire()?;
+            assert!(
+                reward_treasury_from_signed_genesis(&genesis, &xor, &ALICE_ID, &escrow).is_err(),
+                "signed {label} source must not select a funded treasury",
+            );
+            assert_eq!(genesis.0.hash(), original_hash);
+            assert_eq!(genesis.0.encode_wire()?, original_wire);
+        }
+        let genesis = signed_treasury_selection_carrier(vec![
+            mint(&foreign_asset, 3),
+            mint(&foreign_account, 4),
+            mint(&treasury, 1),
+            mint(&treasury, 2),
+        ])?;
+        let original_wire = genesis.0.encode_wire()?;
+        assert_eq!(
+            reward_treasury_from_signed_genesis(&genesis, &xor, &ALICE_ID, &escrow)?,
+            treasury,
+            "unrelated funding is ignored; repeated exact positive custody remains one source",
+        );
+        assert_eq!(genesis.0.encode_wire()?, original_wire);
         Ok(())
     }
 }

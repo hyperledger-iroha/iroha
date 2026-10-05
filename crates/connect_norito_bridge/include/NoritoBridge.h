@@ -2,8 +2,7 @@
 #ifndef NORITOBRIDGE_H
 #define NORITOBRIDGE_H
 
-// The canonical declaration also exports the path-only trusted Rust coordinator
-// installer; this umbrella does not add a caller-selected backend interface.
+// The canonical header owns every exported native bridge declaration.
 #include "connect_norito_bridge.h"
 
 #endif // NORITOBRIDGE_H

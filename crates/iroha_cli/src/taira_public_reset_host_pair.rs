@@ -512,6 +512,9 @@ pub(super) struct NativeOwnedPublicationV1 {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub(super) enum NativeEdgeCompletionProvenanceV1 {
+    /// Genuine first publication has neither a prior CLI nor a publication receipt.
+    #[norito(rename = "vacant")]
+    Vacant,
     #[norito(rename = "publication_only")]
     PublicationOnly { publication_operation_id: String },
     #[norito(rename = "reset_terminal")]
@@ -541,19 +544,34 @@ pub(super) struct NativeEdgeCaptureClaimsV1 {
     pub(super) authorization_sha256: String,
     pub(super) authorization_nonce: String,
     pub(super) next_genesis_hash: String,
-    pub(super) release: EdgeAdmittedReleaseV1,
+    pub(super) initial_state: EdgeInitialStateV1,
+    pub(super) nginx_config: String,
     pub(super) dispatcher: NativePublicFileV1,
     pub(super) native_guard: NativePublicFileV1,
     pub(super) nginx: NativeObservedFileV1,
     pub(super) main_configuration: NativeObservedFileV1,
     pub(super) master: NativeNginxMasterV1,
-    pub(super) owned_publication: NativeOwnedPublicationV1,
+    #[norito(required)]
+    pub(super) owned_publication: Option<NativeOwnedPublicationV1>,
     pub(super) completion: NativeEdgeCompletionProvenanceV1,
     pub(super) forwarding_plan: NativePublicFileV1,
     pub(super) forwarding_identity_receipt: NativePublicFileV1,
     pub(super) forwarding_journal: NativePublicFileV1,
     pub(super) helper_source_closure_sha256: String,
     pub(super) captured_at_unix_ms: u64,
+}
+
+impl NativeEdgeCaptureClaimsV1 {
+    pub(super) fn admitted_release(&self) -> Result<&EdgeAdmittedReleaseV1> {
+        match &self.initial_state {
+            EdgeInitialStateV1::AdmittedRelease(release) => Ok(release),
+            EdgeInitialStateV1::Vacant => Err(eyre!("vacant native edge has no prior release")),
+        }
+    }
+    pub(super) fn owned_publication(&self) -> Result<&NativeOwnedPublicationV1> {
+        self.owned_publication.as_ref()
+            .ok_or_else(|| eyre!("vacant native edge has no prior publication"))
+    }
 }
 
 /// Native software custody signature over the complete edge predecessor capture.
@@ -628,37 +646,32 @@ impl SignedNativeEdgeCaptureV1 {
                 "native edge capture names another maintained helper source closure"
             ));
         }
-        validate_lower_hex("native edge predecessor commit", &claims.release.commit, 40)?;
-        validate_lower_hex(
-            "native edge predecessor CLI",
-            &claims.release.cli_sha256,
-            64,
-        )?;
-        validate_lower_hex(
-            "native edge predecessor public config",
-            &claims.release.config_sha256,
-            64,
-        )?;
-        if claims.release.release_root
-            != format!(
-                "{}/.local/share/iroha/taira/edge/releases/{}",
-                host.owner_home, claims.release.commit
-            )
-            || claims.release.config_sha256 != claims.owned_publication.publication.sha256
-        {
-            return Err(eyre!(
-                "native edge predecessor release or public publication binding differs"
-            ));
+        validate_absolute_normal_path(Path::new(&claims.nginx_config), "native publication destination")?;
+        match (&claims.initial_state, &claims.owned_publication, &claims.completion) {
+            (EdgeInitialStateV1::Vacant, None, NativeEdgeCompletionProvenanceV1::Vacant) => {},
+            (EdgeInitialStateV1::Vacant, None, NativeEdgeCompletionProvenanceV1::ResetTerminal { status, .. })
+                if status == "rolled_back" => {},
+            (EdgeInitialStateV1::AdmittedRelease(release), Some(publication), completion)
+                if !matches!(completion, NativeEdgeCompletionProvenanceV1::Vacant) => {
+                validate_lower_hex("native edge predecessor commit", &release.commit, 40)?;
+                validate_lower_hex("native edge predecessor CLI", &release.cli_sha256, 64)?;
+                validate_lower_hex("native edge predecessor public config", &release.config_sha256, 64)?;
+                if release.release_root != format!(
+                    "{}/.local/share/iroha/taira/edge/releases/{}", host.owner_home, release.commit
+                ) || release.config_sha256 != publication.publication.sha256
+                    || claims.nginx_config != publication.publication.file.path
+                {
+                    return Err(eyre!("native edge predecessor release or public publication binding differs"));
+                }
+                validate_lower_hex("native publisher operation", &publication.operation_id, 32)?;
+            }
+            _ => return Err(eyre!("native initial occupancy and publication provenance disagree")),
         }
-        validate_lower_hex(
-            "native publisher operation",
-            &claims.owned_publication.operation_id,
-            32,
-        )?;
         match &claims.completion {
+            NativeEdgeCompletionProvenanceV1::Vacant => {},
             NativeEdgeCompletionProvenanceV1::PublicationOnly {
                 publication_operation_id,
-            } if publication_operation_id == &claims.owned_publication.operation_id => {}
+            } if publication_operation_id == &claims.owned_publication()?.operation_id => {}
             NativeEdgeCompletionProvenanceV1::ResetTerminal {
                 status,
                 progress,
@@ -717,13 +730,15 @@ impl SignedNativeEdgeCaptureV1 {
         for reference in [
             &claims.dispatcher,
             &claims.native_guard,
-            &claims.owned_publication.journal,
-            &claims.owned_publication.publication,
             &claims.forwarding_plan,
             &claims.forwarding_identity_receipt,
             &claims.forwarding_journal,
         ] {
             reference.validate_public(host.owner_uid)?;
+        }
+        for publication in &claims.owned_publication {
+            publication.journal.validate_public(host.owner_uid)?;
+            publication.publication.validate_public(host.owner_uid)?;
         }
         for reference in [&claims.nginx, &claims.main_configuration] {
             reference.validate_metadata(host.owner_uid)?;
@@ -997,7 +1012,8 @@ pub(super) fn fixture_native_edge_capture(
         authorization_sha256: authorization_sha256.into(),
         authorization_nonce: nonce.into(),
         next_genesis_hash: genesis_hash.into(),
-        release,
+        initial_state: EdgeInitialStateV1::AdmittedRelease(release),
+        nginx_config: publication.file.path.clone(),
         dispatcher: public(
             host.dispatcher_path.clone(),
             host.dispatcher_sha256.clone(),
@@ -1030,7 +1046,7 @@ pub(super) fn fixture_native_edge_capture(
             started: "Mon Oct  5 12:00:00 2026".into(),
             executable: "/opt/homebrew/opt/nginx/bin/nginx".into(),
         },
-        owned_publication: NativeOwnedPublicationV1 {
+        owned_publication: Some(NativeOwnedPublicationV1 {
             journal: public(
                 format!(
                     "/opt/homebrew/etc/nginx/.taira-native-nginx-apply-{operation_id}.receipt.ndjson"
@@ -1041,7 +1057,7 @@ pub(super) fn fixture_native_edge_capture(
             ),
             operation_id: operation_id.clone(),
             publication,
-        },
+        }),
         completion: NativeEdgeCompletionProvenanceV1::PublicationOnly {
             publication_operation_id: operation_id,
         },

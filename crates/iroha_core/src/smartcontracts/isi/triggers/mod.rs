@@ -43,16 +43,37 @@ fn trigger_registered_block_height_metadata_key() -> &'static Name {
 /// Read the trigger enabled flag from metadata, defaulting to `true` when absent.
 /// Malformed values fail closed and disable the trigger.
 pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
-    let Some(value) = metadata.get(trigger_enabled_metadata_key()) else {
-        return true;
+    match trigger_enabled_from_value(metadata.get(trigger_enabled_metadata_key()), |_, _| {
+        Ok::<_, core::convert::Infallible>(())
+    }) {
+        Ok(enabled) => enabled,
+        Err(never) => match never {},
+    }
+}
+/// The two existing scalar decoders, in their original semantic order.
+#[derive(Clone, Copy)]
+enum EnabledScalar {
+    Bool,
+    U64,
+}
+/// One eligibility predicate for ordinary and original-source checked consumers.
+/// Discarded typed mismatches do not acquire an owned formatted diagnostic.
+fn trigger_enabled_from_value<E>(
+    value: Option<&iroha_primitives::json::Json>,
+    mut before_decode: impl FnMut(EnabledScalar, &iroha_primitives::json::Json) -> Result<(), E>,
+) -> Result<bool, E> {
+    let Some(value) = value else {
+        return Ok(true);
     };
-    if let Ok(flag) = value.clone().try_into_any_norito::<bool>() {
-        return flag;
+    before_decode(EnabledScalar::Bool, value)?;
+    if let Ok(flag) = norito::json::from_str::<bool>(value.get()) {
+        return Ok(flag);
     }
-    if let Ok(raw) = value.clone().try_into_any_norito::<u64>() {
-        return raw != 0;
+    before_decode(EnabledScalar::U64, value)?;
+    if let Ok(raw) = norito::json::from_str::<u64>(value.get()) {
+        return Ok(raw != 0);
     }
-    false
+    Ok(false)
 }
 /// Return whether this exact trigger incarnation predates `current_block_height`.
 ///

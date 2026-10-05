@@ -1,4 +1,4 @@
-"""Typed Torii HTTP client: collection queries, typed errors and KAGEMUSHA V1 helpers."""
+"""Typed Torii HTTP client: collection queries, typed errors, governance and transaction-submission helpers."""
 
 from . import client as _client
 from . import collection as _collection

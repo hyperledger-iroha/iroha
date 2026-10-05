@@ -23,7 +23,6 @@ export {
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
 export { NetworkId } from "./networkId.js";
-export { Kagemusha } from "./kagemusha.js";
 export {
   TAIRA_TESTNET_PROFILE,
   createTairaLocalSigningContext,

@@ -101,7 +101,7 @@ fn committee_restore_rejects_genuine_dkg_from_another_generation() {
             &fixture.incumbent,
             20,
             BeaconEpochBindingV1::Installed(binding),
-            KagemushaMintFinalityEpochDecisionV1::Retain,
+            ValidatorEpochDecisionV1::Retain,
             [0; 32],
         );
         for (authorization, cut) in [(genesis, 4), (retained, 19)] {

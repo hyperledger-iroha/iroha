@@ -21,7 +21,6 @@ from .address import (
     MultisigMember,
     MultisigControllerPayload,
 )
-from .kagemusha import Kagemusha
 from .numeric_v1 import (
     INT_MAX,
     INT_MIN,
@@ -168,7 +167,6 @@ from .client import (
     NetworkTimeStatus,
     NetworkTimeSample,
     NetworkTimeRttBucket,
-    KagemushaReadinessV1,
     NodeCapabilities,
     NodeAdminSnapshot,
     VerifiedCommittedTransaction,
@@ -541,7 +539,6 @@ _BASE_EXPORTS = [
     "CurveId",
     "MultisigMember",
     "MultisigControllerPayload",
-    "Kagemusha",
     "CREATE_KAIGI_WIRE_ID_V1",
     "END_KAIGI_WIRE_ID_V1",
     "JOIN_KAIGI_WIRE_ID_V1",
@@ -610,7 +607,6 @@ _BASE_EXPORTS = [
     "TransactionEvent",
     "WitnessEvent",
     "decode_event",
-    "KagemushaReadinessV1",
     "ConnectSessionInfo",
     "ConnectSessionKeys",
     "ConnectSessionState",

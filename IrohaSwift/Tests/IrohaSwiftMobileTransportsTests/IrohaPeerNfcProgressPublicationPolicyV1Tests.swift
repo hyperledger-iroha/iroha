@@ -509,29 +509,29 @@ final class IrohaPeerNfcStartupRecoveryV1Tests: XCTestCase {
             .conditionsNotSatisfied,
         ] {
             let request = try IrohaPeerWireMessageV1(
-                profile: .kagemushaV1,
+                profile: .kagemushaWalletV1,
                 kind: .request,
                 schemaVersion: 1,
-                canonicalPayload: mobileKagemushaStructuralArchiveV1(
+                canonicalPayload: irohaPeerWalletStructuralEnvelopeV1(
                     kind: .request,
                     payload: Data(repeating: 0x31, count: 96)
                 )
             )
             let payment = try IrohaPeerWireMessageV1(
-                profile: .kagemushaV1,
+                profile: .kagemushaWalletV1,
                 kind: .payment,
                 schemaVersion: 1,
-                canonicalPayload: mobileKagemushaStructuralArchiveV1(
+                canonicalPayload: irohaPeerWalletStructuralEnvelopeV1(
                     kind: .payment,
                     payload: Data(repeating: 0x32, count: 192)
                 )
             )
             let acknowledgement = try IrohaPeerWireMessageV1(
-                profile: .kagemushaV1,
-                kind: .acknowledgement,
+                profile: .kagemushaWalletV1,
+                kind: .credited,
                 schemaVersion: 1,
-                canonicalPayload: mobileKagemushaStructuralArchiveV1(
-                    kind: .acknowledgement,
+                canonicalPayload: irohaPeerWalletStructuralEnvelopeV1(
+                    kind: .credited,
                     payload: Data(repeating: 0x33, count: 80)
                 )
             )
@@ -557,7 +557,7 @@ final class IrohaPeerNfcStartupRecoveryV1Tests: XCTestCase {
                 do {
                     result = try await IrohaPeerNfcReaderExchangeV1.run(
                         restoredCheckpoint: await harness.durableCheckpoint(),
-                        profilePolicy: .init(profile: .kagemushaV1),
+                        profilePolicy: .init(profile: .kagemushaWalletV1),
                         limits: limits,
                         transceive: { command in
                             let response = try await harness.transceive(command)
@@ -632,7 +632,7 @@ private actor IrohaPeerNfcStartupRecoveryHarnessV1 {
         receiver = try IrohaPeerNfcReceiverSessionV1(
             sessionID: sessionID,
             receiveRequest: request.encoded,
-            profilePolicy: .init(profile: .kagemushaV1),
+            profilePolicy: .init(profile: .kagemushaWalletV1),
             limits: limits
         )
         self.payment = payment
@@ -689,7 +689,7 @@ private actor IrohaPeerNfcStartupRecoveryHarnessV1 {
         if let checkpoint {
             return try IrohaPeerNfcSenderCheckpointV1.decode(
                 checkpoint,
-                profilePolicy: .init(profile: .kagemushaV1),
+                profilePolicy: .init(profile: .kagemushaWalletV1),
                 limits: limits
             )
         }
@@ -698,7 +698,7 @@ private actor IrohaPeerNfcStartupRecoveryHarnessV1 {
             sessionID: info.identity.sessionID,
             receiveRequest: request.encoded,
             payment: payment.encoded,
-            profilePolicy: .init(profile: .kagemushaV1),
+            profilePolicy: .init(profile: .kagemushaWalletV1),
             limits: limits
         )
         checkpoint = created.encoded

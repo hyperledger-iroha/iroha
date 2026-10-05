@@ -784,9 +784,8 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &client,
         second_boundary_height + 1,
         move |proof, verified| {
-            use iroha_data_model::isi::kagemusha_v1::{
-                BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-                KagemushaMintFinalityEpochDecisionV1,
+            use iroha_data_model::sumeragi::epoch::{
+                BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochDecisionV1,
             };
             let height = verified.height();
             let schedule = &verified.commitment().schedule;
@@ -836,17 +835,14 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
                 if height == second_boundary_height + 1 && frozen_attempt.is_some() {
                     assert_eq!(
                         authorization.decision,
-                        KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+                        ValidatorEpochDecisionV1::RetainAndCancel
                     );
                     assert_eq!(
                         authorization.transition_id,
                         frozen_attempt.as_ref().unwrap().transition_id().unwrap()
                     );
                 } else {
-                    assert_eq!(
-                        authorization.decision,
-                        KagemushaMintFinalityEpochDecisionV1::Retain
-                    );
+                    assert_eq!(authorization.decision, ValidatorEpochDecisionV1::Retain);
                     assert_eq!(authorization.transition_id, [0; 32]);
                 }
                 assert_eq!(

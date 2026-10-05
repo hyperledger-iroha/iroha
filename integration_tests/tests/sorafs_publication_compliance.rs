@@ -5,11 +5,11 @@
 //! empty catalog through the ordinary account-authenticated stage, acknowledge and promote API.
 
 use eyre::{Result, ensure};
-use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_data_model::prelude::*;
-use iroha_torii::sorafs::gateway::{
+use iroha_config::parameters::defaults::sorafs::gateway::compliance::{
     GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
 };
+use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_data_model::prelude::*;
 use sha2::{Digest as _, Sha256};
 use sorafs_manifest::gateway_compliance::{
     GatewayComplianceAcknowledgementPayloadV1, GatewayComplianceAcknowledgementV1,

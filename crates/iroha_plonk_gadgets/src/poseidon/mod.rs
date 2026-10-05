@@ -3,8 +3,8 @@
 //!
 //! Both reproduce [`iroha_pasta::poseidon`] bit for bit (width 3, rate 2,
 //! `x^5`, `R_F = 8`, `R_P = 57`, the pinned RP57 tables of each Pasta
-//! field), so in-circuit digests equal `kagemusha_v1_poseidon::hash` and the
-//! shared vectors of `fixtures/native_prover/kats_v1.json`.
+//! field), so in-circuit digests equal the native domain hash and the shared
+//! `kagemusha_v1_poseidon` vectors of `fixtures/native_prover/kats_v1.json`.
 //!
 //! TODO(T17 follow-up): the transcript mode (intermediate squeezes with the
 //! state carried on, `floor(len / 2) + 1` permutations per squeeze) for the

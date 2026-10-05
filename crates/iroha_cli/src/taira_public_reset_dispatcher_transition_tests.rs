@@ -937,6 +937,24 @@ fn dispatcher_transition_requires_native_aarch64_elf_header() {
 fn dispatcher_transition_prepare_reuses_current_typed_split_source_bindings() {
     let config_commit = "a".repeat(40);
     let daemon_commit = "b".repeat(40);
+    let hosts = super::super::super::host_pair::fixture_pair();
+    let inventory = super::super::super::sample_inventory_fixture();
+    let native_edge = super::super::super::host_pair::fixture_native_edge_capture(
+        &hosts,
+        super::super::super::EdgeAdmittedReleaseV1 {
+            commit: config_commit.clone(),
+            release_root: format!(
+                "{}/.local/share/iroha/taira/edge/releases/{config_commit}",
+                hosts.native_edge.owner_home,
+            ),
+            cli_sha256: "e".repeat(64),
+            config_sha256: "f".repeat(64),
+        },
+        &"1".repeat(64),
+        &"2".repeat(64),
+        &inventory.authorization_nonce,
+        &inventory.next_genesis_hash,
+    );
     let mut validators = Vec::new();
     for slug in &SLUGS[..4] {
         let service = format!("/srv/taira/{slug}");
@@ -1000,14 +1018,10 @@ fn dispatcher_transition_prepare_reuses_current_typed_split_source_bindings() {
     }
     let value = norito::json!({
         "schema": "iroha.taira.dispatcher-current-runtime.v1",
-        "host_identity_sha256": ("d".repeat(64)),
+        "host_identity_sha256": (hosts.validator_guest.endpoint.host_identity_sha256.clone()),
+        "hosts": (json::to_value(&hosts).unwrap()),
         "validators": validators,
-        "edge": {
-            "commit": config_commit,
-            "release_root": (format!("/srv/taira/edge/releases/{config_commit}")),
-            "cli_sha256": ("e".repeat(64)),
-            "config_sha256": ("f".repeat(64)),
-        },
+        "native_edge": (json::to_value(&native_edge).unwrap()),
     });
     let typed: prepare::CurrentRuntime = json::from_value(value.clone()).unwrap();
     prepare::validate_runtime(&typed).unwrap();

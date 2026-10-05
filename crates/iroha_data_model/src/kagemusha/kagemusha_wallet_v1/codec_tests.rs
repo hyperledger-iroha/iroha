@@ -70,8 +70,6 @@ fn kagemusha_wallet_v1_bounds_match_the_design() {
     assert_eq!(KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 10_000);
     assert_eq!(KAGEMUSHA_WALLET_SESSION_TEXT_MAX_BYTES_V1, 2_736);
     assert_eq!(KAGEMUSHA_WALLET_MESSAGE_TEXT_MAX_BYTES_V1, 13_339);
-    assert_eq!(KAGEMUSHA_WALLET_PROOF_MAX_BYTES_V1, 6_016);
-    assert_eq!(KAGEMUSHA_WALLET_CREDIT_STATUS_PROOF_MAX_BYTES_V1, 2_000);
     assert_eq!(KAGEMUSHA_WALLET_CERTIFICATE_SET_MAX_V1, 3);
     for (actual, expected) in [
         (KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1, 512),
@@ -94,6 +92,7 @@ fn kagemusha_wallet_v1_bounds_match_the_design() {
         (KAGEMUSHA_WALLET_RENEWAL_REQUEST_MAX_BYTES_V1, 73_728),
         (KAGEMUSHA_WALLET_COMPLETION_RECORD_MAX_BYTES_V1, 65_536),
         (KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1, 262_144),
+        (KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1, 10_000),
         (KAGEMUSHA_WALLET_BLACKLIST_MAX_BYTES_V1, 2_228_736),
     ] {
         assert_eq!(actual, expected);
@@ -156,27 +155,6 @@ fn kagemusha_wallet_v1_errors_display_and_convert() {
         KagemushaWalletValidationErrorV1::Codec(norito::Error::LengthMismatch)
     ));
     assert!(matches!(
-        KagemushaWalletValidationErrorV1::from(KagemushaValidationErrorV1::InvalidField {
-            field: "device_signature"
-        }),
-        KagemushaWalletValidationErrorV1::InvalidField {
-            field: "device_signature"
-        }
-    ));
-    assert!(matches!(
-        KagemushaWalletValidationErrorV1::from(KagemushaValidationErrorV1::EncodedSizeExceeded {
-            actual: 3,
-            max: 2
-        }),
-        KagemushaWalletValidationErrorV1::EncodedSizeExceeded { actual: 3, max: 2 }
-    ));
-    assert!(matches!(
-        KagemushaWalletValidationErrorV1::from(KagemushaValidationErrorV1::Codec(
-            norito::Error::LengthMismatch
-        )),
-        KagemushaWalletValidationErrorV1::Codec(norito::Error::LengthMismatch)
-    ));
-    assert!(matches!(
         KagemushaWalletValidationErrorV1::from(AxtAssetIncarnationValidationError::Zero),
         KagemushaWalletValidationErrorV1::InvalidField {
             field: "asset_incarnation"
@@ -208,6 +186,21 @@ fn kagemusha_wallet_v1_field_guards() {
     assert!(matches!(
         require_scheme_v1("s", &[1; 32], &[2; 32]),
         Err(KagemushaWalletValidationErrorV1::SchemeMismatch { field: "s" })
+    ));
+    assert!(require_canonical_field_v1("f", &[0; 32]).is_ok());
+    assert!(require_canonical_field_v1("f", &last).is_ok());
+    assert!(matches!(
+        require_canonical_field_v1("f", &KAGEMUSHA_WALLET_FIELD_MODULUS_V1),
+        Err(KagemushaWalletValidationErrorV1::InvalidField { field: "f" })
+    ));
+    assert!(require_nonzero_field_v1("g", &last).is_ok());
+    assert!(matches!(
+        require_nonzero_field_v1("g", &[0; 32]),
+        Err(KagemushaWalletValidationErrorV1::InvalidField { field: "g" })
+    ));
+    assert!(matches!(
+        require_nonzero_field_v1("g", &[0xff; 32]),
+        Err(KagemushaWalletValidationErrorV1::InvalidField { field: "g" })
     ));
     assert!(matches!(
         invalid_v1("x"),

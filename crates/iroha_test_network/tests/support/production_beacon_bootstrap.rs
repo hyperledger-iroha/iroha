@@ -12,13 +12,13 @@ use iroha_core::{
     },
 };
 use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair};
+use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, ValidatorEpochDecisionV1};
 use iroha_data_model::{
     consensus::GlobalThresholdBeaconChainAnchorV1,
     isi::consensus_keys::{
         ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
         ThresholdKeyLifecycleCertificateV1,
     },
-    isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1},
     parameter::system::SumeragiNposParameters,
     sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
     transaction::TransactionEntrypoint,
@@ -1257,7 +1257,11 @@ fn native_finality_limits() -> NativeFinalityLimits {
     }
 }
 
-fn journal_from_store(store: &mut BlockStore, height: u64) -> Result<NativeFinalityJournal> {
+fn journal_from_store(
+    store: &mut BlockStore,
+    height: u64,
+    deadline: Option<Instant>,
+) -> Result<NativeFinalityJournal> {
     let limits = native_finality_limits();
     ensure!(
         (2..=u64::try_from(limits.block_count)?).contains(&height),
@@ -1266,6 +1270,12 @@ fn journal_from_store(store: &mut BlockStore, height: u64) -> Result<NativeFinal
     let mut blocks = Vec::with_capacity(usize::try_from(height)?);
     let mut total = 0_usize;
     for at in 1..=height {
+        if let Some(deadline) = deadline {
+            ensure!(
+                Instant::now() < deadline,
+                "native phase finality deadline elapsed"
+            );
+        }
         let mut index = [BlockIndex {
             start: 0,
             length: 0,
@@ -1288,11 +1298,19 @@ fn journal_from_store(store: &mut BlockStore, height: u64) -> Result<NativeFinal
     Ok(NativeFinalityJournal { blocks })
 }
 
-fn read_exact_finality(config_path: &Path, height: u64) -> Result<NativeFinalityJournal> {
+fn read_exact_finality(
+    config_path: &Path,
+    height: u64,
+    deadline: Instant,
+) -> Result<NativeFinalityJournal> {
+    ensure!(
+        Instant::now() < deadline,
+        "native phase finality deadline elapsed"
+    );
     let native = config(config_path)?;
     let mut store =
         BlockStore::open_read_only(Kura::canonical_storage_path(native.kura.store_dir.value()))?;
-    let journal = journal_from_store(&mut store, height)?;
+    let journal = journal_from_store(&mut store, height, Some(deadline))?;
     let mut cursor = NativeJournalCursor::new(
         native.common.chain.clone(),
         iroha_data_model::NetworkId::from_genesis_hash(native.genesis.expected_hash),
@@ -1308,6 +1326,10 @@ fn read_exact_finality(config_path: &Path, height: u64) -> Result<NativeFinality
             .height()
             == height,
         "native finality differs from requested phase"
+    );
+    ensure!(
+        Instant::now() < deadline,
+        "native phase finality deadline elapsed"
     );
     Ok(journal)
 }
@@ -1374,7 +1396,7 @@ fn verify_pulse(
                 && native.common.chain == *manifest.chain_id(),
             "peer configuration differs from independently signed ceremony source"
         );
-        let journal = journal_from_store(&mut store, epoch_length + 1)?;
+        let journal = journal_from_store(&mut store, epoch_length + 1, None)?;
         let cursor = NativeJournalCursor::new(
             native.common.chain.clone(),
             record.session.network_id,
@@ -1434,13 +1456,13 @@ fn verify_pulse(
                     "scheduling epoch must advance after retained boundary"
                 );
                 ensure!(
-                    authorization.decision == KagemushaMintFinalityEpochDecisionV1::Retain,
+                    authorization.decision == ValidatorEpochDecisionV1::Retain,
                     "unchanged committee must authenticate a retain decision"
                 );
                 ensure!(
                     authorization.beacon
                         == BeaconEpochBindingV1::Installed(
-                            iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                            iroha_data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1 {
                                 session_id: record.session.session_id,
                                 transcript_hash: record.session.transcript_hash
                             }
@@ -2071,12 +2093,14 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
             &launcher,
             native_finality_limits(),
             5,
-            move |expected, _public_snapshot| {
+            move |expected, _public_snapshot, deadline| {
                 let predecessor = Arc::clone(&predecessor);
                 let first_config = directory.join("peer0.toml");
                 let canary = canary_ref;
                 let clients = clients_ref;
                 async move {
+                    let ceremony_deadline = ceremony_deadline.min(Instant::from_std(deadline));
+                    ensure!(Instant::now() < ceremony_deadline, "native phase callback deadline elapsed");
                     let operation = match expected {
                         2 => "onboarding",
                         3 => "faucet",
@@ -2102,7 +2126,8 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
                             scope
                                 .spawn(|| {
                                     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-                                    canary.assert_committed_prepared_replay(operation, &clients[0])
+                                    let client = clients[0].with_request_deadline(ceremony_deadline.into_std());
+                                    canary.assert_committed_prepared_replay(operation, &client)
                                 })
                                 .join()
                                 .map_err(|_| eyre!("committed prepared replay worker panicked"))?
@@ -2113,7 +2138,10 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
                         .lock()
                         .map_err(|_| eyre!("beacon canary predecessor lock poisoned"))? =
                         Some(envelope);
-                    read_exact_finality(&first_config, expected)
+                    ensure!(Instant::now() < ceremony_deadline, "native phase callback deadline elapsed");
+                    let journal = read_exact_finality(&first_config, expected, ceremony_deadline)?;
+                    ensure!(Instant::now() < ceremony_deadline, "native phase callback deadline elapsed");
+                    Ok(journal)
                 }
             },
         )

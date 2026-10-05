@@ -35,7 +35,8 @@ pub enum Mutation {
     /// `sigma_send`: the Request policy epoch is one newer than the
     /// payer's.
     StaleEpoch,
-    /// `sigma_send`: the accepted lower time is one below the floor.
+    /// `sigma_send`: the accepted lower time (and the Request time) is one
+    /// below the floor.
     EarlyTime,
     /// `sigma_send`: the balance covers `amount + fee` exactly, but the
     /// lineage `burned_total` (at least 1) leaves less spendable.
@@ -175,7 +176,11 @@ pub fn sample_witness<F: PastaField>(
         Mutation::StaleEpoch => policy_epoch.saturating_add(1),
         _ => policy_epoch.saturating_sub(rng.next_u64() & 0xff),
     };
-    let request_time = accepted_time_floor.saturating_add(rng.next_u64() & 0xffff);
+    let request_time = match mutation {
+        // Below the floor, so the early accepted time breaks only the floor.
+        Mutation::EarlyTime => accepted_time_floor.saturating_sub(1),
+        _ => accepted_time_floor.saturating_add(rng.next_u64() & 0xffff),
+    };
     let request = RequestTerms {
         amount,
         fee,
@@ -201,6 +206,9 @@ pub fn sample_witness<F: PastaField>(
                 receiver_wallet: counterparty,
                 receiver_credential: rng.next_bytes(),
                 request,
+                // A stand-in Request digest derived from the nonce, so the
+                // sample stream of every other value is unchanged.
+                request_digest: request.nonce.map(|byte| byte ^ 0x5a),
                 accepted_lower,
                 accepted_upper: accepted_lower.saturating_add(600_000),
                 lineage: LineageInputs {

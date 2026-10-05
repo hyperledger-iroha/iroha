@@ -16,8 +16,19 @@ fn populate_canonical_completion(outbox: &ProviderIngestOutbox) -> ([u8; 32], [u
     let completion = stored_completion(outbox, job_id);
     assert!(completion.signed_transaction.is_some());
     assert!(completion.signing_context.is_some());
-    assert!(completion.signer_policy_owner.is_some());
-    assert!(completion.signer_policy_floor.is_some());
+    let expected_authority = &completion
+        .signing_context
+        .as_ref()
+        .unwrap()
+        .expected_authority;
+    assert_eq!(
+        completion.authority_owner.as_ref(),
+        Some(&expected_authority.provider_owner),
+    );
+    assert_eq!(
+        completion.authority_floor.as_ref(),
+        Some(expected_authority)
+    );
     assert!(completion.finalized_authority_observation.is_some());
     assert!(completion.ever_exposed);
     assert_eq!(completion.transaction_hash, Some(transaction_hash));

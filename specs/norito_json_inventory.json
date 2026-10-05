@@ -1,21 +1,31 @@
 {
-  "generated_at": "2026-09-28T10:13:18Z",
+  "generated_at": "2026-10-05T04:25:43Z",
   "command": "python3 scripts/inventory_serde_usage.py --json specs/norito_json_inventory.json --md specs/norito_json_inventory.md",
-  "root": "iroha",
+  "root": "iroha-is-first-release-source",
   "allowlist": [],
   "summary": {
-    "total": 18,
+    "total": 19,
     "flagged": 0,
     "by_scope": {
-      "test": 16,
+      "test": 17,
       "prod": 2
     },
     "by_category": {
-      "source": 16,
+      "source": 17,
       "dependency": 2
     }
   },
   "matches": [
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "crates/iroha_plonk_oracle/tests/pasta_parity/encoding.rs",
+      "line": 24,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde::SerdeObject,"
+    },
     {
       "category": "source",
       "kind": "derive",
@@ -40,7 +50,7 @@
       "category": "dependency",
       "kind": "dev-dependencies:serde",
       "path": "crates/norito/Cargo.toml",
-      "line": 37,
+      "line": 38,
       "scope": "prod",
       "allowed": true,
       "reason": "allowlisted crate",
@@ -50,7 +60,7 @@
       "category": "dependency",
       "kind": "dev-dependencies:serde_json",
       "path": "crates/norito/Cargo.toml",
-      "line": 38,
+      "line": 39,
       "scope": "prod",
       "allowed": true,
       "reason": "allowlisted crate",

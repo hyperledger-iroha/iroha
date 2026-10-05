@@ -5,8 +5,8 @@
 use super::*;
 use crate::{
     crypto::Signer,
-    message::{ResultWitness, VoteKind},
-    testing::{FakeValidators, fake_attestation, scheduled_epoch},
+    message::VoteKind,
+    testing::{FakeValidators, scheduled_epoch},
     types::{Bitmap, ControlWitness, ValidatorIndex},
 };
 
@@ -91,7 +91,8 @@ impl Chain {
             proposer: 0,
             skipped_leaders: Vec::new(),
             control_witness: ControlWitness::empty(),
-            attest: height == config.last_height,
+            // The toy application flags nothing, epoch boundaries included (§3.7 A1).
+            attest: false,
         };
         let block_hash = header.hash(&validators.crypto);
         let preimage = preimage::vote_preimage(
@@ -104,23 +105,11 @@ impl Chain {
             &result,
             header.attest,
         );
-        let statement =
-            preimage::att_preimage(&self.instance, &config.id, height, &block_hash, &result);
         let indices: Vec<ValidatorIndex> = (0..signers).collect();
         let signatures: Vec<_> = indices
             .iter()
             .map(|index| validators.signer(*index).sign(&preimage))
             .collect();
-        let attestations = if header.attest {
-            indices
-                .iter()
-                .map(|index| {
-                    fake_attestation(&validators.key(*index), height, &statement).signature
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
         let qc = Qc {
             kind: VoteKind::Commit,
             instance: self.instance,
@@ -133,10 +122,8 @@ impl Chain {
             signers: Bitmap::from_indices(validators.committee.n(), indices.iter().copied())
                 .expect("signer bitmap"),
             agg_sig: validators.crypto.aggregate(&signatures),
-            attestations,
-            attestation_witness: header
-                .attest
-                .then(|| ResultWitness::from_untrusted(statement).expect("statement")),
+            attestations: Vec::new(),
+            attestation_witness: None,
         };
         RecordProof {
             header,

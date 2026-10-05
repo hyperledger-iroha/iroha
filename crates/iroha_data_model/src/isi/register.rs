@@ -276,10 +276,14 @@ where
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"object\":")?;
-        JsonSerialize::json_serialize_to(&self.object, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"object\":")?;
+            JsonSerialize::json_serialize_to(&self.object, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -300,10 +304,14 @@ where
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"object\":")?;
-        JsonSerialize::json_serialize_to(&self.object, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"object\":")?;
+            JsonSerialize::json_serialize_to(&self.object, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -802,5 +810,24 @@ mod frame_owner_identity_tests {
         crate::frame_owner_identity_tests::assert_bidirectional::<
             super::RegisterCommitteePeerWithPop,
         >("iroha_data_model::isi::register::RegisterCommitteePeerWithPop");
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{account, audit};
+
+    #[test]
+    fn original_register_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Register::account(crate::account::Account::new(account(
+            61,
+        ))));
+    }
+
+    #[test]
+    fn original_unregister_checked_container_retains_bytes_errors_and_depth() {
+        audit(&Unregister::account(account(61)));
     }
 }

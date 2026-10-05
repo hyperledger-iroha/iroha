@@ -279,11 +279,15 @@ impl norito::json::FastJsonWrite for TimeEvent {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        write_key_to(out, "interval")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.interval, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            write_key_to(out, "interval")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.interval, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -357,10 +361,14 @@ impl norito::json::FastJsonWrite for ExecutionTime {
             ExecutionTime::PreCommit => norito::json::write_json_string_to("PreCommit", out),
             ExecutionTime::Schedule(schedule) => {
                 out.begin_container()?;
-                out.push_str("{\"Schedule\":")?;
-                norito::json::JsonSerialize::json_serialize_to(schedule, out)?;
-                out.push('}')?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    out.push_str("{\"Schedule\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(schedule, out)?;
+                    out.push('}')?;
+                    Ok(())
+                })();
                 out.end_container();
+                result?;
                 Ok(())
             }
         }
@@ -428,14 +436,18 @@ impl norito::json::FastJsonWrite for Schedule {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        write_key_to(out, "start_ms")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.start_ms, out)?;
-        out.push(',')?;
-        write_key_to(out, "period_ms")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.period_ms, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            write_key_to(out, "start_ms")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.start_ms, out)?;
+            out.push(',')?;
+            write_key_to(out, "period_ms")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.period_ms, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -498,14 +510,18 @@ impl norito::json::FastJsonWrite for TimeInterval {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        write_key_to(out, "since_ms")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.since_ms, out)?;
-        out.push(',')?;
-        write_key_to(out, "length_ms")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.length_ms, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            write_key_to(out, "since_ms")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.since_ms, out)?;
+            out.push(',')?;
+            write_key_to(out, "length_ms")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.length_ms, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -888,5 +904,51 @@ mod tests {
             let event = TimeEvent { interval };
             assert_eq!(filter.count_matches(&event), 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_time_event_checked_container_retains_bytes_errors_and_depth() {
+        audit(&TimeEvent {
+            interval: TimeInterval {
+                since_ms: 17,
+                length_ms: 23,
+            },
+        });
+    }
+
+    #[test]
+    fn original_execution_time_checked_container_retains_schedule_and_scalar_branch() {
+        audit(&ExecutionTime::PreCommit);
+        audit(&ExecutionTime::Schedule(Schedule {
+            start_ms: 17,
+            period_ms: Some(23),
+        }));
+    }
+
+    #[test]
+    fn original_schedule_checked_container_retains_optional_period_and_depth() {
+        audit(&Schedule {
+            start_ms: 17,
+            period_ms: None,
+        });
+        audit(&Schedule {
+            start_ms: 17,
+            period_ms: Some(23),
+        });
+    }
+
+    #[test]
+    fn original_time_interval_checked_container_retains_bytes_errors_and_depth() {
+        audit(&TimeInterval {
+            since_ms: 17,
+            length_ms: 23,
+        });
     }
 }

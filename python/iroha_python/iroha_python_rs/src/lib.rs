@@ -5113,6 +5113,36 @@ mod tests {
         PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH]).expect("marked test NetworkId")
     }
     #[test]
+    fn provider_completion_authority_requires_exact_distinct_signer() {
+        ensure_python();
+        let owner = AccountId::new(PublicKey::from(parse_private_key(&[0x11; 32]).unwrap()));
+        let signer = AccountId::new(PublicKey::from(parse_private_key(&[0x22; 32]).unwrap()));
+        Python::attach(|py| {
+            let policy = PyDict::new(py);
+            policy.set_item("policy_id", "21".repeat(32)).unwrap();
+            policy.set_item("revision", 1).unwrap();
+            policy.set_item("predecessor_digest", py.None()).unwrap();
+            policy.set_item("policy_digest", "43".repeat(32)).unwrap();
+            let authority = PyDict::new(py);
+            authority
+                .set_item("provider_owner", owner.canonical_i105().unwrap())
+                .unwrap();
+            authority
+                .set_item("completion_signer", signer.canonical_i105().unwrap())
+                .unwrap();
+            authority.set_item("signer_policy", policy).unwrap();
+            let decoded = parse_provider_ingest_completion_authority(&authority).unwrap();
+            assert_eq!(decoded.provider_owner, owner);
+            assert_eq!(decoded.completion_signer, signer);
+            authority.del_item("completion_signer").unwrap();
+            assert!(parse_provider_ingest_completion_authority(&authority).is_err());
+            authority
+                .set_item("completion_signer", "not-an-account")
+                .unwrap();
+            assert!(parse_provider_ingest_completion_authority(&authority).is_err());
+        });
+    }
+    #[test]
     fn privacy_capability_native_builder_rejects_offline_inspection() {
         ensure_python();
         let private_key = parse_private_key(&[0x11; 32]).expect("seeded private key");

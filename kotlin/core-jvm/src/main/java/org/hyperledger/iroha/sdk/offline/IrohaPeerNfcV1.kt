@@ -5,7 +5,14 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.io.ByteArrayOutputStream
 
-/** Transport-neutral NFC constants for the sole three-message KAGEMUSHA V1 protocol. */
+// TODO(G4): carry the payer's Offer and SessionControl envelopes over NFC. Until then the receiver
+// obtains the Offer before it builds the Request, over another carrier of the same envelope.
+
+/**
+ * Transport-neutral NFC constants. One session carries the KAGEMUSHA wallet Request (hosted by the
+ * receiver), the payer's Payment and the receiver's durable acknowledgement, which is the wallet's
+ * Credited envelope (IPM1 kind [IrohaPeerPayloadKind.CREDITED]).
+ */
 object IrohaPeerNfcV1 {
     private val applicationIdentifierBytes = byteArrayOf(
         0xf0.toByte(), 0x50, 0x4b, 0x45, 0x50, 0x4b, 0x52, 0x4e, 0x46, 0x43, 0x01,
@@ -19,7 +26,7 @@ object IrohaPeerNfcV1 {
     const val HASH_BYTES = 32
     const val MAXIMUM_CHUNK_BYTES = 4_096
     const val MAXIMUM_MESSAGE_BYTES =
-        IrohaPeerWireMessageV1.HEADER_LENGTH + IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES
+        IrohaPeerWireMessageV1.HEADER_LENGTH + IrohaPeerWireMessageV1.MAXIMUM_WALLET_ENCODED_BYTES
 
     @JvmStatic fun applicationIdentifier(): ByteArray = applicationIdentifierBytes.copyOf()
 
@@ -27,7 +34,7 @@ object IrohaPeerNfcV1 {
         candidate.contentEquals(applicationIdentifierBytes)
 }
 
-/** Closed APDU instruction inventory for Request -> Payment -> Acknowledgement. */
+/** Closed APDU instruction inventory for Request -> Payment -> Acknowledgement (Credited). */
 enum class IrohaPeerNfcInstructionV1(val code: Int) {
     GET_INFO(0x10),
     READ_REQUEST(0x11),
@@ -292,7 +299,7 @@ class IrohaPeerNfcCommandV1 private constructor(
     }
 }
 
-/** ISO-7816-compatible envelope for the closed KAGEMUSHA command inventory. */
+/** ISO-7816-compatible envelope for the closed Iroha peer NFC command inventory. */
 object IrohaPeerNfcAPDUCodecV1 {
     @JvmStatic fun encode(command: IrohaPeerNfcCommandV1): ByteArray {
         val instruction = when (command.type) {
@@ -439,7 +446,7 @@ class IrohaPeerNfcPaymentAdmissionContextV1 internal constructor(
     fun canonicalPayment(): ByteArray = payment.copyOf()
 }
 
-/** Durable result: exact payment plus byte-identical acknowledgement. */
+/** Durable result: exact payment plus the byte-identical Credited acknowledgement. */
 class IrohaPeerNfcDurablePaymentAdmissionV1(
     @JvmField val context: IrohaPeerNfcPaymentAdmissionContextV1,
     canonicalAcknowledgement: ByteArray,
@@ -519,10 +526,10 @@ class IrohaPeerNfcReceiverSessionV1(
         val acknowledgement = decodeNfcMessage(
             durable.canonicalAcknowledgement(),
             profilePolicy.profile,
-            IrohaPeerPayloadKind.ACKNOWLEDGEMENT,
+            IrohaPeerPayloadKind.CREDITED,
             limits,
         )
-        validateKagemushaExchange(request, decodeNfcMessage(payment, profilePolicy.profile, IrohaPeerPayloadKind.PAYMENT, limits), acknowledgement)
+        validateWalletExchange(request, decodeNfcMessage(payment, profilePolicy.profile, IrohaPeerPayloadKind.PAYMENT, limits), acknowledgement)
         acknowledgementBytes = durable.canonicalAcknowledgement()
         phase = IrohaPeerNfcPhaseV1.ACKNOWLEDGEMENT_READY
         pendingPaymentContext = null
@@ -622,7 +629,7 @@ class IrohaPeerNfcReceiverSessionV1(
         val expected = requireNotNull(descriptor)
         require(message.canonicalHash.contentEquals(expected.canonicalHash()))
         require(message.wireHash.contentEquals(expected.wireHash()))
-        validateKagemushaExchange(request, message, null)
+        validateWalletExchange(request, message, null)
         paymentBytes?.let { require(buffer.contentEquals(it)) { "uncertain payment changed" } }
         if (paymentBytes == null) paymentBytes = buffer.copyOf()
         val context = IrohaPeerNfcPaymentAdmissionContextV1(requestBytes, buffer)
@@ -717,7 +724,7 @@ object IrohaPeerNfcReaderExchangeV1 {
         val payment = preparePayment.prepare(request)
         require(payment.canonicalPayload.profile == profilePolicy.profile)
         require(payment.canonicalPayload.kind == IrohaPeerPayloadKind.PAYMENT)
-        validateKagemushaExchange(request, payment, null)
+        validateWalletExchange(request, payment, null)
         val paymentBytes = payment.encode()
         require(paymentBytes.size <= limits.maximumMessageBytes)
         fun readStatus(): IrohaPeerNfcStatusV1 =
@@ -758,10 +765,10 @@ object IrohaPeerNfcReaderExchangeV1 {
         val acknowledgement = decodeNfcMessage(
             acknowledgementBytes,
             profilePolicy.profile,
-            IrohaPeerPayloadKind.ACKNOWLEDGEMENT,
+            IrohaPeerPayloadKind.CREDITED,
             limits,
         )
-        validateKagemushaExchange(request, payment, acknowledgement)
+        validateWalletExchange(request, payment, acknowledgement)
         require(requireNotNull(status.acknowledgementWireHash()).contentEquals(acknowledgement.wireHash))
         val exchange = IrohaPeerNfcReaderExchangeResultV1(request, payment, acknowledgement)
         persistAcknowledgement.persist(exchange)
@@ -780,19 +787,25 @@ private fun decodeNfcMessage(
     return IrohaPeerWireMessageV1.decode(bytes, expectedProfile, expectedKind)
 }
 
-private fun validateKagemushaExchange(
+/**
+ * The Payment must carry exactly this session's signed Request and the Credited acknowledgement
+ * must name its scheme ([KagemushaWalletWireV1.requireExchangeBinding]); typed verification of the
+ * Credited evidence stays with the wallet.
+ */
+private fun validateWalletExchange(
     request: IrohaPeerWireMessageV1,
     payment: IrohaPeerWireMessageV1,
-    acknowledgement: IrohaPeerWireMessageV1?,
+    credited: IrohaPeerWireMessageV1?,
 ) {
-    val requestModel = KagemushaNoritoV1.decodePaymentRequestShapeExact(request.canonicalPayload.bytes)
-    val paymentModel = KagemushaNoritoV1.decodePaymentShapeExact(payment.canonicalPayload.bytes, requestModel)
-    acknowledgement?.let {
-        KagemushaNoritoV1.decodeAcknowledgementShapeExact(
-            it.canonicalPayload.bytes,
-            requestModel,
-            paymentModel,
-        )
+    val requestBytes = request.canonicalPayload.bytes
+    val paymentBytes = payment.canonicalPayload.bytes
+    val creditedBytes = credited?.canonicalPayload?.bytes
+    try {
+        KagemushaWalletWireV1.requireExchangeBinding(requestBytes, paymentBytes, creditedBytes)
+    } finally {
+        requestBytes.fill(0)
+        paymentBytes.fill(0)
+        creditedBytes?.fill(0)
     }
 }
 

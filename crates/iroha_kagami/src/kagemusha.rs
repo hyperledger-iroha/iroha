@@ -69,7 +69,7 @@ const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 6] = [
     "iroha_privacy_validate_exact12_capability_manifest_v1",
     "iroha_privacy_free_buffer",
 ];
-const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 114] = [
+const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 40] = [
     "connect_norito_confidential_prover_revision_v1",
     "connect_norito_confidential_prover_create_v1",
     "connect_norito_confidential_prover_close_v1",
@@ -93,48 +93,6 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 114] = [
     "connect_norito_bridge_abi_version",
     "connect_norito_domain_id_validate_v1",
     "connect_norito_free",
-    "connect_norito_kagemusha_v1_payment_request_validate",
-    "connect_norito_kagemusha_v1_payment_validate",
-    "connect_norito_kagemusha_v1_acknowledgement_validate",
-    "connect_norito_kagemusha_v1_complete_exchange_validate",
-    "connect_norito_kagemusha_v1_mint_authorization_validate",
-    "connect_norito_kagemusha_v1_mint_credit_validate",
-    "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
-    "connect_norito_kagemusha_v1_redemption_voucher_validate",
-    "connect_norito_kagemusha_v1_payment_request_text_validate",
-    "connect_norito_kagemusha_v1_payment_text_validate",
-    "connect_norito_kagemusha_v1_acknowledgement_text_validate",
-    "connect_norito_kagemusha_v1_complete_exchange_text_validate",
-    "connect_norito_kagemusha_v1_mint_authorization_text_validate",
-    "connect_norito_kagemusha_v1_mint_credit_text_validate",
-    "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
-    "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
-    "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
-    "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
-    "connect_norito_kagemusha_contract_vector_v1",
-    "connect_norito_kagemusha_core_coordinator_contract_v1",
-    "connect_norito_kagemusha_core_coordinator_install_v1",
-    "connect_norito_kagemusha_core_coordinator_open_v1",
-    "connect_norito_kagemusha_core_coordinator_invoke_v1",
-    "connect_norito_kagemusha_core_coordinator_close_v1",
-    "connect_norito_kagemusha_testnet_state_proof_observe_v1",
-    "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
-    "connect_norito_kagemusha_testnet_value_admit_v1",
-    "connect_norito_kagemusha_testnet_value_credit_v1",
-    "connect_norito_kagemusha_testnet_native_startup_contract_v1",
-    "connect_norito_kagemusha_testnet_native_startup_activate_v1",
-    "connect_norito_kagemusha_ordinary_runtime_startup_v1",
-    "connect_norito_kagemusha_ordinary_current_control_v1",
-    "connect_norito_kagemusha_ordinary_outgoing_v1",
-    "connect_norito_kagemusha_ordinary_incoming_v1",
-    "connect_norito_kagemusha_ordinary_integrity_refresh_v1",
-    "connect_norito_kagemusha_ordinary_mint_funding_v1",
-    "connect_norito_kagemusha_device_capabilities_v1",
-    "connect_norito_kagemusha_device_execute_v1",
-    "connect_norito_kagemusha_device_command_response_v1_verify",
-    "connect_norito_kagemusha_reserve_finality_hint_v1",
-    "connect_norito_kagemusha_reserve_finality_verify_v1",
-    "connect_norito_kagemusha_top_up_signed_request_validate_v1",
     "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeBridgeAbiVersion",
     "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeIntentHashV1",
     "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeAssessmentMarkerV1",
@@ -151,39 +109,6 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 114] = [
     "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
     "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
     "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyCommandResponseV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInstallV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1",
-    // Android-only application binding and retirement are checked by the mobile gate.
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeStartupV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeCurrentControlV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeOutgoingV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeIncomingV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeIntegrityRefreshV1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeMintFundingV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeContractV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeObserveV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeContractV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeObserveV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeContractV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeAdmitV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeContractV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeCreditV1",
-    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeContractV1",
-    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeActivateV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeContractV1",
-    "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeCreateV1",
-    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeBridgeAbiVersion",
-    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeHint",
-    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeVerify",
-    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeBridgeAbiVersion",
-    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeValidate",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 ];
 
@@ -2805,7 +2730,12 @@ mod tests {
         let unique: std::collections::BTreeSet<_> =
             REQUIRED_C_JNI_SYMBOLS_V1.iter().copied().collect();
         assert_eq!(unique.len(), REQUIRED_C_JNI_SYMBOLS_V1.len());
-        assert!(unique.contains("connect_norito_kagemusha_ordinary_outgoing_v1"));
+        assert!(unique.contains("connect_norito_domain_id_validate_v1"));
+        assert!(
+            unique
+                .iter()
+                .all(|symbol| !symbol.contains("kagemusha") && !symbol.contains("Kagemusha"))
+        );
         let make_manifest = |symbols: Vec<&str>| {
             let value = norito::json!({
                 "artifact_sha256": ("11".repeat(32)),
@@ -2838,8 +2768,11 @@ mod tests {
             assert!(validate_native_artifact_manifest_v1(&make_manifest(incomplete)).is_err());
         }
         let mut duplicated = REQUIRED_C_JNI_SYMBOLS_V1.to_vec();
-        duplicated.push("connect_norito_kagemusha_ordinary_current_control_v1");
+        duplicated.push("connect_norito_domain_id_validate_v1");
         assert!(validate_native_artifact_manifest_v1(&make_manifest(duplicated)).is_err());
+        let mut retired = REQUIRED_C_JNI_SYMBOLS_V1.to_vec();
+        retired.push("connect_norito_kagemusha_ordinary_current_control_v1");
+        assert!(validate_native_artifact_manifest_v1(&make_manifest(retired)).is_err());
         let mut reordered = REQUIRED_C_JNI_SYMBOLS_V1.to_vec();
         reordered.reverse();
         assert!(validate_native_artifact_manifest_v1(&make_manifest(reordered)).is_err());

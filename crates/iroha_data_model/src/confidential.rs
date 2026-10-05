@@ -375,18 +375,22 @@ impl norito::json::FastJsonWrite for ConfidentialMemoRecipientSlotsV1 {
         output: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         output.begin_container()?;
-        output.push('{')?;
-        for (index, (key, slot)) in MEMO_SLOT_KEYS.iter().zip(&self.slots).enumerate() {
-            if index != 0 {
-                output.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push('{')?;
+            for (index, (key, slot)) in MEMO_SLOT_KEYS.iter().zip(&self.slots).enumerate() {
+                if index != 0 {
+                    output.push(',')?;
+                }
+                output.push('"')?;
+                output.push_str(key)?;
+                output.push_str("\":")?;
+                slot.write_json_to(output)?;
             }
-            output.push('"')?;
-            output.push_str(key)?;
-            output.push_str("\":")?;
-            slot.write_json_to(output)?;
-        }
-        output.push('}')?;
+            output.push('}')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }
@@ -978,7 +982,7 @@ impl norito::json::JsonDeserialize for ConfidentialStatus {
 #[norito(reuse_archived)]
 #[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
 #[norito(no_fast_from_json)]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 pub struct ConfidentialFeatureDigest {
     /// Optional hash summarizing the set of active verifying keys.
     #[norito(json = "crate::json_helpers::fixed_bytes::option")]
@@ -1475,5 +1479,38 @@ mod additional_frame_owner_identity_tests {
         crate::frame_owner_identity_tests::assert_bidirectional::<
             crate::confidential::PoseidonParams,
         >("iroha_data_model::confidential::PoseidonParams");
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_memo_slots_checked_container_retains_original_backing_and_depth() {
+        let slots = core::array::from_fn(|_| {
+            ConfidentialMemoRecipientSlotV1::new(
+                ConfidentialMemoSuiteV1::MlKem768XChaCha20Poly1305,
+                vec![7; CONFIDENTIAL_MEMO_ML_KEM_768_CIPHERTEXT_BYTES_V1],
+                [7; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
+                [7; CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1],
+            )
+            .unwrap()
+        });
+        let value = ConfidentialMemoRecipientSlotsV1::from(slots);
+        let source = value
+            .slots
+            .each_ref()
+            .map(|slot| slot.encapsulation().as_ptr());
+        audit(&value);
+        assert_eq!(
+            value
+                .slots
+                .each_ref()
+                .map(|slot| slot.encapsulation().as_ptr()),
+            source
+        );
     }
 }

@@ -278,10 +278,13 @@ impl Core {
             self.build = Build::Idle;
             return;
         };
-        // MA7: the builder's flag is dropped.
-        let boundary = self.height == self.cfg.epoch.last_height;
-        let attest = (attest && !cfg!(sumeragi_mutation = "MA7"))
-            || (boundary && !cfg!(sumeragi_mutation = "MS45"));
+        // The fresh flag is exactly the builders' flag: the core adds no attestation requirement
+        // of its own, not even at an epoch boundary (§3.7 A1). MA7: the builder's flag is
+        // dropped.
+        let attest = attest && !cfg!(sumeragi_mutation = "MA7");
+        // MS45: a mandatory epoch-boundary flag is imposed.
+        #[cfg(sumeragi_mutation = "MS45")]
+        let attest = attest || self.height == self.cfg.epoch.last_height;
         let justify = if self.view == 0 {
             None
         } else {

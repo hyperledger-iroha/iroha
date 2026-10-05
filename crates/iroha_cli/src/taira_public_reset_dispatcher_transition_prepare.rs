@@ -117,7 +117,7 @@ fn candidate(
     let proof = import.join("preparation");
     let preparation = observed.pin(&proof.join("result.json"), Some(0o400), 16 * 1024 * 1024)?;
     need(
-        preparation.sha256 == *expected,
+        &preparation.sha256 == expected,
         "qualified result digest differs",
     )?;
     let value: Value = json::from_slice(&admission::read(&preparation)?)?;
@@ -327,8 +327,8 @@ fn validate_rolled_back_inventory(
     runtime.hosts.validate_physical_binding(&inventory.hosts)?;
     need(
         inventory.edge.slug == "taira-edge"
-            && json::to_vec(inventory.edge.admitted_release()?)?
-                == json::to_vec(&runtime.native_edge.claims.release)?,
+            && json::to_vec(&inventory.edge.initial_state)?
+                == json::to_vec(&runtime.native_edge.claims.initial_state)?,
         "rolled-back native edge is not the restored selected release",
     )
 }
@@ -552,7 +552,9 @@ mod tests {
                         .host_identity_sha256
                         .clone()
                 }
-                2 => changed.native_edge.claims.release.config_sha256 = "e".repeat(64),
+                2 => if let reset::EdgeInitialStateV1::AdmittedRelease(release) = &mut changed.native_edge.claims.initial_state {
+                    release.config_sha256 = "e".repeat(64);
+                },
                 3 => {
                     changed.native_edge.claims.host_identity_sha256 =
                         changed.host_identity_sha256.clone()
@@ -571,7 +573,7 @@ mod tests {
         object.remove("native_edge");
         object.insert(
             "edge".into(),
-            json::to_value(&runtime.native_edge.claims.release).unwrap(),
+            json::to_value(runtime.native_edge.claims.admitted_release().unwrap()).unwrap(),
         );
         assert!(json::from_value::<CurrentRuntime>(record).is_err());
     }

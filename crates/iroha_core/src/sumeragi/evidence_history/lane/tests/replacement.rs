@@ -17,6 +17,7 @@ use crate::{
     sumeragi::test_chain::{Signers, TestChainConfig},
 };
 use iroha_crypto::{Hash, SignatureOf};
+use iroha_data_model::sumeragi::epoch::{InstalledBeaconEpochBindingV1, ValidatorEpochDecisionV1};
 use iroha_data_model::{
     account::{Account, AccountId},
     asset::AssetId,
@@ -35,10 +36,7 @@ use iroha_data_model::{
             ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
             ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
         },
-        kagemusha_v1::{
-            InstalledBeaconEpochBindingV1, KagemushaMintFinalityAuthorityGenerationV1,
-            KagemushaMintFinalityEpochDecisionV1,
-        },
+        kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     },
     nexus::{
         AdmitValidatorCommitteeSeatV1, FeeDebitSource, PrepareValidatorCommitteeCredentialsV1,
@@ -872,10 +870,7 @@ pub(super) fn finish_after_real_detector_penalty(
         .outcome
         .as_ref()
         .unwrap();
-    assert_eq!(
-        outcome.decision,
-        KagemushaMintFinalityEpochDecisionV1::Activate
-    );
+    assert_eq!(outcome.decision, ValidatorEpochDecisionV1::Activate);
     assert_eq!(outcome.authority_generation, 1);
     assert_eq!(
         view.world()

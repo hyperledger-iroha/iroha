@@ -7192,7 +7192,7 @@ mod tests {
             observe_finalized_completion_authority(
                 &mut completion,
                 Some(&owner),
-                ProviderIngestCompletionAuthorityObservationV1::NotChecked,
+                &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                 cursor(8),
             ),
             Ok(true)
@@ -7202,7 +7202,7 @@ mod tests {
             observe_finalized_completion_authority(
                 &mut completion,
                 Some(&owner),
-                ProviderIngestCompletionAuthorityObservationV1::NotChecked,
+                &ProviderIngestCompletionAuthorityObservationV1::NotChecked,
                 cursor(8),
             ),
             Ok(false)

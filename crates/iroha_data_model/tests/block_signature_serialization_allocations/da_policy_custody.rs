@@ -84,7 +84,7 @@ fn da_policy_array_utf8_and_control_are_prepaid_before_fill_and_follow_last_read
             DaProofPolicyBundle::new(Vec::new()),
             DaProofPolicyBundle::new(vec![DaProofPolicy {
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: String::new(),
                 proof_scheme: DaProofScheme::MerkleSha256,
             }]),

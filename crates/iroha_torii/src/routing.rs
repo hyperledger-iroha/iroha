@@ -36572,6 +36572,23 @@ mod explorer_lookup_tests {
         assert!(detail_json["locked_quantity"].is_null());
         assert!(detail_json["circulating_quantity"].is_null());
 
+        let global_list = handle_v1_explorer_asset_definitions(
+            state.clone(),
+            DataspaceReadVisibility::all_for_tests(),
+            crate::explorer::ExplorerCursorQuery { cursor: None, limit: 10 },
+            None,
+            None,
+        )
+        .await
+        .expect("global voting asset definition list");
+        let global_list_body = global_list.into_body().collect().await
+            .expect("global list body").to_bytes();
+        let global_list_json: Value = norito::json::from_slice(&global_list_body)
+            .expect("global list JSON");
+        let globally_listed = global_list_json["items"].as_array()
+            .and_then(|items| items.first()).expect("global voting definition");
+        assert_eq!(globally_listed["locked_quantity"].as_str(), Some("40"));
+
         let global = handle_v1_explorer_asset_definition_detail(
             state,
             DataspaceReadVisibility::all_for_tests(),
@@ -36588,6 +36605,8 @@ mod explorer_lookup_tests {
         let global_json: Value = norito::json::from_slice(&global_body).expect("global JSON");
         assert!(!global_json["locked_quantity"].is_null());
         assert!(!global_json["circulating_quantity"].is_null());
+        assert_eq!(globally_listed["locked_quantity"], global_json["locked_quantity"]);
+        assert_eq!(globally_listed["circulating_quantity"], global_json["circulating_quantity"]);
     }
 
     routing_test! { sync generic_query_and_explorer_visibility_require_every_committed_route_leg
@@ -52976,9 +52995,43 @@ fn explorer_response_capacity_error() -> Error {
         message: "Explorer response exceeded the retained query byte capacity".to_owned(),
     }
 }
+/// Retain a quantity only after charging its exact native-digit backing to this response phase.
+fn explorer_clone_quantity(quantity: &Quantity) -> Result<Quantity, Error> {
+    let layout = quantity
+        .admission_clone_layout()
+        .map_err(|_| explorer_response_capacity_error())?;
+    norito::core::reserve_decode_allocation(layout.size())
+        .map_err(|_| explorer_response_capacity_error())?;
+    quantity
+        .try_clone_for_admission()
+        .map_err(|_| explorer_response_capacity_error())
+}
 #[cfg(test)]
 mod explorer_response_byte_budget_tests {
     use super::*;
+    #[test]
+    fn retained_quantity_clone_requires_its_exact_response_allocation() {
+        let quantity = Quantity::from(u64::MAX);
+        let exact = quantity.admission_clone_layout().unwrap().size();
+        let limits = |bytes| {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, 32)
+        };
+        let (cloned, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
+            explorer_clone_quantity(&quantity)
+        });
+        assert_eq!(cloned.unwrap(), quantity);
+        assert_eq!(usage.total_allocated_bytes(), exact);
+        let (refused, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
+            explorer_clone_quantity(&quantity)
+        });
+        assert!(refused.is_err());
+        assert_eq!(usage.total_allocated_bytes(), 0);
+        let (zero, usage) = norito::core::with_decode_limits_measured(limits(0), || {
+            explorer_clone_quantity(&Quantity::zero())
+        });
+        assert_eq!(zero.unwrap(), Quantity::zero());
+        assert_eq!(usage.total_allocated_bytes(), 0);
+    }
     #[tokio::test]
     async fn selected_records_and_exact_response_share_one_phase() {
         let payload=[1_u32,2,3,4];
@@ -53141,12 +53194,14 @@ fn handle_v1_explorer_asset_definitions_sync(
             .and_then(|assets| assets.iter().find(|asset| asset.definition() == voting_asset_id
                 && matches!(asset.scope(), dm::asset::AssetBalanceScope::Global)));
         if visibility.can_read_all || escrow_asset_id.is_some_and(|id| visibility.allows_asset(&world, id)) {
+            let zero_locked = Quantity::zero();
             let locked = escrow_asset_id.and_then(|id| world.assets().get(id))
-                .map_or_else(Quantity::zero, |value| value.as_ref().clone());
+                .map_or(&zero_locked, |value| value.as_ref());
             for item in &mut page.items {
                 if item.id == voting_asset_id {
-                    item.circulating_quantity = Some(explorer_circulating_quantity(item.total_quantity, &locked)?);
-                    item.locked_quantity = Some(locked);
+                    let circulating = explorer_circulating_quantity(item.total_quantity, locked)?;
+                    item.locked_quantity = Some(explorer_clone_quantity(locked)?);
+                    item.circulating_quantity = Some(circulating);
                     break;
                 }
             }

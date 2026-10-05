@@ -15,6 +15,7 @@ use crate::fastpq::{
 use crate::queue::RoutingDecision;
 #[cfg(test)]
 use iroha_data_model::transaction::TransactionEntrypoint;
+#[cfg(test)]
 use iroha_model_base::topology::DataSpaceId;
 
 mod content_verification;
@@ -206,8 +207,12 @@ impl StateBlock<'_> {
                 return Err("FASTPQ owned Network source differs from its frozen route".into());
             }
         }
-        for source in &sources.entries()[routes.len()..] {
-            if source.lane().is_some() || source.dataspace() != DataSpaceId::UNIVERSAL {
+        let internal = &sources.entries()[routes.len()..];
+        if internal.is_empty() != sources.internal_dataspace().is_none() {
+            return Err("FASTPQ internal source lost its original root namespace".into());
+        }
+        for source in internal {
+            if source.lane().is_some() || Some(source.dataspace()) != sources.internal_dataspace() {
                 return Err(
                     "FASTPQ internal source differs from its actual unrouted execution".into(),
                 );

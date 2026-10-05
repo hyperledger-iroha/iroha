@@ -178,6 +178,81 @@ def test_create_only_refuses_existing_destination_and_existing_operation_journal
     _clean(root)
 
 
+def _vacant_plan(native_apply):
+    request, root, candidate = native_apply
+    public = root / "first-candidate.conf"
+    public.write_bytes(candidate)
+    public.chmod(0o600)
+    renderer = root / "public-renderer.py"
+    renderer.write_bytes(b"# maintained first-publication renderer fixture\n")
+    renderer.chmod(0o600)
+    reference = dict(path=str(renderer), sha256=hashlib.sha256(renderer.read_bytes()).hexdigest())
+    plan = dict(schema=MODULE.PLAN_SCHEMA, provider="macstadium-dublin", host_kind=request["host_kind"],
+        deployment_reference=reference, native=request["native"], renderer_source=reference,
+        candidate=dict(path=str(public), sha256=request["candidate_sha256"], owner_uid=os.geteuid()),
+        operation_id=request["operation_id"], destination=request["destination"], master=request["master"],
+        publication=request["publication"])
+    return plan, request, root
+
+
+def test_initial_vacancy_is_numeric_read_only_and_preserves_unrelated_namespace(native_apply, monkeypatch):
+    plan, request, root = _vacant_plan(native_apply)
+    unrelated = root / "conf.d/older-namespace.conf"
+    unrelated.write_bytes(b"public unrelated namespace\n")
+    unrelated.chmod(0o600)
+    journal = root / (".taira-native-nginx-apply-" + "c" * 32 + ".receipt.ndjson")
+    journal.write_text(json.dumps(dict(schema="iroha.taira.native-nginx-apply.journal.v1",
+        destination_path=str(unrelated), phase="awaiting_readiness")) + "\n")
+    journal.chmod(0o600)
+    before = unrelated.read_bytes(), journal.read_bytes()
+    def forbidden(*args):
+        raise AssertionError("vacancy inspection performed an effect")
+    monkeypatch.setattr(MODULE, "signal_master", forbidden)
+    monkeypatch.setattr(MODULE, "native_exchange", forbidden)
+    result = MODULE.inspect_vacant_publication(plan)
+    assert set(result) == {"schema", "owned_publication", "nginx_config", "nginx", "main_configuration", "master", "phase"}
+    assert result["owned_publication"] is None and result["phase"] == "vacant"
+    assert result["nginx_config"] == str(root / "conf.d/new-scoped.conf")
+    assert all(type(value) is int for value in result["main_configuration"]["identity"].values())
+    assert "private-existing" not in json.dumps(result) and "private-native" not in json.dumps(result)
+    assert not (root / "conf.d/new-scoped.conf").exists()
+    assert not (root / (".taira-native-nginx-apply-" + request["operation_id"] + ".receipt.ndjson")).exists()
+    assert not (root / "reload-count").exists()
+    assert (unrelated.read_bytes(), journal.read_bytes()) == before
+    _clean(root)
+
+
+@pytest.mark.parametrize("obstruction", ["publication", "dangling_symlink", "intended_journal", "unresolved_journal", "master", "lock"])
+def test_initial_vacancy_refuses_existing_or_changed_owner_without_effect(native_apply, monkeypatch, obstruction):
+    plan, request, root = _vacant_plan(native_apply)
+    destination = root / "conf.d/new-scoped.conf"
+    if obstruction == "publication":
+        destination.write_bytes(b"existing public owner\n")
+    elif obstruction == "dangling_symlink":
+        destination.symlink_to(root / "absent-public-target")
+    elif obstruction == "intended_journal":
+        (root / (".taira-native-nginx-apply-" + request["operation_id"] + ".receipt.ndjson")).write_text("existing exact journal\n")
+    elif obstruction == "unresolved_journal":
+        path = root / (".taira-native-nginx-apply-" + "c" * 32 + ".receipt.ndjson")
+        path.write_text(json.dumps(dict(schema="iroha.taira.native-nginx-apply.journal.v1",
+            destination_path=str(destination), phase="publishing")) + "\n")
+        path.chmod(0o600)
+    elif obstruction == "master":
+        monkeypatch.setattr(MODULE, "observe_master", lambda expected: {**expected, "started":"changed"})
+    else:
+        def changed_lock(expected):
+            (root / ".taira-native-nginx-check.lock").chmod(0o666)
+            return expected
+        monkeypatch.setattr(MODULE, "observe_master", changed_lock)
+    with pytest.raises(RuntimeError, match="vacant_publication_inspection_refused"):
+        MODULE.inspect_vacant_publication(plan)
+    assert not (root / "reload-count").exists()
+    if obstruction == "publication": assert destination.read_bytes() == b"existing public owner\n"
+    if obstruction == "dangling_symlink": assert destination.is_symlink()
+    if obstruction not in {"publication", "dangling_symlink"}: assert not destination.exists()
+    _clean(root)
+
+
 def test_changed_master_is_refused_before_publication(native_apply, monkeypatch):
     request, root, _ = native_apply
     monkeypatch.setattr(MODULE, "observe_master", lambda expected: {**expected, "started": "different"})
@@ -398,7 +473,7 @@ def test_owned_inspection_is_numeric_read_only_and_has_one_closed_output(native_
     monkeypatch.setattr(MODULE, "signal_master", forbidden)
     monkeypatch.setattr(MODULE, "native_exchange", forbidden)
     result = MODULE.inspect_owned_publication(request)
-    assert set(result) == {"schema", "owned_publication", "nginx", "main_configuration", "master", "phase"}
+    assert set(result) == {"schema", "owned_publication", "nginx_config", "nginx", "main_configuration", "master", "phase"}
     assert result["phase"] == "awaiting_readiness"
     assert set(result["owned_publication"]) == {"operation_id", "journal", "publication"}
     identity = result["owned_publication"]["publication"]["file"]["identity"]
@@ -424,6 +499,104 @@ def test_owned_inspection_rejects_substitution_without_effect(native_apply, repl
         MODULE.inspect_owned_publication(request)
     assert (root / "reload-count").read_bytes() == reloads
     _clean(root)
+
+
+@pytest.mark.parametrize("phase", ["publishing", "published", "context_checking", "context_checked", "reload_requested"])
+def test_owned_interruption_inspection_preserves_actual_first_publisher_and_strict_readiness(native_apply, phase):
+    request, root, _ = native_apply
+    assert MODULE.remote_apply(request)["exit_code"] == 0
+    journal = root / (".taira-native-nginx-apply-" + request["operation_id"] + ".receipt.ndjson")
+    rows = _journal(root)
+    index = next(index for index, row in enumerate(rows) if row["phase"] == phase)
+    journal.write_text("".join(json.dumps(row) + "\n" for row in rows[:index+1]))
+    request["publication"] = dict(kind="reconcile", prior=_prior(root, request["operation_id"], request["candidate_sha256"]))
+    before = journal.read_bytes(), (root / "conf.d/new-scoped.conf").read_bytes(), (root / "reload-count").read_bytes()
+    with pytest.raises(RuntimeError, match="owned_publication_inspection_refused"):
+        MODULE.inspect_owned_publication(request)
+    if phase == "publishing":
+        # A hardlink interrupted before single-link/ctime acknowledgement stays ambiguous.
+        with pytest.raises(RuntimeError, match="owned_publication_inspection_refused"):
+            MODULE.inspect_owned_publication(request, allow_pending=True)
+    else:
+        result = MODULE.inspect_owned_publication(request, allow_pending=True)
+        assert result["phase"] == phase and result["owned_publication"]["operation_id"] == request["operation_id"]
+    assert (journal.read_bytes(), (root / "conf.d/new-scoped.conf").read_bytes(), (root / "reload-count").read_bytes()) == before
+    _clean(root)
+
+
+def _terminal_vacant_fixture(native_apply, monkeypatch, phase):
+    plan, request, root = _vacant_plan(native_apply)
+    request["renderer_source_sha256"] = plan["renderer_source"]["sha256"]
+    if phase == "rolled_back_unqualified":
+        (root / "reject-context").touch()
+    else:
+        def refused_link(*args, **kwargs):
+            raise RuntimeError("fixture_refused_before_publication")
+        monkeypatch.setattr(MODULE.os, "link", refused_link)
+    result = MODULE.remote_apply(request)
+    assert result["exit_code"] == 1 and _journal(root)[-1]["phase"] == phase
+    assert not (root / "conf.d/new-scoped.conf").exists()
+    journal = root / (".taira-native-nginx-apply-" + request["operation_id"] + ".receipt.ndjson")
+    reference = dict(path=str(journal), identity=_identity(journal),
+        sha256=hashlib.sha256(journal.read_bytes()).hexdigest())
+    _clean(root)
+    return plan, request, root, reference
+
+
+@pytest.mark.parametrize("phase", ["rolled_back_unqualified", "refused_before_publication"])
+def test_requested_terminal_vacancy_retains_actual_journal_without_fabricating_prior(native_apply, monkeypatch, phase):
+    plan, request, root, reference = _terminal_vacant_fixture(native_apply, monkeypatch, phase)
+    journal = Path(reference["path"])
+    before = journal.read_bytes(), ((root / "reload-count").read_bytes() if (root / "reload-count").exists() else None)
+    result = MODULE.inspect_terminal_vacant_publication(plan, reference)
+    assert result["schema"] == "iroha.taira.native-nginx-terminal-vacancy-inspection.v1"
+    assert set(result) == {"schema", "owned_publication", "publisher_journal", "terminal_phase", "nginx_config",
+                           "nginx", "main_configuration", "master", "phase"}
+    assert result["owned_publication"] is None and result["phase"] == "vacant_publisher_terminal"
+    assert result["terminal_phase"] == phase and result["publisher_journal"]["sha256"] == reference["sha256"]
+    assert result["publisher_journal"]["file"]["path"] == reference["path"]
+    assert all(type(value) is int for value in result["publisher_journal"]["file"]["identity"].values())
+    assert result["nginx_config"] == str(root / "conf.d/new-scoped.conf")
+    assert "private-existing" not in json.dumps(result) and "private-native" not in json.dumps(result)
+    with pytest.raises(RuntimeError, match="vacant_publication_inspection_refused"):
+        MODULE.inspect_vacant_publication(plan)
+    assert (journal.read_bytes(), ((root / "reload-count").read_bytes() if (root / "reload-count").exists() else None)) == before
+    assert not (root / "conf.d/new-scoped.conf").exists()
+    _clean(root)
+
+
+@pytest.mark.parametrize("obstruction", ["nonterminal", "journal_substitution", "dangling_publication", "temporary_residue", "wrong_phase", "unresolved_owner"])
+def test_requested_terminal_vacancy_refuses_changed_or_unfinished_owner(native_apply, monkeypatch, obstruction):
+    plan, request, root, reference = _terminal_vacant_fixture(native_apply, monkeypatch, "rolled_back_unqualified")
+    journal = Path(reference["path"])
+    expected_phase = "rolled_back_unqualified"
+    if obstruction == "nonterminal":
+        rows = _journal(root)
+        rows[-1]["phase"] = "publishing"
+        journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        reference = dict(path=str(journal), identity=_identity(journal), sha256=hashlib.sha256(journal.read_bytes()).hexdigest())
+    elif obstruction == "journal_substitution":
+        replacement = root / "foreign-terminal-journal"
+        replacement.write_bytes(journal.read_bytes()); replacement.chmod(0o600)
+        os.replace(replacement, journal)
+    elif obstruction == "dangling_publication":
+        (root / "conf.d/new-scoped.conf").symlink_to(root / "absent-public-target")
+    elif obstruction == "temporary_residue":
+        temporary = next(row["temporary_basename"] for row in _journal(root) if "temporary_basename" in row)
+        (root / "conf.d" / temporary).write_bytes(b"preserve unfinished public temporary\n")
+    elif obstruction == "wrong_phase":
+        expected_phase = "refused_before_publication"
+    else:
+        other = root / (".taira-native-nginx-apply-" + "c" * 32 + ".receipt.ndjson")
+        other.write_text(json.dumps(dict(schema="iroha.taira.native-nginx-apply.journal.v1",
+            destination_path=str(root / "conf.d/new-scoped.conf"), phase="publishing")) + "\n")
+        other.chmod(0o600)
+    before = journal.read_bytes(), (root / "reload-count").read_bytes()
+    with pytest.raises(RuntimeError, match="terminal_vacant_publication_inspection_refused"):
+        MODULE.inspect_terminal_vacant_publication(plan, reference, expected_phase)
+    assert (journal.read_bytes(), (root / "reload-count").read_bytes()) == before
+    assert obstruction == "dangling_publication" or not (root / "conf.d/new-scoped.conf").exists()
+    assert not list(root.glob(".taira-nginx-check-*"))
 
 
 def _plan(request):

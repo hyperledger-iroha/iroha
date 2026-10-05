@@ -72,7 +72,7 @@ fn ahead_disposable_reset_journal_cannot_suppress_original_visibility() {
     let state = state();
     let record = record(LaneId::SINGLE, 9);
     let prepared = prepare(&state, 1, vec![record.clone()]);
-    let bundle_allocation = prepared.pending.bundle.commitments.as_ptr();
+    let bundle_allocation = prepared.pending.bundle.commitments().as_ptr();
     state
         .da_shard_cursors
         .write()
@@ -99,7 +99,7 @@ fn ahead_disposable_reset_journal_cannot_suppress_original_visibility() {
     );
     let commitments = state.da_commitments.read();
     assert_eq!(
-        commitments.bundle_at(1).unwrap().commitments.as_ptr(),
+        commitments.bundle_at(1).unwrap().commitments().as_ptr(),
         bundle_allocation,
         "publication moves the original bundle allocation"
     );
@@ -136,7 +136,7 @@ fn retained_canonical_recreation_hides_old_identity_even_with_empty_caches() {
         .unwrap_or_else(|(_, error)| panic!("original DA projection admission: {error}"));
         assert_eq!(prepared.query_visible.as_slice().is_empty(), height <= 5);
         assert_eq!(prepared.identity_visible.as_slice().is_empty(), height <= 5);
-        assert_eq!(prepared.pending.bundle.commitments, vec![record.clone()]);
+        assert_eq!(prepared.pending.bundle.commitments(), vec![record.clone()]);
     }
 }
 
@@ -148,10 +148,10 @@ fn retired_lane_keeps_original_bundle_position_and_reserved_identity() {
     let prepared = prepare(&state, 3, vec![retired.clone(), active.clone()]);
     assert_eq!(prepared.active.as_slice(), &[0]);
     assert_eq!(
-        prepared.pending.bundle.commitments[prepared.active.as_slice()[0]],
+        prepared.pending.bundle.commitments()[prepared.active.as_slice()[0]],
         active
     );
-    let original = prepared.pending.bundle.commitments.clone();
+    let original = prepared.pending.bundle.commitments().to_vec();
     {
         let nexus = state.nexus_snapshot();
         let mut generation_notice = state.state_view_publication();
@@ -161,7 +161,7 @@ fn retired_lane_keeps_original_bundle_position_and_reserved_identity() {
         assert!(post.persist);
     }
     let commitments = state.da_commitments.read();
-    assert_eq!(commitments.bundle_at(3).unwrap().commitments, original);
+    assert_eq!(commitments.bundle_at(3).unwrap().commitments(), original);
     assert!(
         commitments
             .get_by_manifest(&retired.manifest_hash)
@@ -225,7 +225,7 @@ fn confidential_receipt_and_cursor_use_original_position_policy_and_shard() {
     .unwrap_or_else(|(_, error)| panic!("original DA projection admission: {error}"));
     assert_eq!(prepared.confidential.as_slice().len(), 1);
     assert_eq!(prepared.confidential.as_slice(), &[1]);
-    assert_eq!(&prepared.pending.bundle.commitments[1], &confidential);
+    assert_eq!(&prepared.pending.bundle.commitments()[1], &confidential);
     // The future candidate catalog differs from the current committed catalog.
     // Neither publishing component may re-read the live catalog for this input.
     assert!(state.nexus_snapshot().lane_config.entry(lane).is_none());
@@ -367,11 +367,11 @@ fn visibility_admission_returns_original_bundle_before_any_partial_charge() {
             Some(&budget.try_reserve_bytes(demand).unwrap_err())
         );
         assert_eq!(budget.reserved_bytes(), demand / 2);
-        assert_eq!(returned.bundle.commitments.as_ptr(), backing);
+        assert_eq!(returned.bundle.commitments().as_ptr(), backing);
         assert_eq!(
             returned
                 .bundle
-                .commitments
+                .commitments()
                 .iter()
                 .map(|record| record.acknowledgement_sig.payload().as_ptr())
                 .collect::<Vec<_>>(),
@@ -386,7 +386,7 @@ fn visibility_admission_returns_original_bundle_before_any_partial_charge() {
             .unwrap_or_else(|(_, error)| {
                 panic!("same original admits after capacity releases: {error}")
             });
-    assert_eq!(prepared.pending.bundle.commitments.as_ptr(), backing);
+    assert_eq!(prepared.pending.bundle.commitments().as_ptr(), backing);
     assert!(prepared.query_visible.belongs_to(&budget));
     assert!(prepared.identity_visible.belongs_to(&budget));
     assert!(prepared.active.belongs_to(&budget));

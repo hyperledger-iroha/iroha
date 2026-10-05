@@ -634,8 +634,10 @@ encode the same three-message payment exchange—direct request, post-commit pro
 payment, and durable acknowledgement. Each request binds one exact amount and a fresh
 recipient encryption key; distinct valid payments against a reusable request are accepted.
 Mint authorization, mint credit, and redemption vouchers are separately framed;
-`kgm1:` is the sole text transport. Exposed credits cannot be cancelled. QR, NFC, and Nearby consume
-`../fixtures/offline/kagemusha_v1.json`. Public wire
+`kgm1:` is the sole text transport. Exposed credits cannot be cancelled. The QR, NFC, and Nearby
+carriers (`IrohaPeer*`) move KAGEMUSHA wallet V1 envelope frames instead
+(`../specs/kagemusha_wallet_wire_v1.md` §6) and test against
+`../fixtures/kagemusha/wallet_v1_vectors.json`. Public wire
 size and verification work are independent of balance history; no hop, input,
 origin, ancestry, fan-in, or proof-depth limit is encoded.
 

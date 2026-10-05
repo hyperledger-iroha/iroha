@@ -386,18 +386,6 @@ try {
 // against a live Torii.
 ```
 
-## KAGEMUSHA V1
-
-The JavaScript package exposes the universal readiness endpoint plus typed
-KAGEMUSHA V1 top-up, redemption, and operation-status clients through
-`getKagemushaReadiness`, `submitKagemushaTopUp`,
-`submitKagemushaRedemption`, and `getKagemushaOperation`. Submit only
-canonical V1 Norito requests. The client derives the idempotency key from the
-request, validates the returned operation identity and kind, and withholds an
-applied result until the caller verifies it against an authenticated release
-anchor. JavaScript does not hold hardware-bound monetary state or produce
-recursive proofs; a qualified hardware wallet must create those artifacts.
-
 ## Torii Queries & Streaming
 
 ```js

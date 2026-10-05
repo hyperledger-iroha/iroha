@@ -242,7 +242,7 @@ fn build_proof_from_store(
     let target = find_in_store(store, request)?;
     let bundle = store.bundle_at(target.location.block_height)?;
     let index = usize::try_from(target.location.index_in_bundle).ok()?;
-    if bundle.commitments.get(index) != Some(&target.commitment) {
+    if bundle.commitments().get(index) != Some(&target.commitment) {
         return None;
     }
     build_da_commitment_proof(bundle, target.location.block_height, index)
@@ -280,7 +280,7 @@ fn build_active_proof_from_state(
     Ok((|| {
         let bundle = block.as_ref().da_commitments()?;
         let index = usize::try_from(target.location.index_in_bundle).ok()?;
-        if bundle.commitments.get(index) != Some(&target.commitment) {
+        if bundle.commitments().get(index) != Some(&target.commitment) {
             return None;
         }
         let policies = block.as_ref().da_proof_policies()?.clone();
@@ -862,7 +862,7 @@ mod tests {
         let bundle = store
             .bundle_at(proof.location.block_height)
             .expect("committed bundle present");
-        assert_eq!(bundle.commitments.as_slice(), &[stale_duplicate, later]);
+        assert_eq!(bundle.commitments(), &[stale_duplicate, later]);
         let mut header = BlockHeader::new(
             NonZeroU64::new(proof.location.block_height).expect("non-zero height"),
             None,

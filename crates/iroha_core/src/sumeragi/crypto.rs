@@ -109,17 +109,30 @@ impl BlsCrypto {
     /// Admit a committee key: verify its proof of possession `pop` once and keep the parsed
     /// key for aggregate verification. The height schedule calls this for every key it
     /// schedules into a committee (genesis committee, registrations, key rotations), before
-    /// the configuration reaches the core. Admitting a key again is harmless.
+    /// the configuration reaches the core. The same key and exact proof reuse this owner's
+    /// original credential. A changed proof is verified again before publication.
     ///
     /// # Errors
     /// A key that is not BLS-normal, or a `PoP` that does not verify; nothing is admitted.
     pub fn admit(&self, key: &IrohaPublicKey, pop: &[u8]) -> Result<PublicKey, KeyError> {
         let core = core_key(key)?;
+        if self
+            .admitted
+            .read()
+            .get(&core)
+            .is_some_and(|key| Self::matches_admission(key, pop))
+        {
+            return Ok(core);
+        }
         let verified = BlsNormalPopVerifiedKey::from_owned_uncached(key.clone(), pop)
             .map_err(|(_, error)| KeyError::BadPop(error.into_error().to_string()))?;
-        self.admitted
-            .write()
-            .insert(core.clone(), Arc::new(verified));
+        let mut admitted = self.admitted.write();
+        if !admitted
+            .get(&core)
+            .is_some_and(|key| Self::matches_admission(key, pop))
+        {
+            admitted.insert(core.clone(), Arc::new(verified));
+        }
         Ok(core)
     }
 
@@ -134,19 +147,41 @@ impl BlsCrypto {
         let mut verified = Vec::new();
         for (position, (key, pop)) in members.into_iter().enumerate() {
             let core = core_key(key).map_err(|e| (position, e))?;
-            let key = BlsNormalPopVerifiedKey::from_owned_uncached(key.clone(), pop).map_err(
-                |(_, error)| (position, KeyError::BadPop(error.into_error().to_string())),
-            )?;
-            verified.push((core, Arc::new(key)));
+            let existing = {
+                let admitted = self.admitted.read();
+                admitted
+                    .get(&core)
+                    .filter(|key| Self::matches_admission(key, pop))
+                    .map(Arc::clone)
+            };
+            let key = if let Some(existing) = existing {
+                existing
+            } else {
+                Arc::new(
+                    BlsNormalPopVerifiedKey::from_owned_uncached(key.clone(), pop).map_err(
+                        |(_, error)| (position, KeyError::BadPop(error.into_error().to_string())),
+                    )?,
+                )
+            };
+            verified.push((core, key, pop));
         }
         let mut admitted = self.admitted.write();
         Ok(verified
             .into_iter()
-            .map(|(core, key)| {
-                admitted.insert(core.clone(), key);
+            .map(|(core, key, pop)| {
+                if !admitted
+                    .get(&core)
+                    .is_some_and(|key| Self::matches_admission(key, pop))
+                {
+                    admitted.insert(core.clone(), key);
+                }
                 core
             })
             .collect())
+    }
+
+    fn matches_admission(key: &BlsNormalPopVerifiedKey, pop: &[u8]) -> bool {
+        key.proof_of_possession_matches(pop) || cfg!(all(test, sumeragi_core_mutation = "HC126"))
     }
 
     /// Whether `key` was admitted.
@@ -487,6 +522,156 @@ mod tests {
         assert_eq!(admitted.len(), 2);
         assert_eq!(crypto.admit(a.public_key(), &pa).unwrap(), admitted[0]);
         assert_eq!(crypto.admitted_len(), 2);
+    }
+
+    /// Repeated exact admission retains its original local credential; a changed proof is verified.
+    #[test]
+    fn repeated_exact_pop_admission_retains_original_credential() {
+        let crypto = BlsCrypto::new();
+        let pair = key_pair(0x71);
+        let proof = pop(&pair);
+        let core = crypto.admit(pair.public_key(), &proof).unwrap();
+        let original = Arc::clone(crypto.admitted.read().get(&core).unwrap());
+        let payload = original.payload().as_ptr();
+        for _ in 0..3 {
+            assert_eq!(crypto.admit(pair.public_key(), &proof).unwrap(), core);
+            let current = Arc::clone(crypto.admitted.read().get(&core).unwrap());
+            assert!(
+                Arc::ptr_eq(&original, &current),
+                "exact proof keeps the original credential owner"
+            );
+            assert_eq!(current.payload().as_ptr(), payload);
+        }
+        let foreign = key_pair(0x72);
+        let foreign_proof = pop(&foreign);
+        let mut changed = proof.clone();
+        changed[17] ^= 1;
+        for rejected in [
+            &[][..],
+            &proof[..95],
+            changed.as_slice(),
+            foreign_proof.as_slice(),
+        ] {
+            assert!(matches!(
+                crypto.admit(pair.public_key(), rejected),
+                Err(KeyError::BadPop(_))
+            ));
+            assert!(Arc::ptr_eq(
+                &original,
+                crypto.admitted.read().get(&core).unwrap()
+            ));
+            assert_eq!(crypto.admitted_len(), 1);
+        }
+        crypto.admit(foreign.public_key(), &foreign_proof).unwrap();
+        assert_eq!(crypto.admitted_len(), 2);
+        assert!(Arc::ptr_eq(
+            &original,
+            crypto.admitted.read().get(&core).unwrap()
+        ));
+        let independent = BlsCrypto::new();
+        independent.admit(pair.public_key(), &proof).unwrap();
+        assert!(
+            !Arc::ptr_eq(&original, independent.admitted.read().get(&core).unwrap()),
+            "independent owners never borrow a credential cache"
+        );
+    }
+
+    /// A rejected batch publishes none of its new members and keeps already verified owners.
+    #[test]
+    fn repeated_committee_admission_retains_owners_and_failed_batch_is_atomic() {
+        let crypto = BlsCrypto::new();
+        let (a, b, c) = (key_pair(0x73), key_pair(0x74), key_pair(0x75));
+        let (pa, pb, pc) = (pop(&a), pop(&b), pop(&c));
+        let ca = crypto.admit(a.public_key(), &pa).unwrap();
+        let original_a = Arc::clone(crypto.admitted.read().get(&ca).unwrap());
+        assert!(matches!(
+            crypto.admit_committee([
+                (a.public_key(), pa.as_slice()),
+                (b.public_key(), pb.as_slice()),
+                (c.public_key(), pb.as_slice())
+            ]),
+            Err((2, KeyError::BadPop(_)))
+        ));
+        assert_eq!(crypto.admitted_len(), 1);
+        assert!(Arc::ptr_eq(
+            &original_a,
+            crypto.admitted.read().get(&ca).unwrap()
+        ));
+        let admitted = crypto
+            .admit_committee([
+                (a.public_key(), pa.as_slice()),
+                (b.public_key(), pb.as_slice()),
+            ])
+            .unwrap();
+        assert_eq!(admitted[0], ca);
+        assert!(
+            Arc::ptr_eq(&original_a, crypto.admitted.read().get(&ca).unwrap()),
+            "batch keeps the original exact credential"
+        );
+        let original_b = Arc::clone(crypto.admitted.read().get(&admitted[1]).unwrap());
+        let repeated = crypto
+            .admit_committee([
+                (b.public_key(), pb.as_slice()),
+                (a.public_key(), pa.as_slice()),
+                (b.public_key(), pb.as_slice()),
+            ])
+            .unwrap();
+        assert_eq!(
+            repeated,
+            vec![admitted[1].clone(), ca.clone(), admitted[1].clone()]
+        );
+        assert_eq!(crypto.admitted_len(), 2);
+        assert!(Arc::ptr_eq(
+            &original_a,
+            crypto.admitted.read().get(&ca).unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            &original_b,
+            crypto.admitted.read().get(&admitted[1]).unwrap()
+        ));
+        assert!(matches!(
+            crypto.admit_committee([
+                (a.public_key(), pc.as_slice()),
+                (c.public_key(), pc.as_slice())
+            ]),
+            Err((0, KeyError::BadPop(_)))
+        ));
+        assert_eq!(crypto.admitted_len(), 2);
+        assert!(Arc::ptr_eq(
+            &original_a,
+            crypto.admitted.read().get(&ca).unwrap()
+        ));
+    }
+
+    /// An exact credential published between batch verification and publication stays authoritative.
+    #[test]
+    fn committee_publication_retains_interleaved_exact_credential() {
+        let crypto = BlsCrypto::new();
+        let (a, b) = (key_pair(0x76), key_pair(0x77));
+        let (pa, pb) = (pop(&a), pop(&b));
+        let ca = core_key(a.public_key()).unwrap();
+        let interleaved = std::cell::RefCell::new(None);
+        let members = [
+            (a.public_key(), pa.as_slice()),
+            (b.public_key(), pb.as_slice()),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, member)| {
+            if index == 1 {
+                crypto.admit(a.public_key(), &pa).unwrap();
+                interleaved.replace(Some(Arc::clone(crypto.admitted.read().get(&ca).unwrap())));
+            }
+            member
+        });
+        let admitted = crypto.admit_committee(members).unwrap();
+        assert_eq!(admitted[0], ca);
+        assert_eq!(crypto.admitted_len(), 2);
+        let published = interleaved.into_inner().unwrap();
+        assert!(
+            Arc::ptr_eq(&published, crypto.admitted.read().get(&ca).unwrap()),
+            "publication must keep an already verified exact owner"
+        );
     }
 
     /// Cross-check with the core: a QC formed by the core with this crypto verifies with

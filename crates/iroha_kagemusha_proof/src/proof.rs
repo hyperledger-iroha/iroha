@@ -71,8 +71,8 @@ pub enum SigmaError {
     },
     /// The witness breaks the relation.
     RelationViolated(Vec<Violation>),
-    /// The public outputs do not match the relation (a Request digest for
-    /// `sigma_recv`, or none for `sigma_send`).
+    /// The public outputs do not match the relation (a credit identifier
+    /// for `sigma_recv`, or none for `sigma_send`).
     PublicShape,
     /// The engine failed to prove.
     Prover(ProverError),
@@ -120,8 +120,10 @@ impl std::error::Error for SigmaError {}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KeyOptions {
     /// The budget of each fixed-base commitment table (of `g` and
-    /// `g_lagrange`), or `None` for no tables. At `k = 11` a table takes
-    /// about 3 MiB and the pair saves about 14% of the prover's time.
+    /// `g_lagrange`), or `None` for no tables. At the budget shape
+    /// (`k = 12`, one lane) the pair saves about 4-6% of the one-thread
+    /// prove CPU and raises the single-prover peak RSS by about 11 MiB
+    /// (M12 stage FIX, medians of three processes each).
     pub commitment_tables: Option<MemoryBudget>,
 }
 
@@ -147,8 +149,8 @@ fn instance<F: Copy>(
     relation: StepRelation,
     public: &StepPublic<F>,
 ) -> Result<Vec<Vec<F>>, SigmaError> {
-    let request = public.request.is_some();
-    if request != (relation == StepRelation::Send) {
+    let credit = public.credit_id.is_some();
+    if credit != (relation == StepRelation::Send) {
         return Err(SigmaError::PublicShape);
     }
     Ok(vec![public.instance()])
@@ -424,11 +426,11 @@ mod tests {
     fn instances_follow_the_relation() {
         let send = StepPublic {
             statement: Fp::ONE,
-            request: Some(Fp::ZERO),
+            credit_id: Some(Fp::ZERO),
         };
         let receive = StepPublic {
             statement: Fp::ONE,
-            request: None,
+            credit_id: None,
         };
         assert_eq!(
             instance(StepRelation::Send, &send),

@@ -7,7 +7,8 @@ use crate::{
     types::{AppliedConfig, ConfigSlot},
 };
 
-fn boundary_harness(boundary: u64, leader_view: u64) -> H {
+/// Epoch `0` ends at `boundary`; the core's key is `pick` of the topology of height 1.
+fn boundary_harness_at(boundary: u64, pick: impl Fn(&Topology) -> ValidatorIndex) -> H {
     let mut h = H::new(4, |_| 0);
     h.committees.insert(boundary + 1, h.v.committee.clone());
     let config = h.config(1);
@@ -21,11 +22,33 @@ fn boundary_harness(boundary: u64, leader_view: u64) -> H {
         W,
         &[],
     );
-    h.signers = vec![h.v.signer(topology.leader(leader_view)).clone()];
+    h.signers = vec![h.v.signer(pick(&topology)).clone()];
     h.records.clear();
     h.install_keys();
     h.restart();
     h
+}
+
+fn boundary_harness(boundary: u64, leader_view: u64) -> H {
+    boundary_harness_at(boundary, pick::leader(leader_view))
+}
+
+/// [`boundary_harness_at`] whose core runs [`crate::crypto::NoAttestation`]: an application
+/// that flags nothing and holds no attestation authority.
+fn unattested_boundary_harness(pick: impl Fn(&Topology) -> ValidatorIndex) -> H {
+    let mut h = boundary_harness_at(1, pick);
+    h.no_attestation = true;
+    h.restart();
+    h
+}
+
+/// After the boundary of height 1 committed and applied: the next epoch is installed.
+fn assert_entered_next_epoch(h: &H) {
+    assert_eq!(h.core.tip.height, 1, "the unflagged boundary committed");
+    assert_eq!(h.core.applied, 1);
+    assert_eq!(h.height(), 2, "its application installed the next epoch");
+    assert_eq!(h.core.cfg.epoch, h.config(2).epoch);
+    assert_eq!(h.core.halted, None);
 }
 
 #[test]
@@ -90,7 +113,10 @@ fn det_s44_boundary_waits_for_original_application() {
     ));
     h.auto_apply = false;
     let boundary = h.commit_with(0, b"boundary work");
-    assert!(boundary.header().attest);
+    assert!(
+        !boundary.header().attest,
+        "the boundary carries only its application's flag"
+    );
     assert_eq!(h.core.applied, 2);
     assert_eq!(h.core.tip.height, 3);
     assert!(h.core.awaiting);
@@ -157,9 +183,11 @@ fn det_s44_boundary_conflict_is_atomic() {
     assert_eq!(h.core.configs, before);
 }
 
+/// MS45 (SR46): at a boundary, at view 0 and after a view change, an empty build never
+/// becomes a block, and the nonempty proposal carries exactly its builder's flag.
 #[test]
-fn det_s45_mandatory_boundary_attestation_survives_empty_paths() {
-    for view in [0, 2] {
+fn det_s45_boundary_proposal_carries_only_the_builders_flag() {
+    for (view, builder_flag) in [(0, false), (2, false), (0, true), (2, true)] {
         let mut h = boundary_harness(1, view);
         if view > 0 {
             h.enter_view(view);
@@ -170,7 +198,7 @@ fn det_s45_mandatory_boundary_attestation_survives_empty_paths() {
         h.fire(Event::PayloadBuilt {
             req,
             payload: None,
-            attest: false,
+            attest: builder_flag,
         });
         assert!(
             h.core.mine.proposal.is_none(),
@@ -181,7 +209,7 @@ fn det_s45_mandatory_boundary_attestation_survives_empty_paths() {
         h.fire(Event::PayloadBuilt {
             req,
             payload: h.payload(b"boundary work"),
-            attest: false,
+            attest: builder_flag,
         });
         let proposal = h
             .core
@@ -190,9 +218,100 @@ fn det_s45_mandatory_boundary_attestation_survives_empty_paths() {
             .as_ref()
             .expect("nonempty boundary proposal");
         assert!(proposal.header.payload_len > 0);
-        assert!(proposal.header.attest);
+        assert_eq!(proposal.header.attest, builder_flag, "view {view}");
         assert_eq!(proposal.header.epoch, h.config(1).epoch.id);
     }
+}
+
+/// MS45 (SR46, §3.7 A1): the core adds no attestation requirement of its own. Under
+/// [`crate::crypto::NoAttestation`] an unflagged epoch boundary commits and is applied when
+/// this node proposes it (a), when a remote leader proposes it (b), when it arrives by sync
+/// (c), and a restart from its unflagged `CommitQC` resumes (d).
+#[test]
+fn det_s45_unflagged_boundary_commits_without_attestation() {
+    // (a) The boundary leader proposes exactly the builders' flag (unset) and commits.
+    let mut h = unattested_boundary_harness(pick::leader(0));
+    h.tick(h.params.block_time);
+    h.built(b"boundary work");
+    let header = h
+        .core
+        .mine
+        .proposal
+        .as_ref()
+        .expect("nonempty boundary proposal")
+        .header
+        .clone();
+    assert!(!header.attest, "the core adds no flag at an epoch boundary");
+    let block = h.author(header, b"boundary work");
+    let out = h.exec_all();
+    assert_eq!(
+        votes_of(&out, VoteKind::Prepare).len(),
+        1,
+        "the leader Prepares"
+    );
+    let from = h.others(1, &[])[0];
+    let out = h.deliver(from, WireMessage::Qc(h.qc_q(VoteKind::Prepare, 0, &block)));
+    let commit = votes_of(&out, VoteKind::Commit);
+    assert_eq!(commit.len(), 1, "no attestation authority is needed");
+    assert!(!commit[0].attest && commit[0].attestation.is_none());
+    assert!(
+        !faults(&h.all)
+            .iter()
+            .any(|f| matches!(f, LocalFault::AttestationUnavailable { .. }))
+    );
+    h.deliver(from, WireMessage::Qc(h.qc_q(VoteKind::Commit, 0, &block)));
+    assert_entered_next_epoch(&h);
+    assert!(!h.store[0].1.attest);
+    // (d) The durable tip is the unflagged boundary certificate.
+    h.restart();
+    assert_entered_next_epoch(&h);
+
+    // (b) A remote leader's unflagged boundary proposal is no signed defect.
+    let mut h = unattested_boundary_harness(pick::set_a(0));
+    let block = h.block(0, b"remote boundary");
+    assert!(!block.header().attest);
+    let p = h.proposal(0, &block, None);
+    let mut out = h.deliver(h.leader(0), WireMessage::Proposal(Box::new(p)));
+    out.extend(h.exec_all());
+    assert!(evidence(&h.all).is_empty(), "no InvalidProposal evidence");
+    assert_eq!(votes_of(&out, VoteKind::Prepare).len(), 1);
+    let from = h.others(1, &[])[0];
+    let out = h.deliver(from, WireMessage::Qc(h.qc_q(VoteKind::Prepare, 0, &block)));
+    assert_eq!(votes_of(&out, VoteKind::Commit).len(), 1);
+    h.deliver(from, WireMessage::Qc(h.qc_q(VoteKind::Commit, 0, &block)));
+    assert_entered_next_epoch(&h);
+
+    // (c) Sync: the unflagged boundary and its successor arrive as sync entries.
+    let mut h = unattested_boundary_harness(pick::set_a(0));
+    let boundary = h.block(0, b"synced boundary");
+    assert!(!boundary.header().attest);
+    let next = h.block_at(2, (h.bh(&boundary), result_of(&boundary)), 0, b"next epoch");
+    let entries: Vec<_> = [&boundary, &next]
+        .into_iter()
+        .map(|block| crate::message::SyncEntry {
+            manifest: manifest(block),
+            commit_qc: h.cqc_for(block, 0),
+        })
+        .collect();
+    let peer = h.others(1, &[])[0];
+    h.deliver(
+        peer,
+        WireMessage::Status(Box::new(Status {
+            instance: I,
+            height: 3,
+            committed_qc: Some(entries[1].commit_qc.clone()),
+            ..Status::default()
+        })),
+    );
+    h.deliver(
+        peer,
+        WireMessage::SyncResponse(crate::message::SyncResponse {
+            instance: I,
+            blocks: entries,
+        }),
+    );
+    assert_eq!(h.core.tip.height, 2, "synced across the unflagged boundary");
+    assert_eq!(h.core.halted, None);
 }
 
 #[test]
@@ -266,7 +385,10 @@ fn boundary_core_four_seven_four_keeps_exact_quorums_and_contexts() {
         let certificate = &h.store.last().unwrap().1;
         assert_eq!(certificate.signers.count_ones(), before.committee.q());
         assert_eq!(certificate.epoch, before.epoch.id);
-        assert_eq!(block.header().attest, matches!(height, 3 | 6));
+        assert!(
+            !block.header().attest && !certificate.attest,
+            "boundaries 3 and 6 commit without a flag"
+        );
         assert_eq!(h.core.halted, None);
         assert_eq!(h.core.applied, height);
         assert_eq!(h.core.cfg.epoch.id, h.config(height + 1).epoch.id);
@@ -307,24 +429,26 @@ fn retained_key_probe_cannot_anchor_a_different_epoch_context() {
 }
 
 #[test]
-fn boundary_certificates_remain_attested_before_cache_hits() {
+fn boundary_certificates_keep_context_checks_before_cache_hits() {
     let mut h = boundary_harness(1, 0);
-    let good = h.block(0, b"boundary");
-    let mut header = good.header().clone();
-    header.attest = false;
-    let bad = h.author(header, good.payload().as_slice());
-    let good_pqc = h.qc_q(VoteKind::Prepare, 0, &good);
-    let bad_pqc = h.qc_q(VoteKind::Prepare, 0, &bad);
+    let block = h.block(0, b"boundary");
+    assert!(!block.header().attest, "an unflagged boundary block");
+    let good_pqc = h.qc_q(VoteKind::Prepare, 0, &block);
     let entries = |qc: &Qc| {
         (0..3)
             .map(|index| (index, Some(qc.clone())))
             .collect::<Vec<_>>()
     };
     let good_tc = h.tc(0, &entries(&good_pqc));
-    let bad_tc = h.tc(0, &entries(&bad_pqc));
+    // The same certificates relabelled with the successor epoch's context.
+    let successor = h.config(2).epoch.id;
+    let mut bad_pqc = good_pqc.clone();
+    bad_pqc.epoch = successor;
+    let mut bad_tc = good_tc.clone();
+    bad_tc.epoch = successor;
     assert!(!h.core.verify_qc_cached(&bad_pqc));
     assert!(!h.core.verify_tc_cached(&bad_tc));
-    // Even a populated verification cache cannot bypass installed context/boundary checks.
+    // Even a populated verification cache cannot bypass the installed context checks.
     h.core.cert_cache.insert(bad_pqc.digest(&h.v.crypto));
     h.core.cert_cache.insert(bad_tc.digest(&h.v.crypto));
     assert!(!h.core.verify_qc_cached(&bad_pqc));

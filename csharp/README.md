@@ -339,8 +339,7 @@ Major first-release areas include:
 - signed iterable queries and canonical transaction submission;
 - fee quotes and sponsor programs;
 - pipeline, data, proof, and explorer event streams;
-- contracts, runtime governance, verifying keys, privacy, KAGEMUSHA V1, VPN, and SoraFS
-  routes.
+- contracts, runtime governance, verifying keys, privacy, VPN, and SoraFS routes.
 
 For an existing public standalone ballot, use
 `TransactionBuilder.UpdatePlainConviction(referendumId, newTotalBond, durationBlocks)`.
@@ -380,23 +379,6 @@ dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.I
 
 The integration suite is environment-gated; its test project documents the required
 variables. The executable sample lives in `samples/Hyperledger.Iroha.Sdk.Sample`.
-
-## KAGEMUSHA wallet operation and recovery contract
-
-Applications must persist a fresh, nonzero 32-byte operation ID before requesting
-a payment request, payment, mint construction or redemption. Pass that same ID
-and the same public inputs on every retry. The wallet reserves the exact ID with
-native Core and rejects substituted reservation results; request creation also
-requires the returned request ID to match. An interrupted call must not allocate
-a replacement monetary operation.
-
-Opening a new qualified wallet corroborates bootstrap with a second native
-recovery snapshot and the live journal revision. Recovery of an existing wallet
-never bootstraps missing state. It rejects identity changes, journal rollback,
-same-revision equivocation and invalid epoch-generation transitions before
-publishing the recovered snapshot. These checks require an authenticated native
-provider; passing orchestration tests does not qualify a device or enable offline
-money. See the [production-readiness record](../specs/kagemusha_v1_production_readiness.md).
 
 ## Pack
 
@@ -480,8 +462,10 @@ four-validator, hardware or release-qualification evidence.
 
 `Hyperledger.Iroha.Petal` is the managed port of the Rust reference
 `crates/iroha_petal`: an animated, camera-readable frame sequence ("streaming QR"
-in the Sakura-storm look) that moves a payload such as a KAGEMUSHA `IPM1` peer
-message from a screen to a phone. Each frame carries three independent
+in the Sakura-storm look) that moves an opaque byte payload from a screen to a phone.
+The stream carries bytes only; this SDK has no peer-message codec. A KAGEMUSHA
+wallet V1 sender plays one `IPM1` message with its IPM1 kind as the stream `kind`
+([wallet wire §6](../specs/kagemusha_wallet_wire_v1.md)). Each frame carries three independent
 Reed–Solomon lanes of fountain-coded atoms — tile polarity (`P`), katakana
 glyphs (`K`) and ring dots (`D`, which carries the stream beacon every fourth
 frame) — so any readable lane of any frame adds progress. A payload is released

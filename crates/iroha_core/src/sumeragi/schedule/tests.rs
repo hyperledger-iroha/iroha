@@ -286,12 +286,9 @@ fn ordinary(schedule: &ConsensusSchedule, height: u64) -> ScheduleOutcome {
 fn retained_boundary(
     current: &iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1,
 ) -> ScheduleOutcome {
-    use iroha_data_model::{
-        isi::kagemusha_v1::{
-            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-            KagemushaMintFinalityEpochDecisionV1,
-        },
-        sumeragi::epoch::ValidatorEpochBoundaryV1,
+    use iroha_data_model::sumeragi::epoch::ValidatorEpochBoundaryV1;
+    use iroha_data_model::sumeragi::epoch::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochDecisionV1,
     };
     let height = current.authorization.last_height;
     let mut next = current.clone();
@@ -300,7 +297,7 @@ fn retained_boundary(
     next.authorization.last_height = height + 3;
     next.authorization.previous_authorization_id =
         current.authorization.authorization_id().unwrap();
-    next.authorization.decision = KagemushaMintFinalityEpochDecisionV1::Retain;
+    next.authorization.decision = ValidatorEpochDecisionV1::Retain;
     next.authorization.beacon = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
         session_id: [0x41; 32],
         transcript_hash: [0x42; 32],

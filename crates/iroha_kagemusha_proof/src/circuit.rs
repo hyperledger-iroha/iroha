@@ -14,7 +14,7 @@
 //!   other's rows.
 //! - One running-sum column with a `2^b`-row limb table (`b = limb_bits`).
 //! - One fixed constants column and one instance column (the statement
-//!   digest, then the Request digest for `sigma_send`).
+//!   digest, then the credit identifier for `sigma_send`).
 //!
 //! With [`PrefixMode::Folded`] each lane starts its domain-prefixed hashes
 //! from the constant post-prefix state (one permutation fewer per hash);
@@ -36,9 +36,9 @@ use iroha_plonk_gadgets::{
 use crate::{
     relation::{self, Chips},
     witness::{
-        NativeStep, RECEIVE_CHAIN_DOMAIN, RECEIVE_CHAIN_FIELDS, REQUEST_DOMAIN, REQUEST_FIELDS,
+        CREDIT_DOMAIN, NativeStep, RECEIVE_CHAIN_DOMAIN, RECEIVE_CHAIN_FIELDS, REQUEST_FIELDS,
         SEND_CHAIN_DOMAIN, SEND_CHAIN_FIELDS, StateLayout, StepDigests, StepWitness,
-        public_outputs,
+        public_outputs, relation_id,
     },
 };
 
@@ -98,10 +98,10 @@ pub enum HashSite {
     Predecessor,
     /// The successor commitment.
     Successor,
+    /// The credit identifier: the Request body under the credit domain.
+    Credit,
     /// The chain append.
     Chain,
-    /// `sigma_send` only: the Request body.
-    Request,
     /// The statement digest.
     Statement,
 }
@@ -131,25 +131,22 @@ impl RelationShape {
         )
     }
 
-    /// The hashes of the relation, in layout order.
+    /// The relation identifier ([`relation_id`]): one per step and state
+    /// layout; the prefix mode computes the same relation.
     #[must_use]
-    pub fn hash_sites(self) -> Vec<HashSite> {
-        match self.step {
-            StepRelation::Send => vec![
-                HashSite::Predecessor,
-                HashSite::Chain,
-                HashSite::Request,
-                HashSite::Successor,
-                HashSite::Statement,
-            ],
-            StepRelation::Receive => vec![
-                HashSite::Predecessor,
-                HashSite::Chain,
-                HashSite::Successor,
-                HashSite::Statement,
-            ],
-        }
+    pub const fn relation_id(self) -> [u8; 32] {
+        relation_id(self.step, self.layout)
     }
+
+    /// The hashes of every relation, in layout order (the same for both
+    /// steps).
+    pub const HASH_SITES: [HashSite; 5] = [
+        HashSite::Credit,
+        HashSite::Chain,
+        HashSite::Predecessor,
+        HashSite::Successor,
+        HashSite::Statement,
+    ];
 
     /// The `(domain, arity)` of a hash.
     #[must_use]
@@ -162,7 +159,7 @@ impl RelationShape {
             (HashSite::Chain, StepRelation::Receive) => {
                 (RECEIVE_CHAIN_DOMAIN, RECEIVE_CHAIN_FIELDS)
             }
-            (HashSite::Request, _) => (REQUEST_DOMAIN, REQUEST_FIELDS),
+            (HashSite::Credit, _) => (CREDIT_DOMAIN, REQUEST_FIELDS),
             (HashSite::Statement, _) => (STATEMENT_DOMAIN, STATEMENT_FIELDS),
         }
     }
@@ -174,11 +171,12 @@ impl RelationShape {
         domain_permutations(arity, matches!(self.prefix, PrefixMode::Folded))
     }
 
-    /// The Pow5 permutations of the relation (M7: `sigma_send` 53 / 83,
-    /// `sigma_recv` 37 / 67 for two-level / flat with absorbed prefixes).
+    /// The Pow5 permutations of the relation (`sigma_send` 68 / 78,
+    /// `sigma_recv` 67 / 77 for two-level / flat with absorbed prefixes; one
+    /// fewer per hash with folded prefixes).
     #[must_use]
     pub fn permutations(self) -> usize {
-        self.hash_sites()
+        Self::HASH_SITES
             .into_iter()
             .map(|site| self.site_permutations(site))
             .sum()
@@ -294,7 +292,7 @@ impl LanePlan {
     #[must_use]
     pub fn new(relation: RelationShape, lanes: usize) -> Self {
         let lanes = lanes.max(1);
-        let mut order = relation.hash_sites();
+        let mut order = RelationShape::HASH_SITES.to_vec();
         order.sort_by_key(|site| core::cmp::Reverse(relation.site_permutations(*site)));
         let mut lane_permutations = vec![0_usize; lanes];
         let mut sites = Vec::with_capacity(order.len());
@@ -625,30 +623,45 @@ mod tests {
     }
 
     #[test]
-    fn permutation_counts_match_m7() {
+    fn permutation_counts_of_the_spec_core() {
         use PrefixMode::{Absorbed, Folded};
         use StateLayout::{Flat, TwoLevel};
         use StepRelation::{Receive, Send};
-        // M7 (absorbed prefixes): send 53 / 83, recv 37 / 67.
-        assert_eq!(shape(Send, TwoLevel, Absorbed).permutations(), 53);
-        assert_eq!(shape(Send, Flat, Absorbed).permutations(), 83);
-        assert_eq!(shape(Receive, TwoLevel, Absorbed).permutations(), 37);
-        assert_eq!(shape(Receive, Flat, Absorbed).permutations(), 67);
+        // Absorbed prefixes: openings 17 (two-level, 31 inputs) or 22 (flat,
+        // 40), credit 14, send chain 6, receive chain 5, statement 16 (29
+        // inputs).
+        assert_eq!(shape(Send, TwoLevel, Absorbed).permutations(), 70);
+        assert_eq!(shape(Send, Flat, Absorbed).permutations(), 80);
+        assert_eq!(shape(Receive, TwoLevel, Absorbed).permutations(), 69);
+        assert_eq!(shape(Receive, Flat, Absorbed).permutations(), 79);
         // Folding saves one permutation per hash.
-        assert_eq!(shape(Send, TwoLevel, Folded).permutations(), 48);
-        assert_eq!(shape(Receive, TwoLevel, Folded).permutations(), 33);
-        assert_eq!(shape(Send, Flat, Folded).permutations(), 78);
+        assert_eq!(shape(Send, TwoLevel, Folded).permutations(), 65);
+        assert_eq!(shape(Receive, TwoLevel, Folded).permutations(), 64);
+        assert_eq!(shape(Send, Flat, Folded).permutations(), 75);
         let send = shape(Send, TwoLevel, Folded);
-        assert_eq!(send.site_permutations(HashSite::Statement), 17);
-        assert_eq!(send.site_permutations(HashSite::Request), 13);
-        assert_eq!(send.site_domain(HashSite::Predecessor).1, 11);
+        assert_eq!(send.site_permutations(HashSite::Statement), 15);
+        assert_eq!(send.site_permutations(HashSite::Credit), 13);
+        assert_eq!(send.site_permutations(HashSite::Predecessor), 16);
+        assert_eq!(send.site_permutations(HashSite::Chain), 5);
+        assert_eq!(send.site_domain(HashSite::Predecessor).1, 31);
         assert_eq!(send.public_outputs(), 2);
         assert_eq!(send.label(), "sigma_send_folded_two_level");
         assert_eq!(
             shape(Receive, Flat, Absorbed).label(),
             "sigma_recv_absorbed_flat"
         );
-        assert_eq!(shape(Receive, Flat, Absorbed).hash_sites().len(), 4);
+        assert_eq!(RelationShape::HASH_SITES.len(), 5);
+        // The relation identity depends on the step and the layout, not on
+        // the prefix mode.
+        assert_eq!(
+            shape(Send, TwoLevel, Absorbed).relation_id(),
+            send.relation_id()
+        );
+        assert_ne!(shape(Send, Flat, Folded).relation_id(), send.relation_id());
+        assert_ne!(
+            shape(Receive, TwoLevel, Folded).relation_id(),
+            send.relation_id()
+        );
     }
 
     #[test]
@@ -659,23 +672,29 @@ mod tests {
             PrefixMode::Folded,
         );
         let one = LanePlan::new(send, 1);
-        assert_eq!(one.lane_permutations(), &[48]);
+        assert_eq!(one.lane_permutations(), &[65]);
         assert_eq!(one.glue_lane(), 0);
-        assert_eq!(one.glue_start(), Ok(48 * 37));
+        assert_eq!(one.glue_start(), Ok(65 * 37));
         let two = LanePlan::new(send, 2);
-        // 17 | 13, then 6 onto 13, 6 onto 17, 6 onto 19.
-        assert_eq!(two.lane_permutations(), &[23, 25]);
+        // 16 | 16, then 15 onto 16, 13 onto 16, 5 onto 29.
+        assert_eq!(two.lane_permutations(), &[31, 34]);
+        assert_eq!(two.lane_of(HashSite::Predecessor), 0);
+        assert_eq!(two.lane_of(HashSite::Successor), 1);
         assert_eq!(two.lane_of(HashSite::Statement), 0);
-        assert_eq!(two.lane_of(HashSite::Request), 1);
+        assert_eq!(two.lane_of(HashSite::Credit), 1);
+        assert_eq!(two.lane_of(HashSite::Chain), 1);
         assert_eq!(two.glue_lane(), 0);
-        assert_eq!(two.lane_of(HashSite::Chain), 0);
         assert_eq!(
             two.folded(send, 0),
-            vec![(STATEMENT_DOMAIN, 32), (SEND_CHAIN_DOMAIN, 10)]
+            vec![(send.layout.domain(), 31), (STATEMENT_DOMAIN, 29)]
         );
         assert_eq!(
             two.folded(send, 1),
-            vec![(REQUEST_DOMAIN, 24), (send.layout.domain(), 11)]
+            vec![
+                (send.layout.domain(), 31),
+                (CREDIT_DOMAIN, 24),
+                (SEND_CHAIN_DOMAIN, 8)
+            ]
         );
         let absorbed = shape(
             StepRelation::Send,
@@ -683,7 +702,7 @@ mod tests {
             PrefixMode::Absorbed,
         );
         assert!(LanePlan::new(absorbed, 2).folded(absorbed, 0).is_empty());
-        assert_eq!(LanePlan::new(send, 0).lane_permutations(), &[48]);
+        assert_eq!(LanePlan::new(send, 0).lane_permutations(), &[65]);
         assert_eq!(least_loaded(&[3, 1, 1]), 1);
         assert_eq!(least_loaded(&[]), 0);
     }

@@ -1842,9 +1842,11 @@ pub(crate) mod tests {
         let producer_budget = test_credential_budget();
         let budget = test_credential_budget();
         use iroha_data_model::isi::kagemusha_v1::{
-            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-            KagemushaMintFinalityAuthorityGenerationV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
             KagemushaMintFinalitySeatReadinessContextV1,
+        };
+        use iroha_data_model::sumeragi::epoch::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
         };
         let network_id = network_id_v1(0xC1);
         let mut peers = (1..=4_u8)

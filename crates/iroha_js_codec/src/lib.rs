@@ -1303,38 +1303,6 @@ where
     Ok(instruction)
 }
 
-fn kagemusha_instruction_from_json(value: &json::Value) -> Option<CodecResult<InstructionBox>> {
-    let json::Value::Object(fields) = value else {
-        return None;
-    };
-    let payload = fields.get("TopUpKagemushaV1")?;
-    Some((|| {
-        exact_json_object_fields(value, &["TopUpKagemushaV1"], "instruction envelope")?;
-        let instruction: iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1 =
-            strict_typed_instruction(payload, "TopUpKagemushaV1")?;
-        Ok(Box::new(instruction).into_instruction_box())
-    })())
-}
-
-fn kagemusha_instruction_to_json(instruction: &InstructionBox) -> Option<CodecResult<json::Value>> {
-    let typed = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()?;
-    Some((|| {
-        let payload = json::to_value(typed).map_err(codec_error)?;
-        let reconstructed: iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1 =
-            strict_typed_instruction(&payload, "TopUpKagemushaV1")?;
-        if norito::encode_canonical(typed).map_err(codec_error)?
-            != norito::encode_canonical(&reconstructed).map_err(codec_error)?
-        {
-            return Err(CodecError::failure(
-                "typed instruction JSON changes canonical Norito bytes",
-            ));
-        }
-        Ok(instruction_envelope("TopUpKagemushaV1", payload))
-    })())
-}
-
 /// Admit a JSON instruction value with the existing explicit variant checks.
 ///
 /// # Errors
@@ -1379,9 +1347,6 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
     if let Some(instruction) = verifying_key_instructions::from_json(&value) {
         return instruction;
     }
-    if let Some(instruction) = kagemusha_instruction_from_json(&value) {
-        return instruction;
-    }
     validate_governance_instruction_selectors(&value)?;
     // These instructions carry release-critical JSON contracts. The generic
     // `InstructionBox` decoder may accept data-model defaults and unknown
@@ -1415,9 +1380,6 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
             || instruction.as_any().is::<RegisterSmartContractCode>()
             || instruction.as_any().is::<RegisterSmartContractBytes>()
             || instruction.as_any().is::<RemoveSmartContractBytes>()
-            || instruction
-                .as_any()
-                .is::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
         {
             return Err(CodecError::new(
                 CodecErrorKind::InvalidArgument,
@@ -3612,9 +3574,6 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
         return value;
     }
     if let Some(value) = verifying_key_instructions::to_json(instruction) {
-        return value;
-    }
-    if let Some(value) = kagemusha_instruction_to_json(instruction) {
         return value;
     }
     let instruction_ref: &dyn InstructionTrait = &**instruction;

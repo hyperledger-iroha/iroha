@@ -159,24 +159,25 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
         )?;
     }
     runtime.hosts.validate_physical_binding(&old.hosts)?;
-    let edge = &runtime.native_edge.claims.release;
-    need(
-        old.edge.slug == "taira-edge"
-            && old.edge.endpoint.host_identity_sha256
-                == runtime.hosts.native_edge.endpoint.host_identity_sha256
-            && edge.commit == old.revision.commit
-            && edge.config_sha256
-                == runtime
-                    .native_edge
-                    .claims
-                    .owned_publication
-                    .publication
-                    .sha256
-            && old.edge.artifacts.iter().any(|artifact| {
-                artifact.role == "edge_config" && artifact.sha256 == edge.config_sha256
-            }),
-        "independently captured native edge differs from selected predecessor",
-    )
+    let claims = &runtime.native_edge.claims;
+    need(old.edge.slug == "taira-edge"
+        && old.edge.endpoint.host_identity_sha256 == runtime.hosts.native_edge.endpoint.host_identity_sha256,
+        "independently captured native edge has another physical owner")?;
+    match &claims.initial_state {
+        reset::EdgeInitialStateV1::Vacant => need(
+            claims.owned_publication.is_none(),
+            "vacant native edge cannot borrow a publication from another namespace",
+        ),
+        reset::EdgeInitialStateV1::AdmittedRelease(edge) => need(
+            edge.commit == old.revision.commit
+                && edge.config_sha256 == claims.owned_publication()?.publication.sha256
+                && old.edge.artifacts.iter().any(|artifact| {
+                    artifact.role == "edge_config" && artifact.sha256 == edge.config_sha256
+                }),
+            "independently captured native edge differs from selected predecessor",
+        ),
+    }
+
 }
 
 /// A failed reset remains the transition predecessor, while its admitted prior
@@ -232,8 +233,8 @@ fn bind_inventory_lineage(
             )?;
         }
         need(
-            json::to_vec(predecessor.edge.admitted_release()?)?
-                == json::to_vec(&runtime.native_edge.claims.release)?,
+            json::to_vec(&predecessor.edge.initial_state)?
+                == json::to_vec(&runtime.native_edge.claims.initial_state)?,
             "rolled-back native edge does not bind the restored release",
         )?;
     } else {
@@ -375,7 +376,9 @@ mod tests {
             .is_err()
         );
         wrong_runtime = runtime.clone();
-        wrong_runtime.native_edge.claims.release.config_sha256 = "e".repeat(64);
+        if let reset::EdgeInitialStateV1::AdmittedRelease(release) = &mut wrong_runtime.native_edge.claims.initial_state {
+            release.config_sha256 = "e".repeat(64);
+        }
         assert!(
             bind_inventory_lineage(
                 &selected,
@@ -982,8 +985,7 @@ impl PrepareTopologyIntent {
                 .native_guard
                 .sha256
                 .clone();
-            intent.edge.initial_state =
-                EdgeInitialStateV1::AdmittedRelease(runtime.native_edge.claims.release.clone());
+            intent.edge.initial_state = runtime.native_edge.claims.initial_state.clone();
             intent.edge.artifacts = vec![
                 artifact(
                     "iroha_cli",

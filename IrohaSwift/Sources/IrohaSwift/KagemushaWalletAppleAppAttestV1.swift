@@ -2,15 +2,23 @@ import Foundation
 
 // Enrollment step E5 of the iPhone wallet adapter: App Attest evidence for a Secure Enclave
 // payment key (spec §2.2; G2 design rev 2, iOS "Enrollment evidence"). The App Attest calls go
-// through the retained `KagemushaAppAttestServiceV1` protocol; this adapter never calls
-// DeviceCheck itself.
+// through the `KagemushaWalletAppAttestServiceV1` protocol below; only its thin iOS system
+// adapter, `KagemushaWalletAppleAppAttestServiceV1`, calls DeviceCheck.
+
+/// Raw App Attest operations; these operations do not authorize value movement.
+public protocol KagemushaWalletAppAttestServiceV1: Sendable {
+  var isSupported: Bool { get }
+  func generateKey() async throws -> String
+  func attestKey(_ keyID: String, clientDataHash: Data) async throws -> Data
+  func generateAssertion(_ keyID: String, clientDataHash: Data) async throws -> Data
+}
 
 /// App Attest enrollment evidence of one payment key.
 public struct KagemushaWalletAppleEnrollmentEvidenceV1: Equatable, Sendable {
   /// App Attest counter consumed by ``keyBindingAssertion``: the first assertion of a fresh App
   /// Attest key (its attestation carries counter 0). Any later assertion owner of
-  /// ``appAttestKeyID`` (renewal) continues after this counter; it never bootstraps the key as
-  /// unused (`KagemushaAppAttestFileIntentStoreV1.bootstrapNew` starts at 0).
+  /// ``appAttestKeyID`` (renewal) continues after this counter; it never treats the key as
+  /// unused, which would restart the counter at 0.
   public static let keyBindingAssertionCounter: UInt32 = 1
 
   /// Identifier of the fresh App Attest key (base64 of 32 bytes); the enrollment owner keeps
@@ -125,3 +133,25 @@ extension KagemushaWalletApplePlatformV1 {
     }
   }
 }
+
+#if os(iOS) && canImport(DeviceCheck)
+import DeviceCheck
+
+/// Thin iOS system adapter; enrollment and assertion verification remain independent.
+@available(iOS 15.0, *)
+public final class KagemushaWalletAppleAppAttestServiceV1: KagemushaWalletAppAttestServiceV1,
+  @unchecked Sendable
+{
+  private let service = DCAppAttestService.shared
+
+  public init() {}
+  public var isSupported: Bool { service.isSupported }
+  public func generateKey() async throws -> String { try await service.generateKey() }
+  public func attestKey(_ keyID: String, clientDataHash: Data) async throws -> Data {
+    try await service.attestKey(keyID, clientDataHash: clientDataHash)
+  }
+  public func generateAssertion(_ keyID: String, clientDataHash: Data) async throws -> Data {
+    try await service.generateAssertion(keyID, clientDataHash: clientDataHash)
+  }
+}
+#endif

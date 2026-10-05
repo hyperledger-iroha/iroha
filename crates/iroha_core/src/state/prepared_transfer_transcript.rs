@@ -72,13 +72,7 @@ impl StateTransaction<'_, '_> {
                 authority_digest,
                 poseidon_preimage_digest,
             },
-            capture: self.fastpq_source_context.capture_transcript(
-                self.tx_call_hash,
-                batch_hash,
-                self.current_lane_id,
-                self.current_dataspace_id,
-                *self.committed_fragments,
-            ),
+            capture: self.capture_original_fastpq_transcript_source(batch_hash),
         })
     }
 
@@ -226,13 +220,7 @@ impl StateTransaction<'_, '_> {
         ) -> Result<T, Error>,
     ) -> Result<T, Error> {
         self.flush_retail_fee_transfer_transcripts()?;
-        let capture = self.fastpq_source_context.capture_transcript(
-            self.tx_call_hash,
-            batch_hash,
-            self.current_lane_id,
-            self.current_dataspace_id,
-            *self.committed_fragments,
-        );
+        let capture = self.capture_original_fastpq_transcript_source(batch_hash);
         let mut empty_deltas = Vec::new();
         let mut occurrence: Option<PreparedTransferOccurrence> = None;
         let mut preparation_failed = false;

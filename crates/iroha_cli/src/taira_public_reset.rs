@@ -1902,7 +1902,7 @@ fn validate_inventory_custody_with_revision<Beacon>(
         ));
     }
 
-    let mut hostnames = BTreeSet::new();
+    inventory.hosts.validate_roles(&inventory.validators, &inventory.edge)?;
     let mut node_fingerprints = BTreeSet::new();
     let mut build_fingerprint = None;
     let mut config_fingerprint = None;
@@ -1913,9 +1913,6 @@ fn validate_inventory_custody_with_revision<Beacon>(
             &inventory.revision,
             inventory.qualification_scope,
         )?;
-        if !hostnames.insert(validator.endpoint.hostname.clone()) {
-            return Err(eyre!("validator hostnames must be distinct"));
-        }
         if !node_fingerprints.insert(validator.node_fingerprint.clone()) {
             return Err(eyre!("validator node fingerprints must be distinct"));
         }
@@ -1989,18 +1986,6 @@ fn validate_inventory_custody_with_revision<Beacon>(
         ));
     }
     validate_edge(&inventory.edge, &inventory.revision, &inventory.hosts)?;
-    if !hostnames.insert(inventory.edge.endpoint.hostname.clone()) {
-        return Err(eyre!("edge hostname must be distinct from every validator"));
-    }
-    // V1 has one durable host progress record. Its mutation boundaries cover
-    // every validator only when all five roles share the authenticated SSH key.
-    if inventory.validators.iter().any(|validator| {
-        validator.endpoint.host_identity_sha256 != inventory.edge.endpoint.host_identity_sha256
-    }) {
-        return Err(eyre!(
-            "public-reset V1 requires all four validators and the edge on one authenticated SSH host identity"
-        ));
-    }
     validate_lower_hex(
         "artifact closure SHA-256",
         &inventory.artifact_closure_sha256,
@@ -2464,10 +2449,7 @@ fn validate_edge(
                 .native_capability
                 .incumbent
                 .claims
-                .owned_publication
-                .publication
-                .file
-                .path
+                .nginx_config
         || edge.platform.os != "macos"
         || edge.platform.arch != "aarch64"
         || edge.platform.kvm_api_version != 0
@@ -2494,16 +2476,16 @@ fn validate_edge(
         validate_lower_hex("edge rollback CLI SHA-256", &release.cli_sha256, 64)?;
         validate_lower_hex("edge rollback config SHA-256", &release.config_sha256, 64)?;
         if json::to_json(release)?
-            != json::to_json(&edge.native_capability.incumbent.claims.release)?
+            != json::to_json(edge.native_capability.incumbent.claims.admitted_release()?)?
         {
             return Err(eyre!(
                 "native edge rollback release differs from its signed captured incumbent"
             ));
         }
-    } else {
-        return Err(eyre!(
-            "native edge requires an independently captured owned incumbent publication"
-        ));
+    } else if !matches!(edge.native_capability.incumbent.claims.initial_state, EdgeInitialStateV1::Vacant)
+        || edge.native_capability.incumbent.claims.owned_publication.is_some()
+    {
+        return Err(eyre!("vacant edge differs from its independently captured initial occupancy"));
     }
     validate_artifacts(
         &edge.artifacts,
@@ -9325,6 +9307,7 @@ mod executor_model {
                     .incumbent
                     .claims
                     .owned_publication
+                    .as_ref().expect("captured owned publication")
                     .operation_id,
                 canonical
                     .edge
@@ -9332,6 +9315,7 @@ mod executor_model {
                     .incumbent
                     .claims
                     .owned_publication
+                    .as_ref().expect("captured owned publication")
                     .operation_id
             );
 
@@ -9376,6 +9360,25 @@ mod executor_model {
                     "vacant target cannot discard admitted release content (edge={edge})"
                 );
             }
+        }
+
+        #[test]
+        fn native_edge_vacancy_requires_independent_signed_occupancy() {
+            let mut inventory = sample_inventory();
+            let edge = &mut inventory.edge;
+            let mut claims = edge.native_capability.incumbent.claims.clone();
+            let key = KeyPair::from_seed(b"mac-native-capture".to_vec(), Algorithm::Ed25519);
+            assert_eq!(key.public_key().to_string(), inventory.hosts.native_edge.capture_public_key);
+            edge.initial_state = EdgeInitialStateV1::Vacant;
+            assert!(validate_edge(edge, &inventory.revision, &inventory.hosts).is_err());
+            claims.initial_state = EdgeInitialStateV1::Vacant;
+            claims.owned_publication = None;
+            claims.completion = host_pair::NativeEdgeCompletionProvenanceV1::Vacant;
+            edge.native_capability.incumbent = host_pair::SignedNativeEdgeCaptureV1::sign(claims, &key).unwrap();
+            edge.native_capability.incumbent_nginx_request = None;
+            validate_edge(edge, &inventory.revision, &inventory.hosts).unwrap();
+            edge.nginx_config = "/another/native/publication.conf".into();
+            assert!(validate_edge(edge, &inventory.revision, &inventory.hosts).is_err());
         }
 
         #[test]
@@ -10143,6 +10146,60 @@ mod executor_model {
                     }
                 })
                 .collect()
+        }
+    }
+}
+
+#[cfg(test)]
+mod host_pair_inventory_custody_tests {
+    use super::*;
+
+    fn validate_custody(inventory: &InventoryV1) -> Result<()> {
+        validate_inventory_custody_with_revision(inventory, |revision| {
+            validate_revision_source_fields(revision)?;
+            validate_revision_build_fields(revision)
+        })
+    }
+
+    #[test]
+    fn host_pair_inventory_custody_accepts_four_shared_guest_roles_and_distinct_native_mac() {
+        for vacant in [false, true] {
+            let mut inventory = sample_inventory_fixture();
+            if vacant {
+                for validator in &mut inventory.validators {
+                    validator.initial_state = ValidatorInitialStateV1::Vacant;
+                }
+            }
+            assert!(inventory.validators.iter().all(|validator| {
+                validator.endpoint.hostname == inventory.hosts.validator_guest.endpoint.hostname
+                    && validator.endpoint.host_identity_sha256
+                        == inventory.hosts.validator_guest.endpoint.host_identity_sha256
+            }));
+            assert_ne!(inventory.edge.endpoint.host_identity_sha256,
+                inventory.hosts.validator_guest.endpoint.host_identity_sha256);
+            validate_custody(&inventory).unwrap();
+            let bytes = canonical_inventory_bytes(&inventory).unwrap();
+            history::decode(&bytes, "current host pair custody").unwrap();
+        }
+    }
+
+    #[test]
+    fn host_pair_inventory_custody_rejects_foreign_routes_and_duplicate_node_role_identities() {
+        let original = sample_inventory_fixture();
+        for mutation in 0..5 {
+            let mut changed = original.clone();
+            match mutation {
+                0 => changed.validators[1].endpoint.hostname = "foreign-guest.invalid".into(),
+                1 => changed.validators[1].node_fingerprint = changed.validators[0].node_fingerprint.clone(),
+                2 => changed.validators[1].slug = changed.validators[0].slug.clone(),
+                3 => changed.validators[1].service_root = changed.validators[0].service_root.clone(),
+                _ => changed.edge.endpoint.host_identity_sha256 =
+                    changed.hosts.validator_guest.endpoint.host_identity_sha256.clone(),
+            }
+            let error = validate_custody(&changed).unwrap_err();
+            if mutation == 1 {
+                assert!(error.to_string().contains("validator node fingerprints must be distinct"));
+            }
         }
     }
 }

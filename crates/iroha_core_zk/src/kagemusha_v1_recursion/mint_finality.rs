@@ -1614,7 +1614,7 @@ mod tests {
 
     #[test]
     fn candidate_and_prepared_seat_possession_are_distinct_and_replay_bound() {
-        use iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1;
+        use iroha_data_model::sumeragi::epoch::BeaconEpochBindingV1;
         let authority = runtime_generation_fixture(1);
         let keys = &authority.validators[1];
         let seed = [0xB1; 32];
@@ -1661,7 +1661,7 @@ mod tests {
             last_height: 20,
             validator_index: 1,
             beacon: BeaconEpochBindingV1::Installed(
-                iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                iroha_data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1 {
                     session_id: [0x22; 32],
                     transcript_hash: [0x23; 32],
                 },
@@ -1711,7 +1711,7 @@ mod tests {
                 6 => changed.validator_index = 2,
                 7 => {
                     changed.beacon = BeaconEpochBindingV1::Installed(
-                        iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                        iroha_data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1 {
                             session_id: [0x22; 32],
                             transcript_hash: [0x24; 32],
                         },
@@ -1746,7 +1746,7 @@ mod tests {
 
     #[test]
     fn retained_generation_signs_new_epoch_with_distinct_nonce_and_rejects_replay() {
-        use iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1;
+        use iroha_data_model::sumeragi::epoch::ValidatorEpochDecisionV1;
         let authority = runtime_generation_fixture(0);
         let signer =
             KagemushaMintFinalitySignerV1::from_seed(Zeroizing::new([0xB1; 32]), 1, &authority)
@@ -1758,7 +1758,7 @@ mod tests {
             &authority,
             20,
             crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
-            KagemushaMintFinalityEpochDecisionV1::Retain,
+            ValidatorEpochDecisionV1::Retain,
             [0; 32],
         );
         let message = KagemushaMintFinalitySealMessageV1 {

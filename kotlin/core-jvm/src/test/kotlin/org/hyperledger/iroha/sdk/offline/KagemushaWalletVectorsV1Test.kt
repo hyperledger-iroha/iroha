@@ -34,25 +34,49 @@ import org.hyperledger.iroha.sdk.norito.Varint
 import org.junit.jupiter.api.Test
 
 /**
- * Consumes the Rust-written `fixtures/kagemusha/wallet_v1_vectors.json` (design §8, C11):
- * recomputes every digest, checks every signature verdict with the raw low-S check before JCA,
- * validates every envelope header and per-kind bound against the Kotlin constants, and round-trips
- * the strict `kgm1:` text.
+ * Consumes the Rust-written `fixtures/kagemusha/wallet_v1_vectors.json` (wire record
+ * `specs/kagemusha_wallet_wire_v1.md` section 5): recomputes every digest, including both proof
+ * digest domains over the stand-in Ω and σ bytes; checks every signature verdict with the raw
+ * low-S check before JCA; validates every envelope header, scheme field and per-kind bound against
+ * the Kotlin constants and round-trips the strict `kgm1:` text; re-encodes every object frame
+ * byte-identically; and re-derives the σ-field element lists from their transcripts and frames.
+ * Typed decoding of message bodies is TODO(G4).
  */
 class KagemushaWalletVectorsV1Test {
     @Test fun `bounds prefixes and Norito header facts match the fixture`() {
         val bounds = vectors.obj("bounds")
+        // A bound added to or removed from the fixture must be mirrored here first.
+        assertEquals(
+            setOf(
+                "certificate_set_max",
+                "credential_max_bytes",
+                "fold_record_max_bytes",
+                "lineage_max_bytes",
+                "message_max_bytes",
+                "message_text_max_bytes",
+                "proof_caps",
+                "session_max_bytes",
+                "session_text_max_bytes",
+                "text_prefix",
+                "version",
+            ),
+            bounds.keys,
+        )
         assertEquals(KagemushaWalletWireV1.VERSION, bounds.int("version"))
         assertEquals(KagemushaWalletWireV1.TEXT_PREFIX, bounds.text("text_prefix"))
         assertEquals(KagemushaWalletWireV1.SESSION_MAX_BYTES, bounds.int("session_max_bytes"))
         assertEquals(KagemushaWalletWireV1.MESSAGE_MAX_BYTES, bounds.int("message_max_bytes"))
         assertEquals(KagemushaWalletWireV1.SESSION_TEXT_MAX_BYTES, bounds.int("session_text_max_bytes"))
         assertEquals(KagemushaWalletWireV1.MESSAGE_TEXT_MAX_BYTES, bounds.int("message_text_max_bytes"))
-        assertEquals(KagemushaWalletWireV1.PROOF_MAX_BYTES, bounds.int("proof_max_bytes"))
-        assertEquals(
-            KagemushaWalletWireV1.CREDIT_STATUS_PROOF_MAX_BYTES,
-            bounds.int("credit_status_proof_max_bytes"),
-        )
+        assertEquals(KagemushaWalletMessageKindV1.LINEAGE.maximumFrameBytes, bounds.int("lineage_max_bytes"))
+        // σ and Ω have no pinned byte caps until the artifact set fixes them (owner question Q6):
+        // the frame that carries them is their only bound, so there is no Kotlin proof cap.
+        assertTrue(bounds.text("proof_caps").startsWith("none pinned"), bounds.text("proof_caps"))
+        // The standalone credential and fold-record caps are the caps of their frame identities.
+        val frameCaps = vectors.array("frames").map { it.jsonObject }
+            .associate { it.text("type") to it.int("max_bytes") }
+        assertEquals(frameCaps.getValue("KagemushaWalletCredentialV1"), bounds.int("credential_max_bytes"))
+        assertEquals(frameCaps.getValue("KagemushaWalletFoldRecordV1"), bounds.int("fold_record_max_bytes"))
         assertEquals(KagemushaWalletWireV1.CERTIFICATE_SET_MAX, bounds.int("certificate_set_max"))
         assertEquals(KagemushaWalletWireV1.DIGEST_PREFIX, vectors.text("domain_prefix"))
         assertContentEquals(
@@ -103,8 +127,9 @@ class KagemushaWalletVectorsV1Test {
             assertEquals(entry.int("tag"), kind.wireTag)
             assertEquals(kind, KagemushaWalletMessageKindV1.fromWireTag(entry.int("tag")))
         }
+        assertEquals(KagemushaWalletMessageKindV1.LINEAGE, KagemushaWalletMessageKindV1.fromWireTag(7))
         assertNull(KagemushaWalletMessageKindV1.fromWireTag(0))
-        assertNull(KagemushaWalletMessageKindV1.fromWireTag(7))
+        assertNull(KagemushaWalletMessageKindV1.fromWireTag(8))
         assertNull(KagemushaWalletMessageKindV1.fromLabel("offer"))
         for (kind in KagemushaWalletMessageKindV1.entries) {
             assertEquals(KagemushaWalletWireV1.textBytesForFrame(kind.maximumFrameBytes), kind.maximumTextBytes)
@@ -121,18 +146,86 @@ class KagemushaWalletVectorsV1Test {
             assertContentEquals(vector.hex("preimage_hex"), preimage, vector.text("object"))
             assertContentEquals(vector.hex("digest_hex"), KagemushaWalletWireV1.digest(role, body), vector.text("object"))
             assertContentEquals(sha256(preimage), KagemushaWalletWireV1.digest(role, body))
-            if (role == KagemushaWalletDigestRoleV1.PROOF) {
-                assertTrue(vector.bool("stand_in_proof"))
-                assertTrue(body.indices.all { index -> unsigned(body[index]) == index % 251 })
-            }
         }
         assertEquals(KagemushaWalletDigestRoleV1.entries.toSet(), seen)
+        // The superseded pre-split roles are gone, not aliased.
+        for (label in listOf("dependencies", "credit-status-statement")) {
+            assertNull(KagemushaWalletDigestRoleV1.fromLabel(label), label)
+        }
         assertEquals(
             KagemushaWalletDigestRoleV1.entries.size,
             KagemushaWalletDigestRoleV1.entries.map { it.label }.toSet().size,
         )
         assertNull(KagemushaWalletDigestRoleV1.fromLabel("policy-chunk"))
         assertNull(KagemushaWalletDigestRoleV1.fromLabel(""))
+    }
+
+    @Test fun `proof digests bind the exact stand-in Ω and σ bytes in their two domains`() {
+        val proof = digestVector("proof")
+        val stepProof = digestVector("step-proof")
+        val lineage = digestVector("lineage")
+        for (vector in listOf(proof, stepProof, lineage)) {
+            assertTrue(vector.bool("stand_in_proof"), vector.text("object"))
+        }
+
+        // Send, Unload and Retiring: `LE32 len(Ω) || Ω || LE32 len(σ) || σ`, Ω being Ω(pred).
+        val (omega, sigma) = le32Parts(proof.hex("body_hex")).also { assertEquals(2, it.size) }
+        assertContentEquals(lineage.hex("body_hex"), omega)
+        assertSigmaStandIn(sigma)
+        // Every other operation, the σ-only domain: `LE32 len(σ) || σ`.
+        assertSigmaStandIn(le32Parts(stepProof.hex("body_hex")).single())
+
+        // Ω bytes are the 320-byte public transcript followed by the transport proof.
+        assertTrue(omega.size > LINEAGE_PUBLIC_BYTES)
+        val transport = omega.copyOfRange(LINEAGE_PUBLIC_BYTES, omega.size)
+        assertTrue(transport.indices.all { index -> unsigned(transport[index]) == (index + 7) % 251 })
+        val exposed = Transcript(omega.copyOf(LINEAGE_PUBLIC_BYTES))
+        assertEquals(KagemushaWalletWireV1.VERSION.toLong(), exposed.unsigned(2))
+        assertContentEquals(digestVector("scheme").hex("digest_hex"), exposed.take(32))
+        assertContentEquals(digestVector("relation").hex("digest_hex"), exposed.take(32))
+        assertCanonicalField(exposed.take(32), nonzero = true)
+        assertContentEquals(digestVector("wallet-id").hex("digest_hex"), exposed.take(32))
+        assertContentEquals(digestVector("credential").hex("digest_hex"), exposed.take(32))
+        assertContentEquals(key("payer_payment"), exposed.take(65))
+        assertTrue(exposed.unsigned(1) in 1L..2L, "lifecycle Active or Retiring")
+        exposed.take(8 + 4 + 16) // LE64 policy_epoch, LE32 enabled_controls, LE128 burned_total
+        val standIns = vectors.obj("stand_ins")
+        assertContentEquals(standIns.hex("lineage_pending_outgoing_root_hex"), exposed.take(32))
+        assertContentEquals(standIns.hex("credit_digest_root_hex"), exposed.take(32))
+        exposed.finish()
+    }
+
+    @Test fun `the Lineage envelope and the Payment carry the same Ω bytes`() {
+        val lineage = digestVector("lineage")
+        // Lineage message `{version, lineage: {public, proof}}`.
+        val message = recordFields(envelopeMessage(envelope("Lineage")))
+        assertEquals(2, message.size)
+        val fromLineage = omegaBytes(message[1])
+        assertContentEquals(lineage.hex("body_hex"), fromLineage)
+        assertContentEquals(
+            lineage.hex("digest_hex"),
+            KagemushaWalletWireV1.digest(KagemushaWalletDigestRoleV1.LINEAGE, fromLineage),
+        )
+
+        // Payment `{version, request, key, credential digest, send}`; Send package `{version,
+        // statement, lineage slot, step proof, receipt}` with the slot Present (tag 1) `{lineage}`.
+        val payment = recordFields(envelopeMessage(envelope("Payment")))
+        assertEquals(5, payment.size)
+        val send = recordFields(payment[4])
+        assertEquals(5, send.size)
+        val slot = send[2]
+        assertEquals(1, readIntLe(slot, 0), "Send package lineage slot is Present")
+        val present = recordFields(slot.copyOfRange(4, slot.size)).single()
+        assertContentEquals(fromLineage, omegaBytes(present))
+        // The Payment's carried payer key and credential digest are Ω's.
+        val exposed = recordFields(recordFields(present)[0])
+        assertContentEquals(exposed[6], payment[2])
+        assertContentEquals(exposed[5], payment[3])
+        // A Receive package carries no Ω(pred): its slot is None (tag 0) with no fields.
+        val receive = recordFields(objectVector("KagemushaWalletPackageV1", "Receive").let { frame ->
+            NoritoHeader.decode(frame, null).payload
+        })
+        assertContentEquals(byteArrayOf(0, 0, 0, 0), receive[2])
     }
 
     @Test fun `signed object digests recompute from the signature vectors`() {
@@ -332,6 +425,9 @@ class KagemushaWalletVectorsV1Test {
             val expectedKind = assertNotNull(KagemushaWalletMessageKindV1.fromLabel(vector.text("kind")), label)
             kinds += expectedKind
             assertEquals(expectedKind, envelope.kind, label)
+            // The scheme checked at decode: the body's (Offer, Request), the carried Request's
+            // (Payment), Ω's (Lineage) or the message's own field (wire record section 3.4).
+            assertContentEquals(schemeId, fieldAt(envelopeMessage(frame), schemePath(expectedKind)), label)
             assertEquals(vector.int("tag"), envelope.kind.wireTag, label)
             assertEquals(vector.int("bound"), envelope.kind.maximumFrameBytes, label)
             assertEquals(vector.int("text_bound"), envelope.kind.maximumTextBytes, label)
@@ -357,6 +453,62 @@ class KagemushaWalletVectorsV1Test {
             assertContentEquals(frame, decoded.frame(), label)
         }
         assertEquals(KagemushaWalletMessageKindV1.entries.toSet(), kinds)
+    }
+
+    @Test fun `vector Request Payment and Credited envelopes are structurally bound`() {
+        val frames = vectors.array("envelopes").associate {
+            it.jsonObject.text("variant") to it.jsonObject.hex("canonical_hex")
+        }
+        val request = frames.getValue("Request")
+        val payment = frames.getValue("Payment")
+        val receive = frames.getValue("Credited::Receive")
+        val status = frames.getValue("Credited::Status")
+        KagemushaWalletWireV1.requireExchangeBinding(request, payment)
+        KagemushaWalletWireV1.requireExchangeBinding(request, payment, receive)
+        KagemushaWalletWireV1.requireExchangeBinding(request, payment, status)
+        // The compact Payment carries the Request's signed body, not the whole Request message.
+        val signedRequest = recordFields(recordFields(envelopeMessage(payment))[1])
+        val requestMessage = recordFields(envelopeMessage(request))
+        assertContentEquals(requestMessage[0], signedRequest[0])
+        assertContentEquals(requestMessage[4], signedRequest[1])
+
+        val rejected = listOf(
+            "kinds swapped" to { KagemushaWalletWireV1.requireExchangeBinding(payment, request) },
+            "Credited as Payment" to { KagemushaWalletWireV1.requireExchangeBinding(request, receive) },
+            "Offer as Credited" to {
+                KagemushaWalletWireV1.requireExchangeBinding(request, payment, frames.getValue("Offer"))
+            },
+            "Lineage as Credited" to {
+                KagemushaWalletWireV1.requireExchangeBinding(request, payment, frames.getValue("Lineage"))
+            },
+            "truncated Credited" to {
+                KagemushaWalletWireV1.requireExchangeBinding(request, payment, receive.copyOf(receive.size - 1))
+            },
+            // Each mutation keeps the envelope structurally valid (its CRC64 is refreshed).
+            "Request with another body" to {
+                KagemushaWalletWireV1.requireExchangeBinding(withFlippedField(request, 0), payment)
+            },
+            "Request with another signature" to {
+                KagemushaWalletWireV1.requireExchangeBinding(withFlippedField(request, 4), payment)
+            },
+            "Payment with another signed Request" to {
+                KagemushaWalletWireV1.requireExchangeBinding(request, withFlippedField(payment, 1))
+            },
+            "Credited under another scheme" to {
+                KagemushaWalletWireV1.requireExchangeBinding(request, payment, withFlippedField(receive, 1))
+            },
+            "Credited::Status under another scheme" to {
+                KagemushaWalletWireV1.requireExchangeBinding(request, payment, withFlippedField(status, 1))
+            },
+        )
+        for ((name, attempt) in rejected) {
+            assertFailsWith<IllegalArgumentException>(name) { attempt() }
+        }
+        // The receiver credential, fee schedule and certificates are bound only by digest in the
+        // Request body, so changing them in the Request message leaves the structural binding.
+        KagemushaWalletWireV1.requireExchangeBinding(withFlippedField(request, 1), payment, receive)
+        // Evidence bytes are checked by the wallet's typed decoder (TODO(G4)), not by carriers.
+        KagemushaWalletWireV1.requireExchangeBinding(request, payment, withFlippedField(receive, 2))
     }
 
     @Test fun `every kind accepts its bound and rejects bound plus one`() {
@@ -423,7 +575,7 @@ class KagemushaWalletVectorsV1Test {
             "version" to reframedPayload { it.also { bytes -> bytes[1] = 2 } },
             "noncanonical varint" to reframedPayload { byteArrayOf(0x82.toByte(), 0x00) + it.copyOfRange(1, it.size) },
             "tag zero" to reframedPayload { it.also { bytes -> bytes[5] = 0 } },
-            "tag seven" to reframedPayload { it.also { bytes -> bytes[5] = 7 } },
+            "tag eight" to reframedPayload { it.also { bytes -> bytes[5] = 8 } },
             "tag high byte" to reframedPayload { it.also { bytes -> bytes[8] = 1 } },
             "message longer than its field" to reframedPayload { it + byteArrayOf(0) },
             "message shorter than its field" to reframedPayload { it.copyOf(it.size - 1) },
@@ -487,6 +639,154 @@ class KagemushaWalletVectorsV1Test {
             KagemushaWalletWireV1.encodeText(ByteArray(KagemushaWalletWireV1.MESSAGE_MAX_BYTES + 1))
         }
         assertEquals(largest, KagemushaWalletWireV1.encodeText(ByteArray(KagemushaWalletWireV1.MESSAGE_MAX_BYTES)))
+    }
+
+    @Test fun `every object vector is a canonical frame of its type that re-encodes byte-identically`() {
+        val identities = vectors.array("frames").map { it.jsonObject }.associateBy { it.text("type") }
+        val objects = vectors.array("objects").map { it.jsonObject }
+        assertTrue(objects.isNotEmpty())
+        for (vector in objects) {
+            val type = vector.text("type")
+            val label = "$type ${vector.text("variant")}"
+            val name = vector.text("frame_name")
+            val frame = vector.hex("canonical_hex")
+            assertEquals(KagemushaWalletWireV1.ENVELOPE_FRAME_NAME.substringBeforeLast("::") + "::" + type, name, label)
+            assertEquals(vector.int("frame_len"), frame.size, label)
+            identities[type]?.let { identity ->
+                assertEquals(identity.text("frame_name"), name, label)
+                assertTrue(frame.size <= identity.int("max_bytes"), label)
+            }
+            val schemaHash = SchemaHash.hash16(name)
+            val decoded = NoritoHeader.decode(frame, schemaHash)
+            decoded.header.validateChecksum(decoded.payload)
+            assertEquals(NoritoHeader.COMPACT_LEN, decoded.header.flags, label)
+            assertEquals(NoritoHeader.COMPRESSION_NONE, decoded.header.compression, label)
+            val padding = frame.size - NoritoHeader.HEADER_LENGTH - decoded.payload.size
+            assertTrue(padding in listOf(0, KagemushaWalletWireV1.ENVELOPE_PADDING_BYTES), "$label padding $padding")
+            // The first field of every wallet object is its version or a record that starts
+            // with one, so the payload splits into complete compact-length fields.
+            assertTrue(recordFields(decoded.payload).isNotEmpty(), label)
+            assertContentEquals(frame, frameOf(schemaHash, decoded.payload, padding), label)
+
+            val flipped = frame.copyOf().also { it[it.size - 1] = (it[it.size - 1].toInt() xor 1).toByte() }
+            assertFailsWith<IllegalArgumentException>(label) {
+                NoritoHeader.decode(flipped, schemaHash).let { it.header.validateChecksum(it.payload) }
+            }
+            assertFailsWith<IllegalArgumentException>(label) {
+                NoritoHeader.decode(frame, KagemushaWalletWireV1.envelopeSchemaHash())
+            }
+        }
+        // Local custody records are digested over their complete canonical frames.
+        val frameRoles = mapOf(
+            "marker" to "KagemushaWalletMarkerV1",
+            "capsule" to "KagemushaWalletRecoveryCapsuleV1",
+            "completion" to "KagemushaWalletCompletionRecordV1",
+            "fold" to "KagemushaWalletFoldRecordV1",
+        )
+        for ((role, type) in frameRoles) {
+            val body = digestVector(role).hex("body_hex")
+            assertTrue(
+                objects.any { it.text("type") == type && it.hex("canonical_hex").contentEquals(body) },
+                "$role digest body is a $type object vector",
+            )
+        }
+    }
+
+    @Test fun `σ-field element vectors follow the element rule`() {
+        val encodings = vectors.obj("field_encodings")
+        assertContentEquals(fieldBytes(FIELD_MODULUS), encodings.hex("modulus_le_hex"))
+        assertTrue(encodings.text("field").endsWith("0x" + FIELD_MODULUS.toString(16)), encodings.text("field"))
+        val domains = encodings.array("domains").map { it.jsonObject }
+        assertEquals(POSEIDON_DOMAINS, domains.associate { it.text("use") to it.text("ascii") })
+        for (domain in domains) {
+            val ascii = domain.text("ascii").toByteArray(Charsets.US_ASCII)
+            assertEquals(8, ascii.size)
+            assertContentEquals(ascii, domain.hex("u64_le_hex"))
+        }
+
+        val lists = mapOf(
+            "consumed_credit_leaf" to items(encodings, "consumed_credit_leaf"),
+            "pending_outgoing_leaf" to items(encodings, "pending_outgoing_leaf"),
+            "fee_claim_leaf" to items(encodings, "fee_claim_leaf"),
+            "credit_digest_leaf" to items(encodings, "credit_digest_leaf"),
+            "send_chain_append_from_empty" to items(encodings, "send_chain_append_from_empty"),
+            "recv_chain_append" to items(encodings, "recv_chain_append"),
+            "send_statement" to items(encodings.obj("send_statement"), "items"),
+            "receive_statement" to items(encodings.obj("receive_statement"), "items"),
+            "core" to items(encodings.obj("receive_successor_state"), "core_items"),
+            "rest" to items(encodings.obj("receive_successor_state"), "rest_items"),
+        )
+        val counts = mapOf(
+            "consumed_credit_leaf" to 4,
+            "pending_outgoing_leaf" to 9,
+            "fee_claim_leaf" to 5,
+            "credit_digest_leaf" to 5,
+            "send_chain_append_from_empty" to 10,
+            "recv_chain_append" to 6,
+            "send_statement" to 29,
+            "receive_statement" to 29,
+            "core" to 29,
+            "rest" to 19,
+        )
+        for ((name, list) in lists) {
+            assertEquals(counts.getValue(name), list.size, name)
+            for (element in list) assertCanonicalField(element, nonzero = false)
+        }
+
+        // Statement elements re-derive from the 440-byte statement transcripts.
+        val sendTranscript = encodings.obj("send_statement").hex("statement_hex")
+        val receiveTranscript = encodings.obj("receive_statement").hex("statement_hex")
+        assertContentEquals(digestVector("statement").hex("body_hex"), sendTranscript)
+        assertElements(lists.getValue("send_statement"), statementElements(sendTranscript), "send statement")
+        assertElements(lists.getValue("receive_statement"), statementElements(receiveTranscript), "receive statement")
+
+        // Core and rest elements re-derive from the canonical state frame.
+        val (core, rest) = stateElements(encodings.obj("receive_successor_state").hex("state_hex"))
+        assertElements(lists.getValue("core"), core, "core")
+        assertElements(lists.getValue("rest"), rest, "rest")
+
+        // Digests and identifiers enter as two limbs; the shared values agree across lists.
+        val send = lists.getValue("send_statement")
+        val receive = lists.getValue("receive_statement")
+        val creditId = limbs(digestVector("credit").hex("digest_hex"))
+        val pending = lists.getValue("pending_outgoing_leaf")
+        assertElements(creditId, send.subList(18, 20), "Send credit_id")
+        assertElements(send.subList(18, 27), pending, "pending-outgoing leaf is the Send descriptor")
+        assertElements(limbs(digestVector("request").hex("digest_hex")), pending.subList(7, 9), "request digest")
+        val sendChain = lists.getValue("send_chain_append_from_empty")
+        assertElements(listOf(ByteArray(32)), sendChain.subList(0, 1), "empty send_chain")
+        assertElements(pending, sendChain.subList(1, 10), "send_chain entry")
+        assertElements(receive.subList(18, 23), lists.getValue("recv_chain_append").subList(1, 6), "recv_chain entry")
+        val consumed = lists.getValue("consumed_credit_leaf")
+        assertElements(receive.subList(18, 20), consumed.subList(0, 2), "consumed credit_id")
+        assertElements(receive.subList(22, 23), consumed.subList(2, 3), "consumed amount")
+        assertElements(receive.subList(10, 11), consumed.subList(3, 4), "receive sequence")
+        val creditDigest = lists.getValue("credit_digest_leaf")
+        assertElements(creditId, creditDigest.subList(0, 2), "credit-digest credit_id")
+        assertElements(limbs(digestVector("payment").hex("digest_hex")), creditDigest.subList(2, 4), "Payment digest")
+        assertTrue(unsignedElement(creditDigest[4]) in 0L..1L, "burned flag")
+        val feeClaim = lists.getValue("fee_claim_leaf")
+        assertElements(creditId, feeClaim.subList(0, 2), "fee-claim credit_id")
+        assertElements(send.subList(24, 25), feeClaim.subList(2, 3), "fee")
+        assertElements(limbs(digestVector("fee-schedule").hex("digest_hex")), feeClaim.subList(3, 5), "fee schedule")
+        // The successor state agrees with its Receive statement.
+        assertElements(receive.subList(3, 7), rest.subList(0, 4), "scheme and asset")
+        assertElements(receive.subList(7, 9), core.subList(3, 5), "credential")
+        assertElements(receive.subList(9, 10), core.subList(0, 1), "lifecycle")
+        assertElements(receive.subList(10, 11), core.subList(7, 8), "sequence")
+        assertElements(receive.subList(11, 12), core.subList(9, 10), "next_load")
+
+        // Stand-in field values follow their labelled rule and are canonical.
+        val standIns = vectors.obj("stand_ins")
+        val seeded = listOf(standIns.hex("credit_digest_root_hex"), standIns.hex("lineage_pending_outgoing_root_hex")) +
+            standIns.obj("empty_roots_hex").values.map { hexBytes(it.jsonPrimitive.content) }
+        for (value in seeded) {
+            val seed = value[0]
+            assertTrue((0 until 31).all { value[it] == seed }, "stand-in seed")
+            assertEquals((seed.toInt() and 0x3f).toByte(), value[31])
+            assertCanonicalField(value, nonzero = true)
+        }
+        assertFailsWith<AssertionError> { assertCanonicalField(encodings.hex("modulus_le_hex"), nonzero = false) }
     }
 
     private fun assertVerdicts(
@@ -603,5 +903,323 @@ class KagemushaWalletVectorsV1Test {
             val message = byteArrayOf(tag.toByte(), 0, 0, 0) + variant
             return frameOf(byteArrayOf(2, 1, 0) + Varint.encode(message.size.toLong()) + message)
         }
+
+        /** A canonical frame of [schemaHash] around [payload] after [padding] zero bytes. */
+        fun frameOf(schemaHash: ByteArray, payload: ByteArray, padding: Int): ByteArray =
+            NoritoHeader(
+                schemaHash,
+                payload.size,
+                CRC64.compute(payload),
+                NoritoHeader.COMPACT_LEN,
+                NoritoHeader.COMPRESSION_NONE,
+            ).encode() + ByteArray(padding) + payload
+
+        /** Length of the fixed Ω public transcript that opens the Ω bytes. */
+        const val LINEAGE_PUBLIC_BYTES = 320
+
+        /** Width of the effect fields after the effect tag in a statement transcript. */
+        const val EFFECT_FIELDS_BYTES = 160
+
+        /** Effect elements per statement, zero-filled. */
+        const val EFFECT_ELEMENTS = 11
+
+        /** `p` of the σ field, Pasta `Fp` (Vesta scalar field). */
+        val FIELD_MODULUS: BigInteger =
+            BigInteger("40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16)
+
+        /** Poseidon domain labels by use (wire record section 3.2). */
+        val POSEIDON_DOMAINS: Map<String, String> = mapOf(
+            "core" to "kgwcore1",
+            "rest" to "kgwrest1",
+            "statement" to "kgwstmt1",
+            "send_chain" to "kgwschn1",
+            "recv_chain" to "kgwrchn1",
+            "credit_digest_leaf" to "kgwcdig1",
+            "consumed_credit_leaf" to "kgwccrd1",
+            "pending_outgoing_leaf" to "kgwpout1",
+            "load_recovery_leaf" to "kgwload1",
+            "redeem_recovery_leaf" to "kgwrdm_1",
+            "fee_claim_leaf" to "kgwfee_1",
+            "quota_usage_leaf" to "kgwquse1",
+        )
+
+        /**
+         * Effect field layouts after the tag, by effect tag: `D` a digest or identifier (two limbs),
+         * `L` an `LE128`, `Q` an `LE64` and `B` a one-byte tag (one element each).
+         */
+        val EFFECT_LAYOUTS: Map<Int, String> = mapOf(
+            1 to "DD",
+            2 to "DLLL",
+            3 to "DDLLLDQQ",
+            4 to "DDL",
+            5 to "DD",
+            6 to "DLLLD",
+            7 to "BDQ",
+            8 to "",
+        )
+
+        /**
+         * Norito field layouts of the state core and rest: `I` an integer or unit-enum tag (one
+         * element), `D` a digest or identifier (two limbs), `F` a σ-field value (one element) and
+         * `R` the nested regulatory policy record of three integers.
+         */
+        const val CORE_LAYOUT = "IDDIIIIIIFFFFFFFFIDIDIIIF"
+        const val REST_LAYOUT = "DDRDDDIDID"
+
+        /** Frame name of the private state, which travels only inside a recovery capsule. */
+        const val STATE_FRAME_NAME = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletStateV1"
+
+        /** The single digest vector of [role]. */
+        fun digestVector(role: String): JsonObject =
+            vectors.array("digests").map { it.jsonObject }.single { it.text("role") == role }
+
+        /** Canonical frame of the envelope vector [variant]. */
+        fun envelope(variant: String): ByteArray =
+            vectors.array("envelopes").map { it.jsonObject }
+                .single { it.text("variant") == variant }.hex("canonical_hex")
+
+        /** Canonical frame of the object vector of [type] and [variant]. */
+        fun objectVector(type: String, variant: String): ByteArray = vectors.array("objects").map { it.jsonObject }
+            .single { it.text("type") == type && it.text("variant") == variant }.hex("canonical_hex")
+
+        /** SEC1 public key of the fixed key [name]. */
+        fun key(name: String): ByteArray =
+            vectors.array("keys").map { it.jsonObject }.single { it.text("name") == name }.hex("public_key_hex")
+
+        /** The message record of an envelope frame: `[len] version [len] (tag [len] message)`. */
+        fun envelopeMessage(frame: ByteArray): ByteArray {
+            val payloadOffset = NoritoHeader.HEADER_LENGTH + KagemushaWalletWireV1.ENVELOPE_PADDING_BYTES
+            val payload = frame.copyOfRange(payloadOffset, frame.size)
+            var cursor = Varint.decode(payload, 0).nextOffset + 2
+            cursor = Varint.decode(payload, cursor).nextOffset + 4
+            cursor = Varint.decode(payload, cursor).nextOffset
+            return payload.copyOfRange(cursor, payload.size)
+        }
+
+        /** The compact-length fields `[len] field` that make up [record] exactly. */
+        fun recordFields(record: ByteArray): List<ByteArray> {
+            val fields = ArrayList<ByteArray>()
+            var offset = 0
+            while (offset < record.size) {
+                val length = Varint.decode(record, offset)
+                check(length.value <= (record.size - length.nextOffset).toLong()) { "field exceeds its record" }
+                offset = length.nextOffset + length.value.toInt()
+                fields.add(record.copyOfRange(length.nextOffset, offset))
+            }
+            return fields
+        }
+
+        /** The field at record [path] below [record]. */
+        fun fieldAt(record: ByteArray, path: List<Int>): ByteArray =
+            path.fold(record) { current, index -> recordFields(current)[index] }
+
+        /** Record path of the decode-time scheme below an envelope message of [kind]. */
+        fun schemePath(kind: KagemushaWalletMessageKindV1): List<Int> = when (kind) {
+            KagemushaWalletMessageKindV1.OFFER, KagemushaWalletMessageKindV1.REQUEST -> listOf(0, 1)
+            KagemushaWalletMessageKindV1.PAYMENT -> listOf(1, 0, 1)
+            KagemushaWalletMessageKindV1.CREDITED,
+            KagemushaWalletMessageKindV1.SESSION_CONTROL,
+            KagemushaWalletMessageKindV1.POLICY_DATA,
+            -> listOf(1)
+            KagemushaWalletMessageKindV1.LINEAGE -> listOf(1, 0, 1)
+        }
+
+        /**
+         * Copy of envelope [frame] with the last byte of top-level message field [field] flipped and
+         * the CRC64 refreshed, so it stays structurally valid.
+         */
+        fun withFlippedField(frame: ByteArray, field: Int): ByteArray {
+            val bytes = frame.copyOf()
+            val payloadOffset = NoritoHeader.HEADER_LENGTH + KagemushaWalletWireV1.ENVELOPE_PADDING_BYTES
+            var cursor = Varint.decode(bytes, payloadOffset).nextOffset + 2
+            cursor = Varint.decode(bytes, cursor).nextOffset + 4
+            cursor = Varint.decode(bytes, cursor).nextOffset
+            var end = cursor
+            for (index in 0..field) {
+                val length = Varint.decode(bytes, cursor)
+                end = length.nextOffset + length.value.toInt()
+                cursor = end
+            }
+            bytes[end - 1] = (bytes[end - 1].toInt() xor 1).toByte()
+            val crc = CRC64.compute(bytes.copyOfRange(payloadOffset, bytes.size))
+            for (index in 0 until 8) bytes[31 + index] = (crc ushr (8 * index)).toByte()
+            KagemushaWalletWireV1.inspectEnvelope(bytes)
+            return bytes
+        }
+
+        /**
+         * Ω bytes of a Norito `KagemushaWalletLineageV1 {public, proof}` record: the fixed public
+         * transcript (the head commitment record unwrapped, the lifecycle enum as its one-byte tag)
+         * followed by the transport proof bytes.
+         */
+        fun omegaBytes(record: ByteArray): ByteArray {
+            val (exposed, proof) = recordFields(record).also { check(it.size == 2) }
+            val fields = recordFields(exposed)
+            check(fields.size == 13)
+            val head = recordFields(fields[3]).single()
+            check(fields[7].size == 4 && readIntLe(fields[7], 0) in 1..2)
+            val transcript = fields[0] + fields[1] + fields[2] + head + fields[4] + fields[5] + fields[6] +
+                fields[7].copyOf(1) + fields[8] + fields[9] + fields[10] + fields[11] + fields[12]
+            check(transcript.size == LINEAGE_PUBLIC_BYTES)
+            // `Vec<u8>` is `LE64 count || bytes`.
+            check(proof.size >= 8 && readLongLe(proof, 0) == (proof.size - 8).toLong())
+            return transcript + proof.copyOfRange(8, proof.size)
+        }
+
+        /** The `LE32 len || bytes` parts that make up [bytes] exactly. */
+        fun le32Parts(bytes: ByteArray): List<ByteArray> {
+            val parts = ArrayList<ByteArray>()
+            var offset = 0
+            while (offset < bytes.size) {
+                check(offset + 4 <= bytes.size)
+                val length = readIntLe(bytes, offset)
+                offset += 4
+                check(length in 0..(bytes.size - offset))
+                parts.add(bytes.copyOfRange(offset, offset + length))
+                offset += length
+            }
+            return parts
+        }
+
+        /** A stand-in σ: non-empty, byte `i` is `i mod 251`. */
+        fun assertSigmaStandIn(sigma: ByteArray) {
+            assertTrue(sigma.isNotEmpty())
+            assertTrue(sigma.indices.all { index -> unsigned(sigma[index]) == index % 251 })
+        }
+
+        /** [value] is a canonical 32-byte little-endian σ-field value, nonzero when [nonzero]. */
+        fun assertCanonicalField(value: ByteArray, nonzero: Boolean) {
+            assertEquals(32, value.size)
+            val integer = BigInteger(1, value.reversedArray())
+            assertTrue(integer < FIELD_MODULUS, "noncanonical σ-field value")
+            if (nonzero) assertTrue(integer.signum() != 0, "zero σ-field value")
+        }
+
+        /** Little-endian 32-byte encoding of a σ-field value. */
+        fun fieldBytes(value: BigInteger): ByteArray =
+            ByteArray(32) { index -> value.shiftRight(8 * index).toInt().toByte() }
+
+        /** Element list [key] of [encodings]. */
+        fun items(encodings: JsonObject, key: String): List<ByteArray> =
+            encodings.array(key).map { hexBytes(it.jsonPrimitive.content) }
+
+        /** One integer element: the little-endian [bytes] zero-extended to 32 bytes. */
+        fun integerElement(bytes: ByteArray): ByteArray {
+            check(bytes.size in 1..16)
+            return ByteArray(32).also { bytes.copyInto(it) }
+        }
+
+        /** Two limbs of a 32-byte digest or identifier, low 16 bytes first. */
+        fun limbs(digest: ByteArray): List<ByteArray> {
+            check(digest.size == 32)
+            return listOf(integerElement(digest.copyOfRange(0, 16)), integerElement(digest.copyOfRange(16, 32)))
+        }
+
+        /** The small integer an element encodes. */
+        fun unsignedElement(element: ByteArray): Long {
+            check(element.size == 32 && (8 until 32).all { element[it].toInt() == 0 })
+            return readLongLe(element, 0)
+        }
+
+        /** σ public-input elements of a 440-byte statement transcript (wire record section 3.2). */
+        fun statementElements(transcript: ByteArray): List<ByteArray> {
+            val reader = Transcript(transcript)
+            val version = reader.take(2)
+            val scheme = reader.take(32)
+            val relation = reader.take(32)
+            val credential = reader.take(32)
+            val asset = reader.take(32)
+            val lifecycle = reader.take(1)
+            val sequence = reader.take(16)
+            val nextLoad = reader.take(16)
+            val controls = reader.take(4)
+            val burned = reader.take(16)
+            val lineageRoot = reader.take(32)
+            val predecessor = reader.take(32)
+            val successor = reader.take(32)
+            val tag = reader.take(1)
+            val effect = Transcript(reader.take(EFFECT_FIELDS_BYTES))
+            reader.finish()
+            val elements = ArrayList<ByteArray>()
+            elements.add(integerElement(version))
+            elements.addAll(limbs(relation))
+            elements.addAll(limbs(scheme))
+            elements.addAll(limbs(asset))
+            elements.addAll(limbs(credential))
+            for (integer in listOf(lifecycle, sequence, nextLoad, controls, burned)) {
+                elements.add(integerElement(integer))
+            }
+            elements.addAll(listOf(lineageRoot, predecessor, successor))
+            elements.add(integerElement(tag))
+            val effectStart = elements.size
+            for (field in EFFECT_LAYOUTS.getValue(unsigned(tag[0]))) {
+                when (field) {
+                    'D' -> elements.addAll(limbs(effect.take(32)))
+                    'L' -> elements.add(integerElement(effect.take(16)))
+                    'Q' -> elements.add(integerElement(effect.take(8)))
+                    'B' -> elements.add(integerElement(effect.take(1)))
+                    else -> error("unknown effect field $field")
+                }
+            }
+            assertTrue(effect.rest().all { it.toInt() == 0 }, "effect zero fill")
+            while (elements.size - effectStart < EFFECT_ELEMENTS) elements.add(ByteArray(32))
+            return elements
+        }
+
+        /** Core and rest elements of a canonical `KagemushaWalletStateV1` frame `{version, core, rest}`. */
+        fun stateElements(frame: ByteArray): Pair<List<ByteArray>, List<ByteArray>> {
+            val decoded = NoritoHeader.decode(frame, SchemaHash.hash16(STATE_FRAME_NAME))
+            decoded.header.validateChecksum(decoded.payload)
+            val state = recordFields(decoded.payload)
+            assertEquals(3, state.size)
+            assertContentEquals(byteArrayOf(1, 0), state[0])
+            val core = layoutElements(recordFields(state[1]), CORE_LAYOUT)
+            return core to layoutElements(recordFields(state[2]), REST_LAYOUT)
+        }
+
+        /** Elements of record [fields] under [layout] (see [CORE_LAYOUT]). */
+        fun layoutElements(fields: List<ByteArray>, layout: String): List<ByteArray> {
+            assertEquals(layout.length, fields.size)
+            val elements = ArrayList<ByteArray>()
+            for ((field, kind) in fields.zip(layout.toList())) {
+                when (kind) {
+                    'I' -> elements.add(integerElement(field))
+                    'D' -> elements.addAll(limbs(field))
+                    'F' -> elements.add(field.also { check(it.size == 32) })
+                    'R' -> elements.addAll(layoutElements(recordFields(field), "III"))
+                    else -> error("unknown layout field $kind")
+                }
+            }
+            return elements
+        }
+
+        /** Element-wise equality of two element lists. */
+        fun assertElements(expected: List<ByteArray>, actual: List<ByteArray>, label: String) {
+            assertEquals(expected.size, actual.size, label)
+            for (index in expected.indices) assertContentEquals(expected[index], actual[index], "$label element $index")
+        }
+
+        fun readIntLe(bytes: ByteArray, offset: Int): Int =
+            (0 until 4).fold(0) { value, index -> value or (unsigned(bytes[offset + index]) shl (8 * index)) }
+
+        fun readLongLe(bytes: ByteArray, offset: Int): Long =
+            (0 until 8).fold(0L) { value, index -> value or (unsigned(bytes[offset + index]).toLong() shl (8 * index)) }
+    }
+
+    /** Sequential reader over one fixed-layout transcript. */
+    private class Transcript(private val bytes: ByteArray) {
+        private var offset = 0
+
+        fun take(count: Int): ByteArray {
+            check(count in 0..(bytes.size - offset)) { "transcript is truncated" }
+            return bytes.copyOfRange(offset, offset + count).also { offset += count }
+        }
+
+        /** Little-endian unsigned integer of [count] bytes. */
+        fun unsigned(count: Int): Long = readLongLe(take(count).copyOf(8), 0)
+
+        fun rest(): ByteArray = take(bytes.size - offset)
+
+        fun finish() = assertEquals(bytes.size, offset, "transcript has trailing bytes")
     }
 }

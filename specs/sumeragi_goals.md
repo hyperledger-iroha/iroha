@@ -5,7 +5,7 @@ first-release Sumeragi core, node integration and application consumers.
 Implementation completion and network/release qualification are separate gates.
 Regression and fault diagnostics do not authorize or block deployment; on-chain governance
 owns deployment policy for testnet and production (§13.5).
-Required working directory: `/Users/takemiyamakoto/soramitsudev/iroha`. Required branch:
+Required working directory: `/Users/takemiyamakoto/dev/iroha`. Required branch:
 `optimizations`.
 
 Protocol contract: [specs/sumeragi.md](sumeragi.md). Implementation:
@@ -43,8 +43,15 @@ S2 and S3 come before S4. S5 and S6 build on S4. S7 gates the release.
 
 ### Active handoff completion gates
 
-The complete handoff goal is active as of 2026-09-30. Work starts with H1; independent
-implementation and simulator work may proceed in parallel. Each gate requires current-source
+This coding task owns H1–H5: production integration, native dataspaces and AMX,
+staking and committee transitions, authenticated snapshot restoration, and
+current-source validation with rebuilt native SDK artifacts. Taira deployment
+and live cutover execution and evidence (H6) are managed separately by the
+deployment owner and are outside this task. H6 remains an open project gate.
+
+H1–H5 remain active. All work uses the required checkout and branch above.
+Work starts with H1; independent implementation and simulator work may proceed
+in parallel. Each gate requires current-source
 evidence, and implementation coverage alone does not close its network or release acceptance.
 
 | Id | Outcome | Completion gate |
@@ -54,7 +61,7 @@ evidence, and implementation coverage alone does not close its network or releas
 | H3 | Staking and committee transitions (S8) | Complete authenticated lane offence attribution and original-pool resource accounting; prove E+2 selection, the full beacon preparation interval and paid 4→7→4 transitions with restart, rewards, exits and slashing. |
 | H4 | Authenticated snapshot restoration (S9) | Authenticate complete State, the exact certified native tip and retained history before restoration; reject substituted, incomplete and corrupt provenance and establish replay equivalence. |
 | H5 | Current-source qualification (S1/S2/S3) | All simulator scenarios at 10,000 seeds; every required mutation killed by its named test; whole-node signed RS16 loss/withholding, lane isolation/restart, workspace build/tests, strict applicable lint and rebuilt native SDK artifacts on the same candidate. |
-| H6 | Taira cutover (S7) | Authenticate Linux source/artifacts and native control authority; complete the fresh four-validator cutover through the canonical reset workflow and retain readiness, paid-write and restart evidence. |
+| H6 | Taira cutover (S7; deployment owner) | Authenticate Linux source/artifacts and native control authority; complete the fresh four-validator cutover through the canonical reset workflow and retain readiness, paid-write and restart evidence. |
 
 All six gates remain open. H6 uses the reset runbook's deployment authority and runtime-only
 signing inputs; local build or component results cannot stand in for live qualification.

@@ -322,7 +322,138 @@ def read_owned_publication_journal(reference, request, context, destination_path
     return opened, records
 
 
-def inspect_owned_publication_in_context(receipt: dict, request: dict, context: dict) -> None:
+def refuse_unresolved_destination_journals(context, destination_path, allowed):
+    """Share the bounded current public-journal exclusion before any creation."""
+    import stat
+    need, identity = _owned_need, context["identity"]
+    main_directory, owner = context["directory"], context["native"]["owner_uid"]
+    terminal = {"rolled_back_unqualified", "refused_before_publication"}
+    with os.scandir(main_directory) as entries:
+        names = []
+        for entry in entries:
+            need(len(names) < 4096, "journal_directory_size_bound")
+            names.append(entry.name)
+    for name in names:
+        if re.fullmatch(r"\.taira-native-nginx-apply-[0-9a-f]{32}\.receipt\.ndjson", name) is None:
+            continue
+        opened = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                         dir_fd=main_directory)
+        context["handles"].append(opened)
+        info = os.fstat(opened)
+        need(stat.S_ISREG(info.st_mode) and info.st_uid == owner and info.st_nlink == 1
+             and stat.S_IMODE(info.st_mode) == 0o600 and info.st_size <= 1048576,
+             "unsafe_prior_public_journal")
+        need(identity(os.stat(name, dir_fd=main_directory, follow_symlinks=False)) == identity(info),
+             "prior_journal_changed")
+        # These are this maintained owner's public metadata journals, not
+        # existing nginx config/key bodies. Never export their raw bytes.
+        rows = os.pread(opened, info.st_size + 1, 0).splitlines()
+        need(identity(info) == identity(os.fstat(opened))
+             == identity(os.stat(name, dir_fd=main_directory, follow_symlinks=False)) and rows,
+             "prior_journal_changed")
+        record = json.loads(rows[-1])
+        need(isinstance(record, dict) and record.get("schema") == "iroha.taira.native-nginx-apply.journal.v1",
+             "prior_journal_invalid")
+        if record.get("destination_path") == destination_path and record.get("phase") not in terminal and name not in allowed:
+            raise RuntimeError("unresolved_destination_journal")
+
+def inspect_vacant_publication_in_context(receipt: dict, request: dict, context: dict) -> None:
+    """Prove first-publication absence under the retained native owner lock."""
+    need = _owned_need
+    need(request["publication"] == {"kind": "create"}, "vacant_publication_kind")
+    directory = context["open_bound"](request["destination"]["directory"], True)
+    destination = str(Path(request["destination"]["directory"]["path"]) / request["destination"]["basename"])
+    need(os.fstat(directory).st_uid == context["native"]["owner_uid"]
+         and os.fstat(directory).st_dev == os.fstat(context["directory"]).st_dev,
+         "destination_owner_or_device")
+    journal_name = ".taira-native-nginx-apply-" + request["operation_id"] + ".receipt.ndjson"
+    def absent(name, parent):
+        try:
+            os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        raise RuntimeError("vacant_publication_already_owned")
+    def revalidate():
+        for name, opened in context["bound"].items():
+            context["revalidate"](context["native"][name], opened)
+        context["revalidate"](context["native"]["directory"], context["directory"], True)
+        context["revalidate"](request["destination"]["directory"], directory, True)
+        need(context["identity"](os.stat(".taira-native-nginx-check.lock", dir_fd=context["directory"],
+             follow_symlinks=False)) == context["identity"](os.fstat(context["lock"])) == context["lock_identity"],
+             "inspection_owner_changed")
+        need(observe_master(request["master"]) == request["master"], "master_identity_changed")
+        absent(request["destination"]["basename"], directory)
+        absent(journal_name, context["directory"])
+        refuse_unresolved_destination_journals(context, destination, set())
+    revalidate()
+    receipt.update(exit_code=0, operation_id=request["operation_id"], phase="vacant",
+        vacancy_checked=True, nginx_config=destination, master=request["master"],
+        native_inputs={name: dict(path=context["native"][name]["path"],
+            identity={key: int(value) for key, value in context["identity"](os.fstat(opened)).items()})
+            for name, opened in context["bound"].items()})
+    revalidate()
+
+
+def inspect_terminal_vacant_publication_in_context(receipt: dict, request: dict, context: dict,
+                                                  journal_reference: dict, terminal_phase=None) -> None:
+    """Prove a requested first publisher completed rollback/refusal, preserving its real journal."""
+    need = _owned_need
+    need(request["publication"] == {"kind": "create"}, "terminal_vacant_publication_kind")
+    directory = context["open_bound"](request["destination"]["directory"], True)
+    destination = str(Path(request["destination"]["directory"]["path"]) / request["destination"]["basename"])
+    need(os.fstat(directory).st_uid == context["native"]["owner_uid"]
+         and os.fstat(directory).st_dev == os.fstat(context["directory"]).st_dev,
+         "destination_owner_or_device")
+    need(validate_public_journal_reference(journal_reference, context["native"]) == request["operation_id"],
+         "terminal_vacant_operation_changed")
+    journal, records = read_owned_publication_journal(journal_reference, request, context, destination)
+    last = records[-1]
+    need(last["phase"] in {"rolled_back_unqualified", "refused_before_publication"}
+         and (terminal_phase is None or terminal_phase == last["phase"])
+         and records[0].get("prior") is None
+         and last["candidate_sha256"] == request["candidate_sha256"]
+         and last["renderer_source_sha256"] == request["renderer_source_sha256"]
+         and last["master"] == request["master"], "terminal_vacant_owner_binding")
+    temporary_names = set()
+    for record in records:
+        name = record.get("temporary_basename")
+        if name is not None:
+            need(isinstance(name, str) and re.fullmatch(r"\.taira-nginx-publish-[0-9a-f]{32}\.candidate", name) is not None,
+                 "terminal_vacant_temporary_identity")
+            temporary_names.add(name)
+    def absent(name):
+        try:
+            os.stat(name, dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        raise RuntimeError("terminal_vacant_publication_remains")
+    def revalidate():
+        for name, opened in context["bound"].items():
+            context["revalidate"](context["native"][name], opened)
+        context["revalidate"](context["native"]["directory"], context["directory"], True)
+        context["revalidate"](request["destination"]["directory"], directory, True)
+        context["revalidate"]({key: journal_reference[key] for key in ("path", "identity")}, journal)
+        need(context["identity"](os.stat(".taira-native-nginx-check.lock", dir_fd=context["directory"],
+             follow_symlinks=False)) == context["identity"](os.fstat(context["lock"])) == context["lock_identity"],
+             "inspection_owner_changed")
+        need(observe_master(request["master"]) == request["master"], "master_identity_changed")
+        absent(request["destination"]["basename"])
+        for name in temporary_names:
+            absent(name)
+        refuse_unresolved_destination_journals(context, destination, {Path(journal_reference["path"]).name})
+    revalidate()
+    receipt.update(exit_code=0, operation_id=request["operation_id"], phase="vacant_publisher_terminal",
+        vacancy_checked=True, nginx_config=destination, master=request["master"], terminal_phase=last["phase"],
+        publisher_journal=dict(file=dict(path=journal_reference["path"],
+            identity={key: int(value) for key, value in journal_reference["identity"].items()}),
+            sha256=journal_reference["sha256"]),
+        native_inputs={name: dict(path=context["native"][name]["path"],
+            identity={key: int(value) for key, value in context["identity"](os.fstat(opened)).items()})
+            for name, opened in context["bound"].items()})
+    revalidate()
+
+
+def inspect_owned_publication_in_context(receipt: dict, request: dict, context: dict, *, allow_pending=False) -> None:
     """Capture exact public ownership under the same native lock without an effect."""
     need = _owned_need
     prior = request["publication"]["prior"]
@@ -332,7 +463,10 @@ def inspect_owned_publication_in_context(receipt: dict, request: dict, context: 
     destination = str(Path(request["destination"]["directory"]["path"]) / request["destination"]["basename"])
     journal_fd, records = read_owned_publication_journal(prior["journal"], request, context, destination)
     last = records[-1]
-    need(last["phase"] == "awaiting_readiness" and last["qualified"] is False
+    phases = {"awaiting_readiness"}
+    if allow_pending:
+        phases |= {"publishing", "published", "context_checking", "context_checked", "reload_requested"}
+    need(last["phase"] in phases and last["qualified"] is False
          and last["master"] == request["master"]
          and last["candidate_sha256"] == request["candidate_sha256"]
          and last["renderer_source_sha256"] == request["renderer_source_sha256"]
@@ -370,7 +504,7 @@ def inspect_owned_publication_in_context(receipt: dict, request: dict, context: 
             for name, opened in context["bound"].items()})
 
 
-def inspect_owned_publication(request: dict) -> dict:
+def inspect_owned_publication(request: dict, *, allow_pending=False) -> dict:
     """Native capture uses the maintained owner contract, never its own journal decoder."""
     _owned_need(isinstance(request, dict) and set(request) == {
         "host_kind", "native", "candidate_sha256", "candidate_base64", "renderer_source_sha256",
@@ -386,7 +520,9 @@ def inspect_owned_publication(request: dict) -> dict:
         renderer_source=dict(path="/native-inspection/renderer.py", sha256=request["renderer_source_sha256"]),
         master=request["master"], destination=request["destination"],
         operation_id=request["operation_id"], publication=request["publication"]))
-    result = checked.remote_check(request, inspect_owned_publication_in_context)
+    def inspect(receipt, selected, context):
+        inspect_owned_publication_in_context(receipt, selected, context, allow_pending=allow_pending)
+    result = checked.remote_check(request, inspect)
     _owned_need(result.get("exit_code") == 0
                 and result.get("owned_publication_checked") is True
                 and result.get("validation_files_removed") is True
@@ -395,9 +531,58 @@ def inspect_owned_publication(request: dict) -> dict:
     return dict(schema="iroha.taira.native-nginx-owned-publication-inspection.v1",
         owned_publication=dict(operation_id=result["operation_id"],
             journal=result["journal"], publication=result["publication"]),
+        nginx_config=result["publication"]["file"]["path"],
         nginx=result["native_inputs"]["nginx"],
         main_configuration=result["native_inputs"]["main"],
         master=result["master"], phase=result["phase"])
+
+
+def inspect_vacant_publication(plan: dict) -> dict:
+    """Inspect the exact create plan without publishing, reloading or inventing a prior owner."""
+    validate_plan(plan)
+    _owned_need(plan["publication"] == {"kind": "create"}, "vacant_publication_kind")
+    candidate = checked.read_declared_public_file(plan["candidate"]["path"], plan["candidate"]["sha256"],
+        owner=plan["candidate"]["owner_uid"], limit=checked.MAX_PUBLIC_BYTES)
+    checked.read_declared_public_file(plan["renderer_source"]["path"], plan["renderer_source"]["sha256"],
+                                     limit=checked.MAX_PUBLIC_BYTES)
+    request = dict(host_kind=plan["host_kind"], native=plan["native"], master=plan["master"],
+        destination=plan["destination"], operation_id=plan["operation_id"], publication=plan["publication"],
+        candidate_sha256=plan["candidate"]["sha256"], candidate_base64=base64.b64encode(candidate).decode(),
+        renderer_source_sha256=plan["renderer_source"]["sha256"])
+    result = checked.remote_check(request, inspect_vacant_publication_in_context)
+    _owned_need(result.get("exit_code") == 0 and result.get("vacancy_checked") is True
+                and result.get("validation_files_removed") is True
+                and result.get("private_config_read_by_controller") is False,
+                "vacant_publication_inspection_refused")
+    return dict(schema="iroha.taira.native-nginx-owned-publication-inspection.v1",
+        owned_publication=None, nginx_config=result["nginx_config"],
+        nginx=result["native_inputs"]["nginx"], main_configuration=result["native_inputs"]["main"],
+        master=result["master"], phase=result["phase"])
+
+
+def inspect_terminal_vacant_publication(plan: dict, journal_reference: dict, terminal_phase=None) -> dict:
+    """Discover only the maintained publisher's actual terminal absence under native custody."""
+    validate_plan(plan)
+    _owned_need(plan["publication"] == {"kind": "create"}, "terminal_vacant_publication_kind")
+    candidate = checked.read_declared_public_file(plan["candidate"]["path"], plan["candidate"]["sha256"],
+        owner=plan["candidate"]["owner_uid"], limit=checked.MAX_PUBLIC_BYTES)
+    checked.read_declared_public_file(plan["renderer_source"]["path"], plan["renderer_source"]["sha256"],
+                                     limit=checked.MAX_PUBLIC_BYTES)
+    request = dict(host_kind=plan["host_kind"], native=plan["native"], master=plan["master"],
+        destination=plan["destination"], operation_id=plan["operation_id"], publication=plan["publication"],
+        candidate_sha256=plan["candidate"]["sha256"], candidate_base64=base64.b64encode(candidate).decode(),
+        renderer_source_sha256=plan["renderer_source"]["sha256"])
+    def inspect(receipt, selected, context):
+        inspect_terminal_vacant_publication_in_context(receipt, selected, context, journal_reference, terminal_phase)
+    result = checked.remote_check(request, inspect)
+    _owned_need(result.get("exit_code") == 0 and result.get("vacancy_checked") is True
+                and result.get("validation_files_removed") is True
+                and result.get("private_config_read_by_controller") is False,
+                "terminal_vacant_publication_inspection_refused")
+    return dict(schema="iroha.taira.native-nginx-terminal-vacancy-inspection.v1", owned_publication=None,
+        publisher_journal=result["publisher_journal"], terminal_phase=result["terminal_phase"],
+        nginx_config=result["nginx_config"], nginx=result["native_inputs"]["nginx"],
+        main_configuration=result["native_inputs"]["main"], master=result["master"], phase=result["phase"])
 
 
 def apply_in_context(receipt: dict, request: dict, context: dict) -> None:
@@ -534,36 +719,6 @@ def apply_in_context(receipt: dict, request: dict, context: dict) -> None:
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             pass_fds=(lock, main_directory, destination_directory), env=environment, timeout=45).returncode
 
-    def refuse_unknown_retry(allowed):
-        terminal = {"rolled_back_unqualified", "refused_before_publication"}
-        with os.scandir(main_directory) as entries:
-            names = []
-            for entry in entries:
-                need(len(names) < 4096, "journal_directory_size_bound")
-                names.append(entry.name)
-        for name in names:
-            if re.fullmatch(r"\.taira-native-nginx-apply-[0-9a-f]{32}\.receipt\.ndjson", name) is None:
-                continue
-            opened = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
-                             dir_fd=main_directory)
-            context["handles"].append(opened)
-            info = os.fstat(opened)
-            need(stat.S_ISREG(info.st_mode) and info.st_uid == owner and info.st_nlink == 1
-                 and stat.S_IMODE(info.st_mode) == 0o600 and info.st_size <= 1048576,
-                 "unsafe_prior_public_journal")
-            need(identity(os.stat(name, dir_fd=main_directory, follow_symlinks=False)) == identity(info),
-                 "prior_journal_changed")
-            # These are this maintained owner's public metadata journals, not
-            # existing nginx config/key bodies. Never export their raw bytes.
-            rows = os.pread(opened, info.st_size + 1, 0).splitlines()
-            need(identity(info) == identity(os.fstat(opened))
-                 == identity(os.stat(name, dir_fd=main_directory, follow_symlinks=False)) and rows,
-                 "prior_journal_changed")
-            record = json.loads(rows[-1])
-            need(isinstance(record, dict) and record.get("schema") == "iroha.taira.native-nginx-apply.journal.v1",
-                 "prior_journal_invalid")
-            if record.get("destination_path") == destination_path and record.get("phase") not in terminal and name not in allowed:
-                raise RuntimeError("unresolved_destination_journal")
 
     try:
         need(os.fstat(destination_directory).st_uid == owner
@@ -637,7 +792,7 @@ def apply_in_context(receipt: dict, request: dict, context: dict) -> None:
                 publication_fd, publication_identity = owned_file(basename, prior["publication"]["identity"],
                                                                    request["candidate_sha256"])
                 published = True
-        refuse_unknown_retry(allowed)
+        refuse_unresolved_destination_journals(context, destination_path, allowed)
         journal_flags = os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC
         if kind != "reconcile":
             journal_flags |= os.O_CREAT | os.O_EXCL
@@ -847,6 +1002,7 @@ def remote_program(request: dict) -> bytes:
             + inspect.getsource(_owned_need) + inspect.getsource(verify_owned_public_file)
             + inspect.getsource(validate_public_owner_identity) + inspect.getsource(validate_public_journal_reference)
             + inspect.getsource(validate_public_prior_reference) + inspect.getsource(read_owned_publication_journal)
+            + inspect.getsource(refuse_unresolved_destination_journals)
             + inspect.getsource(apply_in_context) + inspect.getsource(remote_apply)
             + "\nresult = remote_apply(json.loads(" + repr(json.dumps(request)) + "))\n"
             + "print(json.dumps(result, sort_keys=True))\nsys.exit(result['exit_code'])\n")

@@ -657,41 +657,45 @@ impl FastJsonWrite for ListQuery {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        let mut first = true;
-        let mut field =
-            |name: &str, value: &dyn JsonSerialize| -> Result<(), json::BoundedJsonError> {
-                if !first {
-                    out.push(',')?;
-                }
-                first = false;
-                name.json_serialize_to(out)?;
-                out.push(':')?;
-                value.json_serialize_to(out)
-            };
-        if let Some(value) = &self.aggregate {
-            field("aggregate", value)?;
-        }
-        if let Some(value) = &self.cursor {
-            field("cursor", value)?;
-        }
-        if let Some(value) = &self.filter {
-            field("filter", value)?;
-        }
-        if self.include_total {
-            field("include_total", &true)?;
-        }
-        if let Some(value) = self.limit {
-            field("limit", &value)?;
-        }
-        if let Some(value) = &self.select {
-            field("select", value)?;
-        }
-        if !self.sort.is_empty() {
-            field("sort", &self.sort)?;
-        }
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            let mut first = true;
+            let mut field =
+                |name: &str, value: &dyn JsonSerialize| -> Result<(), json::BoundedJsonError> {
+                    if !first {
+                        out.push(',')?;
+                    }
+                    first = false;
+                    name.json_serialize_to(out)?;
+                    out.push(':')?;
+                    value.json_serialize_to(out)
+                };
+            if let Some(value) = &self.aggregate {
+                field("aggregate", value)?;
+            }
+            if let Some(value) = &self.cursor {
+                field("cursor", value)?;
+            }
+            if let Some(value) = &self.filter {
+                field("filter", value)?;
+            }
+            if self.include_total {
+                field("include_total", &true)?;
+            }
+            if let Some(value) = self.limit {
+                field("limit", &value)?;
+            }
+            if let Some(value) = &self.select {
+                field("select", value)?;
+            }
+            if !self.sort.is_empty() {
+                field("sort", &self.sort)?;
+            }
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -749,16 +753,20 @@ impl<T: JsonSerialize> FastJsonWrite for Page<T> {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"items\":")?;
-        self.items.json_serialize_to(out)?;
-        out.push_str(",\"next_cursor\":")?;
-        self.next_cursor.json_serialize_to(out)?;
-        if let Some(total) = self.total {
-            out.push_str(",\"total\":")?;
-            total.json_serialize_to(out)?;
-        }
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"items\":")?;
+            self.items.json_serialize_to(out)?;
+            out.push_str(",\"next_cursor\":")?;
+            self.next_cursor.json_serialize_to(out)?;
+            if let Some(total) = self.total {
+                out.push_str(",\"total\":")?;
+                total.json_serialize_to(out)?;
+            }
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1060,3 +1068,73 @@ mod tests {
 
 #[cfg(test)]
 mod vectors_tests;
+
+#[cfg(test)]
+mod service_depth_tests {
+    //! Owning checked service writers keep the caller depth on exact refusals.
+    use super::*;
+    use crate::service_checked_writer_test_support::{RefusingLeaf, audit, byte_refusal, error};
+    use norito::json::{BoundedJsonError, FastJsonWrite};
+
+    #[test]
+    fn original_list_query_keeps_optional_controls_and_refusal_depth() {
+        let values = [
+            ListQuery::default(),
+            ListQuery {
+                filter: Some(FilterExpr::Eq(FieldPath::from("name"), Value::from("é"))),
+                sort: vec![SortKey::asc("name"), SortKey::desc("quantity")],
+                limit: Some(7),
+                cursor: Some("abc".into()),
+                select: Some(vec![FieldPath::from("name")]),
+                include_total: true,
+                ..ListQuery::default()
+            },
+            ListQuery {
+                aggregate: Some(AggregateSpec {
+                    group_by: vec![FieldPath::from("name")],
+                    metrics: vec![AggregateMetric {
+                        alias: "accounts".into(),
+                        r#fn: AggregateFn::Count,
+                        field: None,
+                    }],
+                    having: Some(FilterExpr::Gt(
+                        FieldPath::from("accounts"),
+                        Value::from(1_u64),
+                    )),
+                }),
+                ..ListQuery::default()
+            },
+        ];
+        for source in &values {
+            source
+                .validate()
+                .expect("original supported list-query controls");
+            let expected = norito::json::to_json(&source.to_json_value()).unwrap();
+            audit(&expected, |sink| source.write_json_to(sink));
+        }
+    }
+    #[test]
+    fn original_page_keeps_actual_items_optional_total_and_manual_leaf_refusal() {
+        let values = [
+            Page::last(vec![1_u64, 7]),
+            Page {
+                items: Vec::new(),
+                next_cursor: Some("abc".into()),
+                total: Some(9),
+            },
+        ];
+        for source in &values {
+            let expected = norito::json::to_json(source).unwrap();
+            audit(&expected, |sink| source.write_json_to(sink));
+        }
+        let source = Page::last(vec![RefusingLeaf {
+            visits: std::cell::Cell::new(0),
+        }]);
+        byte_refusal(|sink| source.write_json_to(sink));
+        assert_eq!(source.items[0].visits.get(), 0);
+        error(BoundedJsonError::Unsupported, |sink| {
+            source.write_json_to(sink)
+        });
+        assert_eq!(source.items[0].visits.get(), 1);
+    }
+}

@@ -2498,11 +2498,15 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                                 out: &mut dyn norito::json::JsonWriteSink,
                             ) -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                 out.begin_container()?;
+                                let __norito_container_result_1 = (|| -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                 out.push('{')?;
                                 let mut __norito_first = true;
                                 #(#writers)*
                                 out.push('}')?;
+                                ::core::result::Result::Ok(())
+                                })();
                                 out.end_container();
+                                __norito_container_result_1?;
                                 ::core::result::Result::Ok(())
                             }
                         }
@@ -2556,11 +2560,15 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                                 out: &mut dyn norito::json::JsonWriteSink,
                             ) -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                 out.begin_container()?;
+                                let __norito_container_result_2 = (|| -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                 out.push('[')?;
                                 let mut __norito_first = true;
                                 #(#writers)*
                                 out.push(']')?;
+                                ::core::result::Result::Ok(())
+                                })();
                                 out.end_container();
+                                __norito_container_result_2?;
                                 ::core::result::Result::Ok(())
                             }
                         }
@@ -2632,6 +2640,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                         arms.push(quote! {
                             Self::#v_ident => {
                                 out.begin_container()?;
+                                let __norito_container_result_3 = (|| -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                 out.push('{')?;
                                 out.push('"')?;
                                 out.push_str(#tag_lit)?;
@@ -2642,7 +2651,10 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                                 out.push_str(#content_lit)?;
                                 out.push_str("\":null")?;
                                 out.push('}')?;
+                                ::core::result::Result::Ok(())
+                                })();
                                 out.end_container();
+                                __norito_container_result_3?;
                                 ::core::result::Result::Ok(())
                             }
                         });
@@ -2650,8 +2662,9 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                     Fields::Unnamed(fields) => {
                         if fields.unnamed.is_empty() {
                             arms.push(quote! {
-                                Self::#v_ident => {
+                                Self::#v_ident() => {
                                     out.begin_container()?;
+                                    let __norito_container_result_4 = (|| -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                     out.push('{')?;
                                     out.push('"')?;
                                     out.push_str(#tag_lit)?;
@@ -2662,7 +2675,10 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                                     out.push_str(#content_lit)?;
                                     out.push_str("\":null")?;
                                     out.push('}')?;
+                                    ::core::result::Result::Ok(())
+                                    })();
                                     out.end_container();
+                                    __norito_container_result_4?;
                                     ::core::result::Result::Ok(())
                                 }
                             });
@@ -2686,6 +2702,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                             arms.push(quote! {
                                 Self::#v_ident(#binding) => {
                                     out.begin_container()?;
+                                    let __norito_container_result_5 = (|| -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                     out.push('{')?;
                                     out.push('"')?;
                                     out.push_str(#tag_lit)?;
@@ -2697,7 +2714,10 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                                     out.push_str("\":")?;
                                     #serialize_call?;
                                     out.push('}')?;
+                                    ::core::result::Result::Ok(())
+                                    })();
                                     out.end_container();
+                                    __norito_container_result_5?;
                                     ::core::result::Result::Ok(())
                                 }
                             });
@@ -2732,6 +2752,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                             arms.push(quote! {
                                 Self::#v_ident( #( #ref_bindings ),* ) => {
                                     out.begin_container()?;
+                                    let __norito_container_result_6 = (|| -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                     out.push('{')?;
                                     out.push('"')?;
                                     out.push_str(#tag_lit)?;
@@ -2742,13 +2763,20 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                                     out.push_str(#content_lit)?;
                                     out.push_str("\":")?;
                                     out.begin_container()?;
+                                    let __norito_container_result_7 = (|| -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                     out.push('[')?;
                                     let mut __norito_first = true;
                                     #(#serializers)*
                                     out.push(']')?;
+                                    ::core::result::Result::Ok(())
+                                    })();
                                     out.end_container();
+                                    __norito_container_result_7?;
                                     out.push('}')?;
+                                    ::core::result::Result::Ok(())
+                                    })();
                                     out.end_container();
+                                    __norito_container_result_6?;
                                     ::core::result::Result::Ok(())
                                 }
                             });
@@ -2789,6 +2817,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                         arms.push(quote! {
                             Self::#v_ident { #( #ref_idents ),* } => {
                                 out.begin_container()?;
+                                let __norito_container_result_8 = (|| -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                 out.push('{')?;
                                 out.push('"')?;
                                 out.push_str(#tag_lit)?;
@@ -2799,13 +2828,20 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                                 out.push_str(#content_lit)?;
                                 out.push_str("\":")?;
                                 out.begin_container()?;
+                                let __norito_container_result_9 = (|| -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                                 out.push('{')?;
                                 let mut __norito_first_inner = true;
                                 #(#field_writers)*
                                 out.push('}')?;
+                                ::core::result::Result::Ok(())
+                                })();
                                 out.end_container();
+                                __norito_container_result_9?;
                                 out.push('}')?;
+                                ::core::result::Result::Ok(())
+                                })();
                                 out.end_container();
+                                __norito_container_result_8?;
                                 ::core::result::Result::Ok(())
                             }
                         });

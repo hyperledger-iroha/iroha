@@ -26,7 +26,8 @@ pub(super) struct NativeEdgeCapabilityV1 {
     pub(super) host_pair_sha256: String,
     pub(super) helper_source_closure_sha256: String,
     pub(super) incumbent: host_pair::SignedNativeEdgeCaptureV1,
-    pub(super) incumbent_nginx_request: NativePublicFileV1,
+    #[norito(required)]
+    pub(super) incumbent_nginx_request: Option<NativePublicFileV1>,
     pub(super) nginx_apply_plan: NativePublicFileV1,
     pub(super) forwarding_plan: NativePublicFileV1,
     pub(super) forwarding_identity_receipt: NativePublicFileV1,
@@ -59,12 +60,18 @@ impl NativeEdgeCapabilityV1 {
             &claims.authorization_nonce,
             &claims.next_genesis_hash,
         )?;
-        for reference in [
-            &self.incumbent_nginx_request,
+        if matches!(&claims.initial_state, EdgeInitialStateV1::Vacant)
+            != self.incumbent_nginx_request.is_none()
+        {
+            return Err(eyre!(
+                "native capability incumbent request must match its exact captured initial state"
+            ));
+        }
+        for reference in self.incumbent_nginx_request.iter().chain([
             &self.nginx_apply_plan,
             &self.forwarding_plan,
             &self.forwarding_identity_receipt,
-        ] {
+        ]) {
             reference.validate_public(native.owner_uid)?;
             if reference.file.identity.uid != native.owner_uid
                 || reference.file.identity.mode != 0o600
@@ -100,6 +107,16 @@ pub(super) enum NativePublicationEffectV1 {
         intended_operation_id: String,
         incumbent: host_pair::NativeOwnedPublicationV1,
     },
+    #[norito(rename = "vacant_not_requested")]
+    VacantNotRequested {
+        intended_operation_id: String,
+    },
+    #[norito(rename = "vacant_publisher_terminal")]
+    VacantPublisherTerminal {
+        intended_operation_id: String,
+        publisher_journal: NativePublicFileV1,
+        terminal_phase: String,
+    },
 }
 
 impl NativeNginxCompletionPlanV1 {
@@ -113,10 +130,6 @@ impl NativeNginxCompletionPlanV1 {
             .get("publication")
             .and_then(Value::as_object)
             .ok_or_else(|| eyre!("native completion lacks its exact owned publisher"))?;
-        let prior = publication
-            .get("prior")
-            .and_then(Value::as_object)
-            .ok_or_else(|| eyre!("native completion lacks the retained prior publication"))?;
         let publisher = match &self.publication_effect {
             NativePublicationEffectV1::Owned => publication_operation_id,
             NativePublicationEffectV1::NotRequested {
@@ -132,6 +145,32 @@ impl NativeNginxCompletionPlanV1 {
                 }
                 incumbent.operation_id.as_str()
             }
+            NativePublicationEffectV1::VacantNotRequested {
+                intended_operation_id,
+            }
+            | NativePublicationEffectV1::VacantPublisherTerminal {
+                intended_operation_id, ..
+            } => {
+                if intended_operation_id != publication_operation_id
+                    || publication.len() != 1
+                    || publication.get("kind").and_then(Value::as_str) != Some("create")
+                {
+                    return Err(eyre!(
+                        "vacant no-effect rollback changed its exact intended first publication"
+                    ));
+                }
+                publication_operation_id
+            }
+        };
+        let exact_publication = match &self.publication_effect {
+            NativePublicationEffectV1::VacantNotRequested { .. }
+            | NativePublicationEffectV1::VacantPublisherTerminal { .. } => true,
+            NativePublicationEffectV1::Owned | NativePublicationEffectV1::NotRequested { .. } => {
+                publication.get("kind").and_then(Value::as_str) == Some("reconcile")
+                    && publication.get("prior").and_then(Value::as_object)
+                        .and_then(|prior| prior.get("operation_id"))
+                        .and_then(Value::as_str) == Some(publisher)
+            }
         };
         if self.schema != "iroha.taira.public-reset.native-nginx-completion-plan.v1"
             || self.completion_journal_basename != "native-completion.ndjson"
@@ -140,12 +179,34 @@ impl NativeNginxCompletionPlanV1 {
             || plan.get("host_kind").and_then(Value::as_str) != Some("macos")
             || plan.get("provider").and_then(Value::as_str) != Some("macstadium-dublin")
             || plan.get("operation_id").and_then(Value::as_str) != Some(publisher)
-            || publication.get("kind").and_then(Value::as_str) != Some("reconcile")
-            || prior.get("operation_id").and_then(Value::as_str) != Some(publisher)
+            || !exact_publication
         {
             return Err(eyre!(
-                "native completion plan is not an exact reconciliation of this admitted publisher"
+                "native completion plan changes its exact admitted publication effect"
             ));
+        }
+        if let NativePublicationEffectV1::VacantPublisherTerminal {
+            intended_operation_id, publisher_journal, terminal_phase,
+        } = &self.publication_effect {
+            let native = plan.get("native").and_then(Value::as_object)
+                .ok_or_else(|| eyre!("terminal vacancy lacks its native publisher custody"))?;
+            let owner = native.get("owner_uid").and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| eyre!("terminal vacancy lacks its native publisher owner"))?;
+            let directory = native.get("directory").and_then(|value| value.get("path"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| eyre!("terminal vacancy lacks its exact journal directory"))?;
+            validate_absolute_normal_path(Path::new(directory), "terminal publisher journal directory")?;
+            publisher_journal.validate_public(owner)?;
+            if !matches!(terminal_phase.as_str(), "rolled_back_unqualified" | "refused_before_publication")
+                || publisher_journal.file.identity.uid != owner
+                || publisher_journal.file.identity.mode != 0o600
+                || publisher_journal.file.identity.size > 1024 * 1024
+                || Path::new(&publisher_journal.file.path) != Path::new(directory).join(
+                    format!(".taira-native-nginx-apply-{intended_operation_id}.receipt.ndjson"))
+            {
+                return Err(eyre!("terminal vacancy changes its actual requested publisher journal or phase"));
+            }
         }
         // The maintained native nginx helper validates every remaining field and
         // retains its exact owner journal/publication/backup before any effect.
@@ -511,7 +572,7 @@ pub(super) fn read_native_public(
 #[cfg(unix)]
 pub(super) fn validate_terminal_provenance(
     provenance: &host_pair::NativeEdgeCompletionProvenanceV1,
-    owned_publication: &host_pair::NativeOwnedPublicationV1,
+    owned_publication: Option<&host_pair::NativeOwnedPublicationV1>,
     inventory: &InventoryV1,
     inventory_sha256: &str,
     authorization_sha256: &str,
@@ -625,18 +686,30 @@ pub(super) fn validate_terminal_provenance(
         chain.push(checkpoint);
     }
     if status == "rolled_back" {
-        let restored = receipt.restored_owned_publication.as_ref().ok_or_else(|| {
-            eyre!("rolled-back native capture lacks its exact restored publisher custody")
-        })?;
-        if restored != owned_publication
-            || restored.operation_id == receipt.publication_operation_id
-        {
-            return Err(eyre!(
-                "native rollback terminal proof names another restored predecessor"
-            ));
+        match (receipt.restored_owned_publication.as_ref(), owned_publication) {
+            (Some(restored), Some(owned)) => {
+                if inventory.edge.is_vacant()
+                    || restored != owned
+                    || restored.operation_id == receipt.publication_operation_id
+                {
+                    return Err(eyre!(
+                        "native rollback terminal proof names another restored predecessor"
+                    ));
+                }
+                read_native_public(&restored.journal, owner, 1024 * 1024)?;
+                read_native_public(&restored.publication, owner, 1024 * 1024)?;
+            }
+            (None, None) if inventory.edge.is_vacant() => {
+                // The signed recapture independently observes actual vacancy
+                // through the maintained native inspector before this join.
+                // Absence never substitutes for an admitted prior publisher.
+            }
+            _ => {
+                return Err(eyre!(
+                    "native rollback terminal proof changes its original vacant or admitted owner"
+                ));
+            }
         }
-        read_native_public(&restored.journal, owner, 1024 * 1024)?;
-        read_native_public(&restored.publication, owner, 1024 * 1024)?;
         if global_proof.is_some()
             || global_proof_predecessor.is_some()
             || receipt.global_proof_sha256.is_some()
@@ -669,6 +742,8 @@ pub(super) fn validate_terminal_provenance(
         }
         directory.revalidate()?;
     } else {
+        let owned_publication = owned_publication
+            .ok_or_else(|| eyre!("native seal lacks its exact current publication owner"))?;
         if receipt.restored_owned_publication.is_some()
             || receipt.publication_operation_id != owned_publication.operation_id
         {
@@ -758,7 +833,141 @@ pub(super) fn fixture_capability(
         forwarding_plan: incumbent.claims.forwarding_plan.clone(),
         forwarding_identity_receipt: incumbent.claims.forwarding_identity_receipt.clone(),
         incumbent,
-        incumbent_nginx_request: incumbent_request,
+        incumbent_nginx_request: Some(incumbent_request),
         nginx_apply_plan: apply,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vacant_completion(operation: &str) -> NativeNginxCompletionPlanV1 {
+        NativeNginxCompletionPlanV1 {
+            schema: "iroha.taira.public-reset.native-nginx-completion-plan.v1".into(),
+            nginx: norito::json!({
+                "schema": "iroha.taira.native-nginx-apply.plan.v1",
+                "host_kind": "macos",
+                "provider": "macstadium-dublin",
+                "operation_id": (operation.to_owned()),
+                "publication": { "kind": "create" }
+            }),
+            publication_effect: NativePublicationEffectV1::VacantNotRequested {
+                intended_operation_id: operation.to_owned(),
+            },
+            completion_journal_basename: "native-completion.ndjson".into(),
+        }
+    }
+
+    #[test]
+    fn vacant_no_effect_completion_requires_exact_create_and_intended_operation() {
+        let intended = "a".repeat(32);
+        let plan = vacant_completion(&intended);
+        plan.validate(&intended).unwrap();
+        assert!(plan.validate(&"b".repeat(32)).is_err());
+        for publication in [
+            norito::json!({ "kind": "create", "prior": null }),
+            norito::json!({ "kind": "replace" }),
+            norito::json!({ "kind": "reconcile" }),
+        ] {
+            let mut changed = plan.clone();
+            changed.nginx.as_object_mut().unwrap().insert("publication".into(), publication);
+            assert!(changed.validate(&intended).is_err());
+        }
+        let mut changed = plan;
+        changed.nginx.as_object_mut().unwrap()
+            .insert("operation_id".into(), Value::String("b".repeat(32)));
+        assert!(changed.validate(&intended).is_err());
+    }
+
+    #[test]
+    fn vacant_no_effect_publication_wire_has_no_predecessor_or_default() {
+        let intended = "a".repeat(32);
+        let wire = json::to_json(&NativePublicationEffectV1::VacantNotRequested {
+            intended_operation_id: intended.clone(),
+        }).unwrap();
+        let parsed: NativePublicationEffectV1 = json::from_str(&wire).unwrap();
+        assert!(matches!(parsed, NativePublicationEffectV1::VacantNotRequested {
+            intended_operation_id,
+        } if intended_operation_id == intended));
+        for invalid in [
+            r#"{"kind":"vacant_not_requested","value":{}}"#,
+            r#"{"kind":"vacant_not_requested","value":{"intended_operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","incumbent":null}}"#,
+            r#"{"kind":"vacant_not_requested"}"#,
+            r#"{"kind":"legacy","value":null}"#,
+        ] {
+            assert!(json::from_str::<NativePublicationEffectV1>(invalid).is_err());
+        }
+    }
+
+    fn terminal_vacant_completion(operation: &str, phase: &str) -> NativeNginxCompletionPlanV1 {
+        let mut plan = vacant_completion(operation);
+        plan.nginx.as_object_mut().unwrap().insert("native".into(), norito::json!({
+            "owner_uid": 7, "directory": {"path": "/native/nginx"}
+        }));
+        plan.publication_effect = NativePublicationEffectV1::VacantPublisherTerminal {
+            intended_operation_id: operation.to_owned(), terminal_phase: phase.to_owned(),
+            publisher_journal: NativePublicFileV1 {
+                file: NativeObservedFileV1 {
+                    path: format!("/native/nginx/.taira-native-nginx-apply-{operation}.receipt.ndjson"),
+                    identity: host_pair::NativeFileIdentityV1 {
+                        device: 1, inode: 2, uid: 7, gid: 7, mode: 0o600, links: 1,
+                        size: 8, mtime_ns: 9, ctime_ns: 10,
+                    },
+                },
+                sha256: "c".repeat(64),
+            },
+        };
+        plan
+    }
+
+    #[test]
+    fn terminal_vacancy_requires_exact_requested_journal_and_closed_phase() {
+        let intended = "a".repeat(32);
+        for phase in ["rolled_back_unqualified", "refused_before_publication"] {
+            let plan = terminal_vacant_completion(&intended, phase);
+            plan.validate(&intended).unwrap();
+            assert!(plan.validate(&"b".repeat(32)).is_err());
+        }
+        for phase in ["prepared", "rollback_ambiguous", "awaiting_readiness", "vacant"] {
+            assert!(terminal_vacant_completion(&intended, phase).validate(&intended).is_err());
+        }
+        let mut changed = terminal_vacant_completion(&intended, "rolled_back_unqualified");
+        if let NativePublicationEffectV1::VacantPublisherTerminal { publisher_journal, .. } = &mut changed.publication_effect {
+            publisher_journal.file.path = "/native/nginx/foreign.receipt.ndjson".into();
+        }
+        assert!(changed.validate(&intended).is_err());
+    }
+
+    #[test]
+    fn terminal_vacancy_wire_requires_actual_journal_and_phase_without_defaults() {
+        let plan = terminal_vacant_completion(&"a".repeat(32), "refused_before_publication");
+        let wire = json::to_json(&plan.publication_effect).unwrap();
+        let parsed: NativePublicationEffectV1 = json::from_str(&wire).unwrap();
+        assert!(matches!(parsed, NativePublicationEffectV1::VacantPublisherTerminal {
+            terminal_phase, ..
+        } if terminal_phase == "refused_before_publication"));
+        for field in ["publisher_journal", "terminal_phase", "intended_operation_id"] {
+            let mut value = json::to_value(&plan.publication_effect).unwrap();
+            value.as_object_mut().unwrap().get_mut("value").unwrap().as_object_mut().unwrap().remove(field);
+            assert!(json::from_str::<NativePublicationEffectV1>(&json::to_json(&value).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn native_capability_requires_explicit_incumbent_request_option() {
+        let hosts = host_pair::fixture_pair();
+        let release = EdgeAdmittedReleaseV1 {
+            commit: "a".repeat(40),
+            release_root: format!("{}/edge/releases/{}", hosts.native_edge.custody_root, "a".repeat(40)),
+            cli_sha256: "b".repeat(64),
+            config_sha256: "c".repeat(64),
+        };
+        let capability = fixture_capability(&hosts, release, "d".repeat(32).as_str(), "fixture-genesis");
+        let mut value = json::to_value(&capability).unwrap();
+        value.as_object_mut().unwrap().remove("incumbent_nginx_request");
+        assert!(json::from_str::<NativeEdgeCapabilityV1>(&json::to_json(&value).unwrap()).is_err());
+        value.as_object_mut().unwrap().insert("incumbent_nginx_request".into(), Value::Null);
+        assert!(json::from_str::<NativeEdgeCapabilityV1>(&json::to_json(&value).unwrap()).is_ok());
     }
 }

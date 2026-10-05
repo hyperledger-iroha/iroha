@@ -7460,7 +7460,7 @@ fn autoscale_da_fixture_finishes_results_after_attachments() {
     assert_eq!(block.committed_fragment_count(), None);
     let signer = finish_autoscale_fixture(&mut block, 3);
     assert_eq!(block.committed_fragment_count(), Some(3));
-    assert_eq!(block.da_commitments().unwrap().commitments, vec![record]);
+    assert_eq!(block.da_commitments().unwrap().commitments(), vec![record]);
     block.validate_proposal_commitments().unwrap();
     block.validate_execution_result_structure().unwrap();
     block.validate_output_merkle_cache().unwrap();
@@ -16553,7 +16553,7 @@ state_test! { sync hydrate_da_indexes_retains_unknown_lane_bundle_without_active
     {
         let commitments = state.da_commitments().expect("completed DA history read");
         let_row! { stored_bundle = commitments .bundle_at(signed_block.header().height().get()) .expect("committed bundle retained") };
-        assert_eq!(stored_bundle.commitments, vec![record.clone()]);
+        assert_eq!(stored_bundle.commitments(), vec![record.clone()]);
         assert!(
             commitments.get_committed_by_key(&key).is_some(),
             "unknown-lane commitment identity should stay available for committed validation"
@@ -16810,7 +16810,7 @@ state_test! { sync da_commitment_lookup_hydrates_from_kura_after_state_restart
     );
     let commitments = restarted.da_commitments().expect("completed DA history read");
     let_row! { stored_bundle = commitments .bundle_at(signed.header().height().get()) .expect("replayed commitment bundle should be retained by block height") };
-    assert_eq!(stored_bundle.commitments, vec![record]);
+    assert_eq!(stored_bundle.commitments(), vec![record]);
 }
 state_test! { sync block_and_revert_requires_fresh_da_shard_cursor
     let lane0 = LaneConfig::default();

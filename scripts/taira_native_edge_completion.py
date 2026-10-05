@@ -425,11 +425,31 @@ class Admission:
              "completion_plan_schema")
         owner.validate_plan(self.plan["nginx"])
         plan = self.plan["nginx"]
-        need(plan["host_kind"] == "macos" and plan["publication"]["kind"] == "reconcile"
-             and plan["operation_id"] == plan["publication"]["prior"]["operation_id"], "completion_publication_binding")
+        need(plan["host_kind"] == "macos", "completion_publication_binding")
         effect = self.plan["publication_effect"]
         fields(effect, {"kind", "value"}, "publication_effect_fields")
-        if effect["kind"] == "owned":
+        if effect["kind"] in {"vacant_not_requested", "vacant_publisher_terminal"}:
+            need(inventory["edge"]["initial_state"] == {"state": "vacant", "value": None},
+                 "vacant_completion_initial_state")
+            need(packet["action"] == "rollback"
+                 and self.progress["status"] in {"admitted", "staged", "rollback_requested", "rolled_back", "recovery_pending"},
+                 "vacant_publication_effect_not_requested")
+            fields(effect["value"], ({"intended_operation_id"} if effect["kind"] == "vacant_not_requested"
+                else {"intended_operation_id", "publisher_journal", "terminal_phase"}),
+                "vacant_publication_effect_fields")
+            if effect["kind"] == "vacant_publisher_terminal":
+                terminal_publisher_reference(effect["value"])
+            hex_value(effect["value"]["intended_operation_id"], 32, "intended_publication_identity")
+            need(plan["publication"] == {"kind": "create"}
+                 and plan["operation_id"] == effect["value"]["intended_operation_id"]
+                 == self.progress["publication_operation_id"], "vacant_publication_binding")
+        else:
+            need(plan["publication"]["kind"] == "reconcile"
+                 and plan["operation_id"] == plan["publication"]["prior"]["operation_id"],
+                 "completion_publication_binding")
+        if effect["kind"] in {"vacant_not_requested", "vacant_publisher_terminal"}:
+            pass
+        elif effect["kind"] == "owned":
             need(effect["value"] is None and plan["operation_id"] == self.progress["publication_operation_id"],
                  "owned_publication_effect")
         else:
@@ -700,8 +720,24 @@ def packet_action(admission):
 
 def intended_publication_operation(plan):
     effect = plan["publication_effect"]
-    return (effect["value"]["intended_operation_id"] if effect["kind"] == "not_requested"
+    return (effect["value"]["intended_operation_id"]
+            if effect["kind"] in {"not_requested", "vacant_not_requested", "vacant_publisher_terminal"}
             else plan["nginx"]["operation_id"])
+
+
+
+def terminal_publisher_reference(effect):
+    """Convert the exact numeric public journal into the maintained owner wire."""
+    need(effect["terminal_phase"] in {"rolled_back_unqualified", "refused_before_publication"},
+         "vacant_publisher_terminal_phase")
+    reference = effect["publisher_journal"]
+    fields(reference, {"file", "sha256"}, "terminal_publisher_public_fields")
+    validate_observed(reference["file"])
+    hex_value(reference["sha256"], 64, "terminal_publisher_digest")
+    need(0 < reference["file"]["identity"]["size"] <= MAX_PUBLIC_BYTES, "terminal_publisher_size_bound")
+    return dict(path=reference["file"]["path"],
+        identity={key: str(value) for key, value in reference["file"]["identity"].items()},
+        sha256=reference["sha256"])
 
 
 def numeric_owned_publication(plan):
@@ -722,9 +758,9 @@ def finish_in_context(receipt, request, context, admission, journal, owner):
     destination = str(Path(request["destination"]["directory"]["path"]) / request["destination"]["basename"])
     basename = request["destination"]["basename"]
     backup_name = ".taira-nginx-backup-" + request["operation_id"] + ".public"
-    prior = request["publication"]["prior"]
-    publisher = prior["journal"]
-    active = prior["publication"]["identity"]
+    prior = request["publication"].get("prior")
+    publisher = prior["journal"] if prior is not None else None
+    active = prior["publication"]["identity"] if prior is not None else None
     backup = None
     restored = None
     terminal_record = None
@@ -804,6 +840,48 @@ def finish_in_context(receipt, request, context, admission, journal, owner):
 
     try:
         native_guard()
+        effect = admission.plan["publication_effect"]
+        if effect["kind"] in {"vacant_not_requested", "vacant_publisher_terminal"}:
+            # A first publisher has no predecessor. The retained terminal
+            # journal is an actual requested effect, distinct from no request.
+            need(action == "rollback" and request["publication"] == {"kind": "create"},
+                 "vacant_not_requested_terminal_action")
+            intended = effect["value"]["intended_operation_id"]
+            need(request["operation_id"] == intended, "vacant_intended_operation_changed")
+            terminal = effect["kind"] == "vacant_publisher_terminal"
+            if terminal:
+                publisher = terminal_publisher_reference(effect["value"])
+            def verify_vacant():
+                native_guard()
+                observed = {}
+                if terminal:
+                    owner.inspect_terminal_vacant_publication_in_context(observed, request, context,
+                        publisher, effect["value"]["terminal_phase"])
+                    need(observed.get("publisher_journal") == effect["value"]["publisher_journal"]
+                         and observed.get("terminal_phase") == effect["value"]["terminal_phase"],
+                         "terminal_vacant_publisher_changed")
+                else:
+                    owner.inspect_vacant_publication_in_context(observed, request, context)
+                need(observed.get("vacancy_checked") is True
+                     and observed.get("phase") == ("vacant_publisher_terminal" if terminal else "vacant")
+                     and observed.get("nginx_config") == destination
+                     and observed.get("operation_id") == intended, "vacant_owner_observation_required")
+            verify_vacant()
+            if not journal.records:
+                journal_effect("admitted")
+            need(all(row["action"] == "rollback" and row["phase"] in {
+                "admitted", "rollback_requested", "rolled_back", "recovery_pending"}
+                and row["global_proof_sha256"] is None and row["publisher_journal"] == publisher
+                and all(row[name] is None for name in ("publication_identity", "backup_identity",
+                    "publisher_terminal_record", "restored_owner"))
+                for row in journal.records), "vacant_not_requested_journal_phase")
+            if journal.records[-1]["phase"] != "rolled_back":
+                journal_effect("rollback_requested")
+                verify_vacant()
+                journal_effect("rolled_back")
+            verify_vacant()
+            receipt.update(exit_code=0, completion_status="rolled_back", restored_owned_publication=None)
+            return
         if admission.plan["publication_effect"]["kind"] == "not_requested":
             # Stage-only rollback proves the incumbent without changing it.
             # It cannot borrow the successor's nonexistent journal or undo a
@@ -873,7 +951,10 @@ def finish_in_context(receipt, request, context, admission, journal, owner):
             restored["owner"]["journal"] = restored_reference
         if last is None or not any(row["phase"] == "admitted" for row in journal.records):
             active = prior["publication"]["identity"]
-            need(records[-1]["phase"] == "awaiting_readiness" and records[-1]["qualified"] is False
+            admitted_phases = {"awaiting_readiness"}
+            if action == "rollback":
+                admitted_phases |= {"publishing", "published", "context_checking", "context_checked", "reload_requested"}
+            need(records[-1]["phase"] in admitted_phases and records[-1]["qualified"] is False
                  and records[-1]["candidate_sha256"] == request["candidate_sha256"]
                  and records[-1]["renderer_source_sha256"] == request["renderer_source_sha256"]
                  and records[-1]["master"] == request["master"]

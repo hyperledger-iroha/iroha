@@ -27,7 +27,7 @@ fn validator_committee_openapi_is_closed_and_retires_epoch_roster_fields() {
             "version network_id generation validators",
         ),
         (
-            "KagemushaMintFinalityEpochAuthorizationV1",
+            "ValidatorEpochAuthorizationV1",
             "version network_id epoch first_height last_height authority_generation authority_id beacon previous_authorization_id transition_id decision",
         ),
     ] {

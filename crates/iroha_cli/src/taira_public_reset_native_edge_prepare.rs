@@ -29,6 +29,8 @@ try:
     if not data or len(data) > 1048576: raise RuntimeError('inspection_input_bound')
     if sys.argv[2] == 'inspect':
         result = owner.inspect_owned_publication(json.loads(data))
+    elif sys.argv[2] == 'inspect-vacant':
+        result = owner.inspect_vacant_publication(json.loads(data))
     elif sys.argv[2] == 'validate-plan':
         owner.validate_plan(json.loads(data))
         result = {}
@@ -76,14 +78,15 @@ struct PrepareRequestV1 {
     authorization_sha256: String,
     authorization_nonce: String,
     next_genesis_hash: String,
-    incumbent: EdgeAdmittedReleaseV1,
+    initial_state: EdgeInitialStateV1,
     source_root: String,
     source_manifest: NativePublicFileV1,
     trusted_public_key: NativePublicFileV1,
     candidate_cli: NativePublicFileV1,
     /// Retained controller copy path; its receiver verifies the exact signed bytes.
     controller_cli_projection: String,
-    current_nginx_request: NativePublicFileV1,
+    #[norito(required)]
+    current_nginx_request: Option<NativePublicFileV1>,
     new_nginx_apply_plan: NativePublicFileV1,
     forwarding_plan: NativePublicFileV1,
     forwarding_identity_receipt: NativePublicFileV1,
@@ -98,7 +101,9 @@ struct PrepareRequestV1 {
 #[norito(deny_unknown_fields)]
 struct OwnerObservationV1 {
     schema: String,
-    owned_publication: NativeOwnedPublicationV1,
+    #[norito(required)]
+    owned_publication: Option<NativeOwnedPublicationV1>,
+    nginx_config: String,
     nginx: NativeObservedFileV1,
     main_configuration: NativeObservedFileV1,
     master: NativeNginxMasterV1,
@@ -224,26 +229,26 @@ fn read_request(args: &PrepareNativeEdge) -> Result<(PrepareRequestV1, PinnedInp
 fn validate_selected_refs(request: &PrepareRequestV1) -> Result<()> {
     request.hosts.validate()?;
     let host = &request.hosts.native_edge;
-    validate_lower_hex("native incumbent commit", &request.incumbent.commit, 40)?;
-    if request.incumbent.release_root
-        != format!(
-            "{}/.local/share/iroha/taira/edge/releases/{}",
-            host.owner_home, request.incumbent.commit
-        )
-    {
-        return Err(eyre!(
-            "native incumbent escaped its independently selected release root"
-        ));
+    match &request.initial_state {
+        EdgeInitialStateV1::Vacant if request.current_nginx_request.is_none() => {},
+        EdgeInitialStateV1::AdmittedRelease(release) if request.current_nginx_request.is_some() => {
+            validate_lower_hex("native incumbent commit", &release.commit, 40)?;
+            if release.release_root != format!(
+                "{}/.local/share/iroha/taira/edge/releases/{}", host.owner_home, release.commit
+            ) {
+                return Err(eyre!("native incumbent escaped its independently selected release root"));
+            }
+        }
+        _ => return Err(eyre!("native occupancy requires its exact present or absent incumbent request")),
     }
     for reference in [
         &request.source_manifest,
         &request.trusted_public_key,
-        &request.current_nginx_request,
         &request.new_nginx_apply_plan,
         &request.forwarding_plan,
         &request.forwarding_identity_receipt,
         &request.forwarding_journal,
-    ] {
+    ].into_iter().chain(request.current_nginx_request.iter()) {
         reference.validate_public(host.owner_uid)?;
         if reference.file.identity.uid != host.owner_uid
             || reference.file.identity.mode != 0o600
@@ -302,11 +307,12 @@ fn run_owner(action: &str, request: &[u8], directory: &Path) -> Result<Vec<u8>> 
     Ok(result.stdout)
 }
 
-fn inspect_owner(request: &[u8], directory: &Path) -> Result<OwnerObservationV1> {
+fn inspect_owner(action: &str, request: &[u8], directory: &Path) -> Result<OwnerObservationV1> {
     let observed: OwnerObservationV1 =
-        json::from_slice(&run_owner("inspect", request, directory)?)?;
+        json::from_slice(&run_owner(action, request, directory)?)?;
     if observed.schema != "iroha.taira.native-nginx-owned-publication-inspection.v1"
-        || observed.phase != "awaiting_readiness"
+        || !matches!((action, observed.phase.as_str(), observed.owned_publication.is_some()),
+            ("inspect", "awaiting_readiness", true) | ("inspect-vacant", "vacant", false))
     {
         return Err(eyre!(
             "native publication inspection has no capturable owner phase"
@@ -349,6 +355,59 @@ fn validate_new_plan(current: &[u8], proposed: &[u8], directory: &Path) -> Resul
             "maintained native nginx owner refused the proposed plan"
         ));
     }
+    Ok(())
+}
+
+fn validate_initial_plan(proposed: &[u8], directory: &Path) -> Result<()> {
+    let plan: Value = json::from_slice(proposed)?;
+    if plan.get("publication") != Some(&norito::json!({"kind":"create"}))
+        || plan.get("host_kind").and_then(Value::as_str) != Some("macos")
+        || run_owner("validate-plan", proposed, directory)? != b"{}"
+    {
+        return Err(eyre!("vacant native edge requires the exact maintained create publication"));
+    }
+    Ok(())
+}
+
+/// Hold the independently provisioned virgin directories. Only this signed
+/// candidate may occupy releases; state and upload remain empty.
+pub(super) fn retain_vacant_root(native: &host_pair::ResetHostV1, commit: &str) -> Result<Vec<OwnerDirectory>> {
+    let service = PathBuf::from(format!("{}/.local/share/iroha/taira/edge", native.owner_home));
+    let mut directories = vec![OwnerDirectory::open(&service)?];
+    for name in ["state", ".public-reset-upload-v1", "releases"] {
+        directories.push(directories[0].open_child(name)?);
+    }
+    revalidate_vacant_root(&directories, native, commit)?;
+    Ok(directories)
+}
+
+fn revalidate_vacant_root(directories: &[OwnerDirectory], native: &host_pair::ResetHostV1, commit: &str) -> Result<()> {
+    for directory in directories {
+        directory.revalidate()?;
+        let metadata = fs::symlink_metadata(directory.path())?;
+        let identity = native_identity(&metadata)?;
+        if !metadata.is_dir() || identity.uid != native.owner_uid
+            || identity.gid != native.owner_gid || identity.mode != 0o700
+        {
+            return Err(eyre!("vacant native edge directory has different owner custody"));
+        }
+        directory.revalidate()?;
+    }
+    let allowed = [".public-reset-upload-v1", "releases", "state"].map(OsString::from);
+    if directories[0].entries(3)?.as_slice() != allowed
+        || !directories[1].entries(1)?.is_empty()
+        || !directories[2].entries(1)?.is_empty()
+        || directories[3].entries(1)?.as_slice() != [OsString::from(commit)]
+    {
+        return Err(eyre!("native edge vacancy contains a selector, state, upload residue or prior release"));
+    }
+    let release = directories[3].open_child(commit)?;
+    if release.entries(2)?.as_slice() != [OsString::from("bin"), OsString::from("taira.conf")]
+        || release.open_child("bin")?.entries(1)?.as_slice() != [OsString::from("iroha")]
+    {
+        return Err(eyre!("vacant edge candidate contains unpublished foreign release material"));
+    }
+    release.revalidate()?;
     Ok(())
 }
 
@@ -401,11 +460,11 @@ fn sign_records(
     native_edge_protocol::NativeEdgeCapabilityV1,
 )> {
     let native = &request.hosts.native_edge;
-    let release = request.incumbent.clone();
-    if release.config_sha256 != observation.owned_publication.publication.sha256 {
-        return Err(eyre!(
-            "incumbent public config differs from its actual owned publication"
-        ));
+    match (&request.initial_state, &observation.owned_publication) {
+        (EdgeInitialStateV1::Vacant, None) => {},
+        (EdgeInitialStateV1::AdmittedRelease(release), Some(publication))
+            if release.config_sha256 == publication.publication.sha256 => {},
+        _ => return Err(eyre!("initial occupancy differs from its actual owned publication")),
     }
     // The source manifest and actual CLI bytes are admitted before this function.
     let capture = SignedNativeEdgeCaptureV1::sign(
@@ -420,7 +479,8 @@ fn sign_records(
             authorization_sha256: request.authorization_sha256.clone(),
             authorization_nonce: request.authorization_nonce.clone(),
             next_genesis_hash: request.next_genesis_hash.clone(),
-            release,
+            initial_state: request.initial_state.clone(),
+            nginx_config: observation.nginx_config,
             dispatcher,
             native_guard: guard.clone(),
             nginx: observation.nginx,
@@ -594,31 +654,31 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
     validate_darwin_header(&header)?;
     cli.revalidate()?;
     pins.push(cli);
-    let observed_raw = retain_public(
-        &mut pins,
-        &request.current_nginx_request,
-        native.owner_uid,
-        MAX_PUBLIC_PLAN,
-    )?;
-    let observed = inspect_owner(&observed_raw, parent_path)?;
-    pins.push(RetainedInput::metadata(&observed.nginx, native.owner_uid)?);
-    pins.push(RetainedInput::metadata(
-        &observed.main_configuration,
-        native.owner_uid,
-    )?);
-    for reference in [
-        &observed.owned_publication.journal,
-        &observed.owned_publication.publication,
-    ] {
-        retain_public(&mut pins, reference, native.owner_uid, MAX_PUBLIC_PLAN)?;
-    }
     let proposed = retain_public(
-        &mut pins,
-        &request.new_nginx_apply_plan,
-        native.owner_uid,
-        MAX_PUBLIC_PLAN,
+        &mut pins, &request.new_nginx_apply_plan, native.owner_uid, MAX_PUBLIC_PLAN,
     )?;
-    validate_new_plan(&observed_raw, &proposed, parent_path)?;
+    let vacant_root = if matches!(&request.completion, NativeEdgeCompletionProvenanceV1::Vacant) {
+        Some(retain_vacant_root(native, &revision.commit)?)
+    } else { None };
+    let (inspection_action, observed_raw) = match &request.current_nginx_request {
+        Some(reference) => {
+            let current = retain_public(&mut pins, reference, native.owner_uid, MAX_PUBLIC_PLAN)?;
+            validate_new_plan(&current, &proposed, parent_path)?;
+            ("inspect", current)
+        }
+        None => {
+            validate_initial_plan(&proposed, parent_path)?;
+            ("inspect-vacant", proposed.clone())
+        }
+    };
+    let observed = inspect_owner(inspection_action, &observed_raw, parent_path)?;
+    pins.push(RetainedInput::metadata(&observed.nginx, native.owner_uid)?);
+    pins.push(RetainedInput::metadata(&observed.main_configuration, native.owner_uid)?);
+    for publication in &observed.owned_publication {
+        for reference in [&publication.journal, &publication.publication] {
+            retain_public(&mut pins, reference, native.owner_uid, MAX_PUBLIC_PLAN)?;
+        }
+    }
     for reference in [
         &request.forwarding_plan,
         &request.forwarding_identity_receipt,
@@ -683,49 +743,51 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
         ));
     }
     pins.push(RetainedInput::public(&guard, native.owner_uid, 16 * 1024)?);
-    validate_completion(&request, &trusted, &mut pins, &observed.owned_publication)?;
-    let incumbent_path = PathBuf::from(&request.incumbent.release_root).join("bin/iroha");
-    let (mut incumbent, incumbent_snapshot) =
-        open_pinned_regular(&incumbent_path, "native incumbent CLI")?;
-    let incumbent_identity = native_identity(&incumbent.metadata()?)?;
-    if incumbent_identity.uid != native.owner_uid
-        || incumbent_identity.gid != native.owner_gid
-        || incumbent_identity.mode != 0o755
-        || !(64..=512 * 1024 * 1024).contains(&incumbent_identity.size)
-    {
-        return Err(eyre!(
-            "native incumbent lacks bounded executable owner custody"
-        ));
+    validate_completion(&request, &trusted, &mut pins, observed.owned_publication.as_ref())?;
+    if let EdgeInitialStateV1::AdmittedRelease(release) = &request.initial_state {
+        let incumbent_path = PathBuf::from(&release.release_root).join("bin/iroha");
+        let (mut incumbent, incumbent_snapshot) =
+            open_pinned_regular(&incumbent_path, "native incumbent CLI")?;
+        let incumbent_identity = native_identity(&incumbent.metadata()?)?;
+        if incumbent_identity.uid != native.owner_uid
+            || incumbent_identity.gid != native.owner_gid
+            || incumbent_identity.mode != 0o755
+            || !(64..=512 * 1024 * 1024).contains(&incumbent_identity.size)
+        {
+            return Err(eyre!(
+                "native incumbent lacks bounded executable owner custody"
+            ));
+        }
+        incumbent.read_exact(&mut header)?;
+        validate_darwin_header(&header)?;
+        incumbent.rewind()?;
+        if sha256_reader(&mut incumbent, &incumbent_path)? != release.cli_sha256 {
+            return Err(eyre!(
+                "native incumbent differs from independently selected prior release"
+            ));
+        }
+        ensure_pinned_unchanged(
+            &incumbent_path,
+            "native incumbent CLI",
+            &incumbent,
+            &incumbent_snapshot,
+        )?;
+        let incumbent_ref = NativePublicFileV1 {
+            file: NativeObservedFileV1 {
+                path: incumbent_path
+                    .to_str()
+                    .ok_or_else(|| eyre!("native incumbent path is not UTF-8"))?
+                    .into(),
+                identity: incumbent_identity,
+            },
+            sha256: release.cli_sha256.clone(),
+        };
+        pins.push(RetainedInput::public(
+            &incumbent_ref,
+            native.owner_uid,
+            512 * 1024 * 1024,
+        )?);
     }
-    incumbent.read_exact(&mut header)?;
-    validate_darwin_header(&header)?;
-    incumbent.rewind()?;
-    if sha256_reader(&mut incumbent, &incumbent_path)? != request.incumbent.cli_sha256 {
-        return Err(eyre!(
-            "native incumbent differs from independently selected prior release"
-        ));
-    }
-    ensure_pinned_unchanged(
-        &incumbent_path,
-        "native incumbent CLI",
-        &incumbent,
-        &incumbent_snapshot,
-    )?;
-    let incumbent_ref = NativePublicFileV1 {
-        file: NativeObservedFileV1 {
-            path: incumbent_path
-                .to_str()
-                .ok_or_else(|| eyre!("native incumbent path is not UTF-8"))?
-                .into(),
-            identity: incumbent_identity,
-        },
-        sha256: request.incumbent.cli_sha256.clone(),
-    };
-    pins.push(RetainedInput::public(
-        &incumbent_ref,
-        native.owner_uid,
-        512 * 1024 * 1024,
-    )?);
     let native_public = PublicKey::from_str(&native.capture_public_key)?;
     let native_key = inputs::inherited_signing_key(args.native_signing_key_fd, &native_public)?;
     let owner_key = inputs::inherited_signing_key(args.owner_signing_key_fd, &owner_public)?;
@@ -748,7 +810,10 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
     }
     revalidate_pinned(&request_pin, "native prepare request")?;
     validate_source_closure(&revision)?;
-    if inspect_owner(&observed_raw, parent_path)? != observed {
+    if let Some(directories) = &vacant_root {
+        revalidate_vacant_root(directories, native, &revision.commit)?;
+    }
+    if inspect_owner(inspection_action, &observed_raw, parent_path)? != observed {
         return Err(eyre!(
             "native nginx ownership changed before signed publication"
         ));
@@ -807,10 +872,13 @@ fn validate_completion(
     request: &PrepareRequestV1,
     trusted: &TrustedKeyV1,
     pins: &mut Vec<RetainedInput>,
-    owned_publication: &NativeOwnedPublicationV1,
+    owned_publication: Option<&NativeOwnedPublicationV1>,
 ) -> Result<()> {
     match (&request.completion, &request.terminal_authority) {
-        (NativeEdgeCompletionProvenanceV1::PublicationOnly { .. }, None) => Ok(()),
+        (NativeEdgeCompletionProvenanceV1::Vacant, None)
+            if matches!(request.initial_state, EdgeInitialStateV1::Vacant) && owned_publication.is_none() => Ok(()),
+        (NativeEdgeCompletionProvenanceV1::PublicationOnly { .. }, None)
+            if matches!(request.initial_state, EdgeInitialStateV1::AdmittedRelease(_)) && owned_publication.is_some() => Ok(()),
         (
             NativeEdgeCompletionProvenanceV1::ResetTerminal {
                 progress,
@@ -946,13 +1014,13 @@ mod tests {
             authorization_sha256: capture.claims.authorization_sha256.clone(),
             authorization_nonce: capture.claims.authorization_nonce.clone(),
             next_genesis_hash: capture.claims.next_genesis_hash.clone(),
-            incumbent,
+            initial_state: EdgeInitialStateV1::AdmittedRelease(incumbent),
             source_root: revision.source_root.clone(),
             source_manifest: capture.claims.forwarding_plan.clone(),
             trusted_public_key: capture.claims.forwarding_plan.clone(),
             candidate_cli: cli,
             controller_cli_projection: "/native/retained-controller/iroha-darwin".into(),
-            current_nginx_request: capture.claims.forwarding_plan.clone(),
+            current_nginx_request: Some(capture.claims.forwarding_plan.clone()),
             new_nginx_apply_plan: apply,
             forwarding_plan: capture.claims.forwarding_plan.clone(),
             forwarding_identity_receipt: capture.claims.forwarding_identity_receipt.clone(),
@@ -962,6 +1030,7 @@ mod tests {
         };
         let observation = OwnerObservationV1 {
             schema: "iroha.taira.native-nginx-owned-publication-inspection.v1".into(),
+            nginx_config: capture.claims.nginx_config,
             owned_publication: capture.claims.owned_publication,
             nginx: capture.claims.nginx,
             main_configuration: capture.claims.main_configuration,
@@ -1078,13 +1147,89 @@ mod tests {
     }
 
     #[test]
+    fn native_initial_publication_has_signed_vacancy_and_no_invented_predecessor() {
+        let (mut request, revision, mut observation, dispatcher, guard, trusted, native_key, owner_key) = signed_fixture();
+        let old_release = match &request.initial_state {
+            EdgeInitialStateV1::AdmittedRelease(release) => release.clone(),
+            _ => unreachable!(),
+        };
+        let old_publication = observation.owned_publication.clone();
+        request.initial_state = EdgeInitialStateV1::Vacant;
+        request.current_nginx_request = None;
+        request.completion = NativeEdgeCompletionProvenanceV1::Vacant;
+        observation.owned_publication = None;
+        observation.phase = "vacant".into();
+        validate_selected_refs(&request).unwrap();
+        let (capture, candidate, capability) = sign_records(&request, &revision, observation,
+            dispatcher, guard, &trusted, &native_key, &owner_key, 1_234).unwrap();
+        assert!(matches!(&capture.claims.initial_state, EdgeInitialStateV1::Vacant));
+        assert!(capture.claims.owned_publication.is_none());
+        assert!(capture.claims.admitted_release().is_err());
+        assert!(capability.incumbent_nginx_request.is_none());
+        capability.validate(&request.hosts).unwrap();
+        candidate.verify(&request.hosts, &revision.commit, &revision.tree,
+            &revision.cargo_lock_sha256, &revision.source_closure_sha256, &trusted).unwrap();
+        let verify = |claims| {
+            SignedNativeEdgeCaptureV1::sign(claims, &native_key).unwrap().verify(&request.hosts,
+                &request.retained_inventory_sha256, &request.authorization_sha256,
+                &request.authorization_nonce, &request.next_genesis_hash)
+        };
+        let mut changed = capture.claims.clone();
+        changed.initial_state = EdgeInitialStateV1::AdmittedRelease(old_release.clone());
+        assert!(verify(changed).is_err());
+        let mut changed = capture.claims.clone();
+        changed.owned_publication = old_publication;
+        assert!(verify(changed).is_err());
+        let mut changed = capture.claims.clone();
+        changed.completion = NativeEdgeCompletionProvenanceV1::PublicationOnly {
+            publication_operation_id: "a".repeat(32),
+        };
+        assert!(verify(changed).is_err());
+        let mut retired = json::to_value(&capture.claims).unwrap();
+        retired.as_object_mut().unwrap().insert("release".into(), json::to_value(&old_release).unwrap());
+        assert!(json::from_value::<NativeEdgeCaptureClaimsV1>(retired).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_initial_directories_allow_only_fresh_signed_candidate_custody() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = private_custody_test_dir(".native-initial-directories-");
+        let (request, revision, ..) = signed_fixture();
+        let mut native = request.hosts.native_edge;
+        native.owner_home = root.path().to_str().unwrap().into();
+        native.owner_uid = rustix::process::geteuid().as_raw();
+        native.owner_gid = rustix::process::getegid().as_raw();
+        let service = root.path().join(".local/share/iroha/taira/edge");
+        let release = service.join("releases").join(&revision.commit);
+        fs::create_dir_all(release.join("bin")).unwrap();
+        for directory in [&service, &service.join("state"), &service.join(".public-reset-upload-v1"), &service.join("releases")] {
+            fs::create_dir_all(directory).unwrap();
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        fs::write(release.join("taira.conf"), b"public exact candidate fixture").unwrap();
+        fs::write(release.join("bin/iroha"), b"public candidate fixture").unwrap();
+        let retained = retain_vacant_root(&native, &revision.commit).unwrap();
+        for residue in [service.join("current"), service.join("state/prior.json"),
+            service.join(".public-reset-upload-v1/prior"), service.join("releases/another")] {
+            fs::write(&residue, b"foreign prior residue").unwrap();
+            assert!(revalidate_vacant_root(&retained, &native, &revision.commit).is_err());
+            fs::remove_file(residue).unwrap();
+        }
+        fs::set_permissions(service.join("state"), fs::Permissions::from_mode(0o750)).unwrap();
+        assert!(revalidate_vacant_root(&retained, &native, &revision.commit).is_err());
+    }
+
+    #[test]
     fn native_selected_public_paths_cannot_hash_private_nginx_main_or_foreign_release() {
         let (mut request, ..) = signed_fixture();
         validate_selected_refs(&request).unwrap();
         request.forwarding_plan.file.path = "/opt/homebrew/etc/nginx/nginx.conf".into();
         assert!(validate_selected_refs(&request).is_err());
         let (mut request, ..) = signed_fixture();
-        request.incumbent.release_root = "/foreign/private-custody".into();
+        if let EdgeInitialStateV1::AdmittedRelease(release) = &mut request.initial_state {
+            release.release_root = "/foreign/private-custody".into();
+        }
         assert!(validate_selected_refs(&request).is_err());
         let (mut request, ..) = signed_fixture();
         request.trusted_public_key.file.identity.mode = 0o644;
@@ -1228,6 +1373,7 @@ mod tests {
         );
         let observation = OwnerObservationV1 {
             schema: "iroha.taira.native-nginx-owned-publication-inspection.v1".into(),
+            nginx_config: capture.claims.nginx_config,
             owned_publication: capture.claims.owned_publication,
             nginx: capture.claims.nginx,
             main_configuration: capture.claims.main_configuration,

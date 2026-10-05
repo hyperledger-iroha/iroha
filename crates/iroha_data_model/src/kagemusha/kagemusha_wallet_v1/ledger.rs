@@ -36,12 +36,15 @@ use super::{
         kagemusha_wallet_id_v1,
     },
     invalid_v1, is_zero_v1,
+    keys::{KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1},
     messages::{
-        KagemushaWalletPaymentV1, require_exact_certificates_v1, verify_credential_with_set_v1,
+        KagemushaWalletPaymentV1, KagemushaWalletRequestV1, require_exact_certificates_v1,
+        verify_credential_with_set_v1,
     },
     policy::{
-        KagemushaWalletChargeKindV1, KagemushaWalletChargeQuoteV1, SignerBindingV1,
-        kagemusha_wallet_load_ledger_debit_v1, kagemusha_wallet_unload_account_payout_v1,
+        KagemushaWalletChargeKindV1, KagemushaWalletChargeQuoteV1, KagemushaWalletFeeScheduleV1,
+        SignerBindingV1, kagemusha_wallet_load_ledger_debit_v1,
+        kagemusha_wallet_unload_account_payout_v1,
     },
     require_nonzero_v1, require_scheme_v1, require_version_v1,
     state::{
@@ -49,10 +52,7 @@ use super::{
         KagemushaWalletStateV1,
     },
 };
-use crate::{
-    account::AccountId,
-    kagemusha::{KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1},
-};
+use crate::account::AccountId;
 
 #[cfg(test)]
 #[path = "ledger_tests.rs"]
@@ -329,14 +329,14 @@ impl KagemushaWalletLoadVoucherV1 {
         self.validate()?;
         state.validate()?;
         let body = &self.body;
-        require_scheme_v1("voucher.scheme_id", &body.scheme_id, &state.scheme_id)?;
-        if body.asset_digest != state.asset_digest {
+        require_scheme_v1("voucher.scheme_id", &body.scheme_id, &state.core.scheme_id)?;
+        if body.asset_digest != state.core.asset_digest {
             return Err(invalid_v1("voucher.asset_digest"));
         }
-        if body.wallet_id != state.wallet_id {
+        if body.wallet_id != state.core.wallet_id {
             return Err(invalid_v1("voucher.wallet_id"));
         }
-        if body.ordinal != state.next_load {
+        if body.ordinal != state.core.next_load {
             return Err(invalid_v1("voucher.ordinal"));
         }
         Ok(())
@@ -508,13 +508,17 @@ pub struct KagemushaWalletUnloadClaimV1 {
 impl KagemushaWalletUnloadClaimV1 {
     /// Fully validate the claim and return its payout.
     ///
+    /// The package is verified complete, including Ω of its predecessor and the §3.2 consumer
+    /// checks against the claim's credential (§6.1); σ and Ω are verified by the proof owner.
+    ///
     /// # Errors
     ///
     /// Rejects another version, an invalid credential, a certificate set other than exactly its
     /// issuer certificate and quote signer certificate, an account other than the credential's,
-    /// a package that is not an Unload or does not verify, an online charge above the amount, a
-    /// charge quote present or absent against the effect, a quote for another scheme, asset,
-    /// wallet, digest or terms, and a beneficiary other than the quote's.
+    /// a package that is not an Unload carrying Ω(pred) or does not verify, an online charge
+    /// above the amount, a charge quote present or absent against the effect, a quote for
+    /// another scheme, asset, wallet, digest or terms, and a beneficiary other than the
+    /// quote's.
     pub fn payout(&self) -> WalletResult<KagemushaWalletUnloadPayoutV1> {
         require_version_v1("unload_claim.version", self.version)?;
         let credential = &self.credential;
@@ -660,8 +664,10 @@ pub struct KagemushaWalletFeePayoutV1 {
 
 /// Online fee claim relaying a complete committed Payment (§6.2).
 ///
-/// Anyone may relay it; the ledger checks `H("account", beneficiary)` against the schedule's
-/// beneficiary and pays once per `credit_id`.
+/// Anyone may relay it; the ledger verifies Ω(pred), `σ_send`, `τ_send` and the fee terms, with
+/// the schedule and credentials taken from its own records by the digests the Payment binds,
+/// checks `H("account", beneficiary)` against the schedule's beneficiary and pays once per
+/// `credit_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletFeeClaimV1"
@@ -676,21 +682,54 @@ pub struct KagemushaWalletFeeClaimV1 {
 }
 
 impl KagemushaWalletFeeClaimV1 {
-    /// Fully validate the claim and return its payout.
+    /// Structurally validate the claim: a valid Payment with a nonzero fee under a named fee
+    /// schedule.
     ///
     /// # Errors
     ///
-    /// Rejects another version, an invalid Payment, a Payment without a fee schedule or with a
-    /// zero fee, and a beneficiary other than the schedule's.
-    pub fn payout(&self) -> WalletResult<KagemushaWalletFeePayoutV1> {
+    /// Rejects another version, what [`KagemushaWalletPaymentV1::digests`] rejects, and a
+    /// Payment without a fee schedule or with a zero fee.
+    pub fn validate(&self) -> WalletResult<()> {
         require_version_v1("fee_claim.version", self.version)?;
+        self.payment.digests()?;
+        let body = &self.payment.request.body;
+        if is_zero_v1(&body.fee_schedule) {
+            return Err(invalid_v1("fee_claim.fee_schedule"));
+        }
+        if body.fee == 0 {
+            return Err(invalid_v1("fee_claim.fee"));
+        }
+        Ok(())
+    }
+
+    /// Validate the claim against the historical `schedule` the Payment names and return its
+    /// payout.
+    ///
+    /// # Errors
+    ///
+    /// Rejects what [`Self::validate`] rejects, an invalid schedule or one with another digest,
+    /// scheme or asset, a fee other than the schedule's fee of the amount, and a beneficiary
+    /// other than the schedule's.
+    pub fn payout(
+        &self,
+        schedule: &KagemushaWalletFeeScheduleV1,
+    ) -> WalletResult<KagemushaWalletFeePayoutV1> {
+        self.validate()?;
         let digests = self.payment.digests()?;
-        let request = &self.payment.request;
-        let schedule = request
-            .fee_schedule
-            .schedule()
-            .ok_or_else(|| invalid_v1("fee_claim.fee_schedule"))?;
-        if request.body.fee == 0 {
+        let body = &self.payment.request.body;
+        schedule.validate()?;
+        if schedule.fee_schedule_digest() != body.fee_schedule {
+            return Err(invalid_v1("fee_claim.fee_schedule"));
+        }
+        require_scheme_v1(
+            "fee_schedule.scheme_id",
+            &schedule.body.scheme_id,
+            &body.scheme_id,
+        )?;
+        if schedule.body.asset_digest != body.asset_digest {
+            return Err(invalid_v1("fee_schedule.asset_digest"));
+        }
+        if schedule.fee(body.amount)? != body.fee {
             return Err(invalid_v1("fee_claim.fee"));
         }
         let beneficiary = kagemusha_wallet_account_digest_v1(&self.beneficiary)?;
@@ -699,33 +738,35 @@ impl KagemushaWalletFeeClaimV1 {
         }
         Ok(KagemushaWalletFeePayoutV1 {
             credit_id: digests.credit_id,
-            fee: request.body.fee,
-            fee_schedule: request.body.fee_schedule,
+            fee: body.fee,
+            fee_schedule: body.fee_schedule,
             beneficiary_account_digest: beneficiary,
             payment: digests.payment,
         })
     }
 
-    /// Fully validate the claim.
+    /// Validate the claim and verify its Payment under `scheme` with the ledger's records:
+    /// the receiver's `request` (its credential, fee schedule and certificates by the digests
+    /// the Payment binds) and the payer's credential and certificates.
     ///
     /// # Errors
     ///
-    /// Rejects what [`Self::payout`] rejects.
-    pub fn validate(&self) -> WalletResult<()> {
-        self.payout().map(|_| ())
-    }
-
-    /// Validate the claim and verify its Payment under `scheme`.
-    ///
-    /// # Errors
-    ///
-    /// Rejects what [`Self::payout`] and [`KagemushaWalletPaymentV1::verify`] reject.
+    /// Rejects what [`Self::payout`] and [`KagemushaWalletPaymentV1::verify`] reject and a
+    /// Request without the fee schedule.
     pub fn verify(
         &self,
         scheme: &KagemushaWalletSchemeV1,
+        request: &KagemushaWalletRequestV1,
+        payer_credential: &KagemushaWalletCredentialV1,
+        payer_certificates: &KagemushaWalletCertificateSetV1,
     ) -> WalletResult<KagemushaWalletFeePayoutV1> {
-        let payout = self.payout()?;
-        self.payment.verify(scheme)?;
+        let schedule = request
+            .fee_schedule
+            .schedule()
+            .ok_or_else(|| invalid_v1("fee_claim.fee_schedule"))?;
+        let payout = self.payout(schedule)?;
+        self.payment
+            .verify(scheme, payer_credential, payer_certificates, request)?;
         Ok(payout)
     }
 
@@ -1139,7 +1180,9 @@ impl KagemushaWalletActivationV1 {
     }
 }
 
-/// Load closure: a complete package proving `Retiring` and its `next_load` (§6.3).
+/// Load closure: the complete Retiring package, or a later complete Send or Unload package,
+/// proving the Retiring lifecycle and its `next_load` from a folded head with its predecessor
+/// Ω (§6.3).
 ///
 /// In one transaction the ledger checks that no voucher at or above `next_load` exists and
 /// permanently disables further loads. Repeating closure is idempotent.
@@ -1166,9 +1209,10 @@ impl KagemushaWalletCloseLoadsV1 {
     /// # Errors
     ///
     /// Rejects another version, an invalid credential or certificate set, a control other than
-    /// this wallet's `CloseLoads`, a package whose lifecycle is not Retiring or whose `next_load`
-    /// differs from the control's, a package that does not verify or whose digest differs from
-    /// the control's, and a control signature that does not verify.
+    /// this wallet's `CloseLoads`, a package that is not a Retiring, Send or Unload carrying
+    /// Ω(pred), whose lifecycle is not Retiring or whose `next_load` differs from the
+    /// control's, a package that does not verify (including the §3.2 consumer checks) or whose
+    /// digest differs from the control's, and a control signature that does not verify.
     pub fn validate(&self) -> WalletResult<()> {
         require_version_v1("close_loads.version", self.version)?;
         let credential = &self.credential;
@@ -1189,6 +1233,11 @@ impl KagemushaWalletCloseLoadsV1 {
             return Err(invalid_v1("close_loads.action"));
         };
         let statement = &self.package.statement;
+        // Only a Retiring, Send or Unload package proves the lifecycle from a folded head with
+        // its predecessor Ω (§6.3 step 2).
+        if !statement.effect.kind().consumes_lineage() {
+            return Err(invalid_v1("close_loads.effect"));
+        }
         if statement.lifecycle != KagemushaWalletLifecycleV1::Retiring {
             return Err(invalid_v1("close_loads.lifecycle"));
         }

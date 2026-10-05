@@ -21459,6 +21459,26 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn host_request_requires_explicit_phase_checkpoint_field() {
+        let request = sample_request();
+        let canonical = json::to_vec(&request).expect("canonical host request");
+        let decoded: HostRequestV1 = json::from_slice(&canonical).expect("current host request");
+        assert!(decoded.phase_checkpoints.is_empty());
+        assert_eq!(json::to_vec(&decoded).unwrap(), canonical);
+
+        let mut missing = json::to_value(&request).unwrap();
+        missing.as_object_mut().unwrap().remove("phase_checkpoints");
+        let error = json::from_value::<HostRequestV1>(missing).unwrap_err();
+        assert!(error.to_string().contains("phase_checkpoints"));
+
+        let mut null = json::to_value(&request).unwrap();
+        null.as_object_mut()
+            .unwrap()
+            .insert("phase_checkpoints".into(), json::Value::Null);
+        assert!(json::from_value::<HostRequestV1>(null).is_err());
+    }
+
+    #[test]
     fn host_request_retry_identity_excludes_only_deadline() {
         let first = sample_request();
         let mut retry = first.clone();

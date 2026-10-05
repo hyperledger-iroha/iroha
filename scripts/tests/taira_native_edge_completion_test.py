@@ -196,6 +196,240 @@ def test_pre_effect_rollback_proves_incumbent_without_touching_it(effect_admissi
     assert _complete(admission)[1] == records
 
 
+def _vacant_admission(native_apply, action="rollback"):
+    request, root, _ = native_apply
+    admission = EffectAdmission(copy.deepcopy(request), root, action)
+    admission.plan["publication_effect"] = dict(kind="vacant_not_requested",
+        value=dict(intended_operation_id=request["operation_id"]))
+    return admission, root
+
+
+def test_pre_first_publication_rollback_proves_vacancy_without_owner_effect(native_apply, monkeypatch):
+    admission, root = _vacant_admission(native_apply)
+    try:
+        monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("vacant rollback signaled nginx"))
+        monkeypatch.setattr(OWNER, "native_exchange", lambda *args: pytest.fail("vacant rollback exchanged a source"))
+        result, records = _complete(admission)
+        assert result["status"] == "rolled_back" and result["error_code"] is None, result
+        assert result["publication_operation_id"] == native_apply[0]["operation_id"]
+        assert result["restored_owned_publication"] is None
+        assert [row["phase"] for row in records] == ["admitted", "rollback_requested", "rolled_back"]
+        assert all(all(row[key] is None for key in ("publication_identity", "backup_identity",
+            "publisher_journal", "publisher_terminal_record", "restored_owner")) for row in records)
+        assert not (root / "conf.d/new-scoped.conf").exists()
+        assert not list(root.glob(".taira-native-nginx-apply-*.receipt.ndjson"))
+        assert not (root / "reload-count").exists()
+        assert _complete(admission)[1] == records
+    finally:
+        admission.close()
+
+
+@pytest.mark.parametrize("fault", ["destination", "symlink", "intended_journal"])
+def test_vacant_no_effect_rollback_refuses_real_publication_or_journal(native_apply, monkeypatch, fault):
+    admission, root = _vacant_admission(native_apply)
+    destination = root / "conf.d/new-scoped.conf"
+    if fault == "destination":
+        _write_public(destination, b"foreign existing public include\n")
+        occupied = destination
+    elif fault == "symlink":
+        occupied = root / "foreign-public"
+        _write_public(occupied, b"foreign retained public include\n")
+        destination.symlink_to(occupied)
+    else:
+        occupied = root / (".taira-native-nginx-apply-" + native_apply[0]["operation_id"] + ".receipt.ndjson")
+        _write_public(occupied, b"foreign retained owner intent\n")
+    before = occupied.read_bytes(), _identity(occupied)
+    monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("refused vacancy signaled nginx"))
+    monkeypatch.setattr(OWNER, "native_exchange", lambda *args: pytest.fail("refused vacancy exchanged a source"))
+    try:
+        result, _ = _complete(admission)
+        assert result["status"] == "recovery_pending" and result["error_code"] is not None, result
+        assert result["restored_owned_publication"] is None
+        assert (occupied.read_bytes(), _identity(occupied)) == before
+        assert not (root / "reload-count").exists()
+    finally:
+        admission.close()
+
+
+def test_vacancy_is_reobserved_before_durable_no_effect_acknowledgement(native_apply, monkeypatch):
+    admission, root = _vacant_admission(native_apply)
+    inspect = OWNER.inspect_vacant_publication_in_context
+    calls = 0
+    destination = root / "conf.d/new-scoped.conf"
+    def changed_vacancy(receipt, request, context):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            _write_public(destination, b"foreign publication arrived before acknowledgement\n")
+        return inspect(receipt, request, context)
+    monkeypatch.setattr(OWNER, "inspect_vacant_publication_in_context", changed_vacancy)
+    monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("changed vacancy signaled nginx"))
+    monkeypatch.setattr(OWNER, "native_exchange", lambda *args: pytest.fail("changed vacancy exchanged a source"))
+    try:
+        result, records = _complete(admission)
+        assert result["status"] == "recovery_pending" and result["error_code"] is not None, result
+        assert calls == 2
+        assert "rolled_back" not in [row["phase"] for row in records]
+        assert destination.read_bytes() == b"foreign publication arrived before acknowledgement\n"
+        assert not (root / "reload-count").exists()
+    finally:
+        admission.close()
+
+
+@pytest.mark.parametrize("action", ["seal", "cleanup"])
+def test_vacant_no_effect_plan_cannot_authorize_seal_or_cleanup(native_apply, action):
+    admission, root = _vacant_admission(native_apply, action)
+    try:
+        result, _ = _complete(admission)
+        assert result["status"] == "recovery_pending"
+        assert result["error_code"] == "vacant_not_requested_terminal_action"
+        assert not (root / "conf.d/new-scoped.conf").exists()
+        assert not list(root.glob(".taira-native-nginx-apply-*.receipt.ndjson"))
+    finally:
+        admission.close()
+
+
+
+def _terminal_vacant_admission(native_apply, monkeypatch, phase="rolled_back_unqualified", action="rollback"):
+    request, root, _ = native_apply
+    if phase == "rolled_back_unqualified":
+        (root / "reject-context").touch()
+        result = OWNER.remote_apply(request)
+        (root / "reject-context").unlink()
+    else:
+        assert phase == "refused_before_publication"
+        inspect = OWNER.verify_owned_public_file
+        failed = False
+        def refuse_once(context, directory, name, expected, digest, **kwargs):
+            nonlocal failed
+            if not failed and name.startswith(".taira-nginx-publish-"):
+                failed = True
+                raise RuntimeError("controlled_prepublication_refusal")
+            return inspect(context, directory, name, expected, digest, **kwargs)
+        with monkeypatch.context() as controlled:
+            controlled.setattr(OWNER, "verify_owned_public_file", refuse_once)
+            result = OWNER.remote_apply(request)
+    assert result["exit_code"] == 1 and result["phase"] == phase, result
+    assert not (root / "conf.d/new-scoped.conf").exists()
+    publisher = root / (".taira-native-nginx-apply-" + request["operation_id"] + ".receipt.ndjson")
+    reference = dict(file=dict(path=str(publisher), identity=MODULE.identity(publisher.stat())),
+        sha256=hashlib.sha256(publisher.read_bytes()).hexdigest())
+    admission = EffectAdmission(copy.deepcopy(request), root, action)
+    admission.plan["publication_effect"] = dict(kind="vacant_publisher_terminal", value=dict(
+        intended_operation_id=request["operation_id"], publisher_journal=reference, terminal_phase=phase))
+    return admission, root, publisher
+
+
+@pytest.mark.parametrize("phase", ["rolled_back_unqualified", "refused_before_publication"])
+def test_terminal_first_publisher_rollback_preserves_actual_terminal_journal(native_apply, monkeypatch, phase):
+    admission, root, publisher = _terminal_vacant_admission(native_apply, monkeypatch, phase)
+    before = publisher.read_bytes(), _identity(publisher)
+    reload = (root / "reload-count").read_bytes() if (root / "reload-count").exists() else None
+    monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("terminal vacancy signaled nginx"))
+    monkeypatch.setattr(OWNER, "native_exchange", lambda *args: pytest.fail("terminal vacancy exchanged source"))
+    try:
+        result, records = _complete(admission)
+        assert result["status"] == "rolled_back" and result["error_code"] is None, result
+        assert result["restored_owned_publication"] is None
+        assert [row["phase"] for row in records] == ["admitted", "rollback_requested", "rolled_back"]
+        expected = MODULE.terminal_publisher_reference(admission.plan["publication_effect"]["value"])
+        assert all(row["publisher_journal"] == expected for row in records)
+        assert all(all(row[key] is None for key in ("publication_identity", "backup_identity",
+            "publisher_terminal_record", "restored_owner")) for row in records)
+        assert (publisher.read_bytes(), _identity(publisher)) == before
+        assert not (root / "conf.d/new-scoped.conf").exists()
+        assert not list((root / "conf.d").glob(".taira-nginx-publish-*"))
+        assert ((root / "reload-count").read_bytes() if (root / "reload-count").exists() else None) == reload
+        assert _complete(admission)[1] == records
+    finally:
+        admission.close()
+
+
+@pytest.mark.parametrize("fault", ["destination", "journal_changed", "wrong_phase"])
+def test_terminal_vacancy_rollback_refuses_changed_actual_owner(native_apply, monkeypatch, fault):
+    admission, root, publisher = _terminal_vacant_admission(native_apply, monkeypatch)
+    destination = root / "conf.d/new-scoped.conf"
+    if fault == "destination":
+        _write_public(destination, b"foreign public source\n")
+    elif fault == "journal_changed":
+        publisher.write_bytes(publisher.read_bytes() + b" ")
+    else:
+        admission.plan["publication_effect"]["value"]["terminal_phase"] = "refused_before_publication"
+    before = publisher.read_bytes(), _identity(publisher)
+    monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("changed terminal vacancy signaled nginx"))
+    try:
+        result, records = _complete(admission)
+        assert result["status"] == "recovery_pending" and result["error_code"] is not None, result
+        assert "rolled_back" not in [row["phase"] for row in records]
+        assert (publisher.read_bytes(), _identity(publisher)) == before
+        if fault == "destination":
+            assert destination.read_bytes() == b"foreign public source\n"
+    finally:
+        admission.close()
+
+
+@pytest.mark.parametrize("action", ["seal", "cleanup"])
+def test_terminal_vacancy_plan_cannot_authorize_seal_or_cleanup(native_apply, monkeypatch, action):
+    admission, root, publisher = _terminal_vacant_admission(native_apply, monkeypatch, action=action)
+    before = publisher.read_bytes(), _identity(publisher)
+    try:
+        result, _ = _complete(admission)
+        assert result["status"] == "recovery_pending"
+        assert result["error_code"] == "vacant_not_requested_terminal_action"
+        assert (publisher.read_bytes(), _identity(publisher)) == before
+        assert not (root / "conf.d/new-scoped.conf").exists()
+    finally:
+        admission.close()
+
+
+def _interrupted_first_publication(native_apply, phase, action="rollback"):
+    request, root, _ = native_apply
+    result = OWNER.remote_apply(request)
+    assert result["exit_code"] == 0, result
+    journal = root / (".taira-native-nginx-apply-" + request["operation_id"] + ".receipt.ndjson")
+    rows = journal.read_bytes().splitlines(keepends=True)
+    stop = next(index for index, row in enumerate(rows) if json.loads(row)["phase"] == phase)
+    # The exact prefix of a genuine first-create journal models interruption;
+    # retain its real active inode and source bytes, with no invented predecessor.
+    journal.write_bytes(b"".join(rows[:stop + 1]))
+    request = copy.deepcopy(request)
+    request["publication"] = dict(kind="reconcile",
+        prior=_prior(root, request["operation_id"], request["candidate_sha256"]))
+    return EffectAdmission(request, root, action), root
+
+
+@pytest.mark.parametrize("phase", ["published", "context_checking", "context_checked", "reload_requested"])
+def test_owned_interrupted_first_publication_rolls_back_to_real_absence(native_apply, phase):
+    admission, root = _interrupted_first_publication(native_apply, phase)
+    before_reload = int((root / "reload-count").read_text())
+    try:
+        result, records = _complete(admission)
+        assert result["status"] == "rolled_back" and result["error_code"] is None, result
+        assert result["restored_owned_publication"] is None
+        assert records[-1]["phase"] == "rolled_back"
+        assert not (root / "conf.d/new-scoped.conf").exists()
+        assert int((root / "reload-count").read_text()) == before_reload + 1
+        publisher = root / (".taira-native-nginx-apply-" + native_apply[0]["operation_id"] + ".receipt.ndjson")
+        assert json.loads(publisher.read_text().splitlines()[-1])["phase"] == "rolled_back_unqualified"
+    finally:
+        admission.close()
+
+
+@pytest.mark.parametrize("action", ["seal", "cleanup"])
+def test_owned_pending_publication_does_not_authorize_sealing(native_apply, action, monkeypatch):
+    admission, root = _interrupted_first_publication(native_apply, "published", action)
+    destination = root / "conf.d/new-scoped.conf"
+    before = destination.read_bytes(), _identity(destination)
+    monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("pending publication sealing signaled nginx"))
+    monkeypatch.setattr(OWNER, "native_exchange", lambda *args: pytest.fail("pending publication sealing exchanged source"))
+    try:
+        result, _ = _complete(admission)
+        assert result["status"] == "recovery_pending" and result["error_code"] == "completion_owner_binding", result
+        assert (destination.read_bytes(), _identity(destination)) == before
+    finally:
+        admission.close()
+
+
 @pytest.mark.parametrize("fault", ["after_exchange", "after_signal", "after_publisher_append"])
 def test_interrupted_rollback_resumes_exact_owned_intent_without_double_exchange(effect_admission, monkeypatch, fault):
     admission, root = effect_admission

@@ -26,7 +26,7 @@ fn network() -> NetworkId {
 
 fn decoded(cell: &Cell<SnapshotNexusRuntime>) -> Cell<SnapshotNexusRuntime> {
     let mut encoded = String::from("{\"revert\":");
-    json::JsonSerialize::json_serialize(cell.predecessor_view().get(), &mut encoded);
+    mv::json::json_serialize_undo(cell.predecessor_view().get(), &mut encoded);
     encoded.push_str(",\"blocks\":");
     json::JsonSerialize::json_serialize(cell.view().get(), &mut encoded);
     encoded.push('}');

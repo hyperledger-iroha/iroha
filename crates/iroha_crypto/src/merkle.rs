@@ -159,13 +159,16 @@ impl<T> JsonSerialize for MerkleTreeCommitment<T> {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"root\":")?;
-        self.root.json_serialize_to(out)?;
-        out.push_str(",\"leaf_count\":")?;
-        self.leaf_count.get().json_serialize_to(out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), json::BoundedJsonError> {
+            out.push_str("{\"root\":")?;
+            self.root.json_serialize_to(out)?;
+            out.push_str(",\"leaf_count\":")?;
+            self.leaf_count.get().json_serialize_to(out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 #[cfg(feature = "json")]
@@ -444,31 +447,45 @@ impl<T> JsonSerialize for MerkleTree<T> {
     ) -> Result<(), json::BoundedJsonError> {
         let Ok((hash_scheme, leaves)) = self.serialized_view() else {
             out.begin_container()?;
-            out.push_str("{\"hash_scheme\":0,\"leaves\":")?;
-            out.begin_container()?;
-            out.push_str("[]")?;
+            let result = (|| -> Result<(), json::BoundedJsonError> {
+                out.push_str("{\"hash_scheme\":0,\"leaves\":")?;
+                out.begin_container()?;
+                let result = (|| -> Result<(), json::BoundedJsonError> {
+                    out.push_str("[]")?;
+                    Ok(())
+                })();
+                out.end_container();
+                result?;
+                out.push('}')?;
+                Ok(())
+            })();
             out.end_container();
-            out.push('}')?;
-            out.end_container();
-            return Ok(());
+            return result;
         };
         out.begin_container()?;
-        out.push_str("{\"hash_scheme\":")?;
-        hash_scheme.json_serialize_to(out)?;
-        out.push_str(",\"leaves\":")?;
-        out.begin_container()?;
-        out.push('[')?;
-        for (index, leaf) in leaves.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
-            }
-            leaf.json_serialize_to(out)?;
-        }
-        out.push(']')?;
+        let result = (|| -> Result<(), json::BoundedJsonError> {
+            out.push_str("{\"hash_scheme\":")?;
+            hash_scheme.json_serialize_to(out)?;
+            out.push_str(",\"leaves\":")?;
+            out.begin_container()?;
+            let result = (|| -> Result<(), json::BoundedJsonError> {
+                out.push('[')?;
+                for (index, leaf) in leaves.iter().enumerate() {
+                    if index != 0 {
+                        out.push(',')?;
+                    }
+                    leaf.json_serialize_to(out)?;
+                }
+                out.push(']')?;
+                Ok(())
+            })();
+            out.end_container();
+            result?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        out.push('}')?;
-        out.end_container();
-        Ok(())
+        result
     }
 }
 #[cfg(feature = "json")]
@@ -630,13 +647,16 @@ impl<T> JsonSerialize for MerkleProof<T> {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"leaf_index\":")?;
-        self.leaf_index.json_serialize_to(out)?;
-        out.push_str(",\"audit_path\":")?;
-        self.audit_path.json_serialize_to(out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), json::BoundedJsonError> {
+            out.push_str("{\"leaf_index\":")?;
+            self.leaf_index.json_serialize_to(out)?;
+            out.push_str(",\"audit_path\":")?;
+            self.audit_path.json_serialize_to(out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 #[cfg(feature = "json")]
@@ -1464,15 +1484,18 @@ impl<T> JsonSerialize for CompactMerkleProof<T> {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"depth\":")?;
-        self.depth.json_serialize_to(out)?;
-        out.push_str(",\"dirs\":")?;
-        self.dirs.json_serialize_to(out)?;
-        out.push_str(",\"siblings\":")?;
-        self.siblings.json_serialize_to(out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), json::BoundedJsonError> {
+            out.push_str("{\"depth\":")?;
+            self.depth.json_serialize_to(out)?;
+            out.push_str(",\"dirs\":")?;
+            self.dirs.json_serialize_to(out)?;
+            out.push_str(",\"siblings\":")?;
+            self.siblings.json_serialize_to(out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 #[cfg(feature = "json")]
@@ -3415,3 +3438,7 @@ mod tests {
         assert!(error.to_string().contains("maximum is"));
     }
 }
+
+#[cfg(all(test, feature = "json"))]
+#[path = "merkle/checked_json_cleanup_tests.rs"]
+mod checked_json_cleanup_tests;

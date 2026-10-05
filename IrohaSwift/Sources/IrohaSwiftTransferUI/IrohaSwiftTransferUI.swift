@@ -1,2 +1,2 @@
-/// Namespace for reusable ABI-25 KAGEMUSHA UI built on IrohaSwift.
+/// Namespace for the Petal Stream transfer UI (player view and Core Graphics renderer) built on IrohaSwift.
 public enum IrohaSwiftTransferUI {}

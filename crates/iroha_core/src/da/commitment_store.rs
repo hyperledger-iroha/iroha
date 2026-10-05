@@ -80,7 +80,7 @@ impl DaCommitmentStore {
         mut identity_visible: impl FnMut(&DaCommitmentRecord) -> bool,
         mut query_visible: impl FnMut(&DaCommitmentRecord) -> bool,
     ) {
-        for (idx, record) in bundle.commitments.iter().enumerate() {
+        for (idx, record) in bundle.commitments().iter().enumerate() {
             let Some(index_in_bundle) = crate::da::da_bundle_location_index(idx) else {
                 warn!(
                     block_height,
@@ -97,7 +97,7 @@ impl DaCommitmentStore {
                 let _ = self.insert_with_query_visibility(record, location, query_visible(record));
             }
         }
-        if !bundle.commitments.is_empty() {
+        if !bundle.commitments().is_empty() {
             self.by_block.insert(block_height, bundle);
         }
     }
@@ -487,7 +487,7 @@ mod tests {
         duplicate_ticket.storage_ticket = record_b.storage_ticket;
         assert!(store.contains_record_identity(&duplicate_ticket));
         let bundle = store.bundle_at(1).expect("committed bundle retained");
-        assert_eq!(bundle.commitments.as_slice(), &[record_a, record_b]);
+        assert_eq!(bundle.commitments(), &[record_a, record_b]);
     }
     #[test]
     fn insert_bundle_with_query_filter_keeps_bundle_and_committed_identities() {
@@ -501,7 +501,7 @@ mod tests {
         );
         let bundle = store.bundle_at(7).expect("stored committed bundle");
         assert_eq!(
-            bundle.commitments.as_slice(),
+            bundle.commitments(),
             &[visible.clone(), hidden.clone()],
             "committed bundle must stay byte-for-byte available for proof construction"
         );
@@ -563,7 +563,7 @@ mod tests {
         );
         let bundle = store.bundle_at(7).expect("stored committed bundle");
         assert_eq!(
-            bundle.commitments.as_slice(),
+            bundle.commitments(),
             &[visible.clone(), old_incarnation.clone()],
             "old-incarnation record must stay available as committed proof material"
         );
@@ -640,12 +640,9 @@ mod tests {
         assert_eq!(fetched.location.block_height, 8);
         assert_eq!(fetched.location.index_in_bundle, 1);
         let bundle = store.bundle_at(8).expect("committed block bundle retained");
+        assert_eq!(bundle.commitments(), &[stale_duplicate, later.clone()]);
         assert_eq!(
-            bundle.commitments.as_slice(),
-            &[stale_duplicate, later.clone()]
-        );
-        assert_eq!(
-            bundle.commitments[usize::try_from(fetched.location.index_in_bundle).unwrap()],
+            bundle.commitments()[usize::try_from(fetched.location.index_in_bundle).unwrap()],
             fetched.commitment
         );
     }
@@ -682,11 +679,11 @@ mod tests {
         assert_eq!(fetched.location.index_in_bundle, 2);
         let bundle = store.bundle_at(8).expect("committed block bundle retained");
         assert_eq!(
-            bundle.commitments.as_slice(),
+            bundle.commitments(),
             &[duplicate_manifest, duplicate_ticket, later.clone()]
         );
         assert_eq!(
-            bundle.commitments[usize::try_from(fetched.location.index_in_bundle).unwrap()],
+            bundle.commitments()[usize::try_from(fetched.location.index_in_bundle).unwrap()],
             fetched.commitment
         );
     }
@@ -708,7 +705,7 @@ mod tests {
         let bundle = store
             .bundle_at(8)
             .expect("duplicate-only committed block bundle retained");
-        assert_eq!(bundle.commitments.as_slice(), &[duplicate_key]);
+        assert_eq!(bundle.commitments(), &[duplicate_key]);
     }
     #[test]
     fn duplicate_manifest_is_rejected_from_indexes() {
@@ -802,10 +799,10 @@ mod tests {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1, 1)]);
         store.insert_bundle(5, bundle.clone());
         let stored_bundle = store.bundle_at(5).expect("bundle present");
-        assert_eq!(stored_bundle.commitments.len(), 1);
+        assert_eq!(stored_bundle.commitments().len(), 1);
         assert_eq!(
-            stored_bundle.commitments[0].manifest_hash,
-            bundle.commitments[0].manifest_hash
+            stored_bundle.commitments()[0].manifest_hash,
+            bundle.commitments()[0].manifest_hash
         );
     }
 }

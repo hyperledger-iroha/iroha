@@ -409,7 +409,7 @@ mod tests {
     use iroha_data_model::{
         NetworkId,
         block::{BlockHeader, consensus::ExecKv, consensus::ValidatorPower},
-        isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+        sumeragi::epoch::ValidatorEpochAuthorizationV1,
         sumeragi::epoch::{ValidatorCommitteeMemberV1, ValidatorEpochContextV1},
     };
     use iroha_model_base::peer::PeerId;
@@ -530,8 +530,7 @@ mod tests {
             .collect::<Vec<_>>();
         let authority =
             crate::kagemusha_v1_test_fixtures::mint_finality_authority(network_id, 0, &roster);
-        let authorization =
-            KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, u64::MAX).unwrap();
+        let authorization = ValidatorEpochAuthorizationV1::genesis(&authority, u64::MAX).unwrap();
         ValidatorEpochContextV1 {
             da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             version: 1,
@@ -824,11 +823,10 @@ mod tests {
 
     #[test]
     fn maximal_boundary_and_frozen_preparation_fit_the_preimage_bound() {
+        use iroha_data_model::sumeragi::epoch::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochDecisionV1,
+        };
         use iroha_data_model::{
-            isi::kagemusha_v1::{
-                BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-                KagemushaMintFinalityEpochDecisionV1,
-            },
             nexus::{ValidatorCommitteePreparationV1, ValidatorElectionPolicyV1},
             parameter::system::SumeragiNposParameters,
             sumeragi::epoch::ValidatorEpochBoundaryV1,
@@ -846,7 +844,7 @@ mod tests {
                     session_id: [0x41; 32],
                     transcript_hash: [0x42; 32],
                 }),
-                KagemushaMintFinalityEpochDecisionV1::Retain,
+                ValidatorEpochDecisionV1::Retain,
                 [0; 32],
             );
         next.leader_seed = [0x32; 32];

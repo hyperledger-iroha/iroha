@@ -140,9 +140,8 @@ fn da_policy_generated_scalar_fields_reject_truncated_scheme_and_invalid_utf8_wi
         source.as_mut_slice()[offset] = 0xff;
         let mut pending = PreparedDaProofPolicyBundle::from_source(&source, span, &pool).unwrap();
         let error = pending.prepare(&source).unwrap_err();
-        let original = match error {
-            DaProofPolicyCustodyError::Decode(original) => original,
-            _ => panic!("invalid UTF-8 must retain the original decode error"),
+        let DaProofPolicyCustodyError::Decode(original) = error else {
+            panic!("invalid UTF-8 policy must preserve its original decode error");
         };
         assert!(matches!(original.into_error(), norito::Error::InvalidUtf8));
         assert!(pending.values.value.is_none());
