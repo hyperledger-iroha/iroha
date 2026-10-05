@@ -1,13 +1,33 @@
 # RAM-LFE semantic commitment design
 
-Date: 2026-09-29. Status: proposed, not adopted. This record defines a reviewable
-replacement for the programmed backend's private wire-hash bindings. It does not
-change the [current execution contract](ram_lfe_execution_proof.md), enable proof
-mode, or qualify a cryptographic primitive. The retained diagnostic interpreter
-uses the compiled BLAKE3 initializer and canonical Norito/Blake2b bindings
-recorded there; both insecure BFV backends are unavailable in production.
+Date: 2026-09-29. Status: proposed, not adopted. This record proposes a Poseidon
+role table as the hash an execution relation would constrain. It does not enable
+proof mode or qualify a cryptographic primitive. Both insecure BFV backends are
+unavailable in production.
 
-The proposed first-release cut has one representation and no fallback reader.
+The commitments that code and validators use are the
+[canonical V1 contract](ram_lfe_execution_proof.md#canonical-v1-contract):
+Norito frames under fixed domains, Blake2b for public records and BLAKE3
+derive-key for the private preimages. That contract is implemented and is
+authoritative. Where this proposal differs from it, the contract holds:
+
+- The V1 function identity binds the tape, program key, class, plaintext
+  semantics and lifetime query limit only. It binds no chain, program or owner;
+  the receipt binds those.
+- The V1 policy has no verification mode and no resolver or attestation key. A
+  signature over a receipt or an opening is not evidence, so every passage below
+  that describes signed receipts or a signed opening describes the superseded
+  design, not a mode to keep.
+- The V1 receipt binds the beneficiary, the initialized memory and a replay
+  nonce, which role 8 below does not. It identifies the network by its genesis
+  hash, not by the chain label. Its initialized-memory commitment is blinded
+  for each execution from the program key, so it confirms no guessed lanes.
+
+Whether the relation constrains the V1 BLAKE3 frames or a Poseidon role table is
+an [open construction question](ram_lfe_execution_proof.md#open-construction-questions)
+owned by the execution-relation task. If a Poseidon table is adopted, it
+replaces the V1 descriptor, frames and pinned vectors together. There is one
+representation and no fallback reader.
 The complete interpreter relation, resource qualification and independent review
 remain [ZK03](zk_first_release_goals.md) acceptance requirements.
 
@@ -99,7 +119,9 @@ Explicit imports accept only a canonical 32-byte nonzero representation. They
 cannot establish the caller's entropy; the default builder generates a fresh
 key per policy. Arbitrary passwords, byte truncation and modular reduction are
 not key import operations. The generic `RamLfeSecret` remains owned by the
-separate HKDF/affine paths and is not an alias for this key.
+separate HKDF/affine paths and is not an alias for this key. The implemented
+`RamLfeProgramKeyV1` is 32 nonzero bytes with the same import rules; it is not
+required to be a canonical Fp element, which this proposal would add.
 The relation proves `K != 0`, for example with a constrained multiplicative
 inverse; a native import check alone does not constrain the private witness.
 

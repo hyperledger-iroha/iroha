@@ -478,9 +478,12 @@ impl<'state> StateBlock<'state> {
                 TransactionsBlockError::ExecutionDeferred(reason)
             }
         })?;
-        // Retained canonical registries and local artifact caches are checked independently.
-        // The retired proposal surface provides no consensus registry write authority;
-        // publication therefore requires the exact original registry to remain unchanged.
+        // Validate the original registry and local cache independently here. No
+        // instruction or Parliament effect owns a registry mutation, so publication
+        // refuses any change below. The actual top-up/redemption entry points must
+        // match this original registry before proof verification and defer
+        // stale/missing artifacts locally. No local key reload, clone, or role
+        // rebinding occurs during publication.
         let verifier: &dyn std::any::Any = kagemusha_v1_runtime_verifier.as_ref();
         let runtime_check = world
             .kagemusha_verifier_registry
@@ -498,11 +501,10 @@ impl<'state> StateBlock<'state> {
             return Err(TransactionsBlockError::KagemushaVerifierAuthority);
         }
         let predecessor = state_ref.world.kagemusha_verifier_registry.view();
-        let successor = world.kagemusha_verifier_registry.get();
-        if successor != predecessor.get() {
+        if world.kagemusha_verifier_registry.get() != predecessor.get() {
             error!(
                 block_height,
-                "KAGEMUSHA registry mutation has no current governance instruction owner"
+                "KAGEMUSHA registry changed without any State transition owner"
             );
             return Err(TransactionsBlockError::KagemushaGovernanceUnavailable);
         }

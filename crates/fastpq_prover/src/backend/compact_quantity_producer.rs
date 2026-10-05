@@ -16,6 +16,7 @@ use iroha_data_model::fastpq::{
 use norito::NoritoSerialize;
 
 use super::{
+    air::q77::{ProducerLimits, VerifierLimits},
     compact_axt_batch::AxtTransferBatch,
     compact_axt_context::preflight_context,
     compact_bundle::{self, AxtBundleWire},
@@ -24,7 +25,7 @@ use super::{
     compact_public_batch::{BatchContextLimits, preflight_prepared},
     deep_engine,
     deep_proof::MAX_FRAME_BYTES,
-    deep_prover::{ConstructionLimits, ProducerPlan},
+    deep_prover::ProducerPlan,
     deep_relation::DeepRelation,
     deep_trace_source::OwnedTraceSource,
     offline_compact::{
@@ -221,17 +222,19 @@ fn columns(
     OwnedTraceSource::from_rows(witness.rows())
 }
 
-fn construction_limits(
-    proving: ProvingLimits,
+/// Map the facade policies to the engine's typed verifier and producer limits.
+///
+/// These are the only limits the engine receives for a segment; the same
+/// mapping is public as `air::q77::{VerifierLimits, ProducerLimits}::for_segment`.
+fn engine_limits(
+    proving: &ProvingLimits,
     verification: &VerificationLimits,
-) -> ConstructionLimits {
-    ConstructionLimits {
-        digest_execution: proving.digest_execution,
-        max_payload_bytes: proving.max_segment_charge_bytes,
-        max_work_units: proving.max_segment_work_units,
-        max_hash_calls: proving.max_segment_work_units,
-        max_proof_bytes: verification.bundle.segment.max_proof_bytes,
-    }
+) -> (VerifierLimits, ProducerLimits) {
+    let verifier = VerifierLimits::for_segment(
+        verification.bundle.segment,
+        verification.max_segment_decode_allocation_charges,
+    );
+    (verifier, ProducerLimits::for_segment(proving, &verifier))
 }
 
 #[allow(
@@ -251,11 +254,12 @@ fn segments<R: DeepRelation>(
             "quantity producer private/public pair count differs",
         ));
     }
+    let (verifier_limits, producer_limits) = engine_limits(&proving, &verification);
     // Validate every complete statement before expanding even the first witness.
     for ordinal in 0..statements.len() {
         let relation = relation(ordinal)?;
-        deep_engine::preflight(&relation, MAX_FRAME_BYTES, verification.bundle.segment)?;
-        ProducerPlan::new(&relation, construction_limits(proving, &verification))?;
+        deep_engine::preflight(&relation, MAX_FRAME_BYTES, verifier_limits)?;
+        ProducerPlan::new(&relation, producer_limits)?;
         check_segment_charge(
             relation.statement_bytes().len(),
             SHARED_FRAME_BOUND,
@@ -267,7 +271,7 @@ fn segments<R: DeepRelation>(
     for (ordinal, (statement, private)) in statements.iter().zip(private).enumerate() {
         let relation = relation(ordinal)?;
         let columns = columns(statement, private)?;
-        let proof = ProducerPlan::new(&relation, construction_limits(proving, &verification))?
+        let proof = ProducerPlan::new(&relation, producer_limits)?
             .build(columns, &mut rand::rngs::OsRng)?;
         let length = proof.len();
         check(

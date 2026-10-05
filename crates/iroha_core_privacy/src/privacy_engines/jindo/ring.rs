@@ -5,6 +5,10 @@
 //! Their pinned primitive 2048th roots make negacyclic NTT multiplication deterministic across
 //! every target without native-width overflow.
 use super::JINDO_RING_DEGREE_V1;
+// Scalar and slice arithmetic comes from the shared owner.
+#[cfg(test)]
+use iroha_fhe::modular::{is_prime_u64, mul_mod_u64};
+use iroha_fhe::modular::{mod_pow_u64, reduce_i128_to_u64_mod};
 use zeroize::Zeroize;
 /// One pinned NTT prime and primitive `2d`-th root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,13 +79,7 @@ impl JindoRnsPolynomialV1 {
         let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
         for (row, prime) in residues.iter_mut().zip(moduli) {
             for (out, coefficient) in row.iter_mut().zip(coefficients) {
-                let modulus = i128::from(prime.modulus);
-                let reduced = coefficient % modulus;
-                *out = if reduced < 0 {
-                    (reduced + modulus) as u64
-                } else {
-                    reduced as u64
-                };
+                *out = reduce_i128_to_u64_mod(coefficient, prime.modulus);
             }
         }
         Self { residues }
@@ -98,9 +96,7 @@ impl JindoRnsPolynomialV1 {
             .zip(rhs.residues.iter())
             .zip(moduli)
         {
-            for (left, right) in left_row.iter_mut().zip(right_row) {
-                *left = add_mod(*left, *right, prime.modulus);
-            }
+            iroha_fhe::accel::add_mod_assign(left_row, right_row, prime.modulus);
         }
     }
     /// Subtract two ring elements.
@@ -111,9 +107,7 @@ impl JindoRnsPolynomialV1 {
             .zip(rhs.residues.iter())
             .zip(moduli)
         {
-            for (left, right) in left_row.iter_mut().zip(right_row) {
-                *left = sub_mod(*left, *right, prime.modulus);
-            }
+            iroha_fhe::accel::sub_mod_assign(left_row, right_row, prime.modulus);
         }
     }
     /// Multiply in `Z_q[X]/(X^1024 + 1)` using the pinned negacyclic NTT.
@@ -136,11 +130,9 @@ impl JindoRnsPolynomialV1 {
         moduli: [JindoPrimeModulusV1; 2],
     ) -> Self {
         let mut residues = self.residues;
-        for ((output, input), prime) in residues.iter_mut().zip(self.residues.iter()).zip(moduli) {
-            let scalar = pow_mod(2, u64::from(exponent), prime.modulus);
-            for (output, input) in output.iter_mut().zip(input) {
-                *output = mul_mod(*input, scalar, prime.modulus);
-            }
+        for (row, prime) in residues.iter_mut().zip(moduli) {
+            let scalar = mod_pow_u64(2, u64::from(exponent), prime.modulus);
+            iroha_fhe::accel::mul_scalar_mod(row, scalar, prime.modulus);
         }
         Self { residues }
     }
@@ -163,14 +155,16 @@ impl JindoRnsPolynomialV1 {
                 let mut evaluations = *coefficients;
                 let mut twist = 1_u64;
                 for value in &mut evaluations {
-                    *value = mul_mod(*value, twist, modulus);
-                    twist = mul_mod(twist, prime.psi, modulus);
+                    *value = mul_mod_u64(*value, twist, modulus);
+                    twist = mul_mod_u64(twist, prime.psi, modulus);
                 }
-                cyclic_ntt(
+                iroha_fhe::ntt::cyclic_ntt_in_place(
                     &mut evaluations,
-                    mul_mod(prime.psi, prime.psi, modulus),
+                    mul_mod_u64(prime.psi, prime.psi, modulus),
                     modulus,
-                );
+                    false,
+                )
+                .expect("pinned Jindo primes support the cyclic transform");
                 evaluations.iter().all(|value| *value != 0)
             })
     }
@@ -213,163 +207,53 @@ impl JindoRnsPolynomialV1 {
         }
     }
 }
-fn add_mod(left: u64, right: u64, modulus: u64) -> u64 {
-    let sum = left + right;
-    if sum >= modulus { sum - modulus } else { sum }
-}
-fn sub_mod(left: u64, right: u64, modulus: u64) -> u64 {
-    if left >= right {
-        left - right
-    } else {
-        modulus - (right - left)
-    }
-}
-fn mul_mod(left: u64, right: u64, modulus: u64) -> u64 {
-    (u128::from(left) * u128::from(right) % u128::from(modulus)) as u64
-}
-fn pow_mod(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
-    let mut result = 1_u64;
-    while exponent != 0 {
-        if exponent & 1 == 1 {
-            result = mul_mod(result, base, modulus);
-        }
-        base = mul_mod(base, base, modulus);
-        exponent >>= 1;
-    }
-    result
-}
-fn invert_mod(value: u64, modulus: u64) -> u64 {
-    debug_assert_ne!(value, 0);
-    pow_mod(value, modulus - 2, modulus)
-}
-fn cyclic_ntt(values: &mut [u64; JINDO_RING_DEGREE_V1], root: u64, modulus: u64) {
-    let mut target = 0_usize;
-    for source in 1..JINDO_RING_DEGREE_V1 {
-        let mut bit = JINDO_RING_DEGREE_V1 >> 1;
-        while target & bit != 0 {
-            target ^= bit;
-            bit >>= 1;
-        }
-        target ^= bit;
-        if source < target {
-            values.swap(source, target);
-        }
-    }
-    let mut width = 2_usize;
-    while width <= JINDO_RING_DEGREE_V1 {
-        let twiddle_step = pow_mod(root, (JINDO_RING_DEGREE_V1 / width) as u64, modulus);
-        for start in (0..JINDO_RING_DEGREE_V1).step_by(width) {
-            let mut twiddle = 1_u64;
-            for offset in 0..(width / 2) {
-                let even = values[start + offset];
-                let odd = mul_mod(values[start + offset + width / 2], twiddle, modulus);
-                values[start + offset] = add_mod(even, odd, modulus);
-                values[start + offset + width / 2] = sub_mod(even, odd, modulus);
-                twiddle = mul_mod(twiddle, twiddle_step, modulus);
-            }
-        }
-        width *= 2;
-    }
-}
+/// Multiply in one RNS factor of `Z_q[X]/(X^1024 + 1)` with the pinned root of that prime.
 fn negacyclic_mul(
     mut left: [u64; JINDO_RING_DEGREE_V1],
     mut right: [u64; JINDO_RING_DEGREE_V1],
     prime: JindoPrimeModulusV1,
 ) -> [u64; JINDO_RING_DEGREE_V1] {
-    let modulus = prime.modulus;
-    let inverse_psi = invert_mod(prime.psi, modulus);
-    let omega = mul_mod(prime.psi, prime.psi, modulus);
-    let inverse_omega = invert_mod(omega, modulus);
-    let mut twist = 1_u64;
-    for (left_coefficient, right_coefficient) in left.iter_mut().zip(right.iter_mut()) {
-        *left_coefficient = mul_mod(*left_coefficient, twist, modulus);
-        *right_coefficient = mul_mod(*right_coefficient, twist, modulus);
-        twist = mul_mod(twist, prime.psi, modulus);
-    }
-    cyclic_ntt(&mut left, omega, modulus);
-    cyclic_ntt(&mut right, omega, modulus);
-    for (left_value, right_value) in left.iter_mut().zip(right) {
-        *left_value = mul_mod(*left_value, right_value, modulus);
-    }
-    cyclic_ntt(&mut left, inverse_omega, modulus);
-    let inverse_degree = invert_mod(JINDO_RING_DEGREE_V1 as u64, modulus);
-    let mut inverse_twist = 1_u64;
-    for value in &mut left {
-        *value = mul_mod(
-            mul_mod(*value, inverse_degree, modulus),
-            inverse_twist,
-            modulus,
-        );
-        inverse_twist = mul_mod(inverse_twist, inverse_psi, modulus);
-    }
+    iroha_fhe::ntt::negacyclic_multiply_ntt_in_place(
+        &mut left,
+        &mut right,
+        prime.psi,
+        prime.modulus,
+    )
+    .expect("pinned Jindo primes carry a primitive 2048th root");
     left
 }
+/// Reconstruct one coefficient in `[0, q_0 q_1)` from its two residues.
 fn crt_reconstruct(residue_zero: u64, residue_one: u64, moduli: [JindoPrimeModulusV1; 2]) -> u128 {
-    let q0 = moduli[0].modulus;
-    let q1 = moduli[1].modulus;
-    let residue_zero_mod_q1 = residue_zero % q1;
-    let difference = sub_mod(residue_one, residue_zero_mod_q1, q1);
-    let q0_inverse_mod_q1 = invert_mod(q0 % q1, q1);
-    let correction = mul_mod(difference, q0_inverse_mod_q1, q1);
-    u128::from(residue_zero) + u128::from(q0) * u128::from(correction)
-}
-/// Deterministically decide primality for a compiled 64-bit RNS modulus.
-pub(crate) fn is_prime_modulus_v1(value: u64) -> bool {
-    if value < 2 {
-        return false;
-    }
-    for small in [2_u64, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37] {
-        if value % small == 0 {
-            return value == small;
-        }
-    }
-    let mut odd = value - 1;
-    let powers = odd.trailing_zeros();
-    odd >>= powers;
-    for witness in [2_u64, 325, 9_375, 28_178, 450_775, 9_780_504, 1_795_265_022] {
-        if witness % value == 0 {
-            continue;
-        }
-        let mut candidate = pow_mod(witness % value, odd, value);
-        if candidate == 1 || candidate == value - 1 {
-            continue;
-        }
-        let mut accepted = false;
-        for _ in 1..powers {
-            candidate = mul_mod(candidate, candidate, value);
-            if candidate == value - 1 {
-                accepted = true;
-                break;
-            }
-        }
-        if !accepted {
-            return false;
-        }
-    }
-    true
+    iroha_fhe::rns::reconstruct_coefficient(
+        &[residue_zero, residue_one],
+        &[moduli[0].modulus, moduli[1].modulus],
+    )
+    .expect("two pinned Jindo primes reconstruct within u128")
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Schoolbook reference in wide integers; it shares no code with `iroha_fhe`.
     fn naive_negacyclic(
         left: [u64; JINDO_RING_DEGREE_V1],
         right: [u64; JINDO_RING_DEGREE_V1],
         modulus: u64,
     ) -> [u64; JINDO_RING_DEGREE_V1] {
-        let mut out = [0_u64; JINDO_RING_DEGREE_V1];
+        let wide_modulus = u128::from(modulus);
+        let mut out = [0_u128; JINDO_RING_DEGREE_V1];
         for (left_index, left_value) in left.into_iter().enumerate() {
             for (right_index, right_value) in right.into_iter().enumerate() {
-                let product = mul_mod(left_value, right_value, modulus);
+                let product = u128::from(left_value) * u128::from(right_value) % wide_modulus;
                 let index = left_index + right_index;
                 if index < JINDO_RING_DEGREE_V1 {
-                    out[index] = add_mod(out[index], product, modulus);
+                    out[index] = (out[index] + product) % wide_modulus;
                 } else {
-                    out[index - JINDO_RING_DEGREE_V1] =
-                        sub_mod(out[index - JINDO_RING_DEGREE_V1], product, modulus);
+                    let wrapped = index - JINDO_RING_DEGREE_V1;
+                    out[wrapped] = (out[wrapped] + wide_modulus - product) % wide_modulus;
                 }
             }
         }
-        out
+        out.map(|value| u64::try_from(value).expect("reduced residue fits u64"))
     }
     #[test]
     fn pinned_moduli_are_prime_distinct_and_ntt_friendly() {
@@ -380,10 +264,13 @@ mod tests {
             JINDO_OUTER_MODULI_V1[1],
         ];
         for (index, prime) in all.into_iter().enumerate() {
-            assert!(is_prime_modulus_v1(prime.modulus), "modulus {index}");
+            assert!(is_prime_u64(prime.modulus), "modulus {index}");
             assert_eq!((prime.modulus - 1) % 2048, 0);
-            assert_eq!(pow_mod(prime.psi, 2048, prime.modulus), 1);
-            assert_eq!(pow_mod(prime.psi, 1024, prime.modulus), prime.modulus - 1);
+            assert_eq!(mod_pow_u64(prime.psi, 2048, prime.modulus), 1);
+            assert_eq!(
+                mod_pow_u64(prime.psi, 1024, prime.modulus),
+                prime.modulus - 1
+            );
         }
         for left in 0..all.len() {
             for right in (left + 1)..all.len() {
@@ -394,10 +281,10 @@ mod tests {
     #[test]
     fn deterministic_primality_check_rejects_composites_and_pseudoprimes() {
         for composite in [0, 1, 4, 341, 3_215_031_751] {
-            assert!(!is_prime_modulus_v1(composite));
+            assert!(!is_prime_u64(composite));
         }
         for prime in [2, 37, 65_537] {
-            assert!(is_prime_modulus_v1(prime));
+            assert!(is_prime_u64(prime));
         }
     }
     #[test]
@@ -501,11 +388,8 @@ mod tests {
                 .is_unit(JINDO_OUTER_MODULI_V1)
         );
         let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
-        residues[0][0] = sub_mod(
-            0,
-            JINDO_OUTER_MODULI_V1[0].psi,
-            JINDO_OUTER_MODULI_V1[0].modulus,
-        );
+        // Minus psi: the polynomial X - psi vanishes at the first negacyclic root.
+        residues[0][0] = JINDO_OUTER_MODULI_V1[0].modulus - JINDO_OUTER_MODULI_V1[0].psi;
         residues[0][1] = 1;
         residues[1][0] = 1;
         let vanishes_at_first_root =

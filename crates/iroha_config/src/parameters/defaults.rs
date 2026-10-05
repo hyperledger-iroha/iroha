@@ -185,9 +185,6 @@ pub mod data_dir {
     pub const ONBOARDING_AUTHORITY_KEY: &str = "authority/onboarding.key";
     /// SoraFS council authority private key.
     pub const SORAFS_COUNCIL_AUTHORITY_KEY: &str = "authority/sorafs_council.key";
-    /// KAGEMUSHA redemption authority private key
-    /// (`torii.kagemusha_v1_commands.redemption_private_key_file`).
-    pub const KAGEMUSHA_REDEMPTION_AUTHORITY_KEY: &str = "authority/kagemusha_redemption.key";
 }
 /// Node process lifecycle defaults.
 pub mod lifecycle {
@@ -1228,6 +1225,9 @@ pub mod network {
     /// Maximum frame size for block sync / consensus payload traffic.
     pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_PLAINTEXT_FRAME_BYTES;
     /// Maximum frame size for transaction gossip.
+    // TODO(X.2): a transaction above this frame is not gossiped, so a maximum-proof
+    // transaction is proposed only when its ingress node leads
+    // (`specs/zk_resource_contract.json`, `gossip_frame_carries_max_transaction`).
     pub const MAX_FRAME_BYTES_TX_GOSSIP: NonZeroUsize = nonzero!(262_144_usize); // 256 KiB
     /// Maximum frame size for peer gossip.
     pub const MAX_FRAME_BYTES_PEER_GOSSIP: NonZeroUsize = nonzero!(65_536_usize); // 64 KiB
@@ -2519,10 +2519,8 @@ pub mod torii {
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
-    /// This includes KAGEMUSHA V1 top-up/redemption commands.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
     /// Absolute deadline for reading one admitted proof-bearing request body.
-    /// This includes KAGEMUSHA V1 top-up/redemption commands.
     pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(256 * 1024 * 1024); // 256 MiB/s
@@ -2817,18 +2815,6 @@ pub mod torii {
         pub const POW_ADAPTIVE_MAX_EXTRA_BITS: u8 = 0;
         /// Whether verified finalized global-beacon seeds are mixed into faucet challenges.
         pub const POW_BEACON_SEED_ENABLED: bool = false;
-    }
-    /// KAGEMUSHA V1 command-submission defaults.
-    pub mod kagemusha_v1_commands {
-        /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
-        pub const OPERATION_REGISTRY_MAX_ENTRIES: usize = 4_096;
-        /// Canonical bytes charged for operation id, request-authority digest, kind,
-        /// request digest, transaction hash, and issuance/expiry timestamps.
-        pub const OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY: usize =
-            32 + 32 + 32 + 1 + 8 + 8 + 32;
-        /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
-        pub const OPERATION_REGISTRY_MAX_BYTES: usize =
-            OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY * OPERATION_REGISTRY_MAX_ENTRIES;
     }
     // The pre-auth gate charges every external HTTP request. Its default must
     // accommodate the downstream application budgets, including multiple tools
@@ -4060,6 +4046,9 @@ pub mod accel {
     pub const ARTIFACT_BYTES: usize = RESOURCE_LIMITS.artifact_bytes;
 }
 /// Zero-knowledge subsystem defaults used by Torii and the host runtime.
+// TODO(F.4): the proof-size, circuit-size and SCCP limits below decide validity but are read
+// from node configuration and bound into State only as a hash. Move their source into
+// committed State (`specs/zk_resource_contract.json`, bounds `proof.config_*`).
 pub mod zk {
     /// SCCP proof-admission and deterministic verifier-work defaults.
     pub mod sccp {

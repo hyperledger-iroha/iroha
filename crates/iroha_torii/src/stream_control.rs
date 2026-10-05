@@ -615,7 +615,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reader.admitted_height(), 0);
-        let retained = available - app.query_fanout_inflight.available_bytes();
+        let retained = usize::try_from(available - app.query_fanout_inflight.available_bytes())
+            .expect("retained control allocation fits the host byte count");
         assert!(retained > 0 && retained < app.query_fanout_working_set_bytes);
         let current = reader.current_visibility().unwrap();
         drop(reader);

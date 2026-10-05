@@ -424,7 +424,11 @@ including an isolated component with a height-one header, retains the configured
 routed to another lane once it is older than `2A` global block times (by its creation time
 against the parent block's): a stalled lane cannot hold transactions, and each rescued
 transaction is committed evidence of load the lane is not serving (§6.4). A transaction both
-rescued and carried by a lane executes once; the later carrier's copy is a duplicate.
+rescued and carried by a lane executes once; the later carrier's copy is a duplicate. A rescue
+is packed within `G`'s own selection budget (`max_block_bytes(G)` less the proposer reserve). A
+lane whose payload limit is larger than `G`'s admits transactions above that budget; such a
+transaction is never rescued. It waits for its lane and expires if the lane does not carry it
+(`specs/zk_resource_contract.json`, `stage_decisions`).
 
 ### 5.2 Queue partitions
 

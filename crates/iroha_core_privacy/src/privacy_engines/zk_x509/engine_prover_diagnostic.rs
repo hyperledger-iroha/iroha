@@ -57,6 +57,196 @@ fn record_public_diagnostic_v1(directory: &Path, record: &str) -> io::Result<()>
     Ok(())
 }
 
+/// Identity context for the shared phase-tree record of one diagnostic run.
+///
+/// `scripts/zk_resource_harness.py` writes the context into its output
+/// directory before starting this process. Without a harness the identity is
+/// explicitly unbound, and the record's own validation reports that.
+fn harness_context_from_v1(
+    directory: Option<PathBuf>,
+) -> (iroha_measurement::RunContext, Option<PathBuf>) {
+    match directory {
+        Some(directory) => (
+            iroha_measurement::read_harness_context(&directory)
+                .expect("harness output directory holds a readable context"),
+            Some(directory),
+        ),
+        None => (iroha_measurement::RunContext::unbound(), None),
+    }
+}
+
+/// Read the harness hand-off. This diagnostic-only variable selects where a
+/// public record is written; no prover or verifier code reads it.
+fn harness_context_v1() -> (iroha_measurement::RunContext, Option<PathBuf>) {
+    harness_context_from_v1(
+        std::env::var_os(iroha_measurement::HARNESS_OUTPUT_DIR_ENV).map(PathBuf::from),
+    )
+}
+
+/// Retain the public phase-tree record beside the receipt and return the
+/// receipt lines that describe it. Earlier records are never overwritten.
+///
+/// `harness` is what the observation's own session wrote into the harness
+/// directory: the session writes there itself so that a failed, abandoned or
+/// unwound run is retained too. A record the harness did not receive in both
+/// forms is an error.
+fn retain_phase_tree_v1(
+    directory: &Path,
+    harness: Option<&iroha_measurement::DirectoryReport>,
+    record: &iroha_measurement::MeasurementRecord,
+) -> io::Result<String> {
+    use core::fmt::Write as _;
+    let mut text = String::new();
+    let mut sink =
+        iroha_measurement::DirectorySink::new(directory.to_path_buf(), "zk_x509-phase-tree");
+    let retained = sink.report();
+    iroha_measurement::RecordSink::accept(&mut sink, record.clone());
+    for (key, report) in [
+        ("phase_tree_record", Some(&retained)),
+        ("phase_tree_harness_record", harness),
+    ] {
+        let Some(report) = report else { continue };
+        if let Some(kind) = report.errors().first() {
+            return Err(io::Error::new(*kind, "phase-tree record was not retained"));
+        }
+        if report.written().len() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "phase-tree record was not written exactly once",
+            ));
+        }
+        for path in report.written() {
+            writeln!(text, "{key}={}", path.display()).expect("String formatting");
+        }
+    }
+    let attribution = record.attribution().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "phase-tree record has no root")
+    })?;
+    // The one-percent rule alone is met by a single wrapper phase, so the
+    // receipt also states the largest phase that no child divides.
+    let (undivided_phase, undivided_ppm) =
+        record
+            .largest_undivided_phase()
+            .map_or(("none", 0), |largest| {
+                (
+                    record.phase_tree.nodes[largest.phase as usize]
+                        .label
+                        .as_str(),
+                    largest.share_parts_per_million(),
+                )
+            });
+    write!(
+        text,
+        "phase_tree_outcome={}\nphase_tree_root_wall_ns={}\nphase_tree_unattributed_wall_ns={}\nphase_tree_unattributed_ppm={}\nphase_tree_within_one_percent={}\nphase_tree_largest_undivided_phase={undivided_phase}\nphase_tree_largest_undivided_ppm={undivided_ppm}\nphase_tree_findings={:?}",
+        record.outcome.as_str(),
+        attribution.root_wall_ns,
+        attribution.unattributed_wall_ns,
+        attribution.unattributed_parts_per_million(),
+        attribution.within_limit(),
+        record.findings(),
+    )
+    .expect("String formatting");
+    Ok(text)
+}
+
+#[test]
+fn phase_tree_record_is_retained_beside_the_receipt_and_for_the_harness() {
+    use super::super::prover_observation::{ObservationV1, PhaseTimerV1, PhaseV1};
+    let evidence = run_directory_v1(&std::env::temp_dir()).unwrap();
+    let harness = evidence.join("harness");
+    fs::create_dir(&harness).unwrap();
+    let context = iroha_measurement::RunContext {
+        source_commit: "7e93d3e049".repeat(4),
+        source_dirty: false,
+        source_dirty_digest: None,
+        artifact: "sha256:x509-diagnostic".into(),
+        profile: "complete49-MAIN-plus-compactCA".into(),
+        config: "taira_default".into(),
+        hardware: "reference/unit-test-host".into(),
+        cache_policy: iroha_measurement::CachePolicy::Cold,
+    };
+    fs::write(
+        harness.join(iroha_measurement::HARNESS_CONTEXT_FILE),
+        context.to_json_view(),
+    )
+    .unwrap();
+    assert_eq!(
+        harness_context_from_v1(None),
+        (iroha_measurement::RunContext::unbound(), None)
+    );
+    let (bound, directory) = harness_context_from_v1(Some(harness.clone()));
+    assert_eq!((&bound, directory.as_deref()), (&context, Some(&*harness)));
+    assert_eq!(
+        harness_context_v1(),
+        harness_context_from_v1(
+            std::env::var_os(iroha_measurement::HARNESS_OUTPUT_DIR_ENV).map(PathBuf::from)
+        )
+    );
+
+    // The session writes the harness copy itself when the observation ends.
+    let observation = ObservationV1::begin_with_harness_v1(bound, directory);
+    PhaseTimerV1::start_v1(PhaseV1::Preparation).complete_v1();
+    observation.record_failure_v1("producer", "error");
+    observation.record_proof_bytes_v1(4096);
+    let receipt = observation.finish_v1();
+    let record = receipt.measurement_v1().unwrap();
+    assert_eq!(fs::read_dir(&harness).unwrap().count(), 3);
+    let text = retain_phase_tree_v1(&evidence, receipt.harness_v1(), record).unwrap();
+    let written: Vec<_> = text
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("phase_tree_record=")
+                .or_else(|| line.strip_prefix("phase_tree_harness_record="))
+        })
+        .map(PathBuf::from)
+        .collect();
+    assert_eq!(written.len(), 2);
+    assert_eq!(written[0].parent(), Some(&*evidence));
+    assert_eq!(written[1].parent(), Some(&*harness));
+    // Retaining the evidence copy does not write the harness copy again.
+    assert_eq!(fs::read_dir(&harness).unwrap().count(), 3);
+    for path in &written {
+        let decoded =
+            iroha_measurement::MeasurementRecord::from_norito_bytes(&fs::read(path).unwrap())
+                .unwrap();
+        assert_eq!(&decoded, record);
+        let view = fs::read_to_string(path.with_extension("json")).unwrap();
+        assert_eq!(
+            &iroha_measurement::MeasurementRecord::from_json_view(&view).unwrap(),
+            record
+        );
+    }
+    // A failed producer run is retained as a failed record, not dropped.
+    assert!(text.contains("phase_tree_outcome=failed"));
+    assert!(text.contains("phase_tree_within_one_percent="));
+    assert!(text.contains("RunNotSucceeded"));
+    assert!(text.contains(&format!(
+        "phase_tree_root_wall_ns={}",
+        record.attribution().unwrap().root_wall_ns
+    )));
+    // The receipt states how coarse the tree is, not only the 1% rule.
+    assert!(text.contains("phase_tree_largest_undivided_phase=Preparation\n"));
+    assert!(text.contains(&format!(
+        "phase_tree_largest_undivided_ppm={}\n",
+        record
+            .largest_undivided_phase()
+            .unwrap()
+            .share_parts_per_million()
+    )));
+    // Retaining again adds new files and leaves the first record intact.
+    let before = fs::read(&written[0]).unwrap();
+    let again = retain_phase_tree_v1(&evidence, None, record).unwrap();
+    assert!(!again.contains(&written[0].display().to_string()));
+    assert!(!again.contains("phase_tree_harness_record="));
+    assert_eq!(fs::read(&written[0]).unwrap(), before);
+    assert!(retain_phase_tree_v1(&evidence.join("absent"), None, record).is_err());
+    // A harness copy that was not written exactly once is an error, not a
+    // silently missing record.
+    let unwritten = iroha_measurement::DirectorySink::new(harness.join("absent"), "x").report();
+    assert!(retain_phase_tree_v1(&evidence, Some(&unwritten), record).is_err());
+    fs::remove_dir_all(evidence).unwrap();
+}
+
 fn retain_unverified_candidate_v1(directory: &Path, proof: &[u8]) -> io::Result<PathBuf> {
     if proof.is_empty() || proof.len() > super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize
     {
@@ -561,7 +751,13 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     record(format!("structural_shape={:?}", fixture.resource_shape));
     let witness = zeroize::Zeroizing::new(fixture.witness.encode_v1().unwrap());
     let genesis = *fixture.statement.context.network_id.as_bytes();
-    let observation = super::super::prover_observation::ObservationV1::begin_v1();
+    let (measurement_context, harness_directory) = harness_context_v1();
+    // The observation's session writes the record into the harness directory
+    // itself, so a producer that fails, returns early or unwinds is retained.
+    let observation = super::super::prover_observation::ObservationV1::begin_with_harness_v1(
+        measurement_context,
+        harness_directory,
+    );
     let start = Instant::now();
     let public_capture = PublicFixtureDiagnosticGuardV1::begin_v1(&directory);
     let produced = catch_private_prover_panic_v1(|| {
@@ -577,8 +773,30 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     });
     drop(public_capture);
     let prove_elapsed = start.elapsed();
+    // A failed producer is retained in the shared record as a raw failure;
+    // only these two literals are recorded, never the error payload.
+    match &produced {
+        Ok(Ok(proof)) => observation.record_proof_bytes_v1(proof.len() as u64),
+        Ok(Err(_)) => observation.record_failure_v1("producer", "error"),
+        Err(()) => observation.record_failure_v1("producer", "unwind"),
+    }
     let observation = observation.finish_v1();
     record(observation.public_text_v1());
+    // TODO: X.3 owns the complete X509 run under scripts/zk_resource_harness.py
+    // and the phases that close the remaining attribution gap. The last
+    // retained maximum receipt left about 4.45% of the proving time outside
+    // every top-level phase, so this record is expected to report
+    // `phase_tree_within_one_percent=false` until those phases exist.
+    record(
+        retain_phase_tree_v1(
+            &directory,
+            observation.harness_v1(),
+            observation
+                .measurement_v1()
+                .expect("shared phase-tree record of this observation"),
+        )
+        .expect("durable public phase-tree record"),
+    );
     let proof = match produced {
         Ok(Ok(proof)) => proof,
         Ok(Err(error)) => {

@@ -21,10 +21,12 @@ packages = [
   "iroha_crypto",
   "iroha_derive",
   "iroha_derive_primitives",
+  "iroha_fhe",
   "iroha_file_mmap",
   "iroha_fs",
   "iroha_i18n",
   "iroha_macro",
+  "iroha_measurement",
   "iroha_model_base",
   "iroha_operation_journal",
   "iroha_panic_hook",
@@ -74,6 +76,7 @@ packages = [
 [lanes.node]
 description = "Node, Torii, client, configuration, networking, and node test support."
 packages = [
+  "axum-core",
   "iroha",
   "iroha_cli",
   "iroha_cli_lib",

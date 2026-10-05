@@ -136,7 +136,7 @@ pub enum Worker {
 pub struct FrameLimitExceeded {
     /// Height the configuration applies from.
     pub height: u64,
-    /// `max_block_bytes + 64 KiB`.
+    /// `max_block_bytes + FRAME_OVERHEAD`.
     pub needed: u64,
     /// The transport's frame limit.
     pub limit: u64,
@@ -873,7 +873,9 @@ impl Default for DriverConfig {
             backoff: Backoff::default(),
             held: HeldLimits::default(),
             serve: ServeLimits::default(),
-            frame_limit: 16 * 1024 * 1024 + u64::from(FRAME_OVERHEAD),
+            // The chain-wide bound committed chain parameters are validated against: a
+            // parameter change the chain accepts always fits this node's frames.
+            frame_limit: iroha_data_model::sumeragi_finality::CHAIN_TRANSPORT_FRAME_LIMIT,
         }
     }
 }

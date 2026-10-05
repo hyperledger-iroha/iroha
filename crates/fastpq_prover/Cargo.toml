@@ -82,6 +82,10 @@ path = "tests/fastpq_integration.rs"
 name = "offline_compact"
 path = "tests/offline_compact.rs"
 
+[[test]]
+name = "shared_backend_inventory"
+path = "tests/shared_backend_inventory.rs"
+
 [build-dependencies]
 cc = "1.2.45"
 

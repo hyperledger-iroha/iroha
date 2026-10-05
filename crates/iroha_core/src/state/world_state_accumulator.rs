@@ -735,6 +735,12 @@ impl crate::state::State {
 #[path = "world_state_accumulator_tests.rs"]
 mod tests;
 
+// Inventory of every State/World field and the root it currently affects
+// (`specs/state_table_inventory.json`), with the per-field mutation evidence.
+#[cfg(test)]
+#[path = "state_table_inventory_tests.rs"]
+mod inventory_tests;
+
 #[path = "world_state_snapshot.rs"]
 mod world_state_snapshot;
 pub use world_state_snapshot::{ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError};

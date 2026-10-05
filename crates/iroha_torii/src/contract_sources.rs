@@ -3725,7 +3725,18 @@ mod tests {
             &mut stx,
         )
         .expect("register contract bytes");
-        let manifest = verified.manifest.signed(authority_keypair);
+        let signing_owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let max_frame_bytes =
+            usize::try_from(stx.world.parameters().transaction.ivm_bytecode_size.get())
+                .expect("committed fixture manifest frame bound fits usize");
+        let manifest = verified
+            .manifest
+            .try_signed(
+                signing_owner.allocation_context(),
+                max_frame_bytes,
+                authority_keypair,
+            )
+            .expect("sign fixture manifest under original funded owner");
         register_manifest(
             authority,
             contract_address.dataspace_id().expect("fixture scope"),

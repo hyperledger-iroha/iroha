@@ -145,7 +145,7 @@ fn snapshot_roundtrip_preserves_inactive_standby_and_reject_all_recovery() {
 }
 
 #[test]
-fn snapshot_roundtrip_preserves_certified_activation_and_standby_predecessor() {
+fn snapshot_roundtrip_preserves_active_registry_and_standby_predecessor() {
     let world = World::default();
     let standby = standby_registry();
     let release_id = standby.releases[0].release_id;
@@ -296,7 +296,7 @@ fn replayed_governed_release_remains_reject_all_until_local_authentication() {
     assert!(state.validate_kagemusha_v1_runtime_for_startup().is_ok());
 
     governed = active_registry();
-    // Model a replay transition after the process-local reject-all verifier was installed.
+    // Model canonical registry data after the process-local reject-all verifier was installed.
     set_registry(&state.world, governed);
     state
         .validate_kagemusha_v1_runtime_for_startup()
@@ -340,7 +340,7 @@ fn touching_governed_registry_without_changing_it_does_not_require_a_transition(
 }
 
 #[test]
-fn retired_governance_surface_cannot_publish_a_signer_policy_change() {
+fn signer_policy_change_without_a_state_transition_owner_cannot_publish() {
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -365,7 +365,7 @@ fn retired_governance_surface_cannot_publish_a_signer_policy_change() {
     );
     let error = block
         .commit_empty_block_for_testing()
-        .expect_err("retired governance surface cannot authorize a signer-policy mutation");
+        .expect_err("no State transition owner authorizes a signer-policy mutation");
     assert!(matches!(
         error,
         TransactionsBlockError::KagemushaGovernanceUnavailable
@@ -470,7 +470,7 @@ fn staged_release_change_is_rejected_without_state_publication() {
     *block.world.kagemusha_verifier_registry.get_mut() = active_registry();
     let error = block
         .commit_empty_block_for_testing()
-        .expect_err("staged release has no Parliament authorization");
+        .expect_err("staged release has no State transition owner");
     assert!(matches!(
         error,
         TransactionsBlockError::KagemushaGovernanceUnavailable
@@ -724,7 +724,7 @@ fn runtime_reload_world_reader_notifications_follow_commit_fence_release() {
 }
 
 #[test]
-fn direct_standby_retirement_without_certified_original_owner_never_publishes() {
+fn direct_standby_retirement_without_a_state_transition_owner_never_publishes() {
     let predecessor = standby_registry();
     let target = predecessor.releases[0].release_id;
     let (_, manifest, _, _) =

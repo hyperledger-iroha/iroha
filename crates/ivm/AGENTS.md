@@ -32,6 +32,7 @@ These guidelines apply to the `crates/ivm` directory and supplement `../AGENTS.m
   - Update the opcode tables in `docs/opcodes.md` and the helpers in `src/instruction/wide.rs` / `src/encoding`.
   - Refresh syscall/pointer goldens in `tests/abi_syscall_list_golden.rs`, `tests/abi_hash_versions.rs`, and `tests/pointer_type_ids_golden.rs`.
   - Thread new syscalls through the host trait and ensure unknown numbers still yield `VMError::UnknownSyscall`.
+  - Map every new opcode, syscall, `VMError`/`VmTrapKind` variant and numeric or pointer fault in `src/proof_coverage/`, record every file that newly constructs a `VMError` variant in `VM_ERROR_PRODUCERS` with its reviewed origin, then regenerate `docs/proof_coverage_inventory.json` with `cargo run --locked -p ivm --features dev-tools --bin gen_proof_coverage_inventory -- --write` and run `cargo test -p ivm --lib proof_coverage`. Never add a syscall exclusion or mark an entry covered without a relation exercised by a test.
 - Kotodama diagnostics use `iroha_i18n`. Add new message IDs in `src/kotodama/i18n/mod.rs` and provide translations under `src/kotodama/i18n/translations/`.
 - Any new GPU/SIMD path must document the feature flag, include a deterministic fallback, and mention the change in `docs/gpu_offloading.md`.
 - Keep README tables current (status of SIMD/Metal/CUDA, VRF gating, etc.) whenever behaviour or requirements change.

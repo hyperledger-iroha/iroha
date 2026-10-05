@@ -235,11 +235,9 @@ pub use storage_transactions::TransactionsReadOnly;
 use thiserror::Error as ThisError;
 /// Maximum canonical pinned-committee bytes stored in one lane metadata value.
 const MAX_AUTOSCALE_COMMITTEE_BYTES: usize = 32 * 1024;
-const MERGE_EXECUTION_WRITE_SET_DOMAIN: &[u8] = b"iroha:merge:execution-write-set:v1\0";
 /// Maximum number of settled VPN lease receipts retained in each account's read projection.
 pub const VPN_SETTLED_RECEIPT_HISTORY_LIMIT: usize = 24;
 include!("state/vpn_lease_validation.rs");
-const MERGE_QC_BLS_PROOF_BYTES: usize = 96;
 fn append_merge_write_set_component(out: &mut Vec<u8>, bytes: &[u8]) {
     let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     out.extend_from_slice(&len.to_le_bytes());
@@ -312,9 +310,6 @@ use crate::{
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
     governance::parliament::ParliamentAttemptStateV1,
-    smartcontracts::isi::kagemusha::kagemusha_v1_reserve::{
-        KagemushaReserveOperationRecordV1, KagemushaReservePoolV1,
-    },
 };
 #[cfg(test)]
 mod acquisition_fixture_tests;
@@ -1227,7 +1222,6 @@ macro_rules! with_world_overlay_fields {
             axt_spend_nonce_ledger,
             axt_source_transfer_replay_ledger,
             axt_handle_budget_ledger,
-            kagemusha_verifier_registry,
             tx_sequences,
             triggers,
             executor,
@@ -1361,8 +1355,6 @@ macro_rules! with_world_overlay_fields {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            kagemusha_reserve_pools,
-            kagemusha_reserve_operations,
             kagemusha_mint_credit_operations,
             kagemusha_issuance_operations,
             kagemusha_redemption_id_operations,
@@ -1447,7 +1439,6 @@ macro_rules! with_world_overlay_fields {
 use crate::publication_lock::{PublicationGuard, PublicationMutex};
 use crate::publication_rwlock::PublicationRwLock;
 mod effect_publication;
-mod kagemusha_runtime_installation;
 mod lifecycle_index_publication;
 use lifecycle_index_publication::LaneLifecycleReleases;
 #[cfg(test)]
@@ -2460,17 +2451,7 @@ struct AutoscaleLaneCommitteeV1 {
     validator_count: u32,
     min_quorum: u32,
 }
-type MergeExecutionCanonicalOrderKey = (LaneId, DataSpaceId, Hash, u64, u64, u64, Hash, Hash);
 
-/// Return canonical committed identities for an ordered entrypoint slice.
-pub(crate) fn committed_entrypoint_hashes(
-    entrypoints: &[TransactionEntrypoint],
-) -> Vec<HashOf<TransactionEntrypoint>> {
-    entrypoints
-        .iter()
-        .map(TransactionEntrypoint::hash)
-        .collect()
-}
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
@@ -4026,9 +4007,6 @@ pub struct WorldData {
         Storage<AxtSourceTransferReplayKeyV1, AxtSourceTransferReplayRecordV1>,
     /// Consensus-persisted cumulative spend for issuer-signed AXT handle families.
     pub(crate) axt_handle_budget_ledger: Storage<AxtHandleBudgetKey, AxtHandleBudgetRecord>,
-    /// Finalized signer policy and release lifecycle for the KAGEMUSHA verifier.
-    pub(crate) kagemusha_verifier_registry:
-        Cell<iroha_data_model::kagemusha::KagemushaGovernedVerifierRegistryV1>,
     /// Latest committed transaction sequence per account.
     pub(crate) tx_sequences: Storage<AccountId, u64>,
     /// Triggers
@@ -4403,10 +4381,6 @@ pub struct WorldData {
     pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: Storage<SettlementId, SettlementReceipt>,
-    /// Pooled KAGEMUSHA V1 reserve totals keyed by network, asset, and exact incarnation.
-    pub(crate) kagemusha_reserve_pools: Storage<[u8; 32], KagemushaReservePoolV1>,
-    /// Idempotent Kagemusha V1 operation records keyed by operation id.
-    pub(crate) kagemusha_reserve_operations: Storage<[u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
     pub(crate) kagemusha_mint_credit_operations: OperationIndex,
     /// One-to-one index from issuance commitment to top-up operation id.
@@ -5009,9 +4983,6 @@ pub struct WorldBlockFields<'world> {
     /// Consensus-persisted cumulative AXT handle-family spend for this block scope.
     pub(crate) axt_handle_budget_ledger:
         StorageField<'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
-    /// Finalized KAGEMUSHA verifier release authority for this block scope.
-    pub(crate) kagemusha_verifier_registry:
-        CellField<'world, iroha_data_model::kagemusha::KagemushaGovernedVerifierRegistryV1>,
     /// Latest committed transaction sequence per account.
     pub(crate) tx_sequences: StorageField<'world, AccountId, u64>,
     /// Triggers
@@ -5416,11 +5387,6 @@ pub struct WorldBlockFields<'world> {
         StorageField<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageField<'world, SettlementId, SettlementReceipt>,
-    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
-    pub(crate) kagemusha_reserve_pools: StorageField<'world, [u8; 32], KagemushaReservePoolV1>,
-    /// Idempotent Kagemusha V1 operation records keyed by operation id.
-    pub(crate) kagemusha_reserve_operations:
-        StorageField<'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
     pub(crate) kagemusha_mint_credit_operations:
         StorageField<'world, [u8; 32], [u8; 32], OperationIndexMode>,
@@ -5877,8 +5843,6 @@ impl WorldBlock<'_> {
         collect_reverts!(self.global_beacon_active_session, GlobalBeaconActiveSession);
         collect_reverts!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_reverts!(self.global_beacon_pulses, GlobalBeaconPulse);
-        collect_reverts!(self.kagemusha_reserve_pools, KagemushaReservePool);
-        collect_reverts!(self.kagemusha_reserve_operations, KagemushaReserveOperation);
         collect_reverts!(
             self.kagemusha_mint_credit_operations,
             KagemushaMintCreditOperation
@@ -5997,8 +5961,6 @@ impl WorldBlock<'_> {
         collect_payload!(self.global_beacon_active_session, GlobalBeaconActiveSession);
         collect_payload!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_payload!(self.global_beacon_pulses, GlobalBeaconPulse);
-        collect_payload!(self.kagemusha_reserve_pools, KagemushaReservePool);
-        collect_payload!(self.kagemusha_reserve_operations, KagemushaReserveOperation);
         collect_payload!(
             self.kagemusha_mint_credit_operations,
             KagemushaMintCreditOperation
@@ -6052,7 +6014,6 @@ impl WorldBlock<'_> {
             governance_last_unlock_sweep_height,
             governance_unlock_stats,
             parliament_attempt_counts,
-            kagemusha_verifier_registry,
             privacy_consensus_policy,
             privacy_exact12_qualification,
             musubi_registry_policy,
@@ -6275,8 +6236,6 @@ impl WorldBlock<'_> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            kagemusha_reserve_pools,
-            kagemusha_reserve_operations,
             kagemusha_mint_credit_operations,
             kagemusha_issuance_operations,
             kagemusha_redemption_id_operations,
@@ -6712,12 +6671,6 @@ pub struct WorldTransaction<'block, 'world> {
     /// Consensus-persisted cumulative AXT handle-family spend for this transaction.
     pub(crate) axt_handle_budget_ledger:
         StorageTransaction<'block, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
-    /// Finalized KAGEMUSHA verifier release authority for this transaction.
-    pub(crate) kagemusha_verifier_registry: CellTransaction<
-        'block,
-        'world,
-        iroha_data_model::kagemusha::KagemushaGovernedVerifierRegistryV1,
-    >,
     /// Latest committed transaction sequence per account.
     pub(crate) tx_sequences: StorageTransaction<'block, AccountId, u64>,
     /// Triggers
@@ -7123,12 +7076,6 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageTransaction<'block, SettlementId, SettlementReceipt>,
-    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
-    pub(crate) kagemusha_reserve_pools:
-        StorageTransaction<'block, [u8; 32], KagemushaReservePoolV1>,
-    /// Idempotent Kagemusha V1 operation records keyed by operation id.
-    pub(crate) kagemusha_reserve_operations:
-        StorageTransaction<'block, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
     pub(crate) kagemusha_mint_credit_operations:
         StorageTransaction<'block, [u8; 32], [u8; 32], OperationIndexMode>,
@@ -8931,9 +8878,6 @@ pub struct WorldView<'world> {
     /// Consensus-persisted cumulative AXT handle-family spend view.
     pub(crate) axt_handle_budget_ledger:
         StorageView<'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
-    /// Finalized KAGEMUSHA verifier release authority view.
-    pub(crate) kagemusha_verifier_registry:
-        CellView<'world, iroha_data_model::kagemusha::KagemushaGovernedVerifierRegistryV1>,
     /// Latest committed transaction sequence per account.
     pub(crate) tx_sequences: StorageView<'world, AccountId, u64>,
     /// Triggers
@@ -9423,11 +9367,6 @@ pub struct WorldView<'world> {
         StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageView<'world, SettlementId, SettlementReceipt>,
-    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
-    pub(crate) kagemusha_reserve_pools: StorageView<'world, [u8; 32], KagemushaReservePoolV1>,
-    /// Idempotent Kagemusha V1 operation records keyed by operation id.
-    pub(crate) kagemusha_reserve_operations:
-        StorageView<'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
     pub(crate) kagemusha_mint_credit_operations:
         StorageView<'world, [u8; 32], [u8; 32], OperationIndexMode>,
@@ -12008,27 +11947,6 @@ mod view_lock_contention_log_tests {
         );
     }
 }
-/// Exact finalized authority observed before loading local KAGEMUSHA verifier files.
-///
-/// State issues this opaque head before operational I/O and consumes it only if
-/// the network, block tip, State publication generation, and complete governed
-/// registry still match. Local
-/// files cannot create or advance finalized verifier-release authority.
-pub struct KagemushaV1RuntimeReloadHead {
-    network_id: iroha_data_model::NetworkId,
-    block_hash: Option<HashOf<BlockHeader>>,
-    view_generation: u64,
-    registry: iroha_data_model::kagemusha::KagemushaGovernedVerifierRegistryV1,
-}
-
-impl KagemushaV1RuntimeReloadHead {
-    /// Whether finalized authority has an active release at this exact State head.
-    #[must_use]
-    pub fn has_active_release(&self) -> bool {
-        self.registry.active_release_id.is_some()
-    }
-}
-
 /// Current state of the blockchain.
 
 pub struct State {
@@ -12147,10 +12065,6 @@ pub struct State {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration (repo defaults, collateral policies).
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Kagemusha V1 release/artifact resolution and recursive verification.
-    kagemusha_v1_runtime_verifier: PublicationRwLock<
-        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
-    >,
     /// Unified settlement engine for XOR quoting.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier from configuration, exposed through the display sysvar.
@@ -12594,9 +12508,6 @@ pub struct StateBlockFields<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this block.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this block.
-    pub kagemusha_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Settlement engine snapshot for this block.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
@@ -13920,9 +13831,6 @@ pub struct StateTransaction<'block, 'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this transaction.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this transaction.
-    pub kagemusha_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Settlement engine snapshot for this transaction.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier snapshot exposed through the display sysvar.
@@ -14298,9 +14206,6 @@ pub struct StateView<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this view.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this view.
-    pub kagemusha_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Settlement engine snapshot for this view.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this view.
@@ -20995,12 +20900,6 @@ macro_rules! world_ro_accessors {
             storage repo_agreements_by_custodian: AccountId => BTreeSet<RepoAgreementId>;
             /// Successful settlement receipts (read-only).
             storage settlement_receipts: SettlementId => SettlementReceipt;
-            /// Pooled Kagemusha V1 reserve totals (read-only).
-            storage kagemusha_reserve_pools:
-                [u8; 32] => KagemushaReservePoolV1;
-            /// Idempotent Kagemusha V1 operation records (read-only).
-            storage kagemusha_reserve_operations:
-                [u8; 32] => KagemushaReserveOperationRecordV1;
             /// Mint-credit replay index (read-only).
             storage kagemusha_mint_credit_operations: [u8; 32] => [u8; 32];
             /// Issuance-commitment replay index (read-only).
@@ -22668,13 +22567,6 @@ impl WorldTransaction<'_, '_> {
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
         let npos_parameter_id = SumeragiNposParameters::parameter_id();
         executor_data_model.parameters.remove(&npos_parameter_id);
-        executor_data_model
-            .parameters
-            .retain(|_, parameter| !is_retired_kagemusha_mint_finality_parameter(parameter.id()));
-        self.parameters
-            .get_mut()
-            .custom
-            .retain(|_, parameter| !is_retired_kagemusha_mint_finality_parameter(parameter.id()));
         let declared_permissions = executor_data_model.permissions().clone();
         let permission_is_declared = |permission: &Permission| {
             declared_permissions
@@ -24586,7 +24478,6 @@ impl WorldTransaction<'_, '_> {
             axt_spend_nonce_ledger: _,
             axt_source_transfer_replay_ledger: _,
             axt_handle_budget_ledger: _,
-            kagemusha_verifier_registry: _,
             space_directory_manifests: _,
             tx_sequences: _,
             triggers: _,
@@ -24714,8 +24605,6 @@ impl WorldTransaction<'_, '_> {
             soradns_last_publish_ms: _,
             soradns_history_len: _,
             settlement_receipts: _,
-            kagemusha_reserve_pools: _,
-            kagemusha_reserve_operations: _,
             kagemusha_mint_credit_operations: _,
             kagemusha_issuance_operations: _,
             kagemusha_redemption_id_operations: _,
@@ -24947,8 +24836,6 @@ impl WorldTransaction<'_, '_> {
         self.soradns_last_publish_ms.apply();
         self.soradns_history_len.apply();
         self.settlement_receipts.apply();
-        self.kagemusha_reserve_pools.apply();
-        self.kagemusha_reserve_operations.apply();
         self.kagemusha_mint_credit_operations.apply();
         self.kagemusha_issuance_operations.apply();
         self.kagemusha_redemption_id_operations.apply();
@@ -25050,7 +24937,6 @@ impl WorldTransaction<'_, '_> {
         self.axt_spend_nonce_ledger.apply();
         self.axt_source_transfer_replay_ledger.apply();
         self.axt_handle_budget_ledger.apply();
-        self.kagemusha_verifier_registry.apply();
         self.space_directory_manifests.apply();
         self.account_permissions.apply();
         self.roles.apply();
@@ -27841,9 +27727,6 @@ impl State {
                 stripe_layout: iroha_config::parameters::defaults::content::default_stripe_layout(),
             },
             settlement: settlement_cfg,
-            kagemusha_v1_runtime_verifier: PublicationRwLock::<Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>>::try_new(Arc::new(
-                crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier,
-            ), &execution_budget).map_err(StateStorageAdmissionError::World)?,
             settlement_engine,
             #[cfg(feature = "telemetry")]
             telemetry,
@@ -30737,7 +30620,6 @@ impl State {
             let prev_commit_topology_wait = prev_commit_topology_start.elapsed();
             let pipeline_ivm_prepared_cache = releases.prepared_cache.try_read_or_wait()?.clone();
             let crypto = releases.crypto.try_read_or_wait()?.clone();
-            let kagemusha_v1_runtime_verifier = releases.verifier.try_read_or_wait()?.clone();
             let query_ledger_time_ms = cached_header
                 .as_ref()
                 .filter(|header| Some(header.hash()) == latest_hash)
@@ -30837,7 +30719,6 @@ impl State {
                 gov: self.gov.clone(),
                 content: self.content.clone(),
                 settlement: self.settlement.clone(),
-                kagemusha_v1_runtime_verifier,
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
@@ -35814,32 +35695,6 @@ pub fn compute_genesis_confidential_policy_hash(
         sccp_policy_hash_v1(),
     )
 }
-/// Reject the retired next-roster custom parameter without interpreting its payload.
-pub(crate) fn is_retired_kagemusha_mint_finality_parameter(
-    id: &iroha_data_model::parameter::CustomParameterId,
-) -> bool {
-    id.name().as_ref() == "kagemusha_mint_finality_next_epoch_v1"
-}
-
-#[cfg(test)]
-mod retired_mint_finality_parameter_tests {
-    #[test]
-    fn retired_parameter_id_has_no_payload_or_authority_fallback() {
-        assert!(super::is_retired_kagemusha_mint_finality_parameter(
-            &"kagemusha_mint_finality_next_epoch_v1".parse().unwrap()
-        ));
-        for name in [
-            "sumeragi_npos_parameters",
-            "kagemusha_mint_finality",
-            "ordinary_custom",
-        ] {
-            assert!(!super::is_retired_kagemusha_mint_finality_parameter(
-                &name.parse().unwrap()
-            ));
-        }
-    }
-}
-
 fn zk_policy_put_bytes(hasher: &mut Sha256, bytes: &[u8]) {
     let len = u64::try_from(bytes.len()).expect("ZK policy field length must fit into u64");
     Sha2Digest::update(hasher, len.to_be_bytes());
@@ -37530,7 +37385,6 @@ impl<'state> StateBlock<'state> {
             gov: fields.gov.clone(),
             content: fields.content.clone(),
             settlement: fields.settlement.clone(),
-            kagemusha_v1_runtime_verifier: Arc::clone(&fields.kagemusha_v1_runtime_verifier),
             settlement_engine: fields.settlement_engine.clone(),
             chain_id: fields.chain_id.clone(),
             network_id: fields.network_id,
@@ -37668,88 +37522,6 @@ impl<'state> StateBlock<'state> {
                     )
                 }
             })
-    }
-    fn merge_execution_call_hash(entrypoint: &TransactionEntrypoint) -> Hash {
-        Hash::from(entrypoint.execution_call_hash())
-    }
-    #[cfg(test)]
-    fn take_merge_lane_batch_transfer_outcomes(
-        &mut self,
-        entrypoints: &[TransactionEntrypoint],
-        results: &mut [TransactionResult],
-    ) -> Result<(), MergeLedgerCommitError> {
-        if entrypoints.len() != results.len() {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "lane execution cannot align batch-transfer outcomes with transaction results"
-                    .to_owned(),
-            ));
-        }
-        let mut seen_call_hashes = BTreeSet::new();
-        for (entrypoint, result) in entrypoints.iter().zip(results) {
-            let call_hash = Self::merge_execution_call_hash(entrypoint);
-            if !seen_call_hashes.insert(call_hash) {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "lane execution produced duplicate batch-transfer outcome call-hash bindings"
-                        .to_owned(),
-                ));
-            }
-            let outcome_key = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(call_hash);
-            let Some(outcomes) = self.batch_transfer_outcomes.remove(&outcome_key) else {
-                continue;
-            };
-            if outcomes.is_empty() {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "lane execution produced an empty batch-transfer outcome binding".to_owned(),
-                ));
-            }
-            result.set_batch_transfer_outcomes(outcomes);
-        }
-        Ok(())
-    }
-    /// Shared exact outer/call selection for old export and retained native output.
-    /// It validates every binding before either caller mutates transcript custody.
-    fn lane_fastpq_transcript_selection(
-        &self,
-        entrypoints: &[TransactionEntrypoint],
-    ) -> Result<(BTreeMap<Hash, Hash>, BTreeSet<Hash>), MergeLedgerCommitError> {
-        if self.fastpq_source_inventory.is_some() {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "lane execution cannot extract FASTPQ evidence after source inventory finalization"
-                    .to_owned(),
-            ));
-        }
-        let mut entrypoint_bindings = BTreeMap::new();
-        let mut call_hashes = BTreeSet::new();
-        let mut selected_call_hashes = BTreeSet::new();
-        for entrypoint in entrypoints {
-            let entrypoint_hash = Hash::from(entrypoint.hash());
-            let call_hash = Self::merge_execution_call_hash(entrypoint);
-            if !call_hashes.insert(call_hash)
-                || entrypoint_bindings
-                    .insert(entrypoint_hash, call_hash)
-                    .is_some()
-            {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "lane execution produced duplicate FASTPQ transcript call-hash bindings"
-                        .to_owned(),
-                ));
-            }
-            let Some(transcripts) = self.fastpq_transcripts.get(&call_hash) else {
-                continue;
-            };
-            if transcripts.is_empty()
-                || transcripts
-                    .iter()
-                    .any(|transcript| transcript.batch_hash != call_hash)
-            {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "lane execution produced malformed or duplicate FASTPQ transcript evidence"
-                        .to_owned(),
-                ));
-            }
-            selected_call_hashes.insert(call_hash);
-        }
-        Ok((entrypoint_bindings, selected_call_hashes))
     }
     /// Commit changes aggregated during application of block.
     ///
@@ -38222,26 +37994,6 @@ impl<'state> StateBlock<'state> {
             self.prune_axt_replay_ledger(current_slot, retention_slots);
         }
         Ok(())
-    }
-    fn stage_merge_metadata_values(
-        &mut self,
-        entry_merge_hint_roots: &[Hash],
-        global_state_root: Hash,
-    ) {
-        let should_update_roots = self.world.merge_hint_roots.as_slice() != entry_merge_hint_roots;
-        if should_update_roots {
-            let mut tx = self.world.merge_hint_roots.transaction();
-            tx.clear();
-            tx.extend(entry_merge_hint_roots.iter().copied());
-            tx.apply();
-        }
-        let should_update_global =
-            self.world.merge_global_state_root.as_ref() != Some(&global_state_root);
-        if should_update_global {
-            let mut tx = self.world.merge_global_state_root.transaction();
-            *tx = Some(global_state_root);
-            tx.apply();
-        }
     }
     /// Run existing Time maintenance only within the sole borrowing output owner.
     /// The producer admits its phase before this helper and invokes it once.

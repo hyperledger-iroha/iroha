@@ -384,7 +384,7 @@ fn malformed_or_non_ed25519_authority_and_non_native_image_fail_before_creation(
             let body = if fault == "invalid_json" {
                 b"closed-secret-marker invalid JSON".to_vec()
             } else {
-                let mut value: Value =
+                let mut value: json::Value =
                     json::from_slice(&fs::read(&fixture.args.trusted_public_key).unwrap()).unwrap();
                 let map = value.as_object_mut().unwrap();
                 let (field, text) = match fault {
@@ -393,7 +393,7 @@ fn malformed_or_non_ed25519_authority_and_non_native_image_fail_before_creation(
                     "wrong_algorithm" => ("algorithm", "secp256k1"),
                     _ => ("public_key", "closed-secret-marker"),
                 };
-                map.insert(field.into(), Value::String(text.into()));
+                map.insert(field.into(), json::Value::String(text.into()));
                 json::to_vec(&value).unwrap()
             };
             fs::write(&fixture.args.trusted_public_key, &body).unwrap();

@@ -4,7 +4,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use iroha_data_model::fastpq::FastpqSourceStatementContextV1;
 
-use super::{BTreeMap, Hash, StateBlock, output_capacity::OwnedExecutionSources};
+use super::{Hash, StateBlock, output_capacity::OwnedExecutionSources};
 use crate::fastpq::FastpqSourceExecutionEntryV1;
 #[cfg(test)]
 use crate::fastpq::{

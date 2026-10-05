@@ -8574,7 +8574,7 @@ mod event {
     use super::*;
     use crate::state::StateBlock;
     use new::NewBlock;
-    use std::collections::BTreeSet;
+
     pub trait EventProducer {
         fn produce_events(&self) -> impl Iterator<Item = PipelineEventBox>;
     }

@@ -2060,20 +2060,17 @@ fn validate_zk_x509_presentation_window(
     start: u64,
     end: u64,
 ) -> Result<(), PrivacyStatementValidationError> {
-    if end <= start
-        || end
-            .checked_sub(start)
-            .is_none_or(|seconds| seconds > ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1)
-    {
-        return Err(
-            PrivacyStatementValidationError::InvalidX509PresentationWindow {
+    // The canonical interval definition owns the window shape; this adapter
+    // only preserves the statement-level error identity.
+    PrivacyZkX509PresentationWindowV1::new(start, end)
+        .validate()
+        .map_err(
+            |_| PrivacyStatementValidationError::InvalidX509PresentationWindow {
                 start,
                 end,
                 max_seconds: ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1,
             },
-        );
-    }
-    Ok(())
+        )
 }
 fn validate_jindo(
     statement: &IrohaJindoPolynomialCommitmentStatementV1,

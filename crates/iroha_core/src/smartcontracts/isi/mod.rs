@@ -16,8 +16,6 @@ pub mod game;
 /// Authorization, signature and error-mapping helpers shared by ISI modules.
 pub(crate) mod helpers;
 pub mod identifier;
-/// Kagemusha reserve settlement instruction handlers.
-pub mod kagemusha;
 pub mod kaigi;
 /// Ministry agenda submission handlers.
 pub mod ministry;
@@ -423,9 +421,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
-    dispatch_instruction::<iroha_data_model::isi::TopUpKagemushaV1>,
-    dispatch_instruction::<iroha_data_model::isi::TopUpKagemushaOrdinaryV1>,
-    dispatch_instruction::<iroha_data_model::isi::RedeemKagemushaV1>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,
     dispatch_instruction::<iroha_data_model::isi::social::CancelTwitterEscrow>,

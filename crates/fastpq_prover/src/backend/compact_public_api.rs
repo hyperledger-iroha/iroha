@@ -72,8 +72,10 @@ impl DeepVerifier {
         super::deep_engine::verify_committed(
             relation,
             bytes,
-            limits,
-            self.max_decode_allocation_charges,
+            super::air::q77::VerifierLimits::for_segment(
+                limits,
+                self.max_decode_allocation_charges,
+            ),
         )
     }
 }

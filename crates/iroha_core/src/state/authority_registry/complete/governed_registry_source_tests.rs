@@ -483,7 +483,7 @@ fn standby_retirement_capture_retains_exact_original_predecessor_and_remaining_a
     let mut current = predecessor.clone();
     current.retire_standby(target).unwrap();
     let state = state();
-    // This exercises the source-cut owner; certified State publication has a separate due test.
+    // Data-only source fixture: block publication rejects every registry mutation.
     install_pair(&state, predecessor.clone(), current.clone());
     let captured = CapturedGovernedRegistry::try_capture(&state, limits())
         .unwrap()

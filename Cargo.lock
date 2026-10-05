@@ -1795,7 +1795,6 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "hex",
- "iroha",
  "iroha_accel",
  "iroha_core",
  "iroha_core_privacy",
@@ -1804,7 +1803,6 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
- "iroha_fs",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_torii_shared",
@@ -1813,9 +1811,7 @@ dependencies = [
  "jni 0.21.1",
  "libc",
  "norito",
- "p256",
  "rand 0.9.4",
- "sha2",
  "sorafs_car",
  "sorafs_chunker",
  "sorafs_manifest",
@@ -4720,7 +4716,6 @@ dependencies = [
  "hex",
  "http",
  "iroha_config_base",
- "iroha_core_zk",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
@@ -4922,6 +4917,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.18",
  "toml 0.9.12+spec-1.1.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -5048,6 +5044,8 @@ dependencies = [
  "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fhe",
+ "iroha_measurement",
  "iroha_model_base",
  "iroha_schema",
  "iroha_zkp_halo2",
@@ -5159,6 +5157,7 @@ dependencies = [
  "hex-literal",
  "hkdf",
  "iroha_allocation",
+ "iroha_fhe",
  "iroha_primitives",
  "iroha_schema",
  "k256",
@@ -5373,6 +5372,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_fhe"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "num-bigint 0.4.6",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
 name = "iroha_file_mmap"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5567,6 +5575,15 @@ name = "iroha_macro"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_derive",
+]
+
+[[package]]
+name = "iroha_measurement"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "iroha_allocation",
+ "libc",
+ "norito",
 ]
 
 [[package]]
@@ -6229,6 +6246,7 @@ dependencies = [
  "hex",
  "hex-literal",
  "iroha_crypto",
+ "iroha_fhe",
  "iroha_schema",
  "iroha_zkp_poseidon",
  "norito",

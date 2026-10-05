@@ -75,15 +75,10 @@ fn seeded_complete_proof_bytes_are_identical_across_worker_counts() {
             drop(witness);
             let bytes = prove(&relation, source, 0x077_004).unwrap();
             assert_eq!(
-                deep_engine::verify_committed(
-                    &relation,
-                    &bytes,
-                    verification_limits(),
-                    32 * 1024 * 1024
-                )
-                .unwrap()
-                .work()
-                .air_evaluations,
+                deep_engine::verify_committed(&relation, &bytes, engine_verification_limits())
+                    .unwrap()
+                    .work()
+                    .air_evaluations,
                 1
             );
             bytes

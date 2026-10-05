@@ -196,6 +196,26 @@ impl PreparedSignedBlockSignaturesDecode {
         }
         Ok(self.completed.as_ref())
     }
+    /// Whether this block retains this decoder's exact completed signature control.
+    ///
+    /// This allocation-free observation compares physical owners after the same original
+    /// input address, whole-wire content and pool checks. Equal values or admission to
+    /// the same pool do not substitute another independently prepared collection.
+    /// It proves signature custody only, never execution, finality or full-graph admission.
+    ///
+    /// # Errors
+    /// Rejects a changed original source or foreign pool exactly as retained_signatures.
+    /// An incomplete/retired decoder or a different collection returns false.
+    pub fn retains_signature_custody(
+        &self,
+        input: &ChargedBuffer<u8>,
+        block: &SignedBlock,
+    ) -> Result<bool, PreparedSignatureBlockError> {
+        Ok(self
+            .retained_signatures(input)?
+            .is_some_and(|original| BlockSignatures::ptr_eq(original, &block.signatures)))
+    }
+
     /// Borrow the original admitted certificate only for its unchanged complete source.
     /// Custody identity does not establish whole-frame validity or finality authority.
     ///
@@ -311,7 +331,7 @@ impl PreparedSignedBlockSignaturesDecode {
             certificate: DecodedField::Missing,
         };
         self.workspace
-            .decode_canonical_into::<SignedBlock, _>(framed, limits, &mut destination)
+            .decode_canonical_archive_into::<SignedBlock, _>(framed, limits, &mut destination)
             .map_err(retain_field_failure)?;
         let block = SignedBlock {
             signatures: destination

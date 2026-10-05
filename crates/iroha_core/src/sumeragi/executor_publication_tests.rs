@@ -35,7 +35,7 @@ pub(super) fn with_worker(
     );
 }
 
-fn with_worker_from(
+pub(super) fn with_worker_from(
     make_chain: impl FnOnce() -> CertifiedTestChain + Send + 'static,
     consensus_mode: ConsensusMode,
     test: impl FnOnce(
@@ -496,7 +496,7 @@ pub(super) fn proposal_with_transaction(
             proposer: 0,
             skipped_leaders: Vec::new(),
             control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-            attest: height == scheduled.epoch.last_height,
+            attest: proposal_requires_attestation(&proposal, scheduled.epoch.last_height),
         },
         payload,
     )
@@ -3289,4 +3289,135 @@ fn later_canonical_child_allocator_refusal_keeps_the_original_prepared_signature
         assert!(valid.as_ref().same_signature_custody(&original));
         assert!(worker.signature_decode.is_none());
     });
+}
+
+/// The global proposer selects within the payload limit less the reserve the data model owns
+/// (`specs/zk_resource_contract.json`, `block.payload_transaction_reserve_bytes`), which is the
+/// budget queue admission grants. The real build carries a queued transaction of exactly that
+/// length inside the committed limit, and skips it under a limit one byte smaller without
+/// proposing an empty block.
+#[test]
+fn global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve() {
+    use iroha_data_model::{
+        isi::{InstructionBox, Log},
+        parameter::{
+            Parameter,
+            system::{BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES, SumeragiParameter},
+        },
+    };
+    const INCLUDABLE: u32 = 16 * 1024;
+    const MAX_BLOCK_BYTES: u32 = BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + INCLUDABLE;
+    assert_eq!(
+        PAYLOAD_OVERHEAD,
+        BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES as usize
+    );
+    let (send_clock, receive_clock) = std::sync::mpsc::channel();
+    with_worker_from(
+        move || {
+            let mut config = TestChainConfig::new(World::new(), 1_000);
+            config
+                .genesis_parameters
+                .push(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
+                    std::num::NonZeroU32::new(MAX_BLOCK_BYTES).unwrap(),
+                )));
+            let prepared = CertifiedTestChain::prepare(config).expect("prepared signed genesis");
+            send_clock
+                .send(prepared.clock.clone())
+                .expect("fixture clock key");
+            CertifiedTestChain::from_prepared(prepared).expect("actual signed genesis")
+        },
+        ConsensusMode::Permissioned,
+        move |chain, worker, _blocks, _events| {
+            let clock = receive_clock.recv().expect("fixture clock key");
+            let (_, time) =
+                iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(2_001));
+            let accept = |message_len: usize| {
+                crate::tx::AcceptedTransaction::accept_with_time_source(
+                    chain.sign(
+                        &clock,
+                        [InstructionBox::from(Log::new(
+                            iroha_data_model::Level::DEBUG,
+                            "x".repeat(message_len),
+                        ))],
+                        2_000,
+                    ),
+                    &chain.network_id(),
+                    Duration::from_secs(1),
+                    chain.state().view().world().parameters().transaction(),
+                    &iroha_config::parameters::actual::Crypto::default(),
+                    &time,
+                )
+                .expect("within the transaction cap")
+            };
+            // A transaction whose framed length is exactly the includable bound.
+            let target = usize::try_from(INCLUDABLE).unwrap();
+            let slack = 1_024;
+            let probe = accept(target - slack).encoded_len();
+            let transaction = accept(target - slack + (target - probe));
+            assert_eq!(transaction.encoded_len(), target);
+            assert_eq!(
+                chain
+                    .state()
+                    .view()
+                    .world()
+                    .parameters()
+                    .sumeragi()
+                    .max_block_bytes
+                    .get(),
+                MAX_BLOCK_BYTES
+            );
+            let hash = transaction.hash_as_entrypoint();
+            let queue = Arc::new(Queue::test(
+                iroha_config::parameters::actual::Queue::default(),
+                &time,
+            ));
+            queue
+                .push(transaction, chain.state().view())
+                .expect("admission accepts the includable bound itself");
+            worker.queue = Some(Clone::clone(&queue));
+            let exec_budget_ms = u32::try_from(
+                chain
+                    .state()
+                    .view()
+                    .world()
+                    .consensus_schedule()
+                    .ready(2)
+                    .expect("committed schedule authorizes the payload build")
+                    .params
+                    .exec_budget_ms,
+            )
+            .expect("fixture execution budget fits the worker request");
+
+            // One byte less payload leaves a budget one byte short of the transaction.
+            let (payload, attest) = worker
+                .build(2, 0, MAX_BLOCK_BYTES - 1, exec_budget_ms)
+                .unwrap();
+            assert!(
+                payload.is_none() && !attest,
+                "the transaction is skipped and no empty block is proposed"
+            );
+            assert!(worker.completed_payload.is_none());
+            assert!(worker.payload_build.is_none());
+
+            // The committed limit carries it, with the block framing inside the reserve.
+            let (Some(bytes), false) = worker.build(2, 0, MAX_BLOCK_BYTES, exec_budget_ms).unwrap()
+            else {
+                panic!("the committed payload limit carries the includable bound");
+            };
+            let wire = bytes.as_slice().len();
+            assert!(
+                wire > target && wire <= usize::try_from(MAX_BLOCK_BYTES).unwrap(),
+                "assembled payload: {wire} bytes"
+            );
+            let proposal = payload::decode(bytes.as_slice()).unwrap();
+            assert_eq!(proposal.external_entrypoints_slice().len(), 1);
+            assert_eq!(proposal.external_entrypoints_slice()[0].hash(), hash);
+            assert_eq!(
+                queue.queued_len(),
+                1,
+                "the builder peeks; it removes nothing"
+            );
+            assert!(queue.contains_entrypoint_hash(hash));
+        },
+    );
 }

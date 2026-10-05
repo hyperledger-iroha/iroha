@@ -32,8 +32,8 @@ use super::{
     },
     messages::messages_tests::{ACCEPTED_MS, MessageFixture, OPENING_SIBLINGS, message_fixture},
     state::state_tests::{
-        CREDIT_DIGEST_ROOT, LINEAGE_PENDING_ROOT, bootstrap_statement, field_value, signed_package,
-        stand_in_proof, transition_statement,
+        CREDIT_DIGEST_ROOT, LINEAGE_PENDING_ROOT, bootstrap_statement, controlled_state,
+        field_value, signed_package, stand_in_proof, transition_statement,
     },
     *,
 };
@@ -3201,6 +3201,121 @@ fn json_opening(
     ])
 }
 
+/// The canonical frame, core and rest element lists, rest digest and commitment of `state`.
+fn json_state(state: &KagemushaWalletStateV1) -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "state_hex",
+            json_hex(&norito::encode_canonical(state).expect("state frame")),
+        ),
+        (
+            "core_items",
+            json_items(&state.core_field_items().expect("core items")),
+        ),
+        (
+            "rest_items",
+            json_items(&state.rest_field_items().expect("rest items")),
+        ),
+        (
+            "rest_digest_hex",
+            json_hex(&state.rest_digest().expect("rest digest")),
+        ),
+        (
+            "commitment_hex",
+            json_hex(&state.commitment().expect("commitment").value),
+        ),
+    ]
+}
+
+/// The controlled state over the identities of `base` ([`controlled_state`]): every core and
+/// rest element distinct, with each field's value by name (integers in decimal, 32-byte values
+/// in hex), so a consumer binds every element position to its field (owner answers Q3, Q4, Q5
+/// and Q10).
+fn json_controlled_state(base: &KagemushaWalletStateV1) -> Value {
+    let state = controlled_state(base);
+    let core = &state.core;
+    let rest = &state.rest;
+    let number = |value: u128| json_text(&value.to_string());
+    let mut entries = json_state(&state);
+    entries.push((
+        "core_fields",
+        json_object(vec![
+            ("lifecycle", number(u128::from(core.lifecycle.tag()))),
+            ("scheme_id", json_hex(&core.scheme_id)),
+            ("asset_digest", json_hex(&core.asset_digest)),
+            ("wallet_id", json_hex(&core.wallet_id)),
+            ("credential_digest", json_hex(&core.credential_digest)),
+            ("balance", number(core.balance)),
+            ("burned_total", number(core.burned_total)),
+            ("sequence", number(core.sequence)),
+            ("next_send", number(core.next_send)),
+            ("next_load", number(core.next_load)),
+            ("next_redeem", number(core.next_redeem)),
+            ("send_chain", json_hex(&core.send_chain)),
+            ("recv_chain", json_hex(&core.recv_chain)),
+            ("consumed_credit_root", json_hex(&core.consumed_credit_root)),
+            (
+                "pending_outgoing_root",
+                json_hex(&core.pending_outgoing_root),
+            ),
+            (
+                "load_redeem_recovery_root",
+                json_hex(&core.load_redeem_recovery_root),
+            ),
+            ("fee_claim_root", json_hex(&core.fee_claim_root)),
+            ("quota_usage_root", json_hex(&core.quota_usage_root)),
+            (
+                "enabled_controls",
+                number(u128::from(core.enabled_controls)),
+            ),
+            ("quota_windows_root", json_hex(&core.quota_windows_root)),
+            (
+                "blacklist_version",
+                number(u128::from(core.blacklist_version)),
+            ),
+            ("blacklist_root", json_hex(&core.blacklist_root)),
+            (
+                "blacklist_issued_at_ms",
+                number(u128::from(core.blacklist_issued_at_ms)),
+            ),
+            (
+                "blacklist_max_age_ms",
+                number(u128::from(core.blacklist_max_age_ms)),
+            ),
+            (
+                "lease_expires_at_ms",
+                number(u128::from(core.lease_expires_at_ms)),
+            ),
+            ("policy_epoch", number(u128::from(core.policy_epoch))),
+            (
+                "accepted_time_floor_ms",
+                number(u128::from(core.accepted_time_floor_ms)),
+            ),
+            ("state_nonce", json_hex(&core.state_nonce)),
+        ]),
+    ));
+    entries.push((
+        "rest_fields",
+        json_object(vec![
+            (
+                "permitted_controls",
+                number(u128::from(rest.permitted_controls)),
+            ),
+            (
+                "time_anchor_max_response_ms",
+                number(u128::from(rest.time_anchor_max_response_ms)),
+            ),
+            ("scheme_policy", json_hex(&rest.scheme_policy)),
+            ("fee_schedule", json_hex(&rest.fee_schedule)),
+            ("blacklist", json_hex(&rest.blacklist)),
+            ("quota_share", json_hex(&rest.quota_share)),
+            ("quota_share_id", number(u128::from(rest.quota_share_id))),
+            ("time_anchor", json_hex(&rest.time_anchor)),
+        ]),
+    ));
+    json_object(entries)
+}
+
 /// The σ-field encodings shared by native and in-circuit encoders (§3.2): the element lists of
 /// the statement, state core and rest, chain appends and map leaves, with the Poseidon values
 /// the data model computes over them.
@@ -3235,8 +3350,6 @@ fn field_encodings_json(w: &VectorWorld) -> Value {
             ])
         })
         .collect();
-    let core = state.core_field_items().expect("core items");
-    let rest = state.rest_field_items().expect("rest items");
     let send_items = send.field_items().expect("send statement items");
     let receive_items = receive.field_items().expect("receive statement items");
     let send_append = send_entry.append_preimage(&[0; 32]).expect("send append");
@@ -3303,25 +3416,8 @@ fn field_encodings_json(w: &VectorWorld) -> Value {
                 ),
             ]),
         ),
-        (
-            "receive_successor_state",
-            json_object(vec![
-                (
-                    "state_hex",
-                    json_hex(&norito::encode_canonical(state).expect("state frame")),
-                ),
-                ("core_items", json_items(&core)),
-                ("rest_items", json_items(&rest)),
-                (
-                    "rest_digest_hex",
-                    json_hex(&state.rest_digest().expect("rest digest")),
-                ),
-                (
-                    "commitment_hex",
-                    json_hex(&state.commitment().expect("commitment").value),
-                ),
-            ]),
-        ),
+        ("receive_successor_state", json_object(json_state(state))),
+        ("controlled_state", json_controlled_state(state)),
         ("send_chain_append_from_empty", json_items(&send_append)),
         (
             "send_chain_append_from_empty_hex",

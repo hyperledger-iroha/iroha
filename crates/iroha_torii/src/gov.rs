@@ -2283,6 +2283,7 @@ fn governed_contract_invariant(message: impl Into<String>) -> crate::Error {
 fn verify_governed_contract_manifest_signature(
     manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
     budget: &iroha_allocation::AllocationBudget,
+    max_frame_bytes: usize,
 ) -> Result<(), iroha_core::execution_attempt::ExecutionAttemptError<String>> {
     use iroha_core::execution_attempt::ExecutionAttemptError;
     use ivm::error::ExecutionDeferral;
@@ -2291,8 +2292,8 @@ fn verify_governed_contract_manifest_signature(
     let provenance = manifest.provenance.as_ref().ok_or_else(|| {
         ExecutionAttemptError::Rejected("active contract manifest has no signed provenance".into())
     })?;
-    // This is a local capacity ceiling, not a new policy for already committed content.
-    let max_frame_bytes = budget.limit_bytes();
+    // A current frame ceiling limits this read's scratch without declaring retained content invalid.
+    let max_frame_bytes = max_frame_bytes.min(budget.limit_bytes());
     let mut counter = budget
         .try_reserve(DecodeBudgetContext::allocation_layout())
         .map_err(|original| ExecutionAttemptError::Deferred(original.into()))?;
@@ -2342,6 +2343,11 @@ fn verify_governed_contract_manifest_signature(
             .map_err(BoundedEncodeError::from)
             .map_err(&encode_error)
     })?;
+    if frame_bytes > max_frame_bytes {
+        return Err(ExecutionAttemptError::Deferred(
+            ExecutionDeferral::ActiveMemoryCapacity.into(),
+        ));
+    }
     let frame = budget
         .try_reserve_bytes(frame_bytes)
         .map_err(|original| ExecutionAttemptError::Deferred(original.into()))?;
@@ -2378,10 +2384,12 @@ fn is_canonical_public_entrypoint_name(name: &str) -> bool {
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the contract address is malformed or the dataspace alias
-/// encoded in the address is unknown to the current node.
+/// encoded in the address is unknown to the current node. Manifest-frame resource refusals
+/// preserve the query budget failure under the caller's original physical allocation owner.
 pub async fn handle_gov_contract_get(
     state: Arc<iroha_core::state::State>,
     contract_address: axum::extract::Path<String>,
+    allocation_context: &norito::core::DecodeBudgetContext,
 ) -> Result<JsonBody<GovernedContractResponse>, crate::Error> {
     let contract_address: iroha_data_model::smart_contract::ContractAddress =
         contract_address.0.parse().map_err(|err| {
@@ -2489,7 +2497,26 @@ pub async fn handle_gov_contract_get(
             "active contract manifest does not match its authenticated artifact metadata",
         ));
     }
-    verify_governed_contract_manifest_signature(&record.manifest, &state.ivm_execution_budget())
+    let max_frame_bytes = usize::try_from(
+        view.world()
+            .parameters()
+            .transaction
+            .ivm_bytecode_size
+            .get(),
+    )
+    .map_err(|_| {
+        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+        ))
+    })?;
+    allocation_context
+        .with(|| {
+            verify_governed_contract_manifest_signature(
+                &record.manifest,
+                &state.ivm_execution_budget(),
+                max_frame_bytes,
+            )
+        })
         .map_err(|error| match error {
             iroha_core::execution_attempt::ExecutionAttemptError::Rejected(message) => {
                 governed_contract_invariant(message)

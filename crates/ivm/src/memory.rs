@@ -2367,6 +2367,67 @@ mod tests {
             Err(VMError::MemoryOutOfBounds)
         ));
     }
+    /// VM stage of the resource contract (`specs/zk_resource_contract.json`, groups
+    /// `guest_memory` and `vm_handles`): the heap and the input window are inclusive at their
+    /// bound, one byte over is refused, and neither can hold a ceiling-sized proof.
+    #[test]
+    fn guest_heap_and_input_window_accept_their_bound_and_refuse_one_over() {
+        assert_eq!(Memory::HEAP_MAX_SIZE, 1024 * 1024);
+        assert_eq!(
+            Memory::HEAP_MAX_SIZE,
+            Memory::INPUT_START - Memory::HEAP_START
+        );
+        assert_eq!(Memory::INPUT_SIZE, 64 * 1024);
+        assert_eq!(Memory::OUTPUT_SIZE, 32 * 1024);
+        // The input window holds exactly INPUT_SIZE bytes.
+        let window = vec![0xA5; usize::try_from(Memory::INPUT_SIZE).unwrap()];
+        let mut mem = Memory::new();
+        mem.preload_input(0, &window).expect("a full input window");
+        let mut over = window.clone();
+        over.push(0xA5);
+        assert!(matches!(
+            mem.preload_input(0, &over),
+            Err(VMError::MemoryOutOfBounds)
+        ));
+        assert!(matches!(
+            mem.preload_input(1, &window),
+            Err(VMError::MemoryOutOfBounds)
+        ));
+        // The heap holds exactly HEAP_MAX_SIZE bytes.
+        let mut mem = Memory::new();
+        assert_eq!(mem.alloc(Memory::HEAP_MAX_SIZE), Ok(Memory::HEAP_START));
+        assert!(matches!(mem.alloc(1), Err(VMError::OutOfMemory)));
+        assert!(matches!(mem.grow_heap(1), Err(VMError::OutOfMemory)));
+        let mut mem = Memory::new();
+        assert!(matches!(
+            mem.alloc(Memory::HEAP_MAX_SIZE + 1),
+            Err(VMError::OutOfMemory)
+        ));
+        // A governed heap limit below the ABI maximum is enforced the same way and cannot
+        // be raised above the ABI maximum or grown past by the guest.
+        let mut mem = Memory::new();
+        assert!(matches!(
+            mem.set_heap_max_limit(Memory::HEAP_MAX_SIZE + 1),
+            Err(VMError::OutOfMemory)
+        ));
+        mem.set_heap_max_limit(Memory::HEAP_MAX_SIZE)
+            .expect("the ABI maximum itself");
+        mem.set_heap_max_limit(4_096).expect("a governed limit");
+        assert_eq!(mem.alloc(4_096), Ok(Memory::HEAP_START));
+        assert!(matches!(mem.alloc(8), Err(VMError::OutOfMemory)));
+        assert!(matches!(mem.grow_heap(8), Err(VMError::OutOfMemory)));
+        // No guest region, nor all of them together, holds a 9,437,184-byte proof: large
+        // proofs reach a contract only through host-held attachment handles (I.2).
+        const {
+            assert!(
+                Memory::HEAP_MAX_SIZE
+                    + Memory::INPUT_SIZE
+                    + Memory::OUTPUT_SIZE
+                    + Memory::STACK_SIZE
+                    < 9_437_184
+            );
+        }
+    }
     #[test]
     fn input_write_aligned_rejects_invalid_alignment_and_overflow() {
         let mut mem = Memory::new();

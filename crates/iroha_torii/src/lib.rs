@@ -7745,7 +7745,13 @@ async fn handler_gov_contract_get(
         None,
     )
     .await?;
-    crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
+    let owner = crate::history_producer::HistoryProducerOwner::authentication_read(&app)?;
+    crate::gov::handle_gov_contract_get(
+        app.state.clone(),
+        contract_address,
+        owner.allocation_context(),
+    )
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_ministry_agenda_proposal_draft(
@@ -42865,44 +42871,6 @@ pub enum Error {
     /// Torii server terminated with an error
     FailedExit,
 }
-fn kagemusha_reject_code_from_message(message: &str) -> Option<&str> {
-    use iroha_data_model::kagemusha::KAGEMUSHA_V1_REJECTION_REASON_PREFIX;
-    let start = message.find(KAGEMUSHA_V1_REJECTION_REASON_PREFIX)?;
-    let rest = &message[start + KAGEMUSHA_V1_REJECTION_REASON_PREFIX.len()..];
-    let (label, _) = rest.split_once(':')?;
-    if label.is_empty() { None } else { Some(label) }
-}
-fn kagemusha_reject_code_from_query_fail(
-    fail: &iroha_data_model::query::error::QueryExecutionFail,
-) -> Option<&str> {
-    use iroha_data_model::query::error::QueryExecutionFail as Q;
-    match fail {
-        Q::Conversion(message) => kagemusha_reject_code_from_message(message),
-        _ => None,
-    }
-}
-fn kagemusha_reject_code_from_instruction_fail(
-    fail: &iroha_data_model::isi::error::InstructionExecutionError,
-) -> Option<&str> {
-    use iroha_data_model::isi::error::InstructionExecutionError as I;
-    match fail {
-        I::Conversion(message) => kagemusha_reject_code_from_message(message),
-        I::InvariantViolation(message) => kagemusha_reject_code_from_message(message.as_ref()),
-        I::Query(fail) => kagemusha_reject_code_from_query_fail(fail),
-        _ => None,
-    }
-}
-fn kagemusha_reject_code_from_validation_fail(
-    fail: &iroha_data_model::ValidationFail,
-) -> Option<&str> {
-    use iroha_data_model::ValidationFail as V;
-    match fail {
-        V::NotPermitted(message) => kagemusha_reject_code_from_message(message),
-        V::QueryFailed(fail) => kagemusha_reject_code_from_query_fail(fail),
-        V::InstructionFailed(fail) => kagemusha_reject_code_from_instruction_fail(fail),
-        _ => None,
-    }
-}
 fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
     use iroha_data_model::{
         ValidationFail as V, isi::error::InstructionExecutionError as I,
@@ -42959,15 +42927,12 @@ impl IntoResponse for Error {
                         format,
                     );
                 }
-                let kagemusha_reason =
-                    kagemusha_reject_code_from_validation_fail(&err).map(str::to_owned);
                 let axt = match &err {
                     iroha_data_model::ValidationFail::AxtReject(ctx) => Some(ctx.clone()),
                     _ => None,
                 };
                 let mut envelope = public_validation_fail_envelope(&err, status);
                 let mut details = envelope.details.take().unwrap_or_default();
-                details.reject_code = kagemusha_reason.clone();
                 details.axt = axt.as_ref().map(|ctx| AxtErrorDetails {
                     code: Some(ctx.reason.code().to_owned()),
                     reason: Some(ctx.reason.label().to_owned()),
@@ -43023,13 +42988,6 @@ impl IntoResponse for Error {
                                 HeaderName::from_static("x-iroha-axt-next-handle-counter"),
                                 value,
                             );
-                        }
-                    }
-                }
-                if headers.get("x-iroha-reject-code").is_none() {
-                    if let Some(code) = kagemusha_reason {
-                        if let Ok(header) = HeaderValue::from_str(&code) {
-                            headers.insert(HeaderName::from_static("x-iroha-reject-code"), header);
                         }
                     }
                 }

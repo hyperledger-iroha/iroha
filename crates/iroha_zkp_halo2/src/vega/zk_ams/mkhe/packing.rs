@@ -1043,10 +1043,14 @@ pub fn zk_ams_t256_rotation_exponent_for_direction_v1(
         ZkAmsT256RotationDirectionV1::Forward => steps,
         ZkAmsT256RotationDirectionV1::Inverse => (slots - steps) % slots,
     };
-    u32::try_from(mod_pow_usize(
-        SLOT_GALOIS_GENERATOR_V1,
-        exponent_steps as usize,
-        2 * ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
+    let generator =
+        u64::try_from(SLOT_GALOIS_GENERATOR_V1).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    let cyclotomic_order = u64::try_from(2 * ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    u32::try_from(iroha_fhe::modular::mod_pow_u64(
+        generator,
+        u64::from(exponent_steps),
+        cyclotomic_order,
     ))
     .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
 }
@@ -2241,6 +2245,8 @@ fn inverse_cyclic_ntt(values: &mut [T256Fp2], root: T256Fp2) -> Result<(), ZkAms
     }
     Ok(())
 }
+/// Test-only reference; production takes modular exponentiation from `iroha_fhe`.
+#[cfg(test)]
 fn mod_pow_usize(mut base: usize, mut exponent: usize, modulus: usize) -> usize {
     let mut result = 1_usize;
     while exponent != 0 {

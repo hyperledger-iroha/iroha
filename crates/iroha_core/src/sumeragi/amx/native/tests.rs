@@ -1359,7 +1359,11 @@ fn original_authenticated_native_amx_mv_cell_refusal_keeps_original_cut_graph_an
     let budget = roots.participants[0].state().ivm_execution_budget();
     let retained_bytes = budget.reserved_bytes();
     let ordinary = norito::json::to_json(slot.get()).unwrap();
-    let original_leaf_start = ordinary.find("\"blocks\":").unwrap() + "\"blocks\":".len();
+    let original_leaf = "\"global_genesis\":";
+    let original_leaf_start = ordinary
+        .find(original_leaf)
+        .expect("native AMX retains the original global-genesis source leaf")
+        + original_leaf.len();
     for limit in [
         original_leaf_start,
         original_leaf_start + 1,

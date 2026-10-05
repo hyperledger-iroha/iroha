@@ -83,7 +83,34 @@ new patches follow the same default gates.
   `serde`/`serde_json` usage, ad-hoc AoS helpers, and retired non-Norito codec
   dependencies in workspace manifests (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_legacy_codec.sh`).
+  `scripts/check_no_legacy_codec.sh`). It also runs
+  `scripts/check_first_release_history.py`, which checks the
+  [first-release history and cutover](first_release_history_cutover.md)
+  inventory against the source: one wire version per history type, the listed
+  replay and rejection tests, the pinned history fixture, no compatibility
+  definition or alias in a history loader, no retired decoder identifier, every
+  retired store artifact refusal, and a concrete regeneration target per
+  incompatible-change surface. `--report` prints the open findings as
+  `path:line`; `--test-commands` prints the `cargo test` commands that run
+  exactly the listed tests. `make guards` also runs
+  `scripts/check_zk_x509_presentation_interval.py`, which checks the shared
+  zk-X509 interval vectors against an independent oracle and the
+  [presentation-interval](zk_x509_presentation_interval.md) site inventory
+  against the source; `--write` regenerates the vectors. The last guard is
+  `scripts/check_zk_resource_contract.py`, which checks the bounds, enforcement
+  sites, named tests, relations and scanned scopes of the unified
+  [resource contract](zk_resource_contract.json) against the source;
+  `--refresh` rewrites the recorded expressions, values and site counts from
+  the source and keeps every classification; `--propose` prints skeletons for
+  unlisted limits and writes nothing.
+- `make check-fhe-ownership` runs `scripts/check_fhe_ownership_map.py` and its
+  tests. The script checks `specs/fhe_ownership_inventory.json` against the
+  source: every file that names FHE, RAM-LFE or the RAM-LFE HKDF backend, one
+  owner per reusable ring-arithmetic primitive with its production callers, and
+  one owner for every function of the BFV, RAM-LFE and ZK-AMS owner files.
+  After changing a listed file run `make refresh-fhe-ownership`; it recomputes
+  the derived facts and leaves new files and functions for you to classify.
+  The pull-request workflow runs the same check.
 - **Proc-macro UI policy:** every proc-macro crate must ship a `trybuild`
   harness (`tests/ui.rs` with pass/fail globs) behind the `trybuild-tests`
   feature. Place happy-path samples under `tests/ui/pass`, rejection cases under

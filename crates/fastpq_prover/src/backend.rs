@@ -32,6 +32,9 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
 };
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
+/// Typed semantic AIR interface over the fixed q77 engine.
+#[path = "backend/air.rs"]
+pub mod air;
 #[path = "backend/air_degree.rs"]
 mod air_degree;
 #[path = "backend/air_expression.rs"]

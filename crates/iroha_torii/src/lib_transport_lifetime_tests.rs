@@ -1229,7 +1229,7 @@ mod preauth_connection_lifetime_tests {
                 norito::json::from_slice(&body).expect("decode typed error response");
             envelope.code().to_owned()
         }
-        let mut app = app_with_scheme_cap("http");
+        let mut app = app_with_scheme_cap("norito_rpc");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
         state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
@@ -1281,9 +1281,9 @@ mod preauth_connection_lifetime_tests {
                 request
             };
         let occupying_guard = app
-            .acquire_preauth(None, ConnScheme::Http)
+            .acquire_preauth(None, ConnScheme::NoritoRpc)
             .await
-            .expect("occupy the HTTP pre-auth slot");
+            .expect("occupy the transaction pre-auth slot");
         let at_capacity = router
             .clone()
             .oneshot(transaction_request(

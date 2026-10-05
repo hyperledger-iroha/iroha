@@ -716,6 +716,9 @@ mod tests {
         // The consumed source and all prover-owned private coefficients are gone.
         let verifier = VerifyOnly(&air);
         let limits = deep_fixture::verification_limits();
+        // The engine takes the facade segment policy as its typed limits.
+        let engine_limits =
+            |segment| crate::air::q77::VerifierLimits::for_segment(segment, 32 * 1024 * 1024);
         assert!(encoded.len() <= limits.max_proof_bytes);
         assert!(encoded.len() <= deep_proof::PROOF_BYTE_TARGET);
         assert!(encoded.len() <= VerifyLimits::default().max_proof_bytes);
@@ -724,7 +727,7 @@ mod tests {
             ..limits
         };
         assert!(matches!(
-            deep_engine::verify_committed(&verifier, &encoded, low, 32 * 1024 * 1024),
+            deep_engine::verify_committed(&verifier, &encoded, engine_limits(low)),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
                 ..
@@ -732,7 +735,7 @@ mod tests {
         ));
         let verifying_started = std::time::Instant::now();
         let receipt =
-            deep_engine::verify_committed(&verifier, &encoded, limits, 32 * 1024 * 1024).unwrap();
+            deep_engine::verify_committed(&verifier, &encoded, engine_limits(limits)).unwrap();
         let work = receipt.work();
         assert_eq!(work.air_evaluations, 1);
         assert_eq!(work.verifier_messages, 10);
@@ -785,8 +788,7 @@ mod tests {
         .unwrap();
         let changed_air = changed_batch.segment(0).unwrap();
         assert!(
-            deep_engine::verify_committed(&changed_air, &encoded, limits, 32 * 1024 * 1024)
-                .is_err()
+            deep_engine::verify_committed(&changed_air, &encoded, engine_limits(limits)).is_err()
         );
         assert!(
             super::super::compact_public_api::verify_transfer_with_allocation(

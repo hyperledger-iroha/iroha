@@ -623,9 +623,8 @@ fn compiler_emits_self_describing_contract_artifact() {
     assert_eq!(interface.seiyaku_name, "Demo");
     assert_eq!(manifest.seiyaku_name.as_deref(), Some("Demo"));
     let verified = ivm::verify_contract_artifact(&bytes).expect("verify artifact");
-    assert_eq!(
-        verified.manifest.signature_payload(),
-        manifest.signature_payload(),
+    assert!(
+        verified.manifest.same_signed_content(&manifest),
         "compiler manifest must match the embedded contract interface",
     );
 }
@@ -722,7 +721,7 @@ fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
     );
     assert_eq!(
         hex::encode(admitted.code_hash.as_ref()),
-        "984f729f8c465b6d7fb6b62bf9ff13c882f7fbb18b76cad922c3c35a63ded6df"
+        "8ea032a639a92b0c46b366b93a8207699e3253bf4c14fd159c6f1f5261b928a9"
     );
 }
 #[test]
@@ -736,9 +735,10 @@ fn verified_code_hash_binds_execution_header() {
     let changed_cycles_verified = ivm::verify_contract_artifact(&changed_cycles)
         .expect("verify artifact with changed max_cycles");
     assert_ne!(changed_cycles_verified.code_hash, original_hash);
-    assert_ne!(
-        changed_cycles_verified.manifest.signature_payload(),
-        original_verified.manifest.signature_payload(),
+    assert!(
+        !changed_cycles_verified
+            .manifest
+            .same_signed_content(&original_verified.manifest),
         "manifest signatures must bind max_cycles"
     );
     let mut changed_vector_length = original;

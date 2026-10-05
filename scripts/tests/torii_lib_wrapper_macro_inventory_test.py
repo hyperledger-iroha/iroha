@@ -271,8 +271,8 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
 }
 ROUTE_POLICY_DECLARATIONS_SHA256 = "c9cd5d54a3818e070e662a1406ee781198ed4ab41411acb583a8c475bdfae006"
 ROUTE_POLICY_NAMES = ('canonical_account_delete', 'canonical_account_get', 'canonical_account_proof_get', 'canonical_account_post', 'canonical_account_proof_post', 'canonical_signature_delete', 'canonical_signature_get', 'optional_canonical_signature_get', 'canonical_signature_post', 'canonical_signed_post', 'layered_canonical_account_post', 'layered_canonical_signature_get', 'layered_canonical_signature_post', 'layered_canonical_signed_post', 'layered_public_get', 'limited_canonical_account_get', 'limited_canonical_account_post', 'limited_canonical_signature_post', 'limited_optional_canonical_signature_post', 'limited_canonical_signed_post', 'limited_hardened_canonical_signature_get', 'limited_operator_get', 'limited_operator_post', 'limited_protocol_handshake_get', 'limited_protocol_handshake_post', 'limited_public_get', 'limited_unauthenticated_get', 'limited_public_post', 'private_root_owner_get', 'onboarding_get', 'onboarding_post', 'operator_credential_post', 'operator_delete', 'operator_get', 'operator_post', 'protocol_handshake_post', 'public_get', 'public_post', 'unauthenticated_any', 'unauthenticated_get')
-ROUTE_ROW_COUNT = 602
-ROUTE_TUPLE_SHA256 = "a9c1bd1e8a164da6072de456a0dfe22614ed8458c3dba1bd9d1b5f47aa7d6b23"
+ROUTE_ROW_COUNT = 593
+ROUTE_TUPLE_SHA256 = "58e1a609d8eefbd5a6f258da7e869b94dfdf3b6fcd0dfe57b433c6f1c1e92a29"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -1310,75 +1310,35 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 with self.assertRaises(GuardError):
                     validate_source(changed)
 
-    def test_universal_kagemusha_mounts_preserve_signed_wallet_read_policy(self) -> None:
-        """Reject feature gating, removal, or weakened authentication on required routes."""
-        rows = [row for row in _route_table_rows(self.source)
-                if row[2].startswith("route_catalog::kagemusha::")]
-        self.assertEqual([row[2].rsplit("::", 1)[1] for row in rows], [
-            "READINESS", "TOP_UP", "REDEEM", "OPERATION", "AUTHORITY_STATE",
-            "ORDINARY_WALLET_CURRENT",
-            "ORDINARY_MINT_ISSUER_PURPOSE", "ORDINARY_MINT_FINALIZED", "ORDINARY_MINT_CREDIT",
-        ])
-        self.assertTrue(all(row[0] == "always" for row in rows))
-        self.assertEqual(rows[-4], (
-            "always", "POST", "route_catalog::kagemusha::ORDINARY_WALLET_CURRENT",
-            "ordinary_wallet_current::handler",
-            "max(iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1)",
-            "handler:CanonicalAccountSignature",
-        ))
-        mount = "ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);"
-        for old, new in (
-            ("    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder)",
-             '    #[cfg(feature = "app_api")]\n    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder)'),
-            (mount, ""),
-            (mount, mount.replace("limited_canonical_signature_post", "limited_post", 1)),
-            (mount, mount.replace("ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1", "NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1", 1)),
-            (mount, mount.replace("ORDINARY_WALLET_CURRENT =>", "AUTHORITY_ORIGINALS =>", 1)),
-        ):
-            with self.subTest(target=old, changed=new):
-                self.assertEqual(self.source.count(old), 1)
-                changed = self.source.replace(old, new, 1)
-                self.assertNotEqual(changed, self.source)
-                with self.assertRaises(GuardError):
-                    validate_source(changed)
-
-    def test_mint_issuer_purpose_requires_exact_signed_post_limit_and_order(self) -> None:
-        """The new original-data reader preserves authentication, bounds and ordered ownership."""
-        expected = (
-            "always", "POST", "route_catalog::kagemusha::ORDINARY_MINT_ISSUER_PURPOSE",
-            "ordinary_mint_issuer_purpose::handler",
-            "max(iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1)",
-            "handler:CanonicalAccountSignature",
-        )
+    def test_ledger_original_carriers_require_exact_signed_limits_and_order(self) -> None:
+        """Reject changes to native carrier limits, methods, handlers and mounting order."""
         rows = _route_table_rows(self.source)
-        self.assertEqual(rows.count(expected), 1)
-        kagemusha = [row for row in rows if row[2].startswith("route_catalog::kagemusha::")]
-        self.assertEqual(kagemusha[-3], expected)
-        wallet = next(row for row in rows if row[2] == "route_catalog::kagemusha::ORDINARY_WALLET_CURRENT")
-        self.assertEqual(rows.index(expected), rows.index(wallet) + 1)
-        mount = "ORDINARY_MINT_ISSUER_PURPOSE => limited_canonical_signature_post(ordinary_mint_issuer_purpose::handler, iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1);"
+        names = next(row for row in rows if row[2] == "route_catalog::core::RESOURCE_NAMES_STATE")
+        originals = next(row for row in rows if row[2] == "route_catalog::core::AUTHORITY_ORIGINALS")
+        self.assertEqual(rows.index(originals), rows.index(names) + 1)
+        mount = "AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);"
         for changed in (
             "",
             mount + "\n            " + mount,
-            mount.replace("limited_canonical_signature_post", "limited_post", 1),
+            mount.replace("limited_canonical_signature_post", "limited_public_post", 1),
             mount.replace("limited_canonical_signature_post", "canonical_signature_get", 1),
-            mount.replace("ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1", "ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1", 1),
-            mount.replace("ORDINARY_MINT_ISSUER_PURPOSE =>", "ORDINARY_WALLET_CURRENT =>", 1),
-            mount.replace("ordinary_mint_issuer_purpose::handler", "ordinary_wallet_current::handler", 1),
+            mount.replace("authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1", "resource_names_state::NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1", 1),
+            mount.replace("AUTHORITY_ORIGINALS =>", "RESOURCE_NAMES_STATE =>", 1),
+            mount.replace("authority_originals::handler", "resource_names_state::handler", 1),
         ):
             with self.subTest(changed=changed):
                 self.assertEqual(self.source.count(mount), 1)
                 self.assertNotEqual(changed, mount)
                 with self.assertRaises(GuardError):
                     validate_source(self.source.replace(mount, changed, 1))
-        declaration = "    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder)"
+        declaration = "    fn add_policy_and_pipeline_routes(&self, builder: &mut RouterBuilder)"
         self.assertEqual(self.source.count(declaration), 1)
         with self.assertRaises(GuardError):
             validate_source(self.source.replace(declaration, '    #[cfg(feature = "app_api")]\n' + declaration, 1))
-        wallet_mount = "ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);"
-        self.assertEqual(self.source.count(wallet_mount), 1)
-        reordered = self.source.replace(wallet_mount, "__wallet_mint_swap__", 1)
-        reordered = reordered.replace(mount, wallet_mount, 1).replace("__wallet_mint_swap__", mount, 1)
+        names_mount = "RESOURCE_NAMES_STATE => canonical_signature_get(resource_names_state::handler);"
+        self.assertEqual(self.source.count(names_mount), 1)
+        reordered = self.source.replace(names_mount, "__ledger_carrier_swap__", 1)
+        reordered = reordered.replace(mount, names_mount, 1).replace("__ledger_carrier_swap__", mount, 1)
         self.assertNotEqual(reordered, self.source)
         with self.assertRaises(GuardError):
             validate_source(reordered)

@@ -1,7 +1,7 @@
 //! Native ownership, exact ordinary execution and closed component boundaries.
 
 use super::*;
-use crate::{IVM, TraceMode, execution_memory::ExecutionMemoryLease};
+use crate::{IVM, TraceMode, execution_memory::ExecutionMemoryLease, instruction::wide};
 use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::{
     cell::Cell,
@@ -121,6 +121,20 @@ fn actual_compiled_root_captures_staged_gas_store_initialization_return_and_padd
     assert_eq!(output.remaining_gas(), ordinary.remaining_gas());
     assert_eq!(output.cycles(), ordinary.get_cycle_count());
     assert_eq!(output.cycles(), 64);
+    // The straight-line root runs every compiled word once, from its entry
+    // through the protected return.
+    let entry_pc = output
+        .artifact()
+        .entrypoint_descriptor("main")
+        .unwrap()
+        .entry_pc;
+    let root_words = output
+        .artifact()
+        .decoded()
+        .iter()
+        .filter(|op| op.pc >= entry_pc)
+        .count();
+    assert_eq!(output.instructions(), root_words);
     // The compiler may emit a shorter equivalent root. Each native fetch must
     // still match the actual ordinary interpreter's instruction observation.
     assert!(!ordinary.trace_pcs().is_empty());
@@ -290,12 +304,22 @@ fn private_selector_arguments_unsupported_results_and_nonzk_profiles_are_closed_
 
 #[test]
 fn child_calls_are_local_component_refusal_and_do_not_change_ordinary_validity() {
+    // Kotodama moves a private helper with one call site into its caller.
+    // Two call sites keep `leaf` an ordinary protected child.
     let contract = contract(
-        // A private body with two live call sites cannot be moved into its sole
-        // caller. Check actual executed call opcodes before testing refusal.
         "seiyaku Child { fn leaf() { } view fn main() { leaf(); leaf(); } }",
         64,
     );
+    let child_calls = contract
+        .decoded()
+        .iter()
+        .filter(|op| match wide::opcode(op.inst) {
+            wide::control::JAL => wide::rd(op.inst) == 1,
+            wide::control::JALS => true,
+            _ => false,
+        })
+        .count();
+    assert_eq!(child_calls, 2, "both child call sites are retained");
     let mut ordinary = IVM::new(10_000);
     ordinary.load_prepared(&contract).unwrap();
     ordinary.select_entrypoint("main").unwrap();

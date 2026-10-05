@@ -13,8 +13,7 @@ use crate::{
         },
         profile::{
             ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1, ZK_X509_MAX_CHAIN_DEPTH_V1,
-            ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_MAX_SERIAL_BYTES_V1,
-            ZK_X509_MIN_CHAIN_DEPTH_V1,
+            ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_MAX_SERIAL_BYTES_V1, ZK_X509_MIN_CHAIN_DEPTH_V1,
         },
     },
     privacy_state::{
@@ -41,7 +40,8 @@ use iroha_data_model::{
         PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1, PrivacyPolicyDigestV1,
         PrivacyPolicyIdV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
         PrivacyStatementContextV1, PrivacyX509KeyUsageRequirementV1, PrivacyX509TrustStoreDigestV1,
-        PrivacyZkX509DisclosedAttributeV1, ZK_X509_MAX_CERTIFICATE_BYTES_V1,
+        PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509PresentationWindowV1,
+        ZK_X509_MAX_CERTIFICATE_BYTES_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
     },
 };
 use mv::storage::Storage;
@@ -56,40 +56,68 @@ const VALIDATION_TIME: u64 = CRL_THIS_UPDATE + 60;
 const CANONICAL_LEAF_SERIAL_V1: [u8; 1] = [2];
 const MAXIMUM_LEAF_SERIAL_V1: [u8; ZK_X509_MAX_SERIAL_BYTES_V1] =
     [0x40; ZK_X509_MAX_SERIAL_BYTES_V1];
+/// 2022-01-01T00:00:00Z through 2030-01-01T00:00:00Z: the validity period of
+/// every certificate in the fixed release KAT.
+const FIXED_CERTIFICATE_VALIDITY_V1: PrivacyZkX509CertificateValidityV1 =
+    PrivacyZkX509CertificateValidityV1::new(1_640_995_200, 1_893_456_000);
+/// How one fixture selects its public presentation window.
+///
+/// Both non-test variants go through the canonical interval definition: the
+/// window is either admitted by, or built from, the bounds derived from the
+/// signed certificates and CRL. No variant reads a certificate expiry directly;
+/// `WidestFrom` still ends at the earliest expiry when that is the binding
+/// bound (see `PrivacyZkX509PresentationBoundsV1::widest_window_from`).
+#[derive(Clone, Copy)]
+enum ZkX509ReleasePresentationV1 {
+    /// Fixed KAT window; the derived bounds must admit it.
+    Exact(PrivacyZkX509PresentationWindowV1),
+    /// Widest admissible window starting at this trusted second.
+    WidestFrom(u64),
+    /// Negative-control window installed without admission; the builder then
+    /// skips its final reference-relation self-check.
+    #[cfg(test)]
+    Unchecked(PrivacyZkX509PresentationWindowV1),
+}
 #[derive(Clone, Copy)]
 struct ZkX509ReleaseTimesV1 {
+    /// Leaf, intermediate and root validity; the intermediate is unused at
+    /// depth two.
+    certificate_validity: [PrivacyZkX509CertificateValidityV1; ZK_X509_MAX_CHAIN_DEPTH_V1],
     crl_this_update_unix_seconds: u64,
     crl_next_update_unix_seconds: u64,
-    presentation_not_before_unix_seconds: u64,
-    presentation_not_after_unix_seconds: u64,
+    presentation: ZkX509ReleasePresentationV1,
     revoked_at_unix_seconds: u64,
 }
 impl ZkX509ReleaseTimesV1 {
     const FIXED_V1: Self = Self {
+        certificate_validity: [FIXED_CERTIFICATE_VALIDITY_V1; ZK_X509_MAX_CHAIN_DEPTH_V1],
         crl_this_update_unix_seconds: CRL_THIS_UPDATE,
         crl_next_update_unix_seconds: CRL_NEXT_UPDATE,
-        presentation_not_before_unix_seconds: VALIDATION_TIME,
-        presentation_not_after_unix_seconds: VALIDATION_TIME + 60,
+        presentation: ZkX509ReleasePresentationV1::Exact(PrivacyZkX509PresentationWindowV1::new(
+            VALIDATION_TIME,
+            VALIDATION_TIME + 60,
+        )),
         revoked_at_unix_seconds: CRL_THIS_UPDATE - 86_400,
     };
     fn from_trusted_block_timestamp_ms_v1(
         trusted_block_timestamp_ms: u64,
     ) -> Result<Self, &'static str> {
         let trusted_unix_seconds = trusted_block_timestamp_ms / 1_000;
-        let presentation_not_after_unix_seconds = trusted_unix_seconds
+        // The CRL is signed at the trusted second and stays fresh for the
+        // complete age allowance; `nextUpdate` is exclusive, so it is the
+        // second after the last fresh one.
+        let crl_next_update_unix_seconds = trusted_unix_seconds
             .checked_add(ZK_X509_MAX_CRL_AGE_SECONDS_V1)
-            .ok_or("network release presentation window overflow")?;
-        let crl_next_update_unix_seconds = presentation_not_after_unix_seconds
-            .checked_add(1)
+            .and_then(|last_fresh_second| last_fresh_second.checked_add(1))
             .ok_or("network release CRL nextUpdate overflow")?;
         let revoked_at_unix_seconds = trusted_unix_seconds
             .checked_sub(1)
             .ok_or("network release CRL revocation time underflow")?;
         Ok(Self {
+            certificate_validity: [FIXED_CERTIFICATE_VALIDITY_V1; ZK_X509_MAX_CHAIN_DEPTH_V1],
             crl_this_update_unix_seconds: trusted_unix_seconds,
             crl_next_update_unix_seconds,
-            presentation_not_before_unix_seconds: trusted_unix_seconds,
-            presentation_not_after_unix_seconds,
+            presentation: ZkX509ReleasePresentationV1::WidestFrom(trusted_unix_seconds),
             revoked_at_unix_seconds,
         })
     }
@@ -408,6 +436,10 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
     } else {
         u32::from(maximum_shape)
     };
+    let [leaf_validity, intermediate_validity, root_validity] = times.certificate_validity;
+    let leaf_validity_der = validity_der_v1(leaf_validity)?;
+    let intermediate_validity_der = validity_der_v1(intermediate_validity)?;
+    let root_validity_der = validity_der_v1(root_validity)?;
     let root_der = certificate(
         &[1],
         &root_name,
@@ -417,6 +449,7 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
         &root_ski,
         &root_ski,
         Some(root_path_len),
+        &root_validity_der,
     );
     let intermediate_der = maximum_shape.then(|| {
         certificate(
@@ -428,6 +461,7 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
             &intermediate_ski,
             &root_ski,
             Some(if maximum_copy_shape { u32::MAX } else { 0 }),
+            &intermediate_validity_der,
         )
     });
     let (leaf_issuer_name, leaf_issuer_key, leaf_issuer_ski) = if maximum_shape {
@@ -463,6 +497,7 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
             ca_path_len: None,
             extended_key_usages: &extended_key_usages,
         },
+        &leaf_validity_der,
     );
     let (crl_record_epoch, crl_number, previous_crl_record_digest) = match crl_lineage {
         ZkX509ReleaseCrlLineageV1::Origin => {
@@ -503,6 +538,29 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
     if parsed_crl.revoked_serials.len() != revoked_serials.len() {
         return Err("deterministic release CRL lost an entry");
     }
+    // The statement window comes from the canonical interval definition:
+    // bounds derived from every signed certificate and the CRL. The same
+    // DER-to-bounds helper is what a holder calls once X.5 ships the prover.
+    let derive_bounds = || {
+        derive_zk_x509_presentation_bounds_v1(&certificate_chain_der, &crl_der)
+            .map_err(|_| "deterministic release signed intervals share no presentation second")
+    };
+    let (presentation_window, self_check_relation) = match times.presentation {
+        ZkX509ReleasePresentationV1::Exact(window) => {
+            derive_bounds()?
+                .admit(window)
+                .map_err(|_| "deterministic release window is outside the signed intervals")?;
+            (window, true)
+        }
+        ZkX509ReleasePresentationV1::WidestFrom(not_before_unix_seconds) => (
+            derive_bounds()?
+                .widest_window_from(not_before_unix_seconds)
+                .map_err(|_| "deterministic release start is outside the signed intervals")?,
+            true,
+        ),
+        #[cfg(test)]
+        ZkX509ReleasePresentationV1::Unchecked(window) => (window, false),
+    };
     let root = parsed_chain
         .last()
         .ok_or("deterministic release chain is empty")?;
@@ -593,8 +651,8 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
                 attribute_digest: PrivacyAttributeDigestV1::new([0; 32]),
             })
             .collect(),
-        presentation_not_before_unix_seconds: times.presentation_not_before_unix_seconds,
-        presentation_not_after_unix_seconds: times.presentation_not_after_unix_seconds,
+        presentation_not_before_unix_seconds: presentation_window.not_before_unix_seconds,
+        presentation_not_after_unix_seconds: presentation_window.not_after_unix_seconds,
         wallet_account,
         wallet_challenge: PrivacyChallengeV1::new([0x68; 32]),
         certificate_nullifier: PrivacyNullifierV1::new([0; 32]),
@@ -637,17 +695,7 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
         );
         attribute_openings.push(opening);
     }
-    let ownership_challenge = derive_ownership_challenge_digest_v1(&statement)
-        .map_err(|_| "deterministic release ownership challenge failed")?;
-    let ownership_signature: P256Signature = leaf_key
-        .sign_prehash(&ownership_challenge)
-        .map_err(|_| "deterministic release ownership signature failed")?;
-    let ownership_signature = ownership_signature
-        .normalize_s()
-        .unwrap_or(ownership_signature);
-    if ownership_signature.normalize_s().is_some() {
-        return Err("deterministic release ownership signature is not low-S");
-    }
+    let ownership_signature = ownership_signature_v1(&leaf_key, &statement)?;
     let resource_shape = release_resource_shape_v1(
         &parsed_chain,
         &parsed_crl,
@@ -681,20 +729,22 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
         certificate_chain_der,
         crl_der,
         ca_membership_path,
-        wallet_ownership_signature_rs: ownership_signature.to_bytes().into(),
+        wallet_ownership_signature_rs: ownership_signature,
         attribute_openings,
     };
     let authoritative_state = authoritative_state_v1(trust_anchor, policy.clone(), crl)?;
-    validate_reference_relation_v1(
-        &statement,
-        ZkX509GovernanceV1 {
-            trust_anchor: &trust_anchor,
-            certificate_policy: &policy,
-            crl: &crl,
-        },
-        &witness,
-    )
-    .map_err(|_| "deterministic release relation failed")?;
+    if self_check_relation {
+        validate_reference_relation_v1(
+            &statement,
+            ZkX509GovernanceV1 {
+                trust_anchor: &trust_anchor,
+                certificate_policy: &policy,
+                crl: &crl,
+            },
+            &witness,
+        )
+        .map_err(|_| "deterministic release relation failed")?;
+    }
     Ok(ZkX509ReleaseFixtureV1 {
         statement,
         witness,
@@ -702,6 +752,85 @@ fn build_zk_x509_fixture_with_copy_capacity_v1(
         crl_entry_count: revoked_serials.len(),
         resource_shape,
     })
+}
+/// Low-S wallet-ownership signature over the statement-bound challenge.
+///
+/// The challenge commits to the complete statement, including its public
+/// presentation window.
+fn ownership_signature_v1(
+    leaf_key: &P256SigningKey,
+    statement: &IrohaZkX509StarkP256StatementV1,
+) -> Result<[u8; 64], &'static str> {
+    let ownership_challenge = derive_ownership_challenge_digest_v1(statement)
+        .map_err(|_| "deterministic release ownership challenge failed")?;
+    let ownership_signature: P256Signature = leaf_key
+        .sign_prehash(&ownership_challenge)
+        .map_err(|_| "deterministic release ownership signature failed")?;
+    let ownership_signature = ownership_signature
+        .normalize_s()
+        .unwrap_or(ownership_signature);
+    if ownership_signature.normalize_s().is_some() {
+        return Err("deterministic release ownership signature is not low-S");
+    }
+    Ok(ownership_signature.to_bytes().into())
+}
+/// Genuinely signed fixture with caller-chosen signed intervals.
+///
+/// `certificate_validity` is leaf-first: two entries select the ordinary
+/// two-certificate shape and three the maximum shape. The public window is
+/// installed without admission and the final relation self-check is skipped,
+/// so interval controls can present inadmissible windows to every verifier.
+#[cfg(test)]
+pub(crate) fn build_zk_x509_interval_fixture_v1(
+    certificate_validity: &[PrivacyZkX509CertificateValidityV1],
+    crl: PrivacyZkX509CrlUpdateIntervalV1,
+    window: PrivacyZkX509PresentationWindowV1,
+) -> Result<ZkX509ReleaseFixtureV1, &'static str> {
+    let (maximum_shape, certificate_validity) = match *certificate_validity {
+        [leaf, root] => (false, [leaf, FIXED_CERTIFICATE_VALIDITY_V1, root]),
+        [leaf, intermediate, root] => (true, [leaf, intermediate, root]),
+        _ => return Err("interval fixture path depth is outside the closed profile"),
+    };
+    let revoked_serials = if maximum_shape {
+        (0..ZK_X509_MAX_CRL_ENTRIES_V1)
+            .map(maximum_crl_serial_v1)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    build_zk_x509_fixture_v1(
+        reference_statement_context_v1(),
+        maximum_shape,
+        &revoked_serials,
+        ZkX509ReleaseTimesV1 {
+            certificate_validity,
+            crl_this_update_unix_seconds: crl.this_update_unix_seconds,
+            crl_next_update_unix_seconds: crl.next_update_unix_seconds,
+            presentation: ZkX509ReleasePresentationV1::Unchecked(window),
+            revoked_at_unix_seconds: crl
+                .this_update_unix_seconds
+                .checked_sub(86_400)
+                .ok_or("interval fixture CRL revocation time underflow")?,
+        },
+        fixed_release_wallet_account_v1()?,
+        &ZkX509ReleaseCrlLineageV1::Origin,
+    )
+}
+/// Rebind one fixture to another public window.
+///
+/// Every projection except the wallet-ownership challenge is independent of
+/// the window, so only that signature is recomputed with the fixture leaf key.
+#[cfg(test)]
+pub(crate) fn rewindow_zk_x509_fixture_v1(
+    fixture: &ZkX509ReleaseFixtureV1,
+    window: PrivacyZkX509PresentationWindowV1,
+) -> Result<(IrohaZkX509StarkP256StatementV1, ZkX509WitnessV1), &'static str> {
+    let mut statement = fixture.statement.clone();
+    statement.presentation_not_before_unix_seconds = window.not_before_unix_seconds;
+    statement.presentation_not_after_unix_seconds = window.not_after_unix_seconds;
+    let mut witness = fixture.witness.clone();
+    witness.wallet_ownership_signature_rs = ownership_signature_v1(&p256_key(2)?, &statement)?;
+    Ok((statement, witness))
 }
 fn maximum_crl_serial_v1(index: usize) -> Result<Vec<u8>, &'static str> {
     let suffix = u8::try_from(index)
@@ -871,6 +1000,7 @@ fn certificate(
     subject_key_identifier: &[u8],
     authority_key_identifier: &[u8],
     ca_path_len: Option<u32>,
+    validity_der: &[u8],
 ) -> Vec<u8> {
     certificate_with_extension_profile_v1(
         serial,
@@ -884,6 +1014,7 @@ fn certificate(
             ca_path_len,
             extended_key_usages: &[PrivacyX509ExtendedKeyUsageV1::ClientAuthentication],
         },
+        validity_der,
     )
 }
 
@@ -901,6 +1032,7 @@ fn certificate_with_extension_profile_v1(
     subject_key: &P256SigningKey,
     issuer_key: &P256SigningKey,
     extensions: FixtureCertificateExtensionsV1<'_>,
+    validity_der: &[u8],
 ) -> Vec<u8> {
     let FixtureCertificateExtensionsV1 {
         subject_key_identifier,
@@ -961,7 +1093,7 @@ fn certificate_with_extension_profile_v1(
         positive_integer(serial),
         ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
         issuer.to_vec(),
-        sequence(&[tlv(0x17, b"220101000000Z"), tlv(0x17, b"300101000000Z")]),
+        validity_der.to_vec(),
         subject.to_vec(),
         spki,
         tlv(0xa3, &sequence(&extensions)),
@@ -993,21 +1125,15 @@ fn crl(
         integer(1),
         ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
         issuer.to_vec(),
-        tlv(
-            0x17,
-            &utc_time_contents_v1(times.crl_this_update_unix_seconds)?,
-        ),
-        tlv(
-            0x17,
-            &utc_time_contents_v1(times.crl_next_update_unix_seconds)?,
-        ),
+        time_tlv_v1(times.crl_this_update_unix_seconds)?,
+        time_tlv_v1(times.crl_next_update_unix_seconds)?,
     ];
     if !revoked_serials.is_empty() {
-        let revoked_at = utc_time_contents_v1(times.revoked_at_unix_seconds)?;
+        let revoked_at = time_tlv_v1(times.revoked_at_unix_seconds)?;
         fields.push(sequence(
             &revoked_serials
                 .iter()
-                .map(|serial| sequence(&[positive_integer(serial), tlv(0x17, &revoked_at)]))
+                .map(|serial| sequence(&[positive_integer(serial), revoked_at.clone()]))
                 .collect::<Vec<_>>(),
         ));
     }
@@ -1020,28 +1146,35 @@ fn crl(
         bit_string(signature.to_der().as_bytes(), 0),
     ]))
 }
-fn utc_time_contents_v1(unix_seconds: u64) -> Result<[u8; 13], &'static str> {
+/// Encode one RFC 5280 `Validity` sequence.
+fn validity_der_v1(validity: PrivacyZkX509CertificateValidityV1) -> Result<Vec<u8>, &'static str> {
+    Ok(sequence(&[
+        time_tlv_v1(validity.not_before_unix_seconds())?,
+        time_tlv_v1(validity.not_after_unix_seconds())?,
+    ]))
+}
+/// Encode one RFC 5280 `Time`: `UTCTime` through 2049 and `GeneralizedTime`
+/// from 2050, exactly as the closed profile requires.
+fn time_tlv_v1(unix_seconds: u64) -> Result<Vec<u8>, &'static str> {
     let unix_seconds = i64::try_from(unix_seconds)
-        .map_err(|_| "release fixture UTCTime exceeds signed timestamp range")?;
+        .map_err(|_| "release fixture time exceeds signed timestamp range")?;
     let date_time = OffsetDateTime::from_unix_timestamp(unix_seconds)
-        .map_err(|_| "release fixture UTCTime is outside the supported calendar")?;
+        .map_err(|_| "release fixture time is outside the supported calendar")?;
     let year = date_time.year();
-    if !(1950..=2049).contains(&year) {
-        return Err("release fixture UTCTime is outside RFC 5280 UTCTime years");
-    }
+    let (tag, year_text) = match year {
+        1950..=2049 => (0x17, format!("{:02}", year.rem_euclid(100))),
+        2050..=9999 => (0x18, format!("{year:04}")),
+        _ => return Err("release fixture time is outside the RFC 5280 calendar"),
+    };
     let encoded = format!(
-        "{:02}{:02}{:02}{:02}{:02}{:02}Z",
-        year.rem_euclid(100),
+        "{year_text}{:02}{:02}{:02}{:02}{:02}Z",
         u8::from(date_time.month()),
         date_time.day(),
         date_time.hour(),
         date_time.minute(),
         date_time.second(),
     );
-    encoded
-        .into_bytes()
-        .try_into()
-        .map_err(|_| "release fixture UTCTime encoded to a noncanonical width")
+    Ok(tlv(tag, encoded.as_bytes()))
 }
 fn spki(key: &P256SigningKey) -> Vec<u8> {
     let point = key.verifying_key().to_encoded_point(false);
@@ -1186,6 +1319,7 @@ mod tests {
                     &root_ski,
                     &root_ski,
                     Some(path_len),
+                    &validity_der_v1(FIXED_CERTIFICATE_VALIDITY_V1).expect("fixed validity"),
                 );
                 let root_der = &witness.certificate_chain_der[depth - 1];
                 assert!(
@@ -1708,3 +1842,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "presentation_interval_tests.rs"]
+mod presentation_interval_tests;

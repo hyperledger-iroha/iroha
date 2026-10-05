@@ -754,6 +754,9 @@ seiyaku StaticMapAnalysis {
     }
     #[test]
     fn static_state_analysis_keeps_user_helper_access_incomplete() {
+        // Kotodama moves a private helper with one call site into its caller,
+        // which would leave a direct, provable write. Two call sites keep
+        // `hidden_write` behind an ordinary protected call.
         let source = r#"
 seiyaku HelperMapAnalysis {
   state StateMap<int, int> Counters;
@@ -768,6 +771,23 @@ seiyaku HelperMapAnalysis {
             .expect("compile helper-hidden StateMap access");
         let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
             .expect("prepare helper-hidden StateMap access");
+        let entry_pc = prepared
+            .entrypoint_descriptor("helper_write")
+            .expect("helper_write entrypoint")
+            .entry_pc;
+        let helper_calls = prepared
+            .decoded()
+            .iter()
+            .filter_map(direct_call_edges)
+            .map(|(call_target, _)| call_target)
+            .collect::<Vec<_>>();
+        assert_eq!(helper_calls.len(), 2, "both helper call sites are retained");
+        assert!(
+            helper_calls
+                .iter()
+                .all(|target| *target == helper_calls[0] && *target != entry_pc),
+            "the state write stays in one separately compiled helper"
+        );
         let analysis = analyze_prepared_static_state_accesses(
             &prepared,
             Some("helper_write"),

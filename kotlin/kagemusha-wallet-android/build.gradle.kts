@@ -29,9 +29,6 @@ android {
         getByName("test") {
             kotlin.srcDir(rootProject.file("test-support/src"))
         }
-        getByName("androidTest") {
-            assets.srcDir("../../fixtures/offline")
-        }
     }
 
     compileOptions {
@@ -107,9 +104,7 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
-    useJUnitPlatform {
-        excludeTags("host-native")
-    }
+    useJUnitPlatform()
     // The wallet custody backup test asserts the processed library manifest, not only its source.
     if (name == "testDebugUnitTest") {
         dependsOn("processDebugManifest")

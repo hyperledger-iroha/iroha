@@ -20,10 +20,21 @@ from that tree, then run the owner's `--check` mode against the repository.
 Compiler and admission-tool staging files remain private (mode `0600`); publication creates
 separate public fixture files (mode `0644`) without changing the caller's umask.
 
-Update the provenance and the SDK/IVM hash goldens together. Run the IVM
-`contract_artifact` suite and the SDK `contract_code_artifact` route tests on the
-same source before recording their results. Admission and exact-byte checks are
-required; a plausible hash alone is insufficient.
+For a scoped refresh of this fixture, select its exact `ivm_artifacts.tsv` row
+and call the owner's `build_and_validate` twice in separate staging directories.
+Use `compare_renderings`, `owner_manifest` and `publish_create_only` for the
+selected public artifact, retaining native admission and exact compiler-manifest
+comparison in both passes. This does not qualify the other mapped goldens.
+
+Update the provenance and the SDK/IVM hash goldens together. Run these current
+native test selections on the same source before recording their results:
+
+```sh
+cargo test --locked --offline -p ivm --test ivm_group_01 contract_artifact::
+cargo test --locked --offline -p iroha --lib contract_code_artifact
+```
+
+Admission and exact-byte checks are required; a plausible hash alone is insufficient.
 
 Build the two canonical producers without a node dependency. The admission tool
 is a development binary, so it must be selected with its `dev-tools` feature:

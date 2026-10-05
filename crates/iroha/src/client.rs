@@ -1,18 +1,5 @@
 //! End-point querying logic, including custom public and authenticated routes.
 mod authority_originals;
-mod ordinary_native;
-pub use ordinary_native::{
-    KagemushaAdmittedOrdinaryNativeInventoryV1, KagemushaNativeAccountCustodyV1,
-    KagemushaNativeClockCatchupRequiredV1, KagemushaNativeClockTransportV1,
-    KagemushaNativeCurrentWalletReadV1, KagemushaNativeEnrollmentRequestContextV1,
-    KagemushaNativeInstalledRuntimeAuthorityV1, KagemushaNativeOrdinaryInstalledContextV1,
-    KagemushaNativePreparedEnrollmentRequestV1, KagemushaNativeSignedEnrollmentHttpOriginalV1,
-    KagemushaOrdinaryNativeArtifactResolverV1, KagemushaOrdinaryNativeCurrentWalletOriginalV1,
-    KagemushaOrdinaryNativeInventoryV1, KagemushaOrdinaryNativeNodeTargetV1,
-    KagemushaOrdinaryNativeOriginalDescriptorV1,
-    assemble_kagemusha_ordinary_native_clock_selection_v1,
-    assemble_kagemusha_ordinary_native_inventory_v1,
-};
 pub(crate) mod bounded_async_response;
 #[cfg(test)]
 mod capability_test_support;
@@ -27830,7 +27817,7 @@ mod tests {
         let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
         assert_eq!(
             hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
-            "984f729f8c465b6d7fb6b62bf9ff13c882f7fbb18b76cad922c3c35a63ded6df",
+            "8ea032a639a92b0c46b366b93a8207699e3253bf4c14fd159c6f1f5261b928a9",
             "checked-in fixture must retain its native artifact identity"
         );
         artifact

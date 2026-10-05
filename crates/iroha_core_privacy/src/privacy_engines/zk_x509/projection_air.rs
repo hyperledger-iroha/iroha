@@ -33,7 +33,6 @@ use crate::privacy_engines::transparent_stark::{
 };
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyStatementV1, ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
-    ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1,
 };
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
@@ -1113,12 +1112,7 @@ fn validate_public_shape_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<(), ZkX509ProjectionAirErrorV1> {
     if statement.disclosed_attributes.len() > ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1
-        || statement.presentation_not_after_unix_seconds
-            <= statement.presentation_not_before_unix_seconds
-        || statement
-            .presentation_not_after_unix_seconds
-            .checked_sub(statement.presentation_not_before_unix_seconds)
-            .is_none_or(|seconds| seconds > ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1)
+        || statement.presentation_window().validate().is_err()
         || statement
             .disclosed_attributes
             .iter()

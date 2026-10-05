@@ -1118,7 +1118,7 @@ impl<F: PoseidonField> StepWitness<F> {
 
 #[cfg(test)]
 mod tests {
-    use ff::Field;
+    use ff::{Field, PrimeField};
     use iroha_pasta::{Fp, Fq};
 
     use super::*;

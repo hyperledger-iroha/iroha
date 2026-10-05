@@ -194,6 +194,8 @@ fn raw(value: BlockHeader) -> RawHeader {
         creation_time_ms: value.creation_time_ms,
         view_change_index: value.view_change_index,
         confidential_features: value.confidential_features.map(|d| RawDigest {
+            // Option<[u8; 32]> uses the installed framed-array layout.
+            // Keep the unchanged array serializer in this malformed-source producer.
             vk_set_hash: d.vk_set_hash.map(|bytes| RawBytes(bare(&bytes))),
             poseidon_params_id: d.poseidon_params_id,
             pedersen_params_id: d.pedersen_params_id,

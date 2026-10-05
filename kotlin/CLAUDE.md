@@ -42,8 +42,8 @@ selected through platform discovery or a process-global client:
 - **`sdk.address`** — account/asset address encoding (IH58, Bech32M)
 - **`sdk.tx`** — transaction building, signing, offline envelopes, norito adapters
 - **`sdk.client`** — Torii HTTP/WS/SSE client, JSON, transport, queue
-- **`sdk.offline`** — aggregate-balance KAGEMUSHA V1 models, canonical
-  `kgm1:` peer transports, and hardware lifecycle binding contracts
+- **`sdk.offline`** — KAGEMUSHA wallet V1 wire (`KagemushaWalletWireV1`,
+  `KagemushaP256Codec`) and the `IrohaPeer` QR/NFC/Nearby carriers
 - **`sdk.connect`** — connect protocol (BouncyCastle)
 - **`sdk.telemetry`** — telemetry sink, options, providers
 - **`sdk.multisig`**, **`sdk.subscriptions`**, **`sdk.sorafs`**, **`sdk.nexus`** — feature packages
@@ -55,9 +55,11 @@ Android-specific additions:
 - **`sdk.IrohaKeyManager`** — key provider orchestrator
 
 ### Module: `kagemusha-wallet-android` (AAR)
-KAGEMUSHA wallet orchestration and Android/JNI device lifecycle integration live here.
-Keep pure wire and cryptographic contracts in `core-jvm` and general Android client integration
-in `client-android`. Device qualification remains separate from JVM/native unit tests.
+The KAGEMUSHA wallet Android platform handle (`KagemushaWalletAndroid*V1`): the payment-key
+AndroidKeyStore adapter, the opaque platform handle whose private upcalls the Rust wallet adapter
+binds, and the custody backup/data-extraction rules. It has no JNI library or device lifecycle of
+its own. Keep pure wire and cryptographic contracts in `core-jvm` and general Android client
+integration in `client-android`.
 
 ### Module: `tools` (JVM application)
 
@@ -123,9 +125,9 @@ All mutable collections and byte arrays are copied on construction and access. U
   `native/cargo-target/armv7-diagnostic/` lane and writes raw ELF32 bytes plus
   `native/armv7-diagnostic/diagnostic-manifest.json` under that root's SDK module
   build directory. The report records ARM machine 40, actual native exports and
-  LOAD alignment; it grants neither release admission nor KAGEMUSHA device
-  qualification. The task supplies no generated JNI or AAR outputs and leaves
-  the admitted `arm64-v8a`/`x86_64` inventory unchanged. Configure the pinned
+  LOAD alignment; it grants no release admission. The task supplies no
+  generated JNI or AAR outputs and leaves the admitted `arm64-v8a`/`x86_64`
+  inventory unchanged. Configure the pinned
   toolchain and install its ARMv7 standard library before compiling. Run
   `:client-android:verifyArmv7DiagnosticContract` to check routing without a
   native build.

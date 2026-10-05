@@ -17065,6 +17065,100 @@ seiyaku OuterCaller {
             HostOutputLimits::new(7, 4096)
         );
     }
+    /// The committed output budget (`SmartContractParameters::max_output_items` and
+    /// `max_output_bytes`) is inclusive in both dimensions: queued instructions that use
+    /// exactly the budget are retained, and one item or one byte more is refused before it is
+    /// retained, with the attempted and permitted amounts.
+    #[test]
+    fn committed_output_budget_accepts_the_exact_limit_and_refuses_one_over() {
+        let instruction =
+            InstructionBox::from(Log::new(iroha_logger::Level::INFO, "bounded".to_owned()));
+        let host_with = |items: u64, bytes: u64| {
+            let mut host = CoreHost::new((*ALICE_ID).clone());
+            let mut parameters = SmartContractParameters::default();
+            parameters.max_output_items = NonZeroU64::new(items).expect("non-zero item limit");
+            parameters.max_output_bytes = NonZeroU64::new(bytes).expect("non-zero byte limit");
+            host.set_output_limits_from_parameters(parameters);
+            host
+        };
+        // The retained cost of one queued instruction, measured under the default budget.
+        let mut measure = CoreHost::new((*ALICE_ID).clone());
+        measure.queue_instruction(instruction.clone());
+        assert_eq!(measure.retained_output_items(), 1);
+        let cost = measure.retained_output_bytes();
+        assert!(
+            cost > 64,
+            "the encoded instruction and its retained overhead"
+        );
+
+        // Bytes: two instructions use the budget exactly; the third is one item's bytes over.
+        let mut host = host_with(8, 2 * cost);
+        host.queue_instruction(instruction.clone());
+        host.queue_instruction(instruction.clone());
+        assert_eq!(host.queued.len(), 2);
+        assert_eq!(host.retained_output_bytes(), 2 * cost);
+        assert_eq!(host.output_budget_violation(), None);
+        host.queue_instruction(instruction.clone());
+        assert_eq!(host.queued.len(), 2, "nothing over the budget is retained");
+        assert_eq!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::EncodedBytes {
+                attempted: 2 * cost + 1,
+                limit: 2 * cost,
+            }),
+            "the bounded writer stops at the first byte over the budget"
+        );
+        // One byte less budget cannot retain the second instruction.
+        let mut host = host_with(8, 2 * cost - 1);
+        host.queue_instruction(instruction.clone());
+        host.queue_instruction(instruction.clone());
+        assert_eq!(host.queued.len(), 1);
+        assert!(matches!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::EncodedBytes { limit, .. }) if limit == 2 * cost - 1
+        ));
+        // The aggregate counter itself is exact to the byte.
+        let mut host = host_with(8, 1_000);
+        assert!(host.try_reserve_output(1, 400));
+        assert!(host.try_reserve_output(1, 600));
+        assert_eq!(host.retained_output_bytes(), 1_000);
+        assert!(!host.try_reserve_output(1, 1));
+        assert_eq!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::EncodedBytes {
+                attempted: 1_001,
+                limit: 1_000,
+            })
+        );
+
+        // Items: the committed count is inclusive and the next item is refused.
+        let mut host = host_with(2, 1024 * 1024);
+        host.queue_instruction(instruction.clone());
+        host.queue_instruction(instruction.clone());
+        assert_eq!(host.queued.len(), 2);
+        assert_eq!(host.retained_output_items(), 2);
+        assert_eq!(host.output_budget_violation(), None);
+        host.queue_instruction(instruction);
+        assert_eq!(host.queued.len(), 2);
+        assert_eq!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::ItemCount {
+                attempted: 3,
+                limit: 2,
+            })
+        );
+        // The violation is sticky and surfaces to the guest as a deterministic VM error.
+        assert!(!host.try_reserve_output(0, 0));
+        assert_eq!(
+            host.output_budget_violation()
+                .map(HostOutputBudgetViolation::into_vm_error),
+            Some(ivm::VMError::HostOutputBudgetExceeded {
+                resource: ivm::HostOutputResource::Items,
+                attempted: 3,
+                limit: 2,
+            })
+        );
+    }
     #[test]
     fn bounded_host_stops_unique_durable_state_growth_before_insert() {
         let authority = (*ALICE_ID).clone();

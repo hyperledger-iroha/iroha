@@ -176,7 +176,7 @@ fn explicit_decoder_honors_stricter_outer_field_and_allocation_budgets() {
 }
 
 #[test]
-fn builder_enforces_indexes_immediates_outputs_depth_and_capacity() {
+fn builder_enforces_indexes_immediates_outputs_and_capacity_and_leaves_rank_to_classes() {
     use HiddenRamFheInstruction::*;
     for instruction in [
         LoadInput(0, 64),
@@ -200,10 +200,22 @@ fn builder_enforces_indexes_immediates_outputs_depth_and_capacity() {
     assert!(build(&[]).is_err());
     assert!(build(&[LoadConst(0, 1)]).is_err());
     assert!(build(&[Output(0); 65]).is_err());
+    // Rank is a class limit, not a tape-owner limit: the owner admits the
+    // tape, `bounded.v1` and the diagnostic evaluator reject it, and
+    // `refresh.v1` admits it with one refresh.
     let mut deep = vec![LoadConst(0, 1)];
     deep.extend([Mul(0, 0, 0); 17]);
     deep.push(Output(0));
-    assert!(build(&deep).is_err());
+    let deep = build(&deep).unwrap();
+    assert!(crate::validate_hidden_ram_fhe_program(&deep).is_err());
+    assert!(crate::RamLfeClassV1::Bounded.membership(&deep).is_err());
+    assert_eq!(
+        crate::RamLfeClassV1::Refresh
+            .membership(&deep)
+            .unwrap()
+            .refresh_count(),
+        1
+    );
     let mut builder = HiddenRamFheProgram::builder().unwrap();
     assert_eq!(
         format!("{builder:?}"),
@@ -469,4 +481,49 @@ fn instruction_codec_rejects_unknown_tags_indexes_and_unused_words() {
         assert!(decode_instruction(&bytes).is_err());
     }
     assert!(decode_instruction(&[0; BYTES_PER_INSTRUCTION - 1]).is_err());
+}
+
+#[test]
+fn decoder_reserves_exactly_the_tape_and_shared_owner() {
+    use norito::core::{DecodeLimits, with_decode_limits_scope};
+    // Structural validation allocates nothing, so one decoded program charges
+    // the fixed tape and the shared owner with its two reference counts.
+    assert_eq!(
+        DECODE_ALLOCATION_BYTES,
+        MAX_TAPE_BYTES + std::mem::size_of::<Program>() + 2 * std::mem::size_of::<usize>()
+    );
+    let program = default_bfv_programmed_hidden_program();
+    let encoded = program.to_bytes().unwrap();
+    let decode = |allocation: usize| {
+        with_decode_limits_scope(
+            DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64),
+            || HiddenRamFheProgram::from_bytes(&encoded),
+        )
+    };
+    assert_eq!(decode(DECODE_ALLOCATION_BYTES).unwrap(), program);
+    assert!(decode(DECODE_ALLOCATION_BYTES - 1).is_err());
+}
+
+#[test]
+fn owner_admits_tapes_beyond_the_bounded_class_and_the_diagnostic_validator_refuses_them() {
+    use HiddenRamFheInstruction::*;
+    // Rank 17 is structurally valid: the owner builds, encodes and decodes it.
+    let mut tape = vec![LoadInput(0, 1)];
+    tape.extend([Mul(0, 0, 0); 17]);
+    tape.push(Output(0));
+    let deep = build(&tape).unwrap();
+    let encoded = deep.to_bytes().unwrap();
+    assert_eq!(HiddenRamFheProgram::from_bytes(&encoded).unwrap(), deep);
+    let literal = format!("0x{}", hex::encode(&*encoded));
+    assert_eq!(literal.parse::<HiddenRamFheProgram>().unwrap(), deep);
+    // A consumer that needs the diagnostic evaluator's class asks for it.
+    let error = crate::validate_hidden_ram_fhe_program(&deep).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("instruction 17 exceeds the RAM-FHE multiplicative-depth budget 16")
+    );
+    assert!(
+        crate::validate_hidden_ram_fhe_program(&default_bfv_programmed_hidden_program()).is_ok()
+    );
 }

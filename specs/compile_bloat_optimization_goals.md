@@ -25,19 +25,20 @@ committed-state reads and authenticated authority. Thin executables own build
 metadata. Shared operation journaling has one owner consumed directly by Wallet,
 SCCP, services and daemon, with signing and finality retained by consumers.
 
-The current manifest inventory contains 127 source manifests and 121 workspace
-members, with the inactive Wayland patch protected. On the current recorded
-manifest cut, all 72 source-cost measurements match exactly; all 21 locked offline
-boundaries, feature hygiene, the legacy-codec guard and 309 checker controls pass.
+The merged manifest inventory contains 129 source manifests and 123 workspace
+members, with the inactive Wayland patch protected. The source-cost ratchet
+matches all 72 measurements exactly. Recorded locked offline dependency boundary,
+feature hygiene, legacy-codec and checker-control passes retain their input cuts.
 Shipping Oracle denials and the sole aggregate-model test exception remain intact.
 The reviewed ratchet includes the model’s live Pasta field/hash dependency,
 direct allocation-owner dependencies and the proof crate’s development-only
 timing dependency. The daemon’s unused direct Sumeragi edge is removed; Core
-retains consensus ownership. Later Model/Torii repairs leave this graph unchanged.
-The vendor Tokio test feature refreshes the manifest fingerprint with every cost
-limit unchanged. Resolved metadata requires canonical `deps`; malformed entries
-are rejected instead of inferring an empty or alternate graph.
+retains consensus ownership. Resolved metadata requires canonical `deps`;
+malformed entries are rejected instead of inferring an empty or alternate graph.
 Native qualification and requalification of changed selected inputs remain required.
+SDK Native custody and genuine production proving remain mandatory even with
+SDK defaults disabled; assembly and admission tools require explicit `dev-tools`
+selection under the unchanged 24-default ceiling.
 
 The compiler fixture seal records 308 includes and 616 test names, with all
 43 source-reader controls passing on their finite input cut. Foundation CI
@@ -57,8 +58,8 @@ artifact scope.
 All 52 previously failed ordinary Privacy cases remain ordinary tests. They
 must pass in the current harness, followed by its complete unfiltered ordinary
 suite with the original ignores retained. A prepared runtime schedule, source
-inventory or successful focused subset does not satisfy O2. The other chat's
-full Core run and its failure repairs own Core-wide qualification.
+inventory or successful focused subset does not satisfy O2. Core-wide failures
+and their repairs require separate current-source qualification.
 
 The September 27 baseline checked `irohad`, `iroha_cli` and `iroha_kagami`
 without incremental compilation after a data-model edit: 526 seconds overall,

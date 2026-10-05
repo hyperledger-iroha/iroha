@@ -36203,6 +36203,8 @@ mod tx_query_filter_tests {
 #[cfg(all(test, feature = "app_api"))]
 mod explorer_lookup_tests {
     use super::*;
+    use super::sse_stream_tests::next_sse_chunk;
+    use tokio::time::timeout;
     use http_body_util::BodyExt as _;
     use iroha_core::{
         query::store::LiveQueryStore,
@@ -36217,6 +36219,15 @@ mod explorer_lookup_tests {
         sync::Arc,
         time::Duration,
     };
+    /// Poll synchronous detail production entirely inside the admitted native owner.
+    fn admitted_explorer_detail(
+        future: impl std::future::Future<Output = Result<AxResponse, Error>>,
+    ) -> Result<AxResponse, Error> {
+        use futures::FutureExt as _;
+        crate::history_producer::HistoryProducerOwner::for_test().scope(|| {
+            future.now_or_never().expect("detail production remains synchronous")
+        })
+    }
     fn checked_explorer_lookup_keypair(
         seed: u8,
         algorithm: Algorithm,
@@ -36294,9 +36305,22 @@ mod explorer_lookup_tests {
         route_plans: Option<Vec<Vec<(LaneId, DataSpaceId)>>>,
         creation_times_ms: Option<Vec<u64>>,
     ) -> (iroha_core::sumeragi::test_chain::CertifiedTestChain, Vec<HashOf<TransactionEntrypoint>>) {
+        let authority_indices = (0..executables.len()).collect();
+        build_chain_with_selected_authorities(
+            executables, route_plans, creation_times_ms, authority_indices,
+        )
+    }
+    fn build_chain_with_selected_authorities(
+        executables: Vec<dm::Executable>,
+        route_plans: Option<Vec<Vec<(LaneId, DataSpaceId)>>>,
+        creation_times_ms: Option<Vec<u64>>,
+        authority_indices: Vec<usize>,
+    ) -> (iroha_core::sumeragi::test_chain::CertifiedTestChain, Vec<HashOf<TransactionEntrypoint>>) {
         use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::sumeragi_lanes::{SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute};
-        let keys = (0..executables.len()).map(|index| {
+        assert_eq!(authority_indices.len(), executables.len());
+        let authority_count = route_plans.as_ref().map_or(executables.len(), Vec::len);
+        let keys = (0..authority_count).map(|index| {
             checked_explorer_lookup_keypair(u8::try_from(0x20 + index).unwrap(), Algorithm::Ed25519, "explorer input authority")
         }).collect::<Vec<_>>();
         let accounts = keys.iter().map(|key| {
@@ -36341,7 +36365,8 @@ mod explorer_lookup_tests {
         let creation_times_ms = creation_times_ms.unwrap_or_else(|| (0..executables.len()).map(|index| 1_710_000_000_000 + index as u64).collect());
         assert_eq!(creation_times_ms.len(), executables.len());
         let mut hashes = Vec::new();
-        let txs = executables.into_iter().zip(creation_times_ms).zip(keys).map(|((executable, time), key)| {
+        let txs = executables.into_iter().zip(creation_times_ms).zip(authority_indices).map(|((executable, time), authority_index)| {
+            let key = &keys[authority_index];
             let gas_limit = executable.requires_transaction_gas_limit().then(|| NonZeroU64::new(10_000).unwrap());
             let mut builder = dm::TransactionBuilder::new(chain.network_id(), dm::AccountId::new(key.public_key().clone()), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), gas_limit));
             builder.set_creation_time(Duration::from_millis(time));
@@ -36667,6 +36692,342 @@ mod explorer_lookup_tests {
         assert_eq!(globally_listed["circulating_quantity"], global_json["circulating_quantity"]);
     }
 
+    /// Decode one successful Explorer detail response after checking its status and media type.
+    async fn explorer_detail_json(response: AxResponse) -> Value {
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("detail body")
+            .to_bytes();
+        norito::json::from_slice(&body).expect("detail JSON")
+    }
+
+    routing_test! { async governance_supply_enrichment_lists_locked_and_circulating_for_a_global_reader
+        let (owner_id, _) = checked_explorer_lookup_account(
+            0x1a,
+            "derive supply enrichment owner fixture key",
+        );
+        let (escrow_id, _) = checked_explorer_lookup_account(
+            0x19,
+            "derive supply enrichment escrow fixture key",
+        );
+        let domain_id = DomainId::try_new("treasury", "universal").expect("supply domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "vote".parse().expect("voting asset name"),
+        );
+        // Initial issuance is the sum of the balances: 60 circulating and 40 in escrow.
+        let mut world = World::with_assets(
+            [dm::Domain::new(domain_id.clone()).build(&owner_id)],
+            [
+                dm::Account::new(owner_id.clone()).build(&owner_id),
+                dm::Account::new(escrow_id.clone()).build(&owner_id),
+            ],
+            [dm::AssetDefinition::numeric(
+                definition_id.clone(),
+                "Governance vote",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id),
+            )
+            .build(&owner_id)],
+            [
+                dm::Asset::new(
+                    dm::AssetId::new(definition_id.clone(), owner_id),
+                    iroha_primitives::numeric::Quantity::from(60_u32),
+                ),
+                dm::Asset::new(
+                    dm::AssetId::new(definition_id.clone(), escrow_id.clone()),
+                    iroha_primitives::numeric::Quantity::from(40_u32),
+                ),
+            ],
+            [],
+        );
+        crate::test_utils::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
+        let mut state = State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus::default(),
+            LiveQueryStore::start_test(),
+        );
+        state.gov.voting_asset_id = definition_id.clone();
+        state.gov.bond_escrow_account = escrow_id;
+        let state = Arc::new(state);
+        let list = handle_v1_explorer_asset_definitions(
+            state,
+            DataspaceReadVisibility::all_for_tests(),
+            crate::explorer::ExplorerCursorQuery {
+                cursor: None,
+                limit: 10,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("global voting asset definition list");
+        let list_json = explorer_detail_json(list).await;
+        let items = list_json["items"].as_array().expect("definition items");
+        assert_eq!(items.len(), 1);
+        let listed = &items[0];
+        assert_eq!(
+            listed["id"].as_str(),
+            Some(definition_id.to_string().as_str())
+        );
+        // The DTO borrows the committed escrow balance and derives circulating supply
+        // while the same World view and response owner remain live.
+        assert_eq!(listed["total_quantity"].as_str(), Some("100"));
+        assert_eq!(listed["locked_quantity"].as_str(), Some("40"));
+        assert_eq!(listed["circulating_quantity"].as_str(), Some("60"));
+    }
+
+    routing_test! { async explorer_owned_response_equals_json_body_and_admits_world_borrows
+        use iroha_data_model::{
+            common::{Owned, Ref},
+            rwa::{RwaControlPolicy, RwaData, RwaId},
+        };
+
+        // An owned payload gets exactly the status, media type and bytes of `JsonBody`.
+        let owned = vec![1_u32, 2, 3];
+        let expected = JsonBody(owned.clone()).into_response();
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let actual = owner.json(&owned).expect("owned detail payload");
+        assert_eq!(actual.status(), expected.status());
+        assert_eq!(
+            actual.headers().get(header::CONTENT_TYPE),
+            expected.headers().get(header::CONTENT_TYPE)
+        );
+        assert_eq!(
+            actual
+                .into_body()
+                .collect()
+                .await
+                .expect("actual body")
+                .to_bytes(),
+            expected
+                .into_body()
+                .collect()
+                .await
+                .expect("expected body")
+                .to_bytes()
+        );
+
+        // An RWA record borrows its identifier and stored value, which `JsonBody` cannot carry.
+        let (owner_id, _) =
+            checked_explorer_lookup_account(0x1c, "derive RWA detail fixture key");
+        let id = RwaId::generated(
+            DomainId::try_new("vault", "universal").expect("RWA domain"),
+            iroha_crypto::Hash::prehashed([0x31; 32]),
+        );
+        let value = Owned::new(RwaData {
+            quantity: iroha_primitives::numeric::Quantity::from(7_u32),
+            spec: iroha_primitives::numeric::NumericSpec::default(),
+            primary_reference: "https://example.org/certificate".to_owned(),
+            status: None,
+            metadata: Default::default(),
+            parents: Vec::new(),
+            controls: RwaControlPolicy::default(),
+            owned_by: owner_id.clone(),
+            is_frozen: false,
+            held_quantity: iroha_primitives::numeric::Quantity::from(2_u32),
+        });
+        let dto = crate::explorer::ExplorerRwaDto::from_entry(Ref::new(&id, &value));
+        let rwa = explorer_detail_json(
+            owner.json(&dto).expect("borrowed RWA detail"),
+        )
+        .await;
+        assert_eq!(rwa["id"].as_str(), Some(id.to_string().as_str()));
+        assert_eq!(
+            rwa["owned_by"].as_str(),
+            Some(owner_id.to_string().as_str())
+        );
+        assert_eq!(rwa["quantity"].as_str(), Some("7"));
+        assert_eq!(rwa["held_quantity"].as_str(), Some("2"));
+    }
+
+    routing_test! { async explorer_detail_handlers_encode_records_borrowed_from_the_world
+        let (owner_id, _) = checked_explorer_lookup_account(
+            0x1b,
+            "derive explorer detail owner fixture key",
+        );
+        let domain_id = DomainId::try_new("gallery", "universal").expect("detail domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("detail asset name"),
+        );
+        let asset_id = dm::AssetId::new(definition_id.clone(), owner_id.clone());
+        let nft_id = dm::NftId::of(
+            domain_id.clone(),
+            "portrait".parse().expect("detail NFT name"),
+        );
+        let mut content = iroha_model_base::metadata::Metadata::default();
+        content.insert(
+            "artist".parse().expect("detail metadata key"),
+            Value::String("Alice".into()),
+        );
+        let mut world = World::with_assets(
+            [dm::Domain::new(domain_id.clone()).build(&owner_id)],
+            [dm::Account::new(owner_id.clone()).build(&owner_id)],
+            [dm::AssetDefinition::numeric(
+                definition_id.clone(),
+                "Rose",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            )
+            .build(&owner_id)],
+            [dm::Asset::new(
+                asset_id.clone(),
+                iroha_primitives::numeric::Quantity::from(42_u32),
+            )],
+            [dm::Nft::new(nft_id.clone(), content).build(&owner_id)],
+        );
+        crate::test_utils::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
+        let state = Arc::new(State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus::default(),
+            LiveQueryStore::start_test(),
+        ));
+        let all = DataspaceReadVisibility::all_for_tests();
+
+        let account = explorer_detail_json(
+            admitted_explorer_detail(handle_v1_explorer_account_detail(
+                state.clone(), all.clone(), owner_id.clone(),
+            ))
+                .expect("account detail"),
+        )
+        .await;
+        assert_eq!(account["id"].as_str(), Some(owner_id.to_string().as_str()));
+        assert_eq!(account["owned_domains"].as_u64(), Some(1));
+        assert_eq!(account["owned_assets"].as_u64(), Some(1));
+        assert_eq!(account["owned_nfts"].as_u64(), Some(1));
+
+        let domain = explorer_detail_json(
+            admitted_explorer_detail(handle_v1_explorer_domain_detail(
+                state.clone(), all.clone(), domain_id.clone(),
+            ))
+                .expect("domain detail"),
+        )
+        .await;
+        assert_eq!(domain["id"].as_str(), Some(domain_id.to_string().as_str()));
+        assert_eq!(
+            domain["owned_by"].as_str(),
+            Some(owner_id.to_string().as_str())
+        );
+        assert_eq!(domain["nfts"].as_u64(), Some(1));
+
+        let asset = explorer_detail_json(
+            admitted_explorer_detail(handle_v1_explorer_asset_detail(
+                state.clone(), all.clone(), asset_id.clone(),
+            ))
+                .expect("asset detail"),
+        )
+        .await;
+        assert_eq!(asset["id"].as_str(), Some(asset_id.to_string().as_str()));
+        assert_eq!(
+            asset["definition_id"].as_str(),
+            Some(definition_id.to_string().as_str())
+        );
+        assert_eq!(
+            asset["account_id"].as_str(),
+            Some(owner_id.to_string().as_str())
+        );
+        assert_eq!(asset["value"].as_str(), Some("42"));
+
+        let nft = explorer_detail_json(
+            admitted_explorer_detail(handle_v1_explorer_nft_detail(
+                state.clone(), all.clone(), nft_id.clone(),
+            ))
+                .expect("NFT detail"),
+        )
+        .await;
+        assert_eq!(nft["id"].as_str(), Some(nft_id.to_string().as_str()));
+        assert_eq!(nft["owned_by"].as_str(), Some(owner_id.to_string().as_str()));
+        assert_eq!(nft["metadata"]["artist"].as_str(), Some("Alice"));
+
+        // An absent record stays indistinguishable from a hidden one.
+        let absent_nft = dm::NftId::of(
+            domain_id.clone(),
+            "absent".parse().expect("absent NFT name"),
+        );
+        let absent_rwa = iroha_data_model::rwa::RwaId::generated(
+            domain_id,
+            iroha_crypto::Hash::prehashed([0x32; 32]),
+        );
+        let absent = [
+            admitted_explorer_detail(handle_v1_explorer_nft_detail(state.clone(), all.clone(), absent_nft)),
+            admitted_explorer_detail(handle_v1_explorer_rwa_detail(state, all, absent_rwa)),
+        ];
+        for response in absent {
+            let error = response.expect_err("absent record");
+            assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+        }
+    }
+
+    routing_test! { async explorer_rwa_detail_encodes_a_registered_lot_borrowed_from_the_world
+        let (owner_id, _) = checked_explorer_lookup_account(
+            0x1d,
+            "derive RWA detail owner fixture key",
+        );
+        let domain_id = DomainId::try_new("vault", "universal").expect("RWA domain");
+        let world = World::with_assets(
+            [dm::Domain::new(domain_id.clone()).build(&owner_id)],
+            [dm::Account::new(owner_id.clone()).build(&owner_id)],
+            [],
+            [],
+            [],
+        );
+        let state = Arc::new(State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus::default(),
+            LiveQueryStore::start_test(),
+        ));
+        // `RegisterRwa` is the only writer of the lot table; it generates the identifier.
+        crate::explorer::register_rwa_lots_for_tests(&state, &[(&domain_id, &owner_id, 7)]);
+        let rwa_id = {
+            let world = state.world_view();
+            let mut lots = world.rwas_iter().map(|lot| lot.id().clone());
+            let registered = lots.next().expect("registered lot");
+            assert!(lots.next().is_none());
+            registered
+        };
+
+        let rwa = explorer_detail_json(
+            admitted_explorer_detail(handle_v1_explorer_rwa_detail(
+                state.clone(),
+                DataspaceReadVisibility::all_for_tests(),
+                rwa_id.clone(),
+            ))
+            .expect("RWA detail"),
+        )
+        .await;
+        assert_eq!(rwa["id"].as_str(), Some(rwa_id.to_string().as_str()));
+        assert_eq!(rwa["owned_by"].as_str(), Some(owner_id.to_string().as_str()));
+        assert_eq!(rwa["quantity"].as_str(), Some("7"));
+        assert_eq!(rwa["held_quantity"].as_str(), Some("0"));
+        assert_eq!(
+            rwa["primary_reference"].as_str(),
+            Some("https://example.org/lot/0")
+        );
+        assert_eq!(rwa["is_frozen"].as_bool(), Some(false));
+        assert!(rwa["status"].is_null());
+
+        // A reader without the lot's domain route gets the answer an absent lot gets.
+        let hidden = handle_v1_explorer_rwa_detail(
+            state,
+            DataspaceReadVisibility::default(),
+            rwa_id,
+        )
+        .await
+        .expect_err("hidden lot");
+        assert_eq!(hidden.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
     routing_test! { sync generic_query_and_explorer_visibility_require_every_committed_route_leg
         use iroha_data_model::block::{
             BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
@@ -36886,12 +37247,13 @@ mod explorer_lookup_tests {
             block: None,
             asset_id: None,
         };
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
         let collection = crate::explorer::ExplorerHistoryCollection::Transactions;
         let first_query = crate::explorer::ExplorerCursorQuery {
             cursor: None,
             limit: 1,
         };
-        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_transaction_summaries(
+        let (items, pagination) = owner.scope(|| collect_transaction_summaries(
             state.as_ref(),
             &visibility,
             &filters,
@@ -36903,16 +37265,16 @@ mod explorer_lookup_tests {
         assert_eq!(items[0].entrypoint_hash.to_string(), hashes[0].to_string());
         assert!(pagination.has_more);
         let cursor = pagination.next_cursor.expect("visible continuation");
-        let decoded = crate::explorer::decode_explorer_history_cursor(
+        let decoded = owner.scope(|| crate::explorer::decode_explorer_history_cursor(
             &cursor,
             collection,
-            transaction_history_filter_digest(collection, &filters),
+            transaction_history_filter_digest(collection, &filters).expect("admitted transaction filter digest"),
             visibility.visible_route_set_digest(),
-        )
+        ))
         .expect("decode transaction history cursor");
         assert_eq!(decoded.position.entrypoint_hash, Some(hashes[2]));
 
-        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_transaction_summaries(
+        let (items, pagination) = owner.scope(|| collect_transaction_summaries(
             state.as_ref(),
             &visibility,
             &filters,
@@ -36931,27 +37293,41 @@ mod explorer_lookup_tests {
     routing_test! { sync explorer_history_resume_hash_is_stable_across_hidden_insertion
         let visible_dataspace = DataSpaceId::new(7);
         let hidden_dataspace = DataSpaceId::new(8);
-        let (baseline, baseline_hashes) = build_state_with_routed_transactions(
-            vec![
-                vec![dm::Log::new(dm::Level::INFO, "visible-first".to_owned()).into()],
-                vec![dm::Log::new(dm::Level::INFO, "visible-next".to_owned()).into()],
-            ],
-            vec![visible_dataspace, visible_dataspace],
+        // Inserting an input must preserve its peers' signing authorities and the
+        // authenticated genesis network, including the unused hidden lane.
+        let route_plans = vec![
+            vec![(LaneId::new(1), visible_dataspace)],
+            vec![(LaneId::new(2), hidden_dataspace)],
+            vec![(LaneId::new(3), visible_dataspace)],
+        ];
+        let executable = |message: &str| {
+            dm::Executable::from(vec![dm::InstructionBox::from(dm::Log::new(
+                dm::Level::INFO, message.to_owned(),
+            ))])
+        };
+        let (baseline_chain, baseline_hashes) = build_chain_with_selected_authorities(
+            vec![executable("visible-first"), executable("visible-next")],
+            Some(route_plans.clone()),
             Some(vec![1_710_000_000_000, 1_710_000_000_002]),
+            vec![0, 2],
         );
-        let (with_hidden, hidden_hashes) = build_state_with_routed_transactions(
+        let (hidden_chain, hidden_hashes) = build_chain_with_selected_authorities(
             vec![
-                vec![dm::Log::new(dm::Level::INFO, "visible-first".to_owned()).into()],
-                vec![dm::Log::new(dm::Level::INFO, "hidden".to_owned()).into()],
-                vec![dm::Log::new(dm::Level::INFO, "visible-next".to_owned()).into()],
+                executable("visible-first"),
+                executable("hidden"),
+                executable("visible-next"),
             ],
-            vec![visible_dataspace, hidden_dataspace, visible_dataspace],
+            Some(route_plans),
             Some(vec![
                 1_710_000_000_000,
                 1_710_000_000_001,
                 1_710_000_000_002,
             ]),
+            vec![0, 1, 2],
         );
+        assert_eq!(baseline_chain.network_id(), hidden_chain.network_id());
+        let baseline = Arc::clone(baseline_chain.state());
+        let with_hidden = Arc::clone(hidden_chain.state());
         assert_eq!(baseline_hashes[0], hidden_hashes[0]);
         assert_eq!(baseline_hashes[1], hidden_hashes[2]);
         let visibility =
@@ -36962,12 +37338,13 @@ mod explorer_lookup_tests {
             block: None,
             asset_id: None,
         };
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
         let collection = crate::explorer::ExplorerHistoryCollection::Transactions;
         let query = crate::explorer::ExplorerCursorQuery {
             cursor: None,
             limit: 1,
         };
-        let (_, baseline_page) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_transaction_summaries(
+        let (_, baseline_page) = owner.scope(|| collect_transaction_summaries(
             baseline.as_ref(),
             &visibility,
             &filters,
@@ -36975,7 +37352,7 @@ mod explorer_lookup_tests {
             collection,
         ))
         .expect("baseline transaction page");
-        let (_, hidden_page) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_transaction_summaries(
+        let (_, hidden_page) = owner.scope(|| collect_transaction_summaries(
             with_hidden.as_ref(),
             &visibility,
             &filters,
@@ -36983,20 +37360,21 @@ mod explorer_lookup_tests {
             collection,
         ))
         .expect("transaction page with hidden insertion");
-        let filter_digest = transaction_history_filter_digest(collection, &filters);
-        let baseline_cursor = crate::explorer::decode_explorer_history_cursor(
+        let filter_digest = owner.scope(|| transaction_history_filter_digest(collection, &filters))
+            .expect("admitted transaction filter digest");
+        let baseline_cursor = owner.scope(|| crate::explorer::decode_explorer_history_cursor(
             baseline_page.next_cursor.as_deref().expect("baseline cursor"),
             collection,
             filter_digest,
             visibility.visible_route_set_digest(),
-        )
+        ))
         .expect("decode baseline cursor");
-        let hidden_cursor = crate::explorer::decode_explorer_history_cursor(
+        let hidden_cursor = owner.scope(|| crate::explorer::decode_explorer_history_cursor(
             hidden_page.next_cursor.as_deref().expect("hidden-insertion cursor"),
             collection,
             filter_digest,
             visibility.visible_route_set_digest(),
-        )
+        ))
         .expect("decode hidden-insertion cursor");
         assert_eq!(baseline_cursor.position, hidden_cursor.position);
         assert_eq!(
@@ -37063,12 +37441,13 @@ mod explorer_lookup_tests {
             kind: None,
             asset_id: None,
         };
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
         let collection = crate::explorer::ExplorerHistoryCollection::Instructions;
         let first_query = crate::explorer::ExplorerCursorQuery {
             cursor: None,
             limit: 1,
         };
-        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
+        let (items, pagination) = owner.scope(|| collect_instruction_history(
             state.as_ref(),
             &visibility,
             &filters,
@@ -37080,17 +37459,17 @@ mod explorer_lookup_tests {
         assert_eq!(items[0].transaction.entrypoint_hash.to_string(), hashes[0].to_string());
         assert!(pagination.has_more);
         let cursor = pagination.next_cursor.expect("visible continuation");
-        let decoded = crate::explorer::decode_explorer_history_cursor(
+        let decoded = owner.scope(|| crate::explorer::decode_explorer_history_cursor(
             &cursor,
             collection,
-            instruction_history_filter_digest(collection, &filters),
+            instruction_history_filter_digest(collection, &filters).expect("admitted instruction filter digest"),
             visibility.visible_route_set_digest(),
-        )
+        ))
         .expect("decode instruction history cursor");
         assert_eq!(decoded.position.entrypoint_hash, Some(hashes[2]));
         assert_eq!(decoded.position.instruction_index, 0);
 
-        let (items, pagination) = crate::history_producer::HistoryProducerOwner::for_test().scope(|| collect_instruction_history(
+        let (items, pagination) = owner.scope(|| collect_instruction_history(
             state.as_ref(),
             &visibility,
             &filters,
@@ -37541,6 +37920,72 @@ mod explorer_lookup_tests {
             missing.is_err(),
             "invalid instruction index should return not found"
         );
+    }
+    routing_test! { async explorer_sse_lag_is_machine_readable_and_terminal
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "initial".to_owned()).into();
+        let (mut chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])], None, None,
+        );
+        let source = Arc::clone(chain.state());
+        let response = explorer_stream(
+            source, crate::stream_control::ExplorerReadContext::all_for_tests_at(u64::try_from(chain.state().committed_height()).unwrap()), ExplorerStreamKind::Blocks, 1,
+            || Ok(crate::history_producer::HistoryProducerOwner::for_test()),
+        );
+        let key = checked_explorer_lookup_keypair(0x20, Algorithm::Ed25519, "explorer input authority");
+        for message in ["successor one", "successor two"] {
+            let transaction = dm::TransactionBuilder::new(
+                chain.network_id(), dm::AccountId::new(key.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ).with_instructions([dm::Log::new(dm::Level::INFO, message.to_owned())]).sign(key.private_key());
+            crate::test_utils::commit_native_accepted_inputs(&mut chain, vec![AcceptedTransaction::new_unchecked(Cow::Owned(transaction))]);
+        }
+        let mut body = response.into_body();
+        let mut error_frame = next_sse_chunk(&mut body).await;
+        if !error_frame.contains("event: stream_error") {
+            error_frame = next_sse_chunk(&mut body).await;
+        }
+        assert!(error_frame.contains("event: stream_error"));
+        assert!(error_frame.contains("\"code\":\"stream_lagged\""));
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await.expect("terminal Explorer stream should not hang");
+        assert!(terminal.is_none());
+    }
+    routing_test! { async explorer_stream_emits_both_canonical_successors_in_order
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "initial".to_owned()).into();
+        let (mut chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])], None, None,
+        );
+        let initial = u64::try_from(chain.state().committed_height()).unwrap();
+        let response = explorer_stream(
+            Arc::clone(chain.state()), crate::stream_control::ExplorerReadContext::all_for_tests_at(initial), ExplorerStreamKind::Blocks, 2,
+            || Ok(crate::history_producer::HistoryProducerOwner::for_test()),
+        );
+        let key = checked_explorer_lookup_keypair(0x20, Algorithm::Ed25519, "explorer input authority");
+        for message in ["successor one", "successor two"] {
+            let transaction = dm::TransactionBuilder::new(
+                chain.network_id(), dm::AccountId::new(key.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ).with_instructions([dm::Log::new(dm::Level::INFO, message.to_owned())]).sign(key.private_key());
+            crate::test_utils::commit_native_accepted_inputs(&mut chain, vec![AcceptedTransaction::new_unchecked(Cow::Owned(transaction))]);
+        }
+        let mut body = response.into_body();
+        for height in [initial + 1, initial + 2] {
+            let mut frame = next_sse_chunk(&mut body).await;
+            if frame == ": keepalive\n\n" { frame = next_sse_chunk(&mut body).await; }
+            assert!(frame.starts_with("data: "), "{frame}");
+            let payload = frame.split_once("data: ").unwrap().1.trim();
+            let payload: norito::json::Value = norito::json::from_str(payload).unwrap();
+            assert_eq!(payload.get("height").and_then(norito::json::Value::as_u64), Some(height));
+        }
+        // The initially due keepalive may follow both ready successors. Reject
+        // every other frame without extending the no-extra-successor deadline.
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(25);
+        while let Ok(frame) = tokio::time::timeout_at(deadline, body.frame()).await {
+            let frame = frame.expect("canonical successor stream remains open")
+                .expect("SSE body frame");
+            let data = frame.into_data().expect("SSE data frame");
+            assert_eq!(&data[..], b": keepalive\n\n", "no successor may be repeated or omitted");
+        }
     }
 }
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
@@ -41058,7 +41503,7 @@ mod sse_stream_tests {
     };
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use tokio::time::{Duration, timeout};
-    async fn next_sse_chunk(body: &mut Body) -> String {
+    pub(super) async fn next_sse_chunk(body: &mut Body) -> String {
         let frame = timeout(Duration::from_secs(1), body.frame())
             .await
             .expect("timeout waiting for SSE frame")
@@ -41300,35 +41745,6 @@ mod sse_stream_tests {
             .expect("revoked SSE stream should terminate");
         assert!(terminal.is_none());
     }
-    routing_test! { async explorer_sse_lag_is_machine_readable_and_terminal
-        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "initial".to_owned()).into();
-        let (mut chain, _) = build_chain_with_executables_and_route_plans(
-            vec![dm::Executable::from(vec![instruction])], None, None,
-        );
-        let source = Arc::clone(chain.state());
-        let response = explorer_stream(
-            source, crate::stream_control::ExplorerReadContext::all_for_tests_at(u64::try_from(chain.state().committed_height()).unwrap()), ExplorerStreamKind::Blocks, 1,
-            || Ok(crate::history_producer::HistoryProducerOwner::for_test()),
-        );
-        let key = checked_explorer_lookup_keypair(0x20, Algorithm::Ed25519, "explorer input authority");
-        for message in ["successor one", "successor two"] {
-            let transaction = dm::TransactionBuilder::new(
-                chain.network_id(), dm::AccountId::new(key.public_key().clone()),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            ).with_instructions([dm::Log::new(dm::Level::INFO, message.to_owned())]).sign(key.private_key());
-            crate::test_utils::commit_native_accepted_inputs(&mut chain, vec![AcceptedTransaction::new_unchecked(Cow::Owned(transaction))]);
-        }
-        let mut body = response.into_body();
-        let mut error_frame = next_sse_chunk(&mut body).await;
-        if !error_frame.contains("event: stream_error") {
-            error_frame = next_sse_chunk(&mut body).await;
-        }
-        assert!(error_frame.contains("event: stream_error"));
-        assert!(error_frame.contains("\"code\":\"stream_lagged\""));
-        let terminal = timeout(Duration::from_secs(1), body.frame())
-            .await.expect("terminal Explorer stream should not hang");
-        assert!(terminal.is_none());
-    }
     routing_test! { async explorer_stream_does_not_subscribe_to_unbounded_event_graphs
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let response = explorer_stream(
@@ -41343,35 +41759,6 @@ mod sse_stream_tests {
         let mut body = response.into_body();
         assert_eq!(next_sse_chunk(&mut body).await, ": keepalive\n\n");
         assert!(timeout(Duration::from_millis(25), body.frame()).await.is_err());
-    }
-    routing_test! { async explorer_stream_emits_both_canonical_successors_in_order
-        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "initial".to_owned()).into();
-        let (mut chain, _) = build_chain_with_executables_and_route_plans(
-            vec![dm::Executable::from(vec![instruction])], None, None,
-        );
-        let initial = u64::try_from(chain.state().committed_height()).unwrap();
-        let response = explorer_stream(
-            Arc::clone(chain.state()), crate::stream_control::ExplorerReadContext::all_for_tests_at(initial), ExplorerStreamKind::Blocks, 2,
-            || Ok(crate::history_producer::HistoryProducerOwner::for_test()),
-        );
-        let key = checked_explorer_lookup_keypair(0x20, Algorithm::Ed25519, "explorer input authority");
-        for message in ["successor one", "successor two"] {
-            let transaction = dm::TransactionBuilder::new(
-                chain.network_id(), dm::AccountId::new(key.public_key().clone()),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            ).with_instructions([dm::Log::new(dm::Level::INFO, message.to_owned())]).sign(key.private_key());
-            crate::test_utils::commit_native_accepted_inputs(&mut chain, vec![AcceptedTransaction::new_unchecked(Cow::Owned(transaction))]);
-        }
-        let mut body = response.into_body();
-        for height in [initial + 1, initial + 2] {
-            let mut frame = next_sse_chunk(&mut body).await;
-            if frame == ": keepalive\n\n" { frame = next_sse_chunk(&mut body).await; }
-            assert!(frame.starts_with("data: "), "{frame}");
-            let payload = frame.split_once("data: ").unwrap().1.trim();
-            let payload: norito::json::Value = norito::json::from_str(payload).unwrap();
-            assert_eq!(payload.get("height").and_then(norito::json::Value::as_u64), Some(height));
-        }
-        assert!(timeout(Duration::from_millis(25), body.frame()).await.is_err(), "no successor may be repeated or omitted");
     }
     routing_test! { sync explorer_stream_traverses_bounded_canonical_successors
         assert!(!explorer_backlog_is_lagged(7, 7, 1));
@@ -53077,6 +53464,7 @@ mod explorer_response_byte_budget_tests {
     use super::*;
     #[tokio::test]
     async fn selected_records_and_exact_response_share_one_phase() {
+        // Norito JSON serializes `Vec<T>`, not `[T; N]`; the retained bytes stay the four records.
         let payload=vec![1_u32,2,3,4];
         let encoded=norito::json::to_json(&payload).unwrap();
         let retained=core::mem::size_of_val(payload.as_slice());
@@ -53187,7 +53575,9 @@ pub async fn handle_v1_explorer_asset_definitions(
     let byte_budget = crate::QueryFanoutMemoryEnvelope::for_body_admission(
         usize::try_from(iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES.0).expect("fixture working set fits"),
     ).expect("canonical fixture envelope").route_body_bytes;
-    handle_v1_explorer_asset_definitions_sync(state, visibility, pagination, domain, owned_by, byte_budget)
+    crate::history_producer::HistoryProducerOwner::for_test().scope(|| {
+        handle_v1_explorer_asset_definitions_sync(state, visibility, pagination, domain, owned_by, byte_budget)
+    })
 }
 pub(crate) async fn handle_v1_explorer_asset_definitions_admitted(
     state: Arc<CoreState>,

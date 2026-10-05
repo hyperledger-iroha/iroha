@@ -34,11 +34,11 @@ use iroha_data_model::{
         PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1, PrivacyZkAmsRegistryBootstrapDigestV1,
         PrivacyZkAmsSeedPublicKeyV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
         PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordDigestV1,
-        PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
-        PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
-        VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
-        ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
-        ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_LINEAGES_V1,
+        PrivacyZkX509CrlRecordV1, PrivacyZkX509PresentationBoundsV1,
+        PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordDigestV1,
+        PrivacyZkX509TrustAnchorRecordV1, VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1,
+        VEGA_MAX_ISSUER_RECORDS_V1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
+        ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_CRL_LINEAGES_V1,
         ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1, ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1,
         privacy_exact12_syscall_list_digest_v1, validate_vega_issuer_revocation_v1,
         validate_vega_issuer_rotation_v1, validate_zk_x509_certificate_policy_revocation_v1,
@@ -2382,20 +2382,21 @@ pub fn validate_privacy_zk_x509_statement_state_v1(
             "X.509 statement selects a stale or substituted signed-CRL revision".to_owned(),
         );
     }
-    let trusted_block_unix_seconds = trusted_block_timestamp_ms / 1_000;
-    if trusted_block_unix_seconds < statement.presentation_not_before_unix_seconds
-        || trusted_block_unix_seconds > statement.presentation_not_after_unix_seconds
-    {
+    // One canonical interval definition serves this admission check, the
+    // native relation and every statement builder: the executing block second
+    // lies inside the inclusive window, and the window starts at or after the
+    // governed CRL `thisUpdate`, ends strictly before its `nextUpdate` and at
+    // most 300 seconds after `thisUpdate`. The private certificate validity
+    // periods bound the same window inside the proof.
+    let presentation_window = statement.presentation_window();
+    if !presentation_window.admits_block_timestamp_ms(trusted_block_timestamp_ms) {
         return Err(
             "X.509 executing block timestamp is outside the presentation window".to_owned(),
         );
     }
-    if statement.presentation_not_before_unix_seconds < crl_record.this_update_unix_seconds
-        || statement.presentation_not_after_unix_seconds >= crl_record.next_update_unix_seconds
-        || statement
-            .presentation_not_after_unix_seconds
-            .checked_sub(crl_record.this_update_unix_seconds)
-            .is_none_or(|age| age > ZK_X509_MAX_CRL_AGE_SECONDS_V1)
+    if PrivacyZkX509PresentationBoundsV1::from_crl(crl_record.update_interval())
+        .and_then(|bounds| bounds.admit(presentation_window))
+        .is_err()
     {
         return Err(
             "X.509 presentation window is not fully covered by the current signed-CRL freshness window"
@@ -14468,6 +14469,42 @@ mod tests {
             &limits,
         )
         .expect("the exact 300-second CRL freshness boundary is admitted");
+        // The RFC 5280 calendar ceiling at state admission. A governed CRL
+        // record that stays fresh past 9999-12-31T23:59:59Z admits a window
+        // ending at that second and none ending after it.
+        let calendar_end = iroha_data_model::privacy::ZK_X509_MAX_UNIX_SECONDS_V1;
+        let mut calendar_snapshot = snapshot.clone();
+        calendar_snapshot.crl_record.this_update_unix_seconds = calendar_end - 100;
+        calendar_snapshot.crl_record.next_update_unix_seconds = calendar_end + 50;
+        let mut at_calendar_end = statement.clone();
+        at_calendar_end.presentation_not_before_unix_seconds = calendar_end - 100;
+        at_calendar_end.presentation_not_after_unix_seconds = calendar_end;
+        for trusted_block_timestamp_ms in [(calendar_end - 100) * 1_000, calendar_end * 1_000 + 999]
+        {
+            validate_privacy_zk_x509_statement_state_v1(
+                &at_calendar_end,
+                &calendar_snapshot,
+                trusted_block_timestamp_ms,
+                &limits,
+            )
+            .expect("a window ending at the last calendar second is admitted");
+        }
+        let mut past_calendar_end = at_calendar_end.clone();
+        past_calendar_end.presentation_not_after_unix_seconds = calendar_end + 1;
+        // The block second is inside the window, and the window ends before
+        // `nextUpdate` and within the age cap: only the calendar rejects it.
+        for trusted_block_timestamp_ms in [calendar_end * 1_000, (calendar_end + 1) * 1_000] {
+            assert!(
+                validate_privacy_zk_x509_statement_state_v1(
+                    &past_calendar_end,
+                    &calendar_snapshot,
+                    trusted_block_timestamp_ms,
+                    &limits,
+                )
+                .expect_err("a window ending after the last calendar second must reject")
+                .contains("signed-CRL freshness window")
+            );
+        }
         let activations = Storage::new();
         let pgc_accounts = Storage::new();
         let pgc_pool_invariants = Storage::new();

@@ -1,0 +1,29 @@
+[package]
+name = "iroha_fhe"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic exact modular, RNS, NTT, basis-conversion and rounding arithmetic shared by Iroha FHE protocols"
+
+[lints]
+workspace = true
+
+[features]
+# The crate's own builds and tests cover the accelerated kernels and the scalar
+# reference together. Workspace consumers disable default features and select
+# `simd` explicitly (`iroha_crypto/bfv-accel`), so one feature owns the choice.
+default = ["simd"]
+# NEON (AArch64) and AVX2 (x86_64, detected at run time) kernels for the hot
+# modular and NTT loops. Every accelerated kernel returns the same words as the
+# scalar reference, which remains the fallback on every target and input.
+simd = []
+
+[dependencies]
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+# Independent arbitrary-precision oracle; shares no code with the kernels.
+num-bigint = { version = "0.4.6", default-features = false, features = ["std"] }

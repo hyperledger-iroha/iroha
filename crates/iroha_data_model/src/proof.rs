@@ -1748,6 +1748,9 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
 /// signed-transaction wire ceiling. It is not a claim that a maximal frame fits Torii's 8 MiB JSON
 /// proof body: base64 and JSON quotes expand the transport, whose exact largest decoded binary
 /// string at that body limit is 6,291,453 bytes.
+// TODO(I.1): this frame is below the 9,437,184-byte zk-X509 proof ceiling, so a ceiling-sized
+// proof cannot travel as a signed-transaction attachment
+// (`specs/zk_resource_contract.json`, `attachment_list_frame_holds_a_ceiling_proof`).
 pub const PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1: usize = 8 * 1024 * 1024;
 /// Maximum attachments carried by one first-release proof attachment list.
 ///
