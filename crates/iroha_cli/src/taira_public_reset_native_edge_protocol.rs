@@ -43,6 +43,7 @@ impl NativeEdgeCapabilityV1 {
             || self.helper_source_closure_sha256 != host_pair::helper_source_closure_sha256()
             || captured.dispatcher_sha256 != native.dispatcher_sha256
             || captured.guard_sha256 != native.guard_sha256
+            || self.captured_hosts.native_python != hosts.native_python
             || self.incumbent.claims.helper_source_closure_sha256
                 != self.helper_source_closure_sha256
             || self.forwarding_plan != self.incumbent.claims.forwarding_plan
@@ -1053,5 +1054,65 @@ mod tests {
             .unwrap()
             .insert("incumbent_nginx_request".into(), Value::Null);
         assert!(json::from_str::<NativeEdgeCapabilityV1>(&json::to_json(&value).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn host_pair_native_python_selection_is_required_and_closed() {
+        let hosts = host_pair::fixture_pair();
+        let mut value = json::to_value(&hosts).unwrap();
+        value.as_object_mut().unwrap().remove("native_python");
+        assert!(
+            json::from_str::<host_pair::ResetHostPairV1>(&json::to_json(&value).unwrap()).is_err()
+        );
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("native_python".into(), Value::Null);
+        assert!(
+            json::from_str::<host_pair::ResetHostPairV1>(&json::to_json(&value).unwrap()).is_err()
+        );
+        let mut extra = json::to_value(&hosts).unwrap();
+        extra
+            .as_object_mut()
+            .unwrap()
+            .insert("python_runtime_fallback".into(), Value::Null);
+        assert!(
+            json::from_str::<host_pair::ResetHostPairV1>(&json::to_json(&extra).unwrap()).is_err()
+        );
+    }
+
+    #[test]
+    fn retained_native_capability_cannot_substitute_selected_python_software() {
+        let hosts = host_pair::fixture_pair();
+        let release = EdgeAdmittedReleaseV1 {
+            commit: "a".repeat(40),
+            release_root: format!(
+                "{}/.local/share/iroha/taira/edge/releases/{}",
+                hosts.native_edge.owner_home,
+                "a".repeat(40)
+            ),
+            cli_sha256: "b".repeat(64),
+            config_sha256: "c".repeat(64),
+        };
+        let capability = fixture_capability(&hosts, release, &"d".repeat(32), "fixture-genesis");
+        capability.validate(&hosts).unwrap();
+        for kind in ["path", "digest", "identity"] {
+            let mut changed = hosts.clone();
+            match kind {
+                "path" => {
+                    changed.native_python.file.path =
+                        "/opt/homebrew/Cellar/python@3.14/3.14.4/bin/other-python".into()
+                }
+                "digest" => changed.native_python.sha256 = "8".repeat(64),
+                "identity" => changed.native_python.file.identity.inode += 1,
+                _ => unreachable!(),
+            }
+            changed.validate_physical_binding(&hosts).unwrap();
+            assert_ne!(changed.digest().unwrap(), hosts.digest().unwrap());
+            assert!(
+                capability.validate(&changed).is_err(),
+                "substitution {kind}"
+            );
+        }
     }
 }

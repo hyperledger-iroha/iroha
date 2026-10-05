@@ -4,6 +4,7 @@
 //! the signed Mac producer and streamed uploads certify their exact public bytes.
 //! The persistent forwarding service remains owned by its original publisher.
 
+use super::super::native_python::NativePythonRuntime;
 use super::super::{host_pair, native_edge_protocol as protocol, validate_lower_hex};
 use super::*;
 use host_pair::{NativeObservedFileV1, NativePublicFileV1, SignedHostPhaseV1};
@@ -253,10 +254,11 @@ impl PublicPin {
 struct NativeCapsule {
     root: PrivateDirectory,
     sources: Vec<PublicPin>,
+    python: NativePythonRuntime,
 }
 
 impl NativeCapsule {
-    fn admit(admitted: &HostAdmission) -> Result<Self> {
+    fn admit(admitted: &HostAdmission, python: NativePythonRuntime) -> Result<Self> {
         let host = &admitted.inventory.hosts.native_edge;
         let custody = PrivateDirectory::open(&host.custody_root)?;
         let helpers = custody.ensure_child("helpers")?;
@@ -281,7 +283,12 @@ impl NativeCapsule {
         root.sync()?;
         custody.revalidate()?;
         helpers.revalidate()?;
-        Ok(Self { root, sources })
+        python.revalidate()?;
+        Ok(Self {
+            root,
+            sources,
+            python,
+        })
     }
 
     fn run(
@@ -343,24 +350,23 @@ impl NativeCapsule {
         }
         inherited_files.push(request_file);
         self.root.revalidate()?;
-        let output = require_success(
-            RealProcessRunner.run(&ProcessSpec {
-                program: PathBuf::from("/usr/bin/python3"),
-                args,
-                stdin_prefix: Vec::new(),
-                stdin_file: None,
-                stdin_files: Vec::new(),
-                inherited_files,
-                deadline,
-            })?,
-            "native edge owner helper",
-        )?;
+        let output = RealProcessRunner.run(&ProcessSpec {
+            program: self.python.program()?,
+            args,
+            stdin_prefix: Vec::new(),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files,
+            deadline,
+        });
+        self.python.revalidate()?;
         for source in &self.sources {
             source.revalidate()?;
         }
         request.revalidate()?;
         self.root.revalidate()?;
         directory.revalidate()?;
+        let output = require_success(output?, "native edge owner helper")?;
         if output.is_empty() || output.len() > 64 * 1024 {
             return Err(eyre!(
                 "native helper result exceeds its finite public bound"
@@ -695,8 +701,8 @@ pub(super) fn dispatch(
     let HostTarget::Edge(edge) = &admitted.target else {
         return Err(eyre!("native edge dispatcher requires the Mac role"));
     };
-    admit_native_platform(admitted)?;
     edge.native_capability.validate(&admitted.inventory.hosts)?;
+    let python = admit_native_platform(admitted)?;
     if action == HostAction::Preflight {
         if matches!(
             &edge.native_capability.incumbent.claims.completion,
@@ -708,6 +714,7 @@ pub(super) fn dispatch(
             )?;
         }
         verify_native_artifacts(edge)?;
+        python.revalidate()?;
         return Ok(host_receipt(
             admitted,
             action,
@@ -732,7 +739,7 @@ pub(super) fn dispatch(
         ));
     }
     let mut operation = NativeOperation::acquire(admitted)?;
-    let capsule = NativeCapsule::admit(admitted)?;
+    let capsule = NativeCapsule::admit(admitted, python)?;
     if action == HostAction::Upload {
         let selected = artifact(&edge.artifacts, &admitted.request.artifact_role)?;
         verify_prepared_upload(selected, body)?;
@@ -780,7 +787,7 @@ pub(super) fn dispatch(
     ))
 }
 
-fn admit_native_platform(admitted: &HostAdmission) -> Result<()> {
+fn admit_native_platform(admitted: &HostAdmission) -> Result<NativePythonRuntime> {
     let native = &admitted.inventory.hosts.native_edge;
     if !cfg!(all(target_os = "macos", target_arch = "aarch64"))
         || rustix::process::geteuid().as_raw() != native.owner_uid
@@ -800,27 +807,13 @@ fn admit_native_platform(admitted: &HostAdmission) -> Result<()> {
             "native custodian guard root does not derive from the actual executable"
         ));
     }
-    let output = require_success(
-        RealProcessRunner.run(&ProcessSpec::public_input(
-            PathBuf::from("/usr/bin/python3"),
-            vec![
-                "-B".into(),
-                "-I".into(),
-                "-c".into(),
-                "import sys; assert sys.version_info >= (3,11)".into(),
-            ],
-            Vec::new(),
-            admitted.action_deadline,
-        ))?,
-        "native Python capability preflight",
+    let python = NativePythonRuntime::admit(
+        &admitted.inventory.hosts.native_python,
+        native.owner_uid,
+        admitted.action_deadline,
     )?;
-    if !output.is_empty() {
-        return Err(eyre!(
-            "native capability preflight returned unexpected bytes"
-        ));
-    }
     PrivateDirectory::open(&native.custody_root)?.revalidate()?;
-    Ok(())
+    Ok(python)
 }
 
 fn verify_native_artifacts(edge: &EdgeV1) -> Result<()> {

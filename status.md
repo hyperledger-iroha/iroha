@@ -96,6 +96,12 @@ See the [protocol](specs/private_settlement.md).
 
 ## Deployment state
 
+Native Mac public-reset helpers now require an explicitly selected, authenticated
+Python image in the signed host pair. Capture and runtime admission retain the
+same executable and require actual Python 3.11 or later; Apple developer Python
+3.9 cannot satisfy that floor. The corrected native runtime and fresh Taira
+publication still require current-source build and host qualification.
+
 Taira's four validators serve the e3766fdb daemon build and the fresh signed
 genesis `277902D32673C29F56D4AA104063347F290881909ECB838B5038E39ABE11C15F`.
 October 4 direct checks found height 9, three peers and an empty queue on every

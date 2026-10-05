@@ -10,6 +10,15 @@ Native checks also require executable `lsof` at `/usr/sbin/lsof` on macOS or
 `/usr/bin/lsof` on Linux. Both full and focused gates reject a missing or
 nonexecutable inspector before compilation; install this prerequisite first.
 
+The native Mac public-reset host pair requires `native_python`, a public file
+reference containing the explicitly selected interpreter's direct absolute path,
+native file identity and SHA-256. Capture, preflight and every native owner helper
+use this same retained executable with a cleared environment and `-B -I`.
+The actual runtime must be Python 3.11 or later. Its image and safe ancestors
+remain retained and are revalidated around each child; a substituted interpreter
+requires a new native capture. Apple developer Python is not an implicit default,
+and no PATH search or version fallback selects a runtime.
+
 Both doctor scopes require `GET /readyz` to return HTTP 200 with the exact
 plain-text `Ready` response. A healthy status or mounted MCP route does not
 substitute for admission readiness. Failed readiness reports only a bounded

@@ -113,6 +113,8 @@ pub(super) struct ResetHostPairV1 {
     pub(super) provider: String,
     pub(super) validator_guest: ResetHostV1,
     pub(super) native_edge: ResetHostV1,
+    /// Explicit native helper executable; captured and signed with this host selection.
+    pub(super) native_python: NativePublicFileV1,
 }
 
 impl ResetHostPairV1 {
@@ -124,6 +126,8 @@ impl ResetHostPairV1 {
         }
         self.validator_guest.validate(false)?;
         self.native_edge.validate(true)?;
+        self.native_python
+            .validate_python(self.native_edge.owner_uid)?;
         if self.validator_guest.endpoint.host_identity_sha256
             == self.native_edge.endpoint.host_identity_sha256
             || self.validator_guest.endpoint.hostname == self.native_edge.endpoint.hostname
@@ -141,7 +145,7 @@ impl ResetHostPairV1 {
     }
 
     /// Compare the immutable physical owners before admitting separately proven native upgrades.
-    /// Dispatcher/guard digests are intentionally excluded here; callers must validate their
+    /// Dispatcher/guard digests and the Python image are excluded here; callers must validate their
     /// successor through native captured custody and the signed candidate/transition receipt.
     pub(super) fn validate_physical_binding(&self, predecessor: &Self) -> Result<()> {
         self.validate()?;
@@ -869,6 +873,14 @@ impl NativeObservedFileV1 {
 }
 
 impl NativePublicFileV1 {
+    pub(super) fn validate_python(&self, owner_uid: u32) -> Result<()> {
+        self.validate_public(owner_uid)?;
+        if self.file.identity.mode & 0o500 != 0o500 {
+            return Err(eyre!("native Python image must be readable and executable"));
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_public(&self, owner_uid: u32) -> Result<()> {
         self.file.validate_metadata(owner_uid)?;
         validate_lower_hex("native public file SHA-256", &self.sha256, 64)?;
@@ -1056,6 +1068,23 @@ pub(super) fn fixture_pair() -> ResetHostPairV1 {
             )
             .public_key()
             .to_string(),
+        },
+        native_python: NativePublicFileV1 {
+            file: NativeObservedFileV1 {
+                path: "/opt/homebrew/Cellar/python@3.14/3.14.4/bin/python3.14".into(),
+                identity: NativeFileIdentityV1 {
+                    device: 1,
+                    inode: 91,
+                    uid: 501,
+                    gid: 80,
+                    mode: 0o755,
+                    links: 1,
+                    size: 64,
+                    mtime_ns: 1,
+                    ctime_ns: 1,
+                },
+            },
+            sha256: "9".repeat(64),
         },
     }
 }

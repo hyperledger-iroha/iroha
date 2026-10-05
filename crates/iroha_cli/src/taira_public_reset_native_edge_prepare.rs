@@ -4,6 +4,7 @@
 //! retains public inputs and metadata-only private-main custody, signs the native
 //! records with inherited keys, and publishes all outputs as one fresh directory.
 
+use super::native_python::NativePythonRuntime;
 use super::*;
 use host_pair::{
     NativeEdgeCandidateClaimsV1, NativeEdgeCaptureClaimsV1, NativeEdgeCompletionProvenanceV1,
@@ -290,7 +291,12 @@ fn validate_selected_refs(request: &PrepareRequestV1) -> Result<()> {
     Ok(())
 }
 
-fn run_owner(action: &str, request: &[u8], directory: &Path) -> Result<Vec<u8>> {
+fn run_owner(
+    action: &str,
+    request: &[u8],
+    directory: &Path,
+    python: &NativePythonRuntime,
+) -> Result<Vec<u8>> {
     use host::ProcessRunner as _;
     let scratch = tempfile::Builder::new()
         .prefix(".native-edge-inspect-")
@@ -311,7 +317,7 @@ fn run_owner(action: &str, request: &[u8], directory: &Path) -> Result<Vec<u8>> 
     )?;
     sources.revalidate()?;
     let result = host::RealProcessRunner.run(&host::ProcessSpec::public_input(
-        PathBuf::from("/usr/bin/python3"),
+        python.program()?,
         vec![
             OsString::from("-B"),
             OsString::from("-I"),
@@ -322,8 +328,10 @@ fn run_owner(action: &str, request: &[u8], directory: &Path) -> Result<Vec<u8>> 
         ],
         request.to_vec(),
         Instant::now() + Duration::from_secs(60),
-    ))?;
+    ));
+    python.revalidate()?;
     sources.revalidate()?;
+    let result = result?;
     if !result.status.success()
         || !result.stderr.is_empty()
         || result.stdout.len() > MAX_OBSERVATION
@@ -335,8 +343,14 @@ fn run_owner(action: &str, request: &[u8], directory: &Path) -> Result<Vec<u8>> 
     Ok(result.stdout)
 }
 
-fn inspect_owner(action: &str, request: &[u8], directory: &Path) -> Result<OwnerObservationV1> {
-    let observed: OwnerObservationV1 = json::from_slice(&run_owner(action, request, directory)?)?;
+fn inspect_owner(
+    action: &str,
+    request: &[u8],
+    directory: &Path,
+    python: &NativePythonRuntime,
+) -> Result<OwnerObservationV1> {
+    let observed: OwnerObservationV1 =
+        json::from_slice(&run_owner(action, request, directory, python)?)?;
     if observed.schema != "iroha.taira.native-nginx-owned-publication-inspection.v1"
         || !matches!(
             (
@@ -354,7 +368,12 @@ fn inspect_owner(action: &str, request: &[u8], directory: &Path) -> Result<Owner
     Ok(observed)
 }
 
-fn validate_new_plan(current: &[u8], proposed: &[u8], directory: &Path) -> Result<()> {
+fn validate_new_plan(
+    current: &[u8],
+    proposed: &[u8],
+    directory: &Path,
+    python: &NativePythonRuntime,
+) -> Result<()> {
     let incumbent: Value = json::from_slice(current)?;
     let plan: Value = json::from_slice(proposed)?;
     let current = incumbent
@@ -383,7 +402,7 @@ fn validate_new_plan(current: &[u8], proposed: &[u8], directory: &Path) -> Resul
             "new native nginx plan changes the captured host, namespace, master or predecessor"
         ));
     }
-    if run_owner("validate-plan", proposed, directory)? != b"{}" {
+    if run_owner("validate-plan", proposed, directory, python)? != b"{}" {
         return Err(eyre!(
             "maintained native nginx owner refused the proposed plan"
         ));
@@ -391,11 +410,15 @@ fn validate_new_plan(current: &[u8], proposed: &[u8], directory: &Path) -> Resul
     Ok(())
 }
 
-fn validate_initial_plan(proposed: &[u8], directory: &Path) -> Result<()> {
+fn validate_initial_plan(
+    proposed: &[u8],
+    directory: &Path,
+    python: &NativePythonRuntime,
+) -> Result<()> {
     let plan: Value = json::from_slice(proposed)?;
     if plan.get("publication") != Some(&norito::json!({"kind":"create"}))
         || plan.get("host_kind").and_then(Value::as_str) != Some("macos")
-        || run_owner("validate-plan", proposed, directory)? != b"{}"
+        || run_owner("validate-plan", proposed, directory, python)? != b"{}"
     {
         return Err(eyre!(
             "vacant native edge requires the exact maintained create publication"
@@ -678,6 +701,11 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
             "native release authority is not independently selected canonical Ed25519"
         ));
     }
+    let python = NativePythonRuntime::admit(
+        &request.hosts.native_python,
+        native.owner_uid,
+        Instant::now() + Duration::from_secs(60),
+    )?;
     let expected_cli_path = format!(
         "{}/.local/share/iroha/taira/edge/releases/{}/bin/iroha",
         native.owner_home, revision.commit
@@ -720,15 +748,15 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
     let (inspection_action, observed_raw) = match &request.current_nginx_request {
         Some(reference) => {
             let current = retain_public(&mut pins, reference, native.owner_uid, MAX_PUBLIC_PLAN)?;
-            validate_new_plan(&current, &proposed, parent_path)?;
+            validate_new_plan(&current, &proposed, parent_path, &python)?;
             ("inspect", current)
         }
         None => {
-            validate_initial_plan(&proposed, parent_path)?;
+            validate_initial_plan(&proposed, parent_path, &python)?;
             ("inspect-vacant", proposed.clone())
         }
     };
-    let observed = inspect_owner(inspection_action, &observed_raw, parent_path)?;
+    let observed = inspect_owner(inspection_action, &observed_raw, parent_path, &python)?;
     pins.push(RetainedInput::metadata(&observed.nginx, native.owner_uid)?);
     pins.push(RetainedInput::metadata(
         &observed.main_configuration,
@@ -878,7 +906,7 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
     if let Some(directories) = &vacant_root {
         revalidate_vacant_root(directories, native, &revision.commit)?;
     }
-    if inspect_owner(inspection_action, &observed_raw, parent_path)? != observed {
+    if inspect_owner(inspection_action, &observed_raw, parent_path, &python)? != observed {
         return Err(eyre!(
             "native nginx ownership changed before signed publication"
         ));
@@ -888,6 +916,7 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
     }
     revalidate_pinned(&request_pin, "native prepare request")?;
     parent.revalidate()?;
+    python.revalidate()?;
     let capture_wire = json::to_json(&capture)?;
     let candidate_wire = json::to_json(&candidate)?;
     let capability_wire = json::to_json(&capability)?;

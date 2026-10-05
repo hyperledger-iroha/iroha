@@ -94,6 +94,8 @@ mod host_pair;
 mod native_edge_prepare;
 #[path = "taira_public_reset_native_edge_protocol.rs"]
 mod native_edge_protocol;
+#[path = "taira_public_reset_native_python.rs"]
+mod native_python;
 #[path = "taira_public_reset_validator_config.rs"]
 mod validator_config;
 pub(crate) use host::maintenance::StoppedOwnerMaintenance;
