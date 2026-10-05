@@ -16,9 +16,10 @@
 //!
 //! Two hash families apply (§3). Every value a step relation computes or opens is a Poseidon
 //! value `P` of the σ field, computed natively with `iroha_pasta`: `credit_id`, the state
-//! commitment, chains, map, blacklist, quota-window and credit-digest trees, the σ statement
-//! digest, and (packed-byte `P_bytes`) `proof_digest` and the Payment digest. Every other digest
-//! is
+//! commitment, chains, the depth-32 indexed map trees, the blacklist, quota-window and
+//! credit-digest trees, the σ statement digest, and (packed-byte `P_bytes`) `proof_digest`, the
+//! Payment digest, the lineage, credit-opening, credit-status and credited digests and every
+//! signing message. The remaining digests are
 //!
 //! ```text
 //! H(role, body) = SHA-256("iroha:kagemusha:wallet:v1:" || role || 0x00 || LE64(len(body)) || body)
@@ -27,11 +28,11 @@
 //! over a fixed-layout transcript: little-endian fixed-width integers, raw 32-byte digests,
 //! 65-byte uncompressed SEC1 keys, 64-byte `r || s` signatures, and enums as one tag byte
 //! followed by a zero-filled union. A reference to a signer certificate is its 32-byte
-//! certificate digest. Signed objects are signed with ECDSA-P256-SHA256 over the exact
-//! preimage of `H(role-body, body)`; the signer output is normalized to low S and verified
-//! before it is frozen into an object. Verifiers reject high-S signatures and never rewrite
-//! received bytes. The digest of a signed object is `H(role, e || signature)`, where `e` is
-//! its signed body digest.
+//! certificate digest. Every P-256 signature signs the 32-byte signing message
+//! `m = P_bytes(d, transcript)` of its body's signing domain `d` with ECDSA-P256-SHA256 (owner
+//! answer A1); the signer output is normalized to low S and verified before it is frozen into an
+//! object. Verifiers recompute `m`, reject high-S signatures and never rewrite received bytes.
+//! The digest of a signed object is `H(role, m || signature)`.
 //!
 //! # Canonical frames
 //!
@@ -372,10 +373,11 @@ pub enum KagemushaWalletValidationErrorV1 {
         /// Stable field label.
         field: &'static str,
     },
-    /// A signature is malformed, high-S, or does not verify under the required key and role.
+    /// A signature is malformed, high-S, or does not verify under the required key over the
+    /// signing message of its domain.
     InvalidSignature {
-        /// Domain role of the signed body.
-        role: KagemushaWalletDigestRoleV1,
+        /// Signing domain of the signed body.
+        domain: KagemushaWalletSigningDomainV1,
     },
     /// Checked integer arithmetic or a length conversion overflowed.
     ArithmeticOverflow {
@@ -406,10 +408,10 @@ impl core::fmt::Display for KagemushaWalletValidationErrorV1 {
             Self::InvalidField { field } => {
                 write!(f, "invalid KAGEMUSHA wallet V1 field `{field}`")
             }
-            Self::InvalidSignature { role } => write!(
+            Self::InvalidSignature { domain } => write!(
                 f,
-                "invalid KAGEMUSHA wallet V1 signature in role `{}`",
-                role.as_str()
+                "invalid KAGEMUSHA wallet V1 signature in signing domain `{}`",
+                domain.as_str()
             ),
             Self::ArithmeticOverflow { field } => {
                 write!(f, "KAGEMUSHA wallet V1 arithmetic overflow in `{field}`")

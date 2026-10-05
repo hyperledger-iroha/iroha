@@ -8800,36 +8800,9 @@ impl Queue {
 /// User-level configuration container for `Settlement`.
 #[derive(Debug, ReadConfig, Clone, Default)]
 pub struct Settlement {
-    /// KAGEMUSHA V1 runtime-state configuration.
-    #[config(nested)]
-    pub kagemusha: Kagemusha,
     /// Router configuration (shadow price, buffers).
     #[config(nested)]
     pub router: Router,
-}
-/// User-level KAGEMUSHA V1 proof-release configuration.
-///
-/// The six paths are all-or-none. Their contents do not become monetary authority merely by
-/// being configured: startup threshold-authenticates the release and rechecks every artifact's
-/// content address and compiled protocol identity.
-#[derive(Debug, ReadConfig, Clone, Default)]
-pub struct Kagemusha {
-    /// Permit a signed TestnetExperiment proof release on this explicitly configured node.
-    /// Production releases do not need this permission.
-    #[config(default = "false")]
-    pub allow_testnet_experimental_release: bool,
-    /// Canonical Norito release manifest.
-    pub release_manifest_path: Option<PathBuf>,
-    /// Canonical Norito internal qualification receipt.
-    pub validation_receipt_path: Option<PathBuf>,
-    /// Canonical Norito locally trusted release-authority policy.
-    pub authority_policy_path: Option<PathBuf>,
-    /// Canonical Norito threshold-signed release attestation.
-    pub release_attestation_path: Option<PathBuf>,
-    /// Canonical JSON recursive circuit profile signed through its digest.
-    pub recursive_profile_path: Option<PathBuf>,
-    /// Directory containing files named only by lowercase SHA-256 artifact address.
-    pub artifact_directory: Option<PathBuf>,
 }
 /// User-level configuration for the settlement router.
 #[derive(Debug, ReadConfig, Clone, Copy)]
@@ -8987,55 +8960,7 @@ impl Settlement {
     /// Convert this user configuration into the runtime representation.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Settlement {
         actual::Settlement {
-            kagemusha: self.kagemusha.parse(emitter),
             router: self.router.parse(emitter),
-        }
-    }
-}
-impl Kagemusha {
-    /// Validate the all-or-none release file set and construct runtime configuration.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Kagemusha {
-        let paths = [
-            self.release_manifest_path.is_some(),
-            self.validation_receipt_path.is_some(),
-            self.authority_policy_path.is_some(),
-            self.release_attestation_path.is_some(),
-            self.recursive_profile_path.is_some(),
-            self.artifact_directory.is_some(),
-        ];
-        let proof_release = if paths.iter().all(|present| !present) {
-            None
-        } else if paths.iter().all(|present| *present) {
-            Some(actual::KagemushaV1ProofReleaseFiles {
-                manifest: self
-                    .release_manifest_path
-                    .expect("all release paths were checked present"),
-                validation_receipt: self
-                    .validation_receipt_path
-                    .expect("all release paths were checked present"),
-                authority_policy: self
-                    .authority_policy_path
-                    .expect("all release paths were checked present"),
-                attestation: self
-                    .release_attestation_path
-                    .expect("all release paths were checked present"),
-                recursive_profile: self
-                    .recursive_profile_path
-                    .expect("all release paths were checked present"),
-                artifact_directory: self
-                    .artifact_directory
-                    .expect("all release paths were checked present"),
-            })
-        } else {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.kagemusha proof-release paths must be configured all together",
-            ));
-            None
-        };
-        actual::Kagemusha {
-            reserve_accounts: BTreeMap::new(),
-            proof_release,
-            allow_testnet_experimental_release: self.allow_testnet_experimental_release,
         }
     }
 }
@@ -14895,13 +14820,9 @@ pub struct Torii {
     #[config(default = "defaults::torii::PROOF_MAX_BODY_BYTES")]
     pub proof_max_body_bytes: Bytes,
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
-    ///
-    /// This aggregate gate also covers KAGEMUSHA V1 top-up/redemption command bodies.
     #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
     pub proof_body_max_inflight: NonZeroUsize,
     /// Absolute deadline for reading one admitted proof-bearing request body (milliseconds).
-    ///
-    /// This deadline also applies to KAGEMUSHA V1 top-up/redemption command bodies.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS))"
     )]
@@ -15164,9 +15085,6 @@ pub struct Torii {
     pub account_onboarding: Option<AccountOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional KAGEMUSHA V1 command capacity and redemption authority customization.
-    /// Command admission remains active with bounded defaults when absent.
-    pub kagemusha_v1_commands: Option<ToriiKagemushaV1Commands>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration for direct wallet reads.
@@ -15215,10 +15133,6 @@ impl core::fmt::Debug for Torii {
                 &RedactedConfigSecret::present(self.account_onboarding.is_some()),
             )
             .field("faucet_configured", &self.faucet.is_some())
-            .field(
-                "kagemusha_v1_commands",
-                &RedactedConfigSecret::present(self.kagemusha_v1_commands.is_some()),
-            )
             .field(
                 "ram_lfe_program_count",
                 &self
@@ -16459,9 +16373,6 @@ impl Torii {
                 .and_then(|config| config.parse_with_file_source(files, emitter)),
             faucet: self
                 .faucet
-                .and_then(|config| config.parse_with_file_source(files, emitter)),
-            kagemusha_v1_commands: self
-                .kagemusha_v1_commands
                 .and_then(|config| config.parse_with_file_source(files, emitter)),
             ram_lfe: self.ram_lfe.and_then(|config| config.parse(emitter)),
             tx_history: self.tx_history.map(|config| config.parse(emitter)),
@@ -18836,7 +18747,6 @@ impl AccountOnboarding {
             "DpnUser",
             "CanManagePeers",
             "CanResolveEscrowDispute",
-            "CanManageKagemushaReserve",
             "CanSetParameters",
             "CanSetHijiriParameters",
             "CanProposeSccpRouteGovernance",
@@ -19386,250 +19296,9 @@ impl ToriiFaucet {
         }
     }
 }
-/// KAGEMUSHA V1 command-admission configuration for app-facing KAGEMUSHA V1 routes.
-///
-/// The whole table customizes mandatory command admission. Absence uses bounded defaults;
-/// when present, every capacity field is required.
-/// The redemption signer fields are an optional all-or-none group; payer-signed top-ups do not
-/// require Torii to hold an issuer key.
-#[derive(Debug, Clone, norito::JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub struct ToriiKagemushaV1Commands {
-    /// Optional public binding of the redemption issuer: the canonical single-signature account
-    /// the redemption private key must sign for.
-    ///
-    /// It belongs to the redemption group and requires a redemption key. A compiled-profile node
-    /// file sets it to bind the profile's KAGEMUSHA V1 commands template; the key then comes from
-    /// `<data_dir>/secrets/authority/kagemusha_redemption.key`.
-    pub redemption_authority: Option<String>,
-    /// Optional private key for the account submitting redemption instructions.
-    pub redemption_private_key: Option<PrivateKey>,
-    /// Optional owner-held file containing the KAGEMUSHA V1 redemption issuer's private key.
-    pub redemption_private_key_file: Option<WithOrigin<PathBuf>>,
-    /// Minimum live XOR balance required for the self-funded redemption authority.
-    ///
-    /// This is required and must be positive when a redemption key is configured, and must be
-    /// absent when no redemption issuer is configured.
-    pub redemption_minimum_xor_balance: Option<Quantity>,
-    /// Maximum number of admitted and in-flight operations retained in memory.
-    pub operation_registry_max_entries: usize,
-    /// Maximum canonical bytes reserved by admitted and in-flight operations.
-    pub operation_registry_max_bytes: usize,
-}
-impl ToriiKagemushaV1Commands {
-    /// Parse `redemption_authority` as a canonical single-signature account literal.
-    fn parse_redemption_authority(
-        raw: &str,
-        emitter: &mut Emitter<ParseError>,
-    ) -> Option<AccountId> {
-        let parsed = match AccountId::parse_encoded(raw) {
-            Ok(account_id) => account_id,
-            Err(err) => {
-                emit_torii_config_error(
-                    emitter,
-                    format!(
-                        "torii.kagemusha_v1_commands.redemption_authority must be a canonical domainless AccountId: {err}"
-                    ),
-                );
-                return None;
-            }
-        };
-        if raw != parsed.to_string() {
-            emit_torii_config_error(
-                emitter,
-                format!(
-                    "torii.kagemusha_v1_commands.redemption_authority must use canonical form `{parsed}`"
-                ),
-            );
-            return None;
-        }
-        if parsed.try_signatory().is_none() {
-            emit_torii_config_error(
-                emitter,
-                "torii.kagemusha_v1_commands.redemption_authority must be a single-signature AccountId",
-            );
-            return None;
-        }
-        Some(parsed)
-    }
-    #[cfg(test)]
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiKagemushaV1Commands> {
-        self.parse_with_file_source(&ConfigFiles::Native, emitter)
-    }
-    fn parse_with_file_source(
-        self,
-        files: &ConfigFiles<'_>,
-        emitter: &mut Emitter<ParseError>,
-    ) -> Option<actual::ToriiKagemushaV1Commands> {
-        let Self {
-            redemption_authority,
-            redemption_private_key,
-            redemption_private_key_file,
-            redemption_minimum_xor_balance,
-            operation_registry_max_entries,
-            operation_registry_max_bytes,
-        } = self;
-        let redemption_authority = match redemption_authority {
-            Some(raw) => Some(Self::parse_redemption_authority(&raw, emitter)?),
-            None => None,
-        };
-        let redemption_private_key = match (redemption_private_key, redemption_private_key_file) {
-            (Some(_), Some(_)) => {
-                emit_torii_config_error(
-                    emitter,
-                    "torii.kagemusha_v1_commands.redemption_private_key and torii.kagemusha_v1_commands.redemption_private_key_file are mutually exclusive",
-                );
-                return None;
-            }
-            (Some(redemption_private_key), None) => Some(redemption_private_key),
-            (None, Some(file)) => {
-                match read_private_key_file(
-                    file,
-                    "torii.kagemusha_v1_commands.redemption_private_key_file",
-                    files,
-                ) {
-                    Ok((redemption_private_key, _)) => Some(redemption_private_key),
-                    Err(error) => {
-                        emit_torii_config_error(emitter, error);
-                        return None;
-                    }
-                }
-            }
-            (None, None) => None,
-        };
-        let key_pair = match redemption_private_key.map(|redemption_private_key| {
-            let key_pair = match KeyPair::from_private_key(redemption_private_key) {
-                Ok(key_pair) => key_pair,
-                Err(error) => {
-                    emit_torii_config_error(
-                        emitter,
-                        format!(
-                            "invalid torii.kagemusha_v1_commands.redemption_private_key: {error}"
-                        ),
-                    );
-                    return Err(());
-                }
-            };
-            match key_pair.public_key().try_algorithm() {
-                Ok(Algorithm::Ed25519 | Algorithm::Secp256k1) => Ok(key_pair),
-                Ok(_) => {
-                    emit_torii_config_error(
-                        emitter,
-                        "torii.kagemusha_v1_commands.redemption_private_key must use ed25519 or secp256k1",
-                    );
-                    Err(())
-                }
-                Err(error) => {
-                    emit_torii_config_error(
-                        emitter,
-                        format!(
-                            "invalid public key derived from torii.kagemusha_v1_commands.redemption_private_key: {error}"
-                        ),
-                    );
-                    Err(())
-                }
-            }
-        }) {
-            Some(Ok(key_pair)) => Some(key_pair),
-            Some(Err(())) => return None,
-            None => None,
-        };
-        match (&redemption_authority, &key_pair) {
-            (Some(_), None) => {
-                emit_torii_config_error(
-                    emitter,
-                    "torii.kagemusha_v1_commands.redemption_authority requires a redemption private key",
-                );
-                return None;
-            }
-            (Some(authority), Some(key_pair))
-                if authority.try_signatory() != Some(key_pair.public_key()) =>
-            {
-                emit_torii_config_error(
-                    emitter,
-                    "the KAGEMUSHA V1 redemption private key does not sign for torii.kagemusha_v1_commands.redemption_authority",
-                );
-                return None;
-            }
-            _ => {}
-        }
-        let redemption_issuer = match (key_pair, redemption_minimum_xor_balance) {
-            (Some(key_pair), Some(redemption_minimum_xor_balance))
-                if !redemption_minimum_xor_balance.is_zero() =>
-            {
-                Some(actual::ToriiKagemushaV1RedemptionIssuer {
-                    authority: AccountId::new(key_pair.public_key().clone()),
-                    key_pair,
-                    minimum_xor_balance: redemption_minimum_xor_balance,
-                })
-            }
-            (Some(_), Some(_)) => {
-                emit_torii_config_error(
-                    emitter,
-                    "torii.kagemusha_v1_commands.redemption_minimum_xor_balance must be greater than zero",
-                );
-                return None;
-            }
-            (Some(_), None) => {
-                emit_torii_config_error(
-                    emitter,
-                    "torii.kagemusha_v1_commands.redemption_minimum_xor_balance is required when a redemption private key is configured",
-                );
-                return None;
-            }
-            (None, Some(_)) => {
-                emit_torii_config_error(
-                    emitter,
-                    "torii.kagemusha_v1_commands.redemption_minimum_xor_balance requires a redemption private key",
-                );
-                return None;
-            }
-            (None, None) => None,
-        };
-        let operation_registry_max_entries = NonZeroUsize::new(operation_registry_max_entries);
-        if operation_registry_max_entries.is_none() {
-            emit_torii_config_error(
-                emitter,
-                "torii.kagemusha_v1_commands.operation_registry_max_entries must be greater than zero",
-            );
-        }
-        let operation_registry_max_bytes = NonZeroUsize::new(operation_registry_max_bytes);
-        if operation_registry_max_bytes.is_none() {
-            emit_torii_config_error(
-                emitter,
-                "torii.kagemusha_v1_commands.operation_registry_max_bytes must be greater than zero",
-            );
-        } else if operation_registry_max_bytes.is_some_and(|limit| {
-            limit.get()
-                < defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
-        }) {
-            emit_torii_config_error(
-                emitter,
-                format!(
-                    "torii.kagemusha_v1_commands.operation_registry_max_bytes must be at least {}",
-                    defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
-                ),
-            );
-            return None;
-        }
-        let (Some(operation_registry_max_entries), Some(operation_registry_max_bytes)) =
-            (operation_registry_max_entries, operation_registry_max_bytes)
-        else {
-            return None;
-        };
-        Some(actual::ToriiKagemushaV1Commands {
-            redemption_issuer,
-            operation_registry_max_entries,
-            operation_registry_max_bytes,
-        })
-    }
-}
 #[cfg(test)]
 #[path = "user/torii_faucet_tests.rs"]
 mod torii_faucet_tests;
-#[cfg(test)]
-#[path = "user/torii_kagemusha_v1_commands_tests.rs"]
-mod torii_kagemusha_v1_commands_tests;
 /// RAM-LFE runtime configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -19740,6 +19409,23 @@ impl ToriiRamLfeProgram {
                 }
             };
         let hidden_program = self.hidden_program_hex;
+        // The tape owner admits every structurally valid tape. The diagnostic
+        // runtime this table configures executes `bounded.v1` tapes only, so a
+        // tape outside that class is refused here, at startup, and not at the
+        // first request. The class error names hidden instruction positions
+        // and is not reported.
+        // TODO(R.12): the canonical policy declares its class; check the tape
+        // against `RamLfeClassV1::membership` of that class when the canonical
+        // execution path replaces this runtime.
+        if iroha_crypto::validate_hidden_ram_fhe_program(&hidden_program).is_err() {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.ram_lfe.programs[{index}].hidden_program_hex is outside the program class the configured runtime executes"
+                ),
+            );
+            return None;
+        }
         if let Err(err) = KeyPair::from_private_key(self.signer_private_key.clone()) {
             emit_torii_config_error(
                 emitter,
@@ -35264,9 +34950,6 @@ mod configuration_regression_tests {
     }
 }
 include!("user_validation_tests.rs");
-#[cfg(test)]
-#[path = "user/kagemusha_v1_settlement_tests.rs"]
-mod kagemusha_v1_settlement_tests;
 #[cfg(test)]
 #[path = "user/settlement_router_tests.rs"]
 mod settlement_router_tests;

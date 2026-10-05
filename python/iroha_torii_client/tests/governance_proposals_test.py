@@ -29,6 +29,25 @@ from iroha_torii_client.governance_proposals import (
 
 CONTRACT_ADDRESS = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
 NETWORK_ID = "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "KagemushaVerifierPolicyInstall",
+        "KagemushaVerifierReleaseInstall",
+        "KagemushaVerifierReleaseActivate",
+        "KagemushaVerifierReleaseRetire",
+    ],
+)
+@pytest.mark.parametrize("payload", [None, {}, {"proposal_operator": "invalid account"}])
+def test_retired_kagemusha_proposal_kinds_reject_before_payload_validation(
+    tag: str, payload: object
+) -> None:
+    with pytest.raises(TypeError, match="ten first-release variants"):
+        GovernanceProposalKind.from_payload({"kind": tag, "payload": payload})
+
+
 def _bsc_network() -> dict[str, object]:
     return {"network": "bsc_mainnet", "profile": None}
 

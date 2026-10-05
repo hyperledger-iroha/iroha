@@ -623,9 +623,8 @@ fn compiler_emits_self_describing_contract_artifact() {
     assert_eq!(interface.seiyaku_name, "Demo");
     assert_eq!(manifest.seiyaku_name.as_deref(), Some("Demo"));
     let verified = ivm::verify_contract_artifact(&bytes).expect("verify artifact");
-    assert_eq!(
-        verified.manifest.signature_payload(),
-        manifest.signature_payload(),
+    assert!(
+        verified.manifest.same_signed_content(&manifest),
         "compiler manifest must match the embedded contract interface",
     );
 }
@@ -722,7 +721,7 @@ fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
     );
     assert_eq!(
         hex::encode(admitted.code_hash.as_ref()),
-        "984f729f8c465b6d7fb6b62bf9ff13c882f7fbb18b76cad922c3c35a63ded6df"
+        "8ea032a639a92b0c46b366b93a8207699e3253bf4c14fd159c6f1f5261b928a9"
     );
 }
 #[test]
@@ -736,9 +735,10 @@ fn verified_code_hash_binds_execution_header() {
     let changed_cycles_verified = ivm::verify_contract_artifact(&changed_cycles)
         .expect("verify artifact with changed max_cycles");
     assert_ne!(changed_cycles_verified.code_hash, original_hash);
-    assert_ne!(
-        changed_cycles_verified.manifest.signature_payload(),
-        original_verified.manifest.signature_payload(),
+    assert!(
+        !changed_cycles_verified
+            .manifest
+            .same_signed_content(&original_verified.manifest),
         "manifest signatures must bind max_cycles"
     );
     let mut changed_vector_length = original;
@@ -750,17 +750,38 @@ fn verified_code_hash_binds_execution_header() {
 }
 #[test]
 fn signed_manifest_rejects_every_execution_header_mutation() {
+    const FRAME_LIMIT: usize = 64 * 1024;
+    const SCRATCH_BYTES: usize = 8 * FRAME_LIMIT;
+    let signing_pool = iroha_allocation::AllocationBudget::new(
+        SCRATCH_BYTES + norito::core::DecodeBudgetContext::allocation_layout().size(),
+    );
+    let _signing_scratch = signing_pool
+        .try_reserve_bytes(SCRATCH_BYTES)
+        .expect("fund manifest signing and verification scratch");
+    let signing_context = norito::core::DecodeBudgetContext::try_new_owned(
+        norito::DecodeLimits::new(FRAME_LIMIT, FRAME_LIMIT, FRAME_LIMIT, SCRATCH_BYTES, 256),
+        &signing_pool,
+    )
+    .expect("fund original manifest signing counter");
     let original = contract_artifact(1, vec![entrypoint("main", EntryPointKind::Kotoage, 0)]);
     let original_verified =
         ivm::verify_contract_artifact(&original).expect("verify original artifact");
     let signed = original_verified
         .manifest
         .clone()
-        .signed(&iroha_crypto::KeyPair::try_random().expect("test signing key"));
+        .try_signed(
+            &signing_context,
+            FRAME_LIMIT,
+            &iroha_crypto::KeyPair::try_random().expect("test signing key"),
+        )
+        .expect("sign bounded manifest");
     let provenance = signed.provenance.as_ref().expect("manifest provenance");
+    let signed_payload = signed
+        .signature_payload_bytes(&signing_context, FRAME_LIMIT)
+        .expect("encode original bounded signature payload");
     provenance
         .signature
-        .verify(&provenance.signer, &signed.signature_payload_bytes())
+        .verify(&provenance.signer, &signed_payload)
         .expect("original manifest signature");
     let mut mutations = Vec::<(&str, Vec<u8>)>::new();
     for index in 0..ivm::METADATA_MAGIC.len() {
@@ -796,18 +817,18 @@ fn signed_manifest_rejects_every_execution_header_mutation() {
             // Structural rejection is an admission rejection before provenance is checked.
             continue;
         };
+        let mutated_payload = verified
+            .manifest
+            .signature_payload_bytes(&signing_context, FRAME_LIMIT)
+            .expect("encode mutated bounded signature payload");
         assert_ne!(
-            verified.manifest.signature_payload(),
-            signed.signature_payload(),
+            mutated_payload, signed_payload,
             "{field} mutation retained the signed manifest payload"
         );
         assert!(
             provenance
                 .signature
-                .verify(
-                    &provenance.signer,
-                    &verified.manifest.signature_payload_bytes()
-                )
+                .verify(&provenance.signer, &mutated_payload)
                 .is_err(),
             "{field} mutation retained a valid signature"
         );

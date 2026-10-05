@@ -177,6 +177,8 @@ mod effect_budget {
     }
 
     fn contract_fixture() -> (State, Vec<u8>, ContractAddress, Hash) {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(r#"
 seiyaku ActualEffectGroups {
@@ -211,7 +213,7 @@ seiyaku ActualEffectGroups {
                 address.dataspace_id().unwrap(),
                 hash,
             ),
-            manifest.signed(&ALICE_KEYPAIR),
+            manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"),
         );
         setup.world.accounts.insert(
             address.subject_id(),

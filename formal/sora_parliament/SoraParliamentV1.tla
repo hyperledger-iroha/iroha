@@ -605,6 +605,18 @@ FailSortitionPulseUnavailable ==
         >>
     /\ FindingFrame
 
+\* One abstract sortition generation stands for every body whose active
+\* generation ended NoRoster. The reducer refines it exactly: a retry batch
+\* (`validate_sortition_registration_batch_v1`) must contain every such body,
+\* before and after the first consumed pulse, so a retry spends one redraw unit
+\* for all of them and never leaves a failed body behind at the ceiling. That is
+\* why ProposalWideRandomnessRedrawBudget (NoRoster at the ceiling implies
+\* Rejected) is also the reducer's persisted-state audit. Each generation also
+\* owns a fresh pulse slot, so one frozen snapshot serves the whole slot, as the
+\* single modeled request does. A sub-floor hidden
+\* body records capacity evidence for its whole generation, as modeled below.
+\* Per-body stages are abstracted away: a body serving a later stage that fails
+\* here rejects the attempt even while an earlier stage is still in progress.
 SortitionRetryHeightEligible ==
     IF sortitionFailureKind = "HiddenElectorateCapacityUnavailable"
     THEN height > sortitionFailureHeight

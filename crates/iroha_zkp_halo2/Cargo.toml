@@ -14,6 +14,7 @@ path = "src/lib.rs"
 
 [dependencies]
 fastpq_isi = { path = "../fastpq_isi", optional = true }
+iroha_fhe = { path = "../iroha_fhe", default-features = false, optional = true }
 zeroize = { workspace = true, optional = true }
 iroha_crypto = { workspace = true, default-features = false, optional = true }
 tiny-keccak = { workspace = true, optional = true }
@@ -41,6 +42,7 @@ full = [
     "dep:halo2curves",
     "dep:once_cell",
     "dep:fastpq_isi",
+    "dep:iroha_fhe",
     "dep:zeroize",
     "dep:iroha_crypto",
     "dep:tiny-keccak",

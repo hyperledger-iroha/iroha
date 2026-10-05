@@ -89,6 +89,7 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("ivm", "gen_abi_hash_doc"),
         ("ivm", "gen_header_doc"),
         ("ivm", "gen_pointer_types_doc"),
+        ("ivm", "gen_proof_coverage_inventory"),
         ("ivm", "gen_syscalls_doc"),
         ("ivm", "ivm_fixture_export"),
         ("ivm", "ivm_prebuild"),

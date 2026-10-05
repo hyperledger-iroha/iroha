@@ -29,6 +29,8 @@ def executable(cpu=0x100000c):
 
 
 class ClientBuildTests(unittest.TestCase):
+    binary = "musubi"
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
@@ -37,8 +39,12 @@ class ClientBuildTests(unittest.TestCase):
         self.output = self.root / "target/client-observation"
         self.source = self.target / "captured-source"
         self.source.mkdir(mode=0o700)
-        self.args = argparse.Namespace(repo_root=self.root, output_dir=self.output,
+        self.args = argparse.Namespace(repo_root=self.root, output_dir=self.output, bin=self.binary,
                                        expected_commit="a" * 40, expected_signer="A" * 40)
+        _, self.package, self.manifest, self.entry = release.CLIENT_BINARIES[self.binary]
+        manifest = self.source / self.manifest
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('[package]\nname = "' + self.package + '"\nversion = "0.1.0"\n')
         self.tool = self.root / "rust-tool"
         self.tool.write_bytes(b"pinned test compiler")
         self.tool.chmod(0o700)
@@ -49,6 +55,7 @@ class ClientBuildTests(unittest.TestCase):
         self.after_build = lambda: None
         self.snapshots = lambda: [{"path": "Cargo.toml", "sha256": "c" * 64}]
         self.binary_bytes = executable()
+        self.extra_emissions = []
 
     def tearDown(self):
         for path in [self.root, *self.root.rglob("*")]:
@@ -58,7 +65,7 @@ class ClientBuildTests(unittest.TestCase):
 
     def compile(self, source, command, environment, log, **locks):
         self.assertEqual(source, self.source)
-        self.assertEqual(command, release.client_build_command(self.source, self.target, str(self.tool), HOST))
+        self.assertEqual(command, release.client_build_command(self.source, self.target, str(self.tool), HOST, self.binary))
         self.assertNotIn("CARGO_BUILD_JOBS", environment)
         self.assertNotIn("CARGO_ZIGBUILD_ZIG_PATH", environment)
         self.assertNotIn("PRIVATE_KEY", environment)
@@ -66,23 +73,27 @@ class ClientBuildTests(unittest.TestCase):
         self.assertEqual(environment["CARGO_INCREMENTAL"], "0")
         self.assertEqual(environment["IROHA_GIT_COMMIT_HASH"], self.args.expected_commit)
         self.assertEqual(environment["VERGEN_GIT_SHA"], self.args.expected_commit)
-        self.assertEqual(locks["label"], "native Musubi build")
+        self.assertEqual(locks["label"], "native " + self.binary + " build")
         os.fstat(locks["lock_fd"])
         os.fstat(locks["mode_lock_fd"])
         with self.assertRaisesRegex(release.PrepareError, "still running"):
             with release.cargo_lane(self.root, self.target, "release"):
                 self.fail("client build lost its lane lock")
-        binary = self.target / HOST / "debug/musubi"
+        binary = self.target / HOST / "debug" / self.binary
         binary.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         binary.write_bytes(self.binary_bytes)
         binary.chmod(0o700)
-        value = {"reason": "compiler-artifact", "package_id": "path+file://fixture#musubi@0.1.0",
-                 "manifest_path": str(source / "crates/musubi/Cargo.toml"),
-                 "target": {"name": "musubi", "kind": ["bin"], "src_path": str(source / "crates/musubi/src/main.rs")},
+        manifest = source / self.manifest
+        package_id = "path+" + manifest.parent.as_uri() + "#" + (
+            "0.1.0" if manifest.parent.name == self.package else self.package + "@0.1.0")
+        value = {"reason": "compiler-artifact", "package_id": package_id,
+                 "manifest_path": str(manifest),
+                 "target": {"name": self.binary, "kind": ["bin"], "src_path": str(source / self.entry)},
                  "profile": {"test": False}, "features": [], "filenames": [str(binary)],
                  "executable": str(binary), "fresh": False}
         self.emission_edit(value)
-        log.write_text(json.dumps(value) + '\n{"reason":"build-finished","success":true}\n')
+        log.write_text(''.join(json.dumps(row) + '\n' for row in self.extra_emissions + [value])
+                       + '{"reason":"build-finished","success":true}\n')
         self.after_build()
 
     def run_client(self, build=None):
@@ -105,7 +116,7 @@ class ClientBuildTests(unittest.TestCase):
                 (release, "preparation_native_linker", {"return_value": linker}),
                 (release, "preparation_native_environment", {"side_effect": lambda env, _: env}),
                 (release.subprocess, "check_output", {"return_value": "rustc fixture\nhost: " + HOST + "\n"}),
-                (release, "local_package_names", {"return_value": {"musubi"}}),
+                (release, "local_package_names", {"return_value": {self.package}}),
                 (release, "admit_source_fingerprints", {"return_value": []}),
                 (release, "source_fingerprints", {"side_effect": lambda *_a, **_k: contextlib.nullcontext([])}),
                 (release, "run_build", {"side_effect": build or self.compile}),
@@ -124,9 +135,11 @@ class ClientBuildTests(unittest.TestCase):
         self.assertTrue(result["toolchain_unchanged"])
         self.assertFalse(result["release_qualified"])
         self.assertFalse(result["deployed"])
+        self.assertEqual(result["binary"], self.binary)
+        self.assertEqual(result["package"], self.package)
         self.assertEqual(result["artifact"]["sha256"], hashlib.sha256(executable()).hexdigest())
-        self.assertEqual((self.output / "musubi").read_bytes(), executable())
-        self.assertEqual(stat.S_IMODE((self.output / "musubi").stat().st_mode), 0o500)
+        self.assertEqual((self.output / "bin" / self.binary).read_bytes(), executable())
+        self.assertEqual(stat.S_IMODE((self.output / "bin" / self.binary).stat().st_mode), 0o500)
         self.assertEqual(stat.S_IMODE((self.output / "result.json").stat().st_mode), 0o400)
         self.assertEqual(release.read_record(self.output / "result.json"), result)
         self.assertEqual(tuple(name for name, _ in release.BINARIES),
@@ -142,14 +155,14 @@ class ClientBuildTests(unittest.TestCase):
                 with self.assertRaisesRegex(release.PrepareError, "differs from the captured"):
                     self.run_client()
                 self.assertFalse((self.output / "result.json").exists())
-                self.assertFalse((self.output / "musubi").exists())
+                self.assertFalse((self.output / "bin" / self.binary).exists())
 
     def test_source_drift_after_build_retains_log_without_artifact(self):
         self.after_build = lambda: setattr(self, "snapshots", lambda: [{"changed": True}])
         with self.assertRaisesRegex(release.PrepareError, "source changed"):
             self.run_client()
         self.assertTrue((self.output / "cargo.jsonl").exists())
-        self.assertFalse((self.output / "musubi").exists())
+        self.assertFalse((self.output / "bin" / self.binary).exists())
         self.assertFalse((self.output / "result.json").exists())
 
     def test_tool_drift_after_build_retains_log_without_success(self):
@@ -182,22 +195,92 @@ class ClientBuildTests(unittest.TestCase):
         self.assertEqual((self.output / "result.json").read_bytes(), before)
 
     def test_output_cannot_modify_the_source_or_cargo_lane(self):
-        for selected in (self.target, self.source / "output", self.root / "outside-target"):
+        for selected in (self.target, self.source / "output", self.root / "outside-target",
+                         self.root / "target/taira-macos-runtime/foreign-output"):
             self.args.output_dir = selected
             with self.subTest(selected=selected), self.assertRaisesRegex(release.PrepareError, "fresh directory"):
                 self.run_client()
 
     def test_command_and_cli_are_narrow_and_do_not_change_shipping_selection(self):
         args = release.parser().parse_args(["prepare-client", "--expected-commit", "a" * 40,
-                                          "--expected-signer", "A" * 40, "--output-dir", str(self.output)])
+                                          "--expected-signer", "A" * 40, "--bin", self.binary,
+                                          "--output-dir", str(self.output)])
         self.assertEqual(args.command, "prepare-client")
         self.assertFalse(hasattr(args, "target_dir"))
         self.assertFalse(hasattr(args, "zig"))
-        command = release.client_build_command(self.source, self.target, "/pinned/cargo", HOST)
-        self.assertEqual(command[-4:], ["-p", "musubi", "--bin", "musubi"])
+        command = release.client_build_command(self.source, self.target, "/pinned/cargo", HOST, self.binary)
+        self.assertEqual(command[-4:], ["-p", self.package, "--bin", self.binary])
         self.assertNotIn("--jobs", command)
         with self.assertRaisesRegex(release.PrepareError, "native macOS"):
-            release.client_build_command(self.source, self.target, "/pinned/cargo", release.TARGET)
+            release.client_build_command(self.source, self.target, "/pinned/cargo", release.TARGET, self.binary)
+
+    def test_foreign_package_identity_never_publishes_success(self):
+        self.emission_edit = lambda value: value.update(package_id="path+file:///foreign#0.1.0")
+        with self.assertRaisesRegex(release.PrepareError, "package identity differs"):
+            self.run_client()
+        self.assertFalse((self.output / "result.json").exists())
+
+    def test_first_use_creates_only_the_authenticated_fixed_private_client_lane(self):
+        moved = self.root / "target/retained-signed-source"
+        self.source.rename(moved)
+        self.source = moved
+        self.target.rmdir()
+        result = self.run_client()
+        self.assertEqual(result["target_dir"], str(self.target))
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o700)
+
+    def test_same_bytes_created_copy_substitution_preserves_foreign_inode(self):
+        original = release.exclusive_output_fd
+        foreign = {}
+        @contextlib.contextmanager
+        def substitute(path, **kwargs):
+            with original(path, **kwargs) as fd:
+                yield fd
+            if path.name == self.binary and ".native-bin.pending-" in str(path):
+                data = path.read_bytes()
+                path.rename(path.with_name("original-created-copy"))
+                path.write_bytes(data)
+                path.chmod(0o700)
+                foreign.update(path=path, identity=release.file_identity(path.lstat()), bytes=data)
+        with patch.object(release, "exclusive_output_fd", side_effect=substitute):
+            with self.assertRaisesRegex(release.PrepareError, "created copy custody changed"):
+                self.run_client()
+        self.assertEqual(release.file_identity(foreign["path"].lstat()), foreign["identity"])
+        self.assertEqual(stat.S_IMODE(foreign["path"].stat().st_mode), 0o700)
+        self.assertEqual(foreign["path"].read_bytes(), foreign["bytes"])
+        self.assertFalse((self.output / "bin").exists())
+        self.assertFalse((self.output / "result.json").exists())
+
+    def test_same_bytes_cargo_source_substitution_preserves_foreign_inode(self):
+        original = release.cargo_hash_path
+        foreign = {}
+        def substitute(path, **kwargs):
+            pin = original(path, **kwargs)
+            if path.name == self.binary and not foreign:
+                data = path.read_bytes()
+                path.rename(path.with_name("original-built-client"))
+                path.write_bytes(data)
+                path.chmod(0o700)
+                foreign.update(path=path, identity=release.file_identity(path.lstat()), bytes=data)
+            return pin
+        with patch.object(release, "cargo_hash_path", side_effect=substitute):
+            with self.assertRaises(release.ReleaseArtifactError):
+                self.run_client()
+        self.assertEqual(release.file_identity(foreign["path"].lstat()), foreign["identity"])
+        self.assertEqual(foreign["path"].read_bytes(), foreign["bytes"])
+        self.assertFalse((self.output / "bin").exists())
+        self.assertFalse((self.output / "result.json").exists())
+
+
+class IrohaClientBuildTests(ClientBuildTests):
+    binary = "iroha"
+
+    def test_sdk_library_emission_cannot_replace_or_duplicate_the_cli_binary(self):
+        self.extra_emissions = [{"reason": "compiler-artifact", "target": {"name": "iroha", "kind": ["lib"]},
+                                 "executable": None}]
+        result = self.run_client()
+        self.assertEqual(result["artifact"]["name"], "iroha")
+        self.assertEqual(result["cargo_emission"]["target"]["kind"], ["bin"])
 
 
 if __name__ == "__main__":

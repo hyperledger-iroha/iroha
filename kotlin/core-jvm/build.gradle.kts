@@ -44,6 +44,10 @@ java {
 kotlin {
     jvmToolchain(21)
 
+    sourceSets.named("test") {
+        kotlin.srcDir(rootProject.file("test-support/src"))
+    }
+
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_1_8)
         freeCompilerArgs.add("-Xjdk-release=8")

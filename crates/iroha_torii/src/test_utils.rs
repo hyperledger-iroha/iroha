@@ -337,13 +337,41 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
             })
         })
         .map(|entrypoint| entrypoint.name.clone());
+    let state_view = state.view();
+    let transaction_limits = &state_view.world.parameters().transaction;
+    let max_frame_bytes = usize::try_from(transaction_limits.ivm_bytecode_size.get())
+        .expect("configured fixture manifest frame bound fits usize");
+    let max_elements = usize::try_from(transaction_limits.max_instructions.get())
+        .expect("configured fixture element bound fits usize");
+    // Fund the canonical frame and signer clone before encoding. This original
+    // fixture owner remains live through local transaction construction and enqueue.
+    let scratch_bytes = max_frame_bytes
+        .checked_mul(8)
+        .expect("finite fixture signing scratch fits usize");
+    let pool_bytes = scratch_bytes
+        .checked_add(norito::core::DecodeBudgetContext::allocation_layout().size())
+        .expect("fixture scratch and counter backing fit usize");
+    let signing_pool = iroha_allocation::AllocationBudget::new(pool_bytes);
+    let _signing_scratch = signing_pool
+        .try_reserve_bytes(scratch_bytes)
+        .expect("fund original fixture signing scratch");
+    let signing_context = norito::core::DecodeBudgetContext::try_new_owned(
+        norito::DecodeLimits::new(
+            max_elements,
+            max_frame_bytes,
+            max_elements,
+            scratch_bytes,
+            256,
+        ),
+        &signing_pool,
+    )
+    .expect("fund original fixture signing counter");
     let manifest = verified
         .manifest
-        .try_signed(&key_pair)
-        .expect("sign contract manifest locally");
+        .try_signed(&signing_context, max_frame_bytes, &key_pair)
+        .expect("sign bounded contract manifest locally");
     let nonce_key = Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)
         .expect("contract deployment nonce metadata key");
-    let state_view = state.view();
     let deploy_nonce = state_view
         .world
         .account(authority)
@@ -719,7 +747,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             cors: A::ToriiCors::default(),
             ram_lfe: None,
             faucet: None,
-            kagemusha_v1_commands: None,
             tx_history: None,
             recipient_lookup: Default::default(),
             public_dataspace_upstreams: Vec::new(),
@@ -955,6 +982,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
 
             native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+            history_checkpoint_cache_capacity: iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
             block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,

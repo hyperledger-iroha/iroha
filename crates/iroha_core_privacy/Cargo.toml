@@ -20,6 +20,10 @@ zk-stark = []
 simd = ["sha3/asm"]
 privacy-release-evidence = ["zk-stark", "iroha_data_model/privacy-exact12-conformance"]
 test-utils = ["dep:rand_08"]
+# Opt-in diagnostic: measures the transparent FASTPQ replay prover, which
+# `fastpq_prover` exposes only under its `dev-tools` feature. It enables no
+# protocol behaviour and is required only by the test target below.
+fastpq-replay-measurement = ["fastpq_prover/dev-tools"]
 
 [dependencies]
 iroha_allocation = { workspace = true }
@@ -34,6 +38,7 @@ mv = { workspace = true }
 soranet_pq = { workspace = true }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
 fastpq_isi = { path = "../fastpq_isi" }
+iroha_fhe = { path = "../iroha_fhe", default-features = false }
 fastpq_prover = { path = "../fastpq_prover" }
 orchard = { git = "https://github.com/zcash/orchard.git", rev = "9d07047d32c4787e1b7964b4cf4fa0286c93824c", default-features = false, features = ["circuit", "multicore", "std"] }
 incrementalmerkletree = "=0.8.2"
@@ -60,6 +65,14 @@ rand_08 = { package = "rand", version = "=0.8.7", optional = true }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+# Diagnostics only: the X509 prover observation and its tests record phase
+# trees. Production builds of this crate do not link the recorder.
+iroha_measurement = { workspace = true }
 rand_08 = { package = "rand", version = "=0.8.7" }
 tempfile = { workspace = true }
 x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
+
+[[test]]
+name = "fastpq_phase_tree_measurement"
+path = "tests/fastpq_phase_tree_measurement.rs"
+required-features = ["fastpq-replay-measurement"]

@@ -54,6 +54,23 @@ final class ParliamentApiV1JavaConsumerTest {
   }
 
   @Test
+  void retiredKagemushaProposalKindsAreRejectedByTheKotlinParser() {
+    for (String kind : Arrays.asList(
+        "KagemushaVerifierPolicyInstall",
+        "KagemushaVerifierReleaseInstall",
+        "KagemushaVerifierReleaseActivate",
+        "KagemushaVerifierReleaseRetire")) {
+      for (Object payload : Arrays.asList(null, Collections.emptyMap(),
+          map("proposal_operator", "invalid"))) {
+        assertEquals("proposal.kind is unknown or retired",
+            assertThrows(IllegalArgumentException.class,
+                () -> ParliamentApiV1.Proposal.fromJson(encode(map(
+                    "kind", kind, "payload", payload)))).getMessage());
+      }
+    }
+  }
+
+  @Test
   void draftResponseUsesKotlinModelsAndRejectsForeignOrExtendedWireData() {
     Map<String, Object> response = map(
         "version", 1,

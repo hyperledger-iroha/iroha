@@ -9,6 +9,43 @@ sources are bound by the reviewed commit, source fingerprint, and root lockfile.
 end-to-end instructions on consuming a published artifact inside an app, see the
 [public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html).
 
+## Consumer installation
+
+Before SwiftPM resolves `IrohaSwift`, install the matching native ZIP. Obtain its
+SHA-256 and full producing commit from independently authenticated release
+evidence; a digest computed from an untrusted download or its adjacent unsigned
+manifest is not a trust anchor. The signed first public release remains
+unpromoted. Local qualification uses the reviewed producing candidate and its
+authenticated archive evidence.
+
+The consumer verifier requires Python 3.10+, Apple command-line tools, a clean
+checkout of that commit (or its exact mechanical pin child), and an external
+read-only copy of that checkout's canonical `Cargo.lock`. Rust and identical
+producer tool binaries are not required. `DEVELOPER_DIR` selects local Apple
+tools; otherwise the verifier uses `xcode-select -p`.
+
+```bash
+python3 -I -S -B scripts/validate_norito_bridge_archive.py \
+  --consumer \
+  --root /absolute/path/to/clean-release-checkout \
+  --archive /absolute/path/to/NoritoBridge-v0.1.0.xcframework.zip \
+  --expected-sha256 "$TRUSTED_NORITO_ARCHIVE_SHA256" \
+  --expected-source-commit "$TRUSTED_NORITO_SOURCE_COMMIT" \
+  --lockfile-path /absolute/read-only-release-input/Cargo.lock \
+  --install-dir /absolute/path/to/clean-release-checkout/dist
+```
+
+Run a trusted copy of the installer. It admits the release source before loading
+its validation rules, checks the original archive digest before extraction, and
+verifies headers, Swift pins, ABI, native architecture/export inventories, slice
+digests and the lock. Installation creates the framework and its canonical
+manifest symlink without replacing either existing destination. The existing
+`dist/` directory may contain its tracked `.gitkeep`. A consumer verification
+does not re-create producer build provenance; omitting `--consumer` retains the
+strict producer tool and source checks.
+
+## Producer packaging
+
 The `.github/workflows/mobile_sdk_artifacts.yml` workflow builds, validates,
 packages, and publishes tagged Apple artifacts on macOS. The steps below mirror
 that workflow for local release verification.
@@ -155,8 +192,9 @@ that workflow for local release verification.
    untouched. Failed runs retain their uniquely named snapshot and archive residue
    for inspection instead of deleting a path that another process may have swapped.
    A concurrent builder or archiver is rejected; do not invoke `ditto` or `zip`
-   directly. CI also feeds the published ZIP to a fresh local SwiftPM binary target
-   and compiles a consumer against `NoritoBridge`.
+   directly. CI also feeds the published ZIP to a maintained local SwiftPM binary
+   target and executes both that consumer and an ordinary public `IrohaSwift`
+   dependency in Release.
 
 3. Authenticate the archive against its embedded manifest and retain the signed
    release evidence outside the source tree. The checked-in Swift package uses
@@ -190,6 +228,16 @@ that workflow for local release verification.
    public `IrohaSwift` dependency in Release without unsafe linker flags.
    Reuse stable external Swift scratch directories. Do not hand-edit a release
    URL or checksum, or place generated package outputs in Git.
+
+   The maintained gate is `scripts/check_swift_release_consumers.py`; pass the
+   verifier's `archive_sha256` through `--archive-sha256`, the authenticated ZIP
+   through `--archive`, and explicit `--work-dir`, `--archive-scratch` and
+   `--sdk-scratch` directories outside source. It stages the checked-in
+   `scripts/fixtures/swift_release_consumers` executables and uses `swift run
+   --configuration release` for both. The public SDK consumer adds no direct
+   native-target references or unsafe linker flags. Both execute ABI-25 native
+   cryptography and Connect key agreement; the SDK also checks canonical JSON,
+   BLAKE3 and AEAD. Either build or runtime failure stops the Apple release gate.
 
 5. **Maintain the source header when exports or constants change.** The build
    copies `crates/connect_norito_bridge/include/connect_norito_bridge.h` into each

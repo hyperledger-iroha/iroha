@@ -555,6 +555,12 @@ fn zk_x509_network_window_has_reserve_v1(
     if admission_reserve_millis == 0 {
         return Ok(false);
     }
+    // TODO(X.6): take this deadline from the canonical interval definition
+    // (`statement.presentation_window().last_admissible_block_timestamp_ms()`
+    // plus one). It is the same value on every input; the lines below are
+    // pinned as a `deferred` site in
+    // specs/zk_x509_presentation_interval_sites.json and compared with the
+    // definition by `deferred_sites_equal_the_canonical_definition_on_a_boundary_grid`.
     let deadline_exclusive_millis = statement
         .presentation_not_after_unix_seconds
         .checked_add(1)

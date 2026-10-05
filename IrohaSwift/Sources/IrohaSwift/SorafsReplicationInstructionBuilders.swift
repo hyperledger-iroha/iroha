@@ -665,6 +665,14 @@ public enum SorafsReplicationInstructionBuilders {
     public static func decode(
         _ instruction: NoritoJSON
     ) throws -> SorafsReplicationOrderInstruction {
+        // Retain the wire tokens before Foundation can round fractional numbers.
+        // The shared scanner also rejects duplicate keys before object decoding.
+        let numberLexemes: [String: String]
+        do {
+            numberLexemes = try ExactJSONNumberLexemeScanner.scan(instruction.data)
+        } catch {
+            throw invalidInstruction("expected valid JSON with unique object keys")
+        }
         guard let outer = try JSONSerialization.jsonObject(
             with: instruction.data
         ) as? [String: Any],
@@ -672,6 +680,11 @@ public enum SorafsReplicationInstructionBuilders {
               let variant = outer.keys.first
         else {
             throw invalidInstruction("expected exactly one instruction variant")
+        }
+        func epoch(_ field: String, within path: [String] = []) throws -> UInt64 {
+            let keys = ([variant] + path + [field]).map(InstructionJSONKey.init)
+            let token = numberLexemes[exactJSONNumberCodingPathKey(keys)]
+            return try Self.epoch(token, field: field)
         }
         switch variant {
         case "IssueReplicationOrder":
@@ -689,8 +702,8 @@ public enum SorafsReplicationInstructionBuilders {
             return .issue(try SorafsIssueReplicationOrderInstruction(
                 orderId: try string(body["order_id"], field: "order_id"),
                 orderPayloadBase64: try string(body["order_payload"], field: "order_payload"),
-                issuedEpoch: try epoch(body["issued_epoch"], field: "issued_epoch"),
-                deadlineEpoch: try epoch(body["deadline_epoch"], field: "deadline_epoch"),
+                issuedEpoch: try epoch("issued_epoch"),
+                deadlineEpoch: try epoch("deadline_epoch"),
                 musubiArchiveId: try optionalString(
                     body["musubi_archive"],
                     field: "musubi_archive"
@@ -732,7 +745,7 @@ public enum SorafsReplicationInstructionBuilders {
             return .complete(try SorafsCompleteReplicationOrderInstruction(
                 orderId: try string(body["order_id"], field: "order_id"),
                 providerId: try string(body["provider_id"], field: "provider_id"),
-                completionEpoch: try epoch(body["completion_epoch"], field: "completion_epoch"),
+                completionEpoch: try epoch("completion_epoch"),
                 expectedAuthority: try SorafsProviderIngestCompletionAuthorityV1(
                     providerOwner: try string(
                         authority["provider_owner"],
@@ -748,8 +761,8 @@ public enum SorafsReplicationInstructionBuilders {
                             field: "policy_id"
                         ),
                         revision: try epoch(
-                            signerPolicy["revision"],
-                            field: "revision"
+                            "revision",
+                            within: ["expected_authority", "signer_policy"]
                         ),
                         predecessorDigest: try optionalString(
                             signerPolicy["predecessor_digest"],
@@ -761,12 +774,9 @@ public enum SorafsReplicationInstructionBuilders {
                         )
                     )
                 ),
-                expectedAssignmentRevision: try epoch(
-                    body["expected_assignment_revision"],
-                    field: "expected_assignment_revision"
-                ),
+                expectedAssignmentRevision: try epoch("expected_assignment_revision"),
                 finalizedAnchor: try SorafsProviderIngestFinalizedAnchorV1(
-                    height: try epoch(anchor["height"], field: "height"),
+                    height: try epoch("height", within: ["finalized_anchor"]),
                     blockHash: try string(anchor["block_hash"], field: "block_hash")
                 )
             ))
@@ -778,7 +788,7 @@ public enum SorafsReplicationInstructionBuilders {
             )
             return .expire(try SorafsExpireReplicationOrderInstruction(
                 orderId: try string(body["order_id"], field: "order_id"),
-                expirationEpoch: try epoch(body["expiration_epoch"], field: "expiration_epoch")
+                expirationEpoch: try epoch("expiration_epoch")
             ))
         default:
             throw invalidInstruction("unsupported variant \(variant)")
@@ -815,12 +825,16 @@ public enum SorafsReplicationInstructionBuilders {
         return try string(value, field: field)
     }
 
-    private static func epoch(_ value: Any?, field: String) throws -> UInt64 {
-        guard !(value is Bool), let number = value as? NSNumber else {
-            throw invalidInstruction("\(field) must be a non-negative u64")
-        }
-        let literal = number.stringValue
-        guard !literal.isEmpty,
+    private struct InstructionJSONKey: CodingKey {
+        let stringValue: String
+        let intValue: Int? = nil
+
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+    }
+
+    private static func epoch(_ literal: String?, field: String) throws -> UInt64 {
+        guard let literal, !literal.isEmpty,
               literal.utf8.allSatisfy({ (0x30...0x39).contains($0) }),
               let epoch = UInt64(literal)
         else {

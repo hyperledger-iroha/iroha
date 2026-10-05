@@ -108,8 +108,9 @@ Gas enforcement (CoreHost)
 - `JSON_GET_JSON` quotes heap-backed JSON input against the owned HEAP/INPUT payload bound and
   reserves that same HEAP-capable result bound plus its sum handle, so a valid field beyond the
   fixed INPUT arena cannot be rejected during preparation or exceed its pre-dispatch quote.
-- Host-state-dependent public-input and WSV ZK read results reserve the available syscall gas,
-  compute and preflight their exact encoded cost, and only then allocate the result. This keeps
+- Host-state-dependent durable-state, public-input, and WSV ZK read results reserve
+  the available syscall gas, compute and preflight their exact encoded cost, and
+  only then allocate the result. This keeps
   valid HEAP-sized responses inside the dispatcher quote without mutating registers on
   insufficient gas.
 - ISI syscalls charge extra gas using the native ISI schedule (`iroha_core::gas::meter_instruction`).
@@ -365,9 +366,13 @@ Durable state
   Generic programs have no authenticated contract namespace, so every durable
   state syscall is rejected during admission and again before host dispatch.
 - State gas is deterministic and byte-counted: present reads and writes charge
-  the `NoritoBytes` payload length, misses and tombstones charge only the fixed
-  base, and key enumeration adds the returned-key count plus encoded result
-  bytes.
+  the fixed base plus the encoded path and `NoritoBytes` value payload lengths.
+  Misses and tombstones charge the base plus the encoded path length. Key
+  enumeration adds the returned-key count plus encoded result bytes. `STATE_GET` preparation reserves the caller's remaining gas after checking
+  the path-only minimum. The host checks the exact path-plus-value cost before
+  copying a value, recording the read, or publishing a response; unused gas is
+  refunded. A small value or a miss does not require gas for a maximum-size value.
+  The 512 KiB value limit remains mandatory.
 - The development/test `DurableStateOverlay` is not the ledger state backend.
   Its restart file is a direct regular Norito JSON file capped at 30 MiB and is
   admitted before parse. The retained overlay is capped at 4,096 entries,
@@ -615,6 +620,11 @@ node enforces that policy unconditionally.
   scalar and legacy `NoritoBytes(Numeric)` amount arguments remain invalid.
 - Compiler transport normalizes semantic request bytes to `NoritoBytes` before strict VRF
   verification, while typed durable `bytes` values persist only canonical `Blob` atoms.
+- Every `abi_syscall_list()` entry, with its `syscall_name`, is mapped to its proof-relation
+  obligations in [`proof_coverage/syscalls.rs`](../src/proof_coverage/syscalls.rs). There is no
+  default exclusion list: an added, removed or renamed syscall fails the inventory tests until
+  it is mapped, and an unfinished syscall relation keeps complete proof coverage open. See
+  [`proof_coverage.md`](proof_coverage.md).
 - Any future post-release ABI break must be delivered through a new policy/version
   with updated tests and docs.
 
@@ -755,7 +765,7 @@ node enforces that policy unconditionally.
 | 0x10001 | CORE_QUERY_GET | r10=CoreQueryEntityTagV1:u64, r11=&typed entity id | r10=Option<View> sum handle (typed leaf TLVs) | asset:gas/G_scq@ivm.core/v2 + query items + encoded bytes |
 | 0x10002 | CORE_QUERY_PAGE | r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64 | r10=List<View,64> handle, r11=Option<int> sum handle | asset:gas/G_scq@ivm.core/v2 + offset + query items + encoded bytes |
 | 0x10006 | QUERY_GET_PARAMETER | r10=&NoritoBytes(Name) | r10=ptr (&NoritoBytes(Parameter)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractArtifactId) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
+| 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractAddress | Hash) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10008 | QUERY_GET_CONTRACT_INSTANCE | r10=&NoritoBytes(ContractAddress | Name) | r10=ptr (&NoritoBytes(ContractInstance)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10020 | SYSVAR_CHAIN_ID | - | r10=ptr (&Blob(chain_id)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10021 | SYSVAR_BLOCK_HEIGHT | - | r10=height:u64 | asset:gas/G_sysvar@ivm.core/v2 |
@@ -843,10 +853,10 @@ node enforces that policy unconditionally.
 | 0x10200 | SET_ASSET_TRANSFER_AVAILABILITY | r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<string> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10202 | SET_ASSET_HOLDING_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement), r12=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 <!-- END GENERATED SYSCALLS -->
 
 

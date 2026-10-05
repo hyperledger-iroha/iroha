@@ -624,8 +624,10 @@ def test_aggregate_model_test_boundary_retains_protocol_ownership_and_denials() 
     policy = MODULE.validate_boundary_policy(json.loads(path.read_text()))
     shipping = policy["configurations"]["aggregate-model"]
     tests = policy["configurations"]["aggregate-model-tests"]
+    assert shipping["forbidden_packages"] == ["iroha_plonk_oracle"]
+    assert "forbidden_packages" not in tests
     assert tests == {
-        **shipping,
+        **{key: value for key, value in shipping.items() if key != "forbidden_packages"},
         "default_features": True,
         "features": ["http"],
         "include_root_dev_dependencies": True,
@@ -846,38 +848,10 @@ def test_retired_package_contract_admission_is_rejected(context) -> None:
 
 def test_native_policy_preserves_every_original_context_and_layer() -> None:
     policy = _native_policy()
-    original = {
-        name: row for name, row in policy["configurations"].items()
-        if row["package"] != "iroha"
-    }
-    # Preserve the original assertion over all 16 consumer selections. The SDK
-    # consumers carry no proof/custody admission; assert their retained extra
-    # denials before projecting them back to their original shape.
-    original = copy.deepcopy(original)
-    for selection in original.values():
-        if selection["package"] not in {
-            "iroha_musubi_service", "iroha_sccp_wallet", "iroha_storage_client",
-        }:
-            continue
-        assert "package_contracts" not in selection
-        assert selection.pop("forbidden_packages") == ["iroha_p2p", "kotodama_lang", "kotodama_toolchain"]
-        assert set(selection["forbidden_features"].pop("iroha")) == {
-            "dev-tools", "test-fixtures", "test-network-private-settlement-evidence",
-        }
-        assert set(selection["forbidden_features"].pop("iroha_core_zk")) == {
-            "default", "halo2-dev-tests", "kagemusha-real-proof-harness", "proofs-stark",
-            "test-utils", "zk-stark", "zk-tests",
-        }
-        proof_features = selection["forbidden_features"].pop("iroha_zkp_halo2")
-        assert {"bench", "schema-structural"}.issubset(proof_features)
-        if selection["package"] != "iroha_sccp_wallet":
-            selection["forbidden_features"]["iroha_zkp_halo2"] = [
-                feature for feature in proof_features if feature not in {"bench", "schema-structural"}
-            ]
-    assert len(original) == 16
+    assert len(policy["configurations"]) == 21
     assert hashlib.sha256(json.dumps(
-        original, sort_keys=True, separators=(",", ":"),
-    ).encode()).hexdigest() == "edde83783d48b0df0b3fbf2dee4eb83d17d44af8175b89d38cb4286f938bc564"
+        policy["configurations"], sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest() == "2613ea761c6d3ec8f0b62d30523d8f19f8b627d1a85b864bb455f61e9ce6834c"
     assert hashlib.sha256(json.dumps(
         policy["layers"], sort_keys=True, separators=(",", ":"),
     ).encode()).hexdigest() == "3cca600ca6223358c8889fe065f5d8b2a400b360e04083506dd23d2b007fb880"
@@ -896,3 +870,89 @@ def test_every_dependency_metric_still_rejects_one_unit_of_unreviewed_growth(tmp
     report, violations = MODULE.build_source_report(graph, _config(bounds))
     assert not report["within_budget"]
     assert violations == [f"model: {metric} {metrics[metric]} exceeds limit {bounds[metric]}"]
+
+
+SHIPPING_ORACLE_DENIAL_CONTEXTS = [
+    "aggregate-model",
+    "incentives",
+    "iroha3d-without-sccp-wallet",
+    "model-base-default",
+    "model-base-transparent",
+    "musubi-service-default",
+    "sccp-rpc-default",
+    "sccp-wallet-default",
+    "sdk-default",
+    "sdk-tls-native",
+    "sdk-tls-native-vendored",
+    "sdk-tls-rustls-native-roots",
+    "sdk-tls-rustls-webpki-roots",
+    "service-model",
+    "storage-client-default",
+    "storage-client-tls-native",
+    "storage-client-tls-native-vendored",
+    "storage-client-tls-rustls-native-roots",
+    "storage-client-tls-rustls-webpki-roots",
+    "torii-wire"
+]
+
+
+@pytest.mark.parametrize("context", SHIPPING_ORACLE_DENIAL_CONTEXTS)
+def test_every_shipping_selection_rejects_direct_and_transitive_plonk_oracle(context) -> None:
+    policy = _native_policy()
+    selection = policy["configurations"][context]
+    root = selection["package"]
+    assert selection.get("include_root_dev_dependencies", False) is False
+    assert selection["forbidden_packages"].count("iroha_plonk_oracle") == 1
+    command = MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)
+    assert command[command.index("--edges") + 1] == "normal,build"
+    baseline = f"0|{root} v1.0.0|\n"
+    assert MODULE.evaluate_boundary_tree(policy, selection, baseline)["within_boundary"]
+    for suffix, path in [
+        ("1|iroha_plonk_oracle v1.0.0|circuit-params,default\n",
+         [root, "iroha_plonk_oracle"]),
+        ("1|norito v1.0.0|\n2|iroha_plonk_oracle v1.0.0|circuit-params,default\n",
+         [root, "norito", "iroha_plonk_oracle"]),
+    ]:
+        tree = baseline + suffix
+        report = MODULE.evaluate_boundary_tree(policy, selection, tree)
+        assert not report["within_boundary"]
+        assert report["violations"] == [{
+            "package": "iroha_plonk_oracle", "forbidden_package": True, "path": path,
+        }]
+        # Removing just this package denial admits the same parsed fixture;
+        # the rejection above cannot be borrowed from another policy violation.
+        missing_denial = copy.deepcopy(selection)
+        missing_denial["forbidden_packages"].remove("iroha_plonk_oracle")
+        assert MODULE.evaluate_boundary_tree(policy, missing_denial, tree)["within_boundary"]
+
+
+def test_model_test_selection_keeps_dev_oracle_without_relaxing_shipping_or_layers() -> None:
+    policy = _native_policy()
+    configurations = policy["configurations"]
+    assert {
+        name for name, row in configurations.items()
+        if not row.get("include_root_dev_dependencies", False)
+    } == set(SHIPPING_ORACLE_DENIAL_CONTEXTS)
+    assert {
+        name for name, row in configurations.items()
+        if row.get("include_root_dev_dependencies", False)
+    } == {"aggregate-model-tests"}
+    selection = configurations["aggregate-model-tests"]
+    assert "iroha_plonk_oracle" not in selection.get("forbidden_packages", [])
+    assert not any("iroha_plonk_oracle" in packages for packages in policy["layers"].values())
+    command = MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)
+    assert command[command.index("--edges") + 1] == "normal,build,dev"
+    tree = "0|iroha_data_model v1.0.0|\n1|iroha_plonk_oracle v1.0.0|circuit-params,default\n"
+    assert MODULE.evaluate_boundary_tree(policy, selection, tree)["within_boundary"]
+    with_engine = MODULE.evaluate_boundary_tree(policy, selection, tree + "2|ivm v1.0.0|\n")
+    assert with_engine["violations"] == [{
+        "package": "ivm", "forbidden_layer": "node_execution",
+        "path": ["iroha_data_model", "iroha_plonk_oracle", "ivm"],
+    }]
+    with_proof_feature = MODULE.evaluate_boundary_tree(
+        policy, selection, tree + "2|iroha_zkp_halo2 v1.0.0|full\n",
+    )
+    assert with_proof_feature["violations"] == [{
+        "package": "iroha_zkp_halo2", "forbidden_feature": "full",
+        "path": ["iroha_data_model", "iroha_plonk_oracle", "iroha_zkp_halo2"],
+    }]

@@ -632,10 +632,13 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn latest_block_created_at_missing_when_height_zero() {
-        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        let budget = iroha_allocation::AllocationBudget::new(0);
+        let state = CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
         assert!(
-            super::latest_block_created_at(&kura, 0, &budget)
+            super::latest_block_created_at(&state, 0)
                 .expect("height zero needs no body admission")
                 .is_none()
         );

@@ -177,7 +177,15 @@ The bridge requires the four `soranet_mldsa_*` exports owned by
 `crates/soranet_pq/include/soranet_pq.h`. Swift loads those current symbols
 unconditionally; an incomplete native artifact fails admission.
 
-Build the required native bridge before resolving the package:
+Install the authenticated native release archive before resolving the package.
+`scripts/validate_norito_bridge_archive.py --consumer` accepts an independently
+trusted archive SHA-256 and full producing commit, verifies the clean matching
+source checkout, headers, pins, lock, ABI and native slices, and installs into
+an absent `dist/NoritoBridge.xcframework`. Consumer Macs need Python 3.10+ and
+Apple command-line tools, without the producer's Rust toolchain or exact tool
+binaries. See [consumer installation](../docs/norito_bridge_release.md#consumer-installation)
+for the command and trust inputs. The signed public release remains unpromoted;
+use an authenticated local candidate or build the bridge from source:
 
 ```bash
 cd /path/to/iroha

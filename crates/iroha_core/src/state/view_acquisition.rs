@@ -96,6 +96,34 @@ pub(super) use super::authority_registry::world::WorldReadReleases;
 
 #[cfg(test)]
 impl State {
+    /// Probe original State physical publication and reader owners from a test waker.
+    pub(crate) fn assert_view_physical_fences_released_for_reader_test(&self) {
+        let _commit = self
+            .state_commit_lock
+            .try_lock()
+            .expect("original refund callback runs after the State commit fence");
+        let _write = self
+            .state_write_lock
+            .try_lock()
+            .expect("original refund callback runs after the State writer");
+        let _view = self
+            .try_view_once()
+            .expect("original refund callback can acquire all actual State reader owners");
+    }
+
+    /// Hold the actual State publisher and visibility interval for nonblocking reader tests.
+    /// The callback receives the existing physical writer's original release observation.
+    pub(crate) fn with_held_view_publication_for_reader_test<R>(
+        &self,
+        f: impl FnOnce(ReleaseWait) -> R,
+    ) -> R {
+        let mut notice = self.state_view_publication();
+        let mut release = self.state_write_lock.defer_notifications();
+        let _held = release.lock();
+        let _publication = notice.begin();
+        f(self.state_write_lock.observe_release())
+    }
+
     /// Hold the real header writer for an exact nonblocking-reader regression.
     pub(crate) fn with_held_header_for_reader_test<R>(
         &self,
@@ -107,6 +135,16 @@ impl State {
 }
 
 impl World {
+    /// Retain raw auth sources without manufacturing a universal catalog allocation.
+    /// The enclosing stable auth view supplies its independently validated borrowed catalog.
+    pub(super) fn try_authorization_view_retaining(
+        &self,
+        releases: &mut WorldReadReleases,
+    ) -> Result<WorldView<'_>, StateViewError> {
+        let catalog = DataSpaceCatalog::new(Vec::new()).map_err(runtime_catalog_invalid)?;
+        with_world_overlay_fields!(build_world_view_from_fields, self, releases, catalog)
+    }
+
     /// Synchronous callers retain the same reader notices through their outer fences.
     pub(super) fn view_retaining(&self, releases: &mut WorldReadReleases) -> WorldView<'_> {
         loop {

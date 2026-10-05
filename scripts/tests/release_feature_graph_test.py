@@ -21,6 +21,9 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python <3.11
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "check_release_feature_graph.py"
 WORKFLOW = REPO / ".github" / "workflows" / "pr.yml"
+# Exact seal of initialize_tracked_release_surface's fixed files and allowed bridge link.
+# This fixture is independent of the mutable checkout and the production release seal.
+UNIT_RELEASE_SURFACE_SHA256 = "d98aeddfa53061c281e5c397131e0309b9afe29217c3f27ba3b25e27a2e69d9b"
 
 
 def load_checker():
@@ -29,6 +32,16 @@ def load_checker():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+
+def live_shipping_analysis(checker):
+    """Inspect actual declarations and Cargo metadata without asserting release readiness."""
+
+    catalog = checker.workspace_catalog(REPO)
+    targets = checker._declared_shipping_targets_from_catalog(REPO, catalog)
+    profiles = checker._shipping_profiles_from_catalog(REPO, catalog, targets)
+    return targets, profiles
 
 
 def prepare_docker_parser_repo(tmp_path: Path, dockerfile: str | None = None) -> Path:
@@ -135,12 +148,13 @@ def assert_seal_rejects(checker, repo: Path, baseline: str) -> None:
         raise AssertionError("trusted release source drift was accepted")
 
 
-def test_trusted_release_surface_matches_reviewed_seal() -> None:
+def test_trusted_release_surface_matches_reviewed_seal(tmp_path: Path) -> None:
     checker = load_checker()
-    assert (
-        checker.trusted_release_surface_digest(REPO)
-        == checker.TRUSTED_RELEASE_SURFACE_SHA256
-    )
+    initialize_tracked_release_surface(tmp_path)
+    assert checker.trusted_release_surface_digest(tmp_path) == UNIT_RELEASE_SURFACE_SHA256
+    checker.validate_trusted_release_surface(tmp_path, UNIT_RELEASE_SURFACE_SHA256)
+    (tmp_path / "crates/demo/build_input.txt").write_text("unreviewed input\n", encoding="utf-8")
+    assert_seal_rejects(checker, tmp_path, UNIT_RELEASE_SURFACE_SHA256)
 
 
 def load_native_pin_reference():
@@ -1143,7 +1157,8 @@ def test_extracted_native_owner_test_helpers_are_rejected(package: str) -> None:
 
 def test_shipping_packages_exclude_test_fixtures() -> None:
     checker = load_checker()
-    for profile in checker.shipping_profiles(REPO):
+    _targets, profiles = live_shipping_analysis(checker)
+    for profile in profiles:
         graph = checker.feature_graph(
             REPO,
             profile.package,
@@ -1155,7 +1170,7 @@ def test_shipping_packages_exclude_test_fixtures() -> None:
 
 def test_shipping_proof_consumers_keep_complete_parallel_engine() -> None:
     checker = load_checker()
-    profiles = checker.shipping_profiles(REPO)
+    _targets, profiles = live_shipping_analysis(checker)
     for package, required_features in checker.REQUIRED_FEATURES.items():
         package_profiles = [profile for profile in profiles if profile.package == package]
         assert package_profiles
@@ -1171,8 +1186,8 @@ def test_shipping_proof_consumers_keep_complete_parallel_engine() -> None:
 
 def test_release_package_inventory_is_derived_from_shipping_declarations() -> None:
     checker = load_checker()
-    targets = checker.declared_shipping_targets(REPO)
-    profiles = set(checker.shipping_profiles(REPO))
+    targets, derived_profiles = live_shipping_analysis(checker)
+    profiles = set(derived_profiles)
     for target in targets:
         assert checker.ShippingProfile(
             package=target.package,
@@ -1187,7 +1202,7 @@ def test_release_package_inventory_is_derived_from_shipping_declarations() -> No
 
 def test_shipping_declarations_cover_docker_and_sorafs_release_surfaces() -> None:
     checker = load_checker()
-    target_list = checker.declared_shipping_targets(REPO)
+    target_list, _profiles = live_shipping_analysis(checker)
 
     def target_for(source_suffix: str, binary: str):
         matches = [
@@ -1236,7 +1251,8 @@ def test_published_docker_variants_and_feature_overrides_are_derived() -> None:
         "Dockerfile",
         "Dockerfile.cross",
     }
-    profiles = set(checker.shipping_profiles(REPO))
+    _targets, derived_profiles = live_shipping_analysis(checker)
+    profiles = set(derived_profiles)
     assert checker.ShippingProfile("iroha_core", ("profiling",)) in profiles
     assert checker.ShippingProfile("iroha_torii", ("profiling",)) in profiles
     assert checker.ShippingProfile(
@@ -1601,16 +1617,15 @@ def test_all_image_publishers_are_explicitly_classified() -> None:
     ]
 
 
-def test_native_library_roots_and_release_bundle_boundary_are_derived(
-    monkeypatch,
-) -> None:
+def test_native_library_roots_and_release_bundle_boundary_are_derived() -> None:
     checker = load_checker()
     assert (
         checker.canonical_release_bundle_policy(REPO)
         == "authenticated-prebuilt-reviewed-profile"
     )
-    monkeypatch.setattr(checker, "validate_trusted_release_surface", lambda _repo: None)
-    targets = checker.declared_shipping_targets(REPO)
+    targets = checker._declared_shipping_targets_from_catalog(
+        REPO, checker.workspace_catalog(REPO)
+    )
     bridge_targets = [
         target
         for target in targets
@@ -2481,3 +2496,88 @@ def test_shipping_graph_refuses_transitive_daemon_mutation_testing(
     else:
         assert result.err == ""
         assert "exclude test fixtures" in result.out
+
+
+@pytest.mark.parametrize("entrypoint", ["shipping_profiles", "declared_shipping_targets"])
+def test_current_checkout_default_admission_matches_its_source_seal(
+    monkeypatch, entrypoint: str
+) -> None:
+    checker = load_checker()
+    assert checker._embedded_release_surface_sha256() == checker.TRUSTED_RELEASE_SURFACE_SHA256
+    original_validate = checker.validate_trusted_release_surface
+    calls = []
+    admission_completed = False
+    admission_failure = None
+    metadata_called = False
+
+    class MetadataBoundaryReached(Exception):
+        """Stop after authentic source admission, before running Cargo."""
+
+    def observe_default_admission(repo: Path, expected_digest=None) -> None:
+        nonlocal admission_completed, admission_failure
+        calls.append((repo, expected_digest))
+        assert calls == [(REPO, None)]
+        try:
+            original_validate(repo, expected_digest)
+        except (RuntimeError, OSError) as failure:
+            admission_failure = failure
+            raise
+        admission_completed = True
+
+    def metadata_boundary(repo: Path):
+        nonlocal metadata_called
+        metadata_called = True
+        assert repo == REPO
+        assert admission_completed, "Cargo metadata ran before authentic default source admission"
+        raise MetadataBoundaryReached
+
+    monkeypatch.setattr(checker, "validate_trusted_release_surface", observe_default_admission)
+    monkeypatch.setattr(checker, "workspace_catalog", metadata_boundary)
+    try:
+        getattr(checker, entrypoint)(REPO)
+    except MetadataBoundaryReached:
+        assert admission_completed
+        assert admission_failure is None
+        assert metadata_called
+    except (RuntimeError, OSError) as failure:
+        # Only the exact failure from the real source validator is an admission refusal.
+        assert failure is admission_failure
+        assert not admission_completed
+        assert not metadata_called
+    else:
+        pytest.fail("shipping admission returned without the source or Cargo boundary")
+    assert calls == [(REPO, None)]
+
+
+
+def test_declaration_analysis_consumes_explicit_catalog_without_cargo(monkeypatch) -> None:
+    checker = load_checker()
+    catalog = checker.workspace_catalog(REPO)
+
+    def unexpected_child(*_args, **_kwargs):
+        pytest.fail("declaration analysis attempted implicit Cargo or child execution")
+
+    monkeypatch.setattr(checker, "workspace_catalog", unexpected_child)
+    monkeypatch.setattr(checker.subprocess, "run", unexpected_child)
+    targets = checker._declared_shipping_targets_from_catalog(REPO, catalog)
+    profiles = checker._shipping_profiles_from_catalog(REPO, catalog, targets)
+    assert targets
+    assert profiles
+    assert {target.package for target in targets} <= {profile.package for profile in profiles}
+
+
+
+def test_explicit_profile_analysis_still_rejects_missing_baseline_package() -> None:
+    checker = load_checker()
+    catalog = checker.workspace_catalog(REPO)
+    targets = checker._declared_shipping_targets_from_catalog(REPO, catalog)
+    missing = checker.BASELINE_PACKAGES[0]
+    incomplete = catalog._replace(
+        package_features={
+            package: features
+            for package, features in catalog.package_features.items()
+            if package != missing
+        }
+    )
+    with pytest.raises(RuntimeError, match="missing baseline shipping packages"):
+        checker._shipping_profiles_from_catalog(REPO, incomplete, targets)

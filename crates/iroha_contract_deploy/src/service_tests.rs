@@ -79,9 +79,18 @@ pub fn fixture() -> Result<(Config, PlanRecord)> {
     )?;
     let mut uploads = upload.pre_stage;
     uploads.push(upload.finalize);
+    let mut manifest_budget = ManifestEncodingBudget::new()?;
+    let signer_backing = manifest_budget.reserve_signer(config.key_pair.public_key())?;
+    let signing_frame = manifest_budget.reserve_frame(&verified.manifest)?;
+    let manifest = verified.manifest.try_signed(
+        manifest_budget.context(),
+        signing_frame.remaining_bytes(),
+        &config.key_pair,
+    )?;
+    drop(signing_frame);
     let register = signing.sign([InstructionBox::from(RegisterSmartContractCode {
         artifact_id: ContractArtifactId::new(DataSpaceId::UNIVERSAL, verified.code_hash),
-        manifest: verified.manifest.try_signed(&config.key_pair)?,
+        manifest,
     })])?;
     let commit = build_commit_deployment_transaction(
         &signing,
@@ -104,6 +113,7 @@ pub fn fixture() -> Result<(Config, PlanRecord)> {
             norito_hex: hex::encode(tx.encode_versioned()),
         })
         .collect();
+    drop(signer_backing); // Every native graph has been consumed into encoded records.
     let preflight = DeploymentPreflight {
         network_id: config.network_id,
         chain_id: config.chain.to_string(),
@@ -472,9 +482,18 @@ fn native_sequence_signing_matches_the_retained_plan_layout() -> Result<()> {
         dataspace_id: context.dataspace_id,
         previous_contract_address: context.previous_contract_address.clone(),
     };
+    let mut manifest_budget = ManifestEncodingBudget::new()?;
+    let signer_backing = manifest_budget.reserve_signer(config.key_pair.public_key())?;
+    let signing_frame = manifest_budget.reserve_frame(&verified.manifest)?;
+    let manifest = verified.manifest.try_signed(
+        manifest_budget.context(),
+        signing_frame.remaining_bytes(),
+        &config.key_pair,
+    )?;
+    drop(signing_frame);
     let sequence = service.sign_native_sequence(
         &request,
-        verified.manifest.try_signed(&config.key_pair)?,
+        manifest,
         verified.code_hash,
         &state,
         &context.contract_address,
@@ -487,6 +506,8 @@ fn native_sequence_signing_matches_the_retained_plan_layout() -> Result<()> {
         assert_eq!(signed.metadata(), expected.metadata());
         assert_eq!(signed.instructions(), expected.instructions());
     }
+    drop(sequence);
+    drop(signer_backing);
     Ok(())
 }
 

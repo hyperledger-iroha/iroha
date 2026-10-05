@@ -119,7 +119,11 @@ def test_real_owner_rollback_restores_exact_previous_publication_and_closed_rece
     assert (root / "conf.d/new-scoped.conf").read_bytes() == b"upstream selected { server 127.0.0.1:10080; }\n"
     assert int((root / "reload-count").read_text()) == before_reload + 1
     assert [row["phase"] for row in records] == ["admitted", "rollback_requested", "source_restored",
-        "reload_requested", "publisher_terminal_requested", "publisher_terminal", "rolled_back"]
+        "reload_requested", "publisher_terminal_requested", "publisher_terminal_requested",
+        "publisher_terminal_requested", "publisher_terminal", "rolled_back"]
+    witnesses = [row["publisher_write_intent"] for row in records if row["publisher_write_intent"] is not None]
+    assert len(witnesses) == 2
+    assert {witness["record"]["operation_id"] for witness in witnesses} == {"a"*32, "b"*32}
     assert not list((root / "conf.d").glob(".taira-nginx-backup-*"))
     assert "private-native" not in json.dumps(result) and "private-existing" not in json.dumps(result)
     observed = json.loads(json.dumps(result))["completion_journal"]["file"]["identity"]
@@ -135,6 +139,72 @@ def test_real_owner_rollback_restores_exact_previous_publication_and_closed_rece
     assert json.loads(journal.read_text().splitlines()[-1])["publication_identity"] == _identity(root / "conf.d/new-scoped.conf")
 
 
+def _configuration_exchange(admission, callback):
+    """Permit atomic journal publication while guarding configuration effects."""
+    exchange = OWNER.native_exchange
+    expected = os.fstat(admission.directory)
+    def guarded(directory, *names):
+        actual = os.fstat(directory)
+        if (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino) or any(
+                name.endswith('.receipt.ndjson') for name in names):
+            return exchange(directory, *names)
+        return callback(directory, *names)
+    return guarded
+
+
+@pytest.mark.parametrize('forge_successor', [False, True])
+def test_durable_external_writer_witness_reuses_stage_or_refuses_restamped_chain(effect_admission, monkeypatch, forge_successor):
+    admission, root = effect_admission
+    publisher = Path(admission.plan['nginx']['publication']['prior']['journal']['path'])
+    exchange = OWNER.native_exchange
+    interrupted = False
+    foreign_intent = None
+    def at_owner_publication(directory, first, second):
+        nonlocal interrupted, foreign_intent
+        if publisher.name not in {first,second} or interrupted:
+            return exchange(directory,first,second)
+        interrupted = True
+        completion = [json.loads(line) for line in (admission.path/'native-completion.ndjson').read_bytes().splitlines()]
+        proof = completion[-1]['publisher_write_intent']
+        assert proof is not None and proof['record']['operation_id'] == admission.plan['nginx']['operation_id']
+        assert proof['intent']['identity'] == _identity(Path(proof['intent']['path']))
+        if forge_successor:
+            exchange(directory,first,second)
+            body = publisher.read_bytes()
+            lines = body.splitlines(keepends=True)
+            row = json.loads(lines[-1])
+            foreign = root/'foreign-restamped-public-journal'
+            foreign.write_bytes(body); foreign.chmod(0o600)
+            binding = {key:_identity(foreign)[key] for key in ('device','inode','uid','gid','mode')}
+            original_intent = json.loads(Path(row['journal_write_intent']['path']).read_bytes())
+            original_intent['created_identity'] = binding
+            foreign_intent = root/('.taira-native-nginx-write-'+row['operation_id']+'-'+str(row['sequence'])+'-'+('9'*32)+'.intent.json')
+            foreign_intent.write_bytes((json.dumps(original_intent,sort_keys=True)+'\n').encode()); foreign_intent.chmod(0o600)
+            row['journal_publication_identity'] = binding
+            row['journal_write_intent'] = dict(path=str(foreign_intent),identity=_identity(foreign_intent),
+                sha256=hashlib.sha256(foreign_intent.read_bytes()).hexdigest())
+            foreign.write_bytes(b''.join(lines[:-1])+(json.dumps(row,sort_keys=True)+'\n').encode())
+            os.replace(foreign,publisher)
+        raise KeyboardInterrupt('external witness durable before lost owner publication acknowledgment')
+    monkeypatch.setattr(OWNER,'native_exchange',at_owner_publication)
+    with pytest.raises(KeyboardInterrupt): _complete(admission)
+    assert interrupted
+    reloads = (root/'reload-count').read_bytes()
+    before = publisher.read_bytes(),_identity(publisher)
+    monkeypatch.setattr(OWNER,'native_exchange',exchange)
+    result, records = _complete(admission)
+    if forge_successor:
+        assert result['status'] == 'recovery_pending' and result['error_code'] == 'publisher_terminal_not_recorded', result
+        assert (publisher.read_bytes(),_identity(publisher)) == before
+        assert foreign_intent is not None and foreign_intent.exists()
+    else:
+        assert result['status'] == 'rolled_back' and result['error_code'] is None, result
+        assert records[-1]['phase'] == 'rolled_back'
+        assert sum(row['phase'] == 'rolled_back_unqualified' for row in
+            [json.loads(line) for line in publisher.read_bytes().splitlines()]) == 1
+    assert (root/'reload-count').read_bytes() == reloads
+
+
 def test_seal_and_cleanup_require_proof_and_never_signal_or_restore(effect_admission, monkeypatch):
     admission, root = effect_admission
     admission.packet["action"] = "seal"
@@ -142,7 +212,8 @@ def test_seal_and_cleanup_require_proof_and_never_signal_or_restore(effect_admis
     destination = root / "conf.d/new-scoped.conf"
     expected = destination.read_bytes()
     monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("seal or cleanup signaled a master"))
-    monkeypatch.setattr(OWNER, "native_exchange", lambda *args: pytest.fail("proof-fenced source was restored"))
+    monkeypatch.setattr(OWNER, "native_exchange", _configuration_exchange(admission,
+        lambda *args: pytest.fail("proof-fenced source was restored")))
     sealed, records = _complete(admission)
     assert sealed["status"] == "sealed", sealed
     assert sealed["restored_owned_publication"] is None
@@ -184,7 +255,8 @@ def test_pre_effect_rollback_proves_incumbent_without_touching_it(effect_admissi
     journal_before = journal.read_bytes(), _identity(journal)
     reloads = (root / "reload-count").read_bytes()
     monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("pre-effect rollback signaled nginx"))
-    monkeypatch.setattr(OWNER, "native_exchange", lambda *args: pytest.fail("pre-effect rollback exchanged incumbent"))
+    monkeypatch.setattr(OWNER, "native_exchange", _configuration_exchange(admission,
+        lambda *args: pytest.fail("pre-effect rollback exchanged incumbent")))
     result, records = _complete(admission)
     assert result["status"] == "rolled_back" and result["error_code"] is None, result
     assert result["publication_operation_id"] == intended
@@ -223,7 +295,7 @@ def test_interrupted_rollback_resumes_exact_owned_intent_without_double_exchange
             crashed = True
             raise KeyboardInterrupt("owned child crash after exact publisher suffix")
         return append(self, phase, **kwargs)
-    monkeypatch.setattr(OWNER, "native_exchange", exchange_once)
+    monkeypatch.setattr(OWNER, "native_exchange", _configuration_exchange(admission, exchange_once))
     monkeypatch.setattr(OWNER, "signal_master", signal_once)
     monkeypatch.setattr(MODULE.CompletionJournal, "append", append_once)
     with pytest.raises(KeyboardInterrupt):
@@ -248,7 +320,7 @@ def test_foreign_substitution_after_exchange_preserves_both_names_and_requests_r
         foreign = root / "foreign.conf"
         _write_public(foreign, foreign_body)
         os.replace(foreign, root / "conf.d/new-scoped.conf")
-    monkeypatch.setattr(OWNER, "native_exchange", substitute)
+    monkeypatch.setattr(OWNER, "native_exchange", _configuration_exchange(admission, substitute))
     before_reload = (root / "reload-count").read_bytes()
     result, _ = _complete(admission)
     assert result["status"] == "recovery_pending", result
@@ -315,7 +387,8 @@ def test_global_proof_arriving_after_rollback_intent_refuses_any_source_effect(e
         return result
     monkeypatch.setattr(MODULE.CompletionJournal, "append", publish_fence)
     monkeypatch.setattr(OWNER, "signal_master", lambda *args: pytest.fail("HUP after global fence"))
-    monkeypatch.setattr(OWNER, "native_exchange", lambda *args: pytest.fail("exchange after global fence"))
+    monkeypatch.setattr(OWNER, "native_exchange", _configuration_exchange(admission,
+        lambda *args: pytest.fail("exchange after global fence")))
     expected = (root / "conf.d/new-scoped.conf").read_bytes()
     result, records = _complete(admission)
     assert result["status"] == "recovery_pending" and result["error_code"] == "rollback_after_global_proof"
@@ -467,6 +540,12 @@ int main(int argc, char **argv) {
     descriptors.append(lock_fd)
     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     packet["lock"] = dict(fd=lock_fd, file=dict(path=str(operation / "operation.lock"), identity=MODULE.identity(os.fstat(lock_fd))))
+    host_lock_path = custody / "taira-edge/host-operation.lock"
+    host_lock_fd = os.open(host_lock_path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    descriptors.append(host_lock_fd)
+    fcntl.flock(host_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    packet["host_lock"] = dict(fd=host_lock_fd,
+        file=dict(path=str(host_lock_path), identity=MODULE.identity(os.fstat(host_lock_fd))))
     directory_fd = os.open(operation, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     descriptors.append(directory_fd)
     packet["fence"] = dict(kind="absent", value=dict(directory_fd=directory_fd,
@@ -579,11 +658,22 @@ def test_unmodified_anchor_refuses_self_rooted_c_parent_before_any_selected_file
 
 
 @pytest.mark.parametrize("fault", ["unheld_lock", "wrong_parent", "changed_closure", "unknown_fence_field",
-    "omitted_fence_value", "proof_exists", "third_checkpoint", "unit_enum_without_null", "foreign_lock"])
+    "omitted_fence_value", "proof_exists", "third_checkpoint", "unit_enum_without_null", "foreign_lock", "unheld_host_lock", "foreign_host_lock",
+    "changed_host_lock", "host_lock_wrong_path"])
 def test_actual_admission_refuses_owner_and_proof_faults_before_effects(native_admission, fault):
     fixture, packet = native_admission, native_admission["packet"]
     if fault == "unheld_lock":
         fcntl.flock(packet["lock"]["fd"], fcntl.LOCK_UN)
+    elif fault == "unheld_host_lock":
+        fcntl.flock(packet["host_lock"]["fd"], fcntl.LOCK_UN)
+    elif fault == "foreign_host_lock":
+        replacement = fixture["root"] / "foreign-host-lock"
+        _write_public(replacement, b"")
+        os.replace(replacement, Path(packet["host_lock"]["file"]["path"]))
+    elif fault == "changed_host_lock":
+        os.fchmod(packet["host_lock"]["fd"], 0o640)
+    elif fault == "host_lock_wrong_path":
+        packet["host_lock"]["file"]["path"] = str(fixture["root"] / "wrong-host-operation.lock")
     elif fault == "wrong_parent":
         packet["parent"]["pid"] += 1
     elif fault == "changed_closure":
@@ -614,7 +704,9 @@ def test_actual_admission_refuses_owner_and_proof_faults_before_effects(native_a
         changed_closure="helper_closure_changed", unknown_fence_field="proof_fence_fields",
         omitted_fence_value="proof_fence_fields", proof_exists="rollback_after_global_proof",
         third_checkpoint="rollback_after_global_proof", unit_enum_without_null="checkpoint_binding",
-        foreign_lock="retained_identity_changed")
+        foreign_lock="retained_identity_changed", unheld_host_lock="native_lock_not_held",
+        foreign_host_lock="retained_identity_changed", changed_host_lock="retained_identity_changed",
+        host_lock_wrong_path="native_lock_path")
     assert result == {"accepted":False, "error_code":expected[fault]}, (fault, result)
     assert "never export" not in json.dumps(result)
     assert not (fixture["operation"] / "native-completion.ndjson").exists()
@@ -671,4 +763,93 @@ def test_publication_effect_is_exact_first_release_unit_wire(native_admission, e
     fixture["absent_refresh"]()
     result = fixture["run"]()
     assert result["accepted"] is False
-    assert result["error_code"] in {"publication_effect_fields", "owned_publication_effect", "publication_effect_not_requested"}
+    expected = ("publication_effect_kind" if effect.get("kind") == "legacy"
+                else "publication_effect_fields" if set(effect) != {"kind", "value"}
+                else "owned_publication_effect")
+    assert result["error_code"] == expected
+
+
+@pytest.mark.parametrize('fault', ['same_operation', 'journal_before_intent', 'journal_after_intent'])
+def test_stage_only_rollback_refuses_requested_successor_and_preserves_incumbent(effect_admission, monkeypatch, fault):
+    admission, root = effect_admission
+    intended = admission.plan['nginx']['operation_id'] if fault == 'same_operation' else 'd'*32
+    incumbent = MODULE.numeric_owned_publication(admission.plan['nginx'])
+    admission.plan['publication_effect'] = dict(kind='not_requested',
+        value=dict(intended_operation_id=intended, incumbent=incumbent))
+    intended_journal = root/('.taira-native-nginx-apply-'+intended+'.receipt.ndjson')
+    publication = root/'conf.d/new-scoped.conf'
+    before = publication.read_bytes(), _identity(publication)
+    append = MODULE.CompletionJournal.append
+    if fault == 'journal_before_intent':
+        _write_public(intended_journal, b'owned successor intent\n')
+    elif fault == 'journal_after_intent':
+        def requested(self, phase, **details):
+            result = append(self, phase, **details)
+            if phase == 'rollback_requested':
+                _write_public(intended_journal, b'owned successor intent\n')
+            return result
+        monkeypatch.setattr(MODULE.CompletionJournal, 'append', requested)
+    monkeypatch.setattr(OWNER, 'signal_master', lambda *args: pytest.fail('stage-only refusal signaled master'))
+    monkeypatch.setattr(OWNER, 'native_exchange', _configuration_exchange(admission,
+        lambda *args: pytest.fail('stage-only refusal exchanged incumbent')))
+    result, records = _complete(admission)
+    assert result['status'] == 'recovery_pending', result
+    assert result['error_code'] == ('intended_operation_is_incumbent' if fault == 'same_operation'
+                                  else 'publication_effect_already_requested')
+    assert result['restored_owned_publication'] is None
+    assert (publication.read_bytes(), _identity(publication)) == before
+    assert not any(row['phase'] == 'rolled_back' for row in records)
+
+
+@pytest.mark.parametrize('fault,expected', [
+    ('missing_journal','publisher_rollback_fields'),
+    ('missing_restored','publisher_rollback_fields'),
+    ('string_identity','native_identity_numbers'),
+    ('create_with_predecessor','publisher_rollback_predecessor'),
+    ('replace_without_predecessor','publisher_rollback_predecessor'),
+    ('wrong_operation','publisher_rollback_operation'),
+    ('private_journal_path','prior_journal_reference'),
+    ('seal_action','publisher_rollback_effect'),
+    ('wrong_progress','publisher_rollback_effect'),
+])
+def test_publisher_rolled_back_constructor_refuses_untyped_or_unjoined_wire(native_admission, fault, expected):
+    fixture = native_admission
+    plan = json.loads((fixture['operation']/'completion-plan.json').read_bytes())
+    prior = plan['nginx']['publication']['prior']
+    journal = dict(file=dict(path=prior['journal']['path'],
+        identity={key:int(value) for key,value in prior['journal']['identity'].items()}),
+        sha256=prior['journal']['sha256'])
+    plan['nginx']['publication'] = dict(kind='create')
+    plan['publication_effect'] = dict(kind='publisher_rolled_back',
+        value=dict(journal=journal, restored_owned_publication=None))
+    progress = json.loads((fixture['operation']/'progress.json').read_bytes())
+    progress['status'] = 'rollback_requested'
+    if fault == 'missing_journal':
+        del plan['publication_effect']['value']['journal']
+    elif fault == 'missing_restored':
+        del plan['publication_effect']['value']['restored_owned_publication']
+    elif fault == 'string_identity':
+        journal['file']['identity']['mtime_ns'] = str(journal['file']['identity']['mtime_ns'])
+    elif fault == 'create_with_predecessor':
+        plan['publication_effect']['value']['restored_owned_publication'] = MODULE.numeric_owned_publication(
+            dict(plan['nginx'], publication=dict(kind='reconcile', prior=prior)))
+    elif fault == 'replace_without_predecessor':
+        prior = copy.deepcopy(prior)
+        prior['operation_id'] = 'b'*32
+        prior['journal']['path'] = str(Path(prior['journal']['path']).parent/('.taira-native-nginx-apply-'+('b'*32)+'.receipt.ndjson'))
+        plan['nginx']['publication'] = dict(kind='replace', prior=prior)
+    elif fault == 'wrong_operation':
+        journal['file']['path'] = str(Path(prior['journal']['path']).parent/('.taira-native-nginx-apply-'+('b'*32)+'.receipt.ndjson'))
+    elif fault == 'private_journal_path':
+        journal['file']['path'] = plan['nginx']['native']['main']['path']
+    elif fault == 'seal_action':
+        fixture['packet']['action'] = 'seal'
+        progress['status'] = 'sealing'
+    else:
+        progress['status'] = 'awaiting_readiness'
+    fixture['rewrite']('progress', progress)
+    fixture['rewrite']('plan', plan)
+    fixture['absent_refresh']()
+    result = fixture['run']()
+    assert result == {'accepted':False, 'error_code':expected}, (fault, result)
+    assert not (fixture['operation']/'native-completion.ndjson').exists()

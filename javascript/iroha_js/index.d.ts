@@ -9,6 +9,7 @@ import type {
   ToriiBrowserExplorerBlock,
   ToriiBrowserExplorerInstruction,
   ToriiBrowserExplorerTransaction,
+  ToriiBrowserExplorerTransactionDetail,
 } from "./dist/toriiBrowserExplorerTypes.js";
 export type {
   ToriiBrowserExplorerAssetDefinition,
@@ -16,6 +17,8 @@ export type {
   ToriiBrowserExplorerInstruction,
   ToriiBrowserExplorerInstructionBox,
   ToriiBrowserExplorerTransaction,
+  ToriiBrowserExplorerTransactionDetail,
+  ToriiBrowserExplorerTransactionRejection,
 } from "./dist/toriiBrowserExplorerTypes.js";
 import type { SubscriptionActionResponse, SubscriptionAuthorityActionRequest, SubscriptionCancelActionRequest, SubscriptionChargeActionRequest, SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse, SubscriptionUsageDraft, SubscriptionUsageRequest } from "./dist/subscriptionTypes.js";
 import type { SorafsOrderbookSignedTransaction, SorafsOrderbookSubmissionReceipt, SorafsOrderbookTransactionSubmitOptions } from "./dist/sorafsOrderbookSubmission.js";
@@ -10071,12 +10074,12 @@ export declare class ToriiBrowserClient {
   getExplorerTransaction(
     hash: string,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<ToriiBrowserExplorerTransactionDetail>;
   getExplorerInstruction(
     transactionHash: string,
     index: number,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<ToriiBrowserExplorerInstruction>;
   getExplorerInstructionContractView(
     transactionHash: string,
     index: number,

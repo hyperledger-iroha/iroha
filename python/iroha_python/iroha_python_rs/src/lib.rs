@@ -5108,6 +5108,114 @@ mod tests {
             Python::initialize();
         });
     }
+    fn completion_authority_dict<'py>(
+        py: Python<'py>,
+        provider_owner: &str,
+        completion_signer: &str,
+    ) -> Bound<'py, PyDict> {
+        let policy = PyDict::new(py);
+        policy.set_item("policy_id", "21".repeat(32)).unwrap();
+        policy.set_item("revision", 2).unwrap();
+        policy
+            .set_item("predecessor_digest", "32".repeat(32))
+            .unwrap();
+        policy.set_item("policy_digest", "43".repeat(32)).unwrap();
+        let authority = PyDict::new(py);
+        authority
+            .set_item("provider_owner", provider_owner)
+            .unwrap();
+        authority
+            .set_item("completion_signer", completion_signer)
+            .unwrap();
+        authority.set_item("signer_policy", policy).unwrap();
+        authority
+    }
+
+    #[test]
+    fn completion_authority_parser_preserves_distinct_signer_and_norito() {
+        ensure_python();
+        Python::attach(|py| {
+            let owner = canonical_i105_from_seed(0x81);
+            let signer = canonical_i105_from_seed(0x82);
+            let mapping = completion_authority_dict(py, &owner, &signer);
+            let parsed = parse_provider_ingest_completion_authority(&mapping).unwrap();
+            assert_eq!(parsed.provider_owner.canonical_i105().unwrap(), owner);
+            assert_eq!(parsed.completion_signer.canonical_i105().unwrap(), signer);
+            assert_ne!(parsed.provider_owner, parsed.completion_signer);
+            assert_eq!(parsed.signer_policy.revision, 2);
+            assert_eq!(parsed.signer_policy.predecessor_digest, Some([0x32; 32]));
+            let wire = norito::to_bytes(&parsed).unwrap();
+            assert_eq!(
+                norito::decode_from_bytes::<ProviderIngestCompletionAuthorityV1>(&wire).unwrap(),
+                parsed,
+            );
+            let json = norito::json::to_json(&parsed).unwrap();
+            assert_eq!(
+                norito::json::from_json::<ProviderIngestCompletionAuthorityV1>(&json).unwrap(),
+                parsed,
+            );
+            mapping.set_item("completion_signer", &owner).unwrap();
+            let changed = parse_provider_ingest_completion_authority(&mapping).unwrap();
+            assert_eq!(changed.provider_owner, parsed.provider_owner);
+            assert_eq!(changed.signer_policy, parsed.signer_policy);
+            assert_ne!(changed.completion_signer, parsed.completion_signer);
+            assert_ne!(norito::to_bytes(&changed).unwrap(), wire);
+        });
+    }
+
+    #[test]
+    fn completion_authority_parser_rejects_missing_and_unknown_fields() {
+        ensure_python();
+        Python::attach(|py| {
+            let owner = canonical_i105_from_seed(0x81);
+            let signer = canonical_i105_from_seed(0x82);
+            let retired = completion_authority_dict(py, &owner, &signer);
+            retired.del_item("completion_signer").unwrap();
+            let error = parse_provider_ingest_completion_authority(&retired)
+                .expect_err("retired owner-only authority cannot infer its signer");
+            assert!(error.value(py).to_string().contains("completion_signer"));
+            let substituted = completion_authority_dict(py, &owner, &signer);
+            substituted.del_item("completion_signer").unwrap();
+            substituted.set_item("signer", &signer).unwrap();
+            assert!(parse_provider_ingest_completion_authority(&substituted).is_err());
+            let extended = completion_authority_dict(py, &owner, &signer);
+            extended.set_item("relayer", &signer).unwrap();
+            assert!(parse_provider_ingest_completion_authority(&extended).is_err());
+        });
+    }
+
+    #[test]
+    fn completion_authority_parser_rejects_invalid_completion_signer() {
+        ensure_python();
+        Python::attach(|py| {
+            let owner = canonical_i105_from_seed(0x81);
+            let signer = canonical_i105_from_seed(0x82);
+            let mapping = completion_authority_dict(py, &owner, &signer);
+            for invalid in [
+                String::new(),
+                format!(" {signer}"),
+                "merchant@bank".into(),
+                "00".repeat(32),
+            ] {
+                mapping.set_item("completion_signer", invalid).unwrap();
+                let error = parse_provider_ingest_completion_authority(&mapping)
+                    .expect_err("completion signer must be an exact canonical account");
+                assert!(error.value(py).to_string().contains("completion_signer"));
+            }
+            mapping.set_item("completion_signer", py.None()).unwrap();
+            let error = parse_provider_ingest_completion_authority(&mapping)
+                .expect_err("null completion signer must be refused");
+            assert!(
+                error
+                    .value(py)
+                    .to_string()
+                    .contains("completion_signer must be a string")
+            );
+            mapping.set_item("completion_signer", 7).unwrap();
+            assert!(parse_provider_ingest_completion_authority(&mapping).is_err());
+        });
+    }
+
     fn python_test_network_id() -> PyNetworkId {
         PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH]).expect("marked test NetworkId")
     }

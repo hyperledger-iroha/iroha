@@ -60,7 +60,7 @@ fn complete_signed_block_prepared_signatures_preserve_canonical_nominal_frame_an
             PreparedDecodeWorkspace::allocation_layouts()
                 .iter()
                 .map(std::alloc::Layout::size)
-                .sum()
+                .sum::<usize>()
         );
         let admitted = decoder
             .decode(

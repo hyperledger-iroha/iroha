@@ -9,6 +9,16 @@ use iroha_data_model::{
 
 #[test]
 fn captured_complete_source_keeps_original_graph_and_credits_after_state_drop() {
+    // Other Core tests can hold the process-global epoch for arbitrary work.
+    // Execute every original witness assertion with the stock isolated harness.
+    if crate::unit_test_support::run_in_isolated_harness(
+        "state::fastpq_quantity_capture::tests::witness_custody::captured_complete_source_keeps_original_graph_and_credits_after_state_drop",
+    ) {
+        return;
+    }
+    // State Cell retirement is separate from this retained witness graph. Hold
+    // every State generation fixed while its original final owner is dropped.
+    let retirement_pin = crossbeam_epoch::pin();
     let mut retained = None;
     let mut pool = None;
     let mut tape_ptr = std::ptr::null();
@@ -74,7 +84,24 @@ fn captured_complete_source_keeps_original_graph_and_credits_after_state_drop() 
         witness.quantity_entry(0).unwrap().leaf().effects_digest,
         digest.unwrap()
     );
+    let with_retired_state_generations = pool.reserved_bytes();
     drop(witness);
+    assert!(
+        pool.reserved_bytes() < with_retired_state_generations,
+        "the final witness refunds its original graph while State retirement stays pinned"
+    );
+    drop(retirement_pin);
+    // Drive the actual grace period before requiring the whole State pool empty.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while pool.reserved_bytes() != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "original retired State credits remain: {}",
+            pool.reserved_bytes(),
+        );
+        crossbeam_epoch::pin().flush();
+        std::thread::yield_now();
+    }
     assert_eq!(
         pool.reserved_bytes(),
         0,

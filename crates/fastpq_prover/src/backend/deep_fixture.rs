@@ -7,11 +7,11 @@
 use rand::{SeedableRng, rngs::StdRng};
 
 use super::{
+    air::q77::{ProducerLimits, VerifierLimits},
     deep_proof,
-    deep_prover::{ConstructionLimits, ProducerPlan},
+    deep_prover::ProducerPlan,
     deep_relation::DeepRelation,
     deep_trace_source::OwnedTraceSource,
-    offline_compact::ProvingLimits,
 };
 use crate::{Result, VerifyLimits};
 
@@ -21,15 +21,11 @@ pub(super) fn prove(
     source: OwnedTraceSource,
     seed: u64,
 ) -> Result<Vec<u8>> {
-    let limits = ProvingLimits::default();
     ProducerPlan::new(
         relation,
-        ConstructionLimits {
-            digest_execution: limits.digest_execution,
-            max_payload_bytes: limits.max_segment_charge_bytes,
-            max_work_units: limits.max_segment_work_units,
-            max_hash_calls: limits.max_segment_work_units,
+        ProducerLimits {
             max_proof_bytes: deep_proof::PROOF_BYTE_TARGET,
+            ..ProducerLimits::default()
         },
     )?
     .build(source, &mut StdRng::seed_from_u64(seed))
@@ -42,6 +38,12 @@ pub(super) fn verification_limits() -> VerifyLimits {
         max_queries: super::deep_geometry::QUERY_COUNT,
         ..VerifyLimits::default()
     }
+}
+
+/// The same facade policy as the engine's typed verifier limits, with the
+/// 32 MiB decode allocation ceiling the engine fixtures use.
+pub(super) fn engine_verification_limits() -> VerifierLimits {
+    VerifierLimits::for_segment(verification_limits(), 32 * 1024 * 1024)
 }
 
 #[cfg(test)]

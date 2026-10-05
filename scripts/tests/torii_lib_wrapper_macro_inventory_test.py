@@ -1310,6 +1310,39 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 with self.assertRaises(GuardError):
                     validate_source(changed)
 
+    def test_ledger_original_carriers_require_exact_signed_limits_and_order(self) -> None:
+        """Reject changes to native carrier limits, methods, handlers and mounting order."""
+        rows = _route_table_rows(self.source)
+        names = next(row for row in rows if row[2] == "route_catalog::core::RESOURCE_NAMES_STATE")
+        originals = next(row for row in rows if row[2] == "route_catalog::core::AUTHORITY_ORIGINALS")
+        self.assertEqual(rows.index(originals), rows.index(names) + 1)
+        mount = "AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);"
+        for changed in (
+            "",
+            mount + "\n            " + mount,
+            mount.replace("limited_canonical_signature_post", "limited_public_post", 1),
+            mount.replace("limited_canonical_signature_post", "canonical_signature_get", 1),
+            mount.replace("authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1", "resource_names_state::NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1", 1),
+            mount.replace("AUTHORITY_ORIGINALS =>", "RESOURCE_NAMES_STATE =>", 1),
+            mount.replace("authority_originals::handler", "resource_names_state::handler", 1),
+        ):
+            with self.subTest(changed=changed):
+                self.assertEqual(self.source.count(mount), 1)
+                self.assertNotEqual(changed, mount)
+                with self.assertRaises(GuardError):
+                    validate_source(self.source.replace(mount, changed, 1))
+        declaration = "    fn add_policy_and_pipeline_routes(&self, builder: &mut RouterBuilder)"
+        self.assertEqual(self.source.count(declaration), 1)
+        with self.assertRaises(GuardError):
+            validate_source(self.source.replace(declaration, '    #[cfg(feature = "app_api")]\n' + declaration, 1))
+        names_mount = "RESOURCE_NAMES_STATE => canonical_signature_get(resource_names_state::handler);"
+        self.assertEqual(self.source.count(names_mount), 1)
+        reordered = self.source.replace(names_mount, "__ledger_carrier_swap__", 1)
+        reordered = reordered.replace(mount, names_mount, 1).replace("__ledger_carrier_swap__", mount, 1)
+        self.assertNotEqual(reordered, self.source)
+        with self.assertRaises(GuardError):
+            validate_source(reordered)
+
     def test_route_policy_generator_and_declared_bodies_stay_connected(self) -> None:
         """Guard every actual policy body, its generator, and the connected dispatcher."""
         invocation = _route_policy_declarations(self.source)

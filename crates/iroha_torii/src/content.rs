@@ -71,6 +71,10 @@ pub async fn handle_get_content(
     method: Method,
     uri: Uri,
 ) -> Result<Response, ContentError> {
+    let authentication_owner =
+        crate::history_producer::HistoryProducerOwner::authentication_read(&app)
+            .map_err(|_| ContentError::Internal("authentication capacity is unavailable".into()))?;
+
     let start = Instant::now();
     let mut bytes_served = 0u64;
     let mut outcome_hint: Option<&'static str> = None;
@@ -109,18 +113,23 @@ pub async fn handle_get_content(
                 outcome_hint = Some("not_found");
                 return Err(ContentError::NotFound);
             }
-            let entry =
-                authorize_content_entry(&bundle, &app.state, &headers, &method, &uri, &path)
-                    .map_err(|err| {
-                        outcome_hint = Some(match &err {
-                            ContentError::Unauthorized(_) | ContentError::Forbidden(_) => {
-                                "auth_failed"
-                            }
-                            ContentError::NotFound => "not_found",
-                            _ => "internal",
-                        });
-                        err
-                    })?;
+            let entry = authorize_content_entry(
+                &bundle,
+                &app.state,
+                &headers,
+                &method,
+                &uri,
+                &path,
+                authentication_owner.allocation_context(),
+            )
+            .map_err(|err| {
+                outcome_hint = Some(match &err {
+                    ContentError::Unauthorized(_) | ContentError::Forbidden(_) => "auth_failed",
+                    ContentError::NotFound => "not_found",
+                    _ => "internal",
+                });
+                err
+            })?;
             if let Err(err) = enforce_pow(&app.content_config.pow, &headers, &bundle_id, &path) {
                 outcome_hint = Some(match &err {
                     ContentError::Unauthorized(_) => "pow_required",
@@ -273,8 +282,9 @@ fn authorize_content_entry(
     method: &Method,
     uri: &Uri,
     path: &str,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<ContentFileEntry, ContentError> {
-    enforce_auth(&bundle.manifest, state, headers, method, uri)?;
+    enforce_auth(&bundle.manifest, state, headers, method, uri, context)?;
     bundle
         .files
         .iter()
@@ -325,13 +335,17 @@ fn enforce_auth(
     headers: &HeaderMap,
     method: &Method,
     uri: &Uri,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<(), ContentError> {
     match &manifest.auth {
         ContentAuthMode::Public => Ok(()),
         ContentAuthMode::RoleGate(role) => {
-            let account = signed_account(state, headers, method, uri)?;
-            let world = state.world_view();
-            let has_role = world.account_roles_iter(&account).any(|r| r == role);
+            let account = signed_account(state, headers, method, uri, context)?;
+            let has_role = state
+                .try_with_authorization_view(context, |view| {
+                    view.world().account_roles_iter(&account).any(|r| r == role)
+                })
+                .map_err(|_| ContentError::Internal("authentication view unavailable".into()))?;
             if has_role {
                 Ok(())
             } else {
@@ -339,16 +353,18 @@ fn enforce_auth(
             }
         }
         ContentAuthMode::Sponsor(expected) => {
-            let account = signed_account(state, headers, method, uri)?;
-            let world = state.world_view();
-            let account_entry = world
-                .account(&account)
-                .map_err(|_| ContentError::Forbidden("account not found".to_string()))?;
-            let uaid = account_entry
-                .value()
-                .uaid()
-                .copied()
-                .ok_or_else(|| ContentError::Forbidden("uaid required".to_string()))?;
+            let account = signed_account(state, headers, method, uri, context)?;
+            let uaid = state
+                .try_with_authorization_view(context, |view| {
+                    view.world()
+                        .account(&account)
+                        .map_err(|_| ContentError::Forbidden("account not found".into()))?
+                        .value()
+                        .uaid()
+                        .copied()
+                        .ok_or_else(|| ContentError::Forbidden("uaid required".into()))
+                })
+                .map_err(|_| ContentError::Internal("authentication view unavailable".into()))??;
             if uaid == *expected {
                 Ok(())
             } else {
@@ -362,6 +378,7 @@ fn signed_account(
     headers: &HeaderMap,
     method: &Method,
     uri: &Uri,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<AccountId, ContentError> {
     match verify_canonical_network_request(
         state,
@@ -371,6 +388,7 @@ fn signed_account(
         uri,
         &[],
         None,
+        context,
     ) {
         Ok(Some(verified)) => Ok(verified.account),
         Ok(None) => Err(ContentError::Unauthorized(
@@ -868,6 +886,9 @@ mod tests {
             &method,
             &uri,
             "unknown.txt",
+            &norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(
+                48 * 1024 * 1024,
+            )),
         )
         .expect_err("protected lookup must authenticate before checking the path");
         assert!(matches!(protected_error, ContentError::Unauthorized(_)));
@@ -879,6 +900,9 @@ mod tests {
             &method,
             &uri,
             "unknown.txt",
+            &norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(
+                48 * 1024 * 1024,
+            )),
         )
         .expect_err("public missing path must remain not found");
         assert!(matches!(public_error, ContentError::NotFound));
@@ -1143,8 +1167,17 @@ mod tests {
         let headers = HeaderMap::new();
         let method = Method::GET;
         let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
-        let err = enforce_auth(&manifest, &state, &headers, &method, &uri)
-            .expect_err("signature required");
+        let err = enforce_auth(
+            &manifest,
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(
+                48 * 1024 * 1024,
+            )),
+        )
+        .expect_err("signature required");
         assert!(matches!(err, ContentError::Unauthorized(_)));
     }
     #[test]
@@ -1165,8 +1198,17 @@ mod tests {
             &method,
             &uri,
         );
-        let err =
-            enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("missing role");
+        let err = enforce_auth(
+            &manifest,
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(
+                48 * 1024 * 1024,
+            )),
+        )
+        .expect_err("missing role");
         assert!(matches!(err, ContentError::Forbidden(_)));
     }
     #[test]
@@ -1187,11 +1229,29 @@ mod tests {
             &method,
             &uri,
         );
-        let first = enforce_auth(&manifest, &state, &headers, &method, &uri)
-            .expect_err("unsigned role membership should still be forbidden");
+        let first = enforce_auth(
+            &manifest,
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(
+                48 * 1024 * 1024,
+            )),
+        )
+        .expect_err("unsigned role membership should still be forbidden");
         assert!(matches!(first, ContentError::Forbidden(_)));
-        let err =
-            enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("replay denied");
+        let err = enforce_auth(
+            &manifest,
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(
+                48 * 1024 * 1024,
+            )),
+        )
+        .expect_err("replay denied");
         assert!(matches!(
             err,
             ContentError::Unauthorized(ref message) if message == "invalid request signature"
@@ -1215,7 +1275,17 @@ mod tests {
             &method,
             &uri,
         );
-        enforce_auth(&manifest, &state, &headers, &method, &uri).expect("authorized");
+        enforce_auth(
+            &manifest,
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(
+                48 * 1024 * 1024,
+            )),
+        )
+        .expect("authorized");
     }
     #[test]
     fn sponsor_rejects_mismatched_uaid() {
@@ -1241,8 +1311,17 @@ mod tests {
             &method,
             &uri,
         );
-        let err =
-            enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("uaid mismatch");
+        let err = enforce_auth(
+            &manifest,
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(
+                48 * 1024 * 1024,
+            )),
+        )
+        .expect_err("uaid mismatch");
         assert!(matches!(err, ContentError::Forbidden(_)));
     }
     #[test]
@@ -1263,8 +1342,17 @@ mod tests {
             )),
         );
         let headers = signed_headers(&foreign_network, &account_id, &key_pair, &method, &uri);
-        let error = enforce_auth(&manifest, &state, &headers, &method, &uri)
-            .expect_err("foreign-network content signature must fail closed");
+        let error = enforce_auth(
+            &manifest,
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(
+                48 * 1024 * 1024,
+            )),
+        )
+        .expect_err("foreign-network content signature must fail closed");
         assert!(matches!(
             error,
             ContentError::Unauthorized(ref message) if message == "invalid request signature"

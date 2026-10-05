@@ -442,8 +442,36 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
         task::{Context, Waker},
     };
 
-    let mut chain = native_snapshot_chain();
-    chain.commit_at(2_000, Vec::new());
+    let config =
+        crate::sumeragi::test_chain::TestChainConfig::new(crate::state::World::new(), 1_000);
+    let work_key = config.genesis_key.clone();
+    let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original signed native genesis");
+    let genesis_wire_bytes = usize::try_from(
+        chain
+            .kura()
+            .native_frame_read(1, chain.committed(1).block_hash())
+            .unwrap()
+            .unwrap()
+            .wire_len(),
+    )
+    .unwrap();
+    // Real signed work, rather than frame padding, makes the durable successor
+    // larger than the original genesis. Canonical SignedBlockWire is uncompressed.
+    let message_bytes = genesis_wire_bytes.checked_add(1).unwrap();
+    let signed = chain.sign(
+        &work_key,
+        [Log::new(Level::INFO, "x".repeat(message_bytes)).into()],
+        1_999,
+    );
+    assert_eq!(chain.commit_at(2_000, vec![signed.clone()]), vec![true]);
+    let successor = chain.committed(2);
+    assert_eq!(successor.block().network_entrypoint_count(), 1);
+    assert_eq!(
+        successor.block().network_entrypoint_at(0).unwrap(),
+        &iroha_data_model::transaction::TransactionEntrypoint::External(signed)
+    );
+    drop(successor); // The cold evidence reader must own its separate original admission.
     let captured = CapturedStateSnapshot::capture(chain.state()).unwrap();
     let checkpoint = geometry_checkpoint_from_snapshot(captured.json.as_bytes()).unwrap();
     ensure_snapshot_commit_evidence(chain.state(), &checkpoint, &captured.identity).unwrap();
@@ -453,6 +481,18 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
     let budget = chain.state().ivm_execution_budget();
     let mut registration = crate::unit_test_support::release_registration(&budget);
     let layout = SharedSignedBlock::allocation_layout();
+    // Cold reads physically admit the exact durable frame before its decoded shell.
+    let frame_layout = |height: usize| {
+        let source = chain
+            .kura()
+            .native_frame_read(height as u64, checkpoint.block_hashes[height - 1])
+            .unwrap()
+            .unwrap();
+        std::alloc::Layout::array::<u8>(usize::try_from(source.wire_len()).unwrap()).unwrap()
+    };
+    let genesis_frame = frame_layout(1);
+    let successor_frame = frame_layout(2);
+    assert!(successor_frame.size() > genesis_frame.size());
     let baseline = budget.reserved_bytes();
     let ceiling = budget.limit_bytes();
     let original_tip = chain.state().latest_block_hash_fast();
@@ -462,7 +502,9 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
         .unwrap();
     for admitted_controls in [0, 1] {
         let occupied = budget
-            .try_reserve_bytes(ceiling - baseline - admitted_controls * layout.size())
+            .try_reserve_bytes(
+                ceiling - baseline - admitted_controls * (genesis_frame.size() + layout.size()),
+            )
             .unwrap();
         if admitted_controls == 1 {
             let original_reader = CertifiedChain::from_pinned(
@@ -472,8 +514,8 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
                 chain.kura(),
                 &budget,
             )
-            .expect("one prepaid shared control admits the original genesis reader");
-            assert_eq!(budget.reserved_bytes(), ceiling);
+            .expect("the exact prepaid frame and shared shell admit the original genesis reader");
+            assert_eq!(budget.reserved_bytes(), ceiling - genesis_frame.size());
             assert!(matches!(
                 original_reader.certified(2),
                 Err(ExecutionAttemptError::Deferred(_))
@@ -493,11 +535,19 @@ async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_pub
             release,
         }) = reason.allocation_refusal()
         else {
-            panic!("exact original shared-control capacity refusal must survive");
+            panic!("exact original native-frame capacity refusal must survive");
         };
         assert_eq!(
             (*requested_bytes, *reserved_bytes, *limit_bytes),
-            (layout.size(), ceiling, ceiling)
+            (
+                if admitted_controls == 0 {
+                    genesis_frame.size()
+                } else {
+                    successor_frame.size()
+                },
+                ceiling - admitted_controls * genesis_frame.size(),
+                ceiling,
+            )
         );
         let mut released = pin!(release.clone().wait_for_release(&mut registration));
         let mut context = Context::from_waker(Waker::noop());
@@ -632,6 +682,8 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         fsync_interval: FSYNC_INTERVAL,
         native_context_archive_max_bytes:
             iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+        history_checkpoint_cache_capacity:
+            iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:

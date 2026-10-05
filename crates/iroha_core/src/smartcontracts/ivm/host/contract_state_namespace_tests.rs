@@ -547,3 +547,105 @@ fn generic_ivm_host_rejects_all_durable_state_access() {
         );
     }
 }
+
+#[test]
+fn state_get_reserves_exact_available_gas_for_base_overlay_miss_and_tombstone() {
+    use ivm::state_value::{
+        StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
+        StateValueSchemaV1, state_value_schema_hash_v1,
+    };
+    let path: StatePath = "small".parse().expect("state path");
+    let schema = StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Bool)],
+    };
+    let value = norito::to_bytes(&StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(&norito::to_bytes(&schema).expect("state schema")),
+        atoms: vec![StateValueAtomV1::Bool(true)],
+    })
+    .expect("canonical state value");
+    let syscall = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        ivm_sys::SYSCALL_STATE_GET as u8,
+    );
+    let program = build_authenticated_test_contract_program_with_states(
+        &syscall.to_le_bytes(),
+        0,
+        false,
+        vec![ivm::EmbeddedStateDescriptor {
+            name: path.to_string(),
+            ty: ivm::EmbeddedStateType::Bool,
+        }],
+    );
+    let code_offset = ivm::ProgramMetadata::parse(&program)
+        .expect("parse program")
+        .code_offset;
+    let instruction_gas = program[code_offset..]
+        .chunks_exact(4)
+        .map(|word| ivm::gas::cost_of(u32::from_le_bytes(word.try_into().unwrap())).unwrap())
+        .sum::<u64>();
+    let root_table_gas = authenticated_test_probe_setup_gas()
+        - authenticated_test_probe_prologue()
+            .into_iter()
+            .map(|word| ivm::gas::cost_of(word).unwrap())
+            .sum::<u64>();
+    for source in ["base", "overlay", "missing", "tombstone"] {
+        for affordable in [false, true] {
+            let present = matches!(source, "base" | "overlay");
+            let actual = test_state_value_gas(&path, if present { value.len() } else { 0 });
+            let limit = if affordable {
+                root_table_gas + instruction_gas + actual + 7
+            } else {
+                authenticated_test_probe_setup_gas() + ivm::gas::cost_of(syscall).unwrap() + actual
+                    - 1
+            };
+            assert!(limit < ivm_sys::STATE_MAX_VALUE_BYTES as u64);
+            let mut host = local_contract_host(fixture_account("alice")).with_access_logging();
+            if matches!(source, "base" | "overlay" | "tombstone") {
+                host.durable_state_base.insert(path.clone(), value.clone());
+            }
+            if source == "overlay" {
+                host.durable_state_base.insert(path.clone(), vec![0xff]);
+                host.durable_state_overlay
+                    .insert(path.clone(), Some(value.clone()));
+            } else if source == "tombstone" {
+                host.durable_state_overlay.insert(path.clone(), None);
+            }
+            let base_before = host.durable_state_base.clone();
+            let overlay_before = host.durable_state_overlay.clone();
+            let mut vm = IVM::new(limit);
+            vm.load_program(&program)
+                .expect("load actual authenticated read program");
+            let path_ptr = store_state_path_tlv(&mut vm, &path);
+            vm.set_register(14, path_ptr);
+            vm.set_register(15, 0xfeed);
+            let input_before = store_tlv(&mut vm, PointerType::Blob, b"before");
+            let result = vm.run_with_host(&mut host);
+            assert_eq!(host.durable_state_base, base_before);
+            assert_eq!(host.durable_state_overlay, overlay_before);
+            assert!(host.queued.is_empty());
+            if affordable {
+                result.expect("the exact bounded read fits the original caller's gas");
+                assert_eq!(vm.remaining_gas(), 7);
+                assert!(host.state_access_log.read_keys.contains(path.as_ref()));
+                let output = authenticated_test_probe_result(&vm);
+                if present {
+                    let tlv = vm.validate_tlv(output).expect("canonical read output");
+                    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+                    assert_eq!(tlv.payload, value.as_slice());
+                } else {
+                    assert_eq!(output, 0);
+                }
+            } else {
+                assert_eq!(result, Err(ivm::VMError::OutOfGas));
+                assert_eq!(vm.register(10), path_ptr);
+                assert_eq!(vm.register(11), 0xfeed);
+                assert!(host.state_access_log.read_keys.is_empty());
+                assert!(host.state_access_log.durable_read_paths.is_empty());
+                assert_eq!(vm.remaining_gas(), if present { 0 } else { actual - 1 });
+                let input_after = store_tlv(&mut vm, PointerType::Blob, b"after");
+                let before_len = make_tlv(PointerType::Blob as u16, b"before").len() as u64;
+                assert_eq!(input_after, input_before + before_len.next_multiple_of(8));
+            }
+        }
+    }
+}

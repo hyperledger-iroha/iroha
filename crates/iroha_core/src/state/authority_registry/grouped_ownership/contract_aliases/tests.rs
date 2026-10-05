@@ -380,15 +380,36 @@ fn either_original_identity_change_overrides_success_corruption_and_work_refusal
 fn original_address_spelling_and_utf8_alias_text_are_not_redecoded_or_normalized() {
     let mut world = fixture();
     let lower = address(0);
-    let uppercase = lower.as_ref().to_ascii_uppercase();
-    let upper: ContractAddress = uppercase.parse().unwrap();
-    assert_eq!(upper.as_ref(), uppercase);
+    // V1 admits only the canonical lowercase `irohac` spelling. A distinct
+    // genuine address tests exact stored identity without an invalid case alias.
+    assert!(matches!(
+        lower
+            .as_ref()
+            .to_ascii_uppercase()
+            .parse::<ContractAddress>(),
+        Err(iroha_data_model::smart_contract::ContractAddressError::InvalidHrp(_))
+    ));
+    let spelling = address(1).as_ref().to_owned();
+    let stored: ContractAddress = spelling.parse().unwrap();
+    assert_eq!(stored.as_ref(), spelling);
+    assert_ne!(stored, lower);
     let binding = record("caf\u{e9}");
     let alias = binding.alias.clone();
+    assert_eq!(alias.as_ref(), "caf\u{e9}::universal");
+    // The public model refuses alternate NFD spelling before it becomes stored identity.
+    assert!("cafe\u{301}::universal".parse::<ContractAlias>().is_err());
+    // Both of these distinct original aliases are valid NFC. Compatibility folding
+    // would conflate the fullwidth letters with the original ASCII letters.
+    let foreign_alias = record("\u{ff43}\u{ff41}\u{ff46}\u{e9}").alias;
+    assert_eq!(
+        foreign_alias.as_ref(),
+        "\u{ff43}\u{ff41}\u{ff46}\u{e9}::universal"
+    );
+    assert_ne!(foreign_alias, alias);
     let exact = 2
         * (4 + LEASE_WINDOW_WORK
-            + 4 * u64::try_from(alias.as_ref().len() + upper.as_ref().len()).unwrap());
-    world.contract_alias_bindings = mv::storage::Storage::from_iter([(upper, binding)]);
+            + 4 * u64::try_from(alias.as_ref().len() + stored.as_ref().len()).unwrap());
+    world.contract_alias_bindings = mv::storage::Storage::from_iter([(stored.clone(), binding)]);
     world.rebuild_contract_alias_indexes().unwrap();
     assert_eq!(
         check(&world, exact - 1),
@@ -396,6 +417,17 @@ fn original_address_spelling_and_utf8_alias_text_are_not_redecoded_or_normalized
     );
     assert_eq!(check(&world, exact), Ok(()));
     world.contract_aliases.insert(alias, lower);
+    assert_eq!(
+        check(&world, 1_000_000),
+        Err(GroupedOwnershipError::Corrupt {
+            index: INDEX,
+            image: GroupImage::Current,
+            mismatch: GroupMismatch::MissingMember,
+        })
+    );
+    // A relation that rewrites original UTF-8 by compatibility normalization
+    // would incorrectly accept this foreign inverse.
+    world.contract_aliases = mv::storage::Storage::from_iter([(foreign_alias, stored)]);
     assert_eq!(
         check(&world, 1_000_000),
         Err(GroupedOwnershipError::Corrupt {

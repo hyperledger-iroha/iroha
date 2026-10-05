@@ -436,6 +436,24 @@ class ParliamentApiV1Test {
     }
 
     @Test
+    fun retiredKagemushaProposalKindsCannotEnterAttemptDrafts() {
+        listOf(
+            "KagemushaVerifierPolicyInstall",
+            "KagemushaVerifierReleaseInstall",
+            "KagemushaVerifierReleaseActivate",
+            "KagemushaVerifierReleaseRetire",
+        ).forEach { kind ->
+            assertTrue(kind !in ParliamentApiV1.PROPOSAL_KINDS)
+            listOf(null, emptyMap<String, Any?>(), mapOf("proposal_operator" to "invalid")).forEach { payload ->
+                val error = assertFailsWith<IllegalArgumentException>("accepted retired proposal $kind") {
+                    ParliamentApiV1.Proposal.fromJson(encode(linkedMapOf("kind" to kind, "payload" to payload)))
+                }
+                assertEquals("proposal.kind is unknown or retired", error.message)
+            }
+        }
+    }
+
+    @Test
     fun attemptDraftSequenceAcceptsSixteenAndRejectsSeventeen() {
         val accepted = objectValue(
             ParliamentApiV1.attemptDraftRequestJson(

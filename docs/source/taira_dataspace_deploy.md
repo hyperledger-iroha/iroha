@@ -58,8 +58,10 @@ endpoint. Existing public-reset preparation can produce the same profile through
 - `plan` authenticates all four selected validators, checks capabilities, owner
   permissions and funding, allocates an unused lane, derives the committee and
   exact alias prices, then saves a reviewable plan without submitting a ledger
-  transaction. The current native permission boundary requires
-  `CanSetParameters` and `CanReadAllLedgerData`.
+  transaction. Catalog writes require exact `CanSetParameters` authorization.
+  Public control-plane reads, the separate allowlisted operator credential and
+  owner-scoped account and transaction reads cover deployment observations;
+  the owner does not need access to unrelated ledger data.
 - `apply` resumes that plan through catalog registration, ownership grant and
   paid namespace registration. Catalog execution atomically creates its native
   fixed-lane policy; the lane activates at the catalog height plus two. Control

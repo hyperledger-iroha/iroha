@@ -9,6 +9,7 @@ use super::{
     },
     *,
 };
+use iroha_data_model::fastpq::TransferTranscript;
 use iroha_model_base::topology::LaneId;
 use iroha_test_samples::ALICE_ID;
 
@@ -46,6 +47,46 @@ fn take_capture_output(block: &mut StateBlock<'_>, output: usize) -> bool {
         2 => block.take_parliament_timed_ovn_casting_bindings().is_some(),
         _ => unreachable!("only the three capture outputs have extraction accessors"),
     }
+}
+
+/// Inject an explicit post-seal source fault into the actual carrier's private
+/// accumulator. This grants no execution owner and invokes no apply bypass;
+/// all assertions below require the original sealed carrier to reject it.
+fn inject_late_source_capture(block: &mut StateBlock<'_>, hash: Hash) {
+    assert!(matches!(
+        block.execution_output_plan,
+        Some(super::super::output_capacity::ExecutionOutputPlanState::Sealed(_))
+    ));
+    let captured = block
+        .fastpq_source_context
+        .as_ref()
+        .unwrap()
+        .capture_transcript(
+            Some(hash),
+            hash,
+            None,
+            Some(DataSpaceId::UNIVERSAL),
+            block.committed_fragment_count(),
+        );
+    block.fastpq_source_captures.record(captured);
+    assert_eq!(
+        block.fastpq_source_captures.sealed_sources().unwrap_err(),
+        crate::fastpq::FastpqSourceCaptureError::AppliedAfterSeal,
+    );
+    let delta = delta();
+    let poseidon_preimage_digest = crate::fastpq::poseidon_preimage_digest(&delta, &hash);
+    let transcript = TransferTranscript {
+        batch_hash: hash,
+        deltas: vec![delta],
+        authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+        poseidon_preimage_digest: Some(poseidon_preimage_digest),
+    };
+    assert!(
+        block
+            .fastpq_transcripts
+            .insert(hash, vec![transcript])
+            .is_none()
+    );
 }
 
 fn cache_transfer_capture(
@@ -160,7 +201,7 @@ fn same_or_new_key_late_apply_refuses_capture_even_after_late_data_is_drained() 
                     } else {
                         Hash::new(b"late new source")
                     };
-                    apply_source(&mut block, late_hash, false, None);
+                    inject_late_source_capture(&mut block, late_hash);
                     if drain_late {
                         let drained = block.drain_transfer_transcripts_with_pending(None);
                         assert_eq!(drained.len(), 1);
@@ -192,6 +233,9 @@ fn rolled_back_transfer_and_empty_apply_preserve_sealed_capture() {
     with_native_capture_source(
         true,
         |_state, mut block, _recording, mut native_source, original_hash| {
+            // Empty application is permitted before the completed output seal.
+            // Applying any transaction after Sealed correctly poisons the carrier.
+            block.transaction().apply();
             seal_native_source(&mut block, &mut native_source).unwrap();
             let owned = block
                 .verified_fastpq_source_inventory_for_capture()
@@ -211,7 +255,6 @@ fn rolled_back_transfer_and_empty_apply_preserve_sealed_capture() {
                 drop(tx);
                 drop(witness_overlay);
             }
-            block.transaction().apply();
             assert!(block.fastpq_transcripts.is_empty());
             assert!(Arc::ptr_eq(
                 &block
@@ -235,7 +278,7 @@ fn later_applied_transfer_invalidates_and_clears_previously_cached_capture() {
             block.capture_exec_witness().unwrap();
             assert!(block.exec_witness.is_some());
             assert!(block.fastpq_witness_context.is_some());
-            apply_source(&mut block, hash, false, None);
+            inject_late_source_capture(&mut block, hash);
             block.drain_transfer_transcripts_with_pending(None);
             assert!(block.capture_exec_witness().is_err());
             assert_no_cached_capture(&mut block);
@@ -279,7 +322,10 @@ fn capture_rejects_unsealed_replaced_contexts_and_changed_source_caches() {
                             .as_ref()
                             .unwrap()
                             .capture_transcript(
-                                Some(replacement_hash),
+                                // Equal value reconstruction is not new authority: the
+                                // retained quota journals own it. Change the actual
+                                // source kind under the same key in mutation seven.
+                                (mutation == 6).then_some(replacement_hash),
                                 replacement_hash,
                                 Some(LaneId::SINGLE),
                                 Some(DataSpaceId::UNIVERSAL),
@@ -399,7 +445,7 @@ fn each_extraction_accessor_first_rejects_late_applies_without_recapture() {
                     } else {
                         Hash::new(b"late source before direct extraction")
                     };
-                    apply_source(&mut block, late, false, None);
+                    inject_late_source_capture(&mut block, late);
                     let late_archive = block.drain_transfer_transcripts_with_pending(None);
                     assert!(late_archive.contains_key(&late));
                     assert!(block.fastpq_transcripts.is_empty());
@@ -630,4 +676,44 @@ fn original_quota_custody_latches_frozen_policy_and_unavailable_journal_changes(
             },
         );
     }
+}
+
+#[test]
+fn genuine_sealed_carrier_refuses_even_empty_late_application_before_state_publication() {
+    with_native_capture_source(true, |state, mut block, _recording, mut source, _hash| {
+        seal_native_source(&mut block, &mut source).unwrap();
+        let original_inventory = Arc::clone(
+            block
+                .fastpq_source_inventory
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap(),
+        );
+        let original_source_wire = source.encode_wire().unwrap();
+        let original_fragment_count = block.committed_fragment_count();
+        let original_height = state.committed_height();
+        block.transaction().apply();
+        assert!(matches!(
+            block.execution_output_plan,
+            Some(super::super::output_capacity::ExecutionOutputPlanState::Poisoned)
+        ));
+        assert_eq!(block.committed_fragment_count(), original_fragment_count);
+        assert!(block.fastpq_transcripts.is_empty());
+        assert_eq!(source.encode_wire().unwrap(), original_source_wire);
+        assert_eq!(
+            block.fastpq_source_inventory().unwrap(),
+            Some(original_inventory.as_ref())
+        );
+        assert_eq!(
+            block.capture_exec_witness(),
+            Err("FASTPQ witness capture refuses a poisoned carrier".into())
+        );
+        assert_no_cached_capture(&mut block);
+        assert!(matches!(
+            block.commit(),
+            Err(crate::state::TransactionsBlockError::ExecutionOutputCapacity)
+        ));
+        assert_eq!(state.committed_height(), original_height);
+    });
 }

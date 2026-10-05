@@ -8983,6 +8983,7 @@ fn validate_genesis_execution_offline(
         .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))?;
     let initial_committee_size = initial_configs
         .iter()
+        // Only an installed slot carries a committee; a pending boundary fails closed.
         .find_map(|(_, slot)| slot.ready().map(|config| config.committee.n()))
         .ok_or_else(|| {
             Report::new(MainError::Config)

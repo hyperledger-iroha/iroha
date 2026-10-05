@@ -772,10 +772,15 @@ fn reserve_account_credit_frame_reservation_is_exact_cumulative_and_refundable()
     });
     assert_eq!(budget.reserved_bytes(), 0);
     let mut oversized = original;
-    oversized.metadata.insert(
-        "large".parse().unwrap(),
-        iroha_primitives::json::Json::new("x".repeat(MAX_RESERVE_ACCOUNT_CREDIT_BYTES_V1)),
-    );
+    // Each metadata value obeys the JSON bound; their genuine parent frame exceeds
+    // the independent reserve-account response bound that this control exercises.
+    use iroha_primitives::json::{Json, MAX_JSON_BYTES};
+    assert!(Json::try_new("x".repeat(MAX_JSON_BYTES - 1)).is_err());
+    for name in ["large_a", "large_b", "large_c"] {
+        let value = Json::try_new("x".repeat(MAX_JSON_BYTES - 2)).unwrap();
+        assert_eq!(value.get().len(), MAX_JSON_BYTES);
+        oversized.metadata.insert(name.parse().unwrap(), value);
+    }
     assert!(norito::canonical_frame_len(&oversized).unwrap() > MAX_RESERVE_ACCOUNT_CREDIT_BYTES_V1);
     assert!(
         encode_original(&oversized, MAX_RESERVE_ACCOUNT_CREDIT_BYTES_V1, &budget)

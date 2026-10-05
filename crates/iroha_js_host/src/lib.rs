@@ -12311,6 +12311,19 @@ seiyaku Privacy {
     }
     #[test]
     fn smart_contract_code_instruction_json_roundtrip() {
+        const FRAME_LIMIT: usize = 64 * 1024;
+        const SCRATCH_BYTES: usize = 8 * FRAME_LIMIT;
+        let signing_pool = iroha_allocation::AllocationBudget::new(
+            SCRATCH_BYTES + norito::core::DecodeBudgetContext::allocation_layout().size(),
+        );
+        let _signing_scratch = signing_pool
+            .try_reserve_bytes(SCRATCH_BYTES)
+            .expect("fund fixture manifest signing scratch");
+        let signing_context = norito::core::DecodeBudgetContext::try_new_owned(
+            norito::DecodeLimits::new(FRAME_LIMIT, FRAME_LIMIT, FRAME_LIMIT, SCRATCH_BYTES, 256),
+            &signing_pool,
+        )
+        .expect("fund original fixture signing counter");
         let signing_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
             .expect("fixture seed keypair");
         let manifest = ContractManifest {
@@ -12371,7 +12384,8 @@ seiyaku Privacy {
             error_types: None,
             provenance: None,
         }
-        .signed(&signing_key);
+        .try_signed(&signing_context, FRAME_LIMIT, &signing_key)
+        .expect("sign bounded fixture manifest");
         let instruction: InstructionBox = Box::new(RegisterSmartContractCode {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                 DataSpaceId::new(u64::MAX),

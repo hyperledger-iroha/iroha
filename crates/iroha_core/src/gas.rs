@@ -33,7 +33,8 @@ use std::{
 // - Transfer/Mint/Burn: ~180/150/150 gas.
 const BASE_REGISTER: u64 = 200;
 const BASE_UNREGISTER: u64 = 150;
-const BASE_TRANSFER: u64 = 180;
+/// Fixed native charge for one asset or NFT transfer, also quoted before VM host dispatch.
+pub(crate) const BASE_TRANSFER: u64 = 180;
 const BASE_MINT: u64 = 150;
 const BASE_BURN: u64 = 150;
 const BASE_SET_KV: u64 = 64;
@@ -283,22 +284,6 @@ fn gas_for_kaigi_proof_verification(
         .saturating_add(zk_gas_per_proof_byte().saturating_mul(proof_bytes))
         .saturating_add(zk_gas_per_nullifier().saturating_mul(nullifiers))
         .saturating_add(zk_gas_per_commitment().saturating_mul(commitments))
-}
-fn gas_for_kagemusha_v1_redemption(redeem: &dm_isi::kagemusha_v1::RedeemKagemushaV1) -> u64 {
-    let proof = &redeem.request.voucher.proof;
-    let proof_bytes = proof
-        .eq_proof
-        .len()
-        .saturating_add(proof.ep_proof.len())
-        .saturating_add(proof.eq_history.len())
-        .saturating_add(proof.ep_history.len());
-    zk_gas_base_verify()
-        .saturating_mul(2)
-        .saturating_add(
-            zk_gas_per_proof_byte().saturating_mul(u64::try_from(proof_bytes).unwrap_or(u64::MAX)),
-        )
-        .saturating_add(zk_gas_per_nullifier())
-        .saturating_add(zk_gas_per_commitment())
 }
 fn gas_for_register_pin_manifest(manifest_bytes: usize) -> u64 {
     BASE_REGISTER_PIN_MANIFEST.saturating_add(
@@ -728,9 +713,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
-    if let Some(redeem) = any.downcast_ref::<dm_isi::kagemusha_v1::RedeemKagemushaV1>() {
-        return gas_for_kagemusha_v1_redemption(redeem);
-    }
     if let Some(ballot) = any.downcast_ref::<dm_isi::zk::SubmitBallot>() {
         return gas_for_proof_attachment(&ballot.ballot_proof, 1, 0);
     }
@@ -803,9 +785,6 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     }
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
-    }
-    if let Some(redeem) = any.downcast_ref::<dm_isi::kagemusha_v1::RedeemKagemushaV1>() {
-        return gas_for_kagemusha_v1_redemption(redeem);
     }
     if let Some(ballot) = any.downcast_ref::<dm_isi::zk::SubmitBallot>() {
         return gas_for_proof_attachment(&ballot.ballot_proof, 1, 0);

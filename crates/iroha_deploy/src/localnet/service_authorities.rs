@@ -1365,6 +1365,9 @@ pub(crate) struct RetainedServiceProfile {
     prepared: PreparedLocalnet,
     manifest: StreamTokenAuthorityManifest,
     plans: [RetainedProviderServicePlan; PROVIDER_COUNT],
+    // Public original client intent retained by the same one-time canonical parse.
+    chain: String,
+    address_discriminant: u16,
 }
 
 /// Move typed constructor outputs into the existing operation owner without duplicating genesis.
@@ -1403,6 +1406,23 @@ impl RetainedServiceProfile {
     ) -> crate::managed::Result<RetainedGatewayCompliancePlan> {
         compliance_material::retained(&self.manifest, provider)
             .map_err(|_| Error::Invalid("retained generated compliance plan differs".into()))
+    }
+    pub(crate) fn original_publication_plan(
+        &self,
+    ) -> crate::managed::Result<RetainedPublicationServicePlan> {
+        let generation = self
+            .prepared
+            .context
+            .client_config
+            .parent()
+            .ok_or_else(|| Error::Invalid("original publication generation is absent".into()))?;
+        publication_material::retained_from_parts(
+            &self.manifest,
+            &self.chain,
+            self.address_discriminant,
+            generation,
+        )
+        .map_err(|_| Error::Invalid("retained generated publication plan differs".into()))
     }
     pub(crate) fn original_plan(
         &self,
@@ -1745,6 +1765,8 @@ pub(crate) fn capture_retained(
             prepared: prepared.clone(),
             manifest,
             plans,
+            chain: client.chain.to_string(),
+            address_discriminant: client.account_chain_discriminant,
         },
         genesis: crate::verify::finality::GenesisAnchor {
             network_id: client.network_id,

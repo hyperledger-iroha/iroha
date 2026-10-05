@@ -1215,6 +1215,196 @@ mod preauth_connection_lifetime_tests {
             Some(&HeaderValue::from_static("public, max-age=60"))
         );
     }
+    #[tokio::test]
+    async fn transaction_authentication_precedes_media_validation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        async fn error_code(response: Response) -> String {
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect typed error response")
+                .to_bytes();
+            let envelope: ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode typed error response");
+            envelope.code().to_owned()
+        }
+        let mut app = app_with_scheme_cap("norito_rpc");
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.require_api_token = true;
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let router = Router::new()
+            .route(
+                route_catalog::pipeline::TRANSACTION.path(),
+                axum::routing::post({
+                    let handler_calls = Arc::clone(&handler_calls);
+                    move || {
+                        let handler_calls = Arc::clone(&handler_calls);
+                        async move {
+                            handler_calls.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::OK
+                        }
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn(capture_response_format))
+            .layer(axum::middleware::from_fn(coalesce_accept_headers))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_api_token,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_preauth,
+            ))
+            .layer(axum::middleware::from_fn(enforce_typed_error_contract));
+        let transaction_request =
+            |token_count: usize, content_type: &'static str, accept: &'static str| {
+                let mut request = Request::builder()
+                    .method(axum::http::Method::POST)
+                    .uri(route_catalog::pipeline::TRANSACTION.path())
+                    .header(header::ACCEPT, accept)
+                    .header(header::CONTENT_TYPE, content_type)
+                    .body(Body::from("{malformed-json"))
+                    .expect("transaction request");
+                request
+                    .extensions_mut()
+                    .insert(MatchedRouteMetadata::from_descriptor(
+                        route_catalog::pipeline::TRANSACTION,
+                    ));
+                for _ in 0..token_count {
+                    request
+                        .headers_mut()
+                        .append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
+                }
+                request
+            };
+        let occupying_guard = app
+            .acquire_preauth(None, ConnScheme::NoritoRpc)
+            .await
+            .expect("occupy the transaction pre-auth slot");
+        let at_capacity = router
+            .clone()
+            .oneshot(transaction_request(
+                0,
+                "application/json; charset==utf-8",
+                "application/json;q=2",
+            ))
+            .await
+            .expect("pre-auth capacity response");
+        assert_eq!(at_capacity.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error_code(at_capacity).await, "preauth_scheme_capacity");
+        drop(occupying_guard);
+        let missing = router
+            .clone()
+            .oneshot(transaction_request(
+                0,
+                "application/json; charset==utf-8",
+                "application/json;q=2",
+            ))
+            .await
+            .expect("missing-token response");
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(error_code(missing).await, "api_token_required");
+        let mut missing_with_duplicate_content_type =
+            transaction_request(0, "application/json", "application/json");
+        missing_with_duplicate_content_type.headers_mut().append(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        let missing = router
+            .clone()
+            .oneshot(missing_with_duplicate_content_type)
+            .await
+            .expect("missing-token duplicate-Content-Type response");
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(error_code(missing).await, "api_token_required");
+        let duplicate = router
+            .clone()
+            .oneshot(transaction_request(
+                2,
+                "application/json; charset==utf-8",
+                "application/json;q=2",
+            ))
+            .await
+            .expect("duplicate-token response");
+        assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
+        assert!(duplicate.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(error_code(duplicate).await, "api_token_required");
+        let invalid_accept = router
+            .clone()
+            .oneshot(transaction_request(
+                1,
+                "application/x-norito",
+                "application/json;q=2",
+            ))
+            .await
+            .expect("invalid-Accept response");
+        assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
+        let mut non_ascii_accept =
+            transaction_request(1, "application/x-norito", "application/json");
+        non_ascii_accept.headers_mut().append(
+            header::ACCEPT,
+            HeaderValue::from_bytes(&[0xff]).expect("opaque Accept fixture"),
+        );
+        let invalid_accept = router
+            .clone()
+            .oneshot(non_ascii_accept)
+            .await
+            .expect("non-ASCII Accept response");
+        assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
+        let mut duplicate_content_type =
+            transaction_request(1, "application/x-norito", "application/json");
+        duplicate_content_type.headers_mut().append(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        let invalid_content_type = router
+            .clone()
+            .oneshot(duplicate_content_type)
+            .await
+            .expect("duplicate-Content-Type response");
+        assert_eq!(invalid_content_type.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error_code(invalid_content_type).await,
+            "request_content_type_invalid"
+        );
+        let mut non_ascii_content_type =
+            transaction_request(1, "application/x-norito", "application/json");
+        non_ascii_content_type.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_bytes(&[0xff]).expect("opaque Content-Type fixture"),
+        );
+        let invalid_content_type = router
+            .clone()
+            .oneshot(non_ascii_content_type)
+            .await
+            .expect("non-ASCII Content-Type response");
+        assert_eq!(invalid_content_type.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error_code(invalid_content_type).await,
+            "request_content_type_invalid"
+        );
+        assert_eq!(
+            handler_calls.load(Ordering::SeqCst),
+            0,
+            "authentication and media failures must precede handler execution"
+        );
+        let accepted = router
+            .oneshot(transaction_request(
+                1,
+                "application/x-norito",
+                "application/json",
+            ))
+            .await
+            .expect("authenticated transaction boundary response");
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
+    }
 }
 
 #[cfg(test)]

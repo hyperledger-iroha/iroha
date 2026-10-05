@@ -299,6 +299,86 @@ fn account_alias_resolution_requires_active_lease_and_consistent_indexes() {
         "split binding indexes must fail closed"
     );
 }
+
+#[test]
+fn account_alias_authentication_uses_stable_borrowed_catalog_and_original_counter() {
+    let catalog = DataSpaceCatalog::default();
+    let alias = AccountAlias::domainless(
+        "authentication".parse().expect("canonical alias"),
+        DataSpaceId::UNIVERSAL,
+    );
+    let selector = selector_for_account_alias(&alias, &catalog).unwrap();
+    let owner = owner();
+    let mut world = World::with([], [Account::new(owner.clone()).build(&owner)], []);
+    let record = NameRecordV1::new(
+        selector.clone(),
+        owner.clone(),
+        vec![controller(&owner)],
+        0,
+        0,
+        100,
+        200,
+        300,
+        Metadata::default(),
+    );
+    let encoded = record.encode();
+    world
+        .smart_contract_state_mut_for_testing()
+        .insert(record_storage_key(&selector), encoded.clone());
+    world.account_aliases.insert(alias.clone(), owner.clone());
+    world.replace_account_rekey_record_for_testing(
+        iroha_data_model::account::rekey::AccountRekeyRecord::new(alias.clone(), owner.clone()),
+    );
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let pool = iroha_allocation::AllocationBudget::new(1024 * 1024);
+    let context = norito::core::DecodeBudgetContext::try_new_owned(
+        norito::DecodeLimits::new(100_000, 128 * 1024, 100_000, 1024 * 1024, 32),
+        &pool,
+    )
+    .unwrap();
+    let result = state
+        .try_with_authorization_view(&context, |view| {
+            resolve_active_account_alias(
+                view.world(),
+                view.catalog(),
+                &alias,
+                view.ledger_time_ms(),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(result, Some(owner));
+    assert!(context.consumed_allocated_bytes() > 0);
+    let refused = norito::core::DecodeBudgetContext::try_new_owned(
+        norito::DecodeLimits::new(100_000, 128 * 1024, 100_000, 0, 32),
+        &pool,
+    )
+    .unwrap();
+    assert!(
+        state
+            .try_with_authorization_view(&refused, |view| {
+                resolve_active_account_alias(
+                    view.world(),
+                    view.catalog(),
+                    &alias,
+                    view.ledger_time_ms(),
+                )
+            })
+            .unwrap()
+            .is_err(),
+        "authentication cannot reset or replace the caller's exhausted counter"
+    );
+    let mut trailing = encoded;
+    trailing.push(0);
+    assert!(
+        decode_record_for_selector(&trailing, &selector).is_err(),
+        "borrowing exact wire bytes must preserve trailing-byte refusal"
+    );
+}
 #[test]
 fn account_id_rekey_lineage_requires_typed_live_unambiguous_retired_history() {
     use iroha_data_model::account::rekey::{AccountRekeyRecord, AccountRekeyTransitionProvenance};

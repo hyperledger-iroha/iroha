@@ -58,10 +58,17 @@ The active repository must remain on optimizations, and the executing
 bootstrap sources must match the selected signed commit. Native qualification
 loads its gate only from the authenticated source capture; it does not import
 the mutable checkout gate.
-`prepare-client` builds only ordinary host-native Musubi on macOS from the same
+`prepare-client --bin iroha|musubi` builds exactly the selected ordinary
+host-native client on macOS from the same
 signed capture owner, in a separate fixed target/taira-macos-client lane. It
 uses Apple's linker and Cargo's native jobserver, and retains a source/tool/
 artifact receipt. It does not run qualification or add a validator artifact.
+`prepare-native-runtime` uses the same authenticated owner to build the standard
+iroha CLI, Kagami and iroha3d together for the native Mac in one locked/offline
+release invocation. It safely creates and then reuses target/taira-macos-runtime,
+retains failed requests/logs, and atomically publishes only a complete read-only
+three-executable package. This is signed-source build evidence, not deployment
+authority or qualification; it accepts no runtime credentials or private keys.
 """
 
 from __future__ import annotations
@@ -89,7 +96,7 @@ import uuid
 sys.dont_write_bytecode = True
 from release_artifact_contract import (
     ReleaseArtifactError, canonical_json_bytes, create_fresh_directory, ensure_private_directory,
-    exclusive_output_fd, exclusive_write_bytes, stable_hash_path,
+    exclusive_output_fd, exclusive_write_bytes, publish_directory_noreplace, stable_hash_path,
     stable_open_relative,
 )
 from taira_cargo_cache import admit_source_fingerprints, local_package_names, source_fingerprints
@@ -99,6 +106,16 @@ from taira_cargo_artifact import cargo_hash_path, cargo_open_relative
 TARGET = "aarch64-unknown-linux-gnu"
 BINARIES = (("iroha3d_taira", "irohad"), ("iroha", "iroha_cli"),
             ("sorafs-node", "sorafs_node"), ("kagami", "iroha_kagami"))
+NATIVE_RUNTIME_BINARIES = (
+    ("iroha", "iroha_cli", "crates/iroha_cli/bins/Cargo.toml", "crates/iroha_cli/bins/src/bin/iroha.rs"),
+    ("kagami", "iroha_kagami", "crates/iroha_kagami/Cargo.toml", "crates/iroha_kagami/src/main.rs"),
+    ("iroha3d", "irohad", "crates/irohad/bins/Cargo.toml", "crates/irohad/bins/src/bin/iroha3d.rs"),
+)
+CLIENT_BINARIES = {
+    "iroha": NATIVE_RUNTIME_BINARIES[0],
+    "musubi": ("musubi", "musubi", "crates/musubi/Cargo.toml", "crates/musubi/src/main.rs"),
+}
+MAX_CARGO_RECORD_BYTES = 16 * 1024**2
 LINUX_NATIVE_LLVM_TOOL_PATHS = (
     ("compiler", Path("/usr/bin/clang-18"), Path("/usr/lib/llvm-18/bin/clang")),
     ("linker", Path("/usr/bin/ld.lld-18"), Path("/usr/lib/llvm-18/bin/lld")),
@@ -575,7 +592,16 @@ def verify_signed_source(root: Path, commit: str, signer: str) -> str:
     return git(root, "rev-parse", commit + "^{tree}").decode()
 
 
-def frozen_snapshot(source: Path, entries: bytes, target_dir: Path) -> list[dict[str, object]]:
+def frozen_snapshot(source: Path, entries: bytes, target_dir: Path, *,
+                    unpublished_root_fd: int | None = None) -> list[dict[str, object]]:
+    def check_unpublished_root():
+        if unpublished_root_fd is not None:
+            opened, named = os.fstat(unpublished_root_fd), source.lstat()
+            require(stat.S_ISDIR(opened.st_mode) and opened.st_uid == os.geteuid()
+                    and stat.S_IMODE(opened.st_mode) == 0o700
+                    and file_identity(opened) == file_identity(named),
+                    "unpublished source root custody changed")
+    check_unpublished_root()
     rows = source_snapshot(source, entries, frozen=True)
     binding = source / "target"
     require(binding.is_symlink() and binding.lstat().st_uid == os.geteuid()
@@ -587,10 +613,12 @@ def frozen_snapshot(source: Path, entries: bytes, target_dir: Path) -> list[dict
     actual = set()
     for parent, directories, files in os.walk(source, followlinks=False):
         info = Path(parent).lstat()
-        require(stat.S_IMODE(info.st_mode) == 0o500 and info.st_uid == os.geteuid(),
+        mode = 0o700 if unpublished_root_fd is not None and Path(parent) == source else 0o500
+        require(stat.S_IMODE(info.st_mode) == mode and info.st_uid == os.geteuid(),
                 "captured source directory is not owner-held and read-only")
         actual.update((Path(parent) / name).relative_to(source) for name in directories + files)
     require(actual == expected, "captured source has missing or extra inputs")
+    check_unpublished_root()
     return rows
 
 
@@ -677,14 +705,18 @@ class PrivateSourceTree:
     """Hold one unpublished capture and defer directory durability to its seal.
 
     Only a capture-private tree uses this writer. Files receive their final
-    metadata before their sole fsync; every directory is then frozen and synced
-    bottom-up before the existing signed-tree verification and publication.
-    At most one root and two traversal descriptors are open, independent of size.
+    metadata before their sole fsync; child directories are frozen and synced
+    bottom-up. The original root stays private and writable until Darwin's
+    exclusive rename completes, then freezes through its retained descriptor.
+    At most two custody and two traversal descriptors are open, independent of size.
     """
 
     def __init__(self, root: Path):
         self.root = root
         self.fd = -1
+        self.parent_fd = -1
+        self.parent_identity: tuple[int, ...] | None = None
+        self.published_identity: tuple[int, ...] | None = None
         self.directories: dict[Path, tuple[int, ...]] = {}
         self.frozen: set[Path] = set()
 
@@ -702,23 +734,43 @@ class PrivateSourceTree:
                     and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700,
                     "private source root custody changed")
             self.directories[Path('.')] = self.identity(info)
+            self.parent_fd = os.open(self.root.parent, os.O_RDONLY | os.O_DIRECTORY
+                                     | os.O_NOFOLLOW | os.O_CLOEXEC)
+            parent = os.fstat(self.parent_fd)
+            require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.geteuid()
+                    and not parent.st_mode & 0o022
+                    and file_identity(parent) == file_identity(self.root.parent.lstat()),
+                    "private source publication parent custody changed")
+            self.parent_identity = (*self.identity(parent), parent.st_mode)
             self.fd = fd
         except BaseException:
+            if self.parent_fd != -1:
+                os.close(self.parent_fd)
+                self.parent_fd = -1
             os.close(fd)
             raise
         return self
 
     def __exit__(self, *_exc):
         os.close(self.fd)
+        os.close(self.parent_fd)
         self.fd = -1
+        self.parent_fd = -1
 
     def check_root(self) -> None:
+        parent, named_parent = os.fstat(self.parent_fd), self.root.parent.lstat()
+        require(all((*self.identity(info), info.st_mode) == self.parent_identity
+                    for info in (parent, named_parent)),
+                "private source publication parent custody changed")
         named, held = self.root.lstat(), os.fstat(self.fd)
         mode = 0o500 if Path('.') in self.frozen else 0o700
         require(all(stat.S_ISDIR(info.st_mode)
                     and self.identity(info) == self.directories[Path('.')]
                     and stat.S_IMODE(info.st_mode) == mode for info in (named, held)),
                 "private source root was replaced or its custody changed")
+        if self.published_identity is not None:
+            require(all(file_identity(info) == self.published_identity for info in (named, held)),
+                    "published source root metadata changed")
 
     @contextlib.contextmanager
     def directory(self, relative: Path, *, create: bool = False):
@@ -809,6 +861,8 @@ class PrivateSourceTree:
         real_path(self.root)
         self.check_root()
         for relative in sorted(self.directories, key=lambda path: len(path.parts), reverse=True):
+            if relative == Path('.'):
+                continue
             with self.directory(relative) as fd:
                 os.fchmod(fd, 0o500)
                 if relative in unchanged:
@@ -826,7 +880,57 @@ class PrivateSourceTree:
                         and stat.S_IMODE(named.st_mode) == 0o500,
                         "sealed source directory path changed")
         self.check_root()
+        os.fsync(self.fd)
         real_path(self.root)
+
+    def publish(self, destination: Path) -> None:
+        """Publish only this original sealed tree, then durably freeze its root."""
+        self.check_root()
+        require(Path('.') not in self.frozen
+                and self.frozen == set(self.directories) - {Path('.')},
+                "private source children must be sealed before publication")
+        publish_directory_noreplace(self.root, destination, parent_fd=self.parent_fd,
+                                    stage_fd=self.fd)
+        self.root = destination
+        self.check_root()
+        os.fchmod(self.fd, 0o500)
+        os.fsync(self.fd)
+        self.frozen.add(Path('.'))
+        self.published_identity = file_identity(os.fstat(self.fd))
+        self.check_root()
+        require(file_identity(os.fstat(self.fd)) == file_identity(destination.lstat()),
+                "published source root custody changed")
+        os.fsync(self.parent_fd)
+        self.check_root()
+
+
+def retain_previous_source(source: Path, destination: Path, entries: bytes,
+                           target_dir: Path, parent_fd: int) -> None:
+    """Move one authenticated prior capture through its retained original inode."""
+    before = source.lstat()
+    fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        require(file_identity(os.fstat(fd)) == file_identity(before),
+                "previous source root changed before retention")
+        frozen_snapshot(source, entries, target_dir)
+        require(file_identity(os.fstat(fd)) == file_identity(before)
+                and file_identity(source.lstat()) == file_identity(before),
+                "previous source root custody changed")
+        # This is an intentional lifecycle transition of the verified old inode,
+        # not repair or admission of an existing writable/foreign directory.
+        os.fchmod(fd, 0o700)
+        try:
+            require(file_identity(os.fstat(fd)) == file_identity(source.lstat()),
+                    "previous source root changed during retention")
+            publish_directory_noreplace(source, destination, parent_fd=parent_fd, stage_fd=fd)
+        finally:
+            os.fchmod(fd, 0o500)
+            os.fsync(fd)
+        require(file_identity(os.fstat(fd)) == file_identity(destination.lstat()),
+                "retained previous source root custody changed")
+        frozen_snapshot(destination, entries, target_dir)
+    finally:
+        os.close(fd)
 
 
 def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes,
@@ -924,22 +1028,22 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
         # exact output binding; inventories never follow it into generated files.
         writer.symlink(Path("target"), str(target_dir))
         writer.seal(source, unchanged_directories)
-        frozen_snapshot(pending, entries, target_dir)
-    retained = None
-    if os.path.lexists(source):
-        real_path(source)
-        require(previous_entries is not None, "previous source lacks an authenticated binding")
-        retained = parent / ("source.retained-" + uuid.uuid4().hex)
-        os.rename(source, retained)
-    os.rename(pending, source)
-    checkpoint = parent / ("source-state.pending-" + uuid.uuid4().hex)
-    write_record(checkpoint, {"commit": commit})
-    os.replace(checkpoint, state_path)
-    fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        frozen_snapshot(pending, entries, target_dir, unpublished_root_fd=writer.fd)
+        retained = None
+        if os.path.lexists(source):
+            real_path(source)
+            require(previous_entries is not None, "previous source lacks an authenticated binding")
+            retained = parent / ("source.retained-" + uuid.uuid4().hex)
+            retain_previous_source(source, retained, previous_entries, target_dir, writer.parent_fd)
+        writer.publish(source)
+        frozen_snapshot(source, entries, target_dir)
+        writer.check_root()
+        checkpoint = parent / ("source-state.pending-" + uuid.uuid4().hex)
+        write_record(checkpoint, {"commit": commit})
+        writer.check_root()
+        os.replace(checkpoint, state_path)
+        os.fsync(writer.parent_fd)
+        writer.check_root()
     if retained is not None:
         # Keep rollback input through every capture/checkpoint publication failure.
         # Older retained/pending directories belong to interrupted attempts and
@@ -1797,21 +1901,58 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         return result
 
 
-def client_build_command(source: Path, target: Path, cargo: str, host: str) -> list[str]:
+def client_build_command(source: Path, target: Path, cargo: str, host: str,
+                         binary: str) -> list[str]:
     """Build exactly the ordinary client with explicit captured configuration."""
     require(host in {"aarch64-apple-darwin", "x86_64-apple-darwin"},
             "ordinary client preparation requires a native macOS Rust toolchain")
+    require(binary in CLIENT_BINARIES, "select exactly one maintained native client")
+    name, package, _, _ = CLIENT_BINARIES[binary]
     return [cargo, "--config", str(source / ".cargo/config.toml"), "build",
             "--manifest-path", str(source / "Cargo.toml"), "--target-dir", str(target),
             "--locked", "--offline", "--profile", "dev", "--target", host,
-            "--message-format=json-render-diagnostics", "-p", "musubi", "--bin", "musubi"]
+            "--message-format=json-render-diagnostics", "-p", package, "--bin", name]
 
 
-def client_artifact_emission(log: Path, source: Path, target: Path, host: str) -> dict[str, object]:
+def client_artifact_emission(log: Path, source: Path, target: Path, host: str,
+                            binary: str) -> dict[str, object]:
     """Require the successful Cargo run to emit the exact normal client artifact."""
-    selected, finished = [], []
+    require(binary in CLIENT_BINARIES, "select exactly one maintained native client")
+    return native_artifact_emissions(log, source, target, host,
+                                     binaries=(CLIENT_BINARIES[binary],), profile="debug")[0]
+
+
+def capture_client_artifact(target: Path, output: Path, host: str,
+                            binary: str, *, revalidate: Callable[[], None]) -> dict[str, object]:
+    """Publish the selected client under its original source and created-copy custody."""
+    require(binary in CLIENT_BINARIES, "select exactly one maintained native client")
+    return capture_native_binaries(target, output, host,
+                                    binaries=(CLIENT_BINARIES[binary],), profile="debug",
+                                    revalidate=revalidate)[0]
+
+
+def native_runtime_build_command(source: Path, target: Path, cargo: str, host: str) -> list[str]:
+    """Build the exact standard native runtime once, with default package features."""
+    require(host in {"aarch64-apple-darwin", "x86_64-apple-darwin"},
+            "native runtime preparation requires a native macOS Rust toolchain")
+    command = [cargo, "--config", str(source / ".cargo/config.toml"), "build",
+               "--manifest-path", str(source / "Cargo.toml"), "--target-dir", str(target),
+               "--locked", "--offline", "--profile", "release", "--target", host,
+               "--message-format=json-render-diagnostics"]
+    for name, package, _, _ in NATIVE_RUNTIME_BINARIES:
+        command.extend(("-p", package, "--bin", name))
+    return command
+
+
+def native_artifact_emissions(log: Path, source: Path, target: Path,
+                             host: str, *, binaries: tuple, profile: str) -> list[dict[str, object]]:
+    """Bind one successful Cargo run to the exact selected package/bin/source roles."""
+    roles = {name: (package, manifest, entry) for name, package, manifest, entry
+             in binaries}
+    selected, finished = {}, []
     with log.open("rb") as stream:
-        for raw in stream:
+        while raw := stream.readline(MAX_CARGO_RECORD_BYTES + 1):
+            require(len(raw) <= MAX_CARGO_RECORD_BYTES, "Cargo native record exceeds its bound")
             if not raw.startswith(b"{"):
                 continue
             try:
@@ -1822,85 +1963,238 @@ def client_artifact_emission(log: Path, source: Path, target: Path, host: str) -
                 continue
             if value.get("reason") == "build-finished":
                 finished.append(value.get("success"))
-            elif (value.get("reason") == "compiler-artifact"
-                  and value.get("target", {}).get("name") == "musubi"
-                  and value.get("target", {}).get("kind") == ["bin"]):
-                selected.append(value)
-    require(finished == [True] and len(selected) == 1,
-            "Cargo did not emit one successful normal Musubi build")
-    value = selected[0]
-    executable = str(target / host / "debug/musubi")
-    require(value.get("manifest_path") == str(source / "crates/musubi/Cargo.toml")
-            and value.get("target", {}).get("src_path") == str(source / "crates/musubi/src/main.rs")
-            and value.get("profile", {}).get("test") is False
-            and value.get("executable") == executable
-            and executable in value.get("filenames", []),
-            "Cargo client artifact differs from the captured normal binary")
-    return {key: value[key] for key in ("package_id", "manifest_path", "target", "profile",
-                                      "features", "filenames", "executable", "fresh")}
+                require(len(finished) == 1, "Cargo native build completion is duplicated")
+            elif value.get("reason") == "compiler-artifact":
+                item = value.get("target")
+                require(isinstance(item, dict), "Cargo native target is malformed")
+                name = item.get("name")
+                require(isinstance(name, str), "Cargo native target name is malformed")
+                if name not in roles:
+                    continue
+                # The SDK dependency also has a target named iroha. Its exact
+                # non-executable library record cannot replace the CLI binary.
+                if item.get("kind") == ["lib"] and "executable" in value and value["executable"] is None:
+                    continue
+                package, manifest, entry = roles[name]
+                manifest_path = source / manifest
+                declaration = tomllib.loads(manifest_path.read_text())["package"]
+                require(declaration.get("name") == package,
+                        "captured native package declaration differs")
+                package_id = value.get("package_id")
+                prefix = "path+" + manifest_path.parent.as_uri() + "#"
+                require(isinstance(package_id, str) and package_id.startswith(prefix),
+                        "Cargo native package identity differs from captured source")
+                suffix = package_id[len(prefix):]
+                version = declaration.get("version")
+                if version == {"workspace": True}:
+                    version = tomllib.loads((source / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+                require(isinstance(version, str) and suffix ==
+                        (version if manifest_path.parent.name == package else package + "@" + version),
+                        "Cargo native package/version differs from captured source")
+                executable = str(target / host / profile / name)
+                emitted_profile, filenames = value.get("profile"), value.get("filenames")
+                require(item.get("kind") == ["bin"] and item.get("src_path") == str(source / entry)
+                        and value.get("manifest_path") == str(manifest_path)
+                        and isinstance(emitted_profile, dict) and emitted_profile.get("test") is False
+                        and value.get("executable") == executable
+                        and isinstance(filenames, list) and executable in filenames
+                        and isinstance(value.get("features"), list) and type(value.get("fresh")) is bool
+                        and name not in selected,
+                        "Cargo native artifact differs from the captured runtime binary")
+                selected[name] = {key: value[key] for key in (
+                    "package_id", "manifest_path", "target", "profile", "features", "filenames", "executable", "fresh")}
+    require(finished == [True] and set(selected) == set(roles),
+            "Cargo did not emit one successful complete selected native build")
+    return [selected[name] for name, *_ in binaries]
 
 
-def capture_client_artifact(target: Path, output: Path, host: str) -> dict[str, object]:
-    """Copy a pinned native Cargo executable, retaining its cache aliases untouched."""
-    relative = host + "/debug/musubi"
-    original = target / relative
-    expected = cargo_hash_path(original, max_size=MAX_BINARY_BYTES)
-    require(expected.size >= 32 and bool(expected.mode & stat.S_IXUSR)
-            and original.stat().st_uid == os.geteuid(), "client artifact is not an owner-held executable")
-    capacity_preflight([(output, expected.size + CAPTURE_HEADROOM_BYTES, "ordinary client capture")])
-    destination = output / "musubi"
-    with cargo_open_relative(target, relative, expected=expected) as source:
-        header = os.read(source, 16)
-        cpu = {"aarch64-apple-darwin": 0x100000c, "x86_64-apple-darwin": 0x1000007}[host]
-        require(len(header) == 16 and struct.unpack("<IIII", header)[0:2] == (0xfeedfacf, cpu)
-                and struct.unpack("<IIII", header)[3] == 2,
-                "client artifact is not a native macOS executable")
-        os.lseek(source, 0, os.SEEK_SET)
-        with exclusive_output_fd(destination, mode=0o755) as result:
-            digest, size = hashlib.sha256(), 0
-            while block := os.read(source, 1024 * 1024):
-                size += len(block)
-                require(size <= expected.size, "client artifact grew during capture")
-                digest.update(block)
-                view = memoryview(block)
-                while view:
-                    written = os.write(result, view)
-                    require(written > 0, "client capture made no write progress")
-                    view = view[written:]
-            require(size == expected.size and digest.hexdigest() == expected.sha256,
-                    "client artifact changed during capture")
-    freeze(destination)
-    actual = stable_hash_path(destination, max_size=MAX_BINARY_BYTES)
-    require(actual.sha256 == expected.sha256 and actual.mode == 0o500,
-            "retained client differs from the build")
-    return {"name": "musubi", "package": "musubi", "path": str(destination),
-            "sha256": actual.sha256, "size": actual.size}
+def native_runtime_artifact_emissions(log: Path, source: Path, target: Path,
+                                     host: str) -> list[dict[str, object]]:
+    """Bind successful Cargo outputs to all three captured package/bin/source roles."""
+    return native_artifact_emissions(log, source, target, host,
+                                     binaries=NATIVE_RUNTIME_BINARIES, profile="release")
 
 
-def prepare_client(args: argparse.Namespace) -> dict[str, object]:
-    """Build an ordinary public client from signed source, without release authority."""
-    require(sys.platform == "darwin", "prepare-client currently supports macOS only")
+def native_file_identity(info: os.stat_result) -> dict[str, int]:
+    """Record the full public native identity, without rounding integer fields."""
+    return {"device": info.st_dev, "inode": info.st_ino, "uid": info.st_uid, "gid": info.st_gid,
+            "mode": stat.S_IMODE(info.st_mode), "links": info.st_nlink, "size": info.st_size,
+            "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns}
+
+
+def capture_native_binaries(target: Path, output: Path, host: str, *, binaries: tuple,
+                            profile: str, revalidate: Callable[[], None]) -> list[dict[str, object]]:
+    """Retain every selected native executable, then publish their complete directory."""
+    expected = [cargo_hash_path(target / host / profile / name, max_size=MAX_BINARY_BYTES)
+                for name, *_ in binaries]
+    capacity_preflight([(output, sum(row.size for row in expected) + CAPTURE_HEADROOM_BYTES,
+                         "complete native artifact capture")])
+    stage = create_fresh_directory(output / (".native-bin.pending-" + uuid.uuid4().hex), mode=0o700)
+    destination = output / "bin"
+    cpu = {"aarch64-apple-darwin": 0x100000c, "x86_64-apple-darwin": 0x1000007}[host]
+    with contextlib.ExitStack() as retained:
+        parent_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        retained.callback(os.close, parent_fd)
+        parent_identity = os.fstat(parent_fd)
+        def revalidate_parent():
+            real_path(output)
+            opened, named = os.fstat(parent_fd), output.lstat()
+            require(stat.S_ISDIR(opened.st_mode) and opened.st_uid == os.geteuid()
+                    and stat.S_IMODE(opened.st_mode) == 0o700
+                    and all(getattr(opened, field) == getattr(parent_identity, field)
+                            for field in ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid"))
+                    and file_identity(opened) == file_identity(named),
+                    "native artifact output parent custody changed")
+        revalidate_parent()
+        stage_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        retained.callback(os.close, stage_fd)
+        rows, copies, sources = [], [], []
+        for (name, package, _, _), pin in zip(binaries, expected):
+            relative = host + "/" + profile + "/" + name
+            source = retained.enter_context(cargo_open_relative(target, relative, expected=pin))
+            original = os.fstat(source)
+            require(pin.size >= 32 and original.st_uid == os.geteuid()
+                    and bool(original.st_mode & stat.S_IXUSR),
+                    "native artifact artifact is not an owner-held executable")
+            header = os.read(source, 16)
+            require(len(header) == 16 and struct.unpack("<IIII", header)[0:2] == (0xfeedfacf, cpu)
+                    and struct.unpack("<IIII", header)[3] == 2,
+                    "artifact is not a native macOS executable")
+            os.lseek(source, 0, os.SEEK_SET)
+            path = stage / name
+            with exclusive_output_fd(path, mode=0o755) as result:
+                # Preserve the actual create-only origin; reopening a pathname
+                # after this context must never become a new custody baseline.
+                copy = os.dup(result)
+                retained.callback(os.close, copy)
+                digest, size = hashlib.sha256(), 0
+                while block := os.read(source, 1024 * 1024):
+                    size += len(block)
+                    require(size <= pin.size, "native artifact artifact grew during capture")
+                    digest.update(block)
+                    view = memoryview(block)
+                    while view:
+                        written = os.write(result, view)
+                        require(written > 0, "native artifact capture made no write progress")
+                        view = view[written:]
+                require(size == pin.size and digest.hexdigest() == pin.sha256,
+                        "native artifact artifact changed during capture")
+            os.fchmod(copy, 0o500)
+            os.fsync(copy)
+            identity = os.fstat(copy)
+            require(stat.S_ISREG(identity.st_mode) and identity.st_nlink == 1
+                    and identity.st_uid == os.geteuid() and identity.st_size == pin.size
+                    and file_identity(path.lstat()) == file_identity(identity),
+                    "native artifact created copy custody changed")
+            captured = stable_hash_path(path, max_size=MAX_BINARY_BYTES)
+            require(file_identity(os.fstat(copy)) == file_identity(identity)
+                    and file_identity(path.lstat()) == file_identity(identity)
+                    and captured.sha256 == pin.sha256 and captured.mode == 0o500,
+                    "retained native artifact differs from the build")
+            sources.append((source, original, relative, pin))
+            copies.append((copy, identity, name, captured))
+            rows.append({"name": name, "package": package, "path": str(destination / name),
+                         "sha256": captured.sha256, "size": captured.size,
+                         "identity": native_file_identity(identity),
+                         "source_identity": native_file_identity(original)})
+        revalidate()
+        for source, original, relative, pin in sources:
+            require(file_identity(os.fstat(source)) == file_identity(original)
+                    and file_identity((target / relative).lstat()) == file_identity(original)
+                    and cargo_hash_path(target / relative, max_size=MAX_BINARY_BYTES) == pin,
+                    "native artifact source changed before package publication")
+        for copy, identity, name, pin in copies:
+            require(file_identity(os.fstat(copy)) == file_identity(identity)
+                    and file_identity((stage / name).lstat()) == file_identity(identity)
+                    and stable_hash_path(stage / name, max_size=MAX_BINARY_BYTES) == pin,
+                    "native artifact copy changed before package publication")
+        staged_names = set()
+        with os.scandir(stage_fd) as names:
+            for entry in names:
+                require(len(staged_names) < len(binaries),
+                        "native artifact staging directory contains foreign output")
+                staged_names.add(entry.name)
+        require(staged_names == {name for name, *_ in binaries},
+                "native artifact staging directory contains foreign output")
+        revalidate_parent()
+        publish_directory_noreplace(stage, destination, parent_fd=parent_fd, stage_fd=stage_fd)
+        published = os.fstat(stage_fd)
+        require(stat.S_ISDIR(published.st_mode) and published.st_uid == os.geteuid()
+                and stat.S_IMODE(published.st_mode) == 0o700
+                and file_identity(destination.lstat()) == file_identity(published),
+                "native artifact published directory custody changed")
+        # Original file descriptors survive the directory rename. Join every
+        # copied inode to its final name before releasing those descriptors.
+        for copy, identity, name, pin in copies:
+            require(file_identity(os.fstat(copy)) == file_identity(identity)
+                    and file_identity((destination / name).lstat()) == file_identity(identity)
+                    and stable_hash_path(destination / name, max_size=MAX_BINARY_BYTES) == pin,
+                    "native artifact publication changed a retained executable")
+        revalidate_parent()
+        require(file_identity(destination.lstat()) == file_identity(os.fstat(stage_fd)),
+                "native artifact published directory custody changed before finalization")
+        os.fchmod(stage_fd, 0o500)
+        os.fsync(stage_fd)
+        os.fsync(parent_fd)
+        require(file_identity(destination.lstat()) == file_identity(os.fstat(stage_fd))
+                and stat.S_IMODE(os.fstat(stage_fd).st_mode) == 0o500,
+                "native artifact published directory custody changed during finalization")
+        revalidate_parent()
+    return rows
+
+
+def capture_native_runtime(target: Path, output: Path, host: str,
+                           *, revalidate: Callable[[], None]) -> list[dict[str, object]]:
+    """Retain and publish the exact complete three-executable runtime."""
+    return capture_native_binaries(target, output, host, binaries=NATIVE_RUNTIME_BINARIES,
+                                    profile="release", revalidate=revalidate)
+
+
+def prepare_native_build(args: argparse.Namespace, *, runtime: bool) -> dict[str, object]:
+    """Use one authenticated preparation pipeline for client and native runtime builds."""
+    action = "prepare-native-runtime" if runtime else "prepare-client"
+    binary = None if runtime else args.bin
+    require(runtime or binary in CLIENT_BINARIES, "select exactly one maintained native client")
+    subject = "native runtime" if runtime else binary + " client"
+    require(sys.platform == "darwin", action + " currently supports macOS only")
     root = real_path(args.repo_root)
     require(Path(__file__).resolve() == root / "scripts/taira_release.py",
-            "prepare-client must use the maintained script from the selected checkout")
-    target = real_path(root / "target/taira-macos-client")
-    require(target.is_dir(), "create the fixed owner-private target/taira-macos-client lane once, then reuse it")
+            action + " must use the maintained script from the selected checkout")
+    target = real_path(root / ("target/taira-macos-runtime" if runtime else "target/taira-macos-client"),
+                       exists=False)
     output = real_path(args.output_dir, exists=False)
-    require(output.is_relative_to(root / "target") and not output.is_relative_to(target)
+    require(output.is_relative_to(root / "target")
+            and not any(output.is_relative_to(root / "target" / name)
+                        for name in ("taira-macos-runtime", "taira-macos-client"))
             and not target.is_relative_to(output) and not os.path.lexists(output),
-            "client output must be a fresh directory under target/ outside the client Cargo lane")
+            subject + " output must be a fresh directory under target/ outside the " + subject + " Cargo lane")
+    require(not any(output.is_relative_to(root / "target" / name)
+                    for name in ("taira-release-sources", "taira-release-cargo-home")),
+            "native output cannot enter the retained signed source or Cargo home")
     preflight_preparation_tmpdir(dict(os.environ))
     tree = verify_signed_source(root, args.expected_commit, args.expected_signer)
     entries = commit_entries(root, args.expected_commit)
-    with cargo_lane(root, target, "release") as mode_fd, source_lane(root, target) as (source, source_fd):
+    # Only authenticated controller/source admission may create the single
+    # fixed native lane. Existing cache custody is admitted, never repaired.
+    anchor = root / "target"
+    if not os.path.lexists(anchor):
+        create_fresh_directory(anchor, mode=0o700)
+    anchor = real_path(anchor)
+    anchor_info = anchor.stat()
+    require(stat.S_ISDIR(anchor_info.st_mode) and anchor_info.st_uid == os.geteuid()
+            and not anchor_info.st_mode & 0o022,
+            "native target parent must remain owner-held")
+    ensure_private_directory(target, anchor=anchor)
+    with cargo_lane(root, target, "release") as mode_fd, source_lane(root, target) as (source, source_fd), \
+            retained_native_target(target) as revalidate_target:
         capacity_preflight([(target, signed_source_size(root, args.expected_commit, entries)
-                             + BUILD_FREE_FLOOR_BYTES, "signed client source and Cargo working space")])
+                             + BUILD_FREE_FLOOR_BYTES, "signed " + subject + " source and Cargo working space")])
         capture_source(root, source, target, args.expected_commit, entries)
         before = frozen_snapshot(source, entries, target)
         env = child_environment(dict(os.environ), target)
         env.update(IROHA_GIT_COMMIT_HASH=args.expected_commit, VERGEN_GIT_SHA=args.expected_commit)
         env, tools = isolated_cargo_environment(root, source, env)
-        # The shared release helper selects six jobs. This ordinary client uses
+        # The shared shipping helper selects six jobs. Host-native builds use
         # Cargo's native jobserver; ambient job/flags overrides were sanitized.
         env.pop("CARGO_BUILD_JOBS", None)
         env.pop("CARGO_ZIGBUILD_ZIG_PATH", None)
@@ -1912,43 +2206,87 @@ def prepare_client(args: argparse.Namespace) -> dict[str, object]:
         hosts = re.findall(r"^host: (\S+)$", version, re.MULTILINE)
         require(len(hosts) == 1, "Rust toolchain did not report one native host")
         host = hosts[0]
-        command = client_build_command(source, target, env["CARGO"], host)
+        command = (native_runtime_build_command(source, target, env["CARGO"], host) if runtime
+                   else client_build_command(source, target, env["CARGO"], host, binary))
         packages = local_package_names(source, env)
         output = create_fresh_directory(output, mode=0o700)
-        request = {"schema": "taira.local-client-build.v1", "commit": args.expected_commit,
+        request = {"schema": "taira.native-runtime-build.v1" if runtime else "taira.local-client-build.v2", "commit": args.expected_commit,
                    "tree": tree, "signer_fingerprint": args.expected_signer, "source_root": str(source),
-                   "target_dir": str(target), "host": host, "profile": "dev", "jobs": "cargo-default",
+                   "target_dir": str(target), "host": host, "profile": "release" if runtime else "dev", "jobs": "cargo-default",
                    "source_snapshot_sha256": hashlib.sha256(canonical_json_bytes(before)).hexdigest(),
                    "compiler_tools": tools, "native_linker": linker, "command": command,
                    "environment_sha256": hashlib.sha256(canonical_json_bytes(env)).hexdigest(),
                    "release_qualified": False, "deployed": False}
+        if runtime:
+            request["qualified"] = False
+        else:
+            request["binary"] = binary
+            request["package"] = CLIENT_BINARIES[binary][1]
         write_record(output / "request.json", request)
 
         def revalidate():
+            revalidate_target()
             require(frozen_snapshot(source, entries, target) == before,
-                    "captured source changed during client build")
+                    "captured source changed during " + subject + " build")
             require(preparation_native_linker("system") == linker,
-                    "native linker changed during client build")
+                    "native linker changed during " + subject + " build")
             require([{"name": row["name"], **verify_tool(Path(row["path"]), row["sha256"])}
-                     for row in tools] == tools, "Rust toolchain changed during client build")
+                     for row in tools] == tools, "Rust toolchain changed during " + subject + " build")
 
         with preparation_lock(output) as output_fd:
             admit_source_fingerprints(source, target, host, packages)
             revalidate()
             log = output / "cargo.jsonl"
             run_build(source, command, env, log, lock_fd=output_fd, lane_lock_fd=source_fd,
-                      mode_lock_fd=mode_fd, label="native Musubi build")
+                      mode_lock_fd=mode_fd, label="native runtime build" if runtime else "native " + binary + " build")
             with source_fingerprints(source, target, host, packages, repair=False):
                 revalidate()
-                emission = client_artifact_emission(log, source, target, host)
-                artifact = capture_client_artifact(target, output, host)
+                if runtime:
+                    emission = native_runtime_artifact_emissions(log, source, target, host)
+                    artifact = capture_native_runtime(target, output, host, revalidate=revalidate)
+                else:
+                    emission = client_artifact_emission(log, source, target, host, binary)
+                    artifact = capture_client_artifact(target, output, host, binary, revalidate=revalidate)
                 revalidate()
             result = {**request, "source_unchanged": True, "toolchain_unchanged": True,
-                      "cargo_emission": emission, "artifact": artifact}
+                      "cargo_emissions" if runtime else "cargo_emission": emission,
+                      "artifacts" if runtime else "artifact": artifact}
             freeze(log)
             write_record(output / "result.json", result)
             freeze(output, directory=True)
             return result
+
+
+@contextlib.contextmanager
+def retained_native_target(target: Path):
+    """Hold the original warm native lane while its legitimate contents change."""
+    descriptor = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        original = os.fstat(descriptor)
+        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid")
+        def revalidate():
+            real_path(target)
+            opened, named = os.fstat(descriptor), target.lstat()
+            require(stat.S_ISDIR(original.st_mode) and original.st_uid == os.geteuid()
+                    and not original.st_mode & 0o022
+                    and all(getattr(info, field) == getattr(original, field)
+                            for info in (opened, named) for field in fields),
+                    "native Cargo lane custody changed")
+        revalidate()
+        yield revalidate
+        revalidate()
+    finally:
+        os.close(descriptor)
+
+
+def prepare_client(args: argparse.Namespace) -> dict[str, object]:
+    """Build an ordinary public client from signed source, without release authority."""
+    return prepare_native_build(args, runtime=False)
+
+
+def prepare_native_runtime(args: argparse.Namespace) -> dict[str, object]:
+    """Build one same-source native runtime package, without deploying or qualifying it."""
+    return prepare_native_build(args, runtime=True)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1978,12 +2316,20 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--zig-sha256", required=True)
             command.add_argument("--cargo-zigbuild", type=Path, required=True, help="absolute real cargo-zigbuild executable")
             command.add_argument("--cargo-zigbuild-sha256", required=True)
-    client = commands.add_parser("prepare-client", help="build ordinary macOS Musubi from a signed source capture")
+    client = commands.add_parser("prepare-client", help="build exactly one ordinary macOS client from a signed source capture")
     client.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     client.add_argument("--expected-commit", required=True)
     client.add_argument("--expected-signer", required=True)
+    client.add_argument("--bin", required=True, choices=tuple(CLIENT_BINARIES),
+                        help="select only iroha CLI or Musubi; validator binaries are never selected")
     client.add_argument("--output-dir", type=Path, required=True,
                         help="fresh retained observation directory; retries reuse the fixed client Cargo lane")
+    runtime = commands.add_parser("prepare-native-runtime", help="build same-source native macOS iroha, Kagami and iroha3d")
+    runtime.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    runtime.add_argument("--expected-commit", required=True)
+    runtime.add_argument("--expected-signer", required=True, help="independently reviewed signing-key fingerprint")
+    runtime.add_argument("--output-dir", type=Path, required=True,
+                         help="fresh retained observation directory; safely create/reuse the fixed native runtime Cargo lane")
     status = commands.add_parser("check-status", help="read a background diagnostic without starting work")
     status.add_argument("--session-dir", type=Path, required=True)
     worker = commands.add_parser("_check-runner", help=argparse.SUPPRESS)
@@ -2005,6 +2351,10 @@ def main() -> int:
         if args.command == "prepare-client":
             result = prepare_client(args)
             print(f"[taira-client] built {result['commit']}: {args.output_dir / 'result.json'}", flush=True)
+            return 0
+        if args.command == "prepare-native-runtime":
+            result = prepare_native_runtime(args)
+            print(f"[taira-native-runtime] built {result['commit']}: {args.output_dir / 'result.json'}; unqualified, undeployed", flush=True)
             return 0
         if args.command == "check" and args.session_dir is not None:
             session = start_development_check(args, dict(os.environ))

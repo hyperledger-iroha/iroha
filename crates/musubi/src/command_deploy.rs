@@ -7,7 +7,8 @@ use iroha_contract_deploy::{
     DeploymentService,
 };
 use iroha_data_model::{
-    account::address::ChainDiscriminantGuard, smart_contract::ContractAlias,
+    account::address::ChainDiscriminantGuard,
+    smart_contract::{ContractAddress, ContractAlias, ContractArtifactId},
     transaction::FeePaymentIntent,
 };
 
@@ -51,7 +52,7 @@ pub(super) struct ViewArgs {
     /// Public kotodama view entrypoint.
     #[arg(long)]
     entrypoint: String,
-    /// JSON object containing named view arguments, for example {"coffees":"3"}.
+    /// Named JSON arguments; omitted or {} for a zero-parameter view.
     #[arg(long, default_value = "{}", value_name = "JSON")]
     args: String,
     /// VM execution budget for the read-only view.
@@ -309,21 +310,25 @@ pub(super) fn run_view(manifest: Option<&Path>, args: &ViewArgs) -> CommandResul
     let _profile = ChainDiscriminantGuard::enter(network.chain_discriminant);
     let config = network.load_client()?;
     let authority = config.account.clone();
+    let service = iroha_contract_deploy::call::ContractCallService::new(config.clone())
+        .map_err(|error| view_diagnostic(&error))?;
     let client = iroha::blocking::Client::new(config).map_err(|error| view_diagnostic(&error))?;
     client
         .refresh_capabilities()
         .map_err(|error| view_diagnostic(&error))?;
-    let result = client
-        .client()
-        .post_contract_view_json(
-            &authority,
-            None,
-            Some(&alias),
-            &args.entrypoint,
-            Some(&payload),
-            args.gas_limit,
-        )
+    let address = service
+        .resolve_address(&alias)
         .map_err(|error| view_diagnostic(&error))?;
+    let artifact = read_view_artifact(client.client(), &address, &alias)?;
+    let result = post_verified_view(
+        client.client(),
+        &authority,
+        &artifact,
+        &address,
+        &args.entrypoint,
+        payload,
+        args.gas_limit,
+    )?;
     let rendered = norito::json::to_string_pretty(&result).map_err(|_| {
         Diagnostic::new(
             ErrorCode::Internal,
@@ -343,6 +348,102 @@ pub(super) fn run_view(manifest: Option<&Path>, args: &ViewArgs) -> CommandResul
             ("result", result),
         ]),
     })
+}
+
+/// Read the canonical active binding and its network/dataspace/hash-bound stored bytes.
+/// No build, local deployment evidence, signing of transactions or journal write is required.
+fn read_view_artifact(
+    client: &iroha::client::Client,
+    address: &ContractAddress,
+    alias: &ContractAlias,
+) -> Result<Vec<u8>, Diagnostic> {
+    let binding = client
+        .get_gov_contract_json(address)
+        .map_err(|error| view_diagnostic(&error))?;
+    let expected_address =
+        norito::json::to_value(address).map_err(|error| view_diagnostic(&error.into()))?;
+    let code_hash_hex = binding.get("code_hash_hex").and_then(Value::as_str);
+    if binding.get("found").and_then(Value::as_bool) != Some(true)
+        || binding.get("active").and_then(Value::as_bool) != Some(true)
+        || binding.get("contract_address") != Some(&expected_address)
+        || binding.get("dataspace").and_then(Value::as_str) != Some(alias.dataspace_segment())
+        || binding
+            .get("lifecycle")
+            .and_then(|value| value.get("active_code_hash_hex"))
+            .and_then(Value::as_str)
+            != code_hash_hex
+    {
+        return Err(Diagnostic::new(
+            ErrorCode::Network,
+            "the active on-chain contract binding disagrees with the resolved target",
+        ));
+    }
+    let hash = code_hash_hex
+        .filter(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        })
+        .and_then(|value| hex::decode(value).ok())
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .and_then(iroha::crypto::Hash::from_marked_bytes)
+        .ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::Network,
+                "the active contract hash is not canonical",
+            )
+        })?;
+    let artifact_id = ContractArtifactId::for_address(address, hash)
+        .map_err(|error| Diagnostic::new(ErrorCode::Network, error.to_string()))?;
+    client
+        .get_contract_code_bytes(&artifact_id)
+        .map_err(|error| view_diagnostic(&error))
+}
+
+/// Use the authenticated deployed artifact's native schema, then address that exact instance.
+/// The shared normalizer omits payloads only for genuine zero-parameter views.
+fn post_verified_view(
+    client: &iroha::client::Client,
+    authority: &iroha_data_model::account::AccountId,
+    artifact: &[u8],
+    address: &ContractAddress,
+    entrypoint: &str,
+    payload: Value,
+    gas_limit: u64,
+) -> Result<Value, Diagnostic> {
+    let (intent, payload) = iroha_contract_deploy::call::trusted_contract_intent(
+        artifact,
+        address.clone(),
+        entrypoint,
+        payload,
+        true,
+    )
+    .map_err(|error| Diagnostic::new(ErrorCode::Usage, error.to_string()))?;
+    let result = client
+        .post_contract_view_json(
+            authority,
+            Some(address),
+            None,
+            entrypoint,
+            payload.as_ref(),
+            gas_limit,
+        )
+        .map_err(|error| view_diagnostic(&error))?;
+    let expected_code_hash = hex::encode(intent.invocation.expected_code_hash.as_ref());
+    let expected_address =
+        norito::json::to_value(address).map_err(|error| view_diagnostic(&error.into()))?;
+    if result.get("ok").and_then(Value::as_bool) != Some(true)
+        || result.get("contract_address") != Some(&expected_address)
+        || result.get("code_hash_hex").and_then(Value::as_str) != Some(expected_code_hash.as_str())
+        || result.get("entrypoint").and_then(Value::as_str) != Some(entrypoint)
+    {
+        return Err(Diagnostic::new(
+            ErrorCode::Network,
+            "the view response differs from the verified target, artifact or entrypoint",
+        ));
+    }
+    Ok(result)
 }
 
 fn view_diagnostic(error: &eyre::Report) -> Diagnostic {
@@ -532,6 +633,10 @@ fn deployment_diagnostic(error: &DeploymentError) -> Diagnostic {
         _ => diagnostic,
     }
 }
+
+#[cfg(test)]
+#[path = "command_view_tests.rs"]
+mod view_tests;
 
 #[cfg(test)]
 mod tests {

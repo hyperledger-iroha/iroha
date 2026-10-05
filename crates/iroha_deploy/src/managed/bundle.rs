@@ -7,12 +7,12 @@ use super::{Error, Result};
 /// Stable native macOS application identity; signing and notarization are separate release steps.
 pub const MOCHI_APPLICATION_ID: &str = "org.hyperledger.iroha.mochi";
 
-/// Native CLI package geometry; Kagami and its matching daemon need no desktop application.
+/// Native CLI package geometry; the client, Kagami worker and matching daemon need no desktop application.
 #[derive(Debug, Clone, Copy)]
 pub struct KagamiBundleLayout;
 
 impl KagamiBundleLayout {
-    /// Exact directory containing the two native CLI programs on every supported host.
+    /// Exact directory containing the three matching native programs on every supported host.
     #[must_use]
     pub fn runtime_directory(bundle_root: &Path) -> PathBuf {
         bundle_root.join("bin")

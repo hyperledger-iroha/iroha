@@ -543,6 +543,27 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     #[test]
+    fn validation_fee_projection_rejects_unrelated_current_proposal() {
+        use iroha_data_model::governance::types::{
+            GlobalDataTriggerPermissionGovernanceActionV1,
+            GlobalDataTriggerPermissionGovernanceProposalV1,
+        };
+
+        let proposal = ProposalKind::GlobalDataTriggerPermissionGovernance(
+            GlobalDataTriggerPermissionGovernanceProposalV1 {
+                authority: iroha_test_samples::ALICE_ID.clone(),
+                action: GlobalDataTriggerPermissionGovernanceActionV1::Grant,
+            },
+        );
+        assert!(matches!(
+            retained_proposal_operator(&proposal),
+            Err(Error::AppServiceUnavailable {
+                code: "validation_fee_state_inconsistent",
+                ..
+            })
+        ));
+    }
+    #[test]
     fn catch_up_responses_are_temporary_service_unavailability() {
         for error in [
             inconsistent(iroha_data_model::validation_fee::RETAIL_FEE_CATCH_UP_REQUIRED),

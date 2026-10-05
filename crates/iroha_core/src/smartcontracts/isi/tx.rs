@@ -722,6 +722,7 @@ pub(crate) fn read_executed_carrier_from_checkpoints(
     height: NonZeroUsize,
     max_work: u64,
     max_bytes: u64,
+    read_budget: &crate::state::CanonicalHistoryReadBudget,
 ) -> Result<
     FinalizedExecutionCarrier,
     crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>,
@@ -734,27 +735,30 @@ pub(crate) fn read_executed_carrier_from_checkpoints(
     let mut source_blocks = 0_u64;
     let mut wire_bytes = 0_u64;
     let mut carrier = None;
-    state_ro
-        .canonical_history()
-        .visit_executed_backwards_from_checkpoints(
-            height,
-            height,
-            |blocks, bytes| {
-                source_blocks = source_blocks
-                    .checked_add(blocks)
-                    .filter(|work| *work <= max_work)
-                    .ok_or_else(exceeded)?;
-                wire_bytes = wire_bytes
-                    .checked_add(bytes)
-                    .filter(|size| *size <= max_bytes)
-                    .ok_or_else(exceeded)?;
-                Ok(())
-            },
-            |receipt| {
-                carrier = Some(receipt.block().clone());
-                Ok(ControlFlow::Break(()))
-            },
-        )?;
+    read_budget.with(|| {
+        state_ro
+            .canonical_history()
+            .with_read_budget(read_budget)
+            .visit_executed_backwards_from_checkpoints(
+                height,
+                height,
+                |blocks, bytes| {
+                    source_blocks = source_blocks
+                        .checked_add(blocks)
+                        .filter(|work| *work <= max_work)
+                        .ok_or_else(exceeded)?;
+                    wire_bytes = wire_bytes
+                        .checked_add(bytes)
+                        .filter(|size| *size <= max_bytes)
+                        .ok_or_else(exceeded)?;
+                    Ok(())
+                },
+                |receipt| {
+                    carrier = Some(receipt.block().clone());
+                    Ok(ControlFlow::Break(()))
+                },
+            )
+    })?;
     let block = carrier.ok_or_else(|| {
         ExecutionAttemptError::Rejected(canonical_transaction_history_error(
             "requested execution was absent from its authenticated interval",

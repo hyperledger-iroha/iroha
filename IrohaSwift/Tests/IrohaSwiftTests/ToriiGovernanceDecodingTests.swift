@@ -116,7 +116,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         }
     }
 
-    func testGovernanceLockRecordAcceptsExplicitNullLegacyCustody() throws {
+    func testGovernanceLockRecordAcceptsExplicitNullCustody() throws {
         let record = try JSONDecoder().decode(
             ToriiGovernanceLockRecord.self,
             from: governanceLockJSON(custodyJSON: "null")
@@ -181,6 +181,20 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         """.data(using: .utf8)!
 
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiGovernanceTallyResponse.self, from: json))
+    }
+
+    func testGovernanceProposalKindRejectsRetiredKagemushaVariants() {
+        for kind in [
+            "KagemushaVerifierPolicyInstall",
+            "KagemushaVerifierReleaseInstall",
+            "KagemushaVerifierReleaseActivate",
+            "KagemushaVerifierReleaseRetire",
+        ] {
+            XCTAssertThrowsError(try JSONDecoder().decode(
+                ToriiGovernanceProposalKind.self,
+                from: proposalKindJSON(kind: kind, payload: "{}")
+            ))
+        }
     }
 
     func testGovernanceProposalKindDecodesExistingV1Variants() throws {

@@ -121,8 +121,9 @@ pub struct ParliamentSortitionRequestRegistrationV1 {
 /// citizenship state once in the containing block; callers never retransmit
 /// it. The initial batch contains every initially required body. If that shared
 /// initial pulse is objectively unavailable, the exact full initial generation
-/// retries atomically. After any pulse has been consumed, a body-specific
-/// no-roster retry or Confirmation Jury draw contains exactly one fresh request.
+/// retries atomically. After any pulse has been consumed, a no-roster retry
+/// contains exactly every body whose active generation ended without a roster,
+/// and a Confirmation Jury draw contains exactly one fresh request.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
 #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]

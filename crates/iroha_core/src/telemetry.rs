@@ -6252,6 +6252,7 @@ mod tests {
         pipeline::access::AccessSetSource,
         prelude::World,
         query::store::LiveQueryStore,
+        state::StateReadOnly,
         tx::AcceptedTransaction,
     };
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
@@ -9352,7 +9353,17 @@ mod tests {
                 )
         }
         fn create_block(&self) -> iroha_data_model::block::SignedBlock {
-            let tx = self.accepted_transaction([Log::new(Level::DEBUG, "meow".to_string())]);
+            // The mocked clock may stay fixed across commits. Each genuine successor
+            // must still carry a distinct signed transaction rather than replay its parent.
+            let height = self
+                .state
+                .committed_height()
+                .checked_add(1)
+                .expect("original telemetry fixture successor height");
+            let tx = self.accepted_transaction([Log::new(
+                Level::DEBUG,
+                format!("meow at original height {height}"),
+            )]);
             self.build_block(vec![tx])
         }
         fn commit_block(
@@ -9716,6 +9727,22 @@ mod tests {
                 assert_eq!(old_height, 1 + u64::from(already_applied));
 
                 let candidate = sut.create_block();
+                {
+                    let parent = sut
+                        .state
+                        .view()
+                        .latest_block()
+                        .expect("completed original telemetry parent read")
+                        .expect("original telemetry committed parent");
+                    for transaction in candidate.external_transactions() {
+                        assert!(
+                            parent
+                                .external_transactions()
+                                .all(|previous| previous.hash() != transaction.hash()),
+                            "each unpublished successor carries a new signed transaction even at the unchanged mock time"
+                        );
+                    }
+                }
                 let mut chain = sut.native_chain.lock().expect("native chain mutex");
                 let mut pending = chain
                     .as_mut()

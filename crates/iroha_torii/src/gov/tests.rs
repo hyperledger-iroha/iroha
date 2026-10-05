@@ -38,7 +38,7 @@ const ACCOUNT_AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃa
 const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
 #[test]
-fn governance_capability_proposal_kinds_match_the_append_only_v1_inventory() {
+fn governance_capability_proposal_kinds_match_the_first_release_inventory() {
     assert_eq!(
         GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1,
         [
@@ -688,6 +688,10 @@ fn mk_manifest_provenance(
     code_hash: [u8; 32],
     abi_hash: [u8; 32],
 ) -> ManifestProvenance {
+    let owner = crate::history_producer::HistoryProducerOwner::for_test();
+    let max_frame_bytes =
+        usize::try_from(iroha_config::parameters::defaults::transaction::ivm_bytecode_size().get())
+            .expect("configured fixture manifest frame bound fits usize");
     let manifest = ContractManifest {
         seiyaku_name: None,
         code_hash: Some(iroha_crypto::Hash::prehashed(code_hash)),
@@ -702,7 +706,8 @@ fn mk_manifest_provenance(
         error_types: None,
         provenance: None,
     }
-    .signed(keypair);
+    .try_signed(owner.allocation_context(), max_frame_bytes, keypair)
+    .expect("sign bounded governance manifest fixture");
     manifest
         .provenance
         .expect("signed manifest should carry provenance")
@@ -730,11 +735,28 @@ seiyaku GovernedReadFixture {
         .expect("compile governed contract fixture");
     let verified =
         ivm::verify_contract_artifact(&artifact).expect("verify governed contract fixture");
-    assert_eq!(
-        manifest.signature_payload(),
-        verified.manifest.signature_payload()
+    assert!(
+        manifest.same_signed_content(&verified.manifest),
+        "compiler and independently verified artifact must expose exactly the same signed content",
     );
-    let signed_manifest = manifest.signed(&harness.authority_keypair);
+    let owner = crate::history_producer::HistoryProducerOwner::for_test();
+    let max_frame_bytes = usize::try_from(
+        harness
+            .state
+            .world_view()
+            .parameters()
+            .transaction
+            .ivm_bytecode_size
+            .get(),
+    )
+    .expect("configured fixture manifest frame bound fits usize");
+    let signed_manifest = manifest
+        .try_signed(
+            owner.allocation_context(),
+            max_frame_bytes,
+            &harness.authority_keypair,
+        )
+        .expect("sign bounded active governance manifest fixture");
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
@@ -2426,9 +2448,11 @@ async fn governed_contract_read_serializes_exact_missing_shape() {
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("inactive contract address");
+    let owner = crate::history_producer::HistoryProducerOwner::for_test();
     let response = handle_gov_contract_get(
         harness.state,
         axum::extract::Path(contract_address.to_string()),
+        owner.allocation_context(),
     )
     .await
     .expect("inactive governed contract read");
@@ -2480,9 +2504,11 @@ async fn governed_contract_read_retains_inactive_lifecycle_projection() {
         .commit_world_overlay_for_testing()
         .expect("commit inactive lifecycle fixture");
 
+    let owner = crate::history_producer::HistoryProducerOwner::for_test();
     let response = handle_gov_contract_get(
         harness.state,
         axum::extract::Path(contract_address.to_string()),
+        owner.allocation_context(),
     )
     .await
     .expect("inactive governed contract read");
@@ -2539,9 +2565,11 @@ async fn governed_contract_read_retains_inactive_lifecycle_projection() {
 async fn governed_contract_read_verifies_real_artifact_and_exact_active_shape() {
     let harness = mk_governance_harness(true);
     let (contract_address, expected_code_hash) = install_governed_contract_for_test(&harness);
+    let owner = crate::history_producer::HistoryProducerOwner::for_test();
     let response = handle_gov_contract_get(
         harness.state,
         axum::extract::Path(contract_address.to_string()),
+        owner.allocation_context(),
     )
     .await
     .expect("active governed contract read");
@@ -2590,6 +2618,75 @@ async fn governed_contract_read_verifies_real_artifact_and_exact_active_shape() 
     );
 }
 #[tokio::test]
+async fn governed_contract_read_preserves_manifest_frame_allocation_refusal() {
+    let harness = mk_governance_harness(true);
+    let (contract_address, _) = install_governed_contract_for_test(&harness);
+    // Retain the original counter backing, while explicitly admitting no frame scratch.
+    let pool = iroha_allocation::AllocationBudget::new(
+        norito::core::DecodeBudgetContext::allocation_layout().size(),
+    );
+    let context = norito::core::DecodeBudgetContext::try_new_owned(
+        norito::DecodeLimits::new(1024, 1024, 1024, 0, 256),
+        &pool,
+    )
+    .expect("fund refusal test counter");
+    let error = handle_gov_contract_get(
+        harness.state,
+        axum::extract::Path(contract_address.to_string()),
+        &context,
+    )
+    .await
+    .expect_err("unfunded signature frame must preserve budget refusal");
+    assert!(matches!(
+        error,
+        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+        ))
+    ));
+    assert_eq!(context.consumed_allocated_bytes(), 0);
+    assert_eq!(
+        pool.reserved_bytes(),
+        norito::core::DecodeBudgetContext::allocation_layout().size()
+    );
+}
+#[tokio::test]
+async fn governed_contract_read_obeys_committed_manifest_frame_bound() {
+    let harness = mk_governance_harness(true);
+    let (contract_address, _) = install_governed_contract_for_test(&harness);
+    // A smaller current transaction limit refuses this read without declaring the
+    // originally stored, valid manifest corrupt.
+    let mut block = harness
+        .state
+        .block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+    let mut transaction = block.transaction();
+    transaction
+        .world_mut_for_testing()
+        .parameters_mut_for_testing()
+        .get_mut()
+        .set_parameter(iroha_data_model::parameter::Parameter::Transaction(
+            iroha_data_model::parameter::TransactionParameter::IvmBytecodeSize(nonzero!(1_u64)),
+        ));
+    transaction.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit smaller fixture frame bound");
+    let owner = crate::history_producer::HistoryProducerOwner::for_test();
+    let error = handle_gov_contract_get(
+        harness.state,
+        axum::extract::Path(contract_address.to_string()),
+        owner.allocation_context(),
+    )
+    .await
+    .expect_err("current committed frame bound must govern manifest reads");
+    assert!(matches!(
+        error,
+        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+        ))
+    ));
+    assert_eq!(owner.allocation_context().consumed_allocated_bytes(), 0);
+}
+#[tokio::test]
 async fn governed_contract_read_rejects_incomplete_active_state() {
     let harness = mk_governance_harness(true);
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
@@ -2614,9 +2711,11 @@ async fn governed_contract_read_rejects_incomplete_active_state() {
     block
         .commit_world_overlay_for_testing()
         .expect("commit incomplete fixture");
+    let owner = crate::history_producer::HistoryProducerOwner::for_test();
     let error = handle_gov_contract_get(
         harness.state,
         axum::extract::Path(contract_address.to_string()),
+        owner.allocation_context(),
     )
     .await
     .expect_err("incomplete active state must fail closed");
@@ -2658,9 +2757,11 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
     block
         .commit_world_overlay_for_testing()
         .expect("commit corrupted manifest fixture");
+    let owner = crate::history_producer::HistoryProducerOwner::for_test();
     let error = handle_gov_contract_get(
         harness.state,
         axum::extract::Path(contract_address.to_string()),
+        owner.allocation_context(),
     )
     .await
     .expect_err("unsigned active manifest must fail closed");

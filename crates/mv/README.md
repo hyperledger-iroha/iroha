@@ -262,6 +262,12 @@ without a wake. Admitted opening reserves the whole pair and identity first,
 checks both poison verdicts before policy callbacks, and remains inside the
 original pool refund scope.
 
+Synchronous infallible Cell opening and current replacement wait for the original
+physical writer pair before enclosing publication fences. Explicitly admitted
+`BlockAcquisitionSlot::try_initialize` remains nonblocking and reports the exact
+pre-probe Busy source while retaining partial original custody. Both paths use
+the same one-shot acquisition and clone/attachment/retirement kernel.
+
 Cell opening acquires both original EBR writers before cloning either value. A
 partial pair retains completed generations and unused charges until both guards
 release; the complete pair keeps joint ownership through Block and

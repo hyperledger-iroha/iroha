@@ -451,6 +451,16 @@ test("effect-bound proposal drafts require an explicit canonical operator", () =
   }
 });
 
+test("retired Kagemusha proposal kinds reject at the current draft boundary", () => {
+  for (const proposal of retiredParliamentProposalFixtures()) {
+    assert.ok(!PARLIAMENT_PROPOSAL_KINDS_V1.includes(proposal.kind));
+    assert.throws(
+      () => buildParliamentAttemptDraftRequestV1(proposal, 0),
+      /unsupported V1 proposal variant/u,
+    );
+  }
+});
+
 test("Parliament declarations expose the closed wire union and tuple newtypes", () => {
   const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
   const start = declarations.indexOf("export interface ParliamentMusubiPackageIdV1");
@@ -1243,6 +1253,32 @@ test("ToriiClient typed proposal reads use the strict local V1 parser", async ()
     );
   }
 });
+
+test("ToriiClient typed proposal reads reject retired Kagemusha variants", async () => {
+  const client = new ToriiClient("https://example.invalid");
+  for (const kind of retiredParliamentProposalFixtures()) {
+    client.getGovernanceProposal = async () => ({
+      found: true,
+      proposal: {
+        proposer: kind.payload.proposal_operator,
+        kind,
+        created_height: 1,
+        status: "Proposed",
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(client.getGovernanceProposalTyped(PROPOSAL_ID), /unsupported proposal variant/u);
+  }
+});
+
+function retiredParliamentProposalFixtures() {
+  return [
+    "KagemushaVerifierPolicyInstall",
+    "KagemushaVerifierReleaseInstall",
+    "KagemushaVerifierReleaseActivate",
+    "KagemushaVerifierReleaseRetire",
+  ].map((kind) => ({ kind, payload: { proposal_operator: ACCOUNTS[0] } }));
+}
 
 function fixtureAccountId(label) {
   for (let attempt = 0; attempt < 1024; attempt += 1) {

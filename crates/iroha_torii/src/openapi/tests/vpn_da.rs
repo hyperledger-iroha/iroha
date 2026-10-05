@@ -1,7 +1,7 @@
 const OPENAPI_STATIC_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 94_820;
+const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 95_972;
 const OPENAPI_STATIC_CONTRACT_ASSET_SHA256: &str =
-    "d3aaf90d8522b6c272f90637bfb251b287e7672dfc44feea59932a0179c84bf2";
+    "20ba8ee235447dec0c07ec0ef0996ef06b5a96c207f33b4d00130226ad2e8c71";
 const OPENAPI_STATIC_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/openapi/tests/openapi_static_contracts_v1.txt"

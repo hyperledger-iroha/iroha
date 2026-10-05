@@ -272,7 +272,7 @@ pub fn assert_current_owner(cases: &[Case], owner: &str) {
     let expected = current_owner_fixture()
         .get(owner)
         .expect("every current owner is captured");
-    let expected = owner_for_governance_feature(expected, cfg!(feature = "governance"));
+    let expected = owner_for_current_inventory(expected, cfg!(feature = "governance"));
     assert_eq!(
         actual, expected,
         "current codec owner or directional identity changed"
@@ -284,20 +284,17 @@ fn current_native_fixture_has_complete_owner_inventory() {
     assert_eq!(current_owner_fixture().len(), 105);
 }
 
-// This is the only row-level feature condition in the captured printer inventories.
-// Filter by this closed source declaration, never by whichever rows the current code emits.
-fn owner_for_governance_feature(owner: &Value, governance: bool) -> Value {
-    if governance {
-        return owner.clone();
-    }
+// Apply only the closed feature conditions in the current typed inventory.
+// The current fixture already excludes retired governance owners.
+fn owner_for_current_inventory(owner: &Value, governance: bool) -> Value {
     let name = owner.get("owner").and_then(Value::as_str).unwrap();
-    if name != "iroha_data_model::fraud::types::captured_types_schema_tests" {
-        return owner.clone();
-    }
-    let removed: &[&str] = &[
-        "iroha_data_model::fraud::types::GovernanceExport",
-        "iroha_data_model::fraud::types::DecisionAggregate",
-    ];
+    let removed: &[&str] = match name {
+        "iroha_data_model::fraud::types::captured_types_schema_tests" if !governance => &[
+            "iroha_data_model::fraud::types::GovernanceExport",
+            "iroha_data_model::fraud::types::DecisionAggregate",
+        ],
+        _ => return owner.clone(),
+    };
     let rows = owner.get("rows").and_then(Value::as_array).unwrap();
     assert_eq!(
         rows.len(),
@@ -329,18 +326,33 @@ fn owner_for_governance_feature(owner: &Value, governance: bool) -> Value {
 }
 
 #[test]
-fn current_owner_feature_shapes_use_only_closed_declared_governance_rows() {
+fn current_owner_inventory_excludes_retired_types_under_every_feature_shape() {
     let owners = current_owner_fixture();
     for (name, owner) in owners {
-        assert_eq!(owner_for_governance_feature(owner, true), *owner);
-        let minimal = owner_for_governance_feature(owner, false);
-        if name != "iroha_data_model::fraud::types::captured_types_schema_tests" {
-            assert_eq!(minimal, *owner);
-            continue;
+        let complete = owner_for_current_inventory(owner, true);
+        if name == "iroha_data_model::captured_schema_tests::current_release_capture" {
+            assert_eq!(complete["rows"].as_array().unwrap().len(), 3);
+            assert!(complete["rows"].as_array().unwrap().iter().all(|row| {
+                !row["nominal"]
+                    .as_str()
+                    .unwrap()
+                    .contains("KagemushaVerifier")
+            }));
+        } else {
+            assert_eq!(complete, *owner);
         }
+        let minimal = owner_for_current_inventory(owner, false);
+        let expected = match name.as_str() {
+            "iroha_data_model::captured_schema_tests::current_release_capture" => 3,
+            "iroha_data_model::fraud::types::captured_types_schema_tests" => 7,
+            _ => {
+                assert_eq!(minimal, *owner);
+                continue;
+            }
+        };
         assert_eq!(
             minimal.get("rows").and_then(Value::as_array).unwrap().len(),
-            7
+            expected
         );
         assert_eq!(minimal.get("owner"), owner.get("owner"));
         assert_eq!(minimal.get("schema"), owner.get("schema"));

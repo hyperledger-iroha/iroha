@@ -4005,7 +4005,7 @@
       "starts_with_lf": true
     }
   ],
-  "fixtures_sha256": "69115d987aaf9a9369671616a8f6b0d02b272fac4a3a2c9a50e19f60aee75a72",
+  "fixtures_sha256": "ba9ae99da0f536a1fc48b79fa1a4ebe6b4e5eb38a9c9b7dce0f248a33d808116",
   "format": "iroha.kotodama.test-sources",
   "schema_version": 1,
   "source_files": [

@@ -259,3 +259,46 @@ fn owned_scope_outlives_its_batch_scope_without_a_stale_tls_link() {
     assert!(poll(&mut wait, &wakes).is_ready());
     without_allocations(|| budget.with_deferred_refund_notifications(|_| {}));
 }
+
+#[test]
+fn retained_batch_leaves_other_threads_same_pool_refunds_independent() {
+    let budget = AllocationBudget::new(2 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration = registration(&budget);
+    let local = budget.try_reserve(layout(1)).unwrap();
+    let remote = budget.try_reserve(layout(1)).unwrap();
+    let mut wait = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration,
+    );
+    let wakes = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wakes).is_pending());
+    let mut batch = budget.deferred_refund_batch();
+    batch.with_scope(|_| {
+        drop(local);
+        assert_eq!(
+            budget.reserved_bytes(),
+            1 + ReleaseRegistration::allocation_layout().size()
+        );
+        assert_eq!(wakes.0.load(SeqCst), 0);
+        // This refund belongs to the same pool, but not to this thread's scope.
+        std::thread::spawn(move || drop(remote)).join().unwrap();
+        assert_eq!(
+            budget.reserved_bytes(),
+            ReleaseRegistration::allocation_layout().size()
+        );
+        assert_eq!(wakes.0.load(SeqCst), 1);
+        assert!(poll(&mut wait, &wakes).is_ready());
+    });
+    assert_eq!(wakes.0.load(SeqCst), 1);
+    drop(wait);
+    // The original waiter still occupies capacity. Observe a new actual refusal
+    // without reserving pressure or manufacturing an unrelated release.
+    let mut wait = capacity_wait(
+        budget.try_reserve_bytes(budget.limit_bytes()).unwrap_err(),
+        &mut budget_registration,
+    );
+    assert!(poll(&mut wait, &wakes).is_pending());
+    without_allocations(|| drop(batch));
+    assert_eq!(wakes.0.load(SeqCst), 2);
+    assert!(poll(&mut wait, &wakes).is_ready());
+}

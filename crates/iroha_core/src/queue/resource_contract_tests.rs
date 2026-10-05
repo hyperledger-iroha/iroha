@@ -1,0 +1,647 @@
+// Exact-limit and one-over checks of the transaction bounds in `specs/zk_resource_contract.json`:
+// admission, queue custody, proposer selection and block validation read the same committed
+// parameters and make the same decision.
+
+/// One signed `Log` transaction whose message is `message_len` bytes long.
+fn resource_contract_signed_log(
+    time: &TimeSource,
+    message_len: usize,
+) -> iroha_data_model::transaction::SignedTransaction {
+    TransactionBuilder::new_with_time_source(
+        queue_test_network_id(),
+        AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+        time,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(vec![InstructionBox::from(iroha_data_model::isi::Log::new(
+        iroha_data_model::level::Level::INFO,
+        "x".repeat(message_len),
+    ))])
+    .sign(ALICE_KEYPAIR.private_key())
+}
+
+/// Governed limits whose transaction byte cap is `max_tx_bytes`.
+fn resource_contract_limits(max_tx_bytes: u64) -> TransactionParameters {
+    let defaults = TransactionParameters::default();
+    TransactionParameters::with_max_signatures(
+        defaults.max_signatures(),
+        defaults.max_instructions(),
+        defaults.ivm_bytecode_size(),
+        std::num::NonZeroU64::new(max_tx_bytes).expect("nonzero transaction cap"),
+        defaults.max_decompressed_bytes(),
+        defaults.max_metadata_depth(),
+    )
+}
+
+/// Admit `transaction` under `limits` at the mock clock of `time`.
+fn resource_contract_accept(
+    transaction: iroha_data_model::transaction::SignedTransaction,
+    limits: TransactionParameters,
+    time: &TimeSource,
+) -> Result<AcceptedTransaction<'static>, crate::tx::AcceptTransactionFail> {
+    AcceptedTransaction::accept_with_time_source(
+        transaction,
+        &queue_test_network_id(),
+        Duration::from_millis(10),
+        limits,
+        &iroha_config::parameters::actual::Crypto::default(),
+        time,
+    )
+}
+
+/// A queue fixture whose committed global payload limit is `max_block_bytes`.
+fn resource_contract_state(max_block_bytes: u32) -> State {
+    let world = world_with_test_domains();
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(iroha_data_model::parameter::Parameter::Sumeragi(
+            iroha_data_model::parameter::system::SumeragiParameter::MaxBlockBytes(
+                std::num::NonZeroU32::new(max_block_bytes).expect("nonzero payload limit"),
+            ),
+        ));
+        parameters.commit();
+    }
+    let mut state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    install_single_validator_topology_for_queue_test(&mut state, 0xB7);
+    state
+}
+
+/// The committed transaction cap is inclusive, and the admission entry and the block
+/// validation entry reject the same first oversize byte with the same reason.
+#[test]
+fn transaction_cap_is_exact_at_admission_and_block_validation() {
+    let (_, time) = TimeSource::new_mock(Duration::default());
+    let at_limit = resource_contract_signed_log(&time, 3_000);
+    let one_over = resource_contract_signed_log(&time, 3_001);
+    let limit =
+        resource_contract_accept(at_limit.clone(), resource_contract_limits(1 << 20), &time)
+            .expect("transaction fits a 1 MiB cap")
+            .encoded_len();
+    let over = resource_contract_accept(one_over.clone(), resource_contract_limits(1 << 20), &time)
+        .expect("transaction fits a 1 MiB cap")
+        .encoded_len();
+    assert_eq!(
+        over,
+        limit + 1,
+        "one more message byte is one more framed byte"
+    );
+    // Norito framing is part of the measured length: header, alignment and bare payload.
+    assert!(limit > norito::core::Header::SIZE + 3_000);
+    let limit = u64::try_from(limit).unwrap();
+    let limits = resource_contract_limits(limit);
+    let reason = format!(
+        "Transaction size {} bytes exceeds limit {limit} bytes",
+        limit + 1
+    );
+    // SDK preflight over committed parameters whose block payload leaves room for the cap.
+    let mut parameters = iroha_data_model::parameter::Parameters::default();
+    parameters.transaction = limits;
+    assert_eq!(
+        parameters.max_includable_transaction_bytes(
+            iroha_data_model::parameter::system::TransactionInclusionRoute::Global
+        ),
+        limit
+    );
+    assert_eq!(
+        parameters.check_signed_transaction_bytes(
+            limit,
+            iroha_data_model::parameter::system::TransactionInclusionRoute::Global
+        ),
+        Ok(())
+    );
+    assert!(
+        parameters
+            .check_signed_transaction_bytes(
+                limit + 1,
+                iroha_data_model::parameter::system::TransactionInclusionRoute::Global
+            )
+            .is_err()
+    );
+    // Admission (Torii and gossip ingress share this entry).
+    assert!(resource_contract_accept(at_limit.clone(), limits, &time).is_ok());
+    let Err(crate::tx::AcceptTransactionFail::TransactionLimit(admission)) =
+        resource_contract_accept(one_over.clone(), limits, &time)
+    else {
+        panic!("admission rejects one byte over the cap as a transaction limit");
+    };
+    assert_eq!(admission.reason, reason);
+    // Block validation (the follower and lane-merge entry).
+    let crypto = iroha_config::parameters::actual::Crypto::default();
+    let follower = |transaction: &iroha_data_model::transaction::SignedTransaction| {
+        AcceptedTransaction::validate_with_now(
+            transaction,
+            &queue_test_network_id(),
+            Duration::from_millis(10),
+            limits,
+            &crypto,
+            transaction.creation_time(),
+        )
+    };
+    follower(&at_limit).expect("block validation accepts the cap itself");
+    let Err(crate::tx::AcceptTransactionFail::TransactionLimit(validation)) = follower(&one_over)
+    else {
+        panic!("block validation rejects one byte over the cap as a transaction limit");
+    };
+    assert_eq!(validation.reason, reason);
+}
+
+/// Queue admission refuses exactly the transactions the proposer can never select: both read
+/// the committed block payload limit less the reserve the data model owns.
+#[test]
+fn queue_admission_and_proposer_selection_share_the_includable_bound() {
+    let (_, time) = TimeSource::new_mock(Duration::default());
+    let limits = TransactionParameters::default();
+    let at_limit =
+        resource_contract_accept(resource_contract_signed_log(&time, 3_000), limits, &time)
+            .expect("accepted under the default cap");
+    let one_over =
+        resource_contract_accept(resource_contract_signed_log(&time, 3_001), limits, &time)
+            .expect("accepted under the default cap");
+    let limit = at_limit.encoded_len();
+    assert_eq!(one_over.encoded_len(), limit + 1);
+    let reserve = iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
+    let max_block_bytes = reserve + u32::try_from(limit).unwrap();
+    let mut state = resource_contract_state(max_block_bytes);
+    register_accepted_tx_authority_for_queue_test(&mut state, &at_limit);
+    let bound = state
+        .view()
+        .world()
+        .parameters()
+        .max_includable_transaction_bytes(
+            iroha_data_model::parameter::system::TransactionInclusionRoute::Global,
+        );
+    assert_eq!(bound, limit as u64);
+    // The proposer's selection budget is the same number (`sumeragi::executor`).
+    let budget = usize::try_from(max_block_bytes - reserve).unwrap();
+    assert_eq!(budget, limit);
+
+    // Every queue boundary admits the transaction at the bound and refuses one byte over.
+    let reason = iroha_data_model::parameter::system::TransactionNeverIncludable {
+        encoded_bytes: limit as u64 + 1,
+        max_bytes: limit as u64,
+    }
+    .to_string();
+    for boundary in 0..3 {
+        let queue = Arc::new(Queue::test(config_factory(), &time));
+        let push = |transaction: AcceptedTransaction<'static>| match boundary {
+            0 => queue.push(transaction, state.view()).map(|_| ()),
+            1 => queue
+                .push_with_lane_with_state(transaction, &state)
+                .map(|_| ()),
+            _ => {
+                let plan = queue.route_plan_with_state(&transaction, &state).unwrap();
+                queue
+                    .push_batch_with_lane_with_state_and_routing_plans(
+                        vec![(transaction, plan)],
+                        &state,
+                    )
+                    .map(|_| ())
+            }
+        };
+        let failure = push(one_over.clone()).expect_err("one byte over is never includable");
+        let Error::UnsupportedTransactionAdmission { reason: actual } = failure.err else {
+            panic!("unexpected queue error: {:?}", failure.err);
+        };
+        assert_eq!(actual, reason);
+        assert_eq!(
+            queue.active_len(),
+            0,
+            "a refused transaction takes no custody"
+        );
+        push(at_limit.clone()).expect("the bound itself is includable");
+        assert_eq!(queue.active_len(), 1);
+        // The proposer selects what the queue admitted, within the same budget.
+        let selected = crate::sumeragi::payload::select(&state, &queue, budget, 0).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(
+            selected[0].hash_as_entrypoint(),
+            at_limit.hash_as_entrypoint()
+        );
+        assert!(
+            crate::sumeragi::payload::select(&state, &queue, budget - 1, 0)
+                .unwrap()
+                .is_empty(),
+            "one byte less budget cannot carry the transaction"
+        );
+    }
+
+    // Under a larger committed payload limit the same transaction is admitted, and the
+    // proposer still skips it for exactly the budget that cannot carry it.
+    let mut roomy = resource_contract_state(max_block_bytes + 1);
+    register_accepted_tx_authority_for_queue_test(&mut roomy, &one_over);
+    let queue = Arc::new(Queue::test(config_factory(), &time));
+    queue
+        .push(one_over.clone(), roomy.view())
+        .expect("one more payload byte admits one more transaction byte");
+    assert!(
+        crate::sumeragi::payload::select(&roomy, &queue, budget, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        crate::sumeragi::payload::select(&roomy, &queue, budget + 1, 0)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+/// The bound follows the transaction's route. A lane's larger budget is available only to a
+/// transaction routed to that lane, and an unreadable committed policy defers the assessment
+/// at the function and at the queue: it neither admits nor rejects, and takes no custody.
+#[test]
+fn includable_bound_follows_the_route_and_an_unreadable_policy_defers() {
+    use crate::{
+        execution_attempt::ExecutionAttemptError,
+        sumeragi::{
+            lanes::routing::GLOBAL_LANE,
+            payload::{check_includable_transaction, max_includable_transaction_bytes_on_route},
+        },
+    };
+    use iroha_data_model::{
+        parameter::{Parameter, Parameters, system::TransactionNeverIncludable},
+        sumeragi_lanes::{
+            SumeragiLaneFrontier, SumeragiLanePolicy, SumeragiLaneRecord, SumeragiLaneState,
+        },
+    };
+    let (_, time) = TimeSource::new_mock(Duration::default());
+    let limits = TransactionParameters::default();
+    let transaction =
+        resource_contract_accept(resource_contract_signed_log(&time, 3_000), limits, &time)
+            .expect("accepted under the default cap");
+    let length = u32::try_from(transaction.encoded_len()).unwrap();
+    let reserve = iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
+    let lane_reserve = iroha_data_model::parameter::system::LANE_BATCH_FRAMING_RESERVE_BYTES;
+    // The global payload leaves room for one byte less than the transaction; the lane payload
+    // carries it exactly.
+    let global = reserve + length - 1;
+    let mut lane_params = Parameters::default().sumeragi().clone();
+    lane_params.max_block_bytes = std::num::NonZeroU32::new(length + lane_reserve).unwrap();
+    let policy = SumeragiLanePolicy::for_chain(
+        lane_params.clone(),
+        iroha_sumeragi::availability::recommended_data_availability_layout(),
+    );
+    policy.validate().expect("valid lane policy");
+    let never = TransactionNeverIncludable {
+        encoded_bytes: u64::from(length),
+        max_bytes: u64::from(length) - 1,
+    };
+
+    // The budget of each route, from committed parameters and the committed lane record: the
+    // record pins the payload limit the lane's proposer builds within.
+    let mut state = resource_contract_state(global);
+    register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+    let parameters = state.view().world().parameters().clone();
+    let native = iroha_model_base::topology::LaneId::new(1);
+    let lanes_with = |max_block_bytes: u32| {
+        let mut params = lane_params.clone();
+        params.max_block_bytes = std::num::NonZeroU32::new(max_block_bytes).unwrap();
+        let mut lanes = SumeragiLaneState::default();
+        lanes.upsert(SumeragiLaneRecord {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
+            lane: native,
+            dataspace: DataSpaceId::UNIVERSAL,
+            incarnation: [1; 32],
+            params,
+            committee: Vec::new(),
+            created_at: 0,
+            active_from: 0,
+            closing: None,
+            anchor_freshness: 16,
+            merged: SumeragiLaneFrontier::default(),
+            merged_at: 0,
+            rescued: 0,
+        });
+        lanes
+    };
+    let carrying = lanes_with(length + lane_reserve);
+    let on_route = |lanes: &SumeragiLaneState, lane| {
+        max_includable_transaction_bytes_on_route(&parameters, lanes, lane)
+    };
+    assert_eq!(on_route(&carrying, Some(native)), u64::from(length));
+    assert_eq!(on_route(&carrying, Some(GLOBAL_LANE)), never.max_bytes);
+    assert_eq!(on_route(&carrying, None), never.max_bytes);
+    // A lane without a committed record has no proposer: the global budget decides.
+    assert_eq!(
+        on_route(&SumeragiLaneState::default(), Some(native)),
+        never.max_bytes
+    );
+    // One byte less lane payload cannot carry the transaction.
+    assert_eq!(
+        on_route(&lanes_with(length + lane_reserve - 1), Some(native)),
+        never.max_bytes
+    );
+
+    let check = |state: &State| {
+        let view = state.view();
+        check_includable_transaction(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            view.query_ledger_time_ms(),
+            2,
+            &transaction,
+        )
+    };
+    let refused_by = |queue: &Queue, state: &State| {
+        let failure = queue
+            .push(transaction.clone(), state.view())
+            .expect_err("the transaction is not admitted");
+        assert_eq!(queue.active_len(), 0, "a refusal takes no custody");
+        assert_eq!(queue.queued_len(), 0, "a refusal takes no custody");
+        assert_eq!(queue.retained_bytes(), 0, "a refusal takes no custody");
+        failure.err
+    };
+    let refused_by_queue = |state: &State| refused_by(&Queue::test(config_factory(), &time), state);
+
+    // No lane policy: the global budget decides.
+    assert_eq!(check(&state), Err(ExecutionAttemptError::Rejected(never)));
+    assert!(matches!(
+        refused_by_queue(&state),
+        Error::UnsupportedTransactionAdmission { reason } if reason == never.to_string()
+    ));
+
+    // A committed lane policy whose budget would carry the transaction does not help a
+    // transaction routed to lane zero.
+    {
+        let mut world = state.world.block();
+        world
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(policy.into_custom_parameter()));
+        world.commit();
+    }
+    assert_eq!(check(&state), Err(ExecutionAttemptError::Rejected(never)));
+    assert!(matches!(
+        refused_by_queue(&state),
+        Error::UnsupportedTransactionAdmission { reason } if reason == never.to_string()
+    ));
+
+    // Local decode capacity refuses the committed policy read: the assessment is deferred,
+    // and the completed read of the same State gives the deterministic verdict again.
+    let starved_limits = || norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let starved = norito::with_decode_limits_scope(starved_limits(), || check(&state));
+    assert!(
+        matches!(starved, Err(ExecutionAttemptError::Deferred(_))),
+        "a local refusal is neither an admission nor a rejection: {starved:?}"
+    );
+    // Queue admission maps the same local refusal to a deferral, never to the permanent
+    // `UnsupportedTransactionAdmission`, and retains nothing.
+    let Err(ExecutionAttemptError::Deferred(local_refusal)) = starved else {
+        unreachable!("checked above");
+    };
+    let queue = Queue::test(config_factory(), &time);
+    let starved_push =
+        norito::with_decode_limits_scope(starved_limits(), || refused_by(&queue, &state));
+    assert!(
+        matches!(&starved_push, Error::Deferred(reason) if *reason == local_refusal),
+        "a starved policy read defers queue admission with its refusal: {starved_push:?}"
+    );
+    // The same queue admits nothing and rejects nothing because of the deferral: once the
+    // read completes it gives the deterministic verdict.
+    assert_eq!(check(&state), Err(ExecutionAttemptError::Rejected(never)));
+    assert!(matches!(
+        refused_by_queue(&state),
+        Error::UnsupportedTransactionAdmission { reason } if reason == never.to_string()
+    ));
+
+    // A transaction within the global budget needs no policy read, so nothing defers it.
+    let roomy = resource_contract_state(global + 1);
+    let within = norito::with_decode_limits_scope(starved_limits(), || check(&roomy));
+    assert_eq!(within, Ok(()));
+}
+
+/// Today's default parameters at their actual maximum: the largest includable transaction
+/// is admitted and selected, and the 10 MiB cap is inclusive for transaction validation at
+/// admission and in block validation. Queue admission refuses everything above the
+/// includable bound, the cap included, because no block can carry it until the payload
+/// limit grows (contract relation `transaction_cap_fits_block_payload`).
+#[test]
+fn default_limits_admit_and_select_the_largest_includable_transaction() {
+    let (_, time) = TimeSource::new_mock(Duration::default());
+    let limits = TransactionParameters::default();
+    let parameters = iroha_data_model::parameter::Parameters::default();
+    let includable = parameters.max_includable_transaction_bytes(
+        iroha_data_model::parameter::system::TransactionInclusionRoute::Global,
+    );
+    assert_eq!(includable, 4_128_768);
+    let cap = limits.max_tx_bytes().get();
+    assert_eq!(cap, 10_485_760);
+    // A signed transaction of exactly `target` framed bytes, measured by admission itself.
+    let measure = |message_len: usize| {
+        let signed = resource_contract_signed_log(&time, message_len);
+        let length =
+            resource_contract_accept(signed.clone(), resource_contract_limits(1 << 26), &time)
+                .expect("measured under a generous cap")
+                .encoded_len();
+        (signed, length)
+    };
+    let sized = |target: u64| {
+        let target = usize::try_from(target).unwrap();
+        let slack = 8_192;
+        let (_, probe) = measure(target - slack);
+        let (signed, length) = measure(target - slack + (target - probe));
+        assert_eq!(
+            length, target,
+            "the framed length is linear in the message length"
+        );
+        signed
+    };
+    let largest = sized(includable);
+    let over_includable = sized(includable + 1);
+    let at_cap = sized(cap);
+    let over_cap = sized(cap + 1);
+
+    // Transaction validation: the cap is inclusive at admission and in block validation.
+    let crypto = iroha_config::parameters::actual::Crypto::default();
+    let follower = |transaction: &iroha_data_model::transaction::SignedTransaction| {
+        AcceptedTransaction::validate_with_now(
+            transaction,
+            &queue_test_network_id(),
+            Duration::from_millis(10),
+            limits,
+            &crypto,
+            transaction.creation_time(),
+        )
+    };
+    let largest = resource_contract_accept(largest, limits, &time).expect("includable");
+    let over_includable =
+        resource_contract_accept(over_includable, limits, &time).expect("below the cap");
+    follower(&at_cap).expect("block validation accepts the cap itself");
+    let at_cap = resource_contract_accept(at_cap, limits, &time).expect("the cap itself");
+    assert!(matches!(
+        follower(&over_cap),
+        Err(crate::tx::AcceptTransactionFail::TransactionLimit(_))
+    ));
+    assert!(matches!(
+        resource_contract_accept(over_cap, limits, &time),
+        Err(crate::tx::AcceptTransactionFail::TransactionLimit(_))
+    ));
+
+    // Queue admission under the default committed parameters.
+    let mut state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    install_single_validator_topology_for_queue_test(&mut state, 0xB7);
+    register_accepted_tx_authority_for_queue_test(&mut state, &largest);
+    assert_eq!(
+        state
+            .view()
+            .world()
+            .parameters()
+            .max_includable_transaction_bytes(
+                iroha_data_model::parameter::system::TransactionInclusionRoute::Global
+            ),
+        includable
+    );
+    let queue = Arc::new(Queue::test(config_factory(), &time));
+    for refused in [over_includable, at_cap] {
+        let bytes = refused.encoded_len();
+        let failure = queue
+            .push(refused, state.view())
+            .expect_err("no block can carry it");
+        assert!(
+            matches!(failure.err, Error::UnsupportedTransactionAdmission { .. }),
+            "{bytes} bytes: {:?}",
+            failure.err
+        );
+    }
+    assert_eq!(queue.active_len(), 0);
+    queue
+        .push(largest.clone(), state.view())
+        .expect("the largest includable transaction is admitted");
+    // The proposer's budget is the committed payload limit less the reserve.
+    let budget = usize::try_from(includable).unwrap();
+    let selected = crate::sumeragi::payload::select(&state, &queue, budget, 0).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(
+        selected[0].hash_as_entrypoint(),
+        largest.hash_as_entrypoint()
+    );
+    assert_eq!(selected[0].encoded_len(), budget);
+}
+
+/// Admission state whose includable assessment is one fixed local refusal. Every later
+/// admission step panics: a deferred assessment ends admission before any custody is taken.
+struct DeferredInclusionAccess(crate::execution_attempt::ExecutionDeferred);
+
+impl QueueAdmissionStateAccess for DeferredInclusionAccess {
+    fn authority_exists(&mut self, _authority: &AccountId) -> bool {
+        panic!("admission continued after a deferred includable assessment")
+    }
+    fn check_includable_transaction(
+        &mut self,
+        _transaction: &AcceptedTransaction<'_>,
+    ) -> Result<
+        (),
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::parameter::system::TransactionNeverIncludable,
+        >,
+    > {
+        Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+            self.0.clone(),
+        ))
+    }
+    fn sccp_exempt_admission(
+        &mut self,
+        _transaction: &SignedTransaction,
+    ) -> Result<Option<SccpAdmissionKeysV1>, SccpAdmissionRejectV1> {
+        panic!("admission continued after a deferred includable assessment")
+    }
+    fn manifest_authority_eligible_lanes(
+        &mut self,
+        _lane_id: LaneId,
+        _dataspace_id: DataSpaceId,
+    ) -> BTreeSet<LaneId> {
+        panic!("admission continued after a deferred includable assessment")
+    }
+    fn recheck_external_nexus_fee_admission(
+        &mut self,
+        _queue: &Queue,
+        _tx: &AcceptedTransaction<'static>,
+        _route_dataspace_id: Option<DataSpaceId>,
+    ) -> Result<Option<FeeAdmissionReservation>, Error> {
+        panic!("admission continued after a deferred includable assessment")
+    }
+    fn extract_lane_identity_metadata(
+        &mut self,
+        _authority: &AccountId,
+        _dataspace_id: DataSpaceId,
+        _lane_alias: &str,
+    ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
+        panic!("admission continued after a deferred includable assessment")
+    }
+    fn extract_lane_authority_domains(
+        &mut self,
+        _authority: &AccountId,
+        _lane_alias: &str,
+    ) -> Result<Vec<iroha_model_base::domain::DomainId>, Error> {
+        panic!("admission continued after a deferred includable assessment")
+    }
+}
+
+/// Queue admission maps a local refusal of the includable assessment to `Error::Deferred`
+/// with the original refusal: it is not the permanent `UnsupportedTransactionAdmission`, no
+/// later admission step runs and the queue retains nothing. The same transaction is admitted
+/// once the assessment completes.
+#[test]
+fn deferred_includable_assessment_defers_queue_admission_without_custody() {
+    let (_, time) = TimeSource::new_mock(Duration::default());
+    let transaction = resource_contract_accept(
+        resource_contract_signed_log(&time, 64),
+        TransactionParameters::default(),
+        &time,
+    )
+    .expect("accepted under the default cap");
+    let mut state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    install_single_validator_topology_for_queue_test(&mut state, 0xB7);
+    register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+    let queue = Queue::test(config_factory(), &time);
+    let original: crate::execution_attempt::ExecutionDeferred =
+        ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into();
+    let plan = queue
+        .route_plan_with_state(&transaction, &state)
+        .expect("the fixture transaction has a route");
+    {
+        let view = state.view();
+        let Err(failure) = queue.prepare_checked_for_enqueue(
+            CheckedTransaction::new_unchecked(transaction.clone()),
+            plan,
+            &mut DeferredInclusionAccess(original.clone()),
+            None,
+            #[cfg(feature = "telemetry")]
+            view.telemetry,
+        ) else {
+            panic!("a deferred assessment is not an admission");
+        };
+        drop(view);
+        let Error::Deferred(reason) = failure.err else {
+            panic!(
+                "a deferred assessment is not a rejection: {:?}",
+                failure.err
+            );
+        };
+        assert_eq!(reason, original, "the original local refusal is retained");
+        assert_eq!(
+            failure.tx.hash_as_entrypoint(),
+            transaction.hash_as_entrypoint(),
+            "the caller keeps the transaction for its retry"
+        );
+    }
+    assert_eq!(queue.active_len(), 0);
+    assert_eq!(queue.queued_len(), 0);
+    assert_eq!(queue.retained_bytes(), 0);
+    queue
+        .push(transaction, state.view())
+        .expect("the completed assessment admits the same transaction");
+    assert_eq!(queue.active_len(), 1);
+}

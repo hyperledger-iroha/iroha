@@ -221,10 +221,10 @@ impl<'state> StateBlock<'state> {
                 );
                 return Err(TransactionsBlockError::ExecutionOutputCapacity);
             }
-            if let Err(error) = this.validate_canonical_runtime_projection() {
+            if let Err(error) = this.validate_owned_runtime_catalog_overlay() {
                 error!(
                     ?error,
-                    "canonical runtime projection drifted before publication"
+                    "runtime catalog differs from captured policy or original journals before publication"
                 );
                 return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
             }
@@ -360,22 +360,6 @@ impl<'state> StateBlock<'state> {
                 .get_before_block()
                 .nexus_projection(&runtime_policy.nexus)
                 .map_err(|_| TransactionsBlockError::AutoscaleLaneLifecycle)?;
-            if let Err(err) = validate_runtime_catalog_block_overlay(
-                world.parameters.get_before_block(),
-                world,
-                &state_ref.network_id,
-                &predecessor_nexus,
-                pending_autoscale_lifecycle.as_ref(),
-                block_height,
-            ) {
-                error!(
-                    block_height,
-                    block = %block_header_hash,
-                    ?err,
-                    "final block overlay differs from its accepted runtime catalog transition"
-                );
-                return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
-            }
             if let Some(pending) = &pending_autoscale_lifecycle {
                 let staking_validation_result = {
                     ensure_pending_autoscale_lifecycle_staking_is_safe(

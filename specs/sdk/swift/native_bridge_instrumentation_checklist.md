@@ -30,39 +30,33 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
   `specs/swift_xcframework_hardware_plan.md` is optional and used only when
   `IOS6_SMOKE_ENABLE_HARDWARE=true`.
 
-Before any bridge build or smoke run, export the exact first-release envelope:
-
-```bash
-export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
-mkdir -p "$CARGO_TARGET_DIR"
-export CARGO_BUILD_JOBS=1
-export CARGO_INCREMENTAL=0
-export CARGO_NET_OFFLINE=true
-export RUSTC_BOOTSTRAP=1
-export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
-```
-
-Use Python 3.12 and the repository-root `Cargo.lock`; alternate lockfiles and
-in-tree or symbolic Cargo targets are rejected. A nonempty external isolated
-target is supported; builds sharing that target or output are serialized, and
-each Apple slice is freshly invoked.
+Use the exact build, toolchain, lockfile and artifact commands in
+[NoritoBridge release packaging](../../../docs/norito_bridge_release.md).
+Reuse the existing warm Cargo target and select the required read-only external
+copy of the reviewed root `Cargo.lock`. Keep `RUSTC_BOOTSTRAP` unset. Preserve
+the selected Cargo cache and invocation directory through authentication and
+packaging. Each supported Apple target must pass the real native build and
+consumer checks before instrumentation uses the resulting framework.
 
 ## 3. Checklist
 
 ### 3.1 Bridge Load & Fallback Detection
 
 1. **Build and point the bridge.**
+   Complete the release-packaging build and artifact validation above, then
+   select its authenticated external output for the Swift instrumentation runs:
    ```bash
-   ./scripts/build_norito_xcframework.sh
-   # Loader discovers dist/NoritoBridge.xcframework automatically.
+   export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
+   export MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1
    ```
+   Ordinary consumers may use `dist/NoritoBridge.xcframework` after the
+   authenticated ZIP installation described in the release-packaging guide.
 2. **Verify availability telemetry.**
    - Run `swift test --filter TxBuilderTests --package-path IrohaSwift`.
    - Require every bridge-dependent test to execute; a bridge-unavailable skip is a failure.
    - Confirm the logger/telemetry hooks emit a `connect.error` with `code=norito_bridge.available` when the bridge loads and `code=norito_bridge.load_failure` when the xcframework is missing or malformed.
 3. **Record version info.**
-   - Capture `source_commit`, `source_fingerprint_sha256`, `cargo_lock_sha256`, and `build_environment` from `dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json` and attach them to the `status.md` update or release note.
+   - Retain the complete authenticated `$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json` with the change report or release evidence, including its source, locked graph, toolchain, ABI and slice identities.
 
 ### 3.2 Connect Codec Instrumentation
 
@@ -118,7 +112,7 @@ each Apple slice is freshly invoked.
 
 - Archive raw telemetry under `artifacts/xcframework_smoke/` (per-lane logs) and the JSON result file referenced above.
 - Capture the anomaly summary (`artifacts/xcframework_smoke_anomalies.json`) alongside the telemetry export so incident responders have a redacted failure digest without digging through full logs.
-- Update `status.md` (Latest Updates) with a one-line summary and link back to this checklist whenever instrumentation changes ship.
+- Update `status.md` only when current health or blockers change. Put routine validation commands and results in the change report's `Testing` section.
 - In `roadmap.md`, keep the IOS6 “Native bridge instrumentation checklist” row pointing here and update the status emoji when the review completes.
 - Cross-link release PRs with the relevant artefacts (bridge version, telemetry JSON, dashboard output) so auditors can replay the evidence.
 

@@ -3,7 +3,7 @@
 use super::{
     BFV_PROGRAM_DIGEST_DOMAIN, BFV_PROGRAM_MAX_INSTRUCTIONS, BFV_PROGRAM_REGISTER_COUNT_U16,
     BFV_PROGRAM_STATE_WIDTH_U16, Hash, HiddenRamFheInstruction, RamLfeError, invalid_program_error,
-    policy_secret, validate_hidden_program,
+    policy_secret, validate_hidden_program_structure,
 };
 use norito::core::{DecodeFromSlice, SerializePayload};
 use std::{fmt, str::FromStr, sync::Arc};
@@ -14,6 +14,10 @@ const BYTES_PER_INSTRUCTION: usize = WORDS_PER_INSTRUCTION * 8;
 const MAX_TAPE_BYTES: usize = BFV_PROGRAM_MAX_INSTRUCTIONS * BYTES_PER_INSTRUCTION;
 /// Maximum canonical frame accepted for a hidden programmed RAM-LFE tape.
 pub const RAM_LFE_HIDDEN_PROGRAM_MAX_BYTES: usize = 40 + 2 + 3 + 3 + 2 + 8 + MAX_TAPE_BYTES;
+/// Private bytes one decoded program allocates: the fixed tape and the shared
+/// owner with its two reference counts.
+const DECODE_ALLOCATION_BYTES: usize =
+    MAX_TAPE_BYTES + std::mem::size_of::<Program>() + 2 * std::mem::size_of::<usize>();
 
 #[derive(PartialEq, Eq)]
 struct Tape {
@@ -53,7 +57,15 @@ struct Program {
     tape: Tape,
 }
 
-/// Validated hidden program with a single shared, clearing instruction allocation.
+/// Structurally valid hidden program with a single shared, clearing instruction
+/// allocation.
+///
+/// The owner checks the tape's shape only: version, register and lane counts,
+/// every tag, index and immediate, and the output count. It does not check any
+/// class limit. A tape it admits may exceed the logical rank of `bounded.v1`,
+/// so an evaluator or a configuration that needs a class asks
+/// [`super::RamLfeClassV1::membership`], or
+/// [`super::validate_hidden_ram_fhe_program`] for the diagnostic evaluator.
 ///
 /// Use [`Self::builder`] for typed instructions or [`Self::from_bytes`] for a
 /// canonical private frame. Clones share the allocation; Debug never prints the
@@ -185,6 +197,8 @@ impl HiddenRamFheProgram {
         Ok(program)
     }
 
+    // TODO(R.12): superseded by `RamLfeFunctionCommitmentV1`. This digest is not
+    // blinded, so a low-entropy tape can be guessed from it.
     /// Return the public digest of the canonical hidden program commitment.
     ///
     /// # Errors
@@ -195,6 +209,11 @@ impl HiddenRamFheProgram {
             BFV_PROGRAM_DIGEST_DOMAIN,
             &commitment,
         ]))
+    }
+
+    /// Borrow the canonical private tape: 48 bytes per instruction, no padding.
+    pub(super) fn tape_bytes(&self) -> &[u8] {
+        self.0.tape.initialized()
     }
 
     fn encoding(&self) -> ProgramEncoding<'_> {
@@ -225,7 +244,7 @@ impl HiddenRamFheProgramBuilder {
     /// Append a typed instruction without reallocating private tape storage.
     ///
     /// # Errors
-    /// Rejects the 257th instruction before writing it; `finish` validates semantics.
+    /// Rejects the 257th instruction before writing it; `finish` validates structure.
     pub fn push(&mut self, instruction: HiddenRamFheInstruction) -> Result<(), RamLfeError> {
         if self.tape.count == BFV_PROGRAM_MAX_INSTRUCTIONS {
             return Err(invalid_program_error(
@@ -247,8 +266,12 @@ impl HiddenRamFheProgramBuilder {
 
     /// Validate the complete tape and transfer its sole allocation into a shared owner.
     ///
+    /// The owner admits every structurally valid tape. Which class a tape
+    /// belongs to, including its rank and refresh limits, is decided by
+    /// [`super::RamLfeClassV1::membership`].
+    ///
     /// # Errors
-    /// Rejects empty/no-output tapes, invalid indexes/immediates and depth/output excess.
+    /// Rejects empty/no-output tapes, invalid indexes/immediates and output excess.
     pub fn finish(self) -> Result<HiddenRamFheProgram, RamLfeError> {
         let program = HiddenRamFheProgram(Arc::new(Program {
             version: 1,
@@ -256,7 +279,7 @@ impl HiddenRamFheProgramBuilder {
             memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
             tape: self.tape,
         }));
-        validate_hidden_program(&program)?;
+        validate_hidden_program_structure(&program)?;
         Ok(program)
     }
 }
@@ -340,14 +363,9 @@ fn decode_payload(bytes: &[u8]) -> Result<(HiddenRamFheProgram, usize), norito::
     for slot in private.chunks_exact(BYTES_PER_INSTRUCTION) {
         decode_instruction(slot)?;
     }
-    // Account for the fixed tape, shared owner and semantic-validation scratch
-    // in every active Norito budget before the private copy is allocated.
-    let allocation = MAX_TAPE_BYTES
-        + std::mem::size_of::<Program>()
-        + 2 * std::mem::size_of::<usize>()
-        + usize::from(BFV_PROGRAM_REGISTER_COUNT_U16 + BFV_PROGRAM_STATE_WIDTH_U16)
-            * std::mem::size_of::<u16>();
-    norito::core::reserve_decode_allocation(allocation)?;
+    // Account for the private allocation in every active Norito budget before
+    // it is made. Structural validation allocates nothing.
+    norito::core::reserve_decode_allocation(DECODE_ALLOCATION_BYTES)?;
     let mut builder =
         HiddenRamFheProgram::builder().map_err(|error| program_codec_error(&error))?;
     builder.tape.bytes[..length].copy_from_slice(private);

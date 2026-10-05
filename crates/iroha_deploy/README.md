@@ -18,7 +18,7 @@ What exists so far:
   for an explicitly selected release authority and HTTPS publication location. The schema in its
   public receipt binds the compiled candidate; preparation does not qualify a live network,
   publish the endpoint, or authenticate a bundle installation. Release packaging consumes the
-  profile through `cargo xtask kagami-bundle --network-profiles` for the two-program CLI
+  profile through `cargo xtask kagami-bundle --network-profiles` for the matching client/worker/daemon CLI
   package, or `cargo xtask mochi-bundle --network-profiles` for the desktop application.
 - `managed`: workspace-scoped private contexts, four-validator process ownership,
   authenticated native control IPC, durable stop/restart/reset and signed readiness.

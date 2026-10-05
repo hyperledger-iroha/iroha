@@ -63,7 +63,9 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     "iroha_crypto": {
         "default": ("node-crypto",),
         "application": ("rand", "json", "ecc-batch", "bfv-accel", "pqc"),
-        "bfv-accel": (),
+        # The exact CRT-NTT ring products and the NEON/AVX2 kernels of the
+        # shared FHE arithmetic; both return the words of the scalar reference.
+        "bfv-accel": ("iroha_fhe/simd",),
         "bls": (
             "dep:arrayvec",
             "dep:ark-serialize",
@@ -320,6 +322,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "dep:halo2curves",
             "dep:once_cell",
             "dep:fastpq_isi",
+            "dep:iroha_fhe",
             "dep:zeroize",
             "dep:iroha_crypto",
             "dep:tiny-keccak",
@@ -524,7 +527,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
 
     "irohad": ("accel-cuda", "accel-metal", "beep", "dev-telemetry", "dev-tools", "external-software-signer-bin", "fastpq-gpu", "profiling-endpoint", "sm-ffi-openssl", "telegram-alerts", "test-network-disposable-broker", "test-network-parliament-signers", "test-network-private-settlement-route-control", "zk-stark"),
     "iroha_cli": ("cli_integration_harness", "dev-tools"),
-    "iroha_core_privacy": ("privacy-release-evidence", "test-utils"),
+    "iroha_core_privacy": ("fastpq-replay-measurement", "privacy-release-evidence", "test-utils"),
     "iroha_core_timed_ovn": ("test-utils",),
 }
 

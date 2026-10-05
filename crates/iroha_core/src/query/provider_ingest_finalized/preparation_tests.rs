@@ -39,6 +39,17 @@ fn provider_admission_rejects_transition_capacity_and_generation_before_writes()
     substituted.providers[0].expected_owner = Some(account(0x71));
     assert!(matches!(
         archive.insert(substituted),
+        Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+            reason: "provider completion authority is noncanonical or differs from registered owner",
+        })
+    ));
+    // Exercise the transition guard with a canonical projection, so shape
+    // validation cannot hide an unauthorized mid-history policy replacement.
+    let mut substituted = advance_projection(&before, 8);
+    substituted.providers[0].expected_authority = Some(completion_authority(0x11, policy(0xC1, 2)));
+    substituted.validate(bounds()).unwrap();
+    assert!(matches!(
+        archive.insert(substituted),
         Err(ProviderIngestFinalizedArchiveErrorV1::AuthoritySubstitution { .. })
     ));
     assert!(matches!(

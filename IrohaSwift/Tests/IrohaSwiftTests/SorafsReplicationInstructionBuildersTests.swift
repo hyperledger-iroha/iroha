@@ -407,6 +407,154 @@ final class SorafsReplicationInstructionBuildersTests: XCTestCase {
         XCTAssertThrowsError(try SorafsReplicationInstructionBuilders.decode(negative))
     }
 
+    func testDecodedEpochPreservesFullWidthUnsignedIntegers() throws {
+        let epochs: [UInt64] = [0, 1, 9_007_199_254_740_993, UInt64(Int64.max), UInt64.max]
+        for epoch in epochs {
+            let instruction = try SorafsReplicationInstructionBuilders.expireReplicationOrder(
+                orderId: orderId,
+                expirationEpoch: epoch
+            )
+            XCTAssertEqual(
+                try SorafsReplicationInstructionBuilders.decode(instruction),
+                .expire(try SorafsExpireReplicationOrderInstruction(
+                    orderId: orderId,
+                    expirationEpoch: epoch
+                ))
+            )
+        }
+    }
+
+    func testDecodedEpochRejectsBooleanFractionNegativeOverflowStringAndNull() throws {
+        let invalidLiterals = [
+            "true", "false", "-1", "-0", "-0.0", "0.5", "1.5", "0.0", "1.0",
+            "1e0", "1E+0", "1e-0", "1.0000000000000001", "0.99999999999999999",
+            "2.0000000000000001", "18446744073709551616", "\"1\"", "null",
+        ]
+        for literal in invalidLiterals {
+            let instruction = try NoritoJSON(data: Data(
+                #"{"ExpireReplicationOrder":{"order_id":"\#(orderId)","expiration_epoch":\#(literal)}}"#.utf8
+            ))
+            XCTAssertThrowsError(
+                try SorafsReplicationInstructionBuilders.decode(instruction),
+                literal
+            ) { error in
+                XCTAssertEqual(
+                    error as? SorafsReplicationInstructionBuilderError,
+                    .invalidInstruction(reason: "expiration_epoch must be a non-negative u64")
+                )
+            }
+        }
+    }
+
+    func testDecodedIssueEpochsRejectRoundedFractionalTokens() throws {
+        let instruction = try SorafsReplicationInstructionBuilders.issueReplicationOrder(
+            orderId: orderId,
+            orderPayload: replicationFixture(),
+            issuedEpoch: 20,
+            deadlineEpoch: 28
+        )
+        let json = String(decoding: instruction.data, as: UTF8.self)
+        for (field, value) in [("issued_epoch", "20"), ("deadline_epoch", "28")] {
+            let original = "\"\(field)\":\(value)"
+            XCTAssertEqual(json.components(separatedBy: original).count, 2)
+            let malformed = json.replacingOccurrences(
+                of: original,
+                with: "\"\(field)\":\(value).000000000000001"
+            )
+            XCTAssertThrowsError(try SorafsReplicationInstructionBuilders.decode(
+                NoritoJSON(data: Data(malformed.utf8))
+            ), field) { error in
+                XCTAssertEqual(
+                    error as? SorafsReplicationInstructionBuilderError,
+                    .invalidInstruction(reason: "\(field) must be a non-negative u64")
+                )
+            }
+        }
+    }
+
+    func testDecodedCompletionCoordinatesRejectRoundedFractionalTokens() throws {
+        let instruction = try SorafsReplicationInstructionBuilders.completeReplicationOrder(
+            orderId: orderId,
+            providerId: providerId,
+            completionEpoch: 27,
+            expectedAuthority: completionAuthority(),
+            expectedAssignmentRevision: 3,
+            finalizedAnchor: finalizedAnchor()
+        )
+        let json = String(decoding: instruction.data, as: UTF8.self)
+        for (field, value) in [
+            ("completion_epoch", "27"), ("expected_assignment_revision", "3"),
+            ("revision", "2"), ("height", "41"),
+        ] {
+            let original = "\"\(field)\":\(value)"
+            XCTAssertEqual(json.components(separatedBy: original).count, 2)
+            let malformed = json.replacingOccurrences(
+                of: original,
+                with: "\"\(field)\":\(value).0000000000000001"
+            )
+            XCTAssertThrowsError(try SorafsReplicationInstructionBuilders.decode(
+                NoritoJSON(data: Data(malformed.utf8))
+            ), field) { error in
+                XCTAssertEqual(
+                    error as? SorafsReplicationInstructionBuilderError,
+                    .invalidInstruction(reason: "\(field) must be a non-negative u64")
+                )
+            }
+        }
+    }
+
+    func testDecodedCompletionCoordinatesPreserveOneAndUInt64Maximum() throws {
+        for value in [UInt64(1), UInt64.max] {
+            let authority = try SorafsProviderIngestCompletionAuthorityV1(
+                providerOwner: providerOwner,
+                completionSigner: providerOwner,
+                signerPolicy: SorafsProviderIngestCompletionSignerPolicyV1(
+                    policyId: policyId,
+                    revision: value,
+                    predecessorDigest: value == 1 ? nil : predecessorDigest,
+                    policyDigest: policyDigest
+                )
+            )
+            let completion = try SorafsCompleteReplicationOrderInstruction(
+                orderId: orderId,
+                providerId: providerId,
+                completionEpoch: value,
+                expectedAuthority: authority,
+                expectedAssignmentRevision: value,
+                finalizedAnchor: finalizedAnchor(height: value)
+            )
+            XCTAssertEqual(
+                try SorafsReplicationInstructionBuilders.decode(completion.noritoJSON()),
+                .complete(completion)
+            )
+        }
+    }
+
+    func testDecodedEpochUsesUnescapedJSONKeyPath() throws {
+        let instruction = try NoritoJSON(data: Data(
+            #"{"ExpireReplicat\u0069onOrder":{"order_id":"\#(orderId)","expirat\u0069on_epoch":18446744073709551615}}"#.utf8
+        ))
+        XCTAssertEqual(
+            try SorafsReplicationInstructionBuilders.decode(instruction),
+            .expire(try SorafsExpireReplicationOrderInstruction(
+                orderId: orderId,
+                expirationEpoch: UInt64.max
+            ))
+        )
+    }
+
+    func testDecodedEpochRejectsDuplicateNumericKeys() throws {
+        let instruction = try NoritoJSON(data: Data(
+            #"{"ExpireReplicationOrder":{"order_id":"\#(orderId)","expiration_epoch":1,"expirat\u0069on_epoch":1.0000000000000001}}"#.utf8
+        ))
+        XCTAssertThrowsError(try SorafsReplicationInstructionBuilders.decode(instruction)) { error in
+            XCTAssertEqual(
+                error as? SorafsReplicationInstructionBuilderError,
+                .invalidInstruction(reason: "expected valid JSON with unique object keys")
+            )
+        }
+    }
+
     private func replicationFixture() throws -> Data {
         let testFile = URL(fileURLWithPath: #filePath)
         let url = testFile

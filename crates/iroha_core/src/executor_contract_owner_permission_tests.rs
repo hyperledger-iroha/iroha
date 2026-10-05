@@ -225,6 +225,8 @@ fn contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_
 
 #[test]
 fn ordinary_owner_self_grant_enables_guarded_call_and_revocation_closes_it() {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let authority = ALICE_ID.clone();
     let (program, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
@@ -274,7 +276,7 @@ seiyaku OwnerPermission {
             address.dataspace_id().unwrap(),
             code_hash,
         ),
-        manifest.signed(&ALICE_KEYPAIR),
+        manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"),
     );
     seed_owner_permission_contract(&mut setup, &address, &authority, code_hash);
     setup.apply();

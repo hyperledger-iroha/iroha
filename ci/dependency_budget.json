@@ -17,6 +17,9 @@
           "telemetry_runtime",
           "storage_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_plonk_oracle"
+        ],
         "package": "iroha_data_model",
         "target": "all"
       },
@@ -58,6 +61,9 @@
           "telemetry_runtime",
           "storage_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_plonk_oracle"
+        ],
         "package": "soranet_incentives",
         "target": "all"
       },
@@ -67,6 +73,9 @@
         "forbidden_features": {},
         "forbidden_layers": [
           "sccp_wallet"
+        ],
+        "forbidden_packages": [
+          "iroha_plonk_oracle"
         ],
         "package": "irohad",
         "target": "all"
@@ -90,6 +99,9 @@
           "sdk",
           "proof_primitives",
           "http_transport"
+        ],
+        "forbidden_packages": [
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_model_base",
         "target": "all"
@@ -115,6 +127,9 @@
           "sdk",
           "proof_primitives",
           "http_transport"
+        ],
+        "forbidden_packages": [
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_model_base",
         "target": "all"
@@ -151,7 +166,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_musubi_service",
         "target": "all"
@@ -163,6 +179,9 @@
         "forbidden_layers": [
           "node_execution",
           "sccp_wallet"
+        ],
+        "forbidden_packages": [
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_sccp_rpc",
         "target": "all"
@@ -199,7 +218,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_sccp_wallet",
         "target": "all"
@@ -239,7 +259,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "include_root_dev_dependencies": false,
         "package": "iroha",
@@ -284,7 +305,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "include_root_dev_dependencies": false,
         "package": "iroha",
@@ -329,7 +351,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "include_root_dev_dependencies": false,
         "package": "iroha",
@@ -374,7 +397,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "include_root_dev_dependencies": false,
         "package": "iroha",
@@ -419,7 +443,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "include_root_dev_dependencies": false,
         "package": "iroha",
@@ -436,6 +461,9 @@
           "storage_runtime",
           "protocol",
           "sdk"
+        ],
+        "forbidden_packages": [
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_service_model",
         "target": "all"
@@ -473,7 +501,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_storage_client",
         "target": "all"
@@ -515,7 +544,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_storage_client",
         "target": "all"
@@ -557,7 +587,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_storage_client",
         "target": "all"
@@ -599,7 +630,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_storage_client",
         "target": "all"
@@ -641,7 +673,8 @@
         "forbidden_packages": [
           "iroha_p2p",
           "kotodama_lang",
-          "kotodama_toolchain"
+          "kotodama_toolchain",
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_storage_client",
         "target": "all"
@@ -661,6 +694,9 @@
           "node_configuration",
           "telemetry_runtime",
           "storage_runtime"
+        ],
+        "forbidden_packages": [
+          "iroha_plonk_oracle"
         ],
         "package": "iroha_torii_shared",
         "target": "all"
@@ -739,7 +775,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:2c1f82f72cbc70e1dfb9a90203d2f65e8da3f26cb74583b3382cade7e2a91367",
+    "manifest_fingerprint": "sha256:d3e763fa3102de64028b3dbe7a70f85a3c64f2a3f2c9893b8d656117f867f3dd",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -766,18 +802,18 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1061,
-        "declared_external_dependency_edges": 642,
+        "declared_dependency_edges": 1092,
+        "declared_external_dependency_edges": 656,
         "declared_external_packages": 180,
-        "declared_local_packages": 78,
+        "declared_local_packages": 82,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 74,
-        "required_dependency_edges": 910,
-        "required_external_dependency_edges": 518,
-        "required_external_packages": 131,
-        "required_local_packages": 75,
+        "declared_workspace_packages": 78,
+        "required_dependency_edges": 937,
+        "required_external_dependency_edges": 530,
+        "required_external_packages": 130,
+        "required_local_packages": 79,
         "required_path_packages": 4,
-        "required_workspace_packages": 71
+        "required_workspace_packages": 75
       },
       "roots": [
         "iroha_cli"
@@ -786,18 +822,18 @@
     "iroha-data-model-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 278,
-        "declared_external_dependency_edges": 214,
+        "declared_dependency_edges": 288,
+        "declared_external_dependency_edges": 222,
         "declared_external_packages": 104,
-        "declared_local_packages": 28,
+        "declared_local_packages": 30,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 25,
-        "required_dependency_edges": 215,
-        "required_external_dependency_edges": 157,
+        "declared_workspace_packages": 27,
+        "required_dependency_edges": 225,
+        "required_external_dependency_edges": 165,
         "required_external_packages": 72,
-        "required_local_packages": 25,
+        "required_local_packages": 27,
         "required_path_packages": 3,
-        "required_workspace_packages": 22
+        "required_workspace_packages": 24
       },
       "roots": [
         "iroha_data_model"
@@ -806,18 +842,18 @@
     "iroha-model-base-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 173,
-        "declared_external_dependency_edges": 140,
+        "declared_dependency_edges": 176,
+        "declared_external_dependency_edges": 142,
         "declared_external_packages": 79,
-        "declared_local_packages": 20,
+        "declared_local_packages": 21,
         "declared_path_packages": 1,
-        "declared_workspace_packages": 19,
-        "required_dependency_edges": 113,
-        "required_external_dependency_edges": 86,
+        "declared_workspace_packages": 20,
+        "required_dependency_edges": 116,
+        "required_external_dependency_edges": 88,
         "required_external_packages": 49,
-        "required_local_packages": 16,
+        "required_local_packages": 17,
         "required_path_packages": 1,
-        "required_workspace_packages": 15
+        "required_workspace_packages": 16
       },
       "roots": [
         "iroha_model_base"
@@ -826,18 +862,18 @@
     "iroha-sdk-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 457,
-        "declared_external_dependency_edges": 322,
+        "declared_dependency_edges": 470,
+        "declared_external_dependency_edges": 331,
         "declared_external_packages": 128,
-        "declared_local_packages": 43,
+        "declared_local_packages": 46,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 39,
-        "required_dependency_edges": 344,
-        "required_external_dependency_edges": 231,
-        "required_external_packages": 90,
-        "required_local_packages": 39,
+        "declared_workspace_packages": 42,
+        "required_dependency_edges": 354,
+        "required_external_dependency_edges": 238,
+        "required_external_packages": 89,
+        "required_local_packages": 42,
         "required_path_packages": 4,
-        "required_workspace_packages": 35
+        "required_workspace_packages": 38
       },
       "roots": [
         "iroha"
@@ -846,18 +882,18 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1070,
-        "declared_external_dependency_edges": 653,
-        "declared_external_packages": 186,
-        "declared_local_packages": 76,
+        "declared_dependency_edges": 1091,
+        "declared_external_dependency_edges": 663,
+        "declared_external_packages": 188,
+        "declared_local_packages": 80,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 72,
-        "required_dependency_edges": 891,
-        "required_external_dependency_edges": 524,
-        "required_external_packages": 137,
-        "required_local_packages": 71,
+        "declared_workspace_packages": 76,
+        "required_dependency_edges": 908,
+        "required_external_dependency_edges": 531,
+        "required_external_packages": 138,
+        "required_local_packages": 75,
         "required_path_packages": 4,
-        "required_workspace_packages": 67
+        "required_workspace_packages": 71
       },
       "roots": [
         "irohad"
@@ -866,18 +902,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 2046,
-        "declared_external_dependency_edges": 1121,
-        "declared_external_packages": 231,
-        "declared_local_packages": 117,
+        "declared_dependency_edges": 2138,
+        "declared_external_dependency_edges": 1176,
+        "declared_external_packages": 239,
+        "declared_local_packages": 127,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 113,
-        "required_dependency_edges": 1875,
-        "required_external_dependency_edges": 988,
-        "required_external_packages": 184,
-        "required_local_packages": 117,
+        "declared_workspace_packages": 123,
+        "required_dependency_edges": 1961,
+        "required_external_dependency_edges": 1038,
+        "required_external_packages": 191,
+        "required_local_packages": 127,
         "required_path_packages": 4,
-        "required_workspace_packages": 113
+        "required_workspace_packages": 123
       },
       "roots": [
         "*"

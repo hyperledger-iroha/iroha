@@ -3,6 +3,7 @@
 .PHONY: gost-bench gost-bench-update gost-dudect
 .PHONY: docs-cli docs-kagami-cli
 .PHONY: norito-matrix norito-matrix-downstream
+.PHONY: check-fhe-ownership refresh-fhe-ownership
 .PHONY: check-fastpq-row-usage check-fastpq-rollout check-nexus-lanes check-sns-annex
 .PHONY: bridge-xcframework bridge-checksum
 .PHONY: docs-syscalls
@@ -180,7 +181,19 @@ guards:
 	@bash scripts/check_no_direct_serde.sh
 	@bash scripts/deny_handrolled_aos.sh
 	@bash scripts/check_no_legacy_codec.sh
+	@python3 scripts/check_first_release_history.py
+	@python3 scripts/check_zk_x509_presentation_interval.py
+	@python3 scripts/check_zk_resource_contract.py
 	@bash scripts/check_contract_address_chain_identity.sh
+
+# Check the FHE ownership inventory (specs/fhe_ownership_inventory.json) against the tree.
+check-fhe-ownership:
+	@python3 -I -S scripts/check_fhe_ownership_map.py
+	@python3 -m unittest scripts/tests/check_fhe_ownership_map_test.py
+
+# Recompute the derived facts of the FHE ownership inventory; classifications are kept.
+refresh-fhe-ownership:
+	@python3 -I -S scripts/check_fhe_ownership_map.py --refresh --write
 
 # Run a local subset of the Norito feature matrix (use --fast for fewer cases)
 norito-matrix:

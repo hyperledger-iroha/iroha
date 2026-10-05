@@ -15,10 +15,17 @@
 //! - ciphertext-by-ciphertext multiplication with relinearization,
 //! - and a compact affine-circuit evaluator over scalar ciphertext inputs.
 //!
+//! The reusable exact arithmetic (modular scalars, transforms, CRT
+//! reconstruction, basis extension, rounding, digit decomposition and
+//! automorphisms) is owned by the `iroha_fhe` crate. This module keeps the BFV
+//! wire types, parameter policy, guard order and diagnostics, and binds its
+//! parameters to those kernels through thin private adapters.
+//!
 //! The implementation keeps a deterministic scalar fallback for every path.
 //! When the `bfv-accel` feature is enabled, polynomial multiplication switches
-//! to an exact CRT-NTT backend over NTT-friendly helper primes and then folds
-//! the linear product back into the negacyclic BFV ring. This keeps observable
+//! to the exact CRT-NTT backend of `iroha_fhe` over NTT-friendly helper primes
+//! and then folds the linear product back into the negacyclic BFV ring, and the
+//! shared kernels may use their NEON or AVX2 paths. This keeps observable
 //! outputs identical across hardware while substantially reducing the cost of
 //! ciphertext multiplication for the parameter sets used by identifier lookup.
 //! The registered first-release RNS chain covers the exact `Z_q` addition and
@@ -58,6 +65,19 @@ use crate::{Algorithm, Hash, PrivateKey, PublicKey, SignatureOf};
 use blake2::{Blake2b, digest::consts::U32};
 use digest::Digest as _;
 use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
+use iroha_fhe::{
+    automorphism::{self as fhe_automorphism, AutomorphismError},
+    key_switch as fhe_key_switch,
+    modular::{
+        self as fhe_modular, add_mod_u64, is_prime_u64, is_primitive_root_of_order,
+        mod_inv_prime_u64, mod_pow_u64, mul_mod_u64, primitive_root_of_order_with_candidate_limit,
+        reduce_i128_to_u64_mod, sub_mod_u64,
+    },
+    ntt as fhe_ntt,
+    polynomial::{self as fhe_polynomial, PolynomialError},
+    rns::{self as fhe_rns, ModulusChainError, RnsError},
+    rounding::{self as fhe_rounding, RoundingError, center_lift},
+};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -67,6 +87,13 @@ use rand_chacha::ChaCha20Rng;
 use std::{fmt, string::String, sync::OnceLock, vec::Vec};
 use thiserror::Error;
 use zeroize::Zeroizing;
+// Shared kernels that the BFV unit tests exercise directly, under their own names.
+#[cfg(all(test, feature = "bfv-accel"))]
+use iroha_fhe::ntt::{
+    CRT_NTT_PRIMES, NttPrime, convolve_linear_crt_ntt, garner_reconstruct_u128, root_for_length,
+};
+// The shared reconstruction scratch and the BFV chain limit are the same bound.
+const _: () = assert!(BFV_RNS_MODULUS_CHAIN_MAX_LIMBS == fhe_rns::MAX_CRT_LIMBS);
 type BfvBlake2b256 = Blake2b<U32>;
 macro_rules! invalid {
     ($($arg:tt)*) => {
@@ -1727,36 +1754,6 @@ pub fn bfv_balanced_multiplication_depth(input_count: usize) -> Result<u16, BfvE
     }
     Ok(depth)
 }
-#[cfg(feature = "bfv-accel")]
-#[derive(Clone, Copy, Debug)]
-struct NttPrime {
-    modulus: u64,
-    primitive_root: u64,
-    max_power_of_two: u32,
-}
-#[cfg(feature = "bfv-accel")]
-const CRT_NTT_PRIMES: [NttPrime; 4] = [
-    NttPrime {
-        modulus: 4_293_918_721,
-        primitive_root: 19,
-        max_power_of_two: 20,
-    },
-    NttPrime {
-        modulus: 4_292_804_609,
-        primitive_root: 3,
-        max_power_of_two: 16,
-    },
-    NttPrime {
-        modulus: 4_292_149_249,
-        primitive_root: 14,
-        max_power_of_two: 16,
-    },
-    NttPrime {
-        modulus: 4_292_018_177,
-        primitive_root: 5,
-        max_power_of_two: 16,
-    },
-];
 /// Polynomial multiplication backend selected for BFV ring products.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BfvConvolutionBackend {
@@ -1846,12 +1843,7 @@ impl BfvParameters {
             if convolution_len == 0 {
                 return BfvConvolutionBackend::ScalarSchoolbook;
             }
-            let required_log = convolution_len.ilog2();
-            if convolution_len.is_power_of_two()
-                && CRT_NTT_PRIMES
-                    .iter()
-                    .all(|prime| prime.max_power_of_two >= required_log)
-            {
+            if fhe_ntt::crt_ntt_supports_convolution_len(convolution_len) {
                 return BfvConvolutionBackend::CrtNtt;
             }
         }
@@ -2019,17 +2011,9 @@ impl BfvRnsModulusChain {
     ) -> Result<BfvRnsPolynomial, BfvError> {
         self.validate_for_parameters(params)?;
         validate_poly(params, coefficients, "RNS source polynomial")?;
-        let residues_by_limb = self
-            .moduli
-            .iter()
-            .map(|&modulus| {
-                coefficients
-                    .iter()
-                    .map(|&coefficient| coefficient % modulus)
-                    .collect()
-            })
-            .collect();
-        Ok(BfvRnsPolynomial { residues_by_limb })
+        Ok(BfvRnsPolynomial {
+            residues_by_limb: fhe_rns::decompose(coefficients, &self.moduli),
+        })
     }
     /// Decompose a `Z_q` polynomial into centered limb-major RNS residues.
     ///
@@ -2046,19 +2030,13 @@ impl BfvRnsModulusChain {
     ) -> Result<BfvRnsPolynomial, BfvError> {
         self.validate_for_parameters(params)?;
         validate_poly(params, coefficients, "centered RNS source polynomial")?;
-        let residues_by_limb = self
-            .moduli
-            .iter()
-            .map(|&modulus| {
-                coefficients
-                    .iter()
-                    .map(|&coefficient| {
-                        mod_q(center_lift(coefficient, params.ciphertext_modulus), modulus)
-                    })
-                    .collect()
-            })
-            .collect();
-        Ok(BfvRnsPolynomial { residues_by_limb })
+        Ok(BfvRnsPolynomial {
+            residues_by_limb: fhe_rns::decompose_centered(
+                coefficients,
+                params.ciphertext_modulus,
+                &self.moduli,
+            ),
+        })
     }
     /// Decompose a key-switch component into base digits in this RNS chain.
     ///
@@ -2103,18 +2081,8 @@ impl BfvRnsModulusChain {
     ) -> Result<Vec<u128>, BfvError> {
         self.validate_for_parameters(params)?;
         validate_rns_polynomial(params, self, polynomial)?;
-        let mut coefficients = Vec::with_capacity(params.degree());
-        let mut residues = [0_u64; BFV_RNS_MODULUS_CHAIN_MAX_LIMBS];
-        for index in 0..params.degree() {
-            for (limb_index, limb) in polynomial.residues_by_limb.iter().enumerate() {
-                residues[limb_index] = limb[index];
-            }
-            coefficients.push(reconstruct_rns_coefficient(
-                &residues[..self.moduli.len()],
-                &self.moduli,
-            )?);
-        }
-        Ok(coefficients)
+        fhe_rns::reconstruct_polynomial(&polynomial.residues_by_limb, &self.moduli, params.degree())
+            .map_err(bfv_rns_error)
     }
     /// Extend an RNS polynomial from this chain into another modulus chain.
     ///
@@ -2144,17 +2112,10 @@ impl BfvRnsModulusChain {
         );
         validate_rns_polynomial(params, self, polynomial)?;
         let coefficients = self.reconstruct_polynomial(params, polynomial)?;
-        let residues_by_limb = target_chain
-            .moduli
-            .iter()
-            .map(|&modulus| {
-                coefficients
-                    .iter()
-                    .map(|&coefficient| reduce_u128_to_u64_mod(coefficient, modulus))
-                    .collect::<Result<Vec<_>, BfvError>>()
-            })
-            .collect::<Result<Vec<_>, BfvError>>()?;
-        let output = BfvRnsPolynomial { residues_by_limb };
+        let output = BfvRnsPolynomial {
+            residues_by_limb: fhe_rns::reduce_into_limbs(&coefficients, &target_chain.moduli)
+                .map_err(bfv_rns_error)?,
+        };
         validate_rns_polynomial(params, target_chain, &output)?;
         Ok(output)
     }
@@ -2181,74 +2142,15 @@ impl BfvRnsModulusChain {
         self.validate_for_parameters(params)?;
         target_chain.validate_for_parameters(params)?;
         validate_rns_polynomial(params, self, polynomial)?;
-        let source_product = self.product()?;
-        let source_limb_data = self
-            .moduli
-            .iter()
-            .map(|&source_modulus| {
-                let source_basis = source_product / u128::from(source_modulus);
-                let source_basis_mod_source = reduce_u128_to_u64_mod(source_basis, source_modulus)?;
-                let inverse = mod_inv_prime_u64(source_basis_mod_source, source_modulus)
-                    .ok_or_else(|| {
-                        invalid!(
-                            "BFV RNS basis-extension source limb {source_modulus} is not invertible"
-                        )
-                    })?;
-                Ok((source_modulus, source_basis, inverse))
-            })
-            .collect::<Result<Vec<_>, BfvError>>()?;
-        let mut residues_by_limb =
-            vec![Vec::with_capacity(params.degree()); target_chain.moduli.len()];
-        for coefficient_index in 0..params.degree() {
-            let mut quotient = 0_u128;
-            let mut remainder = 0_u128;
-            let mut crt_digits = Vec::with_capacity(source_limb_data.len());
-            for (source_limb_index, &(source_modulus, source_basis, inverse)) in
-                source_limb_data.iter().enumerate()
-            {
-                let residue = polynomial.residues_by_limb[source_limb_index][coefficient_index];
-                let crt_digit = mul_mod_u64(residue, inverse, source_modulus);
-                let term = source_basis
-                    .checked_mul(u128::from(crt_digit))
-                    .ok_or_else(|| invalid!("BFV RNS basis-extension CRT term exceeds u128"))?;
-                if remainder >= source_product - term {
-                    remainder -= source_product - term;
-                    quotient = quotient
-                        .checked_add(1)
-                        .ok_or_else(|| invalid!("BFV RNS basis-extension quotient exceeds u128"))?;
-                } else {
-                    remainder += term;
-                }
-                crt_digits.push((crt_digit, source_basis));
-            }
-            for (target_limb_index, &target_modulus) in target_chain.moduli.iter().enumerate() {
-                let mut target_residue = 0_u64;
-                for &(crt_digit, source_basis) in &crt_digits {
-                    let digit_mod_target =
-                        reduce_u128_to_u64_mod(u128::from(crt_digit), target_modulus)?;
-                    let basis_mod_target = reduce_u128_to_u64_mod(source_basis, target_modulus)?;
-                    target_residue = add_mod_u64(
-                        target_residue,
-                        mul_mod_u64(digit_mod_target, basis_mod_target, target_modulus),
-                        target_modulus,
-                    );
-                }
-                let quotient_mod_target = reduce_u128_to_u64_mod(quotient, target_modulus)?;
-                let source_product_mod_target =
-                    reduce_u128_to_u64_mod(source_product, target_modulus)?;
-                let correction = mul_mod_u64(
-                    quotient_mod_target,
-                    source_product_mod_target,
-                    target_modulus,
-                );
-                residues_by_limb[target_limb_index].push(sub_mod_u64(
-                    target_residue,
-                    correction,
-                    target_modulus,
-                ));
-            }
-        }
-        let output = BfvRnsPolynomial { residues_by_limb };
+        let output = BfvRnsPolynomial {
+            residues_by_limb: fhe_rns::basis_extend_target_limbs(
+                &polynomial.residues_by_limb,
+                &self.moduli,
+                &target_chain.moduli,
+                params.degree(),
+            )
+            .map_err(bfv_rns_error)?,
+        };
         validate_rns_polynomial(params, target_chain, &output)?;
         Ok(output)
     }
@@ -2276,23 +2178,14 @@ impl BfvRnsModulusChain {
         validate_rns_polynomial(params, self, polynomial)?;
         let source_product = self.product()?;
         let coefficients = self.reconstruct_polynomial(params, polynomial)?;
-        let residues_by_limb = target_chain
-            .moduli
-            .iter()
-            .map(|&modulus| {
-                coefficients
-                    .iter()
-                    .map(|&coefficient| {
-                        reduce_centered_source_residue_to_u64_mod(
-                            coefficient,
-                            source_product,
-                            modulus,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, BfvError>>()
-            })
-            .collect::<Result<Vec<_>, BfvError>>()?;
-        let output = BfvRnsPolynomial { residues_by_limb };
+        let output = BfvRnsPolynomial {
+            residues_by_limb: fhe_rns::reduce_centered_into_limbs(
+                &coefficients,
+                source_product,
+                &target_chain.moduli,
+            )
+            .map_err(bfv_rns_error)?,
+        };
         validate_rns_polynomial(params, target_chain, &output)?;
         Ok(output)
     }
@@ -2336,17 +2229,10 @@ impl BfvRnsModulusChain {
                 )));
             }
         }
-        let residues_by_limb = target_chain
-            .moduli
-            .iter()
-            .map(|&modulus| {
-                coefficients
-                    .iter()
-                    .map(|&coefficient| reduce_u128_to_u64_mod(coefficient, modulus))
-                    .collect::<Result<Vec<_>, BfvError>>()
-            })
-            .collect::<Result<Vec<_>, BfvError>>()?;
-        let output = BfvRnsPolynomial { residues_by_limb };
+        let output = BfvRnsPolynomial {
+            residues_by_limb: fhe_rns::reduce_into_limbs(&coefficients, &target_chain.moduli)
+                .map_err(bfv_rns_error)?,
+        };
         validate_rns_polynomial(params, target_chain, &output)?;
         Ok(output)
     }
@@ -2361,20 +2247,13 @@ impl BfvRnsModulusChain {
         rhs: &BfvRnsPolynomial,
     ) -> Result<BfvRnsPolynomial, BfvError> {
         validate_rns_polynomial_pair(params, self, lhs, rhs)?;
-        let residues_by_limb = lhs
-            .residues_by_limb
-            .iter()
-            .zip(&rhs.residues_by_limb)
-            .zip(&self.moduli)
-            .map(|((lhs_limb, rhs_limb), &modulus)| {
-                lhs_limb
-                    .iter()
-                    .zip(rhs_limb)
-                    .map(|(&left, &right)| add_mod_u64(left, right, modulus))
-                    .collect()
-            })
-            .collect();
-        Ok(BfvRnsPolynomial { residues_by_limb })
+        Ok(BfvRnsPolynomial {
+            residues_by_limb: fhe_rns::add_limbs(
+                &lhs.residues_by_limb,
+                &rhs.residues_by_limb,
+                &self.moduli,
+            ),
+        })
     }
     /// Multiply two RNS polynomials in `Z_Q[x] / (x^n + 1)`.
     ///
@@ -9174,24 +9053,12 @@ fn normalize_packed_rotation_steps(
 }
 fn canonical_galois_automorphism_powers(params: &BfvParameters) -> Result<Vec<u32>, BfvError> {
     packed_plaintext_root(params)?;
-    let degree = params.degree();
-    let cyclotomic_order = degree
-        .checked_mul(2)
-        .ok_or_else(|| invalid!("BFV packed-slot cyclotomic order exceeds deterministic bounds"))?;
-    let cyclotomic_order_u64 = u64::try_from(cyclotomic_order)
-        .map_err(|_| invalid!("BFV packed-slot cyclotomic order exceeds u64"))?;
-    let mut powers = Vec::new();
-    for power in (1..cyclotomic_order).step_by(2) {
-        let power_u64 = u64::try_from(power)
-            .map_err(|_| invalid!("BFV packed-slot Galois power exceeds deterministic bounds"))?;
-        if gcd_u64(power_u64, cyclotomic_order_u64) == 1 {
-            powers.push(
-                u32::try_from(power)
-                    .map_err(|_| invalid!("BFV packed-slot Galois power exceeds u32"))?,
-            );
+    fhe_automorphism::unit_powers(params.degree()).map_err(|error| match error {
+        AutomorphismError::PowerExceedsU32 => {
+            invalid!("BFV packed-slot Galois power exceeds u32")
         }
-    }
-    Ok(powers)
+        _ => invalid!("BFV packed-slot cyclotomic order exceeds deterministic bounds"),
+    })
 }
 /// Derive a deterministic one-round public bootstrap refresh key from a BFV public key.
 ///
@@ -34085,23 +33952,20 @@ fn validate_galois_automorphism_power(
     automorphism_power: u32,
 ) -> Result<usize, BfvError> {
     params.validate()?;
-    let cyclotomic_order = params
-        .degree()
-        .checked_mul(2)
-        .ok_or_else(|| invalid!("BFV Galois automorphism order exceeds deterministic bounds"))?;
-    let power = usize::try_from(automorphism_power)
-        .map_err(|_| invalid!("BFV Galois automorphism power exceeds platform usize"))?;
-    invalid_if!(
-        power == 0 || power >= cyclotomic_order,
-        "BFV Galois automorphism power must be in 1..{cyclotomic_order}"
-    );
-    let cyclotomic_order_u64 = u64::try_from(cyclotomic_order)
-        .map_err(|_| invalid!("BFV Galois automorphism order exceeds deterministic bounds"))?;
-    invalid_if!(
-        gcd_u64(u64::from(automorphism_power), cyclotomic_order_u64) != 1,
-        "BFV Galois automorphism power must be coprime to 2 * polynomial_degree"
-    );
-    Ok(power)
+    fhe_automorphism::validate_power(params.degree(), automorphism_power).map_err(|error| {
+        match error {
+            AutomorphismError::PowerExceedsUsize => {
+                invalid!("BFV Galois automorphism power exceeds platform usize")
+            }
+            AutomorphismError::PowerOutOfRange { cyclotomic_order } => {
+                invalid!("BFV Galois automorphism power must be in 1..{cyclotomic_order}")
+            }
+            AutomorphismError::PowerNotCoprime => {
+                invalid!("BFV Galois automorphism power must be coprime to 2 * polynomial_degree")
+            }
+            _ => invalid!("BFV Galois automorphism order exceeds deterministic bounds"),
+        }
+    })
 }
 pub(crate) fn validate_ciphertext(
     params: &BfvParameters,
@@ -37002,39 +36866,46 @@ fn validate_bfv_rns_modulus_chain_with_root_candidate_limit(
     root_candidate_limit: u64,
 ) -> Result<u128, BfvError> {
     params.validate()?;
-    invalid_if!(
-        chain.moduli.len() > BFV_RNS_MODULUS_CHAIN_MAX_LIMBS,
-        "BFV RNS modulus chain supports at most {BFV_RNS_MODULUS_CHAIN_MAX_LIMBS} limbs"
-    );
     let root_order = bfv_negacyclic_ntt_root_order(params)?;
-    let mut previous = 0_u64;
-    for (index, &modulus) in chain.moduli.iter().enumerate() {
-        invalid_guards! {
-            modulus <= params.plaintext_modulus
-            => ("BFV RNS modulus limb {index} must exceed plaintext modulus {}",
-                params.plaintext_modulus),
-            modulus.is_multiple_of(2) => ("BFV RNS modulus limb {index} must be odd"),
-            index > 0 && modulus <= previous => ("BFV RNS modulus limbs must be strictly increasing"
-            ),
-            !is_prime_u64(modulus) => ("BFV RNS modulus limb {index} must be prime"),
-            !(modulus - 1).is_multiple_of(root_order)
-            => ("BFV RNS modulus limb {index} must be 1 mod {root_order}"),
-            negacyclic_ntt_root_for_order_with_candidate_limit(
-                modulus,
-                root_order,
-                root_candidate_limit,
-            )
-            .is_none() => (
-                "BFV RNS modulus limb {index} has no supported primitive {root_order}-th negacyclic NTT root"
-            ),
-            chain.moduli[..index]
-            .iter()
-            .any(|&prior| gcd_u64(prior, modulus) != 1)
-            => ("BFV RNS modulus limbs must be pairwise coprime"),
+    let product = fhe_rns::validate_ntt_modulus_chain(
+        &chain.moduli,
+        BFV_RNS_MODULUS_CHAIN_MAX_LIMBS,
+        params.plaintext_modulus,
+        root_order,
+        |modulus, order| {
+            negacyclic_ntt_root_for_order_with_candidate_limit(modulus, order, root_candidate_limit)
+        },
+    )
+    .map_err(|error| match error {
+        ModulusChainError::TooManyLimbs { max_limbs } => {
+            invalid!("BFV RNS modulus chain supports at most {max_limbs} limbs")
         }
-        previous = modulus;
-    }
-    let product = checked_rns_modulus_product(&chain.moduli)?;
+        ModulusChainError::LimbNotAboveBound { index, bound } => {
+            invalid!("BFV RNS modulus limb {index} must exceed plaintext modulus {bound}")
+        }
+        ModulusChainError::EvenLimb { index } => {
+            invalid!("BFV RNS modulus limb {index} must be odd")
+        }
+        ModulusChainError::NotStrictlyIncreasing { .. } => {
+            invalid!("BFV RNS modulus limbs must be strictly increasing")
+        }
+        ModulusChainError::CompositeLimb { index } => {
+            invalid!("BFV RNS modulus limb {index} must be prime")
+        }
+        ModulusChainError::LimbNotOneModOrder { index, root_order } => {
+            invalid!("BFV RNS modulus limb {index} must be 1 mod {root_order}")
+        }
+        ModulusChainError::NoSupportedRoot { index, root_order } => invalid!(
+            "BFV RNS modulus limb {index} has no supported primitive {root_order}-th negacyclic NTT root"
+        ),
+        ModulusChainError::NotPairwiseCoprime { .. } => {
+            invalid!("BFV RNS modulus limbs must be pairwise coprime")
+        }
+        ModulusChainError::Empty => invalid!("BFV RNS modulus chain must not be empty"),
+        ModulusChainError::ProductOverflow => {
+            invalid!("BFV RNS modulus-chain product exceeds u128")
+        }
+    })?;
     invalid_if!(
         product < u128::from(params.ciphertext_modulus),
         "BFV RNS modulus-chain product {product} does not cover ciphertext modulus {}",
@@ -37230,12 +37101,44 @@ fn bfv_centered_scale_round_source_chain_for_evaluator(
     Ok(chain)
 }
 fn checked_rns_modulus_product(moduli: &[u64]) -> Result<u128, BfvError> {
-    invalid_if!(moduli.is_empty(), "BFV RNS modulus chain must not be empty");
-    moduli.iter().try_fold(1_u128, |product, &modulus| {
-        product
-            .checked_mul(u128::from(modulus))
-            .ok_or_else(|| invalid!("BFV RNS modulus-chain product exceeds u128"))
-    })
+    fhe_rns::checked_modulus_product(moduli).map_err(bfv_rns_error)
+}
+/// Translate a shared RNS kernel failure into the BFV diagnostic for that condition.
+fn bfv_rns_error(error: RnsError) -> BfvError {
+    match error {
+        RnsError::EmptyChain => invalid!("BFV RNS modulus chain must not be empty"),
+        RnsError::ProductOverflow => invalid!("BFV RNS modulus-chain product exceeds u128"),
+        RnsError::ZeroModulus => {
+            invalid!("BFV RNS reconstructed coefficient reduction exceeds u64")
+        }
+        RnsError::ResidueCountMismatch { expected, found } => BfvError::ShapeMismatch(format!(
+            "RNS coefficient expected {expected} residues, found {found}"
+        )),
+        RnsError::TooManyLimbs { max_limbs } => {
+            invalid!("RNS coefficient exceeds supported limb count {max_limbs}")
+        }
+        RnsError::ShortLimb { limb_index } => BfvError::ShapeMismatch(format!(
+            "RNS polynomial limb {limb_index} is shorter than polynomial_degree"
+        )),
+        RnsError::ReconstructionOverflow => {
+            invalid!("RNS coefficient reconstruction exceeds u128")
+        }
+        RnsError::LimbNotInvertible { modulus } => {
+            invalid!("BFV RNS basis-extension source limb {modulus} is not invertible")
+        }
+        RnsError::CrtTermOverflow => invalid!("BFV RNS basis-extension CRT term exceeds u128"),
+        RnsError::QuotientOverflow => invalid!("BFV RNS basis-extension quotient exceeds u128"),
+        RnsError::CenteredSourceExceedsProduct => {
+            invalid!("BFV RNS centered source residue exceeds source-chain product")
+        }
+        RnsError::CenteredExceedsI128 => invalid!("BFV RNS centered reconstruction exceeds i128"),
+        RnsError::CenteredExceedsProduct => {
+            invalid!("BFV RNS centered reconstruction exceeds modulus-chain product")
+        }
+        RnsError::CenteredExceedsBound => {
+            invalid!("BFV RNS centered reconstruction exceeds exact negacyclic product bound")
+        }
+    }
 }
 fn validate_rns_exact_lift_product_bound(
     params: &BfvParameters,
@@ -37326,28 +37229,8 @@ fn exact_ciphertext_modulus_negacyclic_product_sum_rns_bound(
         })
 }
 fn reduce_u128_to_u64_mod(value: u128, modulus: u64) -> Result<u64, BfvError> {
-    u64::try_from(value % u128::from(modulus))
-        .map_err(|_| invalid!("BFV RNS reconstructed coefficient reduction exceeds u64"))
-}
-fn reduce_centered_source_residue_to_u64_mod(
-    value: u128,
-    source_product: u128,
-    target_modulus: u64,
-) -> Result<u64, BfvError> {
-    invalid_if!(
-        value >= source_product,
-        "BFV RNS centered source residue exceeds source-chain product"
-    );
-    if value <= source_product / 2 {
-        return reduce_u128_to_u64_mod(value, target_modulus);
-    }
-    let negative_magnitude = source_product - value;
-    let residue = reduce_u128_to_u64_mod(negative_magnitude, target_modulus)?;
-    if residue == 0 {
-        Ok(0)
-    } else {
-        Ok(target_modulus - residue)
-    }
+    fhe_modular::reduce_u128_to_u64_mod(value, modulus)
+        .ok_or_else(|| invalid!("BFV RNS reconstructed coefficient reduction exceeds u64"))
 }
 fn reduce_centered_rns_value_to_u64_mod(
     value: u128,
@@ -37355,44 +37238,16 @@ fn reduce_centered_rns_value_to_u64_mod(
     centered_abs_bound: u128,
     modulus: u64,
 ) -> Result<u64, BfvError> {
-    if value <= centered_abs_bound {
-        return reduce_u128_to_u64_mod(value, modulus);
-    }
-    let negative_magnitude = rns_product
-        .checked_sub(value)
-        .ok_or_else(|| invalid!("BFV RNS centered reconstruction exceeds modulus-chain product"))?;
-    invalid_if!(
-        negative_magnitude > centered_abs_bound,
-        "BFV RNS centered reconstruction exceeds exact negacyclic product bound"
-    );
-    let residue = reduce_u128_to_u64_mod(negative_magnitude, modulus)?;
-    if residue == 0 {
-        Ok(0)
-    } else {
-        Ok(modulus - residue)
-    }
+    fhe_rns::reduce_centered_value_to_u64_mod(value, rns_product, centered_abs_bound, modulus)
+        .map_err(bfv_rns_error)
 }
 fn reduce_centered_rns_value_to_i128(
     value: u128,
     rns_product: u128,
     centered_abs_bound: u128,
 ) -> Result<i128, BfvError> {
-    if value <= centered_abs_bound {
-        return i128::try_from(value)
-            .map_err(|_| invalid!("BFV RNS centered reconstruction exceeds i128"));
-    }
-    let negative_magnitude = rns_product
-        .checked_sub(value)
-        .ok_or_else(|| invalid!("BFV RNS centered reconstruction exceeds modulus-chain product"))?;
-    invalid_if!(
-        negative_magnitude > centered_abs_bound,
-        "BFV RNS centered reconstruction exceeds exact negacyclic product bound"
-    );
-    let magnitude = i128::try_from(negative_magnitude)
-        .map_err(|_| invalid!("BFV RNS centered reconstruction exceeds i128"))?;
-    magnitude
-        .checked_neg()
-        .ok_or_else(|| invalid!("BFV RNS centered reconstruction exceeds i128"))
+    fhe_rns::reduce_centered_value_to_i128(value, rns_product, centered_abs_bound)
+        .map_err(bfv_rns_error)
 }
 fn validate_rns_polynomial(
     params: &BfvParameters,
@@ -37489,21 +37344,7 @@ fn multiply_rns_limb_negacyclic_scalar(
     rhs: &[u64],
     modulus: u64,
 ) -> Vec<u64> {
-    let degree = params.degree();
-    let mut product = vec![0_u64; degree];
-    for (lhs_index, &lhs_coefficient) in lhs.iter().enumerate() {
-        for (rhs_index, &rhs_coefficient) in rhs.iter().enumerate() {
-            let term = mul_mod_u64(lhs_coefficient, rhs_coefficient, modulus);
-            let raw_index = lhs_index + rhs_index;
-            if raw_index >= degree {
-                let index = raw_index - degree;
-                product[index] = sub_mod_u64(product[index], term, modulus);
-            } else {
-                product[raw_index] = add_mod_u64(product[raw_index], term, modulus);
-            }
-        }
-    }
-    product
+    fhe_polynomial::negacyclic_mul_mod_schoolbook(lhs, rhs, params.degree(), modulus)
 }
 fn try_multiply_rns_limb_negacyclic_ntt(
     params: &BfvParameters,
@@ -37517,18 +37358,7 @@ fn try_multiply_rns_limb_negacyclic_ntt(
     }
     let root_order = u64::try_from(degree.checked_mul(2)?).ok()?;
     let psi = negacyclic_ntt_root_for_order(modulus, root_order)?;
-    let omega = mul_mod_u64(psi, psi, modulus);
-    let inv_psi = mod_inv_prime_u64(psi, modulus)?;
-    let mut lhs_ntt = twist_rns_limb(lhs, psi, modulus);
-    let mut rhs_ntt = twist_rns_limb(rhs, psi, modulus);
-    ntt_in_place_mod(&mut lhs_ntt, omega, modulus, false)?;
-    ntt_in_place_mod(&mut rhs_ntt, omega, modulus, false)?;
-    for (left, right) in lhs_ntt.iter_mut().zip(&rhs_ntt) {
-        *left = mul_mod_u64(*left, *right, modulus);
-    }
-    ntt_in_place_mod(&mut lhs_ntt, omega, modulus, true)?;
-    untwist_rns_limb(&mut lhs_ntt, inv_psi, modulus);
-    Some(lhs_ntt)
+    fhe_ntt::negacyclic_multiply_ntt(lhs, rhs, psi, modulus)
 }
 fn negacyclic_ntt_root_for_order(modulus: u64, order: u64) -> Option<u64> {
     negacyclic_ntt_root_for_order_with_candidate_limit(
@@ -37564,15 +37394,6 @@ fn registered_ram_lfe_negacyclic_ntt_root_index(modulus: u64, order: u64) -> Opt
         .iter()
         .position(|&registered_modulus| registered_modulus == modulus)
 }
-fn is_primitive_root_of_order(modulus: u64, root: u64, order: u64) -> bool {
-    order > 1
-        && order.is_multiple_of(2)
-        && modulus > 2
-        && root > 1
-        && root < modulus
-        && mod_pow_u64(root, order, modulus) == 1
-        && mod_pow_u64(root, order / 2, modulus) == modulus - 1
-}
 fn primitive_root_of_order(modulus: u64, order: u64) -> Option<u64> {
     primitive_root_of_order_with_candidate_limit(
         modulus,
@@ -37580,196 +37401,8 @@ fn primitive_root_of_order(modulus: u64, order: u64) -> Option<u64> {
         BFV_PRIMITIVE_ROOT_DISCOVERY_MAX_CANDIDATES,
     )
 }
-fn primitive_root_of_order_with_candidate_limit(
-    modulus: u64,
-    order: u64,
-    max_candidate: u64,
-) -> Option<u64> {
-    if order <= 1 || modulus <= 2 || max_candidate < 2 || !(modulus - 1).is_multiple_of(order) {
-        return None;
-    }
-    let exponent = (modulus - 1) / order;
-    let half_order = order / 2;
-    for candidate in 2..=max_candidate.min(modulus - 1) {
-        let root = mod_pow_u64(candidate, exponent, modulus);
-        if root != 1
-            && mod_pow_u64(root, order, modulus) == 1
-            && mod_pow_u64(root, half_order, modulus) == modulus - 1
-        {
-            return Some(root);
-        }
-    }
-    None
-}
-fn twist_rns_limb(coefficients: &[u64], psi: u64, modulus: u64) -> Vec<u64> {
-    let mut power = 1_u64;
-    coefficients
-        .iter()
-        .map(|&coefficient| {
-            let twisted = mul_mod_u64(coefficient, power, modulus);
-            power = mul_mod_u64(power, psi, modulus);
-            twisted
-        })
-        .collect()
-}
-fn untwist_rns_limb(coefficients: &mut [u64], inv_psi: u64, modulus: u64) {
-    let mut power = 1_u64;
-    for coefficient in coefficients {
-        *coefficient = mul_mod_u64(*coefficient, power, modulus);
-        power = mul_mod_u64(power, inv_psi, modulus);
-    }
-}
-fn ntt_in_place_mod(values: &mut [u64], root: u64, modulus: u64, invert: bool) -> Option<()> {
-    let len = values.len();
-    if len == 0 || !len.is_power_of_two() || modulus <= 2 {
-        return None;
-    }
-    bit_reverse_permute_rns(values);
-    let root = if invert {
-        mod_inv_prime_u64(root, modulus)?
-    } else {
-        root
-    };
-    let mut stage_len = 2_usize;
-    while stage_len <= len {
-        let step = mod_pow_u64(root, u64::try_from(len / stage_len).ok()?, modulus);
-        for chunk in values.chunks_exact_mut(stage_len) {
-            let (lo, hi) = chunk.split_at_mut(stage_len / 2);
-            let mut twiddle = 1_u64;
-            for (left, right) in lo.iter_mut().zip(hi.iter_mut()) {
-                let product = mul_mod_u64(*right, twiddle, modulus);
-                let left_value = *left;
-                *left = add_mod_u64(left_value, product, modulus);
-                *right = sub_mod_u64(left_value, product, modulus);
-                twiddle = mul_mod_u64(twiddle, step, modulus);
-            }
-        }
-        stage_len = stage_len.checked_mul(2)?;
-    }
-    if invert {
-        let inv_len = mod_inv_prime_u64(u64::try_from(len).ok()?, modulus)?;
-        for value in values {
-            *value = mul_mod_u64(*value, inv_len, modulus);
-        }
-    }
-    Some(())
-}
-fn bit_reverse_permute_rns(values: &mut [u64]) {
-    if values.is_empty() {
-        return;
-    }
-    let bits = values.len().ilog2();
-    for index in 0..values.len() {
-        let reversed = index.reverse_bits() >> (usize::BITS - bits);
-        if reversed > index {
-            values.swap(index, reversed);
-        }
-    }
-}
-fn mod_inv_prime_u64(value: u64, modulus: u64) -> Option<u64> {
-    if modulus <= 2 || value.is_multiple_of(modulus) {
-        return None;
-    }
-    Some(mod_pow_u64(value, modulus - 2, modulus))
-}
 fn reconstruct_rns_coefficient(residues: &[u64], moduli: &[u64]) -> Result<u128, BfvError> {
-    if residues.len() != moduli.len() {
-        return Err(BfvError::ShapeMismatch(format!(
-            "RNS coefficient expected {} residues, found {}",
-            moduli.len(),
-            residues.len()
-        )));
-    }
-    invalid_if!(
-        residues.len() > BFV_RNS_MODULUS_CHAIN_MAX_LIMBS,
-        "RNS coefficient exceeds supported limb count {BFV_RNS_MODULUS_CHAIN_MAX_LIMBS}"
-    );
-    let mut mixed = [0_u64; BFV_RNS_MODULUS_CHAIN_MAX_LIMBS];
-    for (index, (&residue, &modulus)) in residues.iter().zip(moduli).enumerate() {
-        let mut coefficient = residue;
-        for (&prior, &prior_modulus) in mixed[..index].iter().zip(moduli.iter()) {
-            coefficient = mul_mod_u64(
-                sub_mod_u64(coefficient, prior, modulus),
-                mod_pow_u64(prior_modulus % modulus, modulus - 2, modulus),
-                modulus,
-            );
-        }
-        mixed[index] = coefficient;
-    }
-    let mut value = 0_u128;
-    let mut weight = 1_u128;
-    for (index, &coefficient) in mixed[..residues.len()].iter().enumerate() {
-        let term = u128::from(coefficient)
-            .checked_mul(weight)
-            .ok_or_else(|| invalid!("RNS coefficient reconstruction exceeds u128"))?;
-        value = value
-            .checked_add(term)
-            .ok_or_else(|| invalid!("RNS coefficient reconstruction exceeds u128"))?;
-        if index + 1 != residues.len() {
-            weight = weight
-                .checked_mul(u128::from(moduli[index]))
-                .ok_or_else(|| invalid!("RNS coefficient reconstruction exceeds u128"))?;
-        }
-    }
-    Ok(value)
-}
-fn is_prime_u64(candidate: u64) -> bool {
-    const SMALL_PRIMES: [u64; 12] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
-    const MILLER_RABIN_BASES: [u64; 7] = [2, 325, 9_375, 28_178, 450_775, 9_780_504, 1_795_265_022];
-    if candidate < 2 {
-        return false;
-    }
-    for prime in SMALL_PRIMES {
-        if candidate == prime {
-            return true;
-        }
-        if candidate.is_multiple_of(prime) {
-            return false;
-        }
-    }
-    let mut odd_factor = candidate - 1;
-    let mut power_of_two = 0_u32;
-    while odd_factor.is_multiple_of(2) {
-        odd_factor /= 2;
-        power_of_two = power_of_two.saturating_add(1);
-    }
-    'base: for base in MILLER_RABIN_BASES {
-        let base = base % candidate;
-        if base == 0 {
-            continue;
-        }
-        let mut witness = mod_pow_u64(base, odd_factor, candidate);
-        if witness == 1 || witness == candidate - 1 {
-            continue;
-        }
-        for _ in 1..power_of_two {
-            witness = mul_mod_u64(witness, witness, candidate);
-            if witness == candidate - 1 {
-                continue 'base;
-            }
-        }
-        return false;
-    }
-    true
-}
-fn mod_pow_u64(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
-    let mut result = 1_u64;
-    while exponent != 0 {
-        if exponent & 1 == 1 {
-            result = mul_mod_u64(result, base, modulus);
-        }
-        base = mul_mod_u64(base, base, modulus);
-        exponent >>= 1;
-    }
-    result
-}
-fn gcd_u64(mut lhs: u64, mut rhs: u64) -> u64 {
-    while rhs != 0 {
-        let remainder = lhs % rhs;
-        lhs = rhs;
-        rhs = remainder;
-    }
-    lhs
+    fhe_rns::reconstruct_coefficient(residues, moduli).map_err(bfv_rns_error)
 }
 fn derive_rng(domain: &[u8], seed: &[u8]) -> ChaCha20Rng {
     let material = Zeroizing::new(<[u8; Hash::LENGTH]>::from(Hash::new_from_chunks(&[
@@ -37875,7 +37508,7 @@ fn derive_identifier_slot_seed(seed: &[u8], index: usize) -> Result<[u8; Hash::L
     Ok(Hash::new_from_chunks(&[IDENTIFIER_SLOT_ENCRYPT_DOMAIN, seed, &index.to_le_bytes()]).into())
 }
 fn zero_poly(params: &BfvParameters) -> Polynomial {
-    vec![0; params.degree()]
+    fhe_polynomial::zero(params.degree())
 }
 fn zero_ciphertext(params: &BfvParameters) -> BfvCiphertext {
     BfvCiphertext {
@@ -38008,17 +37641,17 @@ fn scale_round_raw_product_coefficient(
     coefficient: i128,
 ) -> Result<u64, BfvError> {
     params.validate()?;
-    let numerator = coefficient
-        .unsigned_abs()
-        .checked_mul(u128::from(params.plaintext_modulus))
-        .and_then(|value| value.checked_add(u128::from(params.ciphertext_modulus / 2)))
-        .ok_or_else(|| {
-            invalid!("BFV bounded-noise product scaling exceeds deterministic limits")
-        })?;
-    let rounded = numerator / u128::from(params.ciphertext_modulus);
-    let rounded = i128::try_from(rounded)
-        .map_err(|_| invalid!("BFV bounded-noise scaled product coefficient exceeds i128"))?;
-    let rounded = if coefficient < 0 { -rounded } else { rounded };
+    let rounded = fhe_rounding::scale_round_centered(
+        coefficient,
+        params.plaintext_modulus,
+        params.ciphertext_modulus,
+    )
+    .map_err(|error| match error {
+        RoundingError::RoundedExceedsI128 => {
+            invalid!("BFV bounded-noise scaled product coefficient exceeds i128")
+        }
+        _ => invalid!("BFV bounded-noise product scaling exceeds deterministic limits"),
+    })?;
     Ok(mod_q(rounded, params.ciphertext_modulus))
 }
 fn validate_raw_polynomial_len(
@@ -38044,48 +37677,34 @@ fn poly_mul_centered_raw(
 ) -> Result<Vec<i128>, BfvError> {
     validate_poly(params, lhs, &format!("{label} lhs"))?;
     validate_poly(params, rhs, &format!("{label} rhs"))?;
-    let degree = params.degree();
-    let mut out = vec![0_i128; degree];
-    for (lhs_index, &lhs_coefficient) in lhs.iter().enumerate() {
-        let lhs_centered = center_lift(lhs_coefficient, params.ciphertext_modulus);
-        for (rhs_index, &rhs_coefficient) in rhs.iter().enumerate() {
-            let rhs_centered = center_lift(rhs_coefficient, params.ciphertext_modulus);
-            let product = lhs_centered.checked_mul(rhs_centered).ok_or_else(|| {
-                invalid!("{label} raw product coefficient exceeds deterministic limits")
-            })?;
-            let exponent = lhs_index.checked_add(rhs_index).ok_or_else(|| {
-                invalid!("{label} raw product exponent exceeds deterministic limits")
-            })?;
-            if exponent >= degree {
-                let target = exponent - degree;
-                out[target] = out[target].checked_sub(product).ok_or_else(|| {
-                    invalid!("{label} raw negacyclic subtraction exceeds deterministic limits")
-                })?;
-            } else {
-                out[exponent] = out[exponent].checked_add(product).ok_or_else(|| {
-                    invalid!("{label} raw negacyclic addition exceeds deterministic limits")
-                })?;
-            }
+    fhe_polynomial::negacyclic_mul_centered_raw(
+        lhs,
+        rhs,
+        params.degree(),
+        params.ciphertext_modulus,
+    )
+    .map_err(|error| match error {
+        PolynomialError::ProductOverflow => {
+            invalid!("{label} raw product coefficient exceeds deterministic limits")
         }
-    }
-    Ok(out)
+        PolynomialError::ExponentOverflow => {
+            invalid!("{label} raw product exponent exceeds deterministic limits")
+        }
+        PolynomialError::SubtractionOverflow => {
+            invalid!("{label} raw negacyclic subtraction exceeds deterministic limits")
+        }
+        PolynomialError::AdditionOverflow | PolynomialError::LengthMismatch { .. } => {
+            invalid!("{label} raw negacyclic addition exceeds deterministic limits")
+        }
+    })
 }
 fn poly_add_centered_raw(lhs: &[i128], rhs: &[i128], label: &str) -> Result<Vec<i128>, BfvError> {
-    if lhs.len() != rhs.len() {
-        return Err(BfvError::ShapeMismatch(format!(
-            "{label} raw polynomial length mismatch: {} != {}",
-            lhs.len(),
-            rhs.len()
-        )));
-    }
-    lhs.iter()
-        .zip(rhs)
-        .map(|(&left, &right)| {
-            left.checked_add(right).ok_or_else(|| {
-                invalid!("{label} raw polynomial addition exceeds deterministic limits")
-            })
-        })
-        .collect()
+    fhe_polynomial::add_centered_raw(lhs, rhs).map_err(|error| match error {
+        PolynomialError::LengthMismatch { lhs, rhs } => BfvError::ShapeMismatch(format!(
+            "{label} raw polynomial length mismatch: {lhs} != {rhs}"
+        )),
+        _ => invalid!("{label} raw polynomial addition exceeds deterministic limits"),
+    })
 }
 fn relinearize(
     params: &BfvParameters,
@@ -38112,12 +37731,15 @@ fn key_switch(
         "key switch key",
     )?;
     let digits = decompose_poly(params, switching_component)?;
-    let mut out0 = c0.to_vec();
-    let mut out1 = c1.to_vec();
-    for (digit_poly, entry) in digits.iter().zip(entries) {
-        out0 = poly_add_mod(params, &out0, &poly_mul_mod(params, digit_poly, &entry.b));
-        out1 = poly_add_mod(params, &out1, &poly_mul_mod(params, digit_poly, &entry.a));
-    }
+    let (out0, out1) = fhe_key_switch::digit_inner_product_pair(
+        (c0.to_vec(), c1.to_vec()),
+        &digits,
+        entries
+            .iter()
+            .map(|entry| (entry.b.as_slice(), entry.a.as_slice())),
+        |digit_poly, row| Ok::<_, BfvError>(poly_mul_mod(params, digit_poly, row)),
+        |accumulator, contribution| Ok(poly_add_mod(params, accumulator, contribution)),
+    )?;
     Ok(BfvCiphertext { c0: out0, c1: out1 })
 }
 fn key_switch_from_transformed_secret(
@@ -38337,28 +37959,21 @@ fn key_switch_rns_exact_with_digit_polynomials(
         digit_polynomials,
         "RNS exact key switch digits",
     )?;
-    let mut out0 = c0.to_vec();
-    let mut out1 = c1.to_vec();
-    for (digit_poly, entry) in digit_polynomials.iter().zip(entries) {
-        let out0_contribution = rns_chain
-            .multiply_rns_polynomial_by_ciphertext_modulus_polynomial_negacyclic_exact(
-                params, digit_poly, &entry.b,
-            )?;
-        out0 = rns_chain.add_ciphertext_modulus_polynomials_exact(
-            params,
-            &out0,
-            &out0_contribution,
-        )?;
-        let out1_contribution = rns_chain
-            .multiply_rns_polynomial_by_ciphertext_modulus_polynomial_negacyclic_exact(
-                params, digit_poly, &entry.a,
-            )?;
-        out1 = rns_chain.add_ciphertext_modulus_polynomials_exact(
-            params,
-            &out1,
-            &out1_contribution,
-        )?;
-    }
+    let (out0, out1) = fhe_key_switch::digit_inner_product_pair(
+        (c0.to_vec(), c1.to_vec()),
+        digit_polynomials,
+        entries
+            .iter()
+            .map(|entry| (entry.b.as_slice(), entry.a.as_slice())),
+        |digit_poly, row| {
+            rns_chain.multiply_rns_polynomial_by_ciphertext_modulus_polynomial_negacyclic_exact(
+                params, digit_poly, row,
+            )
+        },
+        |accumulator, contribution| {
+            rns_chain.add_ciphertext_modulus_polynomials_exact(params, accumulator, contribution)
+        },
+    )?;
     Ok(BfvCiphertext { c0: out0, c1: out1 })
 }
 fn apply_galois_automorphism_poly(
@@ -38368,29 +37983,17 @@ fn apply_galois_automorphism_poly(
 ) -> Result<Zeroizing<Polynomial>, BfvError> {
     validate_poly(params, poly, "Galois automorphism polynomial")?;
     let power = validate_galois_automorphism_power(params, automorphism_power)?;
-    let degree = params.degree();
-    let cyclotomic_order = degree
-        .checked_mul(2)
-        .ok_or_else(|| invalid!("BFV Galois automorphism order exceeds deterministic bounds"))?;
     // This helper also transforms secret keys. Own the partial and returned
     // polynomial through every fallible step, including caller-side checks.
     let mut output = Zeroizing::new(zero_poly(params));
-    for (index, &coefficient) in poly.iter().enumerate() {
-        let exponent = index
-            .checked_mul(power)
-            .map(|value| value % cyclotomic_order)
-            .ok_or_else(|| {
+    fhe_automorphism::apply_into(poly, power, params.ciphertext_modulus, &mut output).map_err(
+        |error| match error {
+            AutomorphismError::ExponentOverflow => {
                 invalid!("BFV Galois automorphism exponent exceeds deterministic bounds")
-            })?;
-        if exponent >= degree {
-            let target_index = exponent - degree;
-            output[target_index] =
-                sub_mod_u64(output[target_index], coefficient, params.ciphertext_modulus);
-        } else {
-            output[exponent] =
-                add_mod_u64(output[exponent], coefficient, params.ciphertext_modulus);
-        }
-    }
+            }
+            _ => invalid!("BFV Galois automorphism order exceeds deterministic bounds"),
+        },
+    )?;
     Ok(output)
 }
 fn packed_plaintext_evaluation_points(params: &BfvParameters) -> Result<Vec<u64>, BfvError> {
@@ -38442,50 +38045,28 @@ fn evaluate_plaintext_polynomial_mod(coefficients: &[u64], point: u64, modulus: 
 }
 fn decompose_poly(params: &BfvParameters, poly: &[u64]) -> Result<Vec<Polynomial>, BfvError> {
     let digits = params.decomposition_digits()?;
-    let base = params.decomposition_base();
-    let mut output = vec![zero_poly(params); digits];
-    for (coeff_index, &coefficient) in poly.iter().enumerate() {
-        let mut value = coefficient;
-        for digit_poly in &mut output {
-            digit_poly[coeff_index] = value % base;
-            value /= base;
-        }
-    }
-    Ok(output)
+    fhe_key_switch::decompose_digits(poly, params.degree(), params.decomposition_base(), digits)
+        .ok_or_else(|| {
+            BfvError::ShapeMismatch(
+                "BFV decomposition polynomial exceeds polynomial_degree".to_owned(),
+            )
+        })
 }
 fn poly_add_mod(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Polynomial {
-    lhs.iter()
-        .zip(rhs)
-        .map(|(&left, &right)| add_mod_u64(left, right, params.ciphertext_modulus))
-        .collect()
+    fhe_polynomial::add_mod(lhs, rhs, params.ciphertext_modulus)
 }
 fn poly_sub_mod(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Polynomial {
-    lhs.iter()
-        .zip(rhs)
-        .map(|(&left, &right)| sub_mod_u64(left, right, params.ciphertext_modulus))
-        .collect()
+    fhe_polynomial::sub_mod(lhs, rhs, params.ciphertext_modulus)
 }
 fn poly_neg_mod(params: &BfvParameters, poly: &[u64]) -> Polynomial {
-    poly.iter()
-        .map(|&coefficient| {
-            if coefficient == 0 {
-                0
-            } else {
-                params.ciphertext_modulus - coefficient
-            }
-        })
-        .collect()
+    fhe_polynomial::neg_mod(poly, params.ciphertext_modulus)
 }
 fn poly_scalar_mul_mod(params: &BfvParameters, poly: &[u64], scalar: u64) -> Polynomial {
-    poly.iter()
-        .map(|&coefficient| mul_mod_u64(coefficient, scalar, params.ciphertext_modulus))
-        .collect()
+    fhe_polynomial::scalar_mul_mod(poly, scalar, params.ciphertext_modulus)
 }
 fn poly_mul_mod(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Polynomial {
     let raw = Zeroizing::new(poly_mul_raw(params, lhs, rhs));
-    raw.iter()
-        .map(|&coefficient| mod_q(coefficient, params.ciphertext_modulus))
-        .collect()
+    fhe_polynomial::reduce_raw_mod(&raw, params.ciphertext_modulus)
 }
 fn poly_mul_raw(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
     #[cfg(feature = "bfv-accel")]
@@ -38495,33 +38076,7 @@ fn poly_mul_raw(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
     poly_mul_raw_scalar(params, lhs, rhs)
 }
 fn poly_mul_raw_scalar(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
-    let lhs = Zeroizing::new(
-        lhs.iter()
-            .map(|&value| i128::from(value))
-            .collect::<Vec<_>>(),
-    );
-    let rhs = Zeroizing::new(
-        rhs.iter()
-            .map(|&value| i128::from(value))
-            .collect::<Vec<_>>(),
-    );
-    poly_mul_raw_scalar_i128(params, &lhs, &rhs)
-}
-fn poly_mul_raw_scalar_i128(params: &BfvParameters, lhs: &[i128], rhs: &[i128]) -> Vec<i128> {
-    let n = params.degree();
-    let mut acc = Zeroizing::new(vec![0_i128; n]);
-    for (i, &left) in lhs.iter().enumerate() {
-        for (j, &right) in rhs.iter().enumerate() {
-            let index = i + j;
-            let term = left * right;
-            if index < n {
-                acc[index] += term;
-            } else {
-                acc[index - n] -= term;
-            }
-        }
-    }
-    std::mem::take(&mut *acc)
+    fhe_polynomial::negacyclic_mul_raw_schoolbook(lhs, rhs, params.degree())
 }
 #[cfg(feature = "bfv-accel")]
 fn poly_mul_raw_crt_ntt(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
@@ -38534,268 +38089,31 @@ fn try_poly_mul_raw_crt_ntt(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) ->
     if n == 0 || lhs.len() != n || rhs.len() != n {
         return None;
     }
-    let linear = Zeroizing::new(convolve_linear_crt_ntt(lhs, rhs)?);
-    let mut folded = Zeroizing::new(vec![0_i128; n]);
-    for (index, slot) in folded.iter_mut().enumerate() {
-        let low = i128::try_from(*linear.get(index)?).ok()?;
-        let high = i128::try_from(*linear.get(index + n)?).ok()?;
-        *slot = low - high;
-    }
-    Some(std::mem::take(&mut *folded))
+    fhe_ntt::negacyclic_product_raw_crt_ntt(lhs, rhs)
 }
-#[cfg(feature = "bfv-accel")]
-fn convolve_linear_crt_ntt(lhs: &[u64], rhs: &[u64]) -> Option<Vec<u128>> {
-    let len = lhs.len().checked_mul(2)?;
-    if len == 0 || !len.is_power_of_two() {
-        return None;
-    }
-    let required_log = len.ilog2();
-    let mut residues = Zeroizing::new(Vec::with_capacity(CRT_NTT_PRIMES.len()));
-    for prime in CRT_NTT_PRIMES {
-        if required_log > prime.max_power_of_two {
-            return None;
-        }
-        residues.push(convolve_linear_mod_prime(lhs, rhs, len, prime)?);
-    }
-    let mut output = Zeroizing::new(Vec::with_capacity(len));
-    for index in 0..len {
-        let coeffs = Zeroizing::new([
-            residues[0][index],
-            residues[1][index],
-            residues[2][index],
-            residues[3][index],
-        ]);
-        output.push(garner_reconstruct_u128(&*coeffs, &CRT_NTT_PRIMES)?);
-    }
-    Some(std::mem::take(&mut *output))
-}
-#[cfg(feature = "bfv-accel")]
-fn convolve_linear_mod_prime(
-    lhs: &[u64],
-    rhs: &[u64],
-    len: usize,
-    prime: NttPrime,
-) -> Option<Vec<u64>> {
-    if len == 0 || !len.is_power_of_two() || len.ilog2() > prime.max_power_of_two {
-        return None;
-    }
-    let modulus = prime.modulus;
-    let mut lhs_ntt = Zeroizing::new(vec![0_u64; len]);
-    let mut rhs_ntt = Zeroizing::new(vec![0_u64; len]);
-    for (slot, &coefficient) in lhs_ntt.iter_mut().zip(lhs) {
-        *slot = coefficient % modulus;
-    }
-    for (slot, &coefficient) in rhs_ntt.iter_mut().zip(rhs) {
-        *slot = coefficient % modulus;
-    }
-    ntt_in_place(&mut lhs_ntt, prime, false)?;
-    ntt_in_place(&mut rhs_ntt, prime, false)?;
-    for (left, right) in lhs_ntt.iter_mut().zip(rhs_ntt.iter()) {
-        *left = mul_mod_prime(*left, *right, modulus);
-    }
-    ntt_in_place(&mut lhs_ntt, prime, true)?;
-    Some(std::mem::take(&mut *lhs_ntt))
-}
-#[cfg(feature = "bfv-accel")]
-fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) -> Option<()> {
-    let len = values.len();
-    let modulus = prime.modulus;
-    let root = root_for_length(prime, len)?;
-    bit_reverse_permute(values);
-    let root = if invert {
-        mod_inv_prime(root, modulus)
-    } else {
-        root
-    };
-    let mut stage_len = 2_usize;
-    while stage_len <= len {
-        let step = mod_pow_prime(root, u64::try_from(len / stage_len).ok()?, modulus);
-        for chunk in values.chunks_exact_mut(stage_len) {
-            let (lo, hi) = chunk.split_at_mut(stage_len / 2);
-            let mut twiddle = 1_u64;
-            for (left, right) in lo.iter_mut().zip(hi.iter_mut()) {
-                let product = mul_mod_prime(*right, twiddle, modulus);
-                let left_value = *left;
-                *left = add_mod_prime(left_value, product, modulus);
-                *right = sub_mod_prime(left_value, product, modulus);
-                twiddle = mul_mod_prime(twiddle, step, modulus);
-            }
-        }
-        stage_len = match stage_len.checked_mul(2) {
-            Some(next) => next,
-            None => break,
-        };
-    }
-    if invert {
-        let inv_len = mod_inv_prime(u64::try_from(len).ok()?, modulus);
-        for value in values {
-            *value = mul_mod_prime(*value, inv_len, modulus);
-        }
-    }
-    Some(())
-}
-#[cfg(feature = "bfv-accel")]
-fn root_for_length(prime: NttPrime, len: usize) -> Option<u64> {
-    if len == 0 || prime.modulus <= 1 {
-        return None;
-    }
-    let log_len = len.ilog2();
-    if !len.is_power_of_two() || log_len > prime.max_power_of_two {
-        return None;
-    }
-    let len = u64::try_from(len).ok()?;
-    Some(mod_pow_prime(
-        prime.primitive_root,
-        (prime.modulus - 1) / len,
-        prime.modulus,
-    ))
-}
-#[cfg(feature = "bfv-accel")]
-fn bit_reverse_permute(values: &mut [u64]) {
-    if values.is_empty() {
-        return;
-    }
-    let bits = values.len().ilog2();
-    for index in 0..values.len() {
-        let reversed = index.reverse_bits() >> (usize::BITS - bits);
-        if reversed > index {
-            values.swap(index, reversed);
-        }
-    }
-}
-#[cfg(feature = "bfv-accel")]
-fn garner_reconstruct_u128(residues: &[u64], primes: &[NttPrime]) -> Option<u128> {
-    if residues.len() != primes.len() {
-        return None;
-    }
-    let mut mixed = Zeroizing::new(vec![0_u64; residues.len()]);
-    for (index, (&residue, prime)) in residues.iter().zip(primes).enumerate() {
-        let mut coefficient = residue;
-        for (prior, prior_prime) in mixed[..index].iter().zip(primes.iter()) {
-            coefficient = mul_mod_prime(
-                sub_mod_prime(coefficient, *prior, prime.modulus),
-                mod_inv_prime(prior_prime.modulus % prime.modulus, prime.modulus),
-                prime.modulus,
-            );
-        }
-        mixed[index] = coefficient;
-    }
-    let mut value = 0_u128;
-    let mut weight = 1_u128;
-    for (index, coefficient) in mixed.iter().enumerate() {
-        let term = u128::from(*coefficient).checked_mul(weight)?;
-        value = value.checked_add(term)?;
-        if index + 1 != mixed.len() {
-            weight = weight.checked_mul(u128::from(primes[index].modulus))?;
-        }
-    }
-    Some(value)
-}
-#[cfg(feature = "bfv-accel")]
-fn add_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    if modulus == 0 {
-        return 0;
-    }
-    low_u64_from_u128((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
-}
-#[cfg(feature = "bfv-accel")]
-fn sub_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    if modulus == 0 {
-        return 0;
-    }
-    let lhs = lhs % modulus;
-    let rhs = rhs % modulus;
-    if lhs >= rhs {
-        lhs - rhs
-    } else {
-        modulus - (rhs - lhs)
-    }
-}
-#[cfg(feature = "bfv-accel")]
-fn mul_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    if modulus == 0 {
-        return 0;
-    }
-    low_u64_from_u128((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
-}
-#[cfg(feature = "bfv-accel")]
-fn mod_pow_prime(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
-    if modulus == 0 {
-        return 0;
-    }
-    let mut result = 1_u64;
-    while exponent != 0 {
-        if exponent & 1 == 1 {
-            result = mul_mod_prime(result, base, modulus);
-        }
-        base = mul_mod_prime(base, base, modulus);
-        exponent >>= 1;
-    }
-    result
-}
-#[cfg(feature = "bfv-accel")]
-fn mod_inv_prime(value: u64, modulus: u64) -> u64 {
-    if modulus <= 1 {
-        return 0;
-    }
-    mod_pow_prime(value, modulus - 2, modulus)
-}
-fn low_u64_from_u128(value: u128) -> u64 {
-    let [b0, b1, b2, b3, b4, b5, b6, b7, _, _, _, _, _, _, _, _] = value.to_le_bytes();
-    u64::from_le_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
-}
-fn low_u64_from_i128(value: i128) -> u64 {
-    let [b0, b1, b2, b3, b4, b5, b6, b7, _, _, _, _, _, _, _, _] = value.to_le_bytes();
-    u64::from_le_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
-}
-fn add_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    low_u64_from_u128((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
-}
-fn sub_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    mod_q(i128::from(lhs) - i128::from(rhs), modulus)
-}
-fn mul_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    low_u64_from_u128((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
-}
+/// BFV name for the least non-negative residue modulo the ciphertext modulus `q`.
 fn mod_q(value: i128, modulus: u64) -> u64 {
-    let modulus = i128::from(modulus);
-    let reduced = value.rem_euclid(modulus);
-    low_u64_from_i128(reduced)
+    reduce_i128_to_u64_mod(value, modulus)
 }
+/// BFV name for the least non-negative residue modulo the plaintext modulus `t`.
 fn mod_t(value: i128, modulus: u64) -> u64 {
-    mod_q(value, modulus)
+    reduce_i128_to_u64_mod(value, modulus)
 }
 fn div_round_nearest_i128(value: i128, divisor: i128) -> Result<i128, BfvError> {
-    invalid_if!(divisor <= 0, "rounded BFV plaintext scale must be positive");
-    let half = divisor / 2;
-    if value >= 0 {
-        value.checked_add(half).map(|value| value / divisor)
-    } else {
-        value
-            .checked_abs()
-            .and_then(|abs| abs.checked_add(half))
-            .map(|rounded_abs| -(rounded_abs / divisor))
-    }
-    .ok_or_else(|| invalid!("rounded BFV plaintext decoding exceeds deterministic integer limits"))
+    fhe_rounding::div_round_nearest_i128(value, divisor).map_err(|error| match error {
+        RoundingError::NonPositiveDivisor => {
+            invalid!("rounded BFV plaintext scale must be positive")
+        }
+        _ => invalid!("rounded BFV plaintext decoding exceeds deterministic integer limits"),
+    })
 }
 fn ceil_div_u128(numerator: u128, denominator: u128) -> Result<u128, BfvError> {
-    invalid_if!(
-        denominator == 0,
-        "BFV bounded-noise division denominator must be non-zero"
-    );
-    numerator
-        .checked_add(denominator - 1)
-        .map(|value| value / denominator)
-        .ok_or_else(|| invalid!("BFV bounded-noise ceiling division exceeds deterministic limits"))
-}
-fn center_lift(coefficient: u64, modulus: u64) -> i128 {
-    let coefficient = i128::from(coefficient);
-    let modulus = i128::from(modulus);
-    if coefficient > modulus / 2 {
-        coefficient - modulus
-    } else {
-        coefficient
-    }
+    fhe_rounding::ceil_div_u128(numerator, denominator).map_err(|error| match error {
+        RoundingError::ZeroDenominator => {
+            invalid!("BFV bounded-noise division denominator must be non-zero")
+        }
+        _ => invalid!("BFV bounded-noise ceiling division exceeds deterministic limits"),
+    })
 }
 fn rotation_steps_mod_slot_count(
     rotation_steps: u32,
@@ -38814,6 +38132,332 @@ fn rotation_steps_mod_slot_count(
     );
     usize::try_from(normalized)
         .map_err(|_| invalid!("normalized BFV rotation step exceeds platform usize"))
+}
+#[cfg(test)]
+mod shared_arithmetic_adapter_tests {
+    //! The adapters hold no arithmetic: each binds BFV parameters to an `iroha_fhe` kernel and
+    //! keeps the BFV diagnostic for every failure the kernel can report.
+    use super::*;
+
+    fn invalid(message: &str) -> BfvError {
+        BfvError::InvalidParameters(message.to_owned())
+    }
+
+    #[test]
+    fn rns_errors_keep_the_bfv_diagnostics() {
+        let cases = [
+            (
+                RnsError::EmptyChain,
+                invalid("BFV RNS modulus chain must not be empty"),
+            ),
+            (
+                RnsError::ProductOverflow,
+                invalid("BFV RNS modulus-chain product exceeds u128"),
+            ),
+            (
+                RnsError::ZeroModulus,
+                invalid("BFV RNS reconstructed coefficient reduction exceeds u64"),
+            ),
+            (
+                RnsError::ResidueCountMismatch {
+                    expected: 8,
+                    found: 7,
+                },
+                BfvError::ShapeMismatch("RNS coefficient expected 8 residues, found 7".to_owned()),
+            ),
+            (
+                RnsError::TooManyLimbs {
+                    max_limbs: BFV_RNS_MODULUS_CHAIN_MAX_LIMBS,
+                },
+                invalid("RNS coefficient exceeds supported limb count 8"),
+            ),
+            (
+                RnsError::ShortLimb { limb_index: 3 },
+                BfvError::ShapeMismatch(
+                    "RNS polynomial limb 3 is shorter than polynomial_degree".to_owned(),
+                ),
+            ),
+            (
+                RnsError::ReconstructionOverflow,
+                invalid("RNS coefficient reconstruction exceeds u128"),
+            ),
+            (
+                RnsError::LimbNotInvertible { modulus: 30_593 },
+                invalid("BFV RNS basis-extension source limb 30593 is not invertible"),
+            ),
+            (
+                RnsError::CrtTermOverflow,
+                invalid("BFV RNS basis-extension CRT term exceeds u128"),
+            ),
+            (
+                RnsError::QuotientOverflow,
+                invalid("BFV RNS basis-extension quotient exceeds u128"),
+            ),
+            (
+                RnsError::CenteredSourceExceedsProduct,
+                invalid("BFV RNS centered source residue exceeds source-chain product"),
+            ),
+            (
+                RnsError::CenteredExceedsI128,
+                invalid("BFV RNS centered reconstruction exceeds i128"),
+            ),
+            (
+                RnsError::CenteredExceedsProduct,
+                invalid("BFV RNS centered reconstruction exceeds modulus-chain product"),
+            ),
+            (
+                RnsError::CenteredExceedsBound,
+                invalid("BFV RNS centered reconstruction exceeds exact negacyclic product bound"),
+            ),
+        ];
+        for (kernel_error, diagnostic) in cases {
+            assert_eq!(bfv_rns_error(kernel_error), diagnostic);
+        }
+        // The adapters reach the same diagnostics from real inputs.
+        assert_eq!(
+            checked_rns_modulus_product(&[]),
+            Err(invalid("BFV RNS modulus chain must not be empty"))
+        );
+        assert_eq!(
+            checked_rns_modulus_product(&[u64::MAX, u64::MAX, 3]),
+            Err(invalid("BFV RNS modulus-chain product exceeds u128"))
+        );
+        assert_eq!(
+            reconstruct_rns_coefficient(&[1], &[3, 5]),
+            Err(BfvError::ShapeMismatch(
+                "RNS coefficient expected 2 residues, found 1".to_owned()
+            ))
+        );
+        assert_eq!(reconstruct_rns_coefficient(&[2, 3], &[3, 5]), Ok(8));
+        assert_eq!(
+            reduce_centered_rns_value_to_i128(5, 35, 4),
+            Err(invalid(
+                "BFV RNS centered reconstruction exceeds exact negacyclic product bound"
+            ))
+        );
+        assert_eq!(reduce_centered_rns_value_to_i128(31, 35, 4), Ok(-4));
+        assert_eq!(
+            reduce_centered_rns_value_to_u64_mod(36, 35, 4, 11),
+            Err(invalid(
+                "BFV RNS centered reconstruction exceeds modulus-chain product"
+            ))
+        );
+        assert_eq!(reduce_centered_rns_value_to_u64_mod(31, 35, 4, 11), Ok(7));
+        assert_eq!(reduce_u128_to_u64_mod(35, 17), Ok(1));
+        assert_eq!(
+            reduce_u128_to_u64_mod(35, 0),
+            Err(invalid(
+                "BFV RNS reconstructed coefficient reduction exceeds u64"
+            ))
+        );
+    }
+
+    #[test]
+    fn chain_validation_keeps_the_bfv_guard_order_and_text() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let registered = ram_lfe_bfv_rns_modulus_chain_v1();
+        let product = validate_bfv_rns_modulus_chain(&registered, &params).expect("registered");
+        assert_eq!(Ok(product), registered.product());
+        let message = |moduli: Vec<u64>, limit: u64| {
+            validate_bfv_rns_modulus_chain_with_root_candidate_limit(
+                &BfvRnsModulusChain { moduli },
+                &params,
+                limit,
+            )
+            .expect_err("malformed chain")
+            .to_string()
+        };
+        let default_limit = BFV_PRIMITIVE_ROOT_DISCOVERY_MAX_CANDIDATES;
+        assert_eq!(
+            message(vec![257, 30_593], default_limit),
+            "invalid BFV parameters: BFV RNS modulus limb 0 must exceed plaintext modulus 257"
+        );
+        assert_eq!(
+            message(vec![30_593, 30_978], default_limit),
+            "invalid BFV parameters: BFV RNS modulus limb 1 must be odd"
+        );
+        assert_eq!(
+            message(vec![30_977, 30_593], default_limit),
+            "invalid BFV parameters: BFV RNS modulus limbs must be strictly increasing"
+        );
+        assert_eq!(
+            message(vec![30_595], default_limit),
+            "invalid BFV parameters: BFV RNS modulus limb 0 must be prime"
+        );
+        assert_eq!(
+            message(vec![263], default_limit),
+            "invalid BFV parameters: BFV RNS modulus limb 0 must be 1 mod 128"
+        );
+        // 2689 = 1 + 128 * 21 is not a registered limb; its first working generator is 13.
+        assert_eq!(
+            message(vec![2_689], 12),
+            "invalid BFV parameters: BFV RNS modulus limb 0 has no supported primitive 128-th negacyclic NTT root"
+        );
+        assert_eq!(
+            message(vec![30_593; 9], default_limit),
+            "invalid BFV parameters: BFV RNS modulus chain supports at most 8 limbs"
+        );
+        assert_eq!(
+            message(Vec::new(), default_limit),
+            "invalid BFV parameters: BFV RNS modulus chain must not be empty"
+        );
+        assert!(message(vec![30_593], default_limit).contains("does not cover ciphertext modulus"));
+    }
+
+    #[test]
+    fn polynomial_adapters_bind_the_ciphertext_modulus_and_degree() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let q = params.ciphertext_modulus;
+        let degree = params.degree();
+        let lhs: Vec<u64> = (0..degree as u64)
+            .map(|index| (index * 0x9E37_79B9 + 17) % q)
+            .collect();
+        let rhs: Vec<u64> = (0..degree as u64).map(|index| q - 1 - index).collect();
+        assert_eq!(zero_poly(&params), vec![0; degree]);
+        assert_eq!(
+            poly_add_mod(&params, &lhs, &rhs),
+            fhe_polynomial::add_mod(&lhs, &rhs, q)
+        );
+        assert_eq!(
+            poly_sub_mod(&params, &lhs, &rhs),
+            fhe_polynomial::sub_mod(&lhs, &rhs, q)
+        );
+        assert_eq!(
+            poly_neg_mod(&params, &lhs),
+            fhe_polynomial::neg_mod(&lhs, q)
+        );
+        assert_eq!(
+            poly_scalar_mul_mod(&params, &lhs, 4_095),
+            fhe_polynomial::scalar_mul_mod(&lhs, 4_095, q)
+        );
+        let raw = poly_mul_raw_scalar(&params, &lhs, &rhs);
+        assert_eq!(
+            raw,
+            fhe_polynomial::negacyclic_mul_raw_schoolbook(&lhs, &rhs, degree)
+        );
+        assert_eq!(
+            poly_mul_raw(&params, &lhs, &rhs),
+            raw,
+            "selected backend equals schoolbook"
+        );
+        assert_eq!(
+            poly_mul_mod(&params, &lhs, &rhs),
+            fhe_polynomial::reduce_raw_mod(&raw, q)
+        );
+        assert_eq!(mod_q(-1, q), q - 1);
+        assert_eq!(
+            mod_t(-1, params.plaintext_modulus),
+            params.plaintext_modulus - 1
+        );
+        // Per-limb products: the transform path and the schoolbook path agree on a registered limb.
+        let modulus = RAM_LFE_BFV_RNS_MODULI_V1[0];
+        let limb_lhs: Vec<u64> = lhs.iter().map(|value| value % modulus).collect();
+        let limb_rhs: Vec<u64> = rhs.iter().map(|value| value % modulus).collect();
+        assert_eq!(
+            try_multiply_rns_limb_negacyclic_ntt(&params, &limb_lhs, &limb_rhs, modulus),
+            Some(multiply_rns_limb_negacyclic_scalar(
+                &params, &limb_lhs, &limb_rhs, modulus
+            ))
+        );
+        assert_eq!(
+            multiply_rns_limb_negacyclic(&params, &limb_lhs, &limb_rhs, modulus),
+            fhe_polynomial::negacyclic_mul_mod_schoolbook(&limb_lhs, &limb_rhs, degree, modulus)
+        );
+        assert_eq!(primitive_root_of_order(2_689, 128), Some(491));
+    }
+
+    #[test]
+    fn rounding_decomposition_and_automorphism_adapters_keep_their_diagnostics() {
+        let params = ram_lfe_bfv_parameters_v1();
+        assert_eq!(div_round_nearest_i128(6, 4), Ok(2));
+        assert_eq!(
+            div_round_nearest_i128(1, 0),
+            Err(invalid("rounded BFV plaintext scale must be positive"))
+        );
+        assert_eq!(
+            div_round_nearest_i128(i128::MAX, 2),
+            Err(invalid(
+                "rounded BFV plaintext decoding exceeds deterministic integer limits"
+            ))
+        );
+        assert_eq!(ceil_div_u128(8, 7), Ok(2));
+        assert_eq!(
+            ceil_div_u128(1, 0),
+            Err(invalid(
+                "BFV bounded-noise division denominator must be non-zero"
+            ))
+        );
+        assert_eq!(
+            ceil_div_u128(u128::MAX, 2),
+            Err(invalid(
+                "BFV bounded-noise ceiling division exceeds deterministic limits"
+            ))
+        );
+        // t / q scale-and-round: exactly one half rounds away from zero.
+        let half = i128::from(params.ciphertext_modulus / params.plaintext_modulus / 2);
+        assert_eq!(scale_round_raw_product_coefficient(&params, half), Ok(1));
+        assert_eq!(
+            scale_round_raw_product_coefficient(&params, half - 1),
+            Ok(0)
+        );
+        assert_eq!(
+            scale_round_raw_product_coefficient(&params, -half),
+            Ok(params.ciphertext_modulus - 1)
+        );
+        assert_eq!(
+            scale_round_raw_product_coefficient(&params, i128::MAX),
+            Err(invalid(
+                "BFV bounded-noise product scaling exceeds deterministic limits"
+            ))
+        );
+        assert_eq!(
+            poly_add_centered_raw(&[1], &[1, 2], "label"),
+            Err(BfvError::ShapeMismatch(
+                "label raw polynomial length mismatch: 1 != 2".to_owned()
+            ))
+        );
+        assert_eq!(
+            poly_add_centered_raw(&[i128::MAX], &[1], "label"),
+            Err(invalid(
+                "label raw polynomial addition exceeds deterministic limits"
+            ))
+        );
+        // Digit decomposition recomposes and rejects an oversized polynomial.
+        let poly = vec![params.ciphertext_modulus - 1; params.degree()];
+        let digits = decompose_poly(&params, &poly).expect("digits");
+        assert_eq!(
+            digits.len(),
+            params.decomposition_digits().expect("digit count")
+        );
+        let recomposed = digits.iter().rev().fold(0_u128, |value, digit| {
+            value * u128::from(params.decomposition_base()) + u128::from(digit[0])
+        });
+        assert_eq!(recomposed, u128::from(params.ciphertext_modulus - 1));
+        assert_eq!(
+            decompose_poly(&params, &vec![0; params.degree() + 1]),
+            Err(BfvError::ShapeMismatch(
+                "BFV decomposition polynomial exceeds polynomial_degree".to_owned()
+            ))
+        );
+        // Automorphism power validation and application.
+        assert_eq!(validate_galois_automorphism_power(&params, 3), Ok(3));
+        assert_eq!(
+            validate_galois_automorphism_power(&params, 0),
+            Err(invalid("BFV Galois automorphism power must be in 1..128"))
+        );
+        assert_eq!(
+            validate_galois_automorphism_power(&params, 2),
+            Err(invalid(
+                "BFV Galois automorphism power must be coprime to 2 * polynomial_degree"
+            ))
+        );
+        let mut x = zero_poly(&params);
+        x[1] = 1;
+        let image = apply_galois_automorphism_poly(&params, &x, 127).expect("X -> X^-1");
+        let mut expected = zero_poly(&params);
+        expected[params.degree() - 1] = params.ciphertext_modulus - 1;
+        assert_eq!(*image, expected, "X^127 = -X^63 in X^64 + 1");
+    }
 }
 #[cfg(test)]
 mod first_release_hard_cut_tests {

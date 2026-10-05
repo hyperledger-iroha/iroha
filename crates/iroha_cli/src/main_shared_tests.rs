@@ -1290,8 +1290,8 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
         "/private/runtime/validator-2.beacon.service",
         "/private/runtime/validator-3.beacon.service",
         "/private/runtime/validator-4.beacon.service",
-        "--edge-unit",
-        "/private/runtime/edge.service",
+        "--native-edge-capability",
+        "/private/runtime/native-edge-capability.json",
         "--known-hosts",
         "/private/runtime/known_hosts",
         "--output",
@@ -1320,8 +1320,12 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
         );
         assert!(error.to_string().contains("--validator-operator-key"));
         argv.extend(["--validator-operator-key", "/private/runtime/operator.key"]);
-        Args::try_parse_from(argv)
+        Args::try_parse_from(&argv)
             .expect("parse complete local custody arguments without opening files");
+        argv.extend(["--edge-unit", "/private/runtime/edge.service"]);
+        let retired = Args::try_parse_from(argv)
+            .expect_err("the independent native edge requires a capability, not a Linux unit");
+        assert_eq!(retired.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 }
 #[test]

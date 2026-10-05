@@ -674,12 +674,6 @@ pub(super) fn contract_test_state_with_world(authority: &AccountId, world: World
         authority.clone(),
         "CanManageSmartContractCode",
     );
-    grant_named_permission_to_account(
-        &state,
-        authority,
-        authority.clone(),
-        iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME,
-    );
     state
 }
 #[test]
@@ -706,6 +700,17 @@ fn deployed_host_fixture_retains_original_genesis_and_artifact_scope() {
     assert_eq!(state.committed_height(), 1);
     assert!(crate::sumeragi::lanes::routing::committed_root_scope(state.view().world()).is_some());
     assert!(state.view().world().account(&authority).is_ok());
+    assert!(
+        !state
+            .view()
+            .world()
+            .account_permissions
+            .get(&authority)
+            .is_some_and(|permissions| permissions
+                .iter()
+                .any(|permission| permission.name() == "CanInvokeContractEntrypoint")),
+        "fixture deployment does not grant unrequested contract entrypoints"
+    );
     let address = install_contract(
         &state,
         &authority,
@@ -729,6 +734,156 @@ fn deployed_host_fixture_retains_original_genesis_and_artifact_scope() {
     );
     assert_eq!(state.committed_height(), 1);
     assert_eq!(state.view().latest_block_hash(), Some(parent));
+    assert!(
+        !state
+            .view()
+            .world()
+            .account_permissions
+            .get(&authority)
+            .is_some_and(|permissions| permissions
+                .iter()
+                .any(|permission| permission.name() == "CanInvokeContractEntrypoint")),
+        "fixture deployment does not grant unrequested contract entrypoints"
+    );
+}
+
+#[test]
+fn deployed_host_fixture_entrypoint_grants_keep_exact_caller_contract_and_selector_scope() {
+    let authority = ALICE_ID.clone();
+    let state = contract_test_state(&authority);
+    let caller = install_contract(
+        &state,
+        &authority,
+        "seiyaku ScopedFixtureCaller { view fn main() -> int { return 0; } }",
+        90,
+    );
+    let source = r#"
+seiyaku ScopedFixtureCallee {
+  view fn inspect() -> int authorize("CanInvokeContractEntrypoint") { return 8; }
+  view fn inspect_other() -> int authorize("CanInvokeContractEntrypoint") { return 9; }
+}
+"#;
+    let callee = install_contract(&state, &authority, source, 91);
+    let other_callee = install_contract(&state, &authority, source, 92);
+    let caller_subject = caller.subject_id();
+    let check = |holder: &AccountId, contract: &ContractAddress, selector: &str| {
+        let view = state.view();
+        crate::executor::enforce_named_contract_entrypoint_permission(
+            view.world(),
+            holder,
+            contract,
+            selector,
+            Some("CanInvokeContractEntrypoint"),
+        )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
+    };
+    assert!(matches!(
+        check(&authority, &callee, "inspect"),
+        Err(ValidationFail::NotPermitted(_))
+    ));
+    assert!(matches!(
+        check(&caller_subject, &callee, "inspect"),
+        Err(ValidationFail::NotPermitted(_))
+    ));
+    grant_contract_entrypoint_to_account(
+        &state,
+        &authority,
+        caller_subject.clone(),
+        &callee,
+        "inspect",
+    );
+    assert!(check(&caller_subject, &callee, "inspect").is_ok());
+    for (holder, contract, selector) in [
+        (&authority, &callee, "inspect"),
+        (&caller_subject, &other_callee, "inspect"),
+        (&caller_subject, &callee, "inspect_other"),
+    ] {
+        assert!(matches!(
+            check(holder, contract, selector),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+    }
+    for _ in 0..2 {
+        grant_contract_entrypoint_to_account(
+            &state,
+            &authority,
+            caller_subject.clone(),
+            &callee,
+            "inspect_other",
+        );
+    }
+    assert!(check(&caller_subject, &callee, "inspect_other").is_ok());
+    assert_eq!(
+        state
+            .view()
+            .world()
+            .account_permissions
+            .get(&caller_subject)
+            .expect("exact entrypoint permission holder")
+            .iter()
+            .filter(|permission| permission.name() == "CanInvokeContractEntrypoint")
+            .count(),
+        2,
+        "distinct selectors coexist and identical grants remain idempotent"
+    );
+    grant_contract_entrypoint_to_account(
+        &state,
+        &authority,
+        authority.clone(),
+        &callee,
+        "inspect_other",
+    );
+    assert!(check(&authority, &callee, "inspect_other").is_ok());
+    assert!(matches!(
+        check(&authority, &callee, "inspect"),
+        Err(ValidationFail::NotPermitted(_))
+    ));
+    let next_height = u64::try_from((state.view().height() + 1).max(2))
+        .ok()
+        .and_then(core::num::NonZeroU64::new)
+        .expect("next exact entrypoint revocation height");
+    let mut block = state.block(BlockHeader::new(
+        next_height,
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction();
+    Revoke::account_permission(
+        CanInvokeContractEntrypoint {
+            contract: callee.clone(),
+            entrypoint: "inspect".to_owned(),
+        },
+        caller_subject.clone(),
+    )
+    .execute(&authority, &mut tx)
+    .expect("revoke the exact caller's inspect permission");
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit exact entrypoint permission revocation");
+    assert!(matches!(
+        check(&caller_subject, &callee, "inspect"),
+        Err(ValidationFail::NotPermitted(_))
+    ));
+    assert!(check(&caller_subject, &callee, "inspect_other").is_ok());
+    assert!(check(&authority, &callee, "inspect_other").is_ok());
+}
+
+#[test]
+#[should_panic(
+    expected = "scoped contract permissions require an exact deployed address and selector"
+)]
+fn named_permission_fixture_rejects_scoped_entrypoint_marker() {
+    let authority = ALICE_ID.clone();
+    let state = contract_test_state(&authority);
+    grant_named_permission_to_account(
+        &state,
+        &authority,
+        authority.clone(),
+        "CanInvokeContractEntrypoint",
+    );
 }
 
 pub(super) fn install_contract(
@@ -771,6 +926,8 @@ fn install_contract_with_interface_and_lifecycle(
     leave_lifecycle_pending: bool,
     customize_interface: impl FnOnce(&mut ivm::EmbeddedContractInterfaceV1),
 ) -> ContractAddress {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let compiler = kotodama_lang::compiler::Compiler::new_with_options(
         kotodama_lang::compiler::CompilerOptions {
             mode: kotodama_lang::compiler::CompilerMode::Production,
@@ -804,7 +961,7 @@ fn install_contract_with_interface_and_lifecycle(
     let code_hash = register_code_bytes(authority, DataSpaceId::UNIVERSAL, code, &mut tx)
         .expect("register contract bytecode");
     manifest.code_hash = Some(code_hash);
-    manifest = manifest.signed(&fixture_signing_keypair(authority));
+    manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture_signing_keypair(authority)).expect("sign bounded fixture manifest");
     register_manifest(authority, DataSpaceId::UNIVERSAL, manifest, &mut tx)
         .expect("register contract manifest");
     let contract_address = ContractAddress::derive(

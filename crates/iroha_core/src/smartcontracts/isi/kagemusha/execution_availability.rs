@@ -74,3 +74,6 @@ pub(super) fn require(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

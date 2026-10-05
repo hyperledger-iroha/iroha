@@ -200,6 +200,8 @@ mod raw_ivm_work {
 
     #[test]
     fn bound_raw_contract_runtime_rejection_retains_actual_work() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
@@ -239,7 +241,7 @@ seiyaku RawMeteredFailure {
                 address.dataspace_id().unwrap(),
                 code_hash,
             ),
-            manifest.signed(&ALICE_KEYPAIR),
+            manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"),
         );
         setup.world.accounts.insert(
             address.subject_id(),
@@ -325,6 +327,8 @@ seiyaku RawMeteredFailure {
 
     #[test]
     fn artifact_validation_rejection_retains_completed_vm_work() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         // Generic-v1 cannot call this syscall. The canonical inline builder
         // supplies the NoritoBytes pointer required by the typed bridge; a
         // contract bytes argument is a Blob and cannot stand in for that type.
@@ -366,7 +370,7 @@ seiyaku UnverifiedBallot {
                 address.dataspace_id().unwrap(),
                 code_hash,
             ),
-            manifest.signed(&ALICE_KEYPAIR),
+            manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"),
         );
         setup.world.accounts.insert(
             address.subject_id(),

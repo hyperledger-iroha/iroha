@@ -181,24 +181,135 @@ def test_native_status_schema_accepts_the_rust_corpus_and_rejects_noncanonical_f
         assert not validator.is_valid(changed), changed
 
 
-def test_parliament_proposal_union_is_closed_and_matches_the_shared_fixture() -> None:
-    """The released proposal union exposes exactly the shared first-release kinds."""
+def test_current_proposal_schemas_are_closed_and_retired_kagemusha_kinds_are_absent() -> None:
+    """The first-release proposal union admits exactly the ten implemented kinds."""
 
-    spec = json.loads(OPENAPI_AUTHORITIES[0].read_bytes())
-    schemas = spec["components"]["schemas"]
-    branches = schemas["GovernanceParliamentProposalKindV1"]["oneOf"]
-    kinds = [branch["properties"]["kind"]["const"] for branch in branches]
     fixture = json.loads(
         (REPO_ROOT / "fixtures/governance/parliament_api_v1.json").read_bytes()
     )
-    assert kinds == fixture["proposal_kinds"]
-    assert len(kinds) == len(set(kinds)) == 10
-    for branch in branches:
-        assert branch["additionalProperties"] is False
-        assert set(branch["required"]) == set(branch["properties"]) == {"kind", "payload"}
-        payload_ref = branch["properties"]["payload"]["$ref"]
-        assert payload_ref.removeprefix("#/components/schemas/") in schemas
-    assert not any(name.startswith("GovernanceParliamentProposalPayloadKagemusha") for name in schemas)
+    retired_kinds = (
+        "KagemushaVerifierPolicyInstall",
+        "KagemushaVerifierReleaseInstall",
+        "KagemushaVerifierReleaseActivate",
+        "KagemushaVerifierReleaseRetire",
+    )
+    payload_schema_names = (
+        "GovernanceParliamentProposalPayloadDeployContractV1",
+        "GovernanceParliamentProposalPayloadRuntimeUpgradeV1",
+        "GovernanceParliamentProposalPayloadSccpRouteGovernanceV1",
+        "GovernanceParliamentProposalPayloadValidationFeePolicyProposalV1",
+        "GovernanceParliamentProposalPayloadValidationFeePayoutLifecycleV1",
+        "GovernanceParliamentProposalPayloadMusubiRegistryActionV1",
+        "GovernanceParliamentProposalPayloadSorafsProviderV1",
+        "GovernanceParliamentProposalPayloadContractLifecycleV1",
+        "GovernanceParliamentProposalPayloadContractEmergencyHoldV1",
+        "GovernanceParliamentProposalPayloadGlobalDataTriggerPermissionV1",
+    )
+    for authority in OPENAPI_AUTHORITIES:
+        spec = json.loads(authority.read_bytes())
+        schemas = spec["components"]["schemas"]
+        branches = schemas["GovernanceParliamentProposalKindV1"]["oneOf"]
+        kinds = [branch["properties"]["kind"]["const"] for branch in branches]
+        assert kinds == fixture["proposal_kinds"]
+        assert len(kinds) == len(set(kinds)) == 10
+        assert [branch["properties"]["payload"]["$ref"] for branch in branches] == [
+            f"#/components/schemas/{name}" for name in payload_schema_names
+        ]
+        for branch in branches:
+            assert branch["additionalProperties"] is False
+            assert set(branch["required"]) == set(branch["properties"]) == {"kind", "payload"}
+        for kind in retired_kinds:
+            assert kind not in kinds
+            assert f"GovernanceParliamentProposalPayload{kind}V1" not in schemas
+
+        # Every admitted payload remains transitively typed and closes its object fields.
+        visited = set()
+
+        def assert_typed(schema: dict) -> None:
+            assert schema
+            if "$ref" in schema:
+                reference = schema["$ref"]
+                assert reference.startswith("#/components/schemas/")
+                name = reference.removeprefix("#/components/schemas/")
+                assert name in schemas and name != "JsonValue"
+                if name not in visited:
+                    visited.add(name)
+                    assert_typed(schemas[name])
+                return
+            if "const" in schema:
+                assert isinstance(schema["const"], (str, int, bool)) or schema["const"] is None
+                return
+            if "allOf" in schema:
+                assert_typed(schema["allOf"][0])
+                for constraint in schema["allOf"][1:]:
+                    if set(constraint) == {"not"}:
+                        assert set(constraint["not"]) in ({"const"}, {"pattern"})
+                        assert isinstance(next(iter(constraint["not"].values())), str)
+                    else:
+                        assert_typed(constraint)
+                return
+            for union in ("oneOf", "anyOf"):
+                if union in schema:
+                    for branch in schema[union]:
+                        assert_typed(branch)
+                    return
+            if schema.get("type") == "object":
+                assert schema["additionalProperties"] is False
+                required = schema.get("required", [])
+                assert len(required) == len(set(required))
+                assert set(required) <= set(schema["properties"])
+                for child in schema["properties"].values():
+                    assert_typed(child)
+            elif schema.get("type") == "array":
+                assert "items" in schema
+                assert_typed(schema["items"])
+            else:
+                assert schema.get("type") in {"string", "integer", "boolean", "null"}
+
+        for name in payload_schema_names:
+            assert_typed({"$ref": f"#/components/schemas/{name}"})
+
+        validator = Draft202012Validator({
+            "$ref": "#/components/schemas/GovernanceParliamentProposalKindV1",
+            "components": spec["components"],
+        })
+        proposal = {
+            "kind": "ContractEmergencyHold",
+            "payload": {
+                "contract_address": "canonical-contract-address",
+                "expected_revision": 1,
+                "expected_code_hash": "ab" * 32,
+                "incident_digest": [1] * 32,
+                "reason": "contain active exploit",
+                "duration_blocks": 3600,
+            },
+        }
+        assert validator.is_valid(proposal)
+        for kind in retired_kinds:
+            retired = copy.deepcopy(proposal)
+            retired["kind"] = kind
+            assert not validator.is_valid(retired), kind
+        for field in proposal["payload"]:
+            mutated = copy.deepcopy(proposal)
+            del mutated["payload"][field]
+            assert not validator.is_valid(mutated), field
+        for field in ("kind", "payload"):
+            mutated = copy.deepcopy(proposal)
+            del mutated[field]
+            assert not validator.is_valid(mutated), field
+        for outer, field, value in (
+            (True, "unknown", None),
+            (False, "unknown", None),
+            (False, "duration_blocks", 0),
+            (False, "duration_blocks", 3601),
+            (False, "expected_revision", 0),
+            (False, "expected_code_hash", "abc"),
+            (False, "incident_digest", [0] * 31),
+            (False, "reason", ""),
+        ):
+            mutated = copy.deepcopy(proposal)
+            (mutated if outer else mutated["payload"])[field] = value
+            assert not validator.is_valid(mutated), (field, value)
 
 
 def test_openapi_authority_parser_rejects_duplicate_members() -> None:

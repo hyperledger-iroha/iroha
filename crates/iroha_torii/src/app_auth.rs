@@ -253,6 +253,11 @@ pub fn configure(
     Ok(())
 }
 /// Authenticated canonical request identity.
+///
+/// The supplied codec context bounds verification; it does not own these result graphs.
+/// Callers must retain their original physical owner until consumption or an exactly paid
+/// transfer. TODO: close general helper-return and HTTP-extension ownership before treating
+/// this raw result type as a complete request-lifetime allocation certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedCanonicalRequest {
     /// Account declared in the canonical request authentication material.
@@ -341,6 +346,18 @@ fn canonical_request_capacity_error() -> crate::Error {
     crate::Error::Query(ValidationFail::QueryFailed(
         QueryExecutionFail::CapacityLimit,
     ))
+}
+
+fn admitted_signer_list(count: usize) -> Result<Vec<PublicKey>, crate::Error> {
+    let layout = std::alloc::Layout::array::<PublicKey>(count)
+        .map_err(|_| canonical_request_capacity_error())?;
+    norito::core::reserve_decode_allocation(layout.size())
+        .map_err(|_| canonical_request_capacity_error())?;
+    let mut signers = Vec::new();
+    signers
+        .try_reserve_exact(count)
+        .map_err(|_| canonical_request_capacity_error())?;
+    Ok(signers)
 }
 
 fn bounded_canonical_request_message_with_network(
@@ -795,6 +812,11 @@ impl TryFrom<BoundedCanonicalRequestWitnessV1> for CanonicalRequestWitnessV1 {
 
     fn try_from(value: BoundedCanonicalRequestWitnessV1) -> Result<Self, Self::Error> {
         let value = value.0;
+        let layout = std::alloc::Layout::array::<CanonicalRequestSignatureWitnessV1>(
+            value.signatures.0.len(),
+        )
+        .map_err(|_| norito::core::Error::LengthMismatch)?;
+        norito::core::reserve_decode_allocation(layout.size())?;
         let mut signatures = Vec::new();
         signatures
             .try_reserve_exact(value.signatures.0.len())
@@ -1073,50 +1095,69 @@ fn parse_canonical_timestamp_ms(value: &str) -> Result<u64, crate::Error> {
 fn parse_account_header_value(
     state: &Arc<CoreState>,
     account_literal: &str,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<AccountId, crate::Error> {
-    fn invalid_account_header() -> crate::Error {
-        crate::Error::Query(ValidationFail::NotPermitted(
-            "invalid X-Iroha-Account value".to_owned(),
-        ))
+    context.with(|| {
+        fn invalid_account_header() -> crate::Error {
+            crate::Error::Query(ValidationFail::NotPermitted(
+                "invalid X-Iroha-Account value".to_owned(),
+            ))
+        }
+        if account_literal.is_empty() || account_literal.trim() != account_literal {
+            return Err(invalid_account_header());
+        }
+        if !canonical_request_account_literal_fits_v1(account_literal) {
+            return Err(invalid_account_header());
+        }
+        if account_literal.starts_with("0x") {
+            return parse_canonical_account_header_address(account_literal);
+        }
+        // HTTP field values do not provide a portable Unicode text carrier. App
+        // authentication therefore uses canonical lowercase account-address hex
+        // for account identities and retains one deliberately narrower alias
+        // exception: resolve the exact active ASCII alias only to establish which
+        // controller must verify the request signature. User-directed alias lookup
+        // remains permissioned independently.
+        if !account_literal.is_ascii() {
+            return Err(invalid_account_header());
+        }
+        if account_literal.len() > CANONICAL_REQUEST_MAX_ALIAS_LITERAL_BYTES_V1 {
+            return Err(invalid_account_header());
+        }
+        state
+            .try_with_authorization_view(context, |view| {
+                let alias = AccountAlias::from_literal(account_literal, view.catalog())
+                    .map_err(|_| invalid_account_header())?;
+                let canonical = alias
+                    .to_literal(view.catalog())
+                    .map_err(|_| invalid_account_header())?;
+                if canonical != account_literal {
+                    return Err(invalid_account_header());
+                }
+                resolve_active_account_alias(
+                    view.world(),
+                    view.catalog(),
+                    &alias,
+                    view.ledger_time_ms(),
+                )
+                .map_err(|error| {
+                    if error.deferral().is_some() {
+                        canonical_request_capacity_error()
+                    } else {
+                        crate::Error::Query(ValidationFail::InternalError(error.to_string()))
+                    }
+                })?
+                .ok_or_else(invalid_account_header)
+            })
+            .map_err(authorization_view_error)?
+    })
+}
+
+pub(crate) fn authorization_view_error(error: iroha_core::state::StateViewError) -> crate::Error {
+    match error {
+        iroha_core::state::StateViewError::Busy(_) => canonical_request_capacity_error(),
+        error => crate::Error::Query(ValidationFail::InternalError(error.to_string())),
     }
-    if account_literal.is_empty() || account_literal.trim() != account_literal {
-        return Err(invalid_account_header());
-    }
-    if !canonical_request_account_literal_fits_v1(account_literal) {
-        return Err(invalid_account_header());
-    }
-    if account_literal.starts_with("0x") {
-        return parse_canonical_account_header_address(account_literal);
-    }
-    // HTTP field values do not provide a portable Unicode text carrier. App
-    // authentication therefore uses canonical lowercase account-address hex
-    // for account identities and retains one deliberately narrower alias
-    // exception: resolve the exact active ASCII alias only to establish which
-    // controller must verify the request signature. User-directed alias lookup
-    // remains permissioned independently.
-    if !account_literal.is_ascii() {
-        return Err(invalid_account_header());
-    }
-    if account_literal.len() > CANONICAL_REQUEST_MAX_ALIAS_LITERAL_BYTES_V1 {
-        return Err(invalid_account_header());
-    }
-    let nexus = state.nexus_snapshot();
-    let alias = AccountAlias::from_literal(account_literal, &nexus.dataspace_catalog)
-        .map_err(|_| invalid_account_header())?;
-    let canonical = alias
-        .to_literal(&nexus.dataspace_catalog)
-        .map_err(|_| invalid_account_header())?;
-    if canonical != account_literal {
-        return Err(invalid_account_header());
-    }
-    let now_ms = state
-        .latest_block_header_fast()
-        .map(|header| header.creation_time_ms)
-        .unwrap_or(0);
-    let world = state.world_view();
-    resolve_active_account_alias(&world, &nexus.dataspace_catalog, &alias, now_ms)
-        .map_err(|error| crate::Error::Query(ValidationFail::InternalError(error.to_string())))?
-        .ok_or_else(invalid_account_header)
 }
 
 fn parse_canonical_account_header_address(
@@ -1297,6 +1338,8 @@ fn allocate_exact_canonical_auth_bytes(length: usize) -> Result<Box<[u8]>, crate
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         ))
     })?;
+    norito::core::reserve_decode_allocation(layout.size())
+        .map_err(|_| canonical_request_capacity_error())?;
     // SAFETY: `layout` describes exactly `length` initialized bytes. A null
     // result is mapped to a recoverable capacity failure before ownership is
     // constructed.
@@ -1405,10 +1448,14 @@ fn decode_witness_value(
         limits,
     )
     .and_then(CanonicalRequestWitnessV1::try_from)
-    .map_err(|_| {
-        crate::Error::Query(ValidationFail::NotPermitted(format!(
-            "invalid {context} payload"
-        )))
+    .map_err(|error| {
+        if norito::core::decode_error_matches_active_limits(&error) {
+            canonical_request_capacity_error()
+        } else {
+            crate::Error::Query(ValidationFail::NotPermitted(format!(
+                "invalid {context} payload"
+            )))
+        }
     })?;
     if witness.schema_version != CANONICAL_REQUEST_WITNESS_VERSION_V1 {
         return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
@@ -1425,25 +1472,35 @@ fn verify_single_signature_authorization(
     signature_bytes: &[u8],
     message: &[u8],
     signature_context: &'static str,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<PublicKey, crate::Error> {
-    let world = state.world_view();
-    let account_entry = world.account(account).map_err(|_| {
-        crate::Error::Query(ValidationFail::NotPermitted(
-            "canonical request account is not registered".to_owned(),
-        ))
-    })?;
-    match account_entry.id.controller() {
-        AccountController::Single(pk) => {
-            let signature =
-                checked_app_auth_signature_from_bytes(signature_bytes, pk, signature_context)?;
-            verify_app_auth_signature(&signature, pk, message, signature_context)?;
-            pk.try_clone_for_admission()
-                .map_err(|_| canonical_request_capacity_error())
-        }
-        AccountController::Multisig(_) => Err(crate::Error::Query(ValidationFail::NotPermitted(
-            "multisig accounts must use X-Iroha-Witness".to_owned(),
-        ))),
-    }
+    state
+        .try_with_authorization_view(context, |view| {
+            let world = view.world();
+            let account_entry = world.account(account).map_err(|_| {
+                crate::Error::Query(ValidationFail::NotPermitted(
+                    "canonical request account is not registered".to_owned(),
+                ))
+            })?;
+            match account_entry.id.controller() {
+                AccountController::Single(pk) => {
+                    let signature = checked_app_auth_signature_from_bytes(
+                        signature_bytes,
+                        pk,
+                        signature_context,
+                    )?;
+                    verify_app_auth_signature(&signature, pk, message, signature_context)?;
+                    pk.try_clone_for_admission()
+                        .map_err(|_| canonical_request_capacity_error())
+                }
+                AccountController::Multisig(_) => {
+                    Err(crate::Error::Query(ValidationFail::NotPermitted(
+                        "multisig accounts must use X-Iroha-Witness".to_owned(),
+                    )))
+                }
+            }
+        })
+        .map_err(authorization_view_error)?
 }
 fn verify_multisig_witness_authorization(
     state: &Arc<CoreState>,
@@ -1451,13 +1508,15 @@ fn verify_multisig_witness_authorization(
     witness: &CanonicalRequestWitnessV1,
     witness_context: &'static str,
     signature_context: &'static str,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<Vec<PublicKey>, crate::Error> {
     let message = canonical_request_witness_message(witness).map_err(|_| {
         crate::Error::Query(ValidationFail::NotPermitted(format!(
             "invalid {witness_context} payload"
         )))
     })?;
-    let world = state.world_view();
+    state.try_with_authorization_view(context, |view| {
+        let world = view.world();
     let account_entry = world.account(account).map_err(|_| {
         crate::Error::Query(ValidationFail::NotPermitted(
             "canonical request account is not registered".to_owned(),
@@ -1479,10 +1538,7 @@ fn verify_multisig_witness_authorization(
                 ))));
             }
             let mut total_weight = 0_u32;
-            let mut verified_signers = Vec::new();
-            verified_signers
-                .try_reserve_exact(witness.signatures.len())
-                .map_err(|_| canonical_request_capacity_error())?;
+            let mut verified_signers = admitted_signer_list(witness.signatures.len())?;
             for CanonicalRequestSignatureWitnessV1 { signer, signature } in &witness.signatures {
                 if verified_signers.iter().any(|verified| verified == signer) {
                     return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
@@ -1514,6 +1570,8 @@ fn verify_multisig_witness_authorization(
             Ok(verified_signers)
         }
     }
+
+    }).map_err(authorization_view_error)?
 }
 #[cfg(test)]
 fn validate_expected_account(
@@ -1628,47 +1686,49 @@ pub(crate) fn verify_canonical_body_request(
     uri: &Uri,
     unsigned_body: &[u8],
     expected_account: Option<&AccountId>,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<VerifiedCanonicalRequest, crate::Error> {
-    validate_canonical_request_target(method, uri)?;
-    let account = parse_account_body_value(state, auth.account_id)?;
-    validate_expected_account(expected_account, &account)?;
-    let (auth_config, replay_cache) = auth_runtime_snapshot();
-    validate_freshness(&auth_config, auth.timestamp_ms, auth.nonce, "nonce")?;
-    match auth.proof {
-        CanonicalRequestBodyProof::SignatureBase64(signature_b64) => {
-            let signature_bytes = decode_signature_bytes_value(signature_b64, "signature_base64")?;
-            let message = bounded_canonical_network_request_message(
-                state.network_id_ref(),
-                method,
-                uri,
-                unsigned_body,
-                Some((auth.timestamp_ms, auth.nonce)),
-            )?;
-            let signer = verify_single_signature_authorization(
-                state,
-                &account,
-                &signature_bytes,
-                &message,
-                "signature_base64 payload",
-            )?;
-            let primary_signer = signer
-                .try_clone_for_admission()
-                .map_err(|_| canonical_request_capacity_error())?;
-            let mut verified_signers = Vec::new();
-            verified_signers
-                .try_reserve_exact(1)
-                .map_err(|_| canonical_request_capacity_error())?;
-            verified_signers.push(signer);
-            finish_verified_canonical_request(
-                account,
-                primary_signer,
-                verified_signers,
-                auth.nonce,
-                &replay_cache,
-                auth_config.nonce_ttl,
-            )
+    context.with(|| {
+        validate_canonical_request_target(method, uri)?;
+        let account = parse_account_body_value(state, auth.account_id)?;
+        validate_expected_account(expected_account, &account)?;
+        let (auth_config, replay_cache) = auth_runtime_snapshot();
+        validate_freshness(&auth_config, auth.timestamp_ms, auth.nonce, "nonce")?;
+        match auth.proof {
+            CanonicalRequestBodyProof::SignatureBase64(signature_b64) => {
+                let signature_bytes =
+                    decode_signature_bytes_value(signature_b64, "signature_base64")?;
+                let message = bounded_canonical_network_request_message(
+                    state.network_id_ref(),
+                    method,
+                    uri,
+                    unsigned_body,
+                    Some((auth.timestamp_ms, auth.nonce)),
+                )?;
+                let signer = verify_single_signature_authorization(
+                    state,
+                    &account,
+                    &signature_bytes,
+                    &message,
+                    "signature_base64 payload",
+                    context,
+                )?;
+                let primary_signer = signer
+                    .try_clone_for_admission()
+                    .map_err(|_| canonical_request_capacity_error())?;
+                let mut verified_signers = admitted_signer_list(1)?;
+                verified_signers.push(signer);
+                finish_verified_canonical_request(
+                    account,
+                    primary_signer,
+                    verified_signers,
+                    auth.nonce,
+                    &replay_cache,
+                    auth_config.nonce_ttl,
+                )
+            }
         }
-    }
+    })
 }
 /// Verify optional exact-network canonical request headers.
 ///
@@ -1682,6 +1742,7 @@ pub fn verify_canonical_request(
     uri: &Uri,
     body: &[u8],
     expected_account: Option<&AccountId>,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
     verify_canonical_request_for_network(
         state,
@@ -1694,12 +1755,14 @@ pub fn verify_canonical_request(
             purpose: CanonicalRequestPurpose::General,
         },
         state.network_id_ref(),
+        context,
     )
 }
 /// Verify required canonical request headers against an exact network identity.
 ///
 /// A signature produced for a different genesis-derived [`NetworkId`] cannot
 /// authenticate on this network even when every HTTP field and body byte is identical.
+/// `context` is the caller's original cumulative owner and is installed only synchronously.
 pub fn verify_canonical_network_request(
     state: &Arc<CoreState>,
     network_id: &NetworkId,
@@ -1708,6 +1771,7 @@ pub fn verify_canonical_network_request(
     uri: &Uri,
     body: &[u8],
     expected_account: Option<&AccountId>,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
     if network_id != state.network_id_ref() {
         return Err(crate::Error::Query(ValidationFail::NotPermitted(
@@ -1725,6 +1789,7 @@ pub fn verify_canonical_network_request(
             purpose: CanonicalRequestPurpose::General,
         },
         network_id,
+        context,
     )
 }
 #[derive(Clone, Copy)]
@@ -1760,7 +1825,10 @@ fn verify_canonical_request_for_network(
     body: &[u8],
     scope: CanonicalRequestVerificationScope<'_>,
     network_id: &NetworkId,
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
+    context.with(|| {
+
     // Axum routes query-bearing fee-quote URIs to the same handler. Reject them before any
     // authentication can commit replay state or bypass the endpoint-specific signer policy.
     if uri.path() == "/v1/fees/quote" && uri.query().is_some() {
@@ -1793,7 +1861,7 @@ fn verify_canonical_request_for_network(
         let witness = decode_witness_value(witness_b64, "X-Iroha-Witness")?;
         let explicit_account = if account_hdr.is_some() {
             let account_literal = parse_required_header_exact_text(headers, HEADER_ACCOUNT)?;
-            let account = parse_account_header_value(state, account_literal)?;
+            let account = parse_account_header_value(state, account_literal, context)?;
             if account != witness.subject_account {
                 return Err(crate::Error::Query(ValidationFail::NotPermitted(
                     "X-Iroha-Account does not match X-Iroha-Witness subject_account".to_owned(),
@@ -1832,7 +1900,7 @@ fn verify_canonical_request_for_network(
             &witness,
             "X-Iroha-Witness",
             "X-Iroha-Witness signature payload",
-        )?;
+         context)?;
         validate_verified_request_purpose(
             scope.purpose,
             method,
@@ -1867,7 +1935,7 @@ fn verify_canonical_request_for_network(
     };
     validate_canonical_request_target(method, uri)?;
     let account_literal = parse_required_header_exact_text(headers, HEADER_ACCOUNT)?;
-    let account = parse_account_header_value(state, account_literal)?;
+    let account = parse_account_header_value(state, account_literal, context)?;
     if let Some(expected) = scope.expected_account
         && expected != &account
     {
@@ -1891,7 +1959,8 @@ fn verify_canonical_request_for_network(
         body,
         Some((timestamp_ms, nonce)),
     )?;
-    let world = state.world_view();
+    let signer = state.try_with_authorization_view(context, |view| {
+        let world = view.world();
     let account_entry = world.account(&account).map_err(|_| {
         crate::Error::Query(ValidationFail::NotPermitted(
             "canonical request account is not registered".to_owned(),
@@ -1914,13 +1983,12 @@ fn verify_canonical_request_for_network(
             )));
         }
     };
+        Ok::<_, crate::Error>(signer)
+    }).map_err(authorization_view_error)??;
     let primary_signer = signer
         .try_clone_for_admission()
         .map_err(|_| canonical_request_capacity_error())?;
-    let mut verified_signers = Vec::new();
-    verified_signers
-        .try_reserve_exact(1)
-        .map_err(|_| canonical_request_capacity_error())?;
+    let mut verified_signers = admitted_signer_list(1)?;
     verified_signers.push(signer);
     validate_verified_request_purpose(
         scope.purpose,
@@ -1938,6 +2006,8 @@ fn verify_canonical_request_for_network(
         &replay_cache,
         auth_config.nonce_ttl,
     )?))
+
+    })
 }
 /// Verify canonical request headers for the fee-quote endpoint.
 ///
@@ -1953,105 +2023,112 @@ pub(crate) fn verify_fee_quote_canonical_request(
     method: &Method,
     uri: &Uri,
     body: &[u8],
+    context: &norito::core::DecodeBudgetContext,
 ) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
-    let normal_error = match verify_canonical_request_for_network(
-        state,
-        headers,
-        method,
-        uri,
-        body,
-        CanonicalRequestVerificationScope {
-            expected_account: None,
-            purpose: CanonicalRequestPurpose::FeeQuote,
-        },
-        state.network_id_ref(),
-    ) {
-        Ok(verified) => return Ok(verified),
-        Err(error) => error,
-    };
-    if method != Method::POST || uri.path() != "/v1/fees/quote" || uri.query().is_some() {
-        return Err(normal_error);
-    }
-    if headers.get(HEADER_WITNESS).is_some() {
-        return Err(normal_error);
-    }
-    let account_literal = match parse_required_header_exact_text(headers, HEADER_ACCOUNT) {
-        Ok(account_literal) => account_literal,
-        Err(_) => return Err(normal_error),
-    };
-    if !canonical_request_account_literal_fits_v1(account_literal) {
-        return Err(normal_error);
-    }
-    let account = match parse_canonical_account_header_address(account_literal) {
-        Ok(account) => account,
-        Err(_) => return Err(normal_error),
-    };
-    let signer = match account.controller() {
-        AccountController::Single(signer) => signer
+    context.with(|| {
+        let normal_error = match verify_canonical_request_for_network(
+            state,
+            headers,
+            method,
+            uri,
+            body,
+            CanonicalRequestVerificationScope {
+                expected_account: None,
+                purpose: CanonicalRequestPurpose::FeeQuote,
+            },
+            state.network_id_ref(),
+            context,
+        ) {
+            Ok(verified) => return Ok(verified),
+            Err(error) => error,
+        };
+        if method != Method::POST || uri.path() != "/v1/fees/quote" || uri.query().is_some() {
+            return Err(normal_error);
+        }
+        if headers.get(HEADER_WITNESS).is_some() {
+            return Err(normal_error);
+        }
+        let account_literal = match parse_required_header_exact_text(headers, HEADER_ACCOUNT) {
+            Ok(account_literal) => account_literal,
+            Err(_) => return Err(normal_error),
+        };
+        if !canonical_request_account_literal_fits_v1(account_literal) {
+            return Err(normal_error);
+        }
+        let account = match parse_canonical_account_header_address(account_literal) {
+            Ok(account) => account,
+            Err(_) => return Err(normal_error),
+        };
+        let signer = match account.controller() {
+            AccountController::Single(signer) => signer
+                .try_clone_for_admission()
+                .map_err(|_| canonical_request_capacity_error())?,
+            AccountController::Multisig(_) => return Err(normal_error),
+        };
+        // A materialised account must always use its world-state controller and normal account
+        // authentication, even when the request body happens to contain a registration instruction.
+        if state
+            .try_with_authorization_view(context, |view| view.world().account(&account).is_ok())
+            .map_err(authorization_view_error)?
+        {
+            return Err(normal_error);
+        }
+        let timestamp_ms = parse_canonical_timestamp_ms(parse_required_header_exact_text(
+            headers,
+            HEADER_TIMESTAMP_MS,
+        )?)?;
+        let nonce = parse_required_header_exact_text(headers, HEADER_NONCE)?;
+        let (auth_config, replay_cache) = auth_runtime_snapshot();
+        validate_freshness(&auth_config, timestamp_ms, nonce, "X-Iroha-Nonce")?;
+        let signature_b64 = parse_required_header_exact_text(headers, HEADER_SIGNATURE)?;
+        let signature_bytes = decode_signature_bytes_value(signature_b64, "X-Iroha-Signature")?;
+        let signature = checked_app_auth_signature_from_bytes(
+            &signature_bytes,
+            &signer,
+            "X-Iroha-Signature payload",
+        )?;
+        let message = bounded_canonical_network_request_message(
+            state.network_id_ref(),
+            method,
+            uri,
+            body,
+            Some((timestamp_ms, nonce)),
+        )?;
+        verify_app_auth_signature(&signature, &signer, &message, "X-Iroha-Signature payload")?;
+        // Decode only after proving the raw request bytes. Malformed bodies therefore cannot bypass
+        // authentication, and they do not qualify an absent authority for this endpoint exception.
+        let request: FeeQuoteRequest = match norito::json::from_slice(body) {
+            Ok(request) => request,
+            Err(_) => return Err(normal_error),
+        };
+        if request.payload.authority != account
+            || !iroha_core::tx::executable_self_registers_authority(
+                &request.payload.instructions,
+                &account,
+            )
+        {
+            return Err(normal_error);
+        }
+        let primary_signer = signer
             .try_clone_for_admission()
-            .map_err(|_| canonical_request_capacity_error())?,
-        AccountController::Multisig(_) => return Err(normal_error),
-    };
-    // A materialised account must always use its world-state controller and normal account
-    // authentication, even when the request body happens to contain a registration instruction.
-    if state.world_view().account(&account).is_ok() {
-        return Err(normal_error);
-    }
-    let timestamp_ms = parse_canonical_timestamp_ms(parse_required_header_exact_text(
-        headers,
-        HEADER_TIMESTAMP_MS,
-    )?)?;
-    let nonce = parse_required_header_exact_text(headers, HEADER_NONCE)?;
-    let (auth_config, replay_cache) = auth_runtime_snapshot();
-    validate_freshness(&auth_config, timestamp_ms, nonce, "X-Iroha-Nonce")?;
-    let signature_b64 = parse_required_header_exact_text(headers, HEADER_SIGNATURE)?;
-    let signature_bytes = decode_signature_bytes_value(signature_b64, "X-Iroha-Signature")?;
-    let signature = checked_app_auth_signature_from_bytes(
-        &signature_bytes,
-        &signer,
-        "X-Iroha-Signature payload",
-    )?;
-    let message = bounded_canonical_network_request_message(
-        state.network_id_ref(),
-        method,
-        uri,
-        body,
-        Some((timestamp_ms, nonce)),
-    )?;
-    verify_app_auth_signature(&signature, &signer, &message, "X-Iroha-Signature payload")?;
-    // Decode only after proving the raw request bytes. Malformed bodies therefore cannot bypass
-    // authentication, and they do not qualify an absent authority for this endpoint exception.
-    let request: FeeQuoteRequest = match norito::json::from_slice(body) {
-        Ok(request) => request,
-        Err(_) => return Err(normal_error),
-    };
-    if request.payload.authority != account
-        || !iroha_core::tx::executable_self_registers_authority(
-            &request.payload.instructions,
-            &account,
-        )
-    {
-        return Err(normal_error);
-    }
-    let primary_signer = signer
-        .try_clone_for_admission()
-        .map_err(|_| canonical_request_capacity_error())?;
-    let mut verified_signers = Vec::new();
-    verified_signers
-        .try_reserve_exact(1)
-        .map_err(|_| canonical_request_capacity_error())?;
-    verified_signers.push(signer);
-    Ok(Some(finish_verified_canonical_request(
-        account,
-        primary_signer,
-        verified_signers,
-        nonce,
-        &replay_cache,
-        auth_config.nonce_ttl,
-    )?))
+            .map_err(|_| canonical_request_capacity_error())?;
+        let mut verified_signers = admitted_signer_list(1)?;
+        verified_signers.push(signer);
+        Ok(Some(finish_verified_canonical_request(
+            account,
+            primary_signer,
+            verified_signers,
+            nonce,
+            &replay_cache,
+            auth_config.nonce_ttl,
+        )?))
+    })
 }
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
+    fn standalone_auth_context() -> norito::core::DecodeBudgetContext {
+        norito::core::DecodeBudgetContext::new(norito::canonical_decode_limits(48 * 1024 * 1024))
+    }
     use super::*;
     use axum::http::Uri;
     use iroha_core::{
@@ -2635,6 +2712,30 @@ mod tests {
     }
 
     #[test]
+    fn canonical_account_header_obeys_original_cumulative_codec_owner() {
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        let literal = account.to_canonical_hex().unwrap();
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let before = owner.allocation_context().consumed_allocated_bytes();
+        let first =
+            parse_account_header_value(&state, &literal, owner.allocation_context()).unwrap();
+        let after = owner.allocation_context().consumed_allocated_bytes();
+        assert_eq!(first, account);
+        assert!(after > before);
+        parse_account_header_value(&state, &literal, owner.allocation_context()).unwrap();
+        assert!(owner.allocation_context().consumed_allocated_bytes() > after);
+        let refused =
+            norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(1, 1, 1, 1, 1));
+        assert!(matches!(
+            parse_account_header_value(&state, &literal, &refused),
+            Err(crate::Error::Query(ValidationFail::QueryFailed(
+                QueryExecutionFail::CapacityLimit
+            )))
+        ));
+    }
+
+    #[test]
     fn canonical_account_alias_limit_precedes_the_wider_controller_hex_limit() {
         let excessive = format!(
             "{}@d",
@@ -3012,6 +3113,7 @@ mod tests {
             &uri,
             body,
             None,
+            &standalone_auth_context(),
         )
         .expect_err("a request signed for a different genesis lineage must fail");
         let wrong_uri: Uri = "/v1/subscriptions/plans"
@@ -3025,6 +3127,7 @@ mod tests {
             &wrong_uri,
             body,
             None,
+            &standalone_auth_context(),
         )
         .expect_err("a signature for another subscription path must fail");
         verify_canonical_network_request(
@@ -3035,6 +3138,7 @@ mod tests {
             &uri,
             br#"{"payload_public_key":"tampered"}"#,
             None,
+            &standalone_auth_context(),
         )
         .expect_err("a signature for another subscription body must fail");
         let verified = verify_canonical_network_request(
@@ -3045,6 +3149,7 @@ mod tests {
             &uri,
             body,
             None,
+            &standalone_auth_context(),
         )
         .expect("exact-network request verification")
         .expect("signed identity");
@@ -3057,6 +3162,7 @@ mod tests {
             &uri,
             body,
             None,
+            &standalone_auth_context(),
         )
         .expect_err("an accepted exact-network nonce must be one-shot");
         assert!(matches!(
@@ -3092,6 +3198,7 @@ mod tests {
             &uri,
             body,
             None,
+            &standalone_auth_context(),
         )
         .expect_err("a payload-declared key is not an eligible on-ledger principal");
         assert_missing_account_rejection(error);
@@ -3114,17 +3221,31 @@ mod tests {
             &body,
             "fee-quote-self-register-success",
         );
-        let verified = verify_fee_quote_canonical_request(&state, &headers, &method, &uri, &body)
-            .expect("self-registering authority should authenticate")
-            .expect("signed request identity");
+        let verified = verify_fee_quote_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &body,
+            &standalone_auth_context(),
+        )
+        .expect("self-registering authority should authenticate")
+        .expect("signed request identity");
         assert_eq!(verified.account, authority);
         assert_eq!(verified.signer, key_pair.public_key().clone());
         assert_eq!(
             verified.verified_signers,
             vec![key_pair.public_key().clone()]
         );
-        let replay = verify_fee_quote_canonical_request(&state, &headers, &method, &uri, &body)
-            .expect_err("accepted fallback must use the canonical replay cache");
+        let replay = verify_fee_quote_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &body,
+            &standalone_auth_context(),
+        )
+        .expect_err("accepted fallback must use the canonical replay cache");
         assert!(matches!(
             replay,
             crate::Error::Query(ValidationFail::NotPermitted(message))
@@ -3157,6 +3278,7 @@ mod tests {
             &method,
             &quote_uri,
             &registers_other,
+            &standalone_auth_context(),
         )
         .expect_err("registration of another account must not qualify");
         assert_missing_account_rejection(error);
@@ -3176,6 +3298,7 @@ mod tests {
             &method,
             &quote_uri,
             &mismatched_authority,
+            &standalone_auth_context(),
         )
         .expect_err("header and payload authorities must match");
         assert_missing_account_rejection(error);
@@ -3201,6 +3324,7 @@ mod tests {
             &method,
             &quote_uri,
             &multisig_body,
+            &standalone_auth_context(),
         )
         .expect_err("absent multisig authority must require a materialised WSV policy");
         assert_missing_account_rejection(error);
@@ -3227,6 +3351,7 @@ mod tests {
                 &method,
                 &quote_uri,
                 &correct_body,
+                &standalone_auth_context(),
             )
             .expect_err("fee-quote fallback must require canonical account-address hex");
             assert!(matches!(
@@ -3250,6 +3375,7 @@ mod tests {
             &method,
             &quote_uri,
             &correct_body,
+            &standalone_auth_context(),
         )
         .expect_err("embedded authority controller must verify the request");
         assert!(matches!(
@@ -3275,6 +3401,7 @@ mod tests {
             &method,
             &other_uri,
             &correct_body,
+            &standalone_auth_context(),
         )
         .expect_err("fallback must not broaden another endpoint");
         assert_missing_account_rejection(error);
@@ -3294,6 +3421,7 @@ mod tests {
             &method,
             &quote_uri,
             malformed_body,
+            &standalone_auth_context(),
         )
         .expect_err("malformed body must not qualify an absent account");
         assert_missing_account_rejection(error);
@@ -3317,8 +3445,15 @@ mod tests {
             &body,
             "fee-quote-registered-controller-wins",
         );
-        let error = verify_fee_quote_canonical_request(&state, &headers, &method, &uri, &body)
-            .expect_err("registered controller verification must not fall back");
+        let error = verify_fee_quote_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &body,
+            &standalone_auth_context(),
+        )
+        .expect_err("registered controller verification must not fall back");
         assert!(matches!(
             error,
             crate::Error::Query(ValidationFail::NotPermitted(message))
@@ -3362,9 +3497,16 @@ mod tests {
             axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
         );
         headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
-        let verified =
-            verify_canonical_request(&state, &headers, &method, &uri, &[], Some(&account))
-                .expect("verify");
+        let verified = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            Some(&account),
+            &standalone_auth_context(),
+        )
+        .expect("verify");
         assert_eq!(
             verified,
             Some(VerifiedCanonicalRequest {
@@ -3416,9 +3558,16 @@ mod tests {
                 axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
             );
             headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
-            let err =
-                verify_canonical_request(&state, &headers, &method, &uri, &[], Some(&account))
-                    .expect_err("noncanonical signature header text must fail before verification");
+            let err = verify_canonical_request(
+                &state,
+                &headers,
+                &method,
+                &uri,
+                &[],
+                Some(&account),
+                &standalone_auth_context(),
+            )
+            .expect_err("noncanonical signature header text must fail before verification");
             match err {
                 crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                     assert!(
@@ -3467,9 +3616,16 @@ mod tests {
             axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
         );
         headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
-        let verified =
-            verify_canonical_request(&state, &headers, &method, &uri, &[], Some(&account))
-                .expect("verify");
+        let verified = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            Some(&account),
+            &standalone_auth_context(),
+        )
+        .expect("verify");
         assert_eq!(
             verified,
             Some(VerifiedCanonicalRequest {
@@ -3486,7 +3642,8 @@ mod tests {
         let canonical = account.to_canonical_hex().expect("canonical account hex");
         assert!(canonical.is_ascii());
         assert_eq!(
-            parse_account_header_value(&state, &canonical).expect("canonical account header"),
+            parse_account_header_value(&state, &canonical, &standalone_auth_context())
+                .expect("canonical account header"),
             account
         );
 
@@ -3509,7 +3666,7 @@ mod tests {
             canonical[..canonical.len() - 1].to_owned(),
             String::from_utf8(forged_class).expect("forged lowercase header hex"),
         ] {
-            parse_account_header_value(&state, &invalid)
+            parse_account_header_value(&state, &invalid, &standalone_auth_context())
                 .expect_err("non-ASCII or noncanonical account header must fail closed");
         }
     }
@@ -3519,7 +3676,8 @@ mod tests {
         let state = minimal_state_with_account(&account);
         bind_account_alias_for_test(&state, &account, "wallet@universal");
         assert_eq!(
-            parse_account_header_value(&state, "wallet@universal").expect("active alias"),
+            parse_account_header_value(&state, "wallet@universal", &standalone_auth_context())
+                .expect("active alias"),
             account
         );
         for invalid in [
@@ -3531,7 +3689,7 @@ mod tests {
             "wállét@universal",
             "missing@universal",
         ] {
-            parse_account_header_value(&state, invalid)
+            parse_account_header_value(&state, invalid, &standalone_auth_context())
                 .expect_err("noncanonical or inactive account header alias must fail closed");
         }
     }
@@ -3562,8 +3720,16 @@ mod tests {
             axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
         );
         headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
-        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-            .expect_err("must fail");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("must fail");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("signature"))
@@ -3597,8 +3763,16 @@ mod tests {
             axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
         );
         headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
-        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-            .expect_err("inert signature payload must fail");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("inert signature payload must fail");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(
@@ -3662,8 +3836,16 @@ mod tests {
                 HEADER_NONCE,
                 axum::http::HeaderValue::from_str(&nonce).unwrap(),
             );
-            let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-                .expect_err("malformed Ed25519 signature R must fail before backend verify");
+            let err = verify_canonical_request(
+                &state,
+                &headers,
+                &method,
+                &uri,
+                &[],
+                None,
+                &standalone_auth_context(),
+            )
+            .expect_err("malformed Ed25519 signature R must fail before backend verify");
             match err {
                 crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                     assert!(
@@ -3715,6 +3897,7 @@ mod tests {
                 &uri,
                 unsigned_body,
                 Some(&account),
+                &standalone_auth_context(),
             )
             .expect_err("noncanonical body signature base64 must fail before verification");
             match err {
@@ -3777,6 +3960,7 @@ mod tests {
                 &uri,
                 unsigned_body,
                 Some(&account),
+                &standalone_auth_context(),
             )
             .expect_err("body malformed Ed25519 signature R must fail before backend verify");
             match err {
@@ -3828,8 +4012,16 @@ mod tests {
             axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
         );
         headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
-        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], Some(&other))
-            .unwrap_err();
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            Some(&other),
+            &standalone_auth_context(),
+        )
+        .unwrap_err();
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("signed account does not match request path"))
@@ -3860,8 +4052,16 @@ mod tests {
             axum::http::HeaderValue::from_str(&BASE64_STANDARD.encode(signature.payload()))
                 .unwrap(),
         );
-        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-            .expect_err("freshness headers must be required");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("freshness headers must be required");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("must be set together"));
@@ -3906,10 +4106,26 @@ mod tests {
             axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
         );
         headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
-        verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-            .expect("first request must pass");
-        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-            .expect_err("replay must fail");
+        verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            None,
+            &standalone_auth_context(),
+        )
+        .expect("first request must pass");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("replay must fail");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("nonce already used"));
@@ -3990,15 +4206,31 @@ mod tests {
             HEADER_NONCE,
             axum::http::HeaderValue::from_str(&nonce).unwrap(),
         );
-        verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-            .expect("first request must pass");
+        verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            None,
+            &standalone_auth_context(),
+        )
+        .expect("first request must pass");
         configure(CanonicalRequestAuthConfig {
             max_clock_skew: Duration::from_secs(120),
             ..CanonicalRequestAuthConfig::default()
         })
         .expect("valid reconfigured app-auth window");
-        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-            .expect_err("replay must still fail after reconfigure");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("replay must still fail after reconfigure");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("nonce already used"));
@@ -4047,8 +4279,16 @@ mod tests {
             axum::http::HeaderValue::from_static("1"),
         );
         headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
-        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-            .expect_err("stale request must fail");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("stale request must fail");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("timestamp outside allowed skew"));
@@ -4103,8 +4343,16 @@ mod tests {
             axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
         );
         headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
-        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
-            .expect_err("multisig app-auth must fail closed");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            &[],
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("multisig app-auth must fail closed");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("X-Iroha-Witness"));
@@ -4309,10 +4557,17 @@ mod tests {
             &[&signer_one, &signer_two],
         );
         let headers = witness_headers(&account, &witness);
-        let verified =
-            verify_canonical_request(&state, &headers, &method, &uri, b"{\"deploy\":true}", None)
-                .expect("verify")
-                .expect("witness auth must be present");
+        let verified = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            b"{\"deploy\":true}",
+            None,
+            &standalone_auth_context(),
+        )
+        .expect("verify")
+        .expect("witness auth must be present");
         assert_eq!(verified.account, account);
         assert_eq!(verified.signer, signer_one.public_key().clone());
         assert_eq!(
@@ -4377,9 +4632,16 @@ mod tests {
             signature: checked_signature(signer.private_key(), &conflicting_frame),
         });
         let rejected_headers = witness_headers(&account, &witness);
-        let rejected_error =
-            verify_canonical_request(&state, &rejected_headers, &method, &uri, body, None)
-                .expect_err("a signature over the conflicting root must fail");
+        let rejected_error = verify_canonical_request(
+            &state,
+            &rejected_headers,
+            &method,
+            &uri,
+            body,
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("a signature over the conflicting root must fail");
         assert!(matches!(
             rejected_error,
             crate::Error::Query(ValidationFail::NotPermitted(message))
@@ -4394,14 +4656,31 @@ mod tests {
                 .parse()
                 .expect("HTTP header"),
         );
-        let verified = verify_canonical_request(&state, &headers, &method, &uri, body, None)
-            .expect("SDK-produced witness must verify")
-            .expect("witness auth is present");
+        let verified = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            body,
+            None,
+            &standalone_auth_context(),
+        )
+        .expect("SDK-produced witness must verify")
+        .expect("witness auth is present");
         assert_eq!(verified.account, account);
         assert_eq!(verified.signer, signer.public_key().clone());
         assert_eq!(verified.verified_signers, vec![signer.public_key().clone()]);
         assert!(
-            verify_canonical_request(&state, &headers, &method, &uri, body, None).is_err(),
+            verify_canonical_request(
+                &state,
+                &headers,
+                &method,
+                &uri,
+                body,
+                None,
+                &standalone_auth_context()
+            )
+            .is_err(),
             "successful SDK witness must retain replay protection"
         );
     }
@@ -4453,6 +4732,7 @@ mod tests {
                 &uri,
                 b"{\"deploy\":true}",
                 None,
+                &standalone_auth_context(),
             )
             .expect_err("malformed witness signature R must fail before backend verify");
             match err {
@@ -4497,8 +4777,16 @@ mod tests {
         let mut duplicate = witness.clone();
         duplicate.signatures.push(duplicate.signatures[0].clone());
         let headers = witness_headers(&account, &duplicate);
-        let err = verify_canonical_request(&state, &headers, &method, &uri, b"{}", None)
-            .expect_err("duplicate witness signers must fail");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            b"{}",
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("duplicate witness signers must fail");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("duplicate signer"));
@@ -4536,8 +4824,16 @@ mod tests {
             &[&signer_one, &signer_two],
         );
         let headers = witness_headers(&account, &witness);
-        let err = verify_canonical_request(&state, &headers, &method, &uri, b"{}", None)
-            .expect_err("threshold failure must reject witness");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            b"{}",
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("threshold failure must reject witness");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("threshold"));
@@ -4573,10 +4869,26 @@ mod tests {
             &[&signer_one, &signer_two],
         );
         let headers = witness_headers(&account, &witness);
-        verify_canonical_request(&state, &headers, &method, &uri, b"{}", None)
-            .expect("first multisig witness must pass");
-        let err = verify_canonical_request(&state, &headers, &method, &uri, b"{}", None)
-            .expect_err("replayed multisig witness must fail");
+        verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            b"{}",
+            None,
+            &standalone_auth_context(),
+        )
+        .expect("first multisig witness must pass");
+        let err = verify_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &uri,
+            b"{}",
+            None,
+            &standalone_auth_context(),
+        )
+        .expect_err("replayed multisig witness must fail");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("nonce already used"));

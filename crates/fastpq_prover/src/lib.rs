@@ -9,6 +9,10 @@
 //!
 //! The public API is intentionally narrow and uses Norito-friendly types so
 //! callers can persist artifacts without pulling in Serde.
+//!
+//! Relations are described against the typed [`air`] interface. The committed
+//! engine accepts only its sealed transfer relations through it; every other
+//! relation has an uncommitted algebraic reference there, which is not a proof.
 
 #![cfg_attr(
     not(feature = "dev-tools"),
@@ -112,6 +116,8 @@ pub use axt_binding::{
     verify_axt_proof_envelope_against_anchor_and_claimed_source_v1,
     verify_axt_proof_envelope_with_outer_metadata,
 };
+/// Typed semantic AIR, field, public-IO, work-limit and observer interface.
+pub use backend::air;
 /// Canonical masked quantity-artifact production and bounded verification.
 pub use backend::offline_compact;
 #[cfg(any(test, feature = "dev-tools"))]

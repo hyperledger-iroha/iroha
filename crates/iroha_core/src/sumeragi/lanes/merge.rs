@@ -618,5 +618,8 @@ impl Admissibility {
 mod tests;
 
 #[cfg(test)]
+pub(crate) use tests::with_original_lane_merge_fixture;
+
+#[cfg(test)]
 #[path = "merge_storage_tests.rs"]
 mod storage_tests;

@@ -331,8 +331,11 @@ fn historical_lane_authority_progresses_cancelled_original_scan_before_new_reque
 fn historical_lane_authority_rejects_changed_complete_creation_write_root() {
     let (chain, record, _epoch) = fixed_lane_chain();
     let budget = chain.state().ivm_execution_budget();
-    let before = budget.reserved_bytes();
     let creation = chain.committed(record.created_at);
+    assert!(creation.block().belongs_to(&budget));
+    // Include the actual retained creation block in the fixture baseline;
+    // the refused scan must refund only the owners it acquired itself.
+    let before = budget.reserved_bytes();
     let path = chain
         .kura()
         .store_root()

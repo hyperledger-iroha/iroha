@@ -874,6 +874,10 @@ fn ledger_executed_block_wire_cached_loading_is_safe_from_256_kib_callers() {
                         paths.contains_key("/v1/accounts/capabilities"),
                         "app API capability route missing from {variant} OpenAPI",
                     );
+                    assert!(
+                        paths.contains_key(route_catalog::core::RESOURCE_NAMES_STATE.path()),
+                        "ledger original carrier missing from {variant} OpenAPI",
+                    );
                 }
             }
         })
@@ -1281,51 +1285,72 @@ fn generated_spec_includes_documented_paths() {
             "feature-pruned path contract drift for {path}"
         );
     }
+    for path in
+        openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.9")
+    {
+        assert!(
+            !paths.contains_key(path),
+            "retired KAGEMUSHA transport leaked into OpenAPI: {path}"
+        );
+    }
     assert!(!paths.contains_key("/v1/attestation/issue"));
 }
 #[test]
-fn generated_spec_omits_retired_wallet_routes_and_schemas() {
-    let document = generate_spec();
-    let paths = document
-        .get("paths")
-        .and_then(Value::as_object)
-        .expect("paths section");
-    let schemas = component_schemas(&document);
-    let wallet_tags = document
-        .get("tags")
-        .and_then(Value::as_array)
-        .expect("top-level tags")
-        .iter()
-        .filter_map(|tag| tag.get("name").and_then(Value::as_str))
-        .filter(|name| name.eq_ignore_ascii_case("KAGEMUSHA"))
-        .collect::<Vec<_>>();
-    assert!(
-        wallet_tags.is_empty(),
-        "retired KAGEMUSHA tag: {wallet_tags:?}"
-    );
-    let retired_product = ["line", "off"].into_iter().rev().collect::<String>();
-    for suffix in ["readiness", "top-up", "redeem", "operations/{operation_id}"] {
-        let retired_path = format!("/v1/{retired_product}/{suffix}");
-        assert!(
-            !paths.contains_key(&retired_path),
-            "retired product route leaked into the first-release OpenAPI: {retired_path}"
-        );
-    }
-    assert!(
-        paths.keys().all(|path| !path.starts_with("/v1/kagemusha/")),
-        "retired KAGEMUSHA route family leaked into OpenAPI"
-    );
-    for retired in [
-        "KagemushaReadinessV1",
-        "KagemushaOperationStatusV1",
-        "KagemushaAuthorityStateRefV1",
+fn openapi_authorities_retire_kagemusha_transport_and_proposal_inputs() {
+    for (variant, document) in [
+        ("package-local", canonical_document()),
+        ("compiled", generate_spec()),
     ] {
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
         assert!(
-            !schemas.contains_key(retired),
-            "retired KAGEMUSHA schema leaked into OpenAPI: {retired}"
+            paths.keys().all(|path| !path.starts_with("/v1/kagemusha/")),
+            "retired KAGEMUSHA transport remains in {variant} OpenAPI"
         );
+        assert!(
+            document
+                .get("tags")
+                .and_then(Value::as_array)
+                .expect("tags section")
+                .iter()
+                .all(|tag| tag
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_none_or(|name| !name.eq_ignore_ascii_case("KAGEMUSHA")))
+        );
+        let retired_product = ["line", "off"].into_iter().rev().collect::<String>();
+        for suffix in ["readiness", "top-up", "redeem", "operations/{operation_id}"] {
+            let retired_path = format!("/v1/{retired_product}/{suffix}");
+            assert!(
+                !paths.contains_key(&retired_path),
+                "retired product route remains in {variant}: {retired_path}"
+            );
+        }
+        let schemas = component_schemas(&document);
+        for retired in [
+            "KagemushaReadinessV1",
+            "KagemushaOperationStatusV1",
+            "KagemushaAuthorityStateV1",
+            "KagemushaAuthorityStateRefV1",
+            "OrdinaryWalletCurrentOriginalV1",
+            "OrdinaryWalletCurrentRequestV1",
+            "OrdinaryMintIssuerPurposeOriginalV1",
+            "OrdinaryMintIssuerPurposeRequestV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierPolicyInstallV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseInstallV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseActivateV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1",
+        ] {
+            assert!(
+                !schemas.contains_key(retired),
+                "retired input/carrier schema remains in {variant}: {retired}"
+            );
+        }
     }
 }
+
 #[test]
 fn musubi_v1_openapi_matches_the_complete_catalog_and_declares_models() {
     let document = generate_spec();
@@ -2815,7 +2840,7 @@ fn scoped_native_original_reads_match_canonical_media_and_resource_bounds() {
             .expect("native original content");
         assert_eq!(
             content.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["application/json", "application/x-norito"]
+            vec!["application/json", "application/x-norito"]
         );
         assert_eq!(
             content

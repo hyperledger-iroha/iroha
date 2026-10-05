@@ -1275,12 +1275,26 @@ mod tests {
         native_job(Quantity::from(100_u32), &[10])
     }
     fn native_job(balance: Quantity, amounts: &[u32]) -> FastpqWitnessJob {
-        let (_chain, source) =
+        native_job_with_chain(balance, amounts).1
+    }
+    fn native_job_with_chain(
+        balance: Quantity,
+        amounts: &[u32],
+    ) -> (
+        crate::sumeragi::test_chain::CertifiedTestChain,
+        FastpqWitnessJob,
+    ) {
+        let (chain, source) =
             crate::fastpq::finalized_source::test_fixture::original_source(balance, amounts);
-        match FastpqWitnessJob::from_finalized(source) {
+        let job = match FastpqWitnessJob::from_finalized(source) {
             Ok(job) => job,
             Err((_, error)) => panic!("genuine source admission failed: {error}"),
-        }
+        };
+        // These assertions measure the whole original State pool, including its
+        // serialized executor and archives. Their fixture owners must stay alive
+        // until the measured handoff finishes; dropping its detached worker can
+        // release unrelated charges concurrently with an exact source comparison.
+        (chain, job)
     }
     fn prepare_job(job: &FastpqWitnessJob) -> source::PreparedSourceEntry<'_> {
         source::prepare(
@@ -1527,10 +1541,10 @@ mod tests {
             backpressure: None,
             ready: Arc::new(AtomicBool::new(true)),
         };
-        let first = sample_job();
+        let (_first_chain, first) = native_job_with_chain(Quantity::from(100_u32), &[10]);
         let first_hash = first.block_hash();
         let _first_receipt = handle.submit(first).expect("first queue slot");
-        let second = sample_job();
+        let (_second_chain, second) = native_job_with_chain(Quantity::from(100_u32), &[10]);
         let pointer = std::ptr::from_ref(second.source.entry(0).unwrap().effects()) as usize;
         let credits = second.source.pool().reserved_bytes();
         let Err((returned, refusal)) = handle.submit(second) else {
@@ -1580,7 +1594,7 @@ mod tests {
         let engine: Arc<dyn FastpqProofEngine> = Arc::new(MockEngine {
             calls: Arc::clone(&calls),
         });
-        let job = sample_job();
+        let (_chain, job) = native_job_with_chain(Quantity::from(100_u32), &[10]);
         let pool = job.source.pool().clone();
         let before = pool.reserved_bytes();
         let demand = source::allocation_bytes(
@@ -1654,7 +1668,7 @@ mod tests {
     #[test]
     fn backend_refusal_and_panic_return_original_job_and_release_only_work_credit() {
         for panic in [false, true] {
-            let job = sample_job();
+            let (_chain, job) = native_job_with_chain(Quantity::from(100_u32), &[10]);
             let pointer = std::ptr::from_ref(job.source.entry(0).unwrap().effects()) as usize;
             let credits = job.source.pool().reserved_bytes();
             let engine: Arc<dyn FastpqProofEngine> = Arc::new(RefusingEngine { panic });
@@ -1681,7 +1695,7 @@ mod tests {
         let engine: Arc<dyn FastpqProofEngine> = Arc::new(MockEngine {
             calls: Arc::new(std::sync::Mutex::new(0)),
         });
-        let job = sample_job();
+        let (_chain, job) = native_job_with_chain(Quantity::from(100_u32), &[10]);
         let pool = job.source.pool().clone();
         let before = pool.reserved_bytes();
         let outcome = process_job(&engine, job, 0, &ShutdownSignal::new(), None);
@@ -1846,7 +1860,7 @@ mod tests {
     fn work_admission_scans_source_once_and_each_original_tape_once() {
         for count in [1_usize, 2, 4] {
             let amounts = (1..=u32::try_from(count).unwrap()).collect::<Vec<_>>();
-            let (_, source) = crate::fastpq::finalized_source::test_fixture::original_source(
+            let (_chain, source) = crate::fastpq::finalized_source::test_fixture::original_source(
                 Quantity::from(100_u32),
                 &amounts,
             );

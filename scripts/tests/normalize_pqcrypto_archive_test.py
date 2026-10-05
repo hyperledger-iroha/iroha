@@ -434,3 +434,30 @@ assert_selected_cargo_lock() { :; }
     records = tmp_path / "cargo-messages/aarch64-apple-darwin.jsonl"
     assert json.loads(records.read_text()) == {"reason": "build-finished", "success": True}
     assert "--message-format=json-render-diagnostics" in (tmp_path / "arguments.txt").read_text().splitlines()
+
+
+def test_current_cargo_selection_accepts_real_accelerator_prelude_and_binds_raw_bytes(tmp_path):
+    refs, _, _, output = cargo_fixture(tmp_path)
+    messages, package = cargo_context(tmp_path, output)
+    prelude = "[cargo-fast] CARGO_BUILD_JOBS=cargo-default\n[cargo-fast] linker=system-default\n"
+    raw = prelude + messages.read_text()
+    messages.write_text(raw)
+    actual, provenance = NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios", messages, package)
+    assert actual == refs
+    assert provenance["cargo_messages_sha256"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert provenance["cargo_build_output"] == str(output)
+
+
+@pytest.mark.parametrize("defect", ["late_banner", "foreign_banner", "duplicate_member", "non_message", "duplicate_terminal"])
+def test_current_cargo_selection_refuses_noise_or_ambiguous_json_even_with_accelerator_prelude(tmp_path, defect):
+    _, _, _, output = cargo_fixture(tmp_path)
+    messages, package = cargo_context(tmp_path, output)
+    rows = messages.read_text().splitlines()
+    if defect == "late_banner": rows.insert(1, "[cargo-fast] late diagnostics")
+    elif defect == "foreign_banner": rows.insert(0, "[foreign-wrapper] ignored?")
+    elif defect == "duplicate_member": rows[0] = rows[0].replace('"reason": "build-script-executed"', '"reason": "foreign", "reason": "build-script-executed"')
+    elif defect == "non_message": rows.insert(0, '{}')
+    elif defect == "duplicate_terminal": rows.append(rows[-1])
+    messages.write_text("[cargo-fast] inert known prelude\n" + "\n".join(rows) + "\n")
+    with pytest.raises(ValueError):
+        NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios", messages, package)

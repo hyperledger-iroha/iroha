@@ -8,6 +8,8 @@ pub mod da;
 pub mod http;
 /// Shared binary resolution helpers for `kagami`-driven localnet tests.
 pub mod kagami;
+/// Finite manifest signing budgets retained through native fixture consumption.
+pub mod manifest;
 /// Prometheus metrics parsing utilities shared by integration tests.
 pub mod metrics;
 /// Bounded process helpers for integration tests.

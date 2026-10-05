@@ -39,6 +39,7 @@ internal object ParliamentProposalValidatorV1 {
         val proposal = objectValue(JsonParser.parse(text), "proposal")
         exact(proposal, setOf("kind", "payload"), "proposal")
         val kind = text(proposal["kind"], "proposal.kind")
+        require(kind in ParliamentApiV1.PROPOSAL_KINDS) { "proposal.kind is unknown or retired" }
         val payload = objectValue(proposal["payload"], "proposal.payload")
         when (kind) {
             "DeployContract" -> deployContract(payload)

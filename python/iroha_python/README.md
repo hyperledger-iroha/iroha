@@ -2557,8 +2557,10 @@ creates the immutable Musubi purpose binding. The retired four-field shape is
 rejected. Completion always requires the exact six-field hard cut:
 `order_id`, `provider_id`, `completion_epoch`, `expected_authority`,
 `expected_assignment_revision`, and `finalized_anchor`. The authority retains
-the provider owner and four-part signer-policy chain; legacy, missing, and
-unknown fields fail decoding. Call `.to_payload()` for the schema-closed SDK
+the provider owner, independently selected completion signer and four-part
+signer-policy chain. Both accounts require exact canonical I105 identities. The
+completion signer is required and is never inferred from the provider owner;
+retired owner-only authorities, missing fields and unknown fields fail decoding. Call `.to_payload()` for the schema-closed SDK
 JSON model or `.to_instruction()` for canonical Norito after rebuilding the
 native extension from the same source revision.
 

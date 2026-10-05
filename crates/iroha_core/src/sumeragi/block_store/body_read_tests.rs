@@ -334,3 +334,69 @@ fn stored_certificate_allocator_refusal_keeps_original_read_and_retries() {
     drop(body);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+/// Storage stage of the resource contract (`specs/zk_resource_contract.json`,
+/// `block.max_block_bytes`): the stored-body projection is bounded by the committed payload
+/// limit of the independently authenticated height. A stored proposal of exactly the limit is
+/// restored; under a limit one byte smaller the read ends as storage corruption on every
+/// attempt and reserves nothing, so no oversize body is rebuilt from disk.
+#[test]
+fn stored_body_projection_accepts_the_payload_limit_and_refuses_one_over() {
+    let (block, source, crypto) = fixture();
+    let payload_len = block.resultless_proposal_wire_len().unwrap();
+    assert!(payload_len > 0);
+    let with_limit = |max_block_bytes: usize| {
+        let mut config = source.config().clone();
+        config.params.max_block_bytes = u32::try_from(max_block_bytes).unwrap();
+        AvailabilitySource::new(
+            source.instance(),
+            source.height(),
+            source.block_hash(),
+            config,
+        )
+        .unwrap()
+    };
+
+    // Exactly the committed limit.
+    let budget = AllocationBudget::new(1 << 25);
+    let exact = with_limit(payload_len);
+    let mut read = StoredBodyRead::new(
+        exact.clone(),
+        Some(block.clone()),
+        budget.clone(),
+        crypto.clone(),
+    );
+    let BodyReadPoll::Ready(restoration) = read.poll(&budget).unwrap() else {
+        panic!("a stored proposal of exactly the payload limit is restored");
+    };
+    assert_eq!(restoration.source(), &exact);
+    drop((restoration, read));
+    assert_eq!(budget.reserved_bytes(), 0);
+
+    // One byte over the committed limit.
+    let budget = AllocationBudget::new(1 << 25);
+    let mut read = StoredBodyRead::new(
+        with_limit(payload_len - 1),
+        Some(block.clone()),
+        budget.clone(),
+        crypto,
+    );
+    for _ in 0..2 {
+        assert!(
+            matches!(
+                read.poll(&budget),
+                Err(BodyReadError::Io(ref error)) if error.kind() == io::ErrorKind::InvalidData
+            ),
+            "one byte over the payload limit is a deterministic storage refusal"
+        );
+        let Stage::Projecting(job) = &read.stage else {
+            panic!("the refused projection keeps its original decoded source");
+        };
+        assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+            &job.source().source,
+            &block
+        ));
+    }
+    drop(read);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

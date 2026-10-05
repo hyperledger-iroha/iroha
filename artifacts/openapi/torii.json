@@ -10258,50 +10258,29 @@
           },
           "box": {
             "additionalProperties": false,
+            "description": "One native instruction frame. Decode instruction with the SDK native InstructionBox decoder; no parallel instruction JSON tree is returned.",
             "properties": {
-              "encoded": {
-                "description": "Exact lowercase Norito instruction-box bytes.",
-                "pattern": "^0x[0-9a-f]+$",
-                "type": "string"
-              },
               "framed_sha256": {
-                "description": "SHA-256 of the canonical wire-id-framed instruction bytes returned by governance draft endpoints.",
-                "pattern": "^0x[0-9a-f]{64}$",
+                "description": "SHA-256 of the exact decoded canonical InstructionBox frame, as lowercase hex without a prefix.",
+                "pattern": "^[0-9a-f]{64}$",
                 "type": "string"
               },
-              "json": {
-                "additionalProperties": false,
-                "properties": {
-                  "encoded": {
-                    "pattern": "^[0-9a-f]+$",
-                    "type": "string"
-                  },
-                  "kind": {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "payload": {
-                    "$ref": "#/components/schemas/ExplorerInstructionPayload",
-                    "description": "Typed public instruction payload. ProposeSccpRouteGovernance is exposed with its exact network-bound v1 proposal; signer secrets and caller-selected lifecycle controls are never part of this payload."
-                  },
-                  "wire_id": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "payload",
-                  "wire_id",
-                  "encoded"
-                ],
-                "type": "object"
+              "instruction": {
+                "description": "Canonical padded RFC 4648 base64 of one native Norito InstructionBox frame.",
+                "minLength": 4,
+                "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)$",
+                "type": "string"
+              },
+              "wire_id": {
+                "description": "Registered native instruction wire identifier.",
+                "minLength": 1,
+                "type": "string"
               }
             },
             "required": [
-              "encoded",
+              "wire_id",
               "framed_sha256",
-              "json"
+              "instruction"
             ],
             "type": "object"
           },
@@ -10341,17 +10320,6 @@
           "index"
         ],
         "type": "object"
-      },
-      "ExplorerInstructionPayload": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/ExplorerSccpRouteGovernanceInstructionPayload"
-          },
-          {
-            "$ref": "#/components/schemas/JsonValue"
-          }
-        ],
-        "description": "Typed public explorer payload when a dedicated schema is available; otherwise the canonical public instruction projection."
       },
       "ExplorerInstructionsPage": {
         "additionalProperties": false,
@@ -10456,32 +10424,119 @@
         ],
         "type": "object"
       },
-      "ExplorerSccpRouteGovernanceInstructionPayload": {
+      "ExplorerTransactionDetail": {
         "additionalProperties": false,
         "properties": {
-          "value": {
-            "$ref": "#/components/schemas/ExplorerSccpRouteGovernanceInstructionValue"
+          "authority": {
+            "minLength": 1,
+            "type": "string"
           },
-          "variant": {
-            "const": "ProposeSccpRouteGovernance"
+          "block": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "executable": {
+            "type": "string"
+          },
+          "executable_payload": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "nonce": {
+            "format": "uint64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExplorerTransactionRejection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature": {
+            "pattern": "^(?:[0-9a-f]{2})+$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "Committed",
+              "Rejected"
+            ],
+            "type": "string"
+          },
+          "time_to_live": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ms": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "ms"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
-          "variant",
-          "value"
+          "authority",
+          "hash",
+          "block",
+          "created_at",
+          "executable",
+          "status",
+          "rejection_reason",
+          "executable_payload",
+          "metadata",
+          "nonce",
+          "signature",
+          "time_to_live"
         ],
         "type": "object"
       },
-      "ExplorerSccpRouteGovernanceInstructionValue": {
+      "ExplorerTransactionRejection": {
         "additionalProperties": false,
-        "description": "Exact v1 proposal of one certificate-only ProposeSccpRouteGovernance instruction; no lifecycle control or signing material is included.",
         "properties": {
-          "proposal": {
-            "$ref": "#/components/schemas/SccpGovernanceProposalV1"
+          "message": {
+            "description": "Public display message for the original native rejection reason.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason": {
+            "description": "Canonical padded RFC 4648 base64 of one native Norito TransactionRejectionReason frame.",
+            "minLength": 4,
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)$",
+            "type": "string"
           }
         },
         "required": [
-          "proposal"
+          "reason",
+          "message"
         ],
         "type": "object"
       },
@@ -69491,7 +69546,7 @@
     },
     "/v1/explorer/instructions/{hash}/{index}": {
       "get": {
-        "description": "Fetch instruction detail for explorer usage. Registered SCCP governance proposals include their exact network-bound v1 proposal payload; signer secrets are never returned.",
+        "description": "Fetch instruction detail with the exact canonical native InstructionBox frame and its wire identifier and SHA-256. Decode the frame with the SDK native decoder to inspect the complete instruction, including governance proposals. Signer secrets are never returned.",
         "parameters": [
           {
             "description": "Transaction hash.",
@@ -70412,7 +70467,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ExplorerTransactionDetail"
                 }
               }
             },

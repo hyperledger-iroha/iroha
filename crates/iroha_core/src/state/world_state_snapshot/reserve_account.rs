@@ -114,7 +114,8 @@ fn encode_original<T: norito::NoritoSerialize>(
     let charge = budget
         .try_reserve_bytes(length)
         .map_err(|e| e.to_string())?;
-    norito::core::reserve_decode_allocation(length).map_err(|e| e.to_string())?;
+    // The bounded encoder charges its exact output allocation to the inherited codec
+    // scope. The independent original pool reservation remains with that same buffer.
     let bytes = norito::core::to_bytes_bounded(record, length).map_err(|e| e.to_string())?;
     // Tuple declaration order drops the bytes before releasing their exact reservation.
     Ok((bytes, charge))

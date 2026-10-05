@@ -5,6 +5,7 @@ mod planner_tests {
         ParliamentBeginInvitationAcceptanceV1, ParliamentCloseBallotRegistrationV1,
         ParliamentConsumeSortitionPulseBatchV1, ParliamentFailBallotNoResultV1,
         ParliamentFailBodyElectionNoRosterV1, ParliamentLifecycleTransitionV1,
+        ParliamentRegisterSortitionRequestV1,
     };
 
     /// World inputs of a driver plan served from fixed maps.
@@ -12,6 +13,7 @@ mod planner_tests {
     struct FixedPlanWorld {
         pulses: BTreeMap<(BeaconSessionId, u64), (BeaconPulseId, [u8; 32])>,
         key_session: Option<TleKeySessionId>,
+        candidates: Option<Vec<AccountId>>,
     }
 
     impl ParliamentPlanWorldV1 for FixedPlanWorld {
@@ -26,6 +28,103 @@ mod planner_tests {
         fn fresh_ballot_tle_key_session(&self, _height: u64) -> Option<TleKeySessionId> {
             self.key_session
         }
+
+        fn eligible_parliament_candidates(
+            &self,
+            _governance: &Governance,
+        ) -> Option<Vec<AccountId>> {
+            self.candidates.clone()
+        }
+    }
+
+    /// Apply `plan` as a driver would at `height` (the due batch, then that height's exact
+    /// transitions) through the reducer, asserting that persistence accepts every successor.
+    fn replay_plan(
+        state: &ParliamentAttemptStateV1,
+        plan: &ParliamentDriverPlanV1,
+        world: &FixedPlanWorld,
+        governance: &Governance,
+        height: u64,
+    ) -> ParliamentAttemptStateV1 {
+        let mut state = state.clone();
+        let id = state.attempt.id;
+        let exact = plan
+            .exact
+            .iter()
+            .filter(|exact| exact.height == height)
+            .map(|exact| &exact.transition);
+        for transition in plan.due.iter().chain(exact) {
+            let applied = match transition {
+                ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(payload) => {
+                    let request = state
+                        .election(&payload.election_attempt_id)
+                        .expect("planned election")
+                        .attempt
+                        .request;
+                    let pulse_available = world
+                        .verified_pulse(request.beacon_session_id, request.pulse_height)
+                        .is_some();
+                    state.fail_body_election_no_roster(
+                        id,
+                        payload.election_attempt_id,
+                        pulse_available,
+                        height,
+                    )
+                }
+                ParliamentLifecycleTransitionV1::SealBodyRoster(payload) => state
+                    .seal_body_roster(id, payload.election_attempt_id, height)
+                    .map(drop),
+                ParliamentLifecycleTransitionV1::AdvanceBodyPhase(payload) => state
+                    .advance_body_phase(
+                        id,
+                        payload.body_instance_id,
+                        payload.target,
+                        height,
+                        governance.parliament_public_finding_phase_blocks,
+                    ),
+                ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {
+                    // The executor's admission: a hidden body below the anonymity floor
+                    // records capacity evidence for the whole generation.
+                    let snapshot = world.candidates.clone().expect("planned snapshot");
+                    let hidden_body_requested = payload.requests.iter().any(|entry| {
+                        state.required_bodies().iter().any(|required| {
+                            required.body == entry.request.body
+                                && required.decision_mode
+                                    == ParliamentDecisionModeV1::HiddenBindingBallot
+                        })
+                    });
+                    if hidden_body_requested
+                        && !hidden_ballot_population_meets_anonymity_floor_v1(snapshot.len())
+                    {
+                        state.record_hidden_sortition_capacity_failure_batch(
+                            id,
+                            payload.requests.clone(),
+                            snapshot,
+                        )
+                    } else {
+                        state.register_sortition_request_batch(
+                            id,
+                            payload.requests.clone(),
+                            snapshot,
+                        )
+                    }
+                }
+                other => panic!("transition outside this replay: {other:?}"),
+            };
+            applied.expect("the reducer accepts every planned transition");
+            state
+                .validate()
+                .expect("persistence accepts every planned successor");
+        }
+        state
+    }
+
+    fn register_sortition(
+        requests: Vec<ParliamentSortitionRequestRegistrationV1>,
+    ) -> ParliamentLifecycleTransitionV1 {
+        ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+            ParliamentRegisterSortitionRequestV1 { requests },
+        )
     }
 
     fn plan_governance() -> Governance {
@@ -414,6 +513,343 @@ mod planner_tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn planner_retries_a_no_roster_election_with_the_exact_next_generation() {
+        // An attempt without a manager (SCCP) has nobody else to submit the retry, so the plan
+        // carries the exact next generation in the block of the failure it follows.
+        let mut state = policy_only_state();
+        let id = state.attempt.id;
+        state
+            .complete_qualification(id)
+            .expect("enter Policy Jury stage");
+        let logical = BeaconSessionId::for_network_v1(&network_id());
+        let (request, snapshot) = sortition_request(
+            id,
+            0,
+            ParliamentBody::PolicyJury,
+            12,
+            3,
+            3,
+            10,
+            20,
+            logical,
+            None,
+        );
+        let election_id = request.body_election_attempt_id;
+        state
+            .register_sortition_request(id, 0, request, snapshot)
+            .expect("register policy sortition");
+        let governance = Governance {
+            policy_jury_size: 3,
+            ..plan_governance()
+        };
+        let retry_snapshot = candidates(40, 4);
+        let world = FixedPlanWorld {
+            candidates: Some(retry_snapshot.clone()),
+            ..FixedPlanWorld::default()
+        };
+
+        let plan = state.plan_driver_v1(&world, &network_id(), &governance, 20, 23);
+        assert_eq!(
+            plan.due,
+            vec![ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(
+                ParliamentFailBodyElectionNoRosterV1 {
+                    election_attempt_id: election_id,
+                }
+            )]
+        );
+        let retry = sortition_request_intent(
+            id,
+            1,
+            ParliamentBody::PolicyJury,
+            retry_snapshot,
+            3,
+            23,
+            33,
+            logical,
+        );
+        assert_eq!(
+            plan.exact,
+            vec![ParliamentExactTransitionV1 {
+                height: 23,
+                transition: register_sortition(vec![ParliamentSortitionRequestRegistrationV1 {
+                    sequence: 1,
+                    request: retry,
+                }]),
+            }]
+        );
+        let replayed = replay_plan(&state, &plan, &world, &governance, 23);
+        assert_eq!(replayed.attempt.status, GovernanceAttemptStatusV1::Active);
+        assert_eq!(
+            replayed
+                .election(&retry.body_election_attempt_id)
+                .expect("redrawn election")
+                .attempt
+                .status,
+            BodyElectionAttemptStatusV1::AwaitingPulse
+        );
+
+        // Without the live electorate the generation cannot be derived.
+        let blind = state.plan_driver_v1(
+            &FixedPlanWorld::default(),
+            &network_id(),
+            &governance,
+            20,
+            23,
+        );
+        assert_eq!(blind.due, plan.due);
+        assert!(blind.exact.is_empty());
+    }
+
+    #[test]
+    fn planner_retries_hidden_capacity_evidence_in_the_next_block() {
+        let mut state = policy_only_state();
+        let id = state.attempt.id;
+        state
+            .complete_qualification(id)
+            .expect("enter Policy Jury stage");
+        let logical = BeaconSessionId::for_network_v1(&network_id());
+        let single = candidates(12, 1);
+        state
+            .record_hidden_sortition_capacity_failure_batch(
+                id,
+                vec![ParliamentSortitionRequestRegistrationV1 {
+                    sequence: 0,
+                    request: sortition_request_intent(
+                        id,
+                        0,
+                        ParliamentBody::PolicyJury,
+                        single.clone(),
+                        3,
+                        10,
+                        20,
+                        logical,
+                    ),
+                }],
+                single,
+            )
+            .expect("record sub-floor capacity evidence");
+        let governance = Governance {
+            policy_jury_size: 3,
+            ..plan_governance()
+        };
+        let grown = candidates(40, 3);
+        let world = FixedPlanWorld {
+            candidates: Some(grown.clone()),
+            ..FixedPlanWorld::default()
+        };
+
+        let same_block = state.plan_driver_v1(&world, &network_id(), &governance, 9, 10);
+        assert!(
+            same_block.exact.is_empty(),
+            "capacity evidence is retried only in a later block"
+        );
+        let plan = state.plan_driver_v1(&world, &network_id(), &governance, 10, 11);
+        assert!(plan.due.is_empty(), "{plan:?}");
+        let retry = sortition_request_intent(
+            id,
+            1,
+            ParliamentBody::PolicyJury,
+            grown,
+            3,
+            11,
+            21,
+            logical,
+        );
+        assert_eq!(
+            plan.exact,
+            vec![ParliamentExactTransitionV1 {
+                height: 11,
+                transition: register_sortition(vec![ParliamentSortitionRequestRegistrationV1 {
+                    sequence: 1,
+                    request: retry,
+                }]),
+            }]
+        );
+        let replayed = replay_plan(&state, &plan, &world, &governance, 11);
+        assert_eq!(
+            replayed
+                .election(&retry.body_election_attempt_id)
+                .expect("drawn retry")
+                .attempt
+                .status,
+            BodyElectionAttemptStatusV1::AwaitingPulse
+        );
+    }
+
+    #[test]
+    fn planner_waits_for_the_hidden_floor_before_retrying_capacity_evidence() {
+        // A retry that a hidden body's sub-floor electorate would only record as capacity
+        // evidence again cannot draw; it would spend a sortition sequence and a redraw unit,
+        // and a driver submitting it every block would exhaust the proposal while the
+        // electorate grows. The plan waits; any submitter may still record the evidence.
+        let mut state = policy_only_state();
+        let id = state.attempt.id;
+        state
+            .complete_qualification(id)
+            .expect("enter Policy Jury stage");
+        let logical = BeaconSessionId::for_network_v1(&network_id());
+        let single = candidates(12, 1);
+        state
+            .record_hidden_sortition_capacity_failure_batch(
+                id,
+                vec![ParliamentSortitionRequestRegistrationV1 {
+                    sequence: 0,
+                    request: sortition_request_intent(
+                        id,
+                        0,
+                        ParliamentBody::PolicyJury,
+                        single.clone(),
+                        3,
+                        10,
+                        20,
+                        logical,
+                    ),
+                }],
+                single,
+            )
+            .expect("record sub-floor capacity evidence");
+        let governance = Governance {
+            policy_jury_size: 3,
+            ..plan_governance()
+        };
+        let still_small = candidates(40, 2);
+        let world = FixedPlanWorld {
+            candidates: Some(still_small.clone()),
+            ..FixedPlanWorld::default()
+        };
+
+        let plan = state.plan_driver_v1(&world, &network_id(), &governance, 10, 11);
+        assert_eq!(plan, ParliamentDriverPlanV1::default());
+        let mut manual = state.clone();
+        manual
+            .record_hidden_sortition_capacity_failure_batch(
+                id,
+                vec![ParliamentSortitionRequestRegistrationV1 {
+                    sequence: 1,
+                    request: sortition_request_intent(
+                        id,
+                        1,
+                        ParliamentBody::PolicyJury,
+                        still_small.clone(),
+                        3,
+                        11,
+                        21,
+                        logical,
+                    ),
+                }],
+                still_small,
+            )
+            .expect("a submitter may still record the unchanged shortfall");
+    }
+
+    #[test]
+    fn planner_retries_every_failed_body_as_one_generation() {
+        let (mut state, failed) =
+            rules_and_policy_invitations_open(MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1 - 1);
+        let id = state.attempt.id;
+        for election_id in failed {
+            respond_to_every_invitation(&mut state, election_id, false, 20);
+        }
+        let governance = Governance {
+            rules_committee_size: 3,
+            policy_jury_size: 3,
+            ..plan_governance()
+        };
+        let snapshot = candidates(90, 12);
+        let world = FixedPlanWorld {
+            candidates: Some(snapshot.clone()),
+            ..FixedPlanWorld::default()
+        };
+
+        let plan = state.plan_driver_v1(&world, &network_id(), &governance, 21, 22);
+        let mut failures = plan.due.clone();
+        failures.sort();
+        let mut expected_failures = failed
+            .map(|election_attempt_id| {
+                ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(
+                    ParliamentFailBodyElectionNoRosterV1 {
+                        election_attempt_id,
+                    },
+                )
+            })
+            .to_vec();
+        expected_failures.sort();
+        assert_eq!(failures, expected_failures);
+        let logical = BeaconSessionId::for_network_v1(&network_id());
+        let bodies = [ParliamentBody::RulesCommittee, ParliamentBody::PolicyJury];
+        assert_eq!(
+            plan.exact,
+            vec![ParliamentExactTransitionV1 {
+                height: 22,
+                transition: register_sortition(sortition_generation(
+                    id, &bodies, 1, &snapshot, 22, logical,
+                )),
+            }]
+        );
+        let replayed = replay_plan(&state, &plan, &world, &governance, 22);
+        assert_eq!(replayed.attempt.status, GovernanceAttemptStatusV1::Active);
+        assert_eq!(
+            replayed.randomness_redraws_used_v1(),
+            Ok(MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1)
+        );
+    }
+
+    #[test]
+    fn planner_terminalizes_a_later_stage_body_at_the_redraw_ceiling() {
+        // The Rules Committee deliberates while the later-stage Policy Jury's roster comes
+        // back empty with no redraw left. The plan rejects the attempt and every planned step
+        // persists.
+        let (mut state, [rules, policy]) =
+            rules_and_policy_invitations_open(MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1);
+        let id = state.attempt.id;
+        respond_to_every_invitation(&mut state, rules, true, 20);
+        respond_to_every_invitation(&mut state, policy, false, 20);
+        let rules_body = state
+            .seal_body_roster(id, rules, 21)
+            .expect("seal the Rules roster");
+        state
+            .advance_body_phase(id, rules_body, DeliberationPhaseV1::Orientation, 21, 10)
+            .expect("the Rules Committee deliberates");
+        let world = FixedPlanWorld {
+            candidates: Some(candidates(90, 12)),
+            ..FixedPlanWorld::default()
+        };
+
+        let plan = state.plan_driver_v1(&world, &network_id(), &plan_governance(), 21, 22);
+        assert!(
+            plan.due
+                .contains(&ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(
+                    ParliamentFailBodyElectionNoRosterV1 {
+                        election_attempt_id: policy,
+                    }
+                )),
+            "{plan:?}"
+        );
+        assert!(plan.exact.is_empty(), "no redraw is left: {plan:?}");
+        let replayed = replay_plan(&state, &plan, &world, &plan_governance(), 22);
+        assert_eq!(replayed.attempt.status, GovernanceAttemptStatusV1::Rejected);
+    }
+
+    #[test]
+    fn planner_omits_transitions_that_persistence_would_reject() {
+        // The due batch executes as one transaction, so one step whose successor fails the
+        // persistence audit would abort every other step. The plan carries only steps whose
+        // successor `validate` accepts.
+        let mut state = policy_only_state();
+        // An impossible persisted shape: the risk tier is locked without Policy sortition.
+        state.risk_locked = true;
+        assert!(state.validate().is_err());
+        let plan = state.plan_driver_v1(
+            &FixedPlanWorld::default(),
+            &network_id(),
+            &plan_governance(),
+            7,
+            10,
+        );
+        assert_eq!(plan, ParliamentDriverPlanV1::default());
     }
 
     #[test]

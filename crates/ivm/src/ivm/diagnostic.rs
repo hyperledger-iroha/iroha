@@ -102,7 +102,7 @@ impl IVM {
         });
     }
 
-    pub(super) fn classify_trap(err: &VMError) -> VmTrapKind {
+    pub(crate) fn classify_trap(err: &VMError) -> VmTrapKind {
         match err.as_unmetered() {
             VMError::OutOfGas | VMError::SyscallOutOfGas { .. } => VmTrapKind::OutOfGas,
             VMError::OutOfMemory => VmTrapKind::OutOfMemory,

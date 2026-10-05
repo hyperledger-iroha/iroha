@@ -8,6 +8,7 @@ use super::{
 };
 use crate::state::{State, TransactionsBlockError};
 use iroha_crypto::HashOf;
+use iroha_data_model::fastpq::TransferTranscript;
 use iroha_model_base::state_path::StatePath;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
@@ -98,6 +99,16 @@ fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
         let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
         pending
             .inspect(move |original| {
+                assert!(
+                    original
+                        .state
+                        .take_parliament_timed_ovn_casting_bindings()
+                        .is_some()
+                );
+                assert_eq!(
+                    original.state.take_fastpq_witness_context().is_some(),
+                    with_transfer
+                );
                 assert!(original.state.exec_witness.is_none());
                 assert!(original.state.fastpq_witness_context.is_none());
                 assert!(
@@ -164,6 +175,13 @@ fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
             super::native_capture_fixture::assert_native_publication_refuses(
                 true,
                 move |original| {
+                    assert!(
+                        original
+                            .state
+                            .take_parliament_timed_ovn_casting_bindings()
+                            .is_some()
+                    );
+                    assert!(original.state.take_fastpq_witness_context().is_some());
                     assert!(original.state.exec_witness.is_none());
                     assert!(original.state.fastpq_witness_context.is_none());
                     assert!(
@@ -178,7 +196,50 @@ fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
                     } else {
                         Hash::new(b"late source after actual extraction")
                     };
-                    apply_marker(original.state, 2, Some(late));
+                    // Explicit adversarial field mutation, not an authorized
+                    // post-seal application or component-owner substitution.
+                    let captured = original
+                        .state
+                        .fastpq_source_context
+                        .as_ref()
+                        .unwrap()
+                        .capture_transcript(
+                            Some(late),
+                            late,
+                            None,
+                            Some(DataSpaceId::UNIVERSAL),
+                            original.state.committed_fragment_count(),
+                        );
+                    original.state.fastpq_source_captures.record(captured);
+                    assert_eq!(
+                        original
+                            .state
+                            .fastpq_source_captures
+                            .sealed_sources()
+                            .unwrap_err(),
+                        crate::fastpq::FastpqSourceCaptureError::AppliedAfterSeal
+                    );
+                    let delta = delta();
+                    let poseidon_preimage_digest =
+                        crate::fastpq::poseidon_preimage_digest(&delta, &late);
+                    let transcript = TransferTranscript {
+                        batch_hash: late,
+                        deltas: vec![delta],
+                        authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+                        poseidon_preimage_digest: Some(poseidon_preimage_digest),
+                    };
+                    assert!(
+                        original
+                            .state
+                            .fastpq_transcripts
+                            .insert(late, vec![transcript])
+                            .is_none()
+                    );
+                    original
+                        .state
+                        .world
+                        .smart_contract_state
+                        .insert(marker(), vec![2]);
                     assert_eq!(
                         original.state.world.smart_contract_state.get(&marker()),
                         Some(&vec![2])

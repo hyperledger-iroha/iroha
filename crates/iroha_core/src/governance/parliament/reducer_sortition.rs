@@ -71,10 +71,130 @@ impl ParliamentAttemptStateV1 {
                     ParliamentReducerEntityV1::BodyElection,
                 ));
             }
-        } else if registrations.len() != 1 {
-            return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
+        } else {
+            // One fresh slot retries every failed body together: a single-body retry could
+            // spend the last proposal-wide redraw unit and strand another failed body that no
+            // later block could afford to redraw. Without a failed body, the batch is the one
+            // newly required body.
+            let failed_bodies: Vec<_> = self
+                .no_roster_sortition_generations_v1()
+                .into_keys()
+                .collect();
+            let registered_bodies: Vec<_> = registrations
+                .iter()
+                .map(|entry| entry.request.body)
+                .collect();
+            if (failed_bodies.is_empty() && registrations.len() != 1)
+                || (!failed_bodies.is_empty() && registered_bodies != failed_bodies)
+            {
+                return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
+            }
+        }
+        // Every generation owns a fresh pulse slot. A batch joining a slot that an earlier
+        // batch registered could freeze a different snapshot for the same pulse, and the
+        // pulse batch, which draws every request of a slot from one snapshot, could then
+        // never consume it.
+        if self
+            .sortition_generation_slots_v1()
+            .contains(&ParliamentPulseSlotV1::new(
+                first.request.beacon_session_id,
+                first.request.pulse_height,
+            ))
+        {
+            return Err(ParliamentReducerErrorV1::InvalidSortitionPulseSchedule);
         }
         Ok(())
+    }
+
+    /// Return every body whose active sortition generation ended `NoRoster`, with that
+    /// generation's sequence, in body order.
+    fn no_roster_sortition_generations_v1(&self) -> BTreeMap<ParliamentBody, u32> {
+        let elections = self.active_elections.iter().filter_map(|(body, id)| {
+            self.elections
+                .get(id)
+                .filter(|election| election.attempt.status == BodyElectionAttemptStatusV1::NoRoster)
+                .map(|election| (*body, election.attempt.sequence))
+        });
+        let capacity_failures = self
+            .active_sortition_capacity_failures
+            .iter()
+            .filter_map(|(body, id)| {
+                self.sortition_capacity_failures
+                    .get(id)
+                    .filter(|failure| failure.status == BodyElectionAttemptStatusV1::NoRoster)
+                    .map(|failure| (*body, failure.sequence))
+            });
+        elections.chain(capacity_failures).collect()
+    }
+
+    /// Derive the exact next sortition generation a block at `request_height` registers for
+    /// every body whose active generation ended `NoRoster`, with its candidate snapshot.
+    ///
+    /// Every field is fixed by committed state: each failed body's next sequence, the shared
+    /// pulse slot `request_height + sortition_pulse_delay_blocks` on `beacon_session_id`,
+    /// the configured body size, and the canonical snapshot of `eligible_candidates` (less
+    /// the sealed Policy Jury for a Confirmation Jury retry). Returns `None` when no body
+    /// awaits a retry or the generation cannot be expressed. Admission still decides whether
+    /// the generation is accepted and whether a sub-floor hidden electorate turns it into
+    /// capacity evidence.
+    pub(crate) fn next_sortition_retry_v1(
+        &self,
+        request_height: u64,
+        beacon_session_id: BeaconSessionId,
+        governance: &Governance,
+        eligible_candidates: Vec<AccountId>,
+    ) -> Option<(Vec<ParliamentSortitionRequestRegistrationV1>, Vec<AccountId>)> {
+        let failed = self.no_roster_sortition_generations_v1();
+        let candidate_snapshot = if failed.contains_key(&ParliamentBody::ConfirmationJury) {
+            if failed.len() != 1 {
+                return None;
+            }
+            let policy_members: BTreeSet<_> = self
+                .sealed_body_for_role(ParliamentBody::PolicyJury)?
+                .assignments
+                .iter()
+                .map(|assignment| &assignment.member)
+                .collect();
+            eligible_candidates
+                .into_iter()
+                .filter(|candidate| !policy_members.contains(candidate))
+                .collect()
+        } else {
+            eligible_candidates
+        };
+        let pulse_height = request_height.checked_add(self.sortition_pulse_delay_blocks)?;
+        let candidate_count = u32::try_from(candidate_snapshot.len()).ok()?;
+        let registrations = failed
+            .into_iter()
+            .map(|(body, failed_sequence)| {
+                let sequence = failed_sequence.checked_add(1)?;
+                // An empty snapshot is capacity intent, which admission records as typed
+                // evidence; `try_new_canonical` would refuse it.
+                let mut request = SortitionRequestV1 {
+                    id: SortitionRequestId::new([0; 32]),
+                    governance_attempt_id: self.attempt.id,
+                    body_election_attempt_id: BodyElectionAttemptId::derive_v1(
+                        self.attempt.id,
+                        body,
+                        sequence,
+                    ),
+                    body,
+                    candidate_root: parliament_candidate_root_v1(
+                        self.attempt.id,
+                        body,
+                        &candidate_snapshot,
+                    ),
+                    candidate_count,
+                    target_seats: u32::try_from(body_committee_size(governance, body)).ok()?,
+                    request_height,
+                    pulse_height,
+                    beacon_session_id,
+                };
+                request.id = request.canonical_id();
+                Some(ParliamentSortitionRequestRegistrationV1 { sequence, request })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (!registrations.is_empty()).then_some((registrations, candidate_snapshot))
     }
 
     /// Atomically register one canonical future-pulse request batch.
@@ -82,10 +202,10 @@ impl ParliamentAttemptStateV1 {
     /// The first batch must contain every initially required body exactly once,
     /// in body order, and freezes one shared candidate snapshot. An objectively
     /// missing first pulse retries that complete initial generation atomically.
-    /// After any pulse is consumed, a body-specific no-roster retry or
-    /// dynamically required Confirmation Jury uses a one-request batch and may
-    /// freeze a fresh snapshot. Mutation is committed only after every request
-    /// validates.
+    /// After any pulse is consumed, a no-roster retry contains exactly every body
+    /// whose active generation ended `NoRoster`, and a dynamically required
+    /// Confirmation Jury uses a one-request batch; either may freeze a fresh
+    /// snapshot. Mutation is committed only after every request validates.
     ///
     /// # Errors
     /// Returns an error for an empty, partial, mixed-slot, noncanonical, or
@@ -114,16 +234,17 @@ impl ParliamentAttemptStateV1 {
     /// Record an objective sub-anonymity-floor electorate before a hidden-body
     /// future-pulse request can be created.
     ///
-    /// The manager-submitted batch remains the request intent and must retain
-    /// every ordinary immutable binding. Core persists separate typed evidence,
-    /// consumes no pulse slot, and makes the exact next generation eligible in
-    /// a later block. The final permitted generation rejects the governance
-    /// attempt with the ordinary sortition-exhaustion result.
+    /// The submitted batch remains the request intent and must retain every
+    /// ordinary immutable binding. Core persists separate typed evidence for
+    /// every body of the generation, consumes no pulse slot, and makes the exact
+    /// next generation eligible in a later block. The final permitted generation
+    /// rejects the governance attempt with the ordinary sortition-exhaustion result.
     ///
     /// # Errors
-    /// Returns an error unless the batch is the exact initial generation or one
-    /// exact hidden-body retry, the live snapshot is canonically ordered and has
-    /// fewer than the V1 anonymity floor, and every non-candidate request binding is valid.
+    /// Returns an error unless the batch is the exact initial generation or the
+    /// exact retry generation of every failed body and includes a hidden body, the
+    /// live snapshot is canonically ordered and has fewer than the V1 anonymity
+    /// floor, and every non-candidate request binding is valid.
     pub fn record_hidden_sortition_capacity_failure_batch(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,

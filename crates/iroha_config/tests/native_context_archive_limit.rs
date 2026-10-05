@@ -51,3 +51,30 @@ native_context_archive_max_bytes = 0
         "unexpected zero-limit diagnostic: {error}"
     );
 }
+
+#[test]
+fn history_checkpoint_cache_count_defaults_and_bounds_reach_actual_config() {
+    let default = parse_actual_config("").unwrap();
+    assert_eq!(default.kura.history_checkpoint_cache_capacity.get(), 8192);
+    for count in [
+        1,
+        8192,
+        defaults::kura::MAX_HISTORY_CHECKPOINT_CACHE_CAPACITY,
+    ] {
+        let config = parse_actual_config(&format!(
+            "[kura]\nhistory_checkpoint_cache_capacity = {count}\n"
+        ))
+        .unwrap();
+        assert_eq!(config.kura.history_checkpoint_cache_capacity.get(), count);
+    }
+    for count in [0, defaults::kura::MAX_HISTORY_CHECKPOINT_CACHE_CAPACITY + 1] {
+        let error = parse_actual_config(&format!(
+            "[kura]\nhistory_checkpoint_cache_capacity = {count}\n"
+        ))
+        .expect_err("unbounded or zero checkpoint slot counts must be rejected");
+        assert!(
+            error.contains("history_checkpoint_cache_capacity"),
+            "{error}"
+        );
+    }
+}

@@ -28,25 +28,62 @@ Run optional native diagnostics:
 
     python3 scripts/taira_release.py check
 
-For an ordinary Mac client using the exact deployed source, create the
-owner-private `target/taira-macos-client` directory once and reuse it. After the
-candidate is signed, build only the normal Musubi executable:
+For an ordinary Mac client using a reviewed signed `optimizations` revision,
+select exactly one client. A DPN CLI fix builds only `iroha`; select `musubi`
+for the Musubi client:
 
     python3 scripts/taira_release.py prepare-client \
+      --bin iroha \
       --expected-commit FULL_SIGNED_COMMIT \
       --expected-signer FULL_SIGNER_FINGERPRINT \
       --output-dir /absolute/iroha/target/client-observations/ATTEMPT
 
-This separate fixed lane uses the existing signed Git-object capture and source/
+This command creates the owner-private `target/taira-macos-client` lane after
+signed-source admission on first use, then reuses it. The separate fixed lane
+uses the existing signed Git-object capture and source/
 Cargo locks, the captured Rust toolchain, Apple linker and native jobserver. It
 excludes worktree edits and inherited compiler hooks. `request.json`, the Cargo
 JSON log and `result.json` bind the commit, source snapshot, compiler/linker and
-exact copied `musubi` hash. Run that retained executable for the public workflow;
+selected package, exact Cargo binary emission and copied executable hash. Run
+the retained `bin/iroha` or `bin/musubi` executable for the public workflow;
 its package-version display alone does not prove source identity. This is an
 ordinary client build, with no network, keys, deployment or qualification step;
-Musubi remains outside the four-binary validator import contract. Existing
+Client selection does not compile the validator runtime. Musubi remains outside
+the four-binary validator import contract. Existing
 outputs are never replayed or overwritten. On failure, inspect the retained log
 and select a fresh observation directory while reusing the same Cargo lane.
+The native capture retains each original Cargo file and exclusively created copy
+until its read-only `bin/` directory is published. Identical replacement bytes
+cannot replace either admitted inode. Outputs cannot enter either fixed native
+Cargo lane.
+
+For the native Mac runtime used by host custody and deployment tools, build the
+standard `iroha`, `kagami` and `iroha3d` together from the reviewed signed revision:
+
+    python3 scripts/taira_release.py prepare-native-runtime \
+      --expected-commit FULL_SIGNED_COMMIT \
+      --expected-signer FULL_INDEPENDENT_SIGNER_FINGERPRINT \
+      --output-dir /absolute/iroha/target/native-runtime-observations/ATTEMPT
+
+This command creates the owner-private `target/taira-macos-runtime` lane on first
+use after signed-source admission, then retains and reuses it. Its single locked,
+offline release Cargo invocation selects the exact packages `iroha_cli`,
+`iroha_kagami` and `irohad`, with their standard features and native macOS target.
+It uses the captured toolchain, Apple's linker and Cargo's native jobserver;
+worktree edits and local-fast source metadata never enter the build. Failed
+requests and Cargo logs remain available. All three native executable identities
+and digests must pass before the complete read-only `bin/` directory is published
+atomically, followed by `result.json`; a failed attempt has no successful receipt.
+Choose a fresh output for a retry while preserving the same Cargo cache.
+
+The retained executables have mode0500. A native installer must independently
+admit their source and digests and establish its required mode0755 custody; this
+builder installs no dispatcher and changes no service. Its `qualified=false` and
+`deployed=false` receipt records authenticated build inputs and outputs. The
+unsigned build observation itself does not grant release authority or replace
+the signed deployment and readiness checks. `prepare-client --bin iroha` and
+`prepare-client --bin musubi` build one ordinary client in the separate client
+lane.
 
 Linux development checks default to the installed LLVM 18 compiler and linker;
 macOS keeps the system Apple linker. Linux requires executable
@@ -318,6 +355,46 @@ diagnostic found in that completed log; the full output remains private.
 
 Before initial source capture, local admission counts the signed Git blobs' exact
 byte sizes without reading unrelated worktree files.
+The signed-source transport exporter independently verifies its emitted pack,
+complete object inventory, signature and symlink layout in a disposable Git object
+database; it does not expand another working tree. Both export and import check
+additional disk bytes and inodes before pack/source writes, including simultaneous
+pack copies, native indexes and explicit control-file headroom. Native command
+input scratch uses the actual Python temporary directory; isolated public signature
+keyrings use the short `/tmp` path. Those locations are checked before scratch
+creation, with 64 MiB of working headroom per allocation, and grouped by filesystem
+alongside the output requirements. Import additionally
+admits the expanded source files and verifies the full clean working tree before
+exclusive publication. Capacity observations reserve no space and delete no caches.
+
+An existing native client builder can admit a signed Rust successor without
+replacing its original checkout, index, Git controls or warm target. Use
+`scripts/taira_source_capture.py append` with independently pinned original and
+successor capture manifests, their full commit/tree/signing fingerprints, the
+successor pack and a fresh 32-digit operation ID. The successor's raw signed
+commit must name exactly the previously admitted commit as its sole parent;
+shallow Git traversal is not used. The selected build Bootstrap blobs must match
+the live controller exactly, including trailing newlines. Existing Cargo and
+source leases refuse overlap with a maintained native build.
+
+The first append binds the exact original checkout and pack. Later appends
+require `--prior-receipt` and `--expected-prior-receipt-sha256`. A durable intent
+records the original custody and newly allocated pack/receipt inodes before
+any live object publication. An interrupted operation must resume with the same
+ID and independently retained `--expected-intent-sha256`; another operation,
+unknown partial state or a same-byte foreign inode is refused. Receipts are
+immutable. `verify-store` requires the current receipt SHA and selected signed
+commit/tree/fingerprint, and reauthenticates the exact object union. The original
+fresh-import receipt remains historical evidence; its strict single-pack
+`verify` contract is unchanged. The store admits at most 32 complete direct
+captures, 200,000 distinct objects, 8 GiB of logical object bytes and 4 GiB of
+physical packs. Capacity checks include the new pack/indexes, overlapping
+intent/receipt evidence and actual signature scratch filesystems; no successor
+working tree is expanded by append. The ordinary `prepare-client` then captures
+the selected signed tree into its existing source lane and keeps its full
+controller process-origin checks. Append never compiles, fetches, checks out,
+garbage-collects, activates a network or moves runtime secrets.
+
 Before compilation, it groups requirements by filesystem and checks an 8 GiB
 Cargo working-space floor plus 256 MiB capture headroom. Before capture,
 it checks the exact binary-copy bytes plus that headroom. The build floor is an
@@ -513,6 +590,43 @@ These preparation operations do not authorize replacement of shared network
 state. The reviewed inventory, explicit reset authorization, and independently
 provisioned trusted host dispatcher and reset guard remain prerequisites for
 `public-reset apply`. The candidate cannot provision its own host authority.
+
+For first-time native custody, use the same-source Kagami key owner with two
+separate fresh directories, one for native capture and one for the independently
+selected release authority:
+
+    "$NATIVE_DARWIN_KAGAMI" keys --algorithm ed25519 \
+      --out-dir "$FRESH_NATIVE_CAPTURE_KEY_CUSTODY"
+    "$NATIVE_DARWIN_KAGAMI" keys --algorithm ed25519 \
+      --out-dir "$FRESH_RELEASE_OWNER_KEY_CUSTODY"
+
+Each invocation atomically publishes `public.key` and `private.key` as mode0600
+files in a new mode0700 directory; stdout reports file paths without key secrets.
+Existing destinations are refused. Keep the capture key separate from release
+authority: its public key belongs in the signed native host pair, while the
+release owner's public key belongs in the independently approved `TrustedKeyV1`
+record. Generating a pair does not approve that authority. Native authorizers
+consume each `private.key` only through its inherited signing descriptor
+(`--native-signing-key-fd` or `--owner-signing-key-fd`); controllers and public
+records use public keys, paths and metadata. Follow the
+[native capture and owner authorization runbook](../../crates/iroha_cli/DISPATCHER_TRANSITION.md)
+for the exact descriptor and public-input contracts.
+
+The explicit OS-operator bootstrap command is
+`iroha taira public-reset initialize-native-edge-custody
+--expected-executable-sha256 SHA256 --trusted-public-key PUBLIC_TRUSTED_KEY_JSON
+--expected-trusted-public-key-sha256 SHA256`. It uses the actual named Mac
+account's home and currently invoked native image, requires release source
+identity, and publishes the fixed dispatcher, guard and exact public authority
+record under `.local/share/iroha/taira/public-reset-v1` as one fresh private
+directory. Both digests must be selected independently. Matching dispatcher,
+guard and public-key anchors return a read-only receipt after normal use;
+operational children remain untouched and receive no authority from this check.
+Missing, indirect or different anchors and incomplete roots are refused. This
+command takes no private key and changes no services. Its
+`qualified=false` receipt establishes bootstrap custody, not deployment proof;
+signed source and release admission remain required. The implementation is
+`crates/iroha_cli/src/taira_public_reset_native_custody.rs`.
 
 ## Updating an initialized testnet
 

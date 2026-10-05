@@ -25,6 +25,7 @@ use iroha_data_model::{
         RuntimeDataSpaceAdditionV1, RuntimeLaneManifestV1,
     },
     parameter::{Parameter, Parameters},
+    permission::Permission,
     transaction::{
         Executable, FeePaymentIntent, SignedTransaction,
         signed::{FeeChargeKind, TransactionEntrypoint},
@@ -614,6 +615,19 @@ fn validate_paid_plan(
     Ok(instructions)
 }
 
+/// Catalog writes require their exact capability. All deployment observations already
+/// use public control-plane reads, the separate operator credential, or this owner's
+/// account and signed transactions; granting visibility into unrelated ledger data
+/// neither authorizes catalog writes nor belongs to this bootstrap boundary.
+fn require_parameter_write_authority(permissions: &[Permission]) -> Result<()> {
+    require(
+        permissions.iter().any(|permission| {
+            permission.name() == "CanSetParameters" && permission.payload().get() == "null"
+        }),
+        "deployment owner lacks exact CanSetParameters permission",
+    )
+}
+
 fn preflight<C: RunContext>(
     context: &C,
     manifest: &ManifestV1,
@@ -644,14 +658,7 @@ fn preflight<C: RunContext>(
     if require_write_permissions {
         let permissions =
             crate::account::list_effective_permissions(client.client(), &manifest.owner)?;
-        for name in ["CanSetParameters", "CanReadAllLedgerData"] {
-            require(
-                permissions
-                    .iter()
-                    .any(|p| p.name() == name && p.payload().get() == "null"),
-                &format!("deployment owner lacks exact {name} permission"),
-            )?;
-        }
+        require_parameter_write_authority(&permissions)?;
     }
     Ok(client)
 }
@@ -2289,6 +2296,44 @@ mod tests {
         FeeQuoteComponent, FeeQuoteDecision, FeeQuoteObservation, PipelineTransactionStatus,
     };
     use std::{collections::BTreeMap, num::NonZeroU32};
+
+    #[test]
+    fn deployment_write_authority_accepts_exact_parameter_grant_without_global_read() {
+        let permissions = [Permission::new(
+            "CanSetParameters".to_owned(),
+            Json::new(()),
+        )];
+        require_parameter_write_authority(&permissions).unwrap();
+    }
+
+    #[test]
+    fn deployment_write_authority_rejects_missing_write_capability() {
+        for permissions in [
+            Vec::new(),
+            vec![Permission::new(
+                "CanReadAllLedgerData".to_owned(),
+                Json::new(()),
+            )],
+        ] {
+            assert!(
+                require_parameter_write_authority(&permissions)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("lacks exact CanSetParameters")
+            );
+        }
+    }
+
+    #[test]
+    fn deployment_write_authority_rejects_noncanonical_parameter_payloads() {
+        for payload in [
+            Json::new(BTreeMap::<String, String>::new()),
+            Json::new("null"),
+        ] {
+            let permissions = [Permission::new("CanSetParameters".to_owned(), payload)];
+            assert!(require_parameter_write_authority(&permissions).is_err());
+        }
+    }
 
     fn amount(value: u32, scale: u32) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, scale)).unwrap()

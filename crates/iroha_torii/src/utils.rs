@@ -3686,14 +3686,14 @@ pub mod extractors {
             }
         }
         #[test]
-        fn norito_only_content_type_is_canonical_norito_only() {
+        fn native_norito_request_content_type_is_canonical_only() {
             let mut headers = axum::http::HeaderMap::new();
             headers.insert(
                 CONTENT_TYPE,
                 HeaderValue::from_static(super::super::NORITO_MIME_TYPE),
             );
             super::super::norito_request_content_type(&headers)
-                .expect("canonical Norito request media type");
+                .expect("canonical native Norito media type");
             for raw in [
                 "application/json",
                 "application/json;charset=utf-8",
@@ -3706,12 +3706,121 @@ pub mod extractors {
                 );
                 assert_eq!(
                     super::super::norito_request_content_type(&headers)
-                        .expect_err("Norito-only requests have one wire representation")
+                        .expect_err("native Norito requests have one wire representation")
                         .status(),
                     StatusCode::UNSUPPORTED_MEDIA_TYPE,
                     "content_type={raw}"
                 );
             }
+        }
+        #[cfg(feature = "app_api")]
+        #[test]
+        fn canonical_norito_decoder_accepts_only_the_canonical_layout() {
+            let value = vec![3_u64, 5, 8, 13, 21];
+            let canonical = norito::encode_canonical(&value).expect("encode canonical fixture");
+            assert_eq!(
+                norito::decode_canonical::<Vec<u64>>(&canonical).expect("decode canonical fixture"),
+                value
+            );
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let alternate = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::to_bytes(&value).expect("encode alternate-layout fixture")
+            };
+            assert_ne!(alternate, canonical);
+            assert!(matches!(
+                norito::decode_canonical::<Vec<u64>>(&alternate),
+                Err(norito::Error::NonCanonicalEncoding)
+            ));
+            let compressed =
+                norito::to_compressed_bytes(&value, Some(norito::CompressionConfig::default()))
+                    .expect("encode compressed fixture");
+            assert!(matches!(
+                norito::decode_canonical::<Vec<u64>>(&compressed),
+                Err(norito::Error::NonCanonicalEncoding)
+            ));
+            let mut trailing = canonical;
+            trailing.push(0);
+            assert!(norito::decode_canonical::<Vec<u64>>(&trailing).is_err());
+        }
+        #[cfg(feature = "app_api")]
+        #[test]
+        fn canonical_norito_decoder_rejects_forged_counts_before_allocation() {
+            const FORGED_LENGTH: u64 = 1 << 40;
+            let frame = norito::core::frame_bare_with_header_flags::<Vec<u64>>(
+                &FORGED_LENGTH.to_le_bytes(),
+                norito::core::default_encode_flags(),
+            )
+            .expect("frame forged count with a valid checksum");
+            assert!(matches!(
+                norito::decode_canonical::<Vec<u64>>(&frame),
+                Err(norito::Error::SequenceLengthExceeded { .. }
+                    | norito::Error::TotalElementsExceeded { .. }
+                    | norito::Error::TotalAllocationExceeded { .. })
+            ));
+            // Keep the forged count within the element limits but omit most
+            // of its length prefixes. Structural preflight must reject this
+            // truncation before reserving storage for elements or their spans.
+            const ALLOCATION_COUNT: u64 = 128;
+            let mut allocation_payload = ALLOCATION_COUNT.to_le_bytes().to_vec();
+            allocation_payload.resize(allocation_payload.len() + ALLOCATION_COUNT as usize - 1, 0);
+            let allocation_frame = norito::core::frame_bare_with_header_flags::<Vec<u64>>(
+                &allocation_payload,
+                norito::core::default_encode_flags(),
+            )
+            .expect("frame forged allocation with a valid checksum");
+            let defaults = norito::canonical_decode_limits(allocation_frame.len());
+            let preflight_only = norito::DecodeLimits::new(
+                defaults.max_sequence_elements(),
+                defaults.max_field_bytes(),
+                defaults.max_total_elements(),
+                allocation_frame.len() * 2,
+                defaults.max_nesting_depth(),
+            );
+            // Enough for frame handling, but not for 128 spans or u64 values:
+            // allocating either first would report a resource refusal instead.
+            assert!(matches!(
+                norito::with_decode_limits(preflight_only, || {
+                    Ok(norito::decode_canonical::<Vec<u64>>(&allocation_frame))
+                }),
+                Ok(Err(norito::Error::LengthMismatch))
+            ));
+        }
+        #[cfg(feature = "app_api")]
+        #[test]
+        fn canonical_norito_decoder_rejects_large_owned_elements_before_allocation() {
+            // Absent large inline values have a small, valid encoding but
+            // still require their full element size in the owned output Vec.
+            type Element = Option<[u64; 1024]>;
+            let values = vec![None::<[u64; 1024]>; 128];
+            let frame = norito::encode_canonical(&values).expect("canonical compact values");
+            let limits = norito::canonical_decode_limits(frame.len());
+            let backing_bytes = values.len() * core::mem::size_of::<Element>();
+            assert!(backing_bytes > limits.max_total_allocated_bytes());
+            assert!(matches!(
+                norito::decode_canonical::<Vec<Element>>(&frame),
+                Err(norito::Error::TotalAllocationExceeded { .. })
+            ));
+            // The canonical API must keep its mandatory envelope even when
+            // callers supply looser limits. A separately funded frame decode
+            // and exact re-encode prove these original bytes are well formed.
+            let funded = norito::DecodeLimits::new(
+                limits.max_sequence_elements(),
+                limits.max_field_bytes(),
+                limits.max_total_elements(),
+                limits.max_total_allocated_bytes() + backing_bytes,
+                limits.max_nesting_depth(),
+            );
+            assert!(matches!(
+                norito::decode_canonical_with_limits::<Vec<Element>>(&frame, funded),
+                Err(norito::Error::TotalAllocationExceeded { .. })
+            ));
+            let decoded = norito::decode_from_bytes_with_limits::<Vec<Element>>(&frame, funded)
+                .expect("the same frame with explicitly funded output storage");
+            assert_eq!(decoded, values);
+            norito::verify_exact_canonical_frame(&decoded, &frame)
+                .expect("the valid frame has the exact canonical bytes");
         }
         #[tokio::test]
         async fn typed_request_content_type_errors_have_exact_status_and_code() {

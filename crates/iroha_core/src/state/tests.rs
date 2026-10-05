@@ -1405,6 +1405,8 @@ state_test! { sync trigger_batch_gas_budget_is_shared_across_items
     assert_eq!(remaining_trigger_batch_gas(125, 200), 0);
 }
 state_test! { sync trigger_batch_contract_calls_advance_nft_sequence
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     use iroha_data_model::{
         events::execute_trigger::ExecuteTriggerEvent,
         transaction::{ExecutableBatchItem, executable::ContractInvocation},
@@ -1448,7 +1450,7 @@ ledger::nft::create_for_all_users();
     );
     let artifact = iroha_data_model::smart_contract::ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
     state_transaction.world.contract_code.insert(artifact, program);
-    state_transaction.world.contract_manifests.insert(artifact, manifest.signed(&ALICE_KEYPAIR));
+    state_transaction.world.contract_manifests.insert(artifact, manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"));
     // The contract-call fixture needs a canonical active lifecycle and bound
     // subject, not an orphan instance entry rejected by State initialization.
     state_transaction.world.bind_active_contract_subject_for_testing(
@@ -5042,6 +5044,8 @@ fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig 
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         native_context_archive_max_bytes:
             iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+        history_checkpoint_cache_capacity:
+            iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -7723,7 +7727,6 @@ state_test! { sync signed_lane_lifecycle_rejects_stale_catalog_after_prior_commi
     );
     let mut chain = manual_lane_lifecycle_test_chain(world);
     commit_manual_lane_lifecycle(&mut chain, &signer);
-    let first = chain.committed(2);
     let state = chain.state();
     let before = state.nexus_snapshot().lane_catalog;
     assert!(before.lanes().iter().any(|lane| lane.id == LaneId::new(1)));
@@ -7731,9 +7734,11 @@ state_test! { sync signed_lane_lifecycle_rejects_stale_catalog_after_prior_commi
     let_row! { stale_incarnations = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations( &LaneCatalog::default(), &stale_incarnations, ) .expect("default lifecycle incarnation set is canonical") };
     let_row! { stale_payload = iroha_data_model::nexus::LaneLifecycleParameterV1::new( &LaneCatalog::default(), &stale_incarnations, iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: LaneId::new(2), alias: "stale-second-lane".to_owned(), ..LaneConfig::default() }], retire: Vec::new(), }, ) .expect("stale lifecycle payload is structurally canonical") };
     let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom( stale_payload.into_custom_parameter(), ))]) .sign(signer.private_key()) };
-    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
-    let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(first.block().as_ref())) .sign(signer.private_key()) .unpack(|_| {}) };
-    let source: SignedBlock = unverified.into();
+    // The actual native producer retains the prior CommitQC/parent service at
+    // height three. A manually linked header alone cannot supply that authority.
+    let source = chain.proposal(None, vec![transaction]);
+    assert_eq!(source.header().height().get(), 3);
+    assert_eq!(source.header().prev_block_hash(), Some(chain.committed(2).block().hash()));
     let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
     let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked(crate::block::reserve_block_for_tests()) .unpack(|_| {}) };
     let signed = committed.into_shared();
@@ -17126,7 +17131,8 @@ state_test! { sync explicit_empty_block_fixture_publishes_exact_block_metadata
 fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES, transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES, membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+    history_checkpoint_cache_capacity: iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES, transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES, membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, } };
     Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0
@@ -19994,7 +20000,10 @@ state_test! { sync capture_exec_witness_stashes_reads_and_writes
     assert_eq!(state_block.fastpq_source_inventory().unwrap().unwrap().tx_set_hash(), tx_set_hash);
     state_block.capture_exec_witness().unwrap();
     let witness = state_block.take_exec_witness().expect("witness captured");
-    assert_eq!(witness.writes.len(), 6);
+    // Quantity effects retain their original transcript rather than an extra ordinary KV write.
+    assert_eq!(witness.writes.len(), 5);
+    assert_eq!(witness.fastpq_transcripts.len(), 1);
+    witness.verify_source_binding().unwrap();
     assert!(witness.writes.iter().any(|write| write.key.as_slice() == iroha_data_model::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1));
     assert!(witness.writes.iter().any(|write| {
         write.key.as_slice()
@@ -22881,16 +22890,22 @@ execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::paramete
         ), "a signed boundary alone cannot reconstruct nonempty executed World");
     }
 
-    // A genuinely empty Fast store may construct an empty unauthenticated State;
-    // it neither invents committed native history nor drops any executed World.
+    // Fast reopens a genuinely initialized, empty Strict store. Its existing catalog
+    // and lock establish storage custody without inventing committed native history.
     let mut empty_config = kura_config.clone();
     let empty_store = temp_dir.path().join("empty-fast");
     std::fs::create_dir(&empty_store).expect("create the actual empty Fast store directory");
     assert!(std::fs::read_dir(&empty_store).unwrap().next().is_none());
     empty_config.store_dir = iroha_config::base::WithOrigin::inline(empty_store);
-    let (empty_kura, _) = Kura::new_with_configured_lane_catalog(
+    empty_config.init_mode = iroha_config::kura::InitMode::Strict;
+    let (initialized_empty_kura, _) = Kura::new_with_configured_lane_catalog(
         &empty_config, &lane_config, &lane_catalog,
-    ).expect("open genuinely empty Fast Kura with the same configured catalog");
+    ).expect("initialize the actual empty Strict store with its original catalog");
+    drop(initialized_empty_kura);
+    empty_config.init_mode = iroha_config::kura::InitMode::Fast;
+    let (empty_kura, _) = Kura::open_test_kura_with_configured_lane_config(
+        &empty_config, &lane_config,
+    ).expect("reopen the initialized empty Fast Kura with the same catalog");
     let empty_seed = deserialize::KuraSeed {
         operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         execution_budget: iroha_allocation::AllocationBudget::new(
@@ -26832,6 +26847,15 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut transaction = state_block.transaction_for_callback_testing();
+    // This authenticated global component callback explicitly carries the same
+    // universal dataspace that the real internal output producer captures.
+    assert!(matches!(crate::executor::root_scope::execution_root_scope(&mut transaction),
+        Ok(iroha_data_model::block::consensus::SumeragiRootScope::Global)));
+    assert!(crate::executor::root_scope::captured_dataspace(&mut transaction).is_err());
+    transaction.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
+    transaction.world.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
+    assert_eq!(crate::executor::root_scope::captured_dataspace(&mut transaction).unwrap(),
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL);
     let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: ALICE_ID.clone(), args: Json::default(), } };
     let_row! { step = transaction .execute_called_trigger(&trigger_id, &event) .expect("generic IVM trigger executes at pc zero") };
     assert!(step.0.is_empty());
@@ -26895,6 +26919,8 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     );
 }
 state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argument_decode
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
         capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
         max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
@@ -26953,7 +26979,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
         let_row! { registered_hash = register_code_bytes(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, program, &mut stx) .expect("register raw trigger bytecode") };
         assert_eq!(registered_hash, code_hash);
         manifest.code_hash = Some(code_hash);
-        register_manifest(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(&ALICE_KEYPAIR), &mut stx)
+        register_manifest(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"), &mut stx)
             .expect("register raw trigger manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),
@@ -27359,6 +27385,8 @@ let _ev = ev;
     );
 }
 state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_argument_decode
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
         capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
         max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
@@ -27425,7 +27453,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             .expect("grant contract deployment permission");
         let_row! { code_hash = register_code_bytes(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, code, &mut stx).expect("register contract bytecode") };
         manifest.code_hash = Some(code_hash);
-        let manifest = manifest.signed(&ALICE_KEYPAIR);
+        let manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest");
         register_manifest(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest, &mut stx).expect("register contract manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),
@@ -27624,6 +27652,8 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
     }
 }
 state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_transfer
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     use crate::smartcontracts::code::{activate_instance, register_code_bytes, register_manifest};
     use iroha_data_model::{
         account::rekey::AccountAlias,
@@ -27719,7 +27749,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
         let_row! { registered_hash = register_code_bytes(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, program, &mut stx) .expect("register alias-transfer callback bytecode") };
         assert_eq!(registered_hash, code_hash);
         manifest.code_hash = Some(code_hash);
-        register_manifest(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(&ALICE_KEYPAIR), &mut stx)
+        register_manifest(&ALICE_ID,iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"), &mut stx)
             .expect("register alias-transfer callback manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),

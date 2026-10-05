@@ -133,7 +133,7 @@ mod node_probe_tests {
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn node_probes_report_ready_and_alive() {
+    async fn node_probes_report_node_readiness_and_liveness() {
         let fixture = crate::tests_runtime_handlers::ReadinessNode::start();
         let app = Arc::clone(&fixture.app);
         let readiness = handler_readyz(axum::extract::State(app)).await;

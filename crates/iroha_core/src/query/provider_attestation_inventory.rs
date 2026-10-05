@@ -54,7 +54,8 @@ pub fn authorize_provider_attestation_inventory_read_v1(
         key.validate().map_err(|_| Rejected)?;
         if now_secs == 0
             || view.height() < 2
-            || crate::sumeragi::lanes::routing::committed_root_scope(view.world())
+            || crate::sumeragi::lanes::routing::read_routing_root_scope(view.world())
+                .map_err(|_| Unavailable)?
                 != Some(SumeragiRootScope::Global)
         {
             return Err(Rejected);

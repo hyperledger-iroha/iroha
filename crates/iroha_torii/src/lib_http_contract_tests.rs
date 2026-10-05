@@ -994,7 +994,7 @@ mod response_negotiation_middleware_tests {
         let handler_calls = Arc::clone(&calls);
         let router = Router::new()
             .route(
-                "/readiness",
+                "/v1/api/version",
                 get(move || {
                     let calls = Arc::clone(&handler_calls);
                     async move {
@@ -1005,7 +1005,7 @@ mod response_negotiation_middleware_tests {
             )
             .layer(axum::middleware::from_fn(capture_response_format));
         let mut request = Request::builder()
-            .uri("/readiness")
+            .uri("/v1/api/version")
             .header(header::ACCEPT, "image/png")
             .header(header::IF_NONE_MATCH, "\"stale-validator\"")
             .body(Body::empty())

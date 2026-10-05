@@ -1814,12 +1814,12 @@ fn signed_zero_transfer_rejection_rolls_back_prior_capture_and_all_following_qua
     assert!(output.result.batch_transfer_outcomes().is_empty());
     assert!(output.completions.is_empty());
     // The rejected business overlay and zero-fee settlement publish no fragment.
-    // The actual Time phase separately applies reward-conversion maintenance,
-    // including an empty registry, through finish_reward_maintenance.
-    assert_eq!(block.committed_fragment_count(), fragments + 1);
+    // Time maintenance checks the empty local journal without publishing
+    // an additional fragment or quantity source transaction.
+    assert_eq!(block.committed_fragment_count(), fragments);
     assert_eq!(
         block.fastpq_quantity_candidate.applied_world_transactions,
-        applied_world_transactions + 1
+        applied_world_transactions
     );
     assert_eq!(
         block
@@ -2859,7 +2859,11 @@ fn signed_account_removal_captures_original_supply_first_burn_and_exact_source_c
         assert_eq!(row.effect_count, 1);
         let wire = block.fastpq_quantity_candidate.entries[&call].wire();
         let bytes = norito::encode_canonical(wire).unwrap();
-        assert_eq!(row.effects_digest, Hash::new(&bytes));
+        assert_eq!(
+            row.effects_digest,
+            iroha_data_model::fastpq::execution_effects_digest_v1(wire).unwrap()
+        );
+        assert_ne!(row.effects_digest, Hash::new(&bytes));
         assert_eq!(row.frame_bytes, u64::try_from(bytes.len()).unwrap());
         // Domain/definition lifecycle and other owner coverage are still incomplete.
         assert_eq!(
@@ -2908,12 +2912,12 @@ fn signed_account_removal_rolls_back_balance_supply_account_and_capture_on_later
         &Quantity::from(13_u32)
     );
     // The rejected business overlay and zero-fee settlement publish no fragment.
-    // The actual Time phase separately applies reward-conversion maintenance,
-    // including an empty registry, through finish_reward_maintenance.
-    assert_eq!(block.committed_fragment_count(), fragments + 1);
+    // Time maintenance checks the empty local journal without publishing
+    // an additional fragment or quantity source transaction.
+    assert_eq!(block.committed_fragment_count(), fragments);
     assert_eq!(
         block.fastpq_quantity_candidate.applied_world_transactions,
-        applied_world_transactions + 1
+        applied_world_transactions
     );
     assert_eq!(
         block
@@ -3251,7 +3255,11 @@ fn signed_definition_and_domain_retirement_capture_exact_original_enumeration_an
             census.entries()[0].effect_count as usize,
             wire.effects.len()
         );
-        assert_eq!(census.entries()[0].effects_digest, Hash::new(bytes));
+        assert_eq!(
+            census.entries()[0].effects_digest,
+            iroha_data_model::fastpq::execution_effects_digest_v1(wire).unwrap()
+        );
+        assert_ne!(census.entries()[0].effects_digest, Hash::new(bytes));
         assert_eq!(
             block.fastpq_quantity_candidate.require_complete(),
             Err(QuantityCaptureIssue::IncompleteCoverage)
@@ -3412,12 +3420,12 @@ fn signed_retirement_later_failure_rolls_back_balances_lifecycles_tape_and_origi
             }
         );
         // The rejected business overlay and zero-fee settlement publish no fragment.
-        // The actual Time phase separately applies reward-conversion maintenance,
-        // including an empty registry, through finish_reward_maintenance.
-        assert_eq!(block.committed_fragment_count(), fragments + 1);
+        // Time maintenance checks the empty local journal without publishing
+        // an additional fragment or quantity source transaction.
+        assert_eq!(block.committed_fragment_count(), fragments);
         assert_eq!(
             block.fastpq_quantity_candidate.applied_world_transactions,
-            applied_world_transactions + 1
+            applied_world_transactions
         );
         assert!(block.world.domains.get(&domain).is_some());
         assert_eq!(
@@ -4292,6 +4300,16 @@ fn original_quantity_census_binds_final_permission_context_and_rejects_late_role
 
 #[test]
 fn completed_quantity_source_retains_original_tape_graph_and_credit_after_state_drop() {
+    // Other Core tests can hold the process-global epoch for arbitrary work.
+    // Execute every original source assertion with the stock isolated harness.
+    if crate::unit_test_support::run_in_isolated_harness(
+        "state::fastpq_quantity_capture::tests::completed_quantity_source_retains_original_tape_graph_and_credit_after_state_drop",
+    ) {
+        return;
+    }
+    // State Cells retire through EBR; their credits are separate from this
+    // retained quantity graph. Keep those generations fixed during its drop.
+    let retirement_pin = crossbeam_epoch::pin();
     let mut retained = None;
     let mut original_pool = None;
     let mut original_ptr = std::ptr::null();
@@ -4342,7 +4360,25 @@ fn completed_quantity_source_retains_original_tape_graph_and_credit_after_state_
         ),
         original_digest
     );
+    let with_retired_state_generations = pool.reserved_bytes();
     drop(owner);
+    assert!(
+        pool.reserved_bytes() < with_retired_state_generations,
+        "the final source owner refunds its original graph while State retirement stays pinned"
+    );
+    drop(retirement_pin);
+    // Drive the real grace period before requiring the whole State pool empty.
+    // A retained generation or leaked graph still fails the exact zero check.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while pool.reserved_bytes() != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "original retired State credits remain: {}",
+            pool.reserved_bytes(),
+        );
+        crossbeam_epoch::pin().flush();
+        std::thread::yield_now();
+    }
     assert_eq!(
         pool.reserved_bytes(),
         0,

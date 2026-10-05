@@ -27,6 +27,7 @@ fn retained_service_plans_parse_once_and_refuse_original_byte_drift_on_every_acc
         for _ in 0..3 {
             authority.validate_profile().unwrap();
             assert!(authority.provider_plans().is_err());
+            assert!(authority.publication_plan().is_err());
             assert!(authority.gateway_compliance_plan(provider).is_ok());
             assert!(
                 authority
@@ -92,7 +93,8 @@ fn retained_network_plans_refuse_complete_input_and_native_custody_drift_without
     let expected = prepared.provider_service_plans().unwrap().unwrap();
     let provider = expected[0].provider_id();
     let expected_compliance = prepared.gateway_compliance_plan(provider).unwrap().unwrap();
-    let (authority, parses) =
+    let expected_publication = prepared.publication_service_plan().unwrap().unwrap();
+    let (mut authority, parses) =
         crate::localnet::service_authorities::count_profile_validations(|| {
             ServiceAuthority::open_network(&prepared, NetworkPurpose::ServiceBootstrap).unwrap()
         });
@@ -107,6 +109,23 @@ fn retained_network_plans_refuse_complete_input_and_native_custody_drift_without
         .unwrap()
         .open_child("2")
         .unwrap();
+    // A mutable SDK client projection is not the retained original publication intent.
+    let original_chain = authority.config.chain.clone();
+    let original_discriminant = authority.config.account_chain_discriminant;
+    authority.config.chain = "different-publication-projection".parse().unwrap();
+    authority.config.account_chain_discriminant ^= 1;
+    let (publication, parses) =
+        crate::localnet::service_authorities::count_profile_validations(|| {
+            authority.publication_plan().unwrap()
+        });
+    assert_eq!(parses, 0);
+    assert_eq!(publication.chain_id(), expected_publication.chain_id());
+    assert_eq!(
+        publication.configuration_table().unwrap(),
+        expected_publication.configuration_table().unwrap()
+    );
+    authority.config.chain = original_chain;
+    authority.config.account_chain_discriminant = original_discriminant;
     let accept = || {
         let plans = authority.provider_plans().unwrap();
         for (selected, expected) in plans.iter().zip(&expected) {
@@ -122,6 +141,22 @@ fn retained_network_plans_refuse_complete_input_and_native_custody_drift_without
             assert_eq!(selected.declaration(), expected.declaration());
             assert_eq!(selected.pricing(), expected.pricing());
         }
+        let publication = authority.publication_plan().unwrap();
+        assert_eq!(publication.network_id(), expected_publication.network_id());
+        assert_eq!(publication.chain_id(), expected_publication.chain_id());
+        assert_eq!(
+            publication.seed_provider(),
+            expected_publication.seed_provider()
+        );
+        assert_eq!(publication.session_id(), expected_publication.session_id());
+        assert_eq!(
+            publication.provider_admission_material(),
+            expected_publication.provider_admission_material()
+        );
+        assert_eq!(
+            publication.configuration_table().unwrap(),
+            expected_publication.configuration_table().unwrap()
+        );
         let compliance = authority.gateway_compliance_plan(provider).unwrap();
         assert_eq!(compliance.network_id(), expected_compliance.network_id());
         assert_eq!(
@@ -149,6 +184,7 @@ fn retained_network_plans_refuse_complete_input_and_native_custody_drift_without
     let refuse = || {
         assert!(authority.provider_plans().is_err());
         assert!(authority.gateway_compliance_plan(provider).is_err());
+        assert!(authority.publication_plan().is_err());
     };
     let (_, parses) = crate::localnet::service_authorities::count_profile_validations(|| {
         accept();

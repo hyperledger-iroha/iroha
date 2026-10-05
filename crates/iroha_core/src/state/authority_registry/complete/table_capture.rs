@@ -957,8 +957,6 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         capture: capture_repo_agreements_once,
     },
     native_world::capture_settlement_receipts_once::MATERIALIZER,
-    native_world::capture_kagemusha_reserve_pools_once::MATERIALIZER,
-    native_world::capture_kagemusha_reserve_operations_once::MATERIALIZER,
     native_world::capture_kagemusha_mint_credit_operations_once::MATERIALIZER,
     native_world::capture_kagemusha_issuance_operations_once::MATERIALIZER,
     native_world::capture_kagemusha_redemption_id_operations_once::MATERIALIZER,
@@ -1045,6 +1043,20 @@ fn capture_actual_state_tables_once(
     limits: TableCaptureLimits,
 ) -> Result<Option<CapturedCanonicalTables>, TableCaptureError> {
     capture_tables_once(state, STATE_FIELDS, TABLE_MATERIALIZERS, limits)
+}
+
+/// Identities of every canonical table that the exact catalog reads, in catalog order.
+///
+/// The State table inventory (`specs/state_table_inventory.json`) records, for each
+/// canonical table of the registry, that this catalog has a reader for it.
+#[cfg(test)]
+pub(in crate::state) fn catalog_table_ids() -> Vec<&'static str> {
+    require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS)
+        .expect("the table catalog matches the registry exactly");
+    TABLE_MATERIALIZERS
+        .iter()
+        .flat_map(|owner| owner.table_ids())
+        .collect()
 }
 
 #[cfg(test)]
@@ -1352,8 +1364,6 @@ mod tests {
             "world.soradns_release_signers",
             "world.repo_agreements",
             "world.settlement_receipts",
-            "world.kagemusha_reserve_pools",
-            "world.kagemusha_reserve_operations",
             "world.kagemusha_mint_credit_operations",
             "world.kagemusha_issuance_operations",
             "world.kagemusha_redemption_id_operations",

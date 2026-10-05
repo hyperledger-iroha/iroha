@@ -78,8 +78,62 @@ does not qualify execution proofs, native consumers or a release candidate.
 
 G2 has an exhaustive typed inventory of World, State, trigger and durable-history
 owners, classifying canonical authority, derived indexes, authenticated history
-and local policy. The World accumulator commits canonical World fields and their
-schema identities; derived indexes do not become independent authority. The
+and local policy. Its machine-readable view is
+[`state_table_inventory.json`](state_table_inventory.json), generated from the
+authority registry, the accumulator's field index, the production World pass,
+the exact table catalog, a scan of every non-test source of `iroha_core` and
+`iroha_data_model`, and the declarations of the consensus-carried types (the
+block header, the block payload and block result, the signed genesis consensus
+parameters, the execution result, every Sumeragi wire message, the lane result,
+the peer handshake capabilities and the node's network envelope).
+`crates/iroha_core/src/state/state_table_inventory_tests.rs`
+compares the tracked file with a fresh generation and fails when a field, its
+root coverage, an execution-witness family or cited evidence drifts, and when a
+domain literal, a new use of a listed literal, a use of a commitment
+construction, a hash-bearing field of a consensus-carried type or of an
+execution-witness value type, any field of a carrier type that holds a State
+digest, or an `iroha_core` function that takes a State or
+World reader and returns a hash-bearing value appears without an exact
+listing; it detects carrier, signature, literal and construction drift, not
+arbitrary State dataflow. The file's
+`summary` holds the current counts; `fields` gives each field's role, shape,
+codec identities, certified root and witness families; `roots` enumerates every
+existing commitment over State content with its class, owner, disposition and
+the detectors that report it, `protocol_carriers` every hash-bearing field of
+the consensus-carried types (the block header, the block payload and block
+result, signed genesis, `R`, the wire messages, the lane result, the peer
+handshake and the network envelope) and every field of the types that hold
+their State digests,
+and `application_accumulator` the accumulators that
+[`sumeragi.md`](sumeragi.md) §16.8 excludes; `open_defects` lists what the
+as-built State still violates, each assigned to ZK delivery plan task G.3. The World accumulator commits
+canonical World fields and their schema identities; derived indexes do not
+become independent authority. Canonical State-level fields (transaction
+membership, commit topologies, the canonical runtime, chain and network
+identity, lane manifests and compliance, and the policy cells installed from
+node configuration) affect no certified root, and the execution-witness roots
+bind only the reserved witness families that the inventory lists; a family
+value that digests State content (for example the FASTPQ permission-table root
+over `world.roles`) is itself a listed commitment. One per-table State root is
+certified today, the retail fee receipt-head root, and is an open defect.
+Protocol objects also carry flat fingerprints of State content that validation
+recomputes and compares: the execution-policy digest (signed genesis and the
+peer handshake), the Nexus/AMX context hash (signed genesis), the DA
+proof-policy bundle hash and the confidential feature digest (every block
+header; the latter digests the effective verifying-key registry), and the AXT
+policy snapshot (every block result: the projection of the derived table
+`world.axt_policies`, which the apply path installs from the block without
+rebuilding it from its registered sources). They are
+listed as protocol fingerprints with open defects; none authenticates a State
+read. The epoch context identity in every consensus message, the schedule
+and beacon fields of `R`, and the pinned committee digest of every lane result
+are listed as consensus bindings and keep their roles.
+The contract
+of the one keyed State commitment that replaces the accumulator, with
+inclusion, absence and complete-range witnesses, is [`sumeragi.md`](sumeragi.md)
+§16; its typed interface and conformance suite are
+`crates/iroha_core/src/state/authority_registry/keyed_commitment.rs`. It is
+specified, not built. The
 complete-table catalog checks exact identities and materializers, and the typed
 inventory admits its canonical schema metadata. Kagemusha verifier authority is
 already the canonical governed World registry. The runtime handle is a local

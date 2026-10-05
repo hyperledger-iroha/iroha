@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
 # Manual asset formatting owner: one-space JSON indentation, enforced below.
-EXPECTED_ASSET_LENGTH = 130_560
-EXPECTED_ASSET_SHA256 = "a47c72217e1a611cedddaabf934f371a8323caccad421fdfa4639243f1cf0eb4"
-EXPECTED_SEMANTIC_SHA256 = "250f4f6c13cdb90820345bdf2995a4a413f4cd302ae4ec197ae611faeb33075b"
+EXPECTED_ASSET_LENGTH = 130_574
+EXPECTED_ASSET_SHA256 = "045ef7e0eae4cd3c6896a3dc5d0e9b27dab0ddf0a5048d3fc8c623902b43d275"
+EXPECTED_SEMANTIC_SHA256 = "d997c6d2d24bbf9d2783e887cae04e761e4721fe82a80d41c65b574d3fa703d5"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -662,6 +662,14 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                     "newest first" in record["description"],
                     name in EXPECTED_NEWEST_FIRST_COLLECTIONS,
                 )
+                if name in (
+                    "iroha.explorer.instructions.query",
+                    "iroha.explorer.instructions.latest.query",
+                ):
+                    for field in ("box.wire_id", "box.framed_sha256", "box.instruction"):
+                        self.assertIn(field, record["description"])
+                    for retired in ("box.encoded", "box.json"):
+                        self.assertNotIn(retired, record["description"])
                 if name.startswith("iroha.explorer."):
                     for needle in ("Fixed bounded order:", "default limit 25, maximum 100"):
                         self.assertIn(needle, record["description"])
@@ -745,6 +753,8 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
             self.asset.replace(b'"schema_version": 1', b'"schema_version": 2', 1),
             self.asset.replace(b'"effect": "read"', b'"effect": "write"', 1),
             self.asset.replace(b'"type": "object"', b'"type": "array" ', 1),
+            self.asset.replace(b"box.wire_id", b"box.encoded", 1),
+            self.asset.replace(b"box.instruction", b"box.json", 1),
         )
         for mutated in mutations:
             with self.subTest(digest=hashlib.sha256(mutated).hexdigest()):

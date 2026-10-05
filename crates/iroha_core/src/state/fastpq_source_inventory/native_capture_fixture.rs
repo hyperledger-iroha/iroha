@@ -241,9 +241,29 @@ fn with_native_state_sources<T>(
             FeePaymentIntent::authority(vec![], None),
         );
         transaction.set_creation_time(header.creation_time() - Duration::from_millis(1));
-        let signed = transaction
-            .with_instructions(body)
-            .sign(ALICE_KEYPAIR.private_key());
+        let mut transaction = transaction.with_instructions(body);
+        {
+            let view = state.view();
+            if let Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
+                dataspace_id,
+                ..
+            }) = crate::sumeragi::lanes::routing::committed_root_scope(view.world())
+            {
+                let draft = transaction.clone().sign(ALICE_KEYPAIR.private_key());
+                let quote = crate::executor::quote_nexus_fee_admission_draft(
+                    view.world(),
+                    view.nexus(),
+                    view.pipeline(),
+                    draft.payload(),
+                    u64::try_from(draft.creation_time().as_millis()).unwrap(),
+                    header.height().get(),
+                    Some(dataspace_id),
+                )
+                .expect("private quantity source pays its original signed fee policy");
+                transaction = transaction.with_fee_payment_intent(quote.recommended_intent);
+            }
+        }
+        let signed = transaction.sign(ALICE_KEYPAIR.private_key());
         hashes.push(Hash::from(
             TransactionEntrypoint::External(signed.clone()).execution_call_hash(),
         ));
@@ -270,7 +290,7 @@ fn with_native_state_sources<T>(
     block.execute_ordinary_output_plan(&source, None).unwrap();
     let rows = block.retained_execution_outputs_for_test().unwrap();
     assert_eq!(rows.len(), transfers_per_entry.len());
-    assert!(rows.iter().all(|row| row.result().is_ok()));
+    assert!(rows.iter().all(|row| row.result().is_ok()), "{rows:?}");
     assert_eq!(source.header().height().get(), 2);
     action(&state, block, recording, source, hashes)
 }

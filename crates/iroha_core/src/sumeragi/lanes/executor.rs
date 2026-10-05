@@ -598,10 +598,13 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
                 skip.extend(hashes.iter().copied());
             }
         }
-        // Leave room for the batch framing.
+        // Leave room for the batch framing; the data model owns the reserve so queue
+        // admission and SDK preflight use the same value.
         let budget = usize::try_from(max_bytes)
             .unwrap_or(usize::MAX)
-            .saturating_sub(64);
+            .saturating_sub(
+                iroha_data_model::parameter::system::LANE_BATCH_FRAMING_RESERVE_BYTES as usize,
+            );
         // The batch merges after the anchor: route as of the next global height.
         let selected = match transactions.candidates(anchor_height.saturating_add(1), budget, &skip)
         {
@@ -887,6 +890,13 @@ mod tests {
         global: &Arc<Global>,
         queue: Option<Arc<Queue>>,
     ) -> LaneExecutor<Global, Accept, Queue> {
+        executor_with(global, queue)
+    }
+
+    fn executor_with<T: LaneTransactions>(
+        global: &Arc<Global>,
+        queue: Option<Arc<T>>,
+    ) -> LaneExecutor<Global, Accept, T> {
         let record = record();
         let config = lane_height_config(&record).expect("config");
         LaneExecutor::begin_recover(
@@ -1024,6 +1034,159 @@ mod tests {
         // A block whose parent is neither applied nor executed is parked.
         let orphan = block(&lane, 3, Hash32([9; 32]), b1.payload().clone());
         assert_eq!(lane.execute(&orphan, &Hash32([8; 32])), None);
+    }
+
+    /// The framed length queue admission and the queue-backed source measure.
+    fn framed_len(transaction: &SignedTransaction) -> usize {
+        crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(transaction))
+            .encoded_len()
+    }
+
+    /// A transaction source that applies the byte budget the builder passes, as the
+    /// queue-backed source does, and records each budget it was given.
+    struct Budgeted {
+        transactions: Vec<SignedTransaction>,
+        budgets: Mutex<Vec<usize>>,
+    }
+    impl LaneTransactions for Budgeted {
+        fn candidates(
+            &self,
+            _height: u64,
+            max_bytes: usize,
+            skip: &BTreeSet<HashOf<TransactionEntrypoint>>,
+        ) -> Result<Vec<SignedTransaction>, crate::execution_attempt::ExecutionDeferred> {
+            self.budgets.lock().push(max_bytes);
+            let mut bytes = 0usize;
+            let mut selected = Vec::new();
+            for transaction in &self.transactions {
+                let next = bytes.saturating_add(framed_len(transaction));
+                if skip.contains(&transaction.hash_as_entrypoint()) || next > max_bytes {
+                    continue;
+                }
+                bytes = next;
+                selected.push(transaction.clone());
+            }
+            Ok(selected)
+        }
+    }
+
+    /// The lane builder selects within the lane payload limit less the batch framing reserve
+    /// the data model owns, which is the budget queue admission grants a lane-routed
+    /// transaction. A transaction of exactly that length is built into a batch that fits the
+    /// payload limit; with one byte less payload it is not selected and nothing is proposed.
+    #[test]
+    fn build_carries_a_transaction_of_the_payload_limit_less_the_framing_reserve() {
+        let reserve =
+            iroha_data_model::parameter::system::LANE_BATCH_FRAMING_RESERVE_BYTES as usize;
+        let global = Arc::new(Global {
+            applied: AtomicU64::new(5),
+        });
+        let transaction = tx(7);
+        let length = framed_len(&transaction);
+        let source = Arc::new(Budgeted {
+            transactions: vec![transaction.clone()],
+            budgets: Mutex::new(Vec::new()),
+        });
+        let mut lane = executor_with(&global, Some(Arc::clone(&source)));
+        let exact = u32::try_from(length + reserve).unwrap();
+        // One byte over the lane budget: the builder's budget is one byte short.
+        let (payload, attest) = lane.build(1, 0, exact - 1, 100).unwrap();
+        assert!(payload.is_none() && !attest, "nothing fits: no empty batch");
+        // Exactly the lane budget.
+        let (payload, attest) = lane.build(1, 0, exact, 100).unwrap();
+        let payload = payload.expect("the lane budget carries the transaction");
+        assert!(!attest);
+        assert!(
+            payload.as_slice().len() <= exact as usize,
+            "the batch framing fits the reserve: {} of {exact} bytes",
+            payload.as_slice().len()
+        );
+        let batch = LaneBatch::from_payload(payload.as_slice()).expect("batch");
+        assert_eq!(batch.transactions, vec![transaction]);
+        assert_eq!(*source.budgets.lock(), vec![length - 1, length]);
+        // The same budget is what the data model grants the lane route at admission (the
+        // global payload here leaves no room, so the lane budget alone decides).
+        assert_eq!(
+            iroha_data_model::parameter::system::max_includable_transaction_bytes(
+                iroha_data_model::parameter::Parameters::default()
+                    .transaction()
+                    .max_tx_bytes(),
+                std::num::NonZeroU32::new(1).unwrap(),
+                iroha_data_model::parameter::system::TransactionInclusionRoute::NativeLane {
+                    max_block_bytes: std::num::NonZeroU32::new(exact).unwrap(),
+                },
+            ),
+            u64::try_from(length).unwrap()
+        );
+    }
+
+    /// A transaction source that ignores the byte budget, so the builder's own comparison of
+    /// the encoded batch with the payload limit decides what is proposed.
+    struct Unbudgeted(Vec<SignedTransaction>);
+    impl LaneTransactions for Unbudgeted {
+        fn candidates(
+            &self,
+            _height: u64,
+            _max_bytes: usize,
+            skip: &BTreeSet<HashOf<TransactionEntrypoint>>,
+        ) -> Result<Vec<SignedTransaction>, crate::execution_attempt::ExecutionDeferred> {
+            Ok(self
+                .0
+                .iter()
+                .filter(|transaction| !skip.contains(&transaction.hash_as_entrypoint()))
+                .cloned()
+                .collect())
+        }
+    }
+
+    /// The encoded batch, framing included, is compared with the lane payload limit itself.
+    /// A batch of exactly the limit is proposed whole; with one byte less the builder drops
+    /// the last transaction instead of proposing an oversized payload; below the batch of one
+    /// transaction it proposes nothing.
+    #[test]
+    fn build_trims_the_batch_to_the_lane_payload_limit() {
+        let global = Arc::new(Global {
+            applied: AtomicU64::new(5),
+        });
+        let (first, second) = (tx(11), tx(12));
+        let source = Arc::new(Unbudgeted(vec![first.clone(), second.clone()]));
+        let mut lane = executor_with(&global, Some(Arc::clone(&source)));
+        let encoded = |transactions: Vec<SignedTransaction>| {
+            let batch = LaneBatch {
+                anchor_height: 5,
+                anchor_hash: anchor_hash(5),
+                transactions,
+            };
+            norito::codec::encode_adaptive_into(&batch, &mut io::sink()).expect("batch length")
+        };
+        let both = encoded(vec![first.clone(), second.clone()]);
+        let one = encoded(vec![first.clone()]);
+        assert!(one < both);
+        let carried = |payload: &PayloadBytes| {
+            LaneBatch::from_payload(payload.as_slice())
+                .expect("batch")
+                .transactions
+        };
+        // Exactly the limit: both transactions, and the payload is the limit to the byte.
+        let (payload, attest) = lane.build(1, 0, u32::try_from(both).unwrap(), 100).unwrap();
+        let payload = payload.expect("a batch of exactly the limit is proposed");
+        assert!(!attest);
+        assert_eq!(payload.as_slice().len(), both);
+        assert_eq!(carried(&payload), vec![first.clone(), second]);
+        // One byte less: the last transaction is dropped, never an oversized payload.
+        let (payload, _) = lane
+            .build(1, 0, u32::try_from(both - 1).unwrap(), 100)
+            .unwrap();
+        let payload = payload.expect("the first transaction still fits");
+        assert_eq!(payload.as_slice().len(), one);
+        assert_eq!(carried(&payload), vec![first]);
+        // The batch of one transaction is itself exact at its own length and refused below it.
+        let (payload, _) = lane.build(1, 0, u32::try_from(one).unwrap(), 100).unwrap();
+        assert_eq!(payload.expect("exactly one batch").as_slice().len(), one);
+        let (payload, attest) = lane
+            .build(1, 0, u32::try_from(one - 1).unwrap(), 100)
+            .unwrap();
+        assert!(payload.is_none() && !attest, "nothing fits: no empty batch");
     }
 
     #[test]

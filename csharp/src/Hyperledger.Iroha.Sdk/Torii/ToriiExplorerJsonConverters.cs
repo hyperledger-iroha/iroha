@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -62,7 +63,7 @@ internal static class ToriiExplorerJson
             throw new JsonException($"{context} must not be null.");
         }
 
-        RequireExactHex(response.Encoded, $"{context}.encoded");
+        RequireCanonicalBase64(response.Reason, $"{context}.reason");
         RequireExactNonEmptyText(response.Message, $"{context}.message");
     }
 
@@ -91,22 +92,26 @@ internal static class ToriiExplorerJson
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        RequireExactHex(response.Encoded, $"{context}.encoded");
-        if (response.Json is null)
+        RequireExactNonEmptyText(response.WireId, $"{context}.wire_id");
+        ToriiSseEventJson.RequireExactSizedHex(response.FramedSha256, $"{context}.framed_sha256", 32);
+        RequireCanonicalBase64(response.Instruction, $"{context}.instruction");
+        var digest = Convert.ToHexString(SHA256.HashData(Convert.FromBase64String(response.Instruction))).ToLowerInvariant();
+        if (digest != response.FramedSha256)
         {
-            throw new JsonException($"{context}.json must not be null.");
+            throw new JsonException($"{context}.framed_sha256 must match the exact instruction frame.");
         }
-
-        ValidateExplorerInstructionJson(response.Json, $"{context}.json");
     }
 
-    internal static void ValidateExplorerInstructionJson(ToriiExplorerInstructionJson response, string context)
+    private static void RequireCanonicalBase64(string value, string field)
     {
-        ArgumentNullException.ThrowIfNull(response);
-
-        RequireExactNonEmptyText(response.Kind, $"{context}.kind");
-        RequireExactNonEmptyText(response.WireId, $"{context}.wire_id");
-        RequireExactEvenLengthHex(response.Encoded, $"{context}.encoded");
+        try
+        {
+            _ = ToriiExplorerDirectMetadata.RequireCanonicalBase64(value, field);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new JsonException($"{field} must be non-empty canonical base64 text without whitespace.", exception);
+        }
     }
 
     internal static void ValidateExplorerAccount(ToriiExplorerAccount? response, string context)
@@ -690,7 +695,9 @@ internal static class ToriiExplorerJson
             "Status" => "status",
             "Kind" => "kind",
             "WireId" => "wire_id",
-            "Encoded" => "encoded",
+            "FramedSha256" => "framed_sha256",
+            "Instruction" => "instruction",
+            "Reason" => "reason",
             "Message" => "message",
             "Json" => "json",
             "InstructionBox" => "box",
@@ -2027,15 +2034,15 @@ internal sealed class ToriiExplorerTransactionRejectionJsonConverter :
         JsonSerializerOptions options)
     {
         var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer transaction rejection");
+        ToriiExplorerJson.RequireExactProperties(payload, "explorer transaction rejection", "reason", "message");
         try
         {
             var response = new ToriiExplorerTransactionRejection
             {
-                Encoded = ToriiExplorerJson.ReadRequiredString(
+                Reason = ToriiExplorerJson.ReadRequiredString(
                     payload,
-                    "encoded",
-                    "explorer transaction rejection.encoded"),
-                Json = ToriiExplorerJson.ReadOptionalNode(payload, "json"),
+                    "reason",
+                    "explorer transaction rejection.reason"),
                 Message = ToriiExplorerJson.ReadRequiredString(
                     payload,
                     "message",
@@ -2058,9 +2065,7 @@ internal sealed class ToriiExplorerTransactionRejectionJsonConverter :
         ToriiExplorerJson.ValidateExplorerTransactionRejection(value, "explorer transaction rejection");
 
         writer.WriteStartObject();
-        writer.WriteString("encoded", value.Encoded);
-        writer.WritePropertyName("json");
-        JsonSerializer.Serialize(writer, value.Json, options);
+        writer.WriteString("reason", value.Reason);
         writer.WriteString("message", value.Message);
         writer.WriteEndObject();
     }
@@ -2156,59 +2161,6 @@ internal sealed class ToriiExplorerTransactionDetailJsonConverter :
     }
 }
 
-internal sealed class ToriiExplorerInstructionJsonJsonConverter : JsonConverter<ToriiExplorerInstructionJson>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerInstructionJson Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer instruction json");
-        try
-        {
-            var response = new ToriiExplorerInstructionJson
-            {
-                Kind = ToriiExplorerJson.ReadRequiredString(payload, "kind", "explorer instruction json.kind"),
-                Payload = ToriiExplorerJson.ReadOptionalNode(payload, "payload"),
-                WireId = ToriiExplorerJson.ReadRequiredString(payload, "wire_id", "explorer instruction json.wire_id"),
-                Encoded = ToriiExplorerJson.ReadRequiredString(payload, "encoded", "explorer instruction json.encoded"),
-            };
-            ToriiExplorerJson.ValidateExplorerInstructionJson(response, "explorer instruction json");
-            return response;
-        }
-        catch (ArgumentException error) when (error.ParamName is not null)
-        {
-            throw ToriiExplorerJson.DirectMetadataErrorToJsonException(error, "explorer instruction json");
-        }
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerInstructionJson value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerInstructionJson(value, "explorer instruction json");
-
-        writer.WriteStartObject();
-        writer.WriteString("kind", value.Kind);
-        writer.WritePropertyName("payload");
-        if (value.Payload is null)
-        {
-            writer.WriteNullValue();
-        }
-        else
-        {
-            value.Payload.WriteTo(writer, options);
-        }
-
-        writer.WriteString("wire_id", value.WireId);
-        writer.WriteString("encoded", value.Encoded);
-        writer.WriteEndObject();
-    }
-}
-
 internal sealed class ToriiExplorerInstructionBoxJsonConverter : JsonConverter<ToriiExplorerInstructionBox>
 {
     public override bool HandleNull => true;
@@ -2219,16 +2171,14 @@ internal sealed class ToriiExplorerInstructionBoxJsonConverter : JsonConverter<T
         JsonSerializerOptions options)
     {
         var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer instruction box");
+        ToriiExplorerJson.RequireExactProperties(payload, "explorer instruction box", "wire_id", "framed_sha256", "instruction");
         try
         {
             var response = new ToriiExplorerInstructionBox
             {
-                Encoded = ToriiExplorerJson.ReadRequiredString(payload, "encoded", "explorer instruction box.encoded"),
-                Json = ToriiExplorerJson.ReadOptionalObject<ToriiExplorerInstructionJson>(
-                    payload,
-                    "json",
-                    "explorer instruction box.json",
-                    "explorer instruction json"),
+                WireId = ToriiExplorerJson.ReadRequiredString(payload, "wire_id", "explorer instruction box.wire_id"),
+                FramedSha256 = ToriiExplorerJson.ReadRequiredString(payload, "framed_sha256", "explorer instruction box.framed_sha256"),
+                Instruction = ToriiExplorerJson.ReadRequiredString(payload, "instruction", "explorer instruction box.instruction"),
             };
             ToriiExplorerJson.ValidateExplorerInstructionBox(response, "explorer instruction box");
             return response;
@@ -2247,9 +2197,9 @@ internal sealed class ToriiExplorerInstructionBoxJsonConverter : JsonConverter<T
         ToriiExplorerJson.ValidateExplorerInstructionBox(value, "explorer instruction box");
 
         writer.WriteStartObject();
-        writer.WriteString("encoded", value.Encoded);
-        writer.WritePropertyName("json");
-        JsonSerializer.Serialize(writer, value.Json, options);
+        writer.WriteString("wire_id", value.WireId);
+        writer.WriteString("framed_sha256", value.FramedSha256);
+        writer.WriteString("instruction", value.Instruction);
         writer.WriteEndObject();
     }
 }

@@ -1358,6 +1358,8 @@ mod contract_address_tests {
 }
 /// Exact recursive schemas for public Kotodama entrypoint boundaries.
 pub mod entrypoint;
+#[path = "smart_contract/manifest_projection.rs"]
+mod manifest_projection;
 /// Canonical bounded continuation positions for live durable-map pagination.
 pub mod state_cursor;
 // Smart contract manifest types and helpers.
@@ -1436,6 +1438,14 @@ pub mod manifest {
     //! under a well-known key for admission-time checks. When attached or registered, a V1 manifest
     //! must carry both consensus-binding hashes.
 
+    pub use super::manifest_projection::{
+        BorrowedEntrypoints, BorrowedManifestValue, BorrowedStates,
+        ContractManifestSignaturePayloadView, EntrypointDescriptorView,
+        ManifestEntrypointSequenceV1, ManifestSigningError, ManifestStateSequenceV1,
+        ManifestStateTypeNameV1, ManifestStateTypeNodeV1, ManifestStateTypeV1,
+        ManifestTypeNameView, StateDescriptorView,
+    };
+
     use crate::{
         DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
         DeriveJsonSerialize as DeriveJsonSer,
@@ -1446,7 +1456,7 @@ pub mod manifest {
         smart_contract::entrypoint::{EntrypointArgumentSchemaV1, EntrypointValueTypeV1},
         trigger::{TriggerId, action::Repeats},
     };
-    use iroha_crypto::{Error as CryptoError, Hash, KeyPair, PublicKey, Signature};
+    use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
     use iroha_model_base::metadata::Metadata;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
@@ -2097,55 +2107,80 @@ pub mod manifest {
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
     }
-    impl From<&ContractManifest> for ContractManifestSignaturePayload {
-        fn from(manifest: &ContractManifest) -> Self {
-            Self {
-                seiyaku_name: manifest.seiyaku_name.clone(),
-                code_hash: manifest.code_hash,
-                abi_hash: manifest.abi_hash,
-                compiler_fingerprint: manifest.compiler_fingerprint.clone(),
-                features_bitmap: manifest.features_bitmap,
-                access_set_hints: manifest.access_set_hints.clone(),
-                entrypoints: manifest.entrypoints.clone(),
-                states: manifest.states.clone(),
-                error_types: manifest.error_types.clone(),
-                error_messages: manifest.error_messages.clone(),
-                kotoba: manifest.kotoba.clone(),
-            }
-        }
-    }
     impl ContractManifest {
-        /// Build the canonical payload that must be signed for provenance checks.
+        /// Compare the exact canonical signing content without copying its owned graph.
+        ///
+        /// Provenance is excluded, just as in [`Self::signature_payload`]. Optional absent
+        /// fields remain distinct from present empty fields; nested vector order and every
+        /// descriptor value remain significant. This comparison allocates nothing.
         #[must_use]
-        pub fn signature_payload(&self) -> ContractManifestSignaturePayload {
-            ContractManifestSignaturePayload::from(self)
+        pub fn same_signed_content(&self, other: &Self) -> bool {
+            // Exhaustive destructuring makes a new manifest field require an explicit
+            // decision here instead of silently excluding it from admission comparisons.
+            let Self {
+                seiyaku_name,
+                code_hash,
+                abi_hash,
+                compiler_fingerprint,
+                features_bitmap,
+                access_set_hints,
+                entrypoints,
+                states,
+                error_types,
+                error_messages,
+                kotoba,
+                provenance: _,
+            } = self;
+            seiyaku_name == &other.seiyaku_name
+                && code_hash == &other.code_hash
+                && abi_hash == &other.abi_hash
+                && compiler_fingerprint == &other.compiler_fingerprint
+                && features_bitmap == &other.features_bitmap
+                && access_set_hints == &other.access_set_hints
+                && entrypoints == &other.entrypoints
+                && states == &other.states
+                && error_types == &other.error_types
+                && error_messages == &other.error_messages
+                && kotoba == &other.kotoba
         }
-        /// Encode the canonical signing payload into Norito bytes.
+        /// Borrow the canonical payload that must be signed for provenance checks.
         #[must_use]
-        pub fn signature_payload_bytes(&self) -> Vec<u8> {
-            norito::encode_canonical(&self.signature_payload())
-                .expect("manifest signature payload encoding must succeed")
+        pub fn signature_payload(&self) -> ContractManifestSignaturePayloadView<'_> {
+            ContractManifestSignaturePayloadView::from(self)
+        }
+        /// Encode one bounded canonical signing frame under the caller's original context.
+        ///
+        /// The caller retains its physical graph/output owner through consumption. The supplied
+        /// cumulative context does not grant independent allocation or lifetime authority.
+        ///
+        /// # Errors
+        ///
+        /// Returns the original native frame, allocation or serialization refusal.
+        pub fn signature_payload_bytes(
+            &self,
+            context: &norito::core::DecodeBudgetContext,
+            max_frame_bytes: usize,
+        ) -> Result<Vec<u8>, norito::core::BoundedEncodeError> {
+            self.signature_payload().to_bytes(context, max_frame_bytes)
         }
         /// Attach provenance by signing the canonical payload with the provided key pair.
         ///
         /// # Errors
         ///
-        /// Returns a crypto error if the selected signing backend rejects the
-        /// key material or payload.
-        pub fn try_signed(mut self, key_pair: &KeyPair) -> Result<Self, CryptoError> {
-            let payload = self.signature_payload_bytes();
+        /// Returns the original native encoder refusal or selected signing backend error.
+        pub fn try_signed(
+            mut self,
+            context: &norito::core::DecodeBudgetContext,
+            max_frame_bytes: usize,
+            key_pair: &KeyPair,
+        ) -> Result<Self, ManifestSigningError> {
+            let payload = self.signature_payload_bytes(context, max_frame_bytes)?;
             let signature = Signature::try_new(key_pair.private_key(), &payload)?;
-            self.provenance = Some(ManifestProvenance {
-                signer: key_pair.public_key().clone(),
-                signature,
-            });
+            let signer = context
+                .with(|| key_pair.public_key().try_clone_for_admission())
+                .map_err(norito::core::BoundedEncodeError::from)?;
+            self.provenance = Some(ManifestProvenance { signer, signature });
             Ok(self)
-        }
-        /// Attach provenance by signing the canonical payload with the provided key pair.
-        #[must_use]
-        pub fn signed(self, key_pair: &KeyPair) -> Self {
-            self.try_signed(key_pair)
-                .expect("contract manifest signing should succeed")
         }
     }
     #[cfg(test)]
@@ -2431,8 +2466,27 @@ pub mod manifest {
         fn checked_random_keypair() -> KeyPair {
             KeyPair::try_random().expect("test fixture random key generation should succeed")
         }
+        const TEST_FRAME_MAX: usize = 64 * 1024;
+        fn signing_context() -> (
+            iroha_allocation::AllocationBudget,
+            iroha_allocation::AllocationReservation,
+            norito::core::DecodeBudgetContext,
+        ) {
+            let grant_bytes = 512 * 1024;
+            let owner = iroha_allocation::AllocationBudget::new(1024 * 1024);
+            let grant = owner
+                .try_reserve_bytes(grant_bytes)
+                .expect("physical fixture grant");
+            let context = norito::core::DecodeBudgetContext::try_new_owned(
+                norito::core::DecodeLimits::new(65_536, TEST_FRAME_MAX, 65_536, grant_bytes, 256),
+                &owner,
+            )
+            .expect("original owned cumulative fixture context");
+            (owner, grant, context)
+        }
         #[test]
         fn signature_payload_excludes_provenance_and_verifies() {
+            let (_owner, _grant, context) = signing_context();
             let kp = checked_random_keypair();
             let mut manifest = ContractManifest {
                 seiyaku_name: None,
@@ -2454,13 +2508,17 @@ pub mod manifest {
                 }]),
                 provenance: None,
             };
-            let payload = manifest.signature_payload_bytes();
+            let payload = manifest
+                .signature_payload_bytes(&context, TEST_FRAME_MAX)
+                .expect("bounded signature payload");
             {
                 let alternate_flags =
                     norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
                 let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
                 assert_eq!(
-                    manifest.signature_payload_bytes(),
+                    manifest
+                        .signature_payload_bytes(&context, TEST_FRAME_MAX)
+                        .expect("bounded signature payload"),
                     payload,
                     "manifest signature identity must ignore the caller's ambient Norito layout"
                 );
@@ -2472,7 +2530,12 @@ pub mod manifest {
                 signature: signature.clone(),
             });
             // Provenance should not affect the payload bytes.
-            assert_eq!(payload, manifest.signature_payload_bytes());
+            assert_eq!(
+                payload,
+                manifest
+                    .signature_payload_bytes(&context, TEST_FRAME_MAX)
+                    .expect("bounded signature payload")
+            );
             signature
                 .verify(kp.public_key(), &payload)
                 .expect("signature must verify");
@@ -2483,23 +2546,38 @@ pub mod manifest {
             }]);
             assert!(
                 signature
-                    .verify(kp.public_key(), &manifest.signature_payload_bytes())
+                    .verify(
+                        kp.public_key(),
+                        &manifest
+                            .signature_payload_bytes(&context, TEST_FRAME_MAX)
+                            .expect("bounded signature payload")
+                    )
                     .is_err(),
                 "manifest provenance must bind static presentation text"
             );
             let explained = manifest
                 .clone()
-                .try_signed(&kp)
+                .try_signed(&context, TEST_FRAME_MAX, &kp)
                 .expect("sign explained manifest");
             let explained_signature = &explained.provenance.as_ref().expect("signature").signature;
             explained_signature
-                .verify(kp.public_key(), &explained.signature_payload_bytes())
+                .verify(
+                    kp.public_key(),
+                    &explained
+                        .signature_payload_bytes(&context, TEST_FRAME_MAX)
+                        .expect("bounded signature payload"),
+                )
                 .expect("explained manifest signature must verify");
             manifest.error_messages.as_mut().expect("messages")[0].message =
                 "Revised explanation".into();
             assert!(
                 explained_signature
-                    .verify(kp.public_key(), &manifest.signature_payload_bytes())
+                    .verify(
+                        kp.public_key(),
+                        &manifest
+                            .signature_payload_bytes(&context, TEST_FRAME_MAX)
+                            .expect("bounded signature payload")
+                    )
                     .is_err(),
                 "changing only presentation text must invalidate provenance"
             );
@@ -2507,13 +2585,19 @@ pub mod manifest {
             manifest.error_types.as_mut().expect("error types")[0].variants[0].code = 1002;
             assert!(
                 signature
-                    .verify(kp.public_key(), &manifest.signature_payload_bytes())
+                    .verify(
+                        kp.public_key(),
+                        &manifest
+                            .signature_payload_bytes(&context, TEST_FRAME_MAX)
+                            .expect("bounded signature payload")
+                    )
                     .is_err(),
                 "manifest provenance must bind nominal error variant codes"
             );
         }
         #[test]
         fn try_signed_attaches_verifiable_provenance() {
+            let (_owner, _grant, context) = signing_context();
             let kp = checked_random_keypair();
             let manifest = ContractManifest {
                 seiyaku_name: None,
@@ -2529,9 +2613,13 @@ pub mod manifest {
                 error_types: None,
                 provenance: None,
             };
-            let signed = manifest.try_signed(&kp).expect("sign manifest");
+            let signed = manifest
+                .try_signed(&context, TEST_FRAME_MAX, &kp)
+                .expect("sign manifest");
             let provenance = signed.provenance.as_ref().expect("manifest provenance");
-            let payload = signed.signature_payload_bytes();
+            let payload = signed
+                .signature_payload_bytes(&context, TEST_FRAME_MAX)
+                .expect("bounded signature payload");
             assert_eq!(provenance.signer, kp.public_key().clone());
             provenance
                 .signature

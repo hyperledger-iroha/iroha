@@ -7,9 +7,6 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import java.io.File
 import java.io.IOException
-import java.lang.reflect.InvocationTargetException
-import java.lang.reflect.Method
-import java.lang.reflect.Modifier
 import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -19,6 +16,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.hyperledger.iroha.sdk.testing.JvmApiInventory
 
 class KagemushaWalletAndroidPlatformV1Test {
     @TempDir
@@ -97,72 +95,73 @@ class KagemushaWalletAndroidPlatformV1Test {
     }
 
     @Test fun `the handle exposes no public operation to app code`() {
-        val type = KagemushaWalletAndroidPlatformV1::class.java
-        val declaredPublic = type.methods.filter { it.declaringClass == type }
+        val type = JvmApiInventory.read(KagemushaWalletAndroidPlatformV1::class.java)
+        val declaredPublic = type.methods.filter { it.isPublic && !it.isSynthetic && it.name != "<init>" }
         assertEquals(listOf("create"), declaredPublic.map { it.name })
-        assertEquals(listOf(Context::class.java), declaredPublic.single().parameterTypes.toList())
-        assertTrue(Modifier.isStatic(declaredPublic.single().modifiers))
-        for ((name, parameters) in UPCALLS) {
-            val method = type.getDeclaredMethod(name, *parameters)
-            assertTrue(Modifier.isPrivate(method.modifiers), name)
+        assertEquals("(Landroid/content/Context;)L$JVM_OWNER/KagemushaWalletAndroidPlatformV1;", declaredPublic.single().descriptor)
+        assertTrue(declaredPublic.single().isStatic)
+        for ((name, signature) in UPCALLS) {
+            val method = type.methods.single { it.name == name }
+            assertTrue(method.flags and 0x0002 != 0, name)
+            assertEquals(signature, method.descriptor, name)
         }
-        assertEquals(UPCALLS.keys, type.declaredMethods.filter { Modifier.isPrivate(it.modifiers) && !it.isSynthetic }.map { it.name }.toSet())
+        assertEquals(UPCALLS.keys, type.methods.filter {
+            it.flags and 0x0002 != 0 && !it.isSynthetic && it.name != "<init>"
+        }.map { it.name }.toSet())
     }
 
     @Test fun `the consumer rules keep every upcall the bridge binds`() {
         val rules = File("consumer-rules.pro").readText()
-        for ((name, parameters) in UPCALLS) {
-            val signature = parameters.joinToString(", ") { if (it == ByteArray::class.java) "byte[]" else it.name }
+        val methods = JvmApiInventory.read(KagemushaWalletAndroidPlatformV1::class.java).methods
+        for (name in UPCALLS.keys) {
+            val signature = methods.single { it.name == name }.parameterTypes.joinToString(", ") {
+                when (it) {
+                    "[B" -> "byte[]"
+                    "I" -> "int"
+                    else -> error("unreviewed JNI upcall parameter descriptor: $it")
+                }
+            }
             assertTrue(rules.contains(" $name($signature);"), "consumer-rules.pro must keep $name($signature)")
         }
     }
 
-    /** Invoke one private upcall exactly as JNI does: by name and signature, ignoring visibility. */
-    private fun KagemushaWalletAndroidPlatformV1.upcall(name: String, vararg arguments: Any): Any? {
-        val method: Method = KagemushaWalletAndroidPlatformV1::class.java.getDeclaredMethod(name, *UPCALLS.getValue(name))
-        method.isAccessible = true
-        return try {
-            method.invoke(this, *arguments)
-        } catch (thrown: InvocationTargetException) {
-            throw thrown.targetException
-        }
-    }
-
-    @Test fun `the JNI upcalls reach the payment key through the slot alias`() {
+    @Test fun `the platform adapter reaches the payment key through the slot alias`() {
         val keyStore = TestKeyStoreV1()
-        val handle = KagemushaWalletAndroidPlatformV1.create(TestEnvironmentV1(directory), keyStore)
+        val platform = adapter(TestEnvironmentV1(directory), keyStore)
         val slot = ByteArray(32) { (it + 1).toByte() }
-        assertSame(KagemushaWalletAndroidKeyProbeV1.Absent, handle.upcall("keyProbe", slot))
+        assertSame(KagemushaWalletAndroidKeyProbeV1.Absent, platform.keyProbe(slot))
         val generated = assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(
-            handle.upcall("keyGenerate", slot, ByteArray(32) { 3 }, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT.tag),
+            platform.keyGenerate(slot, ByteArray(32) { 3 }, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT.tag),
         )
         assertEquals(kagemushaWalletAndroidAliasV1(slot), keyStore.generated.single().alias)
         assertEquals(
             generated.publicKeySec1().toList(),
-            assertIs<KagemushaWalletAndroidKeyProbeV1.Present>(handle.upcall("keyProbe", slot)).publicKeySec1().toList(),
+            assertIs<KagemushaWalletAndroidKeyProbeV1.Present>(platform.keyProbe(slot)).publicKeySec1().toList(),
         )
-        assertIs<KagemushaWalletAndroidSignatureV1.Der>(handle.upcall("keySign", slot, byteArrayOf(1, 2, 3)))
-        assertIs<KagemushaWalletAndroidAttestationChainV1.Present>(handle.upcall("attestationChain", slot))
-        assertEquals(0, handle.upcall("anchorPolicyTag"))
-        assertNull(handle.upcall("storageState"))
-        assertIs<KagemushaWalletAndroidCustodyRootV1.Present>(handle.upcall("custodyRoot"))
-        assertSame(KagemushaWalletAndroidRemoveV1.Removed, handle.upcall("keyDelete", slot))
-        assertSame(KagemushaWalletAndroidKeyProbeV1.Absent, handle.upcall("keyProbe", slot))
-        assertFailsWith<IllegalArgumentException> { handle.upcall("keyGenerate", ByteArray(32) { 9 }, ByteArray(32) { 3 }, 0) }
+        assertIs<KagemushaWalletAndroidSignatureV1.Der>(platform.keySign(slot, byteArrayOf(1, 2, 3)))
+        assertIs<KagemushaWalletAndroidAttestationChainV1.Present>(platform.attestationChain(slot))
+        assertEquals(0, platform.anchorPolicyTag())
+        assertNull(platform.storageState())
+        assertIs<KagemushaWalletAndroidCustodyRootV1.Present>(platform.custodyRoot())
+        assertSame(KagemushaWalletAndroidRemoveV1.Removed, platform.keyDelete(slot))
+        assertSame(KagemushaWalletAndroidKeyProbeV1.Absent, platform.keyProbe(slot))
+        assertFailsWith<IllegalArgumentException> { platform.keyGenerate(ByteArray(32) { 9 }, ByteArray(32) { 3 }, 0) }
         assertEquals(1, keyStore.generated.size)
     }
 
     private companion object {
-        /** The private JNI upcalls and their parameter types: the bridge contract. */
-        val UPCALLS: Map<String, Array<Class<*>>> = linkedMapOf(
-            "keyProbe" to arrayOf(ByteArray::class.java),
-            "keyGenerate" to arrayOf(ByteArray::class.java, ByteArray::class.java, Int::class.javaPrimitiveType!!),
-            "keySign" to arrayOf(ByteArray::class.java, ByteArray::class.java),
-            "keyDelete" to arrayOf(ByteArray::class.java),
-            "attestationChain" to arrayOf(ByteArray::class.java),
-            "anchorPolicyTag" to arrayOf(),
-            "storageState" to arrayOf(),
-            "custodyRoot" to arrayOf(),
+        private const val JVM_OWNER = "org/hyperledger/iroha/sdk/offline/wallet"
+
+        /** Exact private JNI names and descriptors, including return types. */
+        val UPCALLS: Map<String, String> = linkedMapOf(
+            "keyProbe" to "([B)L$JVM_OWNER/KagemushaWalletAndroidKeyProbeV1;",
+            "keyGenerate" to "([B[BI)L$JVM_OWNER/KagemushaWalletAndroidKeyGenerationV1;",
+            "keySign" to "([B[B)L$JVM_OWNER/KagemushaWalletAndroidSignatureV1;",
+            "keyDelete" to "([B)L$JVM_OWNER/KagemushaWalletAndroidRemoveV1;",
+            "attestationChain" to "([B)L$JVM_OWNER/KagemushaWalletAndroidAttestationChainV1;",
+            "anchorPolicyTag" to "()I",
+            "storageState" to "()L$JVM_OWNER/KagemushaWalletAndroidUnavailableV1;",
+            "custodyRoot" to "()L$JVM_OWNER/KagemushaWalletAndroidCustodyRootV1;",
         )
     }
 }

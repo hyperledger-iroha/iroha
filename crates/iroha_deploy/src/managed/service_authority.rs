@@ -295,6 +295,20 @@ impl ServiceAuthority {
         self.profile.original_compliance_plan(provider)
     }
 
+    /// Project singleton publication intent from the original parsed client and manifest.
+    /// The network operation retains full-image custody; this grants no current eligibility.
+    pub(super) fn publication_plan(
+        &self,
+    ) -> Result<crate::localnet::service_authorities::RetainedPublicationServicePlan> {
+        self.validate_profile()?;
+        if matches!(self.scope, Scope::Provider { .. }) {
+            return Err(invalid(
+                "provider service cannot select network publication intent",
+            ));
+        }
+        self.profile.original_publication_plan()
+    }
+
     pub(super) fn provider_plan(&self) -> Result<RetainedProviderServicePlan> {
         self.validate_profile()?;
         self.profile.original_plan(self.provider_id()?)

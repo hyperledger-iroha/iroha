@@ -256,7 +256,11 @@ public final class ParliamentApiV1Tests {
             "FinalizeReferendum",
             "deploy_contract",
             "runtimeUpgrade",
-            "Unknown")) {
+            "Unknown",
+            "KagemushaVerifierPolicyInstall",
+            "KagemushaVerifierReleaseInstall",
+            "KagemushaVerifierReleaseActivate",
+            "KagemushaVerifierReleaseRetire")) {
       assertThrows(
           IllegalArgumentException.class,
           () ->
