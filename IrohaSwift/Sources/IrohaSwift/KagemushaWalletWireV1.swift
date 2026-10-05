@@ -13,7 +13,7 @@ import Foundation
 // Poseidon values (`credit_id`, `proof_digest`, the Payment digest, state commitments, chains,
 // map, blacklist, quota-window and credit-digest roots and openings) are computed only by the
 // native Rust core over the bridge. Swift carries them as opaque 32-byte σ-field values and
-// checks only that they are canonical (``KagemushaWalletWireV1/isCanonicalFieldElement(_:)``).
+// checks only that they are canonical (``KagemushaWalletWireV1/isCanonicalFieldValue(_:)``).
 //
 // TODO(G4): typed Swift decoding and `validate()` of the wallet message bodies (or the shared
 // Rust core over the native bridge) when the Swift wallet wire migrates; structural envelope
@@ -244,6 +244,21 @@ public enum KagemushaWalletWireV1 {
   /// Maximum complete canonical envelope frame for Request, Payment, Credited, PolicyData and
   /// Lineage.
   public static let messageMaximumBytes = 10_000
+  /// `F_payment`: the bytes of a Payment envelope frame other than its Ω and σ_send proofs.
+  public static let paymentFixedBytes = 1_615
+  /// Joint budget of the Ω transport proof and the largest σ_send (R9): `10,000 − F_payment`.
+  ///
+  /// σ and Ω carry no other byte caps: their exact lengths come from the frozen verifying-key
+  /// allowlist (owner answer Q6). Until the artifacts freeze (TODO(G3)) only the carrying frame
+  /// bounds them, which is all the structural envelope check enforces.
+  public static let paymentProofBudgetBytes = messageMaximumBytes - paymentFixedBytes
+  /// Maximum σ entries of the verifying-key allowlist: one per operation other than Send and one
+  /// per supported Send enabled-controls mask.
+  public static let verifyingKeyEntriesMaximum = 15
+  /// Maximum standalone canonical frame of the verifying-key allowlist.
+  public static let verifyingKeyAllowlistMaximumBytes = 2_048
+  /// Maximum non-default siblings of a credit-digest opening (the depth-256 sparse tree).
+  public static let creditOpeningSiblingsMaximum = 256
   /// Maximum complete `kgm1:` text of a session-bounded envelope (2_736).
   public static let sessionTextMaximumBytes = constantTextMaximumBytes(sessionMaximumBytes)
   /// Maximum complete `kgm1:` text of a message-bounded envelope (13_339).
@@ -270,7 +285,7 @@ public enum KagemushaWalletWireV1 {
     0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42, 0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31, 0x92, 0xa8,
   ]
   /// Bytes of one σ-field value: its canonical little-endian encoding.
-  public static let fieldElementBytes = 32
+  public static let fieldValueBytes = 32
   /// σ-field modulus `p` of Pasta `Fp` (the Vesta scalar field), little-endian:
   /// `p = 0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001`.
   ///
@@ -373,10 +388,10 @@ public enum KagemushaWalletWireV1 {
   /// This is a byte comparison from the most significant byte down, like the Rust
   /// `kagemusha_wallet_is_canonical_field_v1`. It is the only check Swift applies to a Poseidon
   /// value, which the native core computes; it never recomputes one.
-  public static func isCanonicalFieldElement(_ value: Data) -> Bool {
+  public static func isCanonicalFieldValue(_ value: Data) -> Bool {
     let bytes = [UInt8](value)
-    guard bytes.count == fieldElementBytes else { return false }
-    for index in stride(from: fieldElementBytes - 1, through: 0, by: -1)
+    guard bytes.count == fieldValueBytes else { return false }
+    for index in stride(from: fieldValueBytes - 1, through: 0, by: -1)
     where bytes[index] != fieldModulus[index] {
       return bytes[index] < fieldModulus[index]
     }

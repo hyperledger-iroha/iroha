@@ -19,6 +19,7 @@ use crate::{
     },
 };
 use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
     account::{Account, AccountId},
@@ -60,6 +61,15 @@ fn fixture_with_effects(
     pipeline_transfer: bool,
     fee_and_protocol: bool,
 ) -> (State, SignedBlock, TriggerId, TriggerId) {
+    fixture_with_effects_in_root(pipeline_transfer, fee_and_protocol, None)
+}
+
+fn fixture_with_effects_in_root(
+    pipeline_transfer: bool,
+    fee_and_protocol: bool,
+    private_dataspace: Option<DataSpaceId>,
+) -> (State, SignedBlock, TriggerId, TriggerId) {
+    assert!(private_dataspace.is_none() || (!pipeline_transfer && !fee_and_protocol));
     // The maintained signed-genesis owner establishes the original native root.
     // Callback fixtures are registered only after genesis, so their exact once
     // actions belong to this successor rather than the bootstrap carrier.
@@ -84,7 +94,7 @@ fn fixture_with_effects(
         parameters.commit();
     }
     let domain = DomainId::try_new("owned-inventory", "universal").unwrap();
-    let asset = if fee_and_protocol {
+    let asset = if fee_and_protocol || private_dataspace.is_some() {
         // Admission resolves the committed network XOR identity even when the Nexus fee is zero.
         AssetDefinitionId::parse_address_literal(
             &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
@@ -130,6 +140,91 @@ fn fixture_with_effects(
     config.governance = Some(state.gov);
     config.nexus = Some(nexus);
     config.genesis_parameters = genesis_parameters;
+    if let Some(dataspace) = private_dataspace {
+        use iroha_data_model::{
+            asset::AssetBalanceScope,
+            block::consensus::{PrivateRootFeePolicy, SumeragiRootScope},
+            domain::Domain,
+            nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
+        };
+        let parent_network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::new(b"original-private-pipeline-time-parent"),
+        ));
+        config.root_scope = SumeragiRootScope::Dataspace {
+            parent_network_id,
+            dataspace_id: dataspace,
+        };
+        let nexus = config.nexus.as_mut().unwrap();
+        nexus.lane_catalog = LaneCatalog::new(
+            NonZeroU32::MIN,
+            vec![LaneConfig {
+                dataspace_id: dataspace,
+                alias: "owned-private-root".into(),
+                ..LaneConfig::default()
+            }],
+        )
+        .unwrap();
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: dataspace,
+            alias: "owned-private-root".into(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .unwrap();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+        nexus.routing_policy.default_dataspace = dataspace;
+        nexus.fees.fee_asset_id = asset.canonical_address();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
+        let genesis_authority = AccountId::new(config.genesis_key.public_key().clone());
+        nexus.fees.fee_sink_account_id = genesis_authority.to_string();
+        config.pipeline.gas.tech_account_id = genesis_authority.to_string();
+        config.pipeline.gas.accepted_assets = vec![asset.canonical_address()];
+        config.pipeline.gas.units_per_gas = vec![GasRate {
+            asset: asset.canonical_address(),
+            units_per_gas: 1,
+            twap_local_per_xor: Numeric::one(),
+            liquidity: GasLiquidity::Tier2,
+            volatility: GasVolatility::Stable,
+        }];
+        config.genesis_parameters.push(Parameter::Custom(
+            PrivateRootFeePolicy {
+                asset_definition_id: asset.clone(),
+                base_fee: Quantity::one(),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: Quantity::zero(),
+                per_gas_unit_fee: Quantity::one(),
+            }
+            .into_custom_parameter()
+            .unwrap(),
+        ));
+        let owning_domain = DomainId::try_new("fees", "owned-private-root").unwrap();
+        config.genesis_instructions.extend([
+            Register::account(Account::new(ALICE_ID.clone())).into(),
+            Register::domain(Domain::new(owning_domain.clone())).into(),
+            Register::asset_definition(AssetDefinition::numeric(
+                asset.clone(),
+                "private callback fee",
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(owning_domain),
+            ))
+            .into(),
+            Mint::asset_quantity(
+                1_000_000_u32,
+                AssetId::with_scope(
+                    asset.clone(),
+                    ALICE_ID.clone(),
+                    AssetBalanceScope::Dataspace(dataspace),
+                ),
+            )
+            .into(),
+        ]);
+    }
     let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
     let mode = config.consensus_mode;
     let prepared = crate::sumeragi::test_chain::CertifiedTestChain::prepare(config)
@@ -178,9 +273,11 @@ fn fixture_with_effects(
     );
     let mut setup = state.block(setup_header);
     let mut tx = setup.transaction_for_callback_testing();
-    Register::account(Account::new(ALICE_ID.clone()))
-        .execute(&ALICE_ID, &mut tx)
-        .unwrap();
+    if private_dataspace.is_none() {
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+    }
     if pipeline_transfer || fee_and_protocol {
         Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut tx)
@@ -317,7 +414,23 @@ fn fixture_with_effects(
             ),
         );
         tx.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
-        let signed = tx.with_instructions(body).sign(ALICE_KEYPAIR.private_key());
+        let mut tx = tx.with_instructions(body);
+        if let Some(dataspace) = private_dataspace {
+            let view = state.view();
+            let quote = crate::executor::quote_nexus_fee_admission_draft(
+                view.world(),
+                &state.nexus_snapshot(),
+                &state.pipeline,
+                tx.payload(),
+                u64::try_from(header.creation_time().as_millis()).unwrap(),
+                header.height().get(),
+                Some(dataspace),
+            )
+            .expect("original paid private-root fee quote");
+            assert!(!quote.recommended_intent.charge_limits().is_empty());
+            tx = tx.with_fee_payment_intent(quote.recommended_intent);
+        }
+        let signed = tx.sign(ALICE_KEYPAIR.private_key());
         let accepted =
             crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(&signed));
         let view = state.view();
@@ -871,6 +984,89 @@ fn owned_seal_still_rejects_late_applied_capture_after_transcript_drain() {
         inventory.as_ref()
     );
     assert!(block.verify_execution_output_seal(&source).is_err());
+    assert!(matches!(
+        block.commit().unwrap_err(),
+        TransactionsBlockError::ExecutionOutputCapacity
+    ));
+}
+
+#[test]
+fn actual_private_root_pipeline_and_time_keep_authenticated_invocation_dataspace() {
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+    let dataspace = DataSpaceId::new(7);
+    let (state, mut source, pipeline, time) =
+        fixture_with_effects_in_root(false, false, Some(dataspace));
+    let scope = crate::sumeragi::lanes::routing::read_committed_root_scope(&state.view().world)
+        .unwrap()
+        .expect("original signed root authority");
+    assert!(
+        matches!(scope, SumeragiRootScope::Dataspace { dataspace_id, .. } if dataspace_id == dataspace)
+    );
+    let (mut block, _recording) = state
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |_| Ok::<(), String>(()),
+            |error| error,
+        )
+        .unwrap();
+    let height = source.header().height().get();
+    let pipeline_call = PipelineInvocationV1 {
+        event: PipelineEventPositionV1::BlockApproved,
+        candidate_index: 0,
+        trigger: pipeline_trigger_use_v1(&block.world.triggers, &pipeline, height).unwrap(),
+    }
+    .execution_call_hash(source.hash())
+    .unwrap();
+    let time_call = TimeInvocationV1 {
+        schedule_index: 0,
+        event: block.create_time_event(&source.header()),
+        trigger: time_trigger_use_v1(&block.world.triggers, &time, height).unwrap(),
+    }
+    .execution_call_hash(source.hash())
+    .unwrap();
+    execute(&mut block, &source);
+    let rows = block.retained_execution_outputs_for_test().unwrap();
+    assert_eq!(rows.len(), 4);
+    assert!(
+        rows[0].result().is_ok(),
+        "original paid Network Log succeeds"
+    );
+    assert!(
+        rows[1].result().is_err(),
+        "original absent trigger remains rejected"
+    );
+    assert!(rows[2].result().is_ok() && rows[3].result().is_ok());
+    assert!(
+        matches!(&rows[2], ExecutionOutputV1::Pipeline(output) if output.invocation.trigger.trigger_id == pipeline)
+    );
+    assert!(
+        matches!(&rows[3], ExecutionOutputV1::Time(output) if output.invocation.trigger.trigger_id == time)
+    );
+    block
+        .seal_execution_outputs(&mut source, |block, _, routes| {
+            assert_eq!(routes.len(), 2);
+            assert!(routes.iter().all(|route| route.dataspace_id == dataspace));
+            seal_metadata(block)
+        })
+        .unwrap();
+    let inventory = block
+        .verified_fastpq_source_inventory_for_capture()
+        .unwrap();
+    assert_eq!(inventory.source().network_id, state.network_id);
+    assert_eq!(inventory.source().height, height);
+    assert_eq!(inventory.entries().len(), 4);
+    assert_eq!(inventory.entries()[2].entry_hash, pipeline_call);
+    assert_eq!(inventory.entries()[3].entry_hash, time_call);
+    for entry in &inventory.entries()[2..] {
+        assert_eq!(entry.route, FastpqSourceRouteV1::Unrouted);
+        assert_eq!(entry.dataspace_id, dataspace);
+        assert_eq!(
+            entry.execution_kind,
+            FastpqSourceExecutionKindV1::ExecutionCall
+        );
+    }
+    block.verify_execution_output_seal(&source).unwrap();
+    // This actual producer/inventory control does not supply a QC or claim finality.
     assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity

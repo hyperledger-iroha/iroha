@@ -11,7 +11,10 @@ pub(crate) fn decode_snapshot(source: &str) -> Result<(u64, Option<u64>), Error>
         parser.parse_null()?;
         None
     } else {
-        Some(integer(&mut parser)?)
+        literal(&mut parser, b"{\"value\":")?;
+        let value = integer(&mut parser)?;
+        literal(&mut parser, b"}")?;
+        Some(value)
     };
     literal(&mut parser, b",\"blocks\":")?;
     let blocks = integer(&mut parser)?;
@@ -89,34 +92,38 @@ mod tests {
     #[test]
     fn rejects_noncanonical_shape_values_and_every_truncation() {
         for source in [
-            r#"{"blocks":9,"revert":6}"#,
-            r#"{"revert":6,"blocks":9,"extra":0}"#,
-            r#"{"revert":6,"blocks":9,"blocks":9}"#,
-            r#"{"revert":6,"revert":6,"blocks":9}"#,
-            r#"{"revert":6}"#,
+            r#"{"revert":6,"blocks":9}"#,
+            r#"{"revert":{},"blocks":9}"#,
+            r#"{"revert":{"value":6,"value":6},"blocks":9}"#,
+            r#"{"revert":{"value":6,"extra":0},"blocks":9}"#,
+            r#"{"blocks":9,"revert":{"value":6}}"#,
+            r#"{"revert":{"value":6},"blocks":9,"extra":0}"#,
+            r#"{"revert":{"value":6},"blocks":9,"blocks":9}"#,
+            r#"{"revert":{"value":6},"revert":{"value":6},"blocks":9}"#,
+            r#"{"revert":{"value":6}}"#,
             r#"{"blocks":9}"#,
-            r#"{"revert":6,"blocks":null}"#,
-            r#"{"revert":true,"blocks":9}"#,
-            r#"{"revert":"6","blocks":9}"#,
-            r#"{"revert":6,"blocks":"9"}"#,
-            r#"{"revert":+6,"blocks":9}"#,
-            r#"{"revert":-0,"blocks":9}"#,
-            r#"{"revert":6,"blocks":-1}"#,
-            r#"{"revert":06,"blocks":9}"#,
-            r#"{"revert":6,"blocks":09}"#,
-            r#"{"revert":6.0,"blocks":9}"#,
-            r#"{"revert":6,"blocks":9e0}"#,
-            r#"{"revert":18446744073709551616,"blocks":9}"#,
-            r#"{"revert":6,"blocks":18446744073709551616}"#,
-            r#"{"revert": 6,"blocks":9}"#,
+            r#"{"revert":{"value":6},"blocks":null}"#,
+            r#"{"revert":{"value":true},"blocks":9}"#,
+            r#"{"revert":{"value":"6"},"blocks":9}"#,
+            r#"{"revert":{"value":6},"blocks":"9"}"#,
+            r#"{"revert":{"value":+6},"blocks":9}"#,
+            r#"{"revert":{"value":-0},"blocks":9}"#,
+            r#"{"revert":{"value":6},"blocks":-1}"#,
+            r#"{"revert":{"value":06},"blocks":9}"#,
+            r#"{"revert":{"value":6},"blocks":09}"#,
+            r#"{"revert":{"value":6.0},"blocks":9}"#,
+            r#"{"revert":{"value":6},"blocks":9e0}"#,
+            r#"{"revert":{"value":18446744073709551616},"blocks":9}"#,
+            r#"{"revert":{"value":6},"blocks":18446744073709551616}"#,
+            r#"{"revert":{"value": 6},"blocks":9}"#,
             r#"{"revert": null,"blocks":9}"#,
-            r#"{"revert":6,"blocks": 9}"#,
-            r#"{"revert":6 ,"blocks":9}"#,
-            r#" {"revert":6,"blocks":9}"#,
-            r#"{"revert":6,"blocks":9} "#,
-            r#"{"revert":6,"blocks":9}{}"#,
-            r#"{"revert":６,"blocks":9}"#,
-            r#"{"re\u0076ert":6,"blocks":9}"#,
+            r#"{"revert":{"value":6},"blocks": 9}"#,
+            r#"{"revert":{"value":6} ,"blocks":9}"#,
+            r#" {"revert":{"value":6},"blocks":9}"#,
+            r#"{"revert":{"value":6},"blocks":9} "#,
+            r#"{"revert":{"value":6},"blocks":9}{}"#,
+            r#"{"revert":{"value":６},"blocks":9}"#,
+            r#"{"re\u0076ert":{"value":6},"blocks":9}"#,
             r#"{"revert":nullx,"blocks":9}"#,
             r#"[6,9]"#,
             "null",
@@ -124,7 +131,7 @@ mod tests {
         ] {
             assert!(decode_snapshot(source).is_err(), "accepted {source}");
         }
-        let valid = r#"{"revert":18446744073709551615,"blocks":9}"#;
+        let valid = r#"{"revert":{"value":18446744073709551615},"blocks":9}"#;
         for length in 0..valid.len() {
             assert!(decode_snapshot(&valid[..length]).is_err());
         }

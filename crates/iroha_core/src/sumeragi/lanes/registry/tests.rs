@@ -410,7 +410,7 @@ fn authenticated_registry_batch_decode_refusal_is_retryable_not_byzantine() {
     ));
     assert!(matches!(
         f.stores.stores.lock().get(&(LANE, INCARNATION)),
-        Some(StoreSlot::Ready(_, false))
+        Some(StoreSlot::Ready(..))
     ));
     assert!(
         FileLaneBlockStore::begin_open(
@@ -495,7 +495,7 @@ fn complete_registry_reads_share_owner_and_preserve_valid_or_byzantine_payload_d
         ));
         assert!(matches!(
             f.stores.stores.lock().get(&(LANE, INCARNATION)),
-            Some(StoreSlot::Ready(_, false))
+            Some(StoreSlot::Ready(..))
         ));
         drop((a, b));
         f.stores.release(LANE, &INCARNATION);
@@ -632,15 +632,13 @@ fn retired_failed_openings_release_original_funding_and_lock_but_keep_replay_fra
         assert_eq!(f.stores.budget.reserved_bytes(), baseline + original.len());
         assert!(matches!(
             f.stores.stores.lock().get(&(LANE, INCARNATION)),
-            Some(StoreSlot::Opening(_, false))
+            Some(StoreSlot::Opening(_, true))
         ));
         f.stores.budget.set_limit_bytes(1 << 25);
         assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
         f.stores.release_retired(&lanes);
-        assert!(matches!(
-            f.stores.stores.lock().get(&(LANE, INCARNATION)),
-            Some(StoreSlot::Ready(_, false))
-        ));
+        assert!(f.stores.stores.lock().is_empty());
+        assert_eq!(fs::read(f.path()).unwrap(), original);
         assert!(f.stores.block(LANE, &INCARNATION, 1).unwrap().is_some());
     }
 }
@@ -658,7 +656,7 @@ fn retired_ready_owner_preserves_outstanding_reader_and_replay_custody() {
     f.stores.release_retired(&SumeragiLaneState::default());
     assert!(matches!(
         f.stores.stores.lock().get(&(LANE, INCARNATION)),
-        Some(StoreSlot::Ready(_, false))
+        Some(StoreSlot::Ready(..))
     ));
     assert!(Arc::ptr_eq(
         &reader,
@@ -688,6 +686,10 @@ fn retired_ready_owner_preserves_outstanding_reader_and_replay_custody() {
 fn storage_corruption_is_repeated_error_not_missing_block_or_recovered_tip() {
     let f = Fixture::new(true);
     f.publish();
+    let original = f.stores.store(LANE, &INCARNATION).unwrap();
+    let weak = Arc::downgrade(&original);
+    let authority_calls = f.authorities.calls.load(Ordering::SeqCst);
+    drop(original);
     let mut bytes = fs::read(f.path()).unwrap();
     let last = bytes.len() - 1;
     bytes[last] ^= 1;
@@ -698,6 +700,7 @@ fn storage_corruption_is_repeated_error_not_missing_block_or_recovered_tip() {
             io::ErrorKind::InvalidData
         );
     }
+    let retained_bytes = f.stores.budget.reserved_bytes();
     f.stores.release(LANE, &INCARNATION);
     for _ in 0..2 {
         assert_eq!(
@@ -705,8 +708,494 @@ fn storage_corruption_is_repeated_error_not_missing_block_or_recovered_tip() {
             io::ErrorKind::InvalidData
         );
     }
+    let original = weak
+        .upgrade()
+        .expect("the exact corrupt pending read must retain its original store owner");
+    let stores = f.stores.stores.lock();
+    let Some(StoreSlot::Ready(retained)) = stores.get(&(LANE, INCARNATION)) else {
+        panic!("a corrupt pending read must not be dropped and reopened");
+    };
+    assert!(Arc::ptr_eq(&original, retained));
+    assert!(retained.retains_pending_work());
+    assert_eq!(f.stores.budget.reserved_bytes(), retained_bytes);
+    assert_eq!(f.authorities.calls.load(Ordering::SeqCst), authority_calls);
+}
+
+#[test]
+fn retired_historical_ready_store_releases_last_owner_after_completed_reader() {
+    let f = Fixture::new(true);
+    f.publish();
+    let frame = fs::read(f.path()).unwrap();
+    let reader = f.stores.runtime_store(LANE, &INCARNATION).unwrap();
+    let weak = Arc::downgrade(&reader);
+    let original_limit = f.stores.budget.limit_bytes();
+    let retired = SumeragiLaneState::default();
+    f.stores.release_retired(&retired);
     assert!(matches!(
         f.stores.stores.lock().get(&(LANE, INCARNATION)),
-        Some(StoreSlot::Opening(..))
+        Some(StoreSlot::Ready(..))
     ));
+    let (body, certificate) = reader.committed_body(1).unwrap().unwrap();
+    assert_eq!(certificate, f.qc);
+    assert_eq!(body.source(), &f.source);
+    assert_eq!(body.hash(&*f.stores.crypto), f.qc.block_hash);
+    drop(body);
+    f.stores.release_retired(&retired);
+    assert!(
+        weak.upgrade().is_some(),
+        "an actual reader still owns its exact store"
+    );
+    drop(reader);
+    f.stores.release_retired(&retired);
+    assert!(
+        weak.upgrade().is_none(),
+        "completed historical reader must release the last ready store owner"
+    );
+    assert!(f.stores.stores.lock().is_empty());
+    assert_eq!(f.stores.budget.limit_bytes(), original_limit);
+    assert_eq!(
+        fs::read(f.path()).unwrap(),
+        frame,
+        "releasing ready memory and lock must preserve certified replay frames"
+    );
+    assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
+    let replay = f.stores.block(LANE, &INCARNATION, 1).unwrap().unwrap();
+    assert_eq!(replay.block_hash, f.qc.block_hash);
+    assert_eq!(replay.result, f.qc.result);
+    assert!(replay.batch.is_some());
+}
+
+// Append inside the existing lanes::registry::tests module. The actual fixture,
+// registry, signed BLS certificate and independently selected schedule remain unchanged.
+
+fn retire_exact_ready_owner(stores: &LaneStores, explicit_release: bool) {
+    if explicit_release {
+        stores.release(LANE, &INCARNATION);
+    } else {
+        stores.release_retired(&SumeragiLaneState::default());
+    }
+}
+
+#[test]
+fn retired_ready_store_preserves_original_read_refusal_before_batch_population() {
+    for explicit_release in [false, true] {
+        let f = Fixture::new(true);
+        f.publish();
+        let frame = fs::read(f.path()).unwrap();
+        let store = f.stores.runtime_store(LANE, &INCARNATION).unwrap();
+        let weak = Arc::downgrade(&store);
+        let baseline = f.stores.budget.reserved_bytes();
+        let ceiling = f.stores.budget.limit_bytes();
+        let occupied = f
+            .stores
+            .budget
+            .try_reserve_bytes(
+                ceiling
+                    .checked_sub(baseline)
+                    .unwrap()
+                    .checked_sub(frame.len())
+                    .unwrap(),
+            )
+            .unwrap();
+        let error = f.stores.block(LANE, &INCARNATION, 1).unwrap_err();
+        let Attempt::Deferred(original) = error else {
+            panic!("actual restoration must preserve its original refusal: {error:?}");
+        };
+        let Some(iroha_allocation::AllocationRefusal::Capacity {
+            requested_bytes,
+            reserved_bytes,
+            limit_bytes,
+            ..
+        }) = original.allocation_refusal()
+        else {
+            panic!("the next restoration allocation must refuse from the original pool");
+        };
+        assert!(*requested_bytes > 0);
+        assert_eq!(*reserved_bytes, ceiling);
+        assert_eq!(*limit_bytes, ceiling);
+        assert_eq!(f.stores.budget.reserved_bytes(), ceiling);
+        assert!(
+            store.batch_read.lock().is_none(),
+            "the source restoration refused before producing an authenticated batch owner"
+        );
+        drop(store);
+        retire_exact_ready_owner(&f.stores, explicit_release);
+        assert_eq!(
+            f.stores.budget.reserved_bytes(),
+            ceiling,
+            "retirement must retain the exact original frame/restoration allocation"
+        );
+        let same = weak
+            .upgrade()
+            .expect("pending read retains the original ready owner");
+        let still_registered = f.stores.store(LANE, &INCARNATION).unwrap();
+        assert!(Arc::ptr_eq(&same, &still_registered));
+        assert!(still_registered.batch_read.lock().is_none());
+        assert_eq!(fs::read(f.path()).unwrap(), frame);
+        assert!(
+            FileLaneBlockStore::begin_open(
+                f.dir.path(),
+                &f.source.instance(),
+                f.stores.crypto.clone(),
+                f.stores.budget.clone(),
+                f.authorities.schedule.clone(),
+                Arc::new(NoAttestation),
+            )
+            .is_err(),
+            "the unfinished original reader still owns the native lock"
+        );
+        drop(still_registered);
+        drop(same);
+        let error = f.stores.block(LANE, &INCARNATION, 1).unwrap_err();
+        assert!(
+            matches!(error, Attempt::Deferred(_)),
+            "unchanged original pressure must not become missing or completed-invalid"
+        );
+        assert_eq!(f.stores.budget.reserved_bytes(), ceiling);
+        drop(occupied);
+        let restored = f.stores.block(LANE, &INCARNATION, 1).unwrap().unwrap();
+        assert_eq!(restored.block_hash, f.qc.block_hash);
+        assert_eq!(restored.result, f.qc.result);
+        assert!(restored.batch.is_some());
+        drop(restored);
+        retire_exact_ready_owner(&f.stores, explicit_release);
+        assert!(
+            weak.upgrade().is_none(),
+            "a completed read can release its final store owner"
+        );
+        assert_eq!(f.stores.budget.reserved_bytes(), baseline);
+        assert_eq!(f.stores.budget.limit_bytes(), ceiling);
+        assert_eq!(fs::read(f.path()).unwrap(), frame);
+        let replay = f.stores.block(LANE, &INCARNATION, 1).unwrap().unwrap();
+        assert_eq!(replay.block_hash, f.qc.block_hash);
+        assert_eq!(replay.result, f.qc.result);
+    }
+}
+
+struct RetiredReadyPublicationFault {
+    armed: AtomicBool,
+}
+impl crate::sumeragi::records::Faults for RetiredReadyPublicationFault {
+    fn before(&self, step: crate::sumeragi::records::FsStep, _: &Path) -> io::Result<()> {
+        if step == crate::sumeragi::records::FsStep::CreateTemp
+            && self.armed.swap(false, Ordering::SeqCst)
+        {
+            return Err(io::Error::other("retained ready publication refusal"));
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn retired_ready_store_preserves_original_unfinished_publication_until_exact_retry() {
+    for explicit_release in [false, true] {
+        let f = Fixture::new(true);
+        let faults = Arc::new(RetiredReadyPublicationFault {
+            armed: AtomicBool::new(false),
+        });
+        // Use the existing faulted physical constructor with this fixture's independently
+        // selected authority. Only test registry insertion differs from the normal factory.
+        let store = FileLaneBlockStore::begin_open_with_faults(
+            f.dir.path(),
+            &f.source.instance(),
+            f.stores.crypto.clone(),
+            f.stores.budget.clone(),
+            f.authorities.schedule.clone(),
+            Arc::new(NoAttestation),
+            faults.clone(),
+        )
+        .unwrap()
+        .complete()
+        .unwrap_or_else(|(_, error)| panic!("empty source store: {error:?}"));
+        let store = Arc::new(store);
+        assert!(
+            f.stores
+                .stores
+                .lock()
+                .insert((LANE, INCARNATION), StoreSlot::Ready(store.clone()),)
+                .is_none()
+        );
+        let weak = Arc::downgrade(&store);
+        let baseline = f.stores.budget.reserved_bytes();
+        let ceiling = f.stores.budget.limit_bytes();
+        faults.armed.store(true, Ordering::SeqCst);
+        let error = store.append(&f.body, &f.qc).unwrap_err();
+        assert_eq!(error.io_kind(), io::ErrorKind::Other);
+        assert!(
+            error
+                .to_string()
+                .contains("retained ready publication refusal")
+        );
+        assert_eq!(store.height(), 0);
+        assert!(!f.path().exists());
+        assert!(store.batch_read.lock().is_none());
+        let retained = f.stores.budget.reserved_bytes();
+        assert!(
+            retained > baseline,
+            "the actual prepared canonical frame is funded before I/O"
+        );
+        drop(store);
+        retire_exact_ready_owner(&f.stores, explicit_release);
+        assert_eq!(
+            f.stores.budget.reserved_bytes(),
+            retained,
+            "the exact prepared output cannot be dropped by retired reconciliation"
+        );
+        let same = weak
+            .upgrade()
+            .expect("original pending publication retains its ready store");
+        assert!(Arc::ptr_eq(
+            &same,
+            &f.stores.store(LANE, &INCARNATION).unwrap()
+        ));
+        assert_eq!(same.height(), 0);
+        assert!(!f.path().exists());
+        assert!(
+            FileLaneBlockStore::begin_open(
+                f.dir.path(),
+                &f.source.instance(),
+                f.stores.crypto.clone(),
+                f.stores.budget.clone(),
+                f.authorities.schedule.clone(),
+                Arc::new(NoAttestation),
+            )
+            .is_err(),
+            "another writer cannot replace original unfinished publication custody"
+        );
+        let occupied = f
+            .stores
+            .budget
+            .try_reserve_bytes(ceiling - retained)
+            .unwrap();
+        same.append(&f.body, &f.qc).unwrap();
+        assert_eq!(same.height(), 1);
+        assert!(f.path().exists());
+        drop(occupied);
+        drop(same);
+        retire_exact_ready_owner(&f.stores, explicit_release);
+        assert!(weak.upgrade().is_none());
+        assert_eq!(f.stores.budget.reserved_bytes(), baseline);
+        assert_eq!(f.stores.budget.limit_bytes(), ceiling);
+        let frame = fs::read(f.path()).unwrap();
+        let replay = f.stores.block(LANE, &INCARNATION, 1).unwrap().unwrap();
+        assert_eq!(replay.block_hash, f.qc.block_hash);
+        assert_eq!(replay.result, f.qc.result);
+        assert_eq!(fs::read(f.path()).unwrap(), frame);
+    }
+}
+
+#[test]
+fn historical_join_of_runtime_opening_retains_original_recovery_after_lane_retirement() {
+    let f = Fixture::new(true);
+    f.publish();
+    let frame = fs::read(f.path()).unwrap();
+    f.stores.release(LANE, &INCARNATION);
+    assert!(f.stores.stores.lock().is_empty());
+    let baseline = f.stores.budget.reserved_bytes();
+    let ceiling = f.stores.budget.limit_bytes();
+    let occupied = f
+        .stores
+        .budget
+        .try_reserve_bytes(
+            ceiling
+                .checked_sub(baseline)
+                .unwrap()
+                .checked_sub(frame.len())
+                .unwrap(),
+        )
+        .unwrap();
+    let runtime_error = f.stores.runtime_store(LANE, &INCARNATION).unwrap_err();
+    assert!(matches!(runtime_error, Attempt::Deferred(_)));
+    assert_eq!(f.stores.budget.reserved_bytes(), ceiling);
+    let authority_calls = f.authorities.calls.load(Ordering::SeqCst);
+    let historical_error = f.stores.store(LANE, &INCARNATION).unwrap_err();
+    assert!(matches!(historical_error, Attempt::Deferred(_)));
+    assert_eq!(f.authorities.calls.load(Ordering::SeqCst), authority_calls);
+    assert_eq!(f.stores.budget.reserved_bytes(), ceiling);
+    f.stores.release_retired(&SumeragiLaneState::default());
+    assert!(
+        matches!(
+            f.stores.stores.lock().get(&(LANE, INCARNATION)),
+            Some(StoreSlot::Opening(..))
+        ),
+        "an actual historical caller joined this original unfinished recovery"
+    );
+    assert_eq!(
+        f.stores.budget.reserved_bytes(),
+        ceiling,
+        "retirement must not erase the historical join's exact original frame allocation"
+    );
+    assert_eq!(f.authorities.calls.load(Ordering::SeqCst), authority_calls);
+    assert_eq!(fs::read(f.path()).unwrap(), frame);
+    drop(occupied);
+    assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
+    assert_eq!(
+        f.authorities.calls.load(Ordering::SeqCst),
+        authority_calls,
+        "same recovery retains its independently selected authority"
+    );
+    let replay = f.stores.block(LANE, &INCARNATION, 1).unwrap().unwrap();
+    assert_eq!(replay.block_hash, f.qc.block_hash);
+    assert_eq!(replay.result, f.qc.result);
+    drop(replay);
+    assert_eq!(f.stores.budget.reserved_bytes(), baseline);
+    f.stores.release(LANE, &INCARNATION);
+    assert!(f.stores.stores.lock().is_empty());
+}
+
+/// The ordinary cached runtime height cannot certify away an actual reader failure.
+#[test]
+fn ready_tip_preserves_same_original_authentication_failure_without_reopening() {
+    let f = Fixture::new(true);
+    f.publish();
+    let store = f.stores.runtime_store(LANE, &INCARNATION).unwrap();
+    let authority_calls = f.authorities.calls.load(Ordering::SeqCst);
+    let mut corrupt = fs::read(f.path()).unwrap();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    fs::write(f.path(), &corrupt).unwrap();
+    let original = f.stores.block(LANE, &INCARNATION, 1).unwrap_err();
+    let Attempt::Rejected(rejected) = original else {
+        panic!("the actual corrupted signed frame must reject authentication");
+    };
+    assert_eq!(rejected.kind(), io::ErrorKind::InvalidData);
+    let cause = rejected.to_string();
+    let retained = f.stores.budget.reserved_bytes();
+    assert_eq!(store.height(), 1, "runtime committed height is unchanged");
+    f.stores.release(LANE, &INCARNATION);
+    for _ in 0..2 {
+        let error = f.stores.tip(LANE, &INCARNATION).unwrap_err();
+        let Attempt::Rejected(rejected) = error else {
+            panic!("an original authentication failure must not become a local refusal");
+        };
+        assert_eq!(rejected.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(rejected.to_string(), cause);
+        assert!(
+            Arc::ptr_eq(&store, &f.stores.store(LANE, &INCARNATION).unwrap()),
+            "tip observation retains the same original Ready owner"
+        );
+        assert_eq!(
+            f.authorities.calls.load(Ordering::SeqCst),
+            authority_calls,
+            "tip must not reopen with a new authority or restoration graph"
+        );
+        assert_eq!(f.stores.budget.reserved_bytes(), retained);
+        assert_eq!(fs::read(f.path()).unwrap(), corrupt);
+        assert_eq!(store.height(), 1);
+    }
+}
+
+#[test]
+fn ready_tip_retains_original_pool_refusal_and_completed_read_until_normal_consumption() {
+    let f = Fixture::new(true);
+    f.publish();
+    let frame = fs::read(f.path()).unwrap();
+    let store = f.stores.runtime_store(LANE, &INCARNATION).unwrap();
+    let weak = Arc::downgrade(&store);
+    let authority_calls = f.authorities.calls.load(Ordering::SeqCst);
+    let baseline = f.stores.budget.reserved_bytes();
+    let ceiling = f.stores.budget.limit_bytes();
+    let occupied = f
+        .stores
+        .budget
+        .try_reserve_bytes(
+            ceiling
+                .checked_sub(baseline)
+                .unwrap()
+                .checked_sub(frame.len())
+                .unwrap(),
+        )
+        .unwrap();
+    let error = f.stores.block(LANE, &INCARNATION, 1).unwrap_err();
+    let Attempt::Deferred(original) = error else {
+        panic!("actual original frame restoration must return its local refusal");
+    };
+    let Some(iroha_allocation::AllocationRefusal::Capacity {
+        requested_bytes,
+        reserved_bytes,
+        limit_bytes,
+        ..
+    }) = original.allocation_refusal()
+    else {
+        panic!("actual restoration must retain complete original Capacity evidence");
+    };
+    assert!(*requested_bytes > 0);
+    assert_eq!(*reserved_bytes, ceiling);
+    assert_eq!(*limit_bytes, ceiling);
+    // An independent refusal from the same still-full finite pool identifies
+    // its exact release observation without exposing or reconstructing a pool.
+    let original_pool_probe = f
+        .stores
+        .budget
+        .try_reserve_bytes(*requested_bytes)
+        .err()
+        .expect("original occupied pool must refuse the same actual demand");
+    assert_eq!(original.allocation_refusal(), Some(&original_pool_probe));
+    assert!(store.batch_read.lock().is_none());
+    for _ in 0..2 {
+        let error = f.stores.tip(LANE, &INCARNATION).unwrap_err();
+        let Attempt::Deferred(retained) = error else {
+            panic!("tip must propagate the same original unfinished local attempt");
+        };
+        assert_eq!(
+            retained, original,
+            "tip must preserve original cause, Capacity fields and pool release owner"
+        );
+        assert!(Arc::ptr_eq(
+            &store,
+            &f.stores.store(LANE, &INCARNATION).unwrap()
+        ));
+        assert_eq!(f.stores.budget.reserved_bytes(), ceiling);
+        assert_eq!(f.authorities.calls.load(Ordering::SeqCst), authority_calls);
+        assert_eq!(
+            store.height(),
+            1,
+            "the runtime committed-height contract is unchanged"
+        );
+        assert_eq!(fs::read(f.path()).unwrap(), frame);
+    }
+    drop(occupied);
+    assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
+    assert!(
+        f.stores.budget.reserved_bytes() > baseline,
+        "successful tip retains the physically funded original ready artifact"
+    );
+    let ready_reserved = f.stores.budget.reserved_bytes();
+    for _ in 0..2 {
+        assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
+        assert_eq!(
+            f.stores.budget.reserved_bytes(),
+            ready_reserved,
+            "completed tip observation never polls or consumes an already-ready source"
+        );
+    }
+    assert!(
+        store.batch_read.lock().is_none(),
+        "tip does not replace read custody with a decoded merge batch"
+    );
+    drop(store);
+    f.stores.release_retired(&SumeragiLaneState::default());
+    let same = weak
+        .upgrade()
+        .expect("the original completed read stays pending for its normal consumer");
+    assert!(Arc::ptr_eq(
+        &same,
+        &f.stores.store(LANE, &INCARNATION).unwrap()
+    ));
+    assert_eq!(f.authorities.calls.load(Ordering::SeqCst), authority_calls);
+    drop(same);
+    let restored = f.stores.block(LANE, &INCARNATION, 1).unwrap().unwrap();
+    assert_eq!(restored.block_hash, f.qc.block_hash);
+    assert_eq!(restored.result, f.qc.result);
+    assert!(restored.batch.is_some());
+    drop(restored);
+    f.stores.release_retired(&SumeragiLaneState::default());
+    assert!(
+        weak.upgrade().is_none(),
+        "normal read completion permits final idle retirement"
+    );
+    assert_eq!(f.stores.budget.reserved_bytes(), baseline);
+    assert_eq!(f.stores.budget.limit_bytes(), ceiling);
+    assert_eq!(fs::read(f.path()).unwrap(), frame);
+    assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
 }

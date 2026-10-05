@@ -104,10 +104,14 @@ impl FastJsonWrite for ProposeRuntimeUpgrade {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"manifest_bytes\":")?;
-        JsonSerialize::json_serialize_to(&self.manifest_bytes, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"manifest_bytes\":")?;
+            JsonSerialize::json_serialize_to(&self.manifest_bytes, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -124,10 +128,14 @@ impl FastJsonWrite for ActivateRuntimeUpgrade {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"id\":")?;
-        JsonSerialize::json_serialize_to(&self.id, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"id\":")?;
+            JsonSerialize::json_serialize_to(&self.id, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -144,10 +152,14 @@ impl FastJsonWrite for CancelRuntimeUpgrade {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"id\":")?;
-        JsonSerialize::json_serialize_to(&self.id, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"id\":")?;
+            JsonSerialize::json_serialize_to(&self.id, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -267,5 +279,33 @@ mod tests {
         .expect("registered cancel")
         .expect("decode cancel");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_propose_runtime_upgrade_checked_container_retains_bytes_errors_and_depth() {
+        audit(&ProposeRuntimeUpgrade {
+            manifest_bytes: vec![0, 1, 2, 255],
+        });
+    }
+
+    #[test]
+    fn original_activate_runtime_upgrade_checked_container_retains_bytes_errors_and_depth() {
+        audit(&ActivateRuntimeUpgrade {
+            id: crate::runtime::RuntimeUpgradeId([3; 32]),
+        });
+    }
+
+    #[test]
+    fn original_cancel_runtime_upgrade_checked_container_retains_bytes_errors_and_depth() {
+        audit(&CancelRuntimeUpgrade {
+            id: crate::runtime::RuntimeUpgradeId([3; 32]),
+        });
     }
 }

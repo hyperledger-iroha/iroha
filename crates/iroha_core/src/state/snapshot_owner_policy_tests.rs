@@ -558,6 +558,10 @@ state_test! { sync snapshot_runtime_requires_exact_retained_predecessor_and_roun
         ("future predecessor lineage", norito::json::to_value(&future_lineage).unwrap()),
         ("predecessor physical policy disagrees with World", norito::json::to_value(&wrong_physical_policy).unwrap()),
     ] {
+        let invalid = match invalid {
+            norito::json::Value::Null => norito::json::Value::Null,
+            value => norito::json::to_value(&mv::json::SnapshotUndoValue { value }).unwrap(),
+        };
         let mut corrupt = snapshot.clone();
         let _ = corrupt.as_object_mut().unwrap().get_mut("nexus_runtime").unwrap()
             .as_object_mut().unwrap().insert("revert".to_owned(), invalid);
@@ -571,7 +575,8 @@ state_test! { sync snapshot_runtime_requires_exact_retained_predecessor_and_roun
     for field in fields {
         let mut corrupt = snapshot.clone();
         let _ = corrupt.as_object_mut().unwrap().get_mut("nexus_runtime").unwrap().as_object_mut().unwrap()
-            .get_mut("revert").unwrap().as_object_mut().unwrap().get_mut("owner_policy").unwrap()
+            .get_mut("revert").unwrap().as_object_mut().unwrap().get_mut("value").unwrap()
+            .as_object_mut().unwrap().get_mut("owner_policy").unwrap()
             .as_object_mut().unwrap().remove(&field);
         assert!(snapshot_runtime_component(&corrupt, &state, None).is_err(),
             "predecessor owner policy field {field} is mandatory");
@@ -587,7 +592,7 @@ state_test! { sync snapshot_runtime_height_zero_requires_absent_predecessor
     assert_eq!(restored.canonical_runtime.view().get(), state.canonical_runtime.view().get());
     let mut corrupt = snapshot;
     let _ = corrupt.as_object_mut().unwrap().get_mut("nexus_runtime").unwrap().as_object_mut().unwrap()
-        .insert("revert".to_owned(), norito::json::to_value(state.canonical_runtime.view().get()).unwrap());
+        .insert("revert".to_owned(), norito::json::to_value(&mv::json::SnapshotUndoValue { value: state.canonical_runtime.view().get() }).unwrap());
     let error = deserialize_state_snapshot_value_with_kura(corrupt, Arc::clone(&state.kura))
         .err().expect("height zero cannot advertise an earlier runtime cut");
     assert!(error.to_string().contains("height-zero runtime cannot retain predecessor undo"));

@@ -46,7 +46,7 @@ fn raw_field(map: &SnapshotJsonMap<'_>) -> *const u8 {
 #[test]
 fn native_lane_signer_snapshot_retains_exact_raw_source_until_both_cuts_are_funded() {
     let source = NativeLaneCustodySnapshot {
-        revert: Some(lanes(1)),
+        revert: Some(mv::json::SnapshotUndoValue { value: lanes(1) }),
         blocks: lanes(2),
     };
     let field = json::to_json(&source).unwrap();
@@ -66,7 +66,10 @@ fn native_lane_signer_snapshot_retains_exact_raw_source_until_both_cuts_are_fund
     let restored = take_native_lane_custody(&mut map, &pool).unwrap();
     assert!(map.is_empty());
     assert_eq!(*restored.view().get(), source.blocks);
-    assert_eq!(*restored.predecessor_view().get(), source.revert);
+    assert_eq!(
+        *restored.predecessor_view().get(),
+        source.revert.as_ref().map(|undo| undo.value.clone())
+    );
     assert!(restored.view().custody[0].signers.admitted_to(&pool));
     assert!(
         restored.predecessor_view().get().as_ref().unwrap().custody[0]
@@ -74,7 +77,7 @@ fn native_lane_signer_snapshot_retains_exact_raw_source_until_both_cuts_are_fund
             .admitted_to(&pool)
     );
     assert_eq!(pool.reserved_bytes(), 2 * demand());
-    // The existing Cell encoding is unchanged; admission is not a new wire field.
+    // Both cuts use the sole explicit-undo Cell schema; admission adds no wire field.
     assert_eq!(json::to_json(&restored).unwrap(), field);
     let original = restored.view().custody[0].signers.as_slice().as_ptr();
     let copy = restored.view().get().clone();
@@ -159,9 +162,11 @@ fn native_lane_sample_snapshot_retains_raw_source_through_both_cut_refusal_and_r
             samples: samples(3),
             ..SumeragiLaneState::default()
         },
-        revert: Some(SumeragiLaneState {
-            samples: samples(2),
-            ..SumeragiLaneState::default()
+        revert: Some(mv::json::SnapshotUndoValue {
+            value: SumeragiLaneState {
+                samples: samples(2),
+                ..SumeragiLaneState::default()
+            },
         }),
     };
     let field = json::to_json(&source).unwrap();
@@ -187,7 +192,10 @@ fn native_lane_sample_snapshot_retains_raw_source_through_both_cut_refusal_and_r
     let restored = take_native_lane_custody(&mut map, &pool).unwrap();
     assert!(map.is_empty());
     assert_eq!(*restored.view().get(), source.blocks);
-    assert_eq!(*restored.predecessor_view().get(), source.revert);
+    assert_eq!(
+        *restored.predecessor_view().get(),
+        source.revert.as_ref().map(|undo| undo.value.clone())
+    );
     assert!(restored.view().samples.admitted_to(&pool));
     assert!(
         restored

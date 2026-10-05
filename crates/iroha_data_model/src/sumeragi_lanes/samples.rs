@@ -270,15 +270,19 @@ impl json::JsonSerialize for SumeragiLaneSamples {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, value) in self.as_slice().iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, value) in self.as_slice().iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                value.json_serialize_to(out)?;
             }
-            value.json_serialize_to(out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -334,5 +338,38 @@ impl IntoSchema for super::SumeragiLaneState {
         Vec::<super::SumeragiLaneCustody>::update_schema_map(map);
         Vec::<SumeragiLaneSample>::update_schema_map(map);
         u64::update_schema_map(map);
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Exact original sample backing and shared charge through writer refusal/retry.
+    use super::*;
+    #[test]
+    fn original_charged_lane_samples_checked_container_retains_exact_pool_backing_and_depth() {
+        let demand = std::mem::size_of::<SumeragiLaneSample>()
+            + SumeragiLaneSamples::control_layout().size();
+        let pool = AllocationBudget::new(demand);
+        let owner = SumeragiLaneSamples::default()
+            .retain_and_append(
+                SumeragiLaneSample {
+                    height: 17,
+                    time_ms: 23,
+                    transactions: 7,
+                    lanes: 4,
+                },
+                1,
+                &pool,
+            )
+            .unwrap();
+        let pointer = owner.as_slice().as_ptr();
+        let charged = pool.reserved_bytes();
+        pool.set_limit_bytes(0);
+        crate::checked_container_refusal_controls::audit(&owner);
+        assert_eq!(owner.as_slice().as_ptr(), pointer);
+        assert!(owner.admitted_to(&pool));
+        assert_eq!(pool.reserved_bytes(), charged);
+        drop(owner);
+        assert_eq!(pool.reserved_bytes(), 0);
     }
 }

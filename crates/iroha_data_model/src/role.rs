@@ -114,15 +114,18 @@ impl norito::json::FastJsonWrite for NewRole {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"id\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.inner.id, out)?;
-        out.push_str(",\"permissions\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.inner.permissions, out)?;
-        out.push_str(",\"grant_to\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.grant_to, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"id\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.inner.id, out)?;
+            out.push_str(",\"permissions\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.inner.permissions, out)?;
+            out.push_str(",\"grant_to\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.grant_to, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 
@@ -191,13 +194,16 @@ impl norito::json::JsonSerialize for Role {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"id\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.id, out)?;
-        out.push_str(",\"permissions\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.permissions, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"id\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.id, out)?;
+            out.push_str(",\"permissions\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.permissions, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 

@@ -2,9 +2,9 @@
 //!
 //! The authenticated release source supplies authority; a profile label or HTTP response does not.
 
-use super::{NativeBundleLayout, sha256_hex};
 use iroha_deploy::bootstrap::{InstalledNetworkProfiles, MAX_INSTALLED_PROFILE_BYTES};
 use norito::json::{self, Value};
+use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     io::Write as _,
@@ -12,16 +12,38 @@ use std::{
     process::{Command, Stdio},
 };
 
-pub(super) const RELEASE_PROFILES: &str = "defaults/developer/network-profiles.nrt";
+pub(crate) const RELEASE_PROFILES: &str = "defaults/developer/network-profiles.nrt";
 
 #[derive(Debug, Clone)]
-pub(super) struct Selection {
+pub(crate) struct Selection {
     bytes: Vec<u8>,
     names: Vec<String>,
-    provenance: Value,
+    source: Source,
 }
 
-pub(super) fn validate_input(profile: &str, supplied: Option<&Path>) -> Result<(), &'static str> {
+#[derive(Debug, Clone)]
+enum Source {
+    Development,
+    Release { commit: String },
+}
+
+/// Require the opaque release selection before publication or later verification.
+pub(crate) fn require_for_profile(
+    profile: &str,
+    selected: Option<&Selection>,
+) -> Result<(), Box<dyn Error>> {
+    if profile == "release"
+        && !matches!(
+            selected.map(|selection| &selection.source),
+            Some(Source::Release { .. })
+        )
+    {
+        return Err("release bundle has no retained release-owned Taira profile selection".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_input(profile: &str, supplied: Option<&Path>) -> Result<(), &'static str> {
     if profile == "release" && supplied.is_some() {
         return Err(
             "release bundles use the committed release-owned network profiles; --network-profiles is development-only",
@@ -30,7 +52,7 @@ pub(super) fn validate_input(profile: &str, supplied: Option<&Path>) -> Result<(
     Ok(())
 }
 
-pub(super) fn select(
+pub(crate) fn select(
     root: &Path,
     profile: &str,
     supplied: Option<&Path>,
@@ -88,7 +110,7 @@ fn git_line(root: &Path, args: &[&str]) -> Result<String, Box<dyn Error>> {
     Ok(value)
 }
 
-pub(super) fn development(
+pub(crate) fn development(
     profiles: &InstalledNetworkProfiles,
 ) -> Result<Selection, Box<dyn Error>> {
     selected(&profiles.encode_installation()?, None)
@@ -103,32 +125,26 @@ fn selected(bytes: &[u8], release_commit: Option<&str>) -> Result<Selection, Box
         profiles.select("taira")?;
     }
     let names: Vec<String> = profiles.names().map(str::to_owned).collect();
-    let provenance = norito::json!({
-        "kind": (if release_commit.is_some() { "committed_release_source" } else { "explicit_development_input" }),
-        "source_path": (release_commit.map(|_| RELEASE_PROFILES)),
-        "source_commit": release_commit,
-        "sha256": (sha256_hex(bytes)),
-        "bytes": (bytes.len()),
-        "networks": (names.clone()),
-        "authentication": "installation release provenance must authenticate the selected source; label and digest alone do not",
+    let source = release_commit.map_or(Source::Development, |commit| Source::Release {
+        commit: commit.to_owned(),
     });
     Ok(Selection {
         bytes: bytes.to_vec(),
         names,
-        provenance,
+        source,
     })
 }
 
 impl Selection {
-    pub(super) fn stage(&self, bundle: &Path) -> Result<(), Box<dyn Error>> {
-        let path = NativeBundleLayout::current().profiles_path(bundle);
+    /// Stage at the profile path selected by the canonical bundle layout.
+    pub(crate) fn stage(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         std::fs::create_dir_all(path.parent().ok_or("profiles have no parent")?)?;
         std::fs::write(&path, &self.bytes)?;
-        self.verify_installed(bundle)
+        self.verify_installed(path)
     }
 
-    pub(super) fn verify_installed(&self, bundle: &Path) -> Result<(), Box<dyn Error>> {
-        let path = NativeBundleLayout::current().profiles_path(bundle);
+    /// Re-read and compare the exact retained image at the canonical layout path.
+    pub(crate) fn verify_installed(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let bytes = InstalledNetworkProfiles::load(&path)?.encode_installation()?;
         if bytes.as_slice() != self.bytes {
             return Err(
@@ -142,7 +158,7 @@ impl Selection {
         Ok(())
     }
 
-    pub(super) fn require_cli_names(&self, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    pub(crate) fn require_cli_names(&self, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
         if bytes.len() > MAX_INSTALLED_PROFILE_BYTES {
             return Err("installed network listing exceeds bound".into());
         }
@@ -155,8 +171,25 @@ impl Selection {
         Ok(())
     }
 
-    pub(super) fn provenance(&self) -> Value {
-        self.provenance.clone()
+    /// Original bounded image for a packager with an existing atomic private writer.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn provenance(&self) -> Value {
+        let release_commit = match &self.source {
+            Source::Development => None,
+            Source::Release { commit } => Some(commit.as_str()),
+        };
+        norito::json!({
+            "kind": (if release_commit.is_some() { "committed_release_source" } else { "explicit_development_input" }),
+            "source_path": (release_commit.map(|_| RELEASE_PROFILES)),
+            "source_commit": release_commit,
+            "sha256": (hex::encode(Sha256::digest(&self.bytes))),
+            "bytes": (self.bytes.len()),
+            "networks": (self.names.clone()),
+            "authentication": "installation release provenance must authenticate the selected source; label and digest alone do not",
+        })
     }
 }
 

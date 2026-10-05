@@ -56,17 +56,21 @@ impl FastJsonWrite for BorrowedMcpJsonObject<'_> {
 
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.begin_container()?;
-        output.push('{')?;
-        for (index, (key, value)) in self.entries.iter().enumerate() {
-            if index != 0 {
-                output.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push('{')?;
+            for (index, (key, value)) in self.entries.iter().enumerate() {
+                if index != 0 {
+                    output.push(',')?;
+                }
+                json::write_json_string_to(key, output)?;
+                output.push(':')?;
+                value.write_json_to(output)?;
             }
-            json::write_json_string_to(key, output)?;
-            output.push(':')?;
-            value.write_json_to(output)?;
-        }
-        output.push('}')?;
+            output.push('}')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }
@@ -613,4 +617,34 @@ fn connect_management_authorization_value(token: &str) -> Result<HeaderValue, St
         .map_err(|error| format!("invalid management authorization header: {error}"))?;
     value.set_sensitive(true);
     Ok(value)
+}
+
+#[cfg(test)]
+mod service_depth_tests {
+    //! Owning checked service writers keep the caller depth on exact refusals.
+    use super::*;
+    use crate::service_checked_writer_test_support::audit;
+    use norito::json::FastJsonWrite;
+
+    #[test]
+    fn original_mcp_borrowed_object_keeps_nested_original_values_and_refusal_depth() {
+        let leaf = Value::from("é");
+        let mut child =
+            BorrowedMcpJsonObject::try_with_capacity(1, "checked child fixture").unwrap();
+        child.entries.push(("child", BorrowedMcpJson::Value(&leaf)));
+        let mut source =
+            BorrowedMcpJsonObject::try_with_capacity(2, "checked object fixture").unwrap();
+        source
+            .entries
+            .push(("original", BorrowedMcpJson::Value(&leaf)));
+        source
+            .entries
+            .push(("nested", BorrowedMcpJson::Object(child)));
+        let mut expected = String::new();
+        source.write_json(&mut expected);
+        audit(&expected, |sink| source.write_json_to(sink));
+        assert!(
+            matches!(&source.entries[0].1, BorrowedMcpJson::Value(value) if std::ptr::eq(*value, &leaf))
+        );
+    }
 }

@@ -404,6 +404,25 @@ impl BigInt {
         }
         Self::from_inner(residue).expect("modulo reduction produces a signed 4096-bit value")
     }
+    /// Adopt one already checked positive native magnitude without normalization.
+    /// The caller is the concrete prepared Quantity owner. Its full-capacity,
+    /// canonical digit Vec and original charge must remain together thereafter.
+    pub(crate) fn from_prepared_quantity_digits(digits: Vec<NativeBigDigit>) -> Self {
+        assert_eq!(
+            digits.len(),
+            digits.capacity(),
+            "prepared digits fill exact capacity"
+        );
+        assert!(
+            digits.last().is_none_or(|&digit| digit != 0),
+            "prepared magnitude is canonical"
+        );
+        let inner = InnerBigInt::from_biguint(
+            num_bigint::Sign::Plus,
+            InnerBigUint::from_native_digits(digits),
+        );
+        Self { inner }
+    }
     pub(crate) fn inner(&self) -> &InnerBigInt {
         &self.inner
     }
@@ -482,10 +501,8 @@ impl<'a> DeserializePayload<'a> for BigInt {
         value
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let slice = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast())
-            .map_err(|e| NoritoError::Message(e.to_string()))?;
-        let (value, _) = <BigInt as DecodeFromSlice>::decode_from_slice(slice)
-            .map_err(|e| NoritoError::Message(e.to_string()))?;
+        let slice = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast())?;
+        let (value, _) = <BigInt as DecodeFromSlice>::decode_from_slice(slice)?;
         Ok(value)
     }
 }
@@ -579,27 +596,119 @@ impl core::str::FromStr for BigInt {
         Self::from_inner(inner)
     }
 }
-impl<'a> DecodeFromSlice<'a> for BigInt {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (len_u32, used_len) = <u32 as DecodeFromSlice>::decode_from_slice(bytes)?;
-        let len_usize: usize = len_u32
-            .try_into()
-            .map_err(|_| ncore::Error::Message("length overflow".into()))?;
-        let end = used_len
-            .checked_add(len_usize)
-            .ok_or_else(|| ncore::Error::Message("length overflow".into()))?;
-        if end > bytes.len() {
-            return Err(ncore::Error::Message("buffer too short".into()));
+/// Borrow the sole canonical signed-byte relation without constructing an integer.
+/// The owning and prepared decoders share length, domain and minimality checks.
+pub(crate) fn canonical_twos_payload(bytes: &[u8]) -> Result<(&[u8], usize), ncore::Error> {
+    let (len_u32, used_len) = <u32 as DecodeFromSlice>::decode_from_slice(bytes)?;
+    let len_usize: usize = len_u32
+        .try_into()
+        .map_err(|_| ncore::Error::Message("length overflow".into()))?;
+    let end = used_len
+        .checked_add(len_usize)
+        .ok_or_else(|| ncore::Error::Message("length overflow".into()))?;
+    if end > bytes.len() {
+        return Err(ncore::Error::Message("buffer too short".into()));
+    }
+    let payload = &bytes[used_len..end];
+    if payload.len() > MAX_ENCODED_BYTES {
+        return Err(ncore::Error::Message("invalid bigint".into()));
+    }
+    let redundant = match payload {
+        [0] => true,
+        [.., previous, last] => {
+            (*last == 0 && *previous & 0x80 == 0) || (*last == 0xff && *previous & 0x80 != 0)
         }
-        let payload = &bytes[used_len..end];
-        let value = BigInt::from_twos_bytes(payload)
-            .map_err(|_| ncore::Error::Message("invalid bigint".into()))?;
-        if value.to_twos_bytes() != payload {
-            return Err(ncore::Error::Message(BigIntError::NonCanonical.to_string()));
+        _ => false,
+    };
+    if redundant {
+        return Err(ncore::Error::Message(BigIntError::NonCanonical.to_string()));
+    }
+    Ok((payload, end))
+}
+/// Fixed scratch for the bounded signed mantissa; no temporary byte/digit Vec.
+pub(crate) struct CanonicalNativeDigits {
+    digits: [NativeBigDigit; MAX_ENCODED_BYTES / core::mem::size_of::<NativeBigDigit>()],
+    len: usize,
+    negative: bool,
+}
+impl CanonicalNativeDigits {
+    pub(crate) fn from_payload(payload: &[u8]) -> Self {
+        let negative = payload.last().is_some_and(|byte| *byte & 0x80 != 0);
+        let mut scratch = [0_u8; MAX_ENCODED_BYTES];
+        scratch[..payload.len()].copy_from_slice(payload);
+        if negative {
+            let mut carry = true;
+            for byte in &mut scratch[..payload.len()] {
+                let (next, overflow) = (!*byte).overflowing_add(u8::from(carry));
+                *byte = next;
+                carry = overflow;
+            }
         }
-        Ok((value, end))
+        let magnitude_bytes = scratch
+            .iter()
+            .rposition(|&byte| byte != 0)
+            .map_or(0, |index| index + 1);
+        let digit_bytes = core::mem::size_of::<NativeBigDigit>();
+        let len = magnitude_bytes.div_ceil(digit_bytes);
+        let mut digits = [0; MAX_ENCODED_BYTES / core::mem::size_of::<NativeBigDigit>()];
+        for (digit, chunk) in digits[..len]
+            .iter_mut()
+            .zip(scratch.chunks_exact(digit_bytes))
+        {
+            *digit = NativeBigDigit::from_le_bytes(chunk.try_into().expect("fixed native digit"));
+        }
+        Self {
+            digits,
+            len,
+            negative,
+        }
+    }
+    pub(crate) fn allocation_layout(&self) -> Layout {
+        Layout::array::<NativeBigDigit>(self.len).expect("bounded native digit layout")
+    }
+    /// Sole nominal decoder-work probe; it issues no physical pool credit.
+    pub(crate) fn reserve_decode_backing(&self) -> Result<(), ncore::Error> {
+        ncore::reserve_decode_allocation(self.allocation_layout().size())
+    }
+    #[allow(unsafe_code)]
+    fn materialize(self) -> Result<BigInt, ncore::Error> {
+        self.reserve_decode_backing()?;
+        let layout = self.allocation_layout();
+        if layout.size() == 0 {
+            return Ok(BigInt::zero());
+        }
+        // SAFETY: exact nonzero native layout, null is retained as allocator refusal.
+        let pointer = unsafe { std::alloc::alloc(layout) };
+        let pointer = core::ptr::NonNull::new(pointer)
+            .ok_or(ncore::Error::AllocationFailed {
+                bytes: u64::try_from(layout.size()).expect("bounded allocation fits u64"),
+            })?
+            .cast::<NativeBigDigit>();
+        // SAFETY: this sole global allocation owns exactly len native digits.
+        // Bounded pushes fill its exact capacity; the Vec owns reclamation on unwind.
+        let mut digits = unsafe { Vec::from_raw_parts(pointer.as_ptr(), 0, self.len) };
+        for digit in &self.digits[..self.len] {
+            digits.push(*digit);
+        }
+        debug_assert_eq!(digits.len(), digits.capacity());
+        debug_assert_ne!(digits.last(), Some(&0));
+        let sign = if self.negative {
+            num_bigint::Sign::Minus
+        } else {
+            num_bigint::Sign::Plus
+        };
+        let inner = InnerBigInt::from_biguint(sign, InnerBigUint::from_native_digits(digits));
+        Ok(BigInt { inner })
     }
 }
+impl<'a> DecodeFromSlice<'a> for BigInt {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (payload, used) = canonical_twos_payload(bytes)?;
+        let value = CanonicalNativeDigits::from_payload(payload).materialize()?;
+        Ok((value, used))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1173,3 +1282,7 @@ mod borrowed_magnitude_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bigint/canonical_prepared_tests.rs"]
+mod canonical_prepared_tests;

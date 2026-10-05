@@ -1552,6 +1552,9 @@ pub fn bls_normal_verify_preaggregated_same_message(
 pub struct BlsNormalPopVerifiedKey {
     public_key: PublicKey,
     point: blstrs::G1Affine,
+    // Inline canonical public proof bytes preserve exact local admission identity.
+    // This is part of the concrete credential layout, not a detached cache owner.
+    proof_of_possession: [u8; 96],
 }
 #[cfg(feature = "bls")]
 impl BlsNormalPopVerifiedKey {
@@ -1565,9 +1568,11 @@ impl BlsNormalPopVerifiedKey {
         let payload = bls_public_key_payload(public_key, Algorithm::BlsNormal)?;
         let point = signature::bls::parsed_normal_key_borrowed(payload)
             .map_err(signature::bls::uncached::Rejection::into_error)?;
+        let proof_of_possession = pop.try_into().map_err(|_| Error::BadSignature)?;
         Ok(Self {
             public_key: public_key.clone(),
             point,
+            proof_of_possession,
         })
     }
     /// Verify original owned key material without copying it or retaining a cache entry.
@@ -1584,9 +1589,26 @@ impl BlsNormalPopVerifiedKey {
         pop: &[u8],
     ) -> Result<Self, (PublicKey, SignatureVerificationError)> {
         match signature::admission::verify_bls_normal_pop_key_borrowed(&public_key, pop) {
-            Ok(point) => Ok(Self { public_key, point }),
+            Ok(point) => match pop.try_into() {
+                Ok(proof_of_possession) => Ok(Self {
+                    public_key,
+                    point,
+                    proof_of_possession,
+                }),
+                Err(_) => Err((public_key, SignatureVerificationError::bad_signature())),
+            },
             Err(error) => Err((public_key, error)),
         }
+    }
+
+    /// Whether `pop` is the exact canonical proof retained by this credential.
+    ///
+    /// This comparison allocates no backing and performs no new verification.
+    /// Callers may reuse only their own already verified credential for the same
+    /// public key. A different proof still requires ordinary PoP verification.
+    #[must_use]
+    pub fn proof_of_possession_matches(&self, pop: &[u8]) -> bool {
+        self.proof_of_possession.as_slice() == pop
     }
 
     /// The verified public key.
@@ -2769,15 +2791,18 @@ impl norito::json::JsonSerialize for KeyPair {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        // The legacy `Value::Object` path is a `BTreeMap`, so preserve its
-        // lexicographic key order exactly.
-        out.push_str("{\"private_key\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.private_key, out)?;
-        out.push_str(",\"public_key\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.public_key, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            // The legacy `Value::Object` path is a `BTreeMap`, so preserve its
+            // lexicographic key order exactly.
+            out.push_str("{\"private_key\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.private_key, out)?;
+            out.push_str(",\"public_key\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.public_key, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 impl FromStr for PrivateKey {

@@ -410,85 +410,111 @@ impl JsonSerialize for PredicateJson {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        let mut wrote_section = if self.equals.is_empty() {
-            false
-        } else {
-            out.push_str("\"equals\":[")?;
-            out.begin_container()?;
-            let mut previous = None;
-            let mut wrote = false;
-            while let Some(index) =
-                next_sorted_index_by(&self.equals, previous, |item| item.field.as_str())
-            {
-                if wrote {
-                    out.push(',')?;
-                }
-                let condition = &self.equals[index];
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            let mut wrote_section = if self.equals.is_empty() {
+                false
+            } else {
+                out.push_str("\"equals\":[")?;
                 out.begin_container()?;
-                out.push_str("{\"field\":")?;
-                condition.field.json_serialize_to(out)?;
-                out.push_str(",\"value\":")?;
-                condition.value.json_serialize_to(out)?;
-                out.push('}')?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    let mut previous = None;
+                    let mut wrote = false;
+                    while let Some(index) =
+                        next_sorted_index_by(&self.equals, previous, |item| item.field.as_str())
+                    {
+                        if wrote {
+                            out.push(',')?;
+                        }
+                        let condition = &self.equals[index];
+                        out.begin_container()?;
+                        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                            out.push_str("{\"field\":")?;
+                            condition.field.json_serialize_to(out)?;
+                            out.push_str(",\"value\":")?;
+                            condition.value.json_serialize_to(out)?;
+                            out.push('}')?;
+                            Ok(())
+                        })();
+                        out.end_container();
+                        result?;
+                        wrote = true;
+                        previous = Some(index);
+                    }
+                    out.push(']')?;
+                    Ok(())
+                })();
                 out.end_container();
-                wrote = true;
-                previous = Some(index);
-            }
-            out.push(']')?;
-            out.end_container();
-            true
-        };
-        if !self.exists.is_empty() {
-            if wrote_section {
-                out.push(',')?;
-            }
-            out.push_str("\"exists\":[")?;
-            out.begin_container()?;
-            let mut previous = None;
-            let mut wrote = false;
-            while let Some(index) = next_sorted_index_by(&self.exists, previous, String::as_str) {
-                if wrote {
+                result?;
+                true
+            };
+            if !self.exists.is_empty() {
+                if wrote_section {
                     out.push(',')?;
                 }
-                self.exists[index].json_serialize_to(out)?;
-                wrote = true;
-                previous = Some(index);
-            }
-            out.push(']')?;
-            out.end_container();
-            wrote_section = true;
-        }
-        if !self.r#in.is_empty() {
-            if wrote_section {
-                out.push(',')?;
-            }
-            out.push_str("\"in\":[")?;
-            out.begin_container()?;
-            let mut previous = None;
-            let mut wrote = false;
-            while let Some(index) =
-                next_sorted_index_by(&self.r#in, previous, |item| item.field.as_str())
-            {
-                if wrote {
-                    out.push(',')?;
-                }
-                let condition = &self.r#in[index];
+                out.push_str("\"exists\":[")?;
                 out.begin_container()?;
-                out.push_str("{\"field\":")?;
-                condition.field.json_serialize_to(out)?;
-                out.push_str(",\"values\":")?;
-                condition.values.json_serialize_to(out)?;
-                out.push('}')?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    let mut previous = None;
+                    let mut wrote = false;
+                    while let Some(index) =
+                        next_sorted_index_by(&self.exists, previous, String::as_str)
+                    {
+                        if wrote {
+                            out.push(',')?;
+                        }
+                        self.exists[index].json_serialize_to(out)?;
+                        wrote = true;
+                        previous = Some(index);
+                    }
+                    out.push(']')?;
+                    Ok(())
+                })();
                 out.end_container();
-                wrote = true;
-                previous = Some(index);
+                result?;
+                wrote_section = true;
             }
-            out.push(']')?;
-            out.end_container();
-        }
-        out.push('}')?;
+            if !self.r#in.is_empty() {
+                if wrote_section {
+                    out.push(',')?;
+                }
+                out.push_str("\"in\":[")?;
+                out.begin_container()?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    let mut previous = None;
+                    let mut wrote = false;
+                    while let Some(index) =
+                        next_sorted_index_by(&self.r#in, previous, |item| item.field.as_str())
+                    {
+                        if wrote {
+                            out.push(',')?;
+                        }
+                        let condition = &self.r#in[index];
+                        out.begin_container()?;
+                        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                            out.push_str("{\"field\":")?;
+                            condition.field.json_serialize_to(out)?;
+                            out.push_str(",\"values\":")?;
+                            condition.values.json_serialize_to(out)?;
+                            out.push('}')?;
+                            Ok(())
+                        })();
+                        out.end_container();
+                        result?;
+                        wrote = true;
+                        previous = Some(index);
+                    }
+                    out.push(']')?;
+                    Ok(())
+                })();
+                out.end_container();
+                result?;
+            }
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -734,5 +760,32 @@ mod tests {
             json::to_json_bounded(&predicate, direct.len() - 1),
             Err(json::BoundedJsonError::BodyTooLarge)
         );
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_predicate_json_checked_container_retains_all_sorted_nested_levels() {
+        let value = PredicateJson {
+            equals: vec![
+                EqualsCondition::new("z", Value::Array(vec![Value::from(7_u64)])),
+                EqualsCondition::new("a", Value::from(3_u64)),
+            ],
+            r#in: vec![
+                InCondition::new("z", vec![Value::from(7_u64)]),
+                InCondition::new("a", vec![Value::from(3_u64)]),
+            ],
+            exists: vec!["z".into(), "a".into()],
+        };
+        let equals = value.equals.as_ptr();
+        let membership = value.r#in.as_ptr();
+        audit(&value);
+        assert_eq!(value.equals.as_ptr(), equals);
+        assert_eq!(value.r#in.as_ptr(), membership);
     }
 }

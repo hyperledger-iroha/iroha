@@ -443,15 +443,6 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeGlobalDataTriggerPermissionGovernance => "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance"),
     #[cfg(feature = "governance")]
-    governance_wire_id!(governance::ProposeKagemushaVerifierPolicyInstallV1 => "iroha.instruction.v1::governance::ProposeKagemushaVerifierPolicyInstallV1"),
-    #[cfg(feature = "governance")]
-    governance_wire_id!(governance::ProposeKagemushaVerifierReleaseInstallV1 => "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseInstallV1"),
-    #[cfg(feature = "governance")]
-    governance_wire_id!(governance::ProposeKagemushaVerifierReleaseActivateV1 => "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseActivateV1"),
-    #[cfg(feature = "governance")]
-    // Retire exactly one never-activated standby through Parliament.
-    governance_wire_id!(governance::ProposeKagemushaVerifierReleaseRetireV1 => "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseRetireV1"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeRuntimeUpgradeProposal => "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"),
     #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeSccpRouteGovernance => "iroha.instruction.v1::governance::ProposeSccpRouteGovernance"),

@@ -119,15 +119,19 @@ impl norito::json::JsonSerialize for ManifestRootCid {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, byte) in self.0.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, byte) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                norito::json::JsonSerialize::json_serialize_to(byte, out)?;
             }
-            norito::json::JsonSerialize::json_serialize_to(byte, out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1749,3 +1753,15 @@ mod tests {
 mod captured_pin_registry_schema_tests;
 #[cfg(test)]
 mod completion_authority_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_manifest_cid_checked_container_retains_bytes_errors_and_depth() {
+        audit(&ManifestRootCid::from_blake3_digest([7; 32]).unwrap());
+    }
+}

@@ -162,17 +162,21 @@ impl<const N: usize> JsonSerialize for BorrowedRow<'_, N> {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        for (index, (name, value)) in self.fields.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            for (index, (name, value)) in self.fields.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                name.json_serialize_to(out)?;
+                out.push(':')?;
+                value.json_serialize_to(out)?;
             }
-            name.json_serialize_to(out)?;
-            out.push(':')?;
-            value.json_serialize_to(out)?;
-        }
-        out.push('}')?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -327,5 +331,37 @@ mod tests {
             Value::Object(empty_leaf.clone()),
         ]);
         assert!(value_heap_bytes(&pair).unwrap() >= 2 * map_heap_bytes(&empty_leaf).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod service_depth_tests {
+    //! Owning checked service writers keep the caller depth on exact refusals.
+    use super::*;
+    use crate::service_checked_writer_test_support::{RefusingLeaf, audit, byte_refusal, error};
+    use norito::json::{BoundedJsonError, JsonSerialize};
+
+    #[test]
+    fn original_borrowed_row_keeps_exact_field_refs_and_manual_leaf_refusal_depth() {
+        let text = "é";
+        let number = 7_u64;
+        let source = BorrowedRow {
+            fields: [("name", &text), ("count", &number)],
+        };
+        let mut expected = String::new();
+        source.json_serialize(&mut expected);
+        audit(&expected, |sink| source.json_serialize_to(sink));
+        let manual = RefusingLeaf {
+            visits: std::cell::Cell::new(0),
+        };
+        let source = BorrowedRow {
+            fields: [("manual", &manual)],
+        };
+        byte_refusal(|sink| source.json_serialize_to(sink));
+        assert_eq!(manual.visits.get(), 0);
+        error(BoundedJsonError::Unsupported, |sink| {
+            source.json_serialize_to(sink)
+        });
+        assert_eq!(manual.visits.get(), 1);
     }
 }

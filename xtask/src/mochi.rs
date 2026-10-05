@@ -1,6 +1,6 @@
 //! Build and inspect a complete native developer runtime bundle.
 
-use crate::workspace_root;
+use crate::{network_profiles, workspace_root};
 use iroha_deploy::managed::{NativeBundleLayout, macos_info_plist};
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
@@ -15,7 +15,8 @@ use std::{
 };
 use walkdir::WalkDir;
 mod developer_smoke;
-mod network_profiles;
+#[cfg(test)]
+mod network_profile_tests;
 #[cfg(test)]
 use iroha_deploy::bootstrap::InstalledNetworkProfiles;
 pub(crate) mod latency;
@@ -61,7 +62,7 @@ pub(crate) fn bundle_mochi(
     )?;
     stage_application_metadata(&bundle_root)?;
     if let Some(profiles) = &network_profiles {
-        profiles.stage(&bundle_root)?;
+        profiles.stage(&NativeBundleLayout::current().profiles_path(&bundle_root))?;
     }
     copy_into_bundle("LICENSE", &bundle_root.join("LICENSE"))?;
     copy_into_bundle(
@@ -90,14 +91,6 @@ pub(crate) fn bundle_mochi(
         archive_sha256,
         network_profiles,
     })
-}
-
-/// Validate the exact release/development profile input before packaging effects.
-pub(crate) fn validate_network_profile_input(
-    profile: &str,
-    supplied: Option<&Path>,
-) -> Result<(), &'static str> {
-    network_profiles::validate_input(profile, supplied)
 }
 
 /// Refuse the workspace's explicitly non-packaging profile before doing any work.
@@ -141,7 +134,8 @@ fn stage_network_profiles(
     bundle_root: &Path,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(profiles) = profiles {
-        network_profiles::development(profiles)?.stage(bundle_root)?;
+        network_profiles::development(profiles)?
+            .stage(&NativeBundleLayout::current().profiles_path(bundle_root))?;
     }
     Ok(())
 }
@@ -188,11 +182,10 @@ fn verify_bundle_profiles(result: &MochiBundleResult) -> Result<(), Box<dyn Erro
         (None, None) => {}
         _ => return Err("bundle archive differs from original packaging selection".into()),
     }
+    network_profiles::require_for_profile(&result.profile, result.network_profiles.as_ref())?;
     match &result.network_profiles {
-        Some(profiles) => profiles.verify_installed(&result.bundle_root),
-        None if result.profile == "release" => {
-            Err("release bundle has no retained Taira profile selection".into())
-        }
+        Some(profiles) => profiles
+            .verify_installed(&NativeBundleLayout::current().profiles_path(&result.bundle_root)),
         None => match fs::symlink_metadata(
             NativeBundleLayout::current().profiles_path(&result.bundle_root),
         ) {
@@ -350,7 +343,8 @@ pub(crate) fn stage_bundle(
     }
     verify_bundle_profiles(result)?;
     if let Some(profiles) = &result.network_profiles {
-        profiles.verify_installed(&staged_bundle_root)?;
+        profiles
+            .verify_installed(&NativeBundleLayout::current().profiles_path(&staged_bundle_root))?;
     }
     if let (Some(original), Some(expected)) = (&result.archive_path, &result.archive_sha256) {
         let staged = stage_root.join(original.file_name().ok_or("archive filename absent")?);
@@ -868,7 +862,9 @@ mod tests {
             .unwrap();
         let bundle = root.path().join("bundle");
         fs::create_dir_all(NativeBundleLayout::current().runtime_directory(&bundle)).unwrap();
-        loaded.stage(&bundle).unwrap();
+        loaded
+            .stage(&NativeBundleLayout::current().profiles_path(&bundle))
+            .unwrap();
         assert_eq!(
             fs::read(NativeBundleLayout::current().profiles_path(&bundle)).unwrap(),
             bytes

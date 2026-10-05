@@ -75,7 +75,7 @@ pub trait JsonWriteSink {
     fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
         Ok(())
     }
-    /// Leave a JSON array or object after a successful write.
+    /// Leave one successfully entered JSON array or object, including on a returned write refusal.
     fn end_container(&mut self) {}
     /// Return the legacy output only for an ordinary unbounded write.
     #[doc(hidden)]
@@ -420,7 +420,7 @@ fn visit_json_string_content<E>(
     Ok(())
 }
 
-fn write_json_string_content_to<S: JsonWriteSink + ?Sized>(
+pub(super) fn write_json_string_content_to<S: JsonWriteSink + ?Sized>(
     value: &str,
     output: &mut S,
 ) -> Result<(), BoundedJsonError> {
@@ -749,13 +749,16 @@ impl JsonSerialize for std::time::Duration {
     }
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.begin_container()?;
-        output.push_str("{\"secs\":")?;
-        JsonSerialize::json_serialize_to(&self.as_secs(), output)?;
-        output.push_str(",\"nanos\":")?;
-        JsonSerialize::json_serialize_to(&self.subsec_nanos(), output)?;
-        output.push('}')?;
+        let result = (|| {
+            output.push_str("{\"secs\":")?;
+            JsonSerialize::json_serialize_to(&self.as_secs(), output)?;
+            output.push_str(",\"nanos\":")?;
+            JsonSerialize::json_serialize_to(&self.subsec_nanos(), output)?;
+            output.push('}')?;
+            Ok(())
+        })();
         output.end_container();
-        Ok(())
+        result
     }
 }
 impl<T: JsonSerialize> JsonSerialize for Option<T> {
@@ -793,16 +796,19 @@ impl<T: JsonSerialize> JsonSerialize for Vec<T> {
     }
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.begin_container()?;
-        output.push('[')?;
-        for (index, value) in self.iter().enumerate() {
-            if index != 0 {
-                output.push(',')?;
+        let result = (|| {
+            output.push('[')?;
+            for (index, value) in self.iter().enumerate() {
+                if index != 0 {
+                    output.push(',')?;
+                }
+                value.json_serialize_to(output)?;
             }
-            value.json_serialize_to(output)?;
-        }
-        output.push(']')?;
+            output.push(']')?;
+            Ok(())
+        })();
         output.end_container();
-        Ok(())
+        result
     }
 }
 macro_rules! impl_unsigned_fast_json {
@@ -894,16 +900,19 @@ impl<T: JsonSerialize + Ord> FastJsonWrite for BTreeSet<T> {
     }
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.begin_container()?;
-        output.push('[')?;
-        for (index, value) in self.iter().enumerate() {
-            if index != 0 {
-                output.push(',')?;
+        let result = (|| {
+            output.push('[')?;
+            for (index, value) in self.iter().enumerate() {
+                if index != 0 {
+                    output.push(',')?;
+                }
+                value.json_serialize_to(output)?;
             }
-            value.json_serialize_to(output)?;
-        }
-        output.push(']')?;
+            output.push(']')?;
+            Ok(())
+        })();
         output.end_container();
-        Ok(())
+        result
     }
 }
 impl<K, V> FastJsonWrite for BTreeMap<K, V>
@@ -925,18 +934,21 @@ where
     }
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.begin_container()?;
-        output.push('{')?;
-        for (index, (key, value)) in self.iter().enumerate() {
-            if index != 0 {
-                output.push(',')?;
+        let result = (|| {
+            output.push('{')?;
+            for (index, (key, value)) in self.iter().enumerate() {
+                if index != 0 {
+                    output.push(',')?;
+                }
+                write_json_object_key_to(key, output)?;
+                output.push(':')?;
+                value.json_serialize_to(output)?;
             }
-            write_json_object_key_to(key, output)?;
-            output.push(':')?;
-            value.json_serialize_to(output)?;
-        }
-        output.push('}')?;
+            output.push('}')?;
+            Ok(())
+        })();
         output.end_container();
-        Ok(())
+        result
     }
 }
 impl FastJsonWrite for f64 {
@@ -1037,106 +1049,118 @@ pub(super) fn write_value_to<S: JsonWriteSink + ?Sized>(
     frames[0] = Some(Frame::Value(value, depth));
     let mut frame_count = 1_usize;
 
-    while frame_count != 0 {
-        frame_count -= 1;
-        let frame = frames[frame_count]
-            .take()
-            .expect("JSON value writer frame must be initialized");
-        match frame {
-            Frame::Value(value, depth) => {
-                if depth >= MAX_JSON_VALUE_NESTING_DEPTH {
-                    return Err(BoundedJsonError::Unsupported);
+    let mut entered_containers = 0_usize;
+    let result = (|| {
+        while frame_count != 0 {
+            frame_count -= 1;
+            let frame = frames[frame_count]
+                .take()
+                .expect("JSON value writer frame must be initialized");
+            match frame {
+                Frame::Value(value, depth) => {
+                    if depth >= MAX_JSON_VALUE_NESTING_DEPTH {
+                        return Err(BoundedJsonError::Unsupported);
+                    }
+                    match value {
+                        Value::Null => output.push_str("null")?,
+                        Value::Bool(value) => {
+                            output.push_str(if *value { "true" } else { "false" })?;
+                        }
+                        Value::Number(native::Number::I64(value)) => write_i64_to(*value, output)?,
+                        Value::Number(native::Number::U64(value)) => {
+                            write_u128_to(u128::from(*value), output)?;
+                        }
+                        Value::Number(native::Number::U128(value)) => {
+                            write_u128_to(*value, output)?;
+                        }
+                        Value::Number(native::Number::F64(value)) => write_f64_to(*value, output)?,
+                        Value::String(value) => write_json_string_to(value, output)?,
+                        Value::Array(values) => {
+                            output.begin_container()?;
+                            entered_containers += 1;
+                            output.push('[')?;
+                            let child_depth =
+                                depth.checked_add(1).ok_or(BoundedJsonError::Unsupported)?;
+                            frames[frame_count] = Some(Frame::Array {
+                                values: values.iter(),
+                                child_depth,
+                                wrote_value: false,
+                            });
+                            frame_count += 1;
+                        }
+                        Value::Object(values) => {
+                            output.begin_container()?;
+                            entered_containers += 1;
+                            output.push('{')?;
+                            let child_depth =
+                                depth.checked_add(1).ok_or(BoundedJsonError::Unsupported)?;
+                            frames[frame_count] = Some(Frame::Object {
+                                values: values.iter(),
+                                child_depth,
+                                wrote_value: false,
+                            });
+                            frame_count += 1;
+                        }
+                    }
                 }
-                match value {
-                    Value::Null => output.push_str("null")?,
-                    Value::Bool(value) => {
-                        output.push_str(if *value { "true" } else { "false" })?;
-                    }
-                    Value::Number(native::Number::I64(value)) => write_i64_to(*value, output)?,
-                    Value::Number(native::Number::U64(value)) => {
-                        write_u128_to(u128::from(*value), output)?;
-                    }
-                    Value::Number(native::Number::U128(value)) => {
-                        write_u128_to(*value, output)?;
-                    }
-                    Value::Number(native::Number::F64(value)) => write_f64_to(*value, output)?,
-                    Value::String(value) => write_json_string_to(value, output)?,
-                    Value::Array(values) => {
-                        output.begin_container()?;
-                        output.push('[')?;
-                        let child_depth =
-                            depth.checked_add(1).ok_or(BoundedJsonError::Unsupported)?;
+                Frame::Array {
+                    mut values,
+                    child_depth,
+                    wrote_value,
+                } => {
+                    if let Some(value) = values.next() {
+                        if wrote_value {
+                            output.push(',')?;
+                        }
                         frames[frame_count] = Some(Frame::Array {
-                            values: values.iter(),
+                            values,
                             child_depth,
-                            wrote_value: false,
+                            wrote_value: true,
                         });
                         frame_count += 1;
+                        frames[frame_count] = Some(Frame::Value(value, child_depth));
+                        frame_count += 1;
+                    } else {
+                        output.push(']')?;
+                        output.end_container();
+                        entered_containers -= 1;
                     }
-                    Value::Object(values) => {
-                        output.begin_container()?;
-                        output.push('{')?;
-                        let child_depth =
-                            depth.checked_add(1).ok_or(BoundedJsonError::Unsupported)?;
+                }
+                Frame::Object {
+                    mut values,
+                    child_depth,
+                    wrote_value,
+                } => {
+                    if let Some((key, value)) = values.next() {
+                        if wrote_value {
+                            output.push(',')?;
+                        }
+                        write_json_string_to(key, output)?;
+                        output.push(':')?;
                         frames[frame_count] = Some(Frame::Object {
-                            values: values.iter(),
+                            values,
                             child_depth,
-                            wrote_value: false,
+                            wrote_value: true,
                         });
                         frame_count += 1;
+                        frames[frame_count] = Some(Frame::Value(value, child_depth));
+                        frame_count += 1;
+                    } else {
+                        output.push('}')?;
+                        output.end_container();
+                        entered_containers -= 1;
                     }
-                }
-            }
-            Frame::Array {
-                mut values,
-                child_depth,
-                wrote_value,
-            } => {
-                if let Some(value) = values.next() {
-                    if wrote_value {
-                        output.push(',')?;
-                    }
-                    frames[frame_count] = Some(Frame::Array {
-                        values,
-                        child_depth,
-                        wrote_value: true,
-                    });
-                    frame_count += 1;
-                    frames[frame_count] = Some(Frame::Value(value, child_depth));
-                    frame_count += 1;
-                } else {
-                    output.push(']')?;
-                    output.end_container();
-                }
-            }
-            Frame::Object {
-                mut values,
-                child_depth,
-                wrote_value,
-            } => {
-                if let Some((key, value)) = values.next() {
-                    if wrote_value {
-                        output.push(',')?;
-                    }
-                    write_json_string_to(key, output)?;
-                    output.push(':')?;
-                    frames[frame_count] = Some(Frame::Object {
-                        values,
-                        child_depth,
-                        wrote_value: true,
-                    });
-                    frame_count += 1;
-                    frames[frame_count] = Some(Frame::Value(value, child_depth));
-                    frame_count += 1;
-                } else {
-                    output.push('}')?;
-                    output.end_container();
                 }
             }
         }
-    }
 
-    Ok(())
+        Ok(())
+    })();
+    while entered_containers != 0 {
+        output.end_container();
+        entered_containers -= 1;
+    }
+    result
 }
 #[cfg(test)]
 mod tests {

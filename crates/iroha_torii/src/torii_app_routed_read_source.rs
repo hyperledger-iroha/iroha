@@ -335,42 +335,49 @@ impl norito::json::FastJsonWrite for ToriiAssetDefinitionJsonSource<'_> {
     ) -> Result<(), norito::json::BoundedJsonError> {
         use norito::json::JsonSerialize as _;
         output.begin_container()?;
-        output.push_str("{\"alias\":")?;
-        if let Some(binding) = self.alias_binding {
-            norito::json::write_json_string_to(binding.alias.as_ref(), output)?;
-            output.push_str(",\"alias_binding\":")?;
-            write_torii_asset_alias_binding_json(binding, self.observation_time_ms, output)?;
-        } else {
-            self.definition.alias.json_serialize_to(output)?;
-        }
-        output.push_str(",\"balance_scope_policy\":")?;
-        self.definition
-            .balance_scope_policy
-            .json_serialize_to(output)?;
-        output.push_str(",\"confidential_policy\":")?;
-        write_torii_asset_confidential_policy_json(&self.definition.confidential_policy, output)?;
-        output.push_str(",\"description\":")?;
-        self.definition.description.json_serialize_to(output)?;
-        output.push_str(",\"id\":")?;
-        self.definition.id.json_serialize_to(output)?;
-        output.push_str(",\"logo\":")?;
-        self.definition.logo.json_serialize_to(output)?;
-        output.push_str(",\"metadata\":")?;
-        iroha_data_model::HasMetadata::metadata(self.definition).json_serialize_to(output)?;
-        output.push_str(",\"mintable\":")?;
-        self.definition.mintable.json_serialize_to(output)?;
-        output.push_str(",\"name\":")?;
-        self.definition.name.json_serialize_to(output)?;
-        output.push_str(",\"owned_by\":")?;
-        self.definition.owned_by.json_serialize_to(output)?;
-        output.push_str(",\"owning_domain\":")?;
-        self.definition.owning_domain.json_serialize_to(output)?;
-        output.push_str(",\"spec\":")?;
-        self.definition.spec.json_serialize_to(output)?;
-        output.push_str(",\"total_quantity\":")?;
-        self.definition.total_quantity.json_serialize_to(output)?;
-        output.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push_str("{\"alias\":")?;
+            if let Some(binding) = self.alias_binding {
+                norito::json::write_json_string_to(binding.alias.as_ref(), output)?;
+                output.push_str(",\"alias_binding\":")?;
+                write_torii_asset_alias_binding_json(binding, self.observation_time_ms, output)?;
+            } else {
+                self.definition.alias.json_serialize_to(output)?;
+            }
+            output.push_str(",\"balance_scope_policy\":")?;
+            self.definition
+                .balance_scope_policy
+                .json_serialize_to(output)?;
+            output.push_str(",\"confidential_policy\":")?;
+            write_torii_asset_confidential_policy_json(
+                &self.definition.confidential_policy,
+                output,
+            )?;
+            output.push_str(",\"description\":")?;
+            self.definition.description.json_serialize_to(output)?;
+            output.push_str(",\"id\":")?;
+            self.definition.id.json_serialize_to(output)?;
+            output.push_str(",\"logo\":")?;
+            self.definition.logo.json_serialize_to(output)?;
+            output.push_str(",\"metadata\":")?;
+            iroha_data_model::HasMetadata::metadata(self.definition).json_serialize_to(output)?;
+            output.push_str(",\"mintable\":")?;
+            self.definition.mintable.json_serialize_to(output)?;
+            output.push_str(",\"name\":")?;
+            self.definition.name.json_serialize_to(output)?;
+            output.push_str(",\"owned_by\":")?;
+            self.definition.owned_by.json_serialize_to(output)?;
+            output.push_str(",\"owning_domain\":")?;
+            self.definition.owning_domain.json_serialize_to(output)?;
+            output.push_str(",\"spec\":")?;
+            self.definition.spec.json_serialize_to(output)?;
+            output.push_str(",\"total_quantity\":")?;
+            self.definition.total_quantity.json_serialize_to(output)?;
+            output.push('}')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }
@@ -381,34 +388,42 @@ fn write_torii_asset_confidential_policy_json(
 ) -> Result<(), norito::json::BoundedJsonError> {
     use norito::json::JsonSerialize as _;
     output.begin_container()?;
-    output.push_str("{\"mode\":")?;
-    policy.mode.json_serialize_to(output)?;
-    output.push_str(",\"pedersen_params_id\":")?;
-    policy.pedersen_params_id.json_serialize_to(output)?;
-    output.push_str(",\"pending_transition\":")?;
-    if let Some(transition) = &policy.pending_transition {
-        output.begin_container()?;
-        output.push_str("{\"conversion_window\":")?;
-        transition.conversion_window.json_serialize_to(output)?;
-        output.push_str(",\"effective_height\":")?;
-        transition.effective_height.json_serialize_to(output)?;
-        output.push_str(",\"new_mode\":")?;
-        transition.new_mode.json_serialize_to(output)?;
-        output.push_str(",\"previous_mode\":")?;
-        transition.previous_mode.json_serialize_to(output)?;
-        output.push_str(",\"transition_id\":")?;
-        transition.transition_id.json_serialize_to(output)?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        output.push_str("{\"mode\":")?;
+        policy.mode.json_serialize_to(output)?;
+        output.push_str(",\"pedersen_params_id\":")?;
+        policy.pedersen_params_id.json_serialize_to(output)?;
+        output.push_str(",\"pending_transition\":")?;
+        if let Some(transition) = &policy.pending_transition {
+            output.begin_container()?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                output.push_str("{\"conversion_window\":")?;
+                transition.conversion_window.json_serialize_to(output)?;
+                output.push_str(",\"effective_height\":")?;
+                transition.effective_height.json_serialize_to(output)?;
+                output.push_str(",\"new_mode\":")?;
+                transition.new_mode.json_serialize_to(output)?;
+                output.push_str(",\"previous_mode\":")?;
+                transition.previous_mode.json_serialize_to(output)?;
+                output.push_str(",\"transition_id\":")?;
+                transition.transition_id.json_serialize_to(output)?;
+                output.push('}')?;
+                Ok(())
+            })();
+            output.end_container();
+            result?;
+        } else {
+            output.push_str("null")?;
+        }
+        output.push_str(",\"poseidon_params_id\":")?;
+        policy.poseidon_params_id.json_serialize_to(output)?;
+        output.push_str(",\"vk_set_hash\":")?;
+        policy.vk_set_hash.json_serialize_to(output)?;
         output.push('}')?;
-        output.end_container();
-    } else {
-        output.push_str("null")?;
-    }
-    output.push_str(",\"poseidon_params_id\":")?;
-    policy.poseidon_params_id.json_serialize_to(output)?;
-    output.push_str(",\"vk_set_hash\":")?;
-    policy.vk_set_hash.json_serialize_to(output)?;
-    output.push('}')?;
+        Ok(())
+    })();
     output.end_container();
+    result?;
     Ok(())
 }
 fn write_torii_asset_alias_binding_json(
@@ -425,22 +440,26 @@ fn write_torii_asset_alias_binding_json(
         AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup => "expired_pending_cleanup",
     };
     output.begin_container()?;
-    output.push_str("{\"alias\":")?;
-    norito::json::write_json_string_to(binding.alias.as_ref(), output)?;
-    output.push_str(",\"bound_at_ms\":")?;
-    binding.bound_at_ms.json_serialize_to(output)?;
-    if let Some(grace_until_ms) = binding.grace_until_ms {
-        output.push_str(",\"grace_until_ms\":")?;
-        grace_until_ms.json_serialize_to(output)?;
-    }
-    if let Some(lease_expiry_ms) = binding.lease_expiry_ms {
-        output.push_str(",\"lease_expiry_ms\":")?;
-        lease_expiry_ms.json_serialize_to(output)?;
-    }
-    output.push_str(",\"status\":")?;
-    norito::json::write_json_string_to(status, output)?;
-    output.push('}')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        output.push_str("{\"alias\":")?;
+        norito::json::write_json_string_to(binding.alias.as_ref(), output)?;
+        output.push_str(",\"bound_at_ms\":")?;
+        binding.bound_at_ms.json_serialize_to(output)?;
+        if let Some(grace_until_ms) = binding.grace_until_ms {
+            output.push_str(",\"grace_until_ms\":")?;
+            grace_until_ms.json_serialize_to(output)?;
+        }
+        if let Some(lease_expiry_ms) = binding.lease_expiry_ms {
+            output.push_str(",\"lease_expiry_ms\":")?;
+            lease_expiry_ms.json_serialize_to(output)?;
+        }
+        output.push_str(",\"status\":")?;
+        norito::json::write_json_string_to(status, output)?;
+        output.push('}')?;
+        Ok(())
+    })();
     output.end_container();
+    result?;
     Ok(())
 }
 fn resolve_torii_asset_definition_source_selector(
@@ -549,44 +568,52 @@ impl norito::json::FastJsonWrite for ToriiSpaceDirectoryBindingsJsonSource<'_> {
     ) -> Result<(), norito::json::BoundedJsonError> {
         use norito::json::JsonSerialize as _;
         output.begin_container()?;
-        output.push_str("{\"dataspaces\":[")?;
-        if let Some(bindings) = self.bindings {
-            let mut emitted = 0usize;
-            for (dataspace_id, accounts) in bindings.iter() {
-                if !self.visibility.allows_dataspace(*dataspace_id) {
-                    continue;
-                }
-                if emitted != 0 {
-                    output.push(',')?;
-                }
-                emitted = emitted.saturating_add(1);
-                output.begin_container()?;
-                output.push_str("{\"accounts\":[")?;
-                for (account_index, account_id) in accounts.iter().enumerate() {
-                    if account_index != 0 {
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push_str("{\"dataspaces\":[")?;
+            if let Some(bindings) = self.bindings {
+                let mut emitted = 0usize;
+                for (dataspace_id, accounts) in bindings.iter() {
+                    if !self.visibility.allows_dataspace(*dataspace_id) {
+                        continue;
+                    }
+                    if emitted != 0 {
                         output.push(',')?;
                     }
-                    account_id.json_serialize_to(output)?;
+                    emitted = emitted.saturating_add(1);
+                    output.begin_container()?;
+                    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                        output.push_str("{\"accounts\":[")?;
+                        for (account_index, account_id) in accounts.iter().enumerate() {
+                            if account_index != 0 {
+                                output.push(',')?;
+                            }
+                            account_id.json_serialize_to(output)?;
+                        }
+                        output.push_str("],\"dataspace_alias\":")?;
+                        self.catalog
+                            .entries()
+                            .iter()
+                            .find(|entry| entry.id == *dataspace_id)
+                            .map(|entry| entry.alias.as_str())
+                            .json_serialize_to(output)?;
+                        output.push_str(",\"dataspace_id\":")?;
+                        dataspace_id.as_u64().json_serialize_to(output)?;
+                        output.push('}')?;
+                        Ok(())
+                    })();
+                    output.end_container();
+                    result?;
                 }
-                output.push_str("],\"dataspace_alias\":")?;
-                self.catalog
-                    .entries()
-                    .iter()
-                    .find(|entry| entry.id == *dataspace_id)
-                    .map(|entry| entry.alias.as_str())
-                    .json_serialize_to(output)?;
-                output.push_str(",\"dataspace_id\":")?;
-                dataspace_id.as_u64().json_serialize_to(output)?;
-                output.push('}')?;
-                output.end_container();
             }
-        }
-        output.push_str("],\"uaid\":")?;
-        // The route publishes the canonical UAID literal, not the model's
-        // derived JSON representation. Its display length is fixed and bounded.
-        self.uaid.to_string().json_serialize_to(output)?;
-        output.push('}')?;
+            output.push_str("],\"uaid\":")?;
+            // The route publishes the canonical UAID literal, not the model's
+            // derived JSON representation. Its display length is fixed and bounded.
+            self.uaid.to_string().json_serialize_to(output)?;
+            output.push('}')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }
@@ -656,18 +683,26 @@ impl norito::json::FastJsonWrite for ToriiContractAliasJsonSource<'_> {
     ) -> Result<(), norito::json::BoundedJsonError> {
         use norito::json::JsonSerialize as _;
         output.begin_container()?;
-        output.push_str("{\"contract_alias\":")?;
-        self.contract_alias.json_serialize_to(output)?;
-        output.push_str(",\"contract_address\":")?;
-        self.contract_address.json_serialize_to(output)?;
-        output.push_str(",\"contract_subject_account\":")?;
-        self.contract_subject.json_serialize_to(output)?;
-        output.push_str(",\"dataspace\":")?;
-        norito::json::write_json_string_to(self.dataspace_alias, output)?;
-        output.push_str(",\"contract_alias_binding\":")?;
-        write_torii_contract_alias_binding_json(self.binding, self.observation_time_ms, output)?;
-        output.push_str(",\"source\":\"world_state\"}")?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push_str("{\"contract_alias\":")?;
+            self.contract_alias.json_serialize_to(output)?;
+            output.push_str(",\"contract_address\":")?;
+            self.contract_address.json_serialize_to(output)?;
+            output.push_str(",\"contract_subject_account\":")?;
+            self.contract_subject.json_serialize_to(output)?;
+            output.push_str(",\"dataspace\":")?;
+            norito::json::write_json_string_to(self.dataspace_alias, output)?;
+            output.push_str(",\"contract_alias_binding\":")?;
+            write_torii_contract_alias_binding_json(
+                self.binding,
+                self.observation_time_ms,
+                output,
+            )?;
+            output.push_str(",\"source\":\"world_state\"}")?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }
@@ -685,22 +720,26 @@ fn write_torii_contract_alias_binding_json(
         ContractAliasLeaseStatus::ExpiredPendingCleanup => "expired_pending_cleanup",
     };
     output.begin_container()?;
-    output.push_str("{\"alias\":")?;
-    binding.alias.json_serialize_to(output)?;
-    output.push_str(",\"status\":")?;
-    norito::json::write_json_string_to(status, output)?;
-    if let Some(lease_expiry_ms) = binding.lease_expiry_ms {
-        output.push_str(",\"lease_expiry_ms\":")?;
-        lease_expiry_ms.json_serialize_to(output)?;
-    }
-    if let Some(grace_until_ms) = binding.grace_until_ms {
-        output.push_str(",\"grace_until_ms\":")?;
-        grace_until_ms.json_serialize_to(output)?;
-    }
-    output.push_str(",\"bound_at_ms\":")?;
-    binding.bound_at_ms.json_serialize_to(output)?;
-    output.push('}')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        output.push_str("{\"alias\":")?;
+        binding.alias.json_serialize_to(output)?;
+        output.push_str(",\"status\":")?;
+        norito::json::write_json_string_to(status, output)?;
+        if let Some(lease_expiry_ms) = binding.lease_expiry_ms {
+            output.push_str(",\"lease_expiry_ms\":")?;
+            lease_expiry_ms.json_serialize_to(output)?;
+        }
+        if let Some(grace_until_ms) = binding.grace_until_ms {
+            output.push_str(",\"grace_until_ms\":")?;
+            grace_until_ms.json_serialize_to(output)?;
+        }
+        output.push_str(",\"bound_at_ms\":")?;
+        binding.bound_at_ms.json_serialize_to(output)?;
+        output.push('}')?;
+        Ok(())
+    })();
     output.end_container();
+    result?;
     Ok(())
 }
 fn execute_torii_contract_alias_local_source_read(
@@ -850,28 +889,32 @@ impl norito::json::FastJsonWrite for ToriiExplorerAssetDefinitionJsonSource<'_> 
     ) -> Result<(), norito::json::BoundedJsonError> {
         use norito::json::JsonSerialize as _;
         output.begin_container()?;
-        output.push_str("{\"id\":")?;
-        self.definition.id.json_serialize_to(output)?;
-        output.push_str(",\"owning_domain\":")?;
-        self.definition.owning_domain.json_serialize_to(output)?;
-        output.push_str(",\"mintable\":")?;
-        self.definition.mintable.json_serialize_to(output)?;
-        output.push_str(",\"logo\":")?;
-        self.definition.logo.json_serialize_to(output)?;
-        output.push_str(",\"metadata\":")?;
-        iroha_data_model::HasMetadata::metadata(self.definition).json_serialize_to(output)?;
-        output.push_str(",\"owned_by\":")?;
-        self.definition.owned_by.json_serialize_to(output)?;
-        output.push_str(",\"assets\":")?;
-        self.assets.json_serialize_to(output)?;
-        output.push_str(",\"total_quantity\":")?;
-        self.definition.total_quantity.json_serialize_to(output)?;
-        output.push_str(",\"locked_quantity\":")?;
-        self.locked_quantity.json_serialize_to(output)?;
-        output.push_str(",\"circulating_quantity\":")?;
-        self.circulating_quantity.json_serialize_to(output)?;
-        output.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push_str("{\"id\":")?;
+            self.definition.id.json_serialize_to(output)?;
+            output.push_str(",\"owning_domain\":")?;
+            self.definition.owning_domain.json_serialize_to(output)?;
+            output.push_str(",\"mintable\":")?;
+            self.definition.mintable.json_serialize_to(output)?;
+            output.push_str(",\"logo\":")?;
+            self.definition.logo.json_serialize_to(output)?;
+            output.push_str(",\"metadata\":")?;
+            iroha_data_model::HasMetadata::metadata(self.definition).json_serialize_to(output)?;
+            output.push_str(",\"owned_by\":")?;
+            self.definition.owned_by.json_serialize_to(output)?;
+            output.push_str(",\"assets\":")?;
+            self.assets.json_serialize_to(output)?;
+            output.push_str(",\"total_quantity\":")?;
+            self.definition.total_quantity.json_serialize_to(output)?;
+            output.push_str(",\"locked_quantity\":")?;
+            self.locked_quantity.json_serialize_to(output)?;
+            output.push_str(",\"circulating_quantity\":")?;
+            self.circulating_quantity.json_serialize_to(output)?;
+            output.push('}')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1004,3 +1047,227 @@ fn execute_torii_proof_record_local_source_read_admitted(
 }
 #[cfg(test)]
 include!("tests/lib_routed_reads/routed_read_source_bounds.rs");
+
+#[cfg(test)]
+mod service_source_depth_tests {
+    //! Owning checked service writers keep the caller depth on exact refusals.
+    use super::*;
+    use crate::service_checked_writer_test_support::audit;
+    use norito::json::FastJsonWrite;
+
+    use iroha_data_model::Registrable as _;
+    use norito::json::Value;
+    fn definition() -> iroha_data_model::asset::definition::AssetDefinition {
+        let authority = crate::tests_runtime_handlers::checked_torii_test_account_id(
+            0x71,
+            "checked service source fixture",
+        );
+        let domain = iroha_model_base::domain::DomainId::try_new("issuer", "universal").unwrap();
+        let id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            domain,
+            "usd".parse().unwrap(),
+        );
+        iroha_data_model::asset::AssetDefinition::numeric(
+            id,
+            "Treasury USD",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority)
+    }
+    fn binding() -> iroha_core::state::AssetDefinitionAliasBindingRecord {
+        iroha_core::state::AssetDefinitionAliasBindingRecord {
+            alias: "usd#issuer.main".parse().unwrap(),
+            lease_expiry_ms: Some(50),
+            grace_until_ms: Some(75),
+            bound_at_ms: 10,
+        }
+    }
+    fn configured_policy() -> iroha_data_model::asset::definition::AssetConfidentialPolicy {
+        use iroha_data_model::asset::definition::{
+            AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+        };
+        AssetConfidentialPolicy {
+            mode: ConfidentialPolicyMode::Convertible,
+            vk_set_hash: Some(iroha_crypto::Hash::new(b"checked keys")),
+            poseidon_params_id: Some(3),
+            pedersen_params_id: Some(5),
+            pending_transition: Some(ConfidentialPolicyTransition {
+                new_mode: ConfidentialPolicyMode::ShieldedOnly,
+                effective_height: 80,
+                previous_mode: ConfidentialPolicyMode::Convertible,
+                transition_id: iroha_crypto::Hash::new(b"checked transition"),
+                conversion_window: Some(20),
+            }),
+        }
+    }
+    #[test]
+    fn original_asset_definition_projection_keeps_original_record_and_refusal_depth() {
+        let mut definition = definition();
+        definition.confidential_policy = configured_policy();
+        let binding = binding();
+        for alias_binding in [None, Some(&binding)] {
+            let source = ToriiAssetDefinitionJsonSource {
+                definition: &definition,
+                alias_binding,
+                observation_time_ms: 60,
+            };
+            let mut expected = norito::json::to_value(&definition).unwrap();
+            if let Some(binding) = alias_binding {
+                let Value::Object(object) = &mut expected else {
+                    panic!("original definition object");
+                };
+                object.insert("alias".into(), Value::from(binding.alias.to_string()));
+                object.insert(
+                    "alias_binding".into(),
+                    norito::json::to_value(&routing::asset_alias_binding_dto(binding, 60)).unwrap(),
+                );
+            }
+            let expected = norito::json::to_json(&expected).unwrap();
+            audit(&expected, |sink| source.write_json_to(sink));
+            assert!(std::ptr::eq(source.definition, &definition));
+        }
+    }
+    #[test]
+    fn original_confidential_projection_keeps_nested_transition_refusal_depth() {
+        for policy in [
+            iroha_data_model::asset::definition::AssetConfidentialPolicy::default(),
+            configured_policy(),
+        ] {
+            let expected =
+                norito::json::to_json(&norito::json::to_value(&policy).unwrap()).unwrap();
+            audit(&expected, |sink| {
+                write_torii_asset_confidential_policy_json(&policy, sink)
+            });
+        }
+    }
+    #[test]
+    fn original_asset_alias_projection_keeps_actual_lease_status_and_refusal_depth() {
+        let binding = binding();
+        for observed in [10, 60, 76] {
+            let expected =
+                norito::json::to_json(&routing::asset_alias_binding_dto(&binding, observed))
+                    .unwrap();
+            audit(&expected, |sink| {
+                write_torii_asset_alias_binding_json(&binding, observed, sink)
+            });
+        }
+    }
+    #[test]
+    fn original_space_directory_projection_keeps_actual_bindings_and_nested_refusal_depth() {
+        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            .parse()
+            .unwrap();
+        let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
+        let account = crate::tests_runtime_handlers::checked_torii_test_account_id(
+            0x71,
+            "checked binding fixture",
+        );
+        let original_account_json = norito::json::to_value(&account).unwrap();
+        let ds = iroha_model_base::topology::DataSpaceId::UNIVERSAL;
+        bindings.bind_account(ds, account);
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+        let visibility = routing::DataspaceReadVisibility::all_for_tests();
+        for bindings in [None, Some(&bindings)] {
+            let source = ToriiSpaceDirectoryBindingsJsonSource {
+                uaid: &uaid,
+                bindings,
+                catalog: &catalog,
+                visibility: &visibility,
+            };
+            let expected_value = if bindings.is_some() {
+                let alias = catalog
+                    .entries()
+                    .iter()
+                    .find(|entry| entry.id == ds)
+                    .map(|entry| entry.alias.as_str());
+                norito::json!({ "dataspaces": [{ "accounts": [original_account_json.clone()], "dataspace_alias": (alias), "dataspace_id": (ds.as_u64()) }], "uaid": (uaid.to_string()) })
+            } else {
+                norito::json!({ "dataspaces": [], "uaid": (uaid.to_string()) })
+            };
+            let expected = norito::json::to_json(&expected_value).unwrap();
+            audit(&expected, |sink| source.write_json_to(sink));
+        }
+    }
+    fn contract() -> (
+        iroha_data_model::smart_contract::ContractAddress,
+        iroha_data_model::smart_contract::ContractAlias,
+        iroha_core::state::ContractAliasBindingRecord,
+    ) {
+        let authority = crate::tests_runtime_handlers::checked_torii_test_account_id(
+            0x72,
+            "checked contract source fixture",
+        );
+        let address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .unwrap(),
+            &authority,
+            0,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        )
+        .unwrap();
+        let alias = "router::dex.universal"
+            .parse::<iroha_data_model::smart_contract::ContractAlias>()
+            .unwrap();
+        let binding = iroha_core::state::ContractAliasBindingRecord {
+            alias: alias.clone(),
+            lease_expiry_ms: Some(50),
+            grace_until_ms: Some(75),
+            bound_at_ms: 10,
+        };
+        (address, alias, binding)
+    }
+    #[test]
+    fn original_contract_alias_projection_keeps_actual_subject_and_refusal_depth() {
+        let (address, alias, binding) = contract();
+        let subject = address.subject_id();
+        let source = ToriiContractAliasJsonSource {
+            contract_alias: &alias,
+            contract_address: &address,
+            contract_subject: &subject,
+            dataspace_alias: "universal",
+            binding: &binding,
+            observation_time_ms: 60,
+        };
+        let expected = routing::ContractAliasResolveResponseDto {
+            contract_alias: alias.to_string(),
+            contract_address: address.to_string(),
+            contract_subject_account: subject.to_string(),
+            dataspace: "universal".into(),
+            contract_alias_binding: routing::contract_alias_binding_dto(&binding, 60),
+            source: "world_state".into(),
+        };
+        let expected = norito::json::to_json(&expected).unwrap();
+        audit(&expected, |sink| source.write_json_to(sink));
+    }
+    #[test]
+    fn original_contract_binding_projection_keeps_lease_status_and_refusal_depth() {
+        let (_, _, binding) = contract();
+        for observed in [10, 60, 76] {
+            let expected =
+                norito::json::to_json(&routing::contract_alias_binding_dto(&binding, observed))
+                    .unwrap();
+            audit(&expected, |sink| {
+                write_torii_contract_alias_binding_json(&binding, observed, sink)
+            });
+        }
+    }
+    #[test]
+    fn original_explorer_definition_projection_keeps_actual_owner_and_refusal_depth() {
+        let definition = definition();
+        let source = ToriiExplorerAssetDefinitionJsonSource {
+            definition: &definition,
+            assets: 7,
+            locked_quantity: None,
+            circulating_quantity: None,
+        };
+        let expected =
+            crate::explorer::ExplorerAssetDefinitionDto::from_definition_with_asset_count(
+                &definition,
+                7,
+            );
+        let expected = norito::json::to_json(&expected).unwrap();
+        audit(&expected, |sink| source.write_json_to(sink));
+    }
+}

@@ -84,16 +84,19 @@ where
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, item) in self.0.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, item) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                JsonSerialize::json_serialize_to(item, out)?;
             }
-            JsonSerialize::json_serialize_to(item, out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 #[cfg(feature = "json")]

@@ -7,13 +7,17 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
 
 ## Current priorities
 
-1. Rebuild and qualify the Nexus proposal projection, retained peer context,
-   telemetry/status retirement and restricted lane gossip on the real workload;
-   measure repeated accepted settlements.
+1. Complete Nexus fault/restart qualification and restricted lane isolation;
+   preserve original funded execution through publication and replay, qualify lane
+   retirement ownership, and reclaim physical storage only after retained global
+   history releases its certified dependencies.
 2. Complete original funded execution through State/World acquisition,
    certification, Kura publication and restart; finish DS-local State and AMX.
-3. Qualify Sumeragi and authenticated Linux artifacts; extend Taira's verified
-   four-validator readiness, paid writes and rolling restart to DPN/contracts.
+3. Qualify Sumeragi and authenticated Linux artifacts; Taira's deployment
+   owner manages cutover, live four-validator readiness, paid writes and restart
+   evidence, including DPN/contracts. This coding task owns H1–H5 in the
+   [Sumeragi handoff goals](specs/sumeragi_goals.md#active-handoff-completion-gates)
+   and works only in `/Users/takemiyamakoto/dev/iroha` on `optimizations`.
 4. Validate the combined fixture/runtime repairs through fresh workspace,
    genuine fixture and native SDK artifacts on one source candidate. Qualify the
    joint X509 relation and transcript privacy, and resolve its proving-time and

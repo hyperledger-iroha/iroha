@@ -147,6 +147,13 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
+        Self::start_with_policy_and_configure(policy(), |_| {})
+    }
+
+    fn start_with_policy_and_configure(
+        policy: SumeragiLanePolicy,
+        configure: impl FnOnce(&mut TestChainConfig),
+    ) -> Self {
         let dir = tempfile::tempdir().expect("temp dir");
         let mut world = World::default();
         for key in [lane_user(), other_user()] {
@@ -158,8 +165,9 @@ impl Fixture {
         let mut config = TestChainConfig::new(world, GENESIS_MS);
         config
             .genesis_parameters
-            .push(Parameter::Custom(policy().into_custom_parameter()));
+            .push(Parameter::Custom(policy.into_custom_parameter()));
         config.lane_blocks = deferred.clone();
+        configure(&mut config);
         let prepared = CertifiedTestChain::prepare(config).expect("original signed genesis");
         let keys = prepared.validator_keys.clone();
         let chain = CertifiedTestChain::from_prepared(prepared).expect("the chain starts");
@@ -378,6 +386,9 @@ impl Fixture {
         .expect("a merge-only proposal")
     }
 }
+
+#[path = "merge_tests/paid_quantity_source.rs"]
+mod paid_quantity_source;
 
 #[test]
 fn global_blocks_merge_fresh_lane_blocks_and_drop_what_they_must_not_execute() {

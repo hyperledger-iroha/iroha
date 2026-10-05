@@ -22,8 +22,13 @@ cargo xtask kagami-bundle --profile debug
 
 It publishes `target/kagami-bundle/kagami-<os>-<arch>-debug/bin/{kagami,iroha3d}`
 with a sorted hash inventory. Use a fresh `--out` directory for another immutable
-package. `--network-profiles <artifact.nrt>` installs explicitly supplied native
-authority beside the two programs. The CLI package requires no Mochi desktop;
+package. The default release command requires the exact committed public preset at
+`defaults/developer/network-profiles.nrt`, including Taira, through the same release
+selector as Mochi. It refuses missing release input or a caller replacement before
+building or creating output. The approved artifact remains a release-owner prerequisite;
+the packager creates no signing authority. Debug packages may omit presets or use
+`--network-profiles <artifact.nrt>` for explicit development input. The manifest retains
+the selected image digest and public source provenance. The CLI package requires no Mochi desktop;
 `cargo xtask mochi-bundle` remains the separate desktop application packager.
 
 Kagami always includes the BLS validator tooling required by Sumeragi.

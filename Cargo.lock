@@ -6295,6 +6295,7 @@ dependencies = [
  "iroha_sccp",
  "iroha_sccp_rpc",
  "iroha_storage_client",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",

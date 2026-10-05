@@ -466,15 +466,19 @@ mod provider_inventories_json {
         out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, provider) in value.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, provider) in value.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                provider.json_serialize_to(out)?;
             }
-            provider.json_serialize_to(out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 
@@ -1986,5 +1990,19 @@ mod manifest_codec_tests {
             Err(norito::json::Error::NestingDepthExceeded { .. })
         ));
         assert_eq!(parser.position(), 0);
+    }
+
+    #[test]
+    fn original_fixed_provider_inventory_keeps_original_array_and_refusal_depth() {
+        let original = manifest();
+        let mut expected = String::new();
+        provider_inventories_json::serialize(&original.providers, &mut expected);
+        crate::service_checked_writer_test_support::audit(&expected, |sink| {
+            provider_inventories_json::serialize_bounded(&original.providers, sink)
+        });
+        assert_eq!(original.providers.len(), PROVIDER_COUNT);
+        for (slot, provider) in original.providers.iter().enumerate() {
+            assert_eq!(usize::from(provider.slot), slot);
+        }
     }
 }

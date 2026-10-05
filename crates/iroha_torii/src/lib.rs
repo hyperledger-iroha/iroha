@@ -44045,3 +44045,6 @@ fn validate_native_transaction_submission_identity(
 }
 #[cfg(all(test, feature = "connect"))]
 mod native_transaction_proxy_tests;
+
+#[cfg(test)]
+mod service_checked_writer_test_support;
