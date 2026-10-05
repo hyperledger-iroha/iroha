@@ -3,6 +3,7 @@
 use p256::ecdsa::SigningKey;
 
 use super::*;
+use crate::kagemusha::kagemusha_wallet_v1::digest::kagemusha_wallet_digest_v1;
 use crate::kagemusha::kagemusha_wallet_v1::{
     KAGEMUSHA_WALLET_VERSION_V1, KagemushaWalletValidationErrorV1,
     codec_tests::{assert_every_flip_rejected_or_rebound, norito_tag},
@@ -448,7 +449,7 @@ fn kagemusha_wallet_v1_scheme_policy_sign_verify_decode() {
         policy.scheme_policy_digest(),
         kagemusha_wallet_signed_object_digest_v1(
             Role::SchemePolicy,
-            &kagemusha_wallet_digest_v1(Role::SchemePolicyBody, &expected),
+            &kagemusha_wallet_signing_message_v1(Domain::SchemePolicy, &expected),
             &policy.signature
         )
     );
@@ -505,7 +506,7 @@ fn kagemusha_wallet_v1_scheme_policy_sign_verify_decode() {
             raw_output(&f.time_signer, &body.signing_message()),
         ),
         Err(KagemushaWalletValidationErrorV1::InvalidSignature {
-            role: Role::SchemePolicyBody
+            domain: Domain::SchemePolicy
         })
     ));
 }
