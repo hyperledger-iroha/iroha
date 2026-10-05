@@ -67,9 +67,7 @@ impl ClockRead<'_> {
                 .get_sumeragi_finality_attestation(height, nonce, peer),
             ClockNode::Public(node) => {
                 ensure!(nonce != [0; 32], "clock nonce rejected");
-                let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
-                    .path()
-                    .replace("{height}", &height.get().to_string());
+                let path = crate::client::sumeragi_attestation_path(height, peer)?;
                 let response = node.read(&path, Some(nonce), self.deadline)?;
                 if response.status() != StatusCode::OK {
                     let failure = Client::decode_finality_attestation_failure(
@@ -184,6 +182,62 @@ impl PublicClockNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn public_clock_dispatches_the_expected_bls_peer_at_the_shared_root() {
+        let selected = iroha_model_base::peer::PeerId::new(
+            iroha_crypto::KeyPair::from_seed(vec![0x53; 32], iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let expected =
+            format!("https://taira.sora.org/v1/bridge/finality/attestation/2?peer_id={selected}");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        let node = PublicClockNode {
+            origin: "https://taira.sora.org/".parse().unwrap(),
+            network: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                Hash::new(b"clock transport fixture"),
+            )),
+            transport: DefaultHttpTransport::mock(Arc::new(move |request| {
+                assert_eq!(request.method, Method::GET);
+                assert_eq!(request.url.as_str(), expected);
+                assert_eq!(
+                    request.max_response_bytes,
+                    SUMERAGI_FINALITY_RESPONSE_MAX_BYTES
+                );
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut response = crate::http::Response::new(Vec::new());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                Ok(response)
+            })),
+        };
+        let read = ClockNode::Public(&node)
+            .with_request_deadline(Instant::now() + std::time::Duration::from_secs(5));
+        assert!(
+            read.get_sumeragi_finality_attestation(
+                NonZeroU64::new(2).unwrap(),
+                [0x31; 32],
+                &selected
+            )
+            .is_err()
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let invalid = iroha_model_base::peer::PeerId::new(
+            iroha_crypto::KeyPair::from_seed(vec![0x53; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        assert!(
+            read.get_sumeragi_finality_attestation(
+                NonZeroU64::new(2).unwrap(),
+                [0x31; 32],
+                &invalid
+            )
+            .is_err()
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn public_clock_has_no_wallet_or_credential_constructor() {
         for origin in [

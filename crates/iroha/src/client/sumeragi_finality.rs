@@ -3,6 +3,24 @@
 const SUMERAGI_FINALITY_RESPONSE_MAX_BYTES: usize =
     2 * iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;
 
+// The public gateway may serve several independently selected committee members
+// at one root. Selection affects transport only; the signed response must still
+// authenticate the exact expected node, challenge, network and certified state.
+fn sumeragi_attestation_path(
+    height: NonZeroU64,
+    expected_node: &iroha_model_base::peer::PeerId,
+) -> Result<String> {
+    if expected_node.public_key().try_algorithm()? != iroha_crypto::Algorithm::BlsNormal {
+        return Err(eyre!("finality attestation requires a selected BLS node"));
+    }
+    let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
+        .path()
+        .replace("{height}", &height.get().to_string());
+    // Canonical BLS PeerId text contains only ASCII letters and digits; this
+    // query is constructed from typed identity, never caller-supplied URL text.
+    Ok(format!("{path}?peer_id={expected_node}"))
+}
+
 impl Client {
     /// Read current provider discovery and authenticate it against an independently selected block.
     ///
@@ -212,6 +230,8 @@ impl Client {
     /// Probe the original genesis tip under a caller-authenticated current genesis verifier.
     /// A successful node signature authenticates that node's observed genesis execution;
     /// callers requiring quorum readiness must collect independently selected nodes.
+    /// The transport selects that BLS node with the canonical `peer_id` query,
+    /// permitting distinct committee attestations through one public gateway.
     ///
     /// # Errors
     /// Invalid independent inputs, elapsed deadline, transport, signature, root or instance mismatch.
@@ -229,6 +249,7 @@ impl Client {
                 "genesis readiness requires a nonzero challenge and selected BLS node"
             ));
         }
+        let path = sumeragi_attestation_path(NonZeroU64::new(1).expect("genesis height"), expected_node)?;
         let deadline = self
             .http_transport
             .deadline()
@@ -236,9 +257,6 @@ impl Client {
         Self::ensure_genesis_readiness_deadline(deadline)?;
         let client = self.with_request_deadline(deadline);
         client.ensure_data_model_compatibility()?;
-        let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
-            .path()
-            .replace("{height}", "1");
         let response = client.send_activation_evidence_read(
             &path,
             SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
@@ -283,6 +301,8 @@ impl Client {
     }
     /// Read and authenticate the selected node's fresh current-consensus tip statement.
     /// The caller's independently anchored verifier must authenticate the embedded chain.
+    /// An internally constructed `peer_id` query selects the expected BLS node
+    /// when several committee members share this client's public Torii root.
     ///
     /// # Errors
     /// Bounded transport/codec failure, malformed proof, invalid node signature or wrong request binding.
@@ -295,10 +315,8 @@ impl Client {
         if challenge == [0; 32] {
             return Err(eyre!("finality challenge must be nonzero"));
         }
+        let path = sumeragi_attestation_path(height, expected_node)?;
         self.ensure_data_model_compatibility()?;
-        let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
-            .path()
-            .replace("{height}", &height.get().to_string());
         let response = self.send_activation_evidence_read(
             &path,
             SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,

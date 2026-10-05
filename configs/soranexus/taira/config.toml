@@ -124,6 +124,7 @@ allowed_headers = [
   "x-iroha-timestamp-ms",
   "x-iroha-nonce",
   "x-iroha-witness",
+  "X-Iroha-Finality-Challenge",
 ]
 exposed_headers = ["etag", "location", "retry-after"]
 

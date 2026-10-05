@@ -551,9 +551,13 @@ mod tests {
                         .host_identity_sha256
                         .clone()
                 }
-                2 => if let reset::EdgeInitialStateV1::AdmittedRelease(release) = &mut changed.native_edge.claims.initial_state {
-                    release.config_sha256 = "e".repeat(64);
-                },
+                2 => {
+                    if let reset::EdgeInitialStateV1::AdmittedRelease(release) =
+                        &mut changed.native_edge.claims.initial_state
+                    {
+                        release.config_sha256 = "e".repeat(64);
+                    }
+                }
                 3 => {
                     changed.native_edge.claims.host_identity_sha256 =
                         changed.host_identity_sha256.clone()

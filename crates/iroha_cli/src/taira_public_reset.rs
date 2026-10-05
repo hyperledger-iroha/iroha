@@ -1902,7 +1902,9 @@ fn validate_inventory_custody_with_revision<Beacon>(
         ));
     }
 
-    inventory.hosts.validate_roles(&inventory.validators, &inventory.edge)?;
+    inventory
+        .hosts
+        .validate_roles(&inventory.validators, &inventory.edge)?;
     let mut node_fingerprints = BTreeSet::new();
     let mut build_fingerprint = None;
     let mut config_fingerprint = None;
@@ -1934,13 +1936,9 @@ fn validate_inventory_custody_with_revision<Beacon>(
     let mut client_accounts = BTreeSet::new();
     let mut client_peers = BTreeSet::new();
     let mut probe_origins = BTreeSet::new();
-    let mut public_origins = BTreeSet::new();
     let mut client_placement_targets = BTreeSet::new();
     for (client, expected_slug) in inventory.validator_clients.iter().zip(VALIDATOR_SLUGS) {
         validate_validator_public_origin(&client.torii_origin)?;
-        if !public_origins.insert(&client.torii_origin) {
-            return Err(eyre!("validator public Torii origins must be distinct"));
-        }
         validate_candidate_probe_origin(&client.probe_origin)?;
         if !probe_origins.insert(&client.probe_origin) {
             return Err(eyre!(
@@ -1954,7 +1952,7 @@ fn validate_inventory_custody_with_revision<Beacon>(
             || !client_peers.insert(client.peer_id.clone())
         {
             return Err(eyre!(
-                "validator client identities must bind four distinct ordered account/peer pairs and Torii origins"
+                "validator client identities must bind four distinct ordered account/peer pairs and candidate sockets"
             ));
         }
         let account = AccountId::parse_encoded(&client.account_id)
@@ -2444,12 +2442,7 @@ fn validate_edge(
         || edge.service_root != service_root
         || edge.state_root != format!("{service_root}/state")
         || edge.reset_guard != format!("{}/taira-edge", native.custody_root)
-        || edge.nginx_config
-            != edge
-                .native_capability
-                .incumbent
-                .claims
-                .nginx_config
+        || edge.nginx_config != edge.native_capability.incumbent.claims.nginx_config
         || edge.platform.os != "macos"
         || edge.platform.arch != "aarch64"
         || edge.platform.kvm_api_version != 0
@@ -2482,10 +2475,19 @@ fn validate_edge(
                 "native edge rollback release differs from its signed captured incumbent"
             ));
         }
-    } else if !matches!(edge.native_capability.incumbent.claims.initial_state, EdgeInitialStateV1::Vacant)
-        || edge.native_capability.incumbent.claims.owned_publication.is_some()
+    } else if !matches!(
+        edge.native_capability.incumbent.claims.initial_state,
+        EdgeInitialStateV1::Vacant
+    ) || edge
+        .native_capability
+        .incumbent
+        .claims
+        .owned_publication
+        .is_some()
     {
-        return Err(eyre!("vacant edge differs from its independently captured initial occupancy"));
+        return Err(eyre!(
+            "vacant edge differs from its independently captured initial occupancy"
+        ));
     }
     validate_artifacts(
         &edge.artifacts,
@@ -9307,7 +9309,8 @@ mod executor_model {
                     .incumbent
                     .claims
                     .owned_publication
-                    .as_ref().expect("captured owned publication")
+                    .as_ref()
+                    .expect("captured owned publication")
                     .operation_id,
                 canonical
                     .edge
@@ -9315,7 +9318,8 @@ mod executor_model {
                     .incumbent
                     .claims
                     .owned_publication
-                    .as_ref().expect("captured owned publication")
+                    .as_ref()
+                    .expect("captured owned publication")
                     .operation_id
             );
 
@@ -9368,14 +9372,18 @@ mod executor_model {
             let edge = &mut inventory.edge;
             let mut claims = edge.native_capability.incumbent.claims.clone();
             let key = KeyPair::from_seed(b"mac-native-capture".to_vec(), Algorithm::Ed25519);
-            assert_eq!(key.public_key().to_string(), inventory.hosts.native_edge.capture_public_key);
+            assert_eq!(
+                key.public_key().to_string(),
+                inventory.hosts.native_edge.capture_public_key
+            );
             edge.initial_state = EdgeInitialStateV1::Vacant;
             assert!(validate_edge(edge, &inventory.revision, &inventory.hosts).is_err());
             claims.initial_state = EdgeInitialStateV1::Vacant;
             claims.owned_publication = None;
             claims.completion = host_pair::NativeEdgeCompletionProvenanceV1::Vacant;
             claims.predecessor_authority = None;
-            edge.native_capability.incumbent = host_pair::SignedNativeEdgeCaptureV1::sign(claims, &key).unwrap();
+            edge.native_capability.incumbent =
+                host_pair::SignedNativeEdgeCaptureV1::sign(claims, &key).unwrap();
             edge.native_capability.incumbent_nginx_request = None;
             validate_edge(edge, &inventory.revision, &inventory.hosts).unwrap();
             edge.nginx_config = "/another/native/publication.conf".into();
@@ -9539,7 +9547,7 @@ mod executor_model {
         }
 
         #[test]
-        fn validator_public_origins_require_distinct_canonical_https_roots() {
+        fn validator_public_origins_admit_shared_root_with_distinct_authenticated_peers() {
             let mut inventory = sample_inventory();
             validate_inventory_structure(&inventory).expect("existing canonical HTTPS roots");
             for (index, client) in inventory.validator_clients.iter_mut().enumerate() {
@@ -9547,15 +9555,11 @@ mod executor_model {
             }
             validate_inventory_structure(&inventory)
                 .expect("four authenticated peers on distinct HTTPS ports");
-            let mut duplicate = inventory.clone();
-            duplicate.validator_clients[1].torii_origin =
-                duplicate.validator_clients[0].torii_origin.clone();
-            assert!(
-                validate_inventory_structure(&duplicate)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("origins must be distinct")
-            );
+            for client in &mut inventory.validator_clients {
+                client.torii_origin = "https://taira.sora.org/".into();
+            }
+            validate_inventory_structure(&inventory)
+                .expect("one public gateway routes four independently selected peers");
             for field in ["account", "peer"] {
                 let mut duplicate = inventory.clone();
                 if field == "account" {
@@ -9903,7 +9907,7 @@ mod executor_model {
                     .expect("deterministic validator peer key");
                     ValidatorClientV1 {
                         slug: (*slug).to_owned(),
-                        torii_origin: format!("https://taira-validator-{}.sora.org/", index + 1),
+                        torii_origin: format!("{PUBLIC_ROOT}/"),
                         probe_origin: format!("http://127.0.0.1:{}/", 8080 + index),
                         account_id: AccountId::new(account_key.public_key().clone()).to_string(),
                         peer_id: PeerId::from(peer_key.public_key().clone()).to_string(),
@@ -10174,10 +10178,20 @@ mod host_pair_inventory_custody_tests {
             assert!(inventory.validators.iter().all(|validator| {
                 validator.endpoint.hostname == inventory.hosts.validator_guest.endpoint.hostname
                     && validator.endpoint.host_identity_sha256
-                        == inventory.hosts.validator_guest.endpoint.host_identity_sha256
+                        == inventory
+                            .hosts
+                            .validator_guest
+                            .endpoint
+                            .host_identity_sha256
             }));
-            assert_ne!(inventory.edge.endpoint.host_identity_sha256,
-                inventory.hosts.validator_guest.endpoint.host_identity_sha256);
+            assert_ne!(
+                inventory.edge.endpoint.host_identity_sha256,
+                inventory
+                    .hosts
+                    .validator_guest
+                    .endpoint
+                    .host_identity_sha256
+            );
             validate_custody(&inventory).unwrap();
             let bytes = canonical_inventory_bytes(&inventory).unwrap();
             history::decode(&bytes, "current host pair custody").unwrap();
@@ -10191,15 +10205,30 @@ mod host_pair_inventory_custody_tests {
             let mut changed = original.clone();
             match mutation {
                 0 => changed.validators[1].endpoint.hostname = "foreign-guest.invalid".into(),
-                1 => changed.validators[1].node_fingerprint = changed.validators[0].node_fingerprint.clone(),
+                1 => {
+                    changed.validators[1].node_fingerprint =
+                        changed.validators[0].node_fingerprint.clone()
+                }
                 2 => changed.validators[1].slug = changed.validators[0].slug.clone(),
-                3 => changed.validators[1].service_root = changed.validators[0].service_root.clone(),
-                _ => changed.edge.endpoint.host_identity_sha256 =
-                    changed.hosts.validator_guest.endpoint.host_identity_sha256.clone(),
+                3 => {
+                    changed.validators[1].service_root = changed.validators[0].service_root.clone()
+                }
+                _ => {
+                    changed.edge.endpoint.host_identity_sha256 = changed
+                        .hosts
+                        .validator_guest
+                        .endpoint
+                        .host_identity_sha256
+                        .clone()
+                }
             }
             let error = validate_custody(&changed).unwrap_err();
             if mutation == 1 {
-                assert!(error.to_string().contains("validator node fingerprints must be distinct"));
+                assert!(
+                    error
+                        .to_string()
+                        .contains("validator node fingerprints must be distinct")
+                );
             }
         }
     }

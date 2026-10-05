@@ -1061,7 +1061,9 @@ pub(crate) fn append_seating_instructions(
     let authored = manifest.append_instruction_only_tail(instructions)?;
     // The signer bounds fully injected batches, not raw JSON transaction rows.
     // Refuse an invalid or oversized seated manifest before any private output.
-    authored.clone().normalize()
+    authored
+        .clone()
+        .normalize()
         .wrap_err("seated genesis violates native signing bounds")?;
     Ok(authored)
 }

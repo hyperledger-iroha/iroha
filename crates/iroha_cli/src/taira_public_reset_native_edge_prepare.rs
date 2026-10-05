@@ -7,8 +7,9 @@
 use super::*;
 use host_pair::{
     NativeEdgeCandidateClaimsV1, NativeEdgeCaptureClaimsV1, NativeEdgeCompletionProvenanceV1,
-    NativeFileIdentityV1, NativeNginxMasterV1, NativeObservedFileV1, NativeOwnedPublicationV1,
-    NativePublicFileV1, NativeEdgeRetainedAuthorityV1, ResetHostPairV1, SignedNativeEdgeCandidateV1, SignedNativeEdgeCaptureV1,
+    NativeEdgeRetainedAuthorityV1, NativeFileIdentityV1, NativeNginxMasterV1, NativeObservedFileV1,
+    NativeOwnedPublicationV1, NativePublicFileV1, ResetHostPairV1, SignedNativeEdgeCandidateV1,
+    SignedNativeEdgeCaptureV1,
 };
 use iroha_crypto::KeyPair;
 use iroha_fs::OwnerDirectory;
@@ -232,25 +233,38 @@ fn validate_selected_refs(request: &PrepareRequestV1) -> Result<()> {
         (NativeEdgeCompletionProvenanceV1::Vacant, None)
             if matches!(request.initial_state, EdgeInitialStateV1::Vacant)
                 && request.current_nginx_request.is_none()
-                && request.terminal_authority.is_none() => {},
+                && request.terminal_authority.is_none() => {}
         (NativeEdgeCompletionProvenanceV1::PublicationOnly { .. }, Some(authority))
         | (NativeEdgeCompletionProvenanceV1::ResetTerminal { .. }, Some(authority)) => {
             authority.validate()?;
         }
-        _ => return Err(eyre!("native request requires actual absent or retained predecessor authority")),
+        _ => {
+            return Err(eyre!(
+                "native request requires actual absent or retained predecessor authority"
+            ));
+        }
     }
     let host = &request.hosts.native_edge;
     match &request.initial_state {
-        EdgeInitialStateV1::Vacant if request.current_nginx_request.is_none() => {},
+        EdgeInitialStateV1::Vacant if request.current_nginx_request.is_none() => {}
         EdgeInitialStateV1::AdmittedRelease(release) if request.current_nginx_request.is_some() => {
             validate_lower_hex("native incumbent commit", &release.commit, 40)?;
-            if release.release_root != format!(
-                "{}/.local/share/iroha/taira/edge/releases/{}", host.owner_home, release.commit
-            ) {
-                return Err(eyre!("native incumbent escaped its independently selected release root"));
+            if release.release_root
+                != format!(
+                    "{}/.local/share/iroha/taira/edge/releases/{}",
+                    host.owner_home, release.commit
+                )
+            {
+                return Err(eyre!(
+                    "native incumbent escaped its independently selected release root"
+                ));
             }
         }
-        _ => return Err(eyre!("native occupancy requires its exact present or absent incumbent request")),
+        _ => {
+            return Err(eyre!(
+                "native occupancy requires its exact present or absent incumbent request"
+            ));
+        }
     }
     for reference in [
         &request.source_manifest,
@@ -259,7 +273,10 @@ fn validate_selected_refs(request: &PrepareRequestV1) -> Result<()> {
         &request.forwarding_plan,
         &request.forwarding_identity_receipt,
         &request.forwarding_journal,
-    ].into_iter().chain(request.current_nginx_request.iter()) {
+    ]
+    .into_iter()
+    .chain(request.current_nginx_request.iter())
+    {
         reference.validate_public(host.owner_uid)?;
         if reference.file.identity.uid != host.owner_uid
             || reference.file.identity.mode != 0o600
@@ -319,11 +336,16 @@ fn run_owner(action: &str, request: &[u8], directory: &Path) -> Result<Vec<u8>> 
 }
 
 fn inspect_owner(action: &str, request: &[u8], directory: &Path) -> Result<OwnerObservationV1> {
-    let observed: OwnerObservationV1 =
-        json::from_slice(&run_owner(action, request, directory)?)?;
+    let observed: OwnerObservationV1 = json::from_slice(&run_owner(action, request, directory)?)?;
     if observed.schema != "iroha.taira.native-nginx-owned-publication-inspection.v1"
-        || !matches!((action, observed.phase.as_str(), observed.owned_publication.is_some()),
-            ("inspect", "awaiting_readiness", true) | ("inspect-vacant", "vacant", false))
+        || !matches!(
+            (
+                action,
+                observed.phase.as_str(),
+                observed.owned_publication.is_some()
+            ),
+            ("inspect", "awaiting_readiness", true) | ("inspect-vacant", "vacant", false)
+        )
     {
         return Err(eyre!(
             "native publication inspection has no capturable owner phase"
@@ -375,15 +397,23 @@ fn validate_initial_plan(proposed: &[u8], directory: &Path) -> Result<()> {
         || plan.get("host_kind").and_then(Value::as_str) != Some("macos")
         || run_owner("validate-plan", proposed, directory)? != b"{}"
     {
-        return Err(eyre!("vacant native edge requires the exact maintained create publication"));
+        return Err(eyre!(
+            "vacant native edge requires the exact maintained create publication"
+        ));
     }
     Ok(())
 }
 
 /// Hold the independently provisioned virgin directories. Only this signed
 /// candidate may occupy releases; state and upload remain empty.
-pub(super) fn retain_vacant_root(native: &host_pair::ResetHostV1, commit: &str) -> Result<Vec<OwnerDirectory>> {
-    let service = PathBuf::from(format!("{}/.local/share/iroha/taira/edge", native.owner_home));
+pub(super) fn retain_vacant_root(
+    native: &host_pair::ResetHostV1,
+    commit: &str,
+) -> Result<Vec<OwnerDirectory>> {
+    let service = PathBuf::from(format!(
+        "{}/.local/share/iroha/taira/edge",
+        native.owner_home
+    ));
     let mut directories = vec![OwnerDirectory::open(&service)?];
     for name in ["state", ".public-reset-upload-v1", "releases"] {
         directories.push(directories[0].open_child(name)?);
@@ -392,15 +422,23 @@ pub(super) fn retain_vacant_root(native: &host_pair::ResetHostV1, commit: &str) 
     Ok(directories)
 }
 
-fn revalidate_vacant_root(directories: &[OwnerDirectory], native: &host_pair::ResetHostV1, commit: &str) -> Result<()> {
+fn revalidate_vacant_root(
+    directories: &[OwnerDirectory],
+    native: &host_pair::ResetHostV1,
+    commit: &str,
+) -> Result<()> {
     for directory in directories {
         directory.revalidate()?;
         let metadata = fs::symlink_metadata(directory.path())?;
         let identity = native_identity(&metadata)?;
-        if !metadata.is_dir() || identity.uid != native.owner_uid
-            || identity.gid != native.owner_gid || identity.mode != 0o700
+        if !metadata.is_dir()
+            || identity.uid != native.owner_uid
+            || identity.gid != native.owner_gid
+            || identity.mode != 0o700
         {
-            return Err(eyre!("vacant native edge directory has different owner custody"));
+            return Err(eyre!(
+                "vacant native edge directory has different owner custody"
+            ));
         }
         directory.revalidate()?;
     }
@@ -410,13 +448,17 @@ fn revalidate_vacant_root(directories: &[OwnerDirectory], native: &host_pair::Re
         || !directories[2].entries(1)?.is_empty()
         || directories[3].entries(1)?.as_slice() != [OsString::from(commit)]
     {
-        return Err(eyre!("native edge vacancy contains a selector, state, upload residue or prior release"));
+        return Err(eyre!(
+            "native edge vacancy contains a selector, state, upload residue or prior release"
+        ));
     }
     let release = directories[3].open_child(commit)?;
     if release.entries(2)?.as_slice() != [OsString::from("bin"), OsString::from("taira.conf")]
         || release.open_child("bin")?.entries(1)?.as_slice() != [OsString::from("iroha")]
     {
-        return Err(eyre!("vacant edge candidate contains unpublished foreign release material"));
+        return Err(eyre!(
+            "vacant edge candidate contains unpublished foreign release material"
+        ));
     }
     release.revalidate()?;
     Ok(())
@@ -472,10 +514,14 @@ fn sign_records(
 )> {
     let native = &request.hosts.native_edge;
     match (&request.initial_state, &observation.owned_publication) {
-        (EdgeInitialStateV1::Vacant, None) => {},
+        (EdgeInitialStateV1::Vacant, None) => {}
         (EdgeInitialStateV1::AdmittedRelease(release), Some(publication))
-            if release.config_sha256 == publication.publication.sha256 => {},
-        _ => return Err(eyre!("initial occupancy differs from its actual owned publication")),
+            if release.config_sha256 == publication.publication.sha256 => {}
+        _ => {
+            return Err(eyre!(
+                "initial occupancy differs from its actual owned publication"
+            ));
+        }
     }
     // The source manifest and actual CLI bytes are admitted before this function.
     let capture = SignedNativeEdgeCaptureV1::sign(
@@ -658,11 +704,19 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
     cli.revalidate()?;
     pins.push(cli);
     let proposed = retain_public(
-        &mut pins, &request.new_nginx_apply_plan, native.owner_uid, MAX_PUBLIC_PLAN,
+        &mut pins,
+        &request.new_nginx_apply_plan,
+        native.owner_uid,
+        MAX_PUBLIC_PLAN,
     )?;
-    let vacant_root = if matches!(&request.completion, NativeEdgeCompletionProvenanceV1::Vacant) {
+    let vacant_root = if matches!(
+        &request.completion,
+        NativeEdgeCompletionProvenanceV1::Vacant
+    ) {
         Some(retain_vacant_root(native, &revision.commit)?)
-    } else { None };
+    } else {
+        None
+    };
     let (inspection_action, observed_raw) = match &request.current_nginx_request {
         Some(reference) => {
             let current = retain_public(&mut pins, reference, native.owner_uid, MAX_PUBLIC_PLAN)?;
@@ -676,7 +730,10 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
     };
     let observed = inspect_owner(inspection_action, &observed_raw, parent_path)?;
     pins.push(RetainedInput::metadata(&observed.nginx, native.owner_uid)?);
-    pins.push(RetainedInput::metadata(&observed.main_configuration, native.owner_uid)?);
+    pins.push(RetainedInput::metadata(
+        &observed.main_configuration,
+        native.owner_uid,
+    )?);
     for publication in &observed.owned_publication {
         for reference in [&publication.journal, &publication.publication] {
             retain_public(&mut pins, reference, native.owner_uid, MAX_PUBLIC_PLAN)?;
@@ -746,7 +803,12 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
         ));
     }
     pins.push(RetainedInput::public(&guard, native.owner_uid, 16 * 1024)?);
-    validate_completion(&request, &trusted, &mut pins, observed.owned_publication.as_ref())?;
+    validate_completion(
+        &request,
+        &trusted,
+        &mut pins,
+        observed.owned_publication.as_ref(),
+    )?;
     if let EdgeInitialStateV1::AdmittedRelease(release) = &request.initial_state {
         let incumbent_path = PathBuf::from(&release.release_root).join("bin/iroha");
         let (mut incumbent, incumbent_snapshot) =
@@ -879,9 +941,19 @@ fn validate_completion(
 ) -> Result<()> {
     match (&request.completion, &request.terminal_authority) {
         (NativeEdgeCompletionProvenanceV1::Vacant, None)
-            if matches!(request.initial_state, EdgeInitialStateV1::Vacant) && owned_publication.is_none() => Ok(()),
+            if matches!(request.initial_state, EdgeInitialStateV1::Vacant)
+                && owned_publication.is_none() =>
+        {
+            Ok(())
+        }
         (NativeEdgeCompletionProvenanceV1::PublicationOnly { .. }, None)
-            if matches!(request.initial_state, EdgeInitialStateV1::AdmittedRelease(_)) && owned_publication.is_some() => Ok(()),
+            if matches!(
+                request.initial_state,
+                EdgeInitialStateV1::AdmittedRelease(_)
+            ) && owned_publication.is_some() =>
+        {
+            Ok(())
+        }
         (
             NativeEdgeCompletionProvenanceV1::ResetTerminal {
                 progress,
@@ -919,7 +991,9 @@ fn validate_completion(
                 request.hosts.native_edge.owner_uid,
                 MAX_JSON_BYTES,
             )?)?;
-            let predecessor = request.predecessor_authority.as_ref()
+            let predecessor = request
+                .predecessor_authority
+                .as_ref()
                 .ok_or_else(|| eyre!("native terminal requires actual retained authority"))?;
             if authority.inventory.sha256 != predecessor.retained_inventory_sha256
                 || authorization_semantic_sha256(&authorization, trusted)?
@@ -1151,7 +1225,16 @@ mod tests {
 
     #[test]
     fn native_initial_publication_has_signed_vacancy_and_no_invented_predecessor() {
-        let (mut request, revision, mut observation, dispatcher, guard, trusted, native_key, owner_key) = signed_fixture();
+        let (
+            mut request,
+            revision,
+            mut observation,
+            dispatcher,
+            guard,
+            trusted,
+            native_key,
+            owner_key,
+        ) = signed_fixture();
         let old_release = match &request.initial_state {
             EdgeInitialStateV1::AdmittedRelease(release) => release.clone(),
             _ => unreachable!(),
@@ -1164,20 +1247,46 @@ mod tests {
         observation.owned_publication = None;
         observation.phase = "vacant".into();
         validate_selected_refs(&request).unwrap();
-        let (capture, candidate, capability) = sign_records(&request, &revision, observation,
-            dispatcher, guard, &trusted, &native_key, &owner_key, 1_234).unwrap();
-        assert!(matches!(&capture.claims.initial_state, EdgeInitialStateV1::Vacant));
+        let (capture, candidate, capability) = sign_records(
+            &request,
+            &revision,
+            observation,
+            dispatcher,
+            guard,
+            &trusted,
+            &native_key,
+            &owner_key,
+            1_234,
+        )
+        .unwrap();
+        assert!(matches!(
+            &capture.claims.initial_state,
+            EdgeInitialStateV1::Vacant
+        ));
         assert!(capture.claims.owned_publication.is_none());
         assert!(capture.claims.predecessor_authority.is_none());
         assert!(capture.claims.admitted_release().is_err());
         assert!(capability.incumbent_nginx_request.is_none());
         capability.validate(&request.hosts).unwrap();
-        candidate.verify(&request.hosts, &revision.commit, &revision.tree,
-            &revision.cargo_lock_sha256, &revision.source_closure_sha256, &trusted).unwrap();
+        candidate
+            .verify(
+                &request.hosts,
+                &revision.commit,
+                &revision.tree,
+                &revision.cargo_lock_sha256,
+                &revision.source_closure_sha256,
+                &trusted,
+            )
+            .unwrap();
         let verify = |claims| {
-            SignedNativeEdgeCaptureV1::sign(claims, &native_key).unwrap().verify(&request.hosts,
-                request.predecessor_authority.as_ref(),
-                &request.authorization_nonce, &request.next_genesis_hash)
+            SignedNativeEdgeCaptureV1::sign(claims, &native_key)
+                .unwrap()
+                .verify(
+                    &request.hosts,
+                    request.predecessor_authority.as_ref(),
+                    &request.authorization_nonce,
+                    &request.next_genesis_hash,
+                )
         };
         let mut changed = capture.claims.clone();
         changed.initial_state = EdgeInitialStateV1::AdmittedRelease(old_release.clone());
@@ -1191,21 +1300,31 @@ mod tests {
         };
         assert!(verify(changed).is_err());
         let mut retired = json::to_value(&capture.claims).unwrap();
-        retired.as_object_mut().unwrap().insert("release".into(), json::to_value(&old_release).unwrap());
+        retired
+            .as_object_mut()
+            .unwrap()
+            .insert("release".into(), json::to_value(&old_release).unwrap());
         assert!(json::from_value::<NativeEdgeCaptureClaimsV1>(retired).is_err());
         let canonical = json::to_value(&capture.claims).unwrap();
         assert_eq!(canonical.get("predecessor_authority"), Some(&Value::Null));
         let mut missing = canonical.clone();
-        missing.as_object_mut().unwrap().remove("predecessor_authority");
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("predecessor_authority");
         assert!(json::from_value::<NativeEdgeCaptureClaimsV1>(missing).is_err());
         for field in ["retained_inventory_sha256", "authorization_sha256"] {
             let mut retired = canonical.clone();
-            retired.as_object_mut().unwrap().insert(field.into(), Value::String("d".repeat(64)));
+            retired
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), Value::String("d".repeat(64)));
             assert!(json::from_value::<NativeEdgeCaptureClaimsV1>(retired).is_err());
         }
         let mut forged = capture.claims.clone();
         forged.predecessor_authority = Some(NativeEdgeRetainedAuthorityV1 {
-            retained_inventory_sha256: "d".repeat(64), authorization_sha256: "e".repeat(64),
+            retained_inventory_sha256: "d".repeat(64),
+            authorization_sha256: "e".repeat(64),
         });
         assert!(verify(forged).is_err());
     }
@@ -1219,18 +1338,33 @@ mod tests {
         assert!(validate_selected_refs(&absent).is_err());
         for field in ["retained_inventory_sha256", "authorization_sha256"] {
             let mut malformed = json::to_value(&request).unwrap();
-            malformed.get_mut("predecessor_authority").unwrap().as_object_mut().unwrap().remove(field);
+            malformed
+                .get_mut("predecessor_authority")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
             assert!(json::from_value::<PrepareRequestV1>(malformed).is_err());
             let mut retired = json::to_value(&request).unwrap();
-            retired.as_object_mut().unwrap().insert(field.into(), Value::String("d".repeat(64)));
+            retired
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), Value::String("d".repeat(64)));
             assert!(json::from_value::<PrepareRequestV1>(retired).is_err());
         }
         let mut missing = json::to_value(&request).unwrap();
-        missing.as_object_mut().unwrap().remove("predecessor_authority");
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("predecessor_authority");
         assert!(json::from_value::<PrepareRequestV1>(missing).is_err());
         for digest in [String::new(), "0".repeat(64)] {
             let mut malformed = request.clone();
-            malformed.predecessor_authority.as_mut().unwrap().retained_inventory_sha256 = digest;
+            malformed
+                .predecessor_authority
+                .as_mut()
+                .unwrap()
+                .retained_inventory_sha256 = digest;
             assert!(validate_selected_refs(&malformed).is_err());
         }
         let mut vacant = request.clone();
@@ -1244,7 +1378,8 @@ mod tests {
         assert!(validate_selected_refs(&invented).is_err());
         let mut invented = vacant.clone();
         invented.terminal_authority = Some(TerminalAuthorityV1 {
-            inventory: request.source_manifest.clone(), authorization: request.trusted_public_key.clone(),
+            inventory: request.source_manifest.clone(),
+            authorization: request.trusted_public_key.clone(),
         });
         assert!(validate_selected_refs(&invented).is_err());
         let mut invented = vacant;
@@ -1260,33 +1395,85 @@ mod tests {
             _ => unreachable!(),
         };
         let authority = request.predecessor_authority.as_ref().unwrap();
-        let capture = host_pair::fixture_native_edge_capture(&request.hosts, release,
-            &authority.retained_inventory_sha256, &authority.authorization_sha256,
-            &request.authorization_nonce, &request.next_genesis_hash);
-        capture.verify_retained_join(&request.hosts, &authority.retained_inventory_sha256,
-            &authority.authorization_sha256, &request.authorization_nonce, &request.next_genesis_hash).unwrap();
-        assert!(capture.verify_retained_join(&request.hosts, &"f".repeat(64),
-            &authority.authorization_sha256, &request.authorization_nonce, &request.next_genesis_hash).is_err());
-        assert!(capture.verify_retained_join(&request.hosts, &authority.retained_inventory_sha256,
-            &"f".repeat(64), &request.authorization_nonce, &request.next_genesis_hash).is_err());
+        let capture = host_pair::fixture_native_edge_capture(
+            &request.hosts,
+            release,
+            &authority.retained_inventory_sha256,
+            &authority.authorization_sha256,
+            &request.authorization_nonce,
+            &request.next_genesis_hash,
+        );
+        capture
+            .verify_retained_join(
+                &request.hosts,
+                &authority.retained_inventory_sha256,
+                &authority.authorization_sha256,
+                &request.authorization_nonce,
+                &request.next_genesis_hash,
+            )
+            .unwrap();
+        assert!(
+            capture
+                .verify_retained_join(
+                    &request.hosts,
+                    &"f".repeat(64),
+                    &authority.authorization_sha256,
+                    &request.authorization_nonce,
+                    &request.next_genesis_hash
+                )
+                .is_err()
+        );
+        assert!(
+            capture
+                .verify_retained_join(
+                    &request.hosts,
+                    &authority.retained_inventory_sha256,
+                    &"f".repeat(64),
+                    &request.authorization_nonce,
+                    &request.next_genesis_hash
+                )
+                .is_err()
+        );
         let mut claims = capture.claims;
         claims.initial_state = EdgeInitialStateV1::Vacant;
         claims.owned_publication = None;
-        let terminal_root = format!("{}/taira-edge/operations/{}",
-            request.hosts.native_edge.custody_root, authority.authorization_sha256);
+        let terminal_root = format!(
+            "{}/taira-edge/operations/{}",
+            request.hosts.native_edge.custody_root, authority.authorization_sha256
+        );
         let mut progress = claims.forwarding_plan.clone();
         progress.file.path = format!("{terminal_root}/progress.json");
         let mut receipt = progress.clone();
         receipt.file.path = format!("{terminal_root}/completion.json");
         claims.completion = NativeEdgeCompletionProvenanceV1::ResetTerminal {
-            status: "rolled_back".into(), progress, completion_receipt: receipt,
-            checkpoints: Vec::new(), global_proof: None, global_proof_predecessor: None,
+            status: "rolled_back".into(),
+            progress,
+            completion_receipt: receipt,
+            checkpoints: Vec::new(),
+            global_proof: None,
+            global_proof_predecessor: None,
         };
-        SignedNativeEdgeCaptureV1::sign(claims.clone(), &native_key).unwrap()
-            .verify(&request.hosts, Some(authority), &request.authorization_nonce, &request.next_genesis_hash).unwrap();
+        SignedNativeEdgeCaptureV1::sign(claims.clone(), &native_key)
+            .unwrap()
+            .verify(
+                &request.hosts,
+                Some(authority),
+                &request.authorization_nonce,
+                &request.next_genesis_hash,
+            )
+            .unwrap();
         claims.predecessor_authority = None;
-        assert!(SignedNativeEdgeCaptureV1::sign(claims, &native_key).unwrap()
-            .verify(&request.hosts, None, &request.authorization_nonce, &request.next_genesis_hash).is_err());
+        assert!(
+            SignedNativeEdgeCaptureV1::sign(claims, &native_key)
+                .unwrap()
+                .verify(
+                    &request.hosts,
+                    None,
+                    &request.authorization_nonce,
+                    &request.next_genesis_hash
+                )
+                .is_err()
+        );
     }
 
     #[cfg(unix)]
@@ -1302,15 +1489,28 @@ mod tests {
         let service = root.path().join(".local/share/iroha/taira/edge");
         let release = service.join("releases").join(&revision.commit);
         fs::create_dir_all(release.join("bin")).unwrap();
-        for directory in [&service, &service.join("state"), &service.join(".public-reset-upload-v1"), &service.join("releases")] {
+        for directory in [
+            &service,
+            &service.join("state"),
+            &service.join(".public-reset-upload-v1"),
+            &service.join("releases"),
+        ] {
             fs::create_dir_all(directory).unwrap();
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
         }
-        fs::write(release.join("taira.conf"), b"public exact candidate fixture").unwrap();
+        fs::write(
+            release.join("taira.conf"),
+            b"public exact candidate fixture",
+        )
+        .unwrap();
         fs::write(release.join("bin/iroha"), b"public candidate fixture").unwrap();
         let retained = retain_vacant_root(&native, &revision.commit).unwrap();
-        for residue in [service.join("current"), service.join("state/prior.json"),
-            service.join(".public-reset-upload-v1/prior"), service.join("releases/another")] {
+        for residue in [
+            service.join("current"),
+            service.join("state/prior.json"),
+            service.join(".public-reset-upload-v1/prior"),
+            service.join("releases/another"),
+        ] {
             fs::write(&residue, b"foreign prior residue").unwrap();
             assert!(revalidate_vacant_root(&retained, &native, &revision.commit).is_err());
             fs::remove_file(residue).unwrap();

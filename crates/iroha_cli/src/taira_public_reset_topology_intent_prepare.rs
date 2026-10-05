@@ -160,9 +160,12 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
     }
     runtime.hosts.validate_physical_binding(&old.hosts)?;
     let claims = &runtime.native_edge.claims;
-    need(old.edge.slug == "taira-edge"
-        && old.edge.endpoint.host_identity_sha256 == runtime.hosts.native_edge.endpoint.host_identity_sha256,
-        "independently captured native edge has another physical owner")?;
+    need(
+        old.edge.slug == "taira-edge"
+            && old.edge.endpoint.host_identity_sha256
+                == runtime.hosts.native_edge.endpoint.host_identity_sha256,
+        "independently captured native edge has another physical owner",
+    )?;
     match &claims.initial_state {
         reset::EdgeInitialStateV1::Vacant => need(
             claims.owned_publication.is_none(),
@@ -177,7 +180,6 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
             "independently captured native edge differs from selected predecessor",
         ),
     }
-
 }
 
 /// A failed reset remains the transition predecessor, while its admitted prior
@@ -376,7 +378,9 @@ mod tests {
             .is_err()
         );
         wrong_runtime = runtime.clone();
-        if let reset::EdgeInitialStateV1::AdmittedRelease(release) = &mut wrong_runtime.native_edge.claims.initial_state {
+        if let reset::EdgeInitialStateV1::AdmittedRelease(release) =
+            &mut wrong_runtime.native_edge.claims.initial_state
+        {
             release.config_sha256 = "e".repeat(64);
         }
         assert!(

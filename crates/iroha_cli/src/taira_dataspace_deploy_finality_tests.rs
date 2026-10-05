@@ -256,7 +256,7 @@ fn deployment_trust_rejects_wrong_network_key_and_changed_genesis_wire() {
 }
 
 #[test]
-fn deployment_trust_requires_four_distinct_genesis_peers_and_public_endpoints() {
+fn deployment_trust_requires_four_distinct_genesis_peers_at_selected_public_endpoints() {
     let trust = test_trust();
     let network = test_network_id();
     let mut changed = trust.clone();
@@ -270,8 +270,12 @@ fn deployment_trust_requires_four_distinct_genesis_peers_and_public_endpoints() 
     changed.peers[1].node_fingerprint = trust.peers[0].node_fingerprint;
     assert!(changed.authority(network).is_err());
     let mut changed = trust.clone();
-    changed.peers[1].torii_origin = trust.peers[0].torii_origin.clone();
-    assert!(changed.authority(network).is_err());
+    for peer in &mut changed.peers {
+        peer.torii_origin = "https://taira.sora.org/".into();
+    }
+    changed
+        .authority(network)
+        .expect("shared root with four authenticated peer selectors");
     let mut changed = trust.clone();
     let unknown =
         KeyPair::try_from_seed(vec![92; 32], Algorithm::BlsNormal).expect("foreign validator");

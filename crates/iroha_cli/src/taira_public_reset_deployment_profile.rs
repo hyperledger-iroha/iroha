@@ -309,7 +309,7 @@ mod tests {
             admitted_inventory_profile(&wrong, &public, &wire)
                 .unwrap_err()
                 .to_string()
-                .contains("validator profile must bind four distinct genesis peers and endpoints"),
+                .contains("validator profile must bind four distinct genesis peers and their selected endpoints"),
         );
     }
 

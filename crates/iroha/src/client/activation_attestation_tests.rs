@@ -425,7 +425,10 @@ fn bridge_finality_attestation_reader_binds_exact_request_headers_and_signed_bod
     assert_eq!(actual.expect("attestation"), attestation);
     assert_eq!(request.method, HttpMethod::GET);
     assert_eq!(request.url.path(), "/v1/bridge/finality/attestation/1");
-    assert!(request.url.query().is_none());
+    assert_eq!(
+        request.url.query(),
+        Some(format!("peer_id={}", attestation.body.node_id).as_str())
+    );
     assert!(request.body.is_empty());
     assert_eq!(
         request.max_response_bytes,
@@ -445,6 +448,73 @@ fn bridge_finality_attestation_reader_binds_exact_request_headers_and_signed_bod
             .iter()
             .all(|(name, _)| !name.eq_ignore_ascii_case("content-type"))
     );
+}
+
+#[test]
+fn shared_gateway_requests_authenticate_four_distinct_signed_nodes() {
+    let original = client_attestation_fixture();
+    let mut selected = std::collections::BTreeSet::new();
+    for seed in 1..=4 {
+        let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
+        let mut attestation = original.clone();
+        attestation.body.node_id =
+            iroha_model_base::peer::PeerId::new(signer.public_key().clone());
+        attestation.body.node_fingerprint = Hash::new(
+            norito::codec::Encode::encode(&attestation.body.node_id),
+        );
+        attestation.body.status.signer = Some(signer.public_key().clone());
+        attestation.signature = iroha_crypto::SignatureOf::try_from_hash(
+            signer.private_key(), attestation.body.signing_hash(),
+        ).unwrap();
+        attestation.verify().unwrap();
+        let mut client = current_finality_client();
+        client.torii_url = "https://taira.sora.org/".parse().unwrap();
+        let (result, request) = capture_request(
+            norito_response(StatusCode::OK, &attestation), |transport| {
+                let client = client.with_test_http_transport(transport);
+                mark_data_model_compatible(&client);
+                client.get_sumeragi_finality_attestation(
+                    NonZeroU64::new(1).unwrap(), attestation.body.challenge,
+                    &attestation.body.node_id,
+                )
+            },
+        );
+        let authenticated = result.unwrap();
+        assert_eq!(request.url.origin().ascii_serialization(), "https://taira.sora.org");
+        assert_eq!(request.url.query(), Some(format!("peer_id={}", authenticated.body.node_id).as_str()));
+        assert!(selected.insert(authenticated.body.node_id));
+    }
+    assert_eq!(selected.len(), 4);
+}
+
+#[test]
+fn attestation_readers_reject_non_bls_selectors_before_dispatch() {
+    let selected = iroha_model_base::peer::PeerId::new(
+        KeyPair::from_seed(vec![0x91; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    let (_, verifier, _) = current_finality_fixture();
+    for genesis in [false, true] {
+        let (result, requests) = capture_requests(
+            empty_response(StatusCode::BAD_REQUEST),
+            |transport| {
+                let client = current_finality_client().with_test_http_transport(transport);
+                if genesis {
+                    client.poll_sumeragi_genesis_readiness(
+                        [0x51; 32], &selected, &verifier,
+                        std::time::Instant::now() + Duration::from_secs(5),
+                    ).map(|_| ())
+                } else {
+                    client.get_sumeragi_finality_attestation(
+                        NonZeroU64::new(1).unwrap(), [0x51; 32], &selected,
+                    ).map(|_| ())
+                }
+            },
+        );
+        assert!(result.unwrap_err().to_string().contains("BLS"));
+        assert!(requests.is_empty(), "invalid selector must precede all transport");
+    }
 }
 
 #[test]
@@ -1097,7 +1167,7 @@ fn bridge_finality_next_reader_rejects_height_mismatch_before_advancing() {
 fn current_genesis_readiness_authenticates_selected_root_and_instance() {
     let attestation = client_attestation_fixture();
     let (_, verifier, _) = current_finality_fixture();
-    let (result, _) = capture_request(norito_response(StatusCode::OK, &attestation), |transport| {
+    let (result, request) = capture_request(norito_response(StatusCode::OK, &attestation), |transport| {
         let client = current_finality_client().with_test_http_transport(transport);
         mark_data_model_compatible(&client);
         client.poll_sumeragi_genesis_readiness(
@@ -1111,6 +1181,11 @@ fn current_genesis_readiness_authenticates_selected_root_and_instance() {
         result.unwrap(),
         GenesisFinalityReadiness::Ready(_)
     ));
+    assert_eq!(request.url.path(), "/v1/bridge/finality/attestation/1");
+    assert_eq!(
+        request.url.query(),
+        Some(format!("peer_id={}", attestation.body.node_id).as_str())
+    );
     let mut wrong = attestation.clone();
     wrong.body.status.instance[0] ^= 1;
     let (_, _, signer) = current_finality_fixture();

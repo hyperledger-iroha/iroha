@@ -1,6 +1,6 @@
 # Copy this file to a user-local path such as
 # `configs/soranexus/taira/validator_roster.local.toml`, replace every
-# placeholder, and keep the populated file out of the repo. Keep the matching
+# placeholder and fixture public key, and keep the populated file out of the repo. Keep the matching
 # validator private keys and shared authorities in your runtime secret store,
 # not here. This roster is retained only as the topology input for the edge
 # nginx renderer; it is not a validator deployment source.
@@ -20,9 +20,10 @@
 # alias = "solswap-indexer.sora"
 # edge_upstream = "127.0.0.1:8788"
 #
-# Every validator must set its own `torii_public_address`. `https://taira.sora.org`
-# is the current public Torii root, while per-validator Torii hostnames remain
-# valid when you want validator-specific ingress.
+# All four validators use the public Torii root `https://taira.sora.org`.
+# Their native-selected BLS public keys route finality attestations to distinct
+# pinned upstreams. The public keys below are development fixture examples;
+# replace them with the actual generated role keys before native admission.
 
 network_address = "0.0.0.0:1337"
 torii_address = "0.0.0.0:18080"
@@ -30,35 +31,35 @@ torii_address = "0.0.0.0:18080"
 [[validators]]
 slug = "taira-validator-1"
 account_id = "REPLACE_WITH_VALIDATOR_ACCOUNT_ID_1"
-public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_1"
+public_key = "ea0130A1DB3124CEBD4A5A9BBC968D3988FFC0DF0B8E50F9650554FD8599E7D7F07A7C8F7F1CFE1B2CBC397661A48363188EED"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_1"
 public_address = "taira-validator-1.sora.org:1337"
-torii_public_address = "https://taira-validator-1.sora.org"
+torii_public_address = "https://taira.sora.org"
 edge_torii_upstream = "127.0.0.1:29080"
 
 [[validators]]
 slug = "taira-validator-2"
 account_id = "REPLACE_WITH_VALIDATOR_ACCOUNT_ID_2"
-public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_2"
+public_key = "ea013095F9E716AB9F2F0670D588FBFA5420AC598CFFB58F0AEF969543D7BBCF81CE132A2A20E813A1CC0647B4B179B76B09CD"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_2"
 public_address = "taira-validator-2.sora.org:1337"
-torii_public_address = "https://taira-validator-2.sora.org"
+torii_public_address = "https://taira.sora.org"
 edge_torii_upstream = "127.0.0.1:29081"
 
 [[validators]]
 slug = "taira-validator-3"
 account_id = "REPLACE_WITH_VALIDATOR_ACCOUNT_ID_3"
-public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_3"
+public_key = "ea01309753D5AA860989AD67EC4FB2A14558A879AACC538A4C656CCDF2FE8D646CD5B6DF7E32F397A91CD371951645D89ED917"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_3"
 public_address = "taira-validator-3.sora.org:1337"
-torii_public_address = "https://taira-validator-3.sora.org"
+torii_public_address = "https://taira.sora.org"
 edge_torii_upstream = "127.0.0.1:29082"
 
 [[validators]]
 slug = "taira-validator-4"
 account_id = "REPLACE_WITH_VALIDATOR_ACCOUNT_ID_4"
-public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_4"
+public_key = "ea013089E0110B3F07AB1CEFAC930756E4DBC25E37D606E4D03513BF4C744DA0F6134DE8B7E52749511C823C230672F736C304"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_4"
 public_address = "taira-validator-4.sora.org:1337"
-torii_public_address = "https://taira-validator-4.sora.org"
+torii_public_address = "https://taira.sora.org"
 edge_torii_upstream = "127.0.0.1:29083"

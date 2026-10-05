@@ -543,7 +543,9 @@ impl NativeEdgeRetainedAuthorityV1 {
         for digest in [&self.retained_inventory_sha256, &self.authorization_sha256] {
             validate_lower_hex("native predecessor authority", digest, 64)?;
             if digest.bytes().all(|byte| byte == b'0') {
-                return Err(eyre!("native predecessor authority cannot use an invented zero digest"));
+                return Err(eyre!(
+                    "native predecessor authority cannot use an invented zero digest"
+                ));
             }
         }
         Ok(())
@@ -583,7 +585,8 @@ pub(super) struct NativeEdgeCaptureClaimsV1 {
 
 impl NativeEdgeCaptureClaimsV1 {
     pub(super) fn retained_authority(&self) -> Result<&NativeEdgeRetainedAuthorityV1> {
-        self.predecessor_authority.as_ref()
+        self.predecessor_authority
+            .as_ref()
             .ok_or_else(|| eyre!("vacant first publication has no retained native authority"))
     }
 
@@ -591,12 +594,17 @@ impl NativeEdgeCaptureClaimsV1 {
         match (&self.completion, &self.predecessor_authority) {
             (NativeEdgeCompletionProvenanceV1::Vacant, None)
                 if matches!(self.initial_state, EdgeInitialStateV1::Vacant)
-                    && self.owned_publication.is_none() => Ok(()),
+                    && self.owned_publication.is_none() =>
+            {
+                Ok(())
+            }
             (NativeEdgeCompletionProvenanceV1::PublicationOnly { .. }, Some(authority))
             | (NativeEdgeCompletionProvenanceV1::ResetTerminal { .. }, Some(authority)) => {
                 authority.validate()
             }
-            _ => Err(eyre!("native predecessor authority must match its actual completion provenance")),
+            _ => Err(eyre!(
+                "native predecessor authority must match its actual completion provenance"
+            )),
         }
     }
 
@@ -607,7 +615,8 @@ impl NativeEdgeCaptureClaimsV1 {
         }
     }
     pub(super) fn owned_publication(&self) -> Result<&NativeOwnedPublicationV1> {
-        self.owned_publication.as_ref()
+        self.owned_publication
+            .as_ref()
             .ok_or_else(|| eyre!("vacant native edge has no prior publication"))
     }
 }
@@ -705,29 +714,53 @@ impl SignedNativeEdgeCaptureV1 {
                 "native edge capture names another maintained helper source closure"
             ));
         }
-        validate_absolute_normal_path(Path::new(&claims.nginx_config), "native publication destination")?;
-        match (&claims.initial_state, &claims.owned_publication, &claims.completion) {
-            (EdgeInitialStateV1::Vacant, None, NativeEdgeCompletionProvenanceV1::Vacant) => {},
-            (EdgeInitialStateV1::Vacant, None, NativeEdgeCompletionProvenanceV1::ResetTerminal { status, .. })
-                if status == "rolled_back" => {},
+        validate_absolute_normal_path(
+            Path::new(&claims.nginx_config),
+            "native publication destination",
+        )?;
+        match (
+            &claims.initial_state,
+            &claims.owned_publication,
+            &claims.completion,
+        ) {
+            (EdgeInitialStateV1::Vacant, None, NativeEdgeCompletionProvenanceV1::Vacant) => {}
+            (
+                EdgeInitialStateV1::Vacant,
+                None,
+                NativeEdgeCompletionProvenanceV1::ResetTerminal { status, .. },
+            ) if status == "rolled_back" => {}
             (EdgeInitialStateV1::AdmittedRelease(release), Some(publication), completion)
-                if !matches!(completion, NativeEdgeCompletionProvenanceV1::Vacant) => {
+                if !matches!(completion, NativeEdgeCompletionProvenanceV1::Vacant) =>
+            {
                 validate_lower_hex("native edge predecessor commit", &release.commit, 40)?;
                 validate_lower_hex("native edge predecessor CLI", &release.cli_sha256, 64)?;
-                validate_lower_hex("native edge predecessor public config", &release.config_sha256, 64)?;
-                if release.release_root != format!(
-                    "{}/.local/share/iroha/taira/edge/releases/{}", host.owner_home, release.commit
-                ) || release.config_sha256 != publication.publication.sha256
+                validate_lower_hex(
+                    "native edge predecessor public config",
+                    &release.config_sha256,
+                    64,
+                )?;
+                if release.release_root
+                    != format!(
+                        "{}/.local/share/iroha/taira/edge/releases/{}",
+                        host.owner_home, release.commit
+                    )
+                    || release.config_sha256 != publication.publication.sha256
                     || claims.nginx_config != publication.publication.file.path
                 {
-                    return Err(eyre!("native edge predecessor release or public publication binding differs"));
+                    return Err(eyre!(
+                        "native edge predecessor release or public publication binding differs"
+                    ));
                 }
                 validate_lower_hex("native publisher operation", &publication.operation_id, 32)?;
             }
-            _ => return Err(eyre!("native initial occupancy and publication provenance disagree")),
+            _ => {
+                return Err(eyre!(
+                    "native initial occupancy and publication provenance disagree"
+                ));
+            }
         }
         match &claims.completion {
-            NativeEdgeCompletionProvenanceV1::Vacant => {},
+            NativeEdgeCompletionProvenanceV1::Vacant => {}
             NativeEdgeCompletionProvenanceV1::PublicationOnly {
                 publication_operation_id,
             } if publication_operation_id == &claims.owned_publication()?.operation_id => {}
@@ -741,7 +774,8 @@ impl SignedNativeEdgeCaptureV1 {
             } => {
                 let terminal_root = format!(
                     "{}/taira-edge/operations/{}",
-                    host.custody_root, claims.retained_authority()?.authorization_sha256
+                    host.custody_root,
+                    claims.retained_authority()?.authorization_sha256
                 );
                 let proven = matches!(status.as_str(), "sealed" | "cleaned");
                 if !(proven || status == "rolled_back")

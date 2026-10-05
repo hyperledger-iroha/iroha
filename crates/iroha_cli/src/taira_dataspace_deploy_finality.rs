@@ -184,7 +184,6 @@ fn validate_peer_selection(
         "verification requires exactly four authenticated genesis peers",
     )?;
     let mut peers = BTreeSet::new();
-    let mut origins = BTreeSet::new();
     for peer in selected {
         let origin: url::Url = peer.torii_origin.parse()?;
         require(
@@ -198,11 +197,10 @@ fn validate_peer_selection(
             "validator endpoint must be a canonical credential-free Torii URL",
         )?;
         require(
-            origins.insert(origin.as_str().to_owned())
-                && peers.insert(peer.peer_id.clone())
+            peers.insert(peer.peer_id.clone())
                 && validators.contains_key(&peer.peer_id)
                 && Hash::new(peer.peer_id.encode()) == peer.node_fingerprint,
-            "validator profile must bind four distinct genesis peers and endpoints",
+            "validator profile must bind four distinct genesis peers and their selected endpoints",
         )?;
     }
     Ok(())

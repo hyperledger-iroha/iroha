@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import re
+
+import pytest
 import sys
 from pathlib import Path
 
@@ -28,6 +31,11 @@ def _location_block(server: str, marker: str) -> str:
     return rest[:next_location]
 
 
+
+def _bls_key(index: int) -> str:
+    return "ea0130" + f"{0xA0 + index:02X}" * 48
+
+
 def _write_roster(
     path: Path,
     *,
@@ -51,7 +59,7 @@ def _write_roster(
             [
                 "[[validators]]",
                 f'slug = "taira-validator-{index}"',
-                f'public_key = "peer-{index}-public"',
+                f'public_key = "{_bls_key(index)}"',
                 f'pop_hex = "peer-{index}-pop"',
                 f'public_address = "taira-validator-{index}.sora.org:1337"',
                 f'torii_public_address = "https://taira-validator-{index}.sora.org"',
@@ -231,6 +239,7 @@ def test_validator_values_require_exact_canonical_spelling(tmp_path: Path) -> No
 def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     validators = [
         MODULE.EdgeValidator(
+            public_key=_bls_key(index),
             slug=f"taira-validator-{index}",
             upstream_name=f"taira_validator_{index}",
             validator_host=f"taira-validator-{index}.sora.org",
@@ -335,6 +344,7 @@ def test_public_torii_cors_matches_runtime_policy_and_browser_sdk_headers() -> N
 
     validators = [
         MODULE.EdgeValidator(
+            public_key=_bls_key(index),
             slug=f"taira-validator-{index}",
             upstream_name=f"taira_validator_{index}",
             validator_host=f"taira-validator-{index}.sora.org",
@@ -380,7 +390,7 @@ def test_public_torii_cors_matches_runtime_policy_and_browser_sdk_headers() -> N
     allowed_headers = {
         header.strip().lower() for header in MODULE.PUBLIC_TORII_CORS_HEADERS.split(",")
     }
-    assert allowed_headers == set(cors["allowed_headers"])
+    assert allowed_headers == {header.lower() for header in cors["allowed_headers"]}
     assert "*" not in allowed_headers
     assert (
         "idempotency-key" in allowed_headers
@@ -419,6 +429,7 @@ def test_public_edge_is_the_only_trusted_torii_forwarding_hop() -> None:
 
     validators = [
         MODULE.EdgeValidator(
+            public_key=_bls_key(index),
             slug=f"taira-validator-{index}",
             upstream_name=f"taira_validator_{index}",
             validator_host=f"taira-validator-{index}.sora.org",
@@ -435,6 +446,7 @@ def test_public_edge_is_the_only_trusted_torii_forwarding_hop() -> None:
 def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> None:
     validators = [
         MODULE.EdgeValidator(
+            public_key=_bls_key(index),
             slug=f"taira-validator-{index}",
             upstream_name=f"taira_validator_{index}",
             validator_host=f"taira-validator-{index}.sora.org",
@@ -466,6 +478,7 @@ def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> No
 def test_render_edge_nginx_conf_rejects_unknown_public_validator() -> None:
     validators = [
         MODULE.EdgeValidator(
+            public_key=_bls_key(index),
             slug=f"taira-validator-{index}",
             upstream_name=f"taira_validator_{index}",
             validator_host=f"taira-validator-{index}.sora.org",
@@ -599,6 +612,7 @@ def test_load_soracloud_alias_route_specs_rejects_bad_roster_entries(tmp_path: P
 def test_render_requires_exactly_four_validators() -> None:
     validators = [
         MODULE.EdgeValidator(
+            public_key=_bls_key(index),
             slug=f"taira-validator-{index}",
             upstream_name=f"taira_validator_{index}",
             validator_host=f"taira-validator-{index}.sora.org",
@@ -618,6 +632,7 @@ def test_render_requires_exactly_four_validators() -> None:
 def test_render_rejects_noncanonical_preconstructed_values() -> None:
     validators = [
         MODULE.EdgeValidator(
+            public_key=_bls_key(index),
             slug=f"taira-validator-{index}",
             upstream_name=f"taira_validator_{index}",
             validator_host=f"taira-validator-{index}.sora.org",
@@ -629,6 +644,7 @@ def test_render_rejects_noncanonical_preconstructed_values() -> None:
     drifted_values = (
         (
             MODULE.EdgeValidator(
+                public_key=_bls_key(1),
                 slug="Taira-Validator-1",
                 upstream_name="taira_validator_1",
                 validator_host=validators[0].validator_host,
@@ -638,6 +654,7 @@ def test_render_rejects_noncanonical_preconstructed_values() -> None:
         ),
         (
             MODULE.EdgeValidator(
+                public_key=_bls_key(1),
                 slug=validators[0].slug,
                 upstream_name="legacy_sanitized_name",
                 validator_host=validators[0].validator_host,
@@ -647,6 +664,7 @@ def test_render_rejects_noncanonical_preconstructed_values() -> None:
         ),
         (
             MODULE.EdgeValidator(
+                public_key=_bls_key(1),
                 slug=validators[0].slug,
                 upstream_name=validators[0].upstream_name,
                 validator_host="Taira-Validator-1.sora.org",
@@ -656,6 +674,7 @@ def test_render_rejects_noncanonical_preconstructed_values() -> None:
         ),
         (
             MODULE.EdgeValidator(
+                public_key=_bls_key(1),
                 slug=validators[0].slug,
                 upstream_name=validators[0].upstream_name,
                 validator_host=validators[0].validator_host,
@@ -696,6 +715,7 @@ def test_render_rejects_noncanonical_preconstructed_values() -> None:
 def test_render_edge_nginx_conf_can_pin_soracloud_alias_route_to_service_upstream() -> None:
     validators = [
         MODULE.EdgeValidator(
+            public_key=_bls_key(index),
             slug=f"taira-validator-{index}",
             upstream_name=f"taira_validator_{index}",
             validator_host=f"taira-validator-{index}.sora.org",
@@ -850,7 +870,7 @@ def test_validator_listener_rejects_duplicates_reserved_ports_and_edge_collision
         replace(validators[0], https_port=True),
     ]
     for hostname in [
-        "taira.sora.org", "taira-explorer.sora.org", "mon.taira.sora.net",
+        "taira-explorer.sora.org", "mon.taira.sora.net",
         "app.mon.taira.sora.net", "nested.app.mon.taira.sora.net",
         "site.sorafs.taira.sora.org",
     ]:
@@ -1078,3 +1098,221 @@ def test_main_private_backend_scope_is_complete_and_disjoint_before_output(tmp_p
         assert not output.exists()
     assert MODULE.main(base + scoped) == 0
     assert "listen 192.168.64.3:18083;" in output.read_text(encoding="utf-8")
+
+
+def _shared_public_roster(path: Path) -> None:
+    _write_roster(path)
+    text = path.read_text(encoding="utf-8")
+    for index in range(1, 5):
+        text = text.replace(f"https://taira-validator-{index}.sora.org", "https://taira.sora.org")
+    path.write_text(text, encoding="utf-8")
+
+
+def _finality_peer_map(rendered: str):
+    block = rendered.split("map $args $taira_finality_peer_upstream {\n", 1)[1].split("\n}", 1)[0]
+    assert block.splitlines()[0] == '  default "";'
+    assert "~*" not in block
+    entries = []
+    for line in block.splitlines()[1:]:
+        match = re.fullmatch(r"  ~(\^peer_id=ea0130[0-9A-F]{96}\$) (taira_validator_[1-4]_upstream);", line)
+        assert match is not None, line
+        entries.append((re.compile(match[1]), match[2]))
+    assert len(entries) == 4
+    return entries
+
+
+def _selected_peer(entries, args: str) -> str:
+    matches = [upstream for pattern, upstream in entries if pattern.fullmatch(args)]
+    assert len(matches) <= 1
+    return matches[0] if matches else ""
+
+
+def test_shared_public_root_has_one_server_and_four_exact_signed_peer_routes(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_public_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    assert {row.validator_host for row in validators} == {"taira.sora.org"}
+    assert {row.https_port for row in validators} == {443}
+    assert [row.public_key for row in validators] == [_bls_key(index) for index in range(1, 5)]
+    rendered = MODULE.render_edge_nginx_conf(validators, public_upstream_validator="taira-validator-3")
+    assert rendered.count("  server_name taira.sora.org;\n") == 1
+    entries = _finality_peer_map(rendered)
+    for index in range(1, 5):
+        assert _selected_peer(entries, "peer_id=" + _bls_key(index)) == f"taira_validator_{index}_upstream"
+    public = rendered.split("  server_name taira.sora.org;\n", 1)[1].split("\n}", 1)[0]
+    marker = "location ~ ^/v1/bridge/finality/attestation/(?:[1-9][0-9]*|latest)$"
+    finality = _location_block(public, marker)
+    assert 'if ($taira_finality_peer_upstream = "") { return 400; }' in finality
+    assert "proxy_pass http://$taira_finality_peer_upstream;" in finality
+    assert "proxy_next_upstream off;" in finality
+    assert "proxy_set_header Host $host;" in finality
+    assert "proxy_set_header X-Forwarded-Host $host;" in finality
+    assert "proxy_set_header X-Forwarded-For $remote_addr;" in finality
+    assert "rewrite " not in finality and "$request_uri" not in finality
+    assert "location ^~ / {" not in public
+    fallback = _location_block(public, "location / {")
+    assert "proxy_pass http://taira_public_edge_upstream;" in fallback
+    assert "$taira_finality_peer_upstream" not in fallback
+    convenience = rendered.split("upstream taira_public_edge_upstream {", 1)[1].split("}", 1)[0]
+    assert "127.0.0.1:18082" in convenience and "127.0.0.1:18080" not in convenience
+
+
+@pytest.mark.parametrize("selector", [
+    "", "peer_id=unknown", "peer_id={key}&peer_id={key}", "peer_id={key}&peer_id={other}",
+    "peer_id={other}&peer_id={key}", "peer_id={key}&height=1", "height=1&peer_id={key}",
+    "peer_id={key}&", "peer_id=%65a0130{suffix}", "peer%5Fid={key}",
+    "Peer_id={key}", "PEER_ID={key}", "peer_id={lower}", "peer_id={upper}",
+])
+def test_raw_finality_peer_selector_refuses_unknown_duplicate_escaped_additional_and_case_forms(tmp_path: Path, selector: str) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_public_roster(roster)
+    rendered = MODULE.render_edge_nginx_conf(MODULE.load_edge_validators(roster))
+    entries = _finality_peer_map(rendered)
+    key = _bls_key(1)
+    args = selector.format(key=key, other=_bls_key(2), suffix=key[6:], lower=key.lower(), upper=key.upper())
+    assert _selected_peer(entries, args) == ""
+
+
+@pytest.mark.parametrize("fault", ["missing", "placeholder", "wrong_prefix", "lower_hex", "short", "duplicate_key", "duplicate_slug", "duplicate_upstream"])
+def test_roster_peer_routing_requires_four_distinct_canonical_bls_keys_slugs_and_upstreams(tmp_path: Path, fault: str) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_public_roster(roster)
+    text = roster.read_text(encoding="utf-8")
+    if fault == "missing":
+        text = text.replace(f'public_key = "{_bls_key(1)}"\n', "", 1)
+    elif fault == "placeholder":
+        text = text.replace(_bls_key(1), "REPLACE_WITH_BLS_PUBLIC_KEY_1", 1)
+    elif fault == "wrong_prefix":
+        text = text.replace(_bls_key(1), "ed0120" + _bls_key(1)[6:], 1)
+    elif fault == "lower_hex":
+        text = text.replace(_bls_key(1), _bls_key(1).lower(), 1)
+    elif fault == "short":
+        text = text.replace(_bls_key(1), _bls_key(1)[:-2], 1)
+    elif fault == "duplicate_key":
+        text = text.replace(_bls_key(2), _bls_key(1), 1)
+    elif fault == "duplicate_slug":
+        text = text.replace('slug = "taira-validator-2"', 'slug = "taira-validator-1"', 1)
+    else:
+        text = text.replace("127.0.0.1:18081", "127.0.0.1:18080", 1)
+    roster.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError):
+        MODULE.load_edge_validators(roster)
+
+
+def test_shared_scoped_tls_listener_is_deduplicated_and_retains_peer_map(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_public_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    rendered = MODULE.render_validator_listeners_conf(validators, listen_addresses=["203.0.113.10"],
+        tls_certificate="/var/tls/fullchain.pem", tls_certificate_key="/var/tls/privkey.pem")
+    assert rendered.count("  listen 203.0.113.10:443 ssl;") == 1
+    assert rendered.count("  server_name taira.sora.org;") == 1
+    entries = _finality_peer_map(rendered)
+    for index in range(1, 5):
+        assert _selected_peer(entries, "peer_id=" + _bls_key(index)) == f"taira_validator_{index}_upstream"
+
+
+def test_public_gateway_binds_explicit_interfaces_tls_one_root_and_selected_convenience_peer(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_public_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    rendered = MODULE.render_public_gateway_conf(validators,
+        listen_addresses=["203.0.113.10", "2001:db8::10"],
+        tls_certificate="/var/tls/actual-public-chain.pem", tls_certificate_key="/var/tls/actual-public-key.pem",
+        public_upstream_validator="taira-validator-3")
+    assert rendered.count("\nserver {\n") == 1
+    assert "  listen 203.0.113.10:443 ssl;" in rendered
+    assert "  listen [2001:db8::10]:443 ssl;" in rendered
+    assert "  listen 443 ssl;" not in rendered and "listen [::]:443" not in rendered
+    assert rendered.count("  server_name taira.sora.org;") == 1
+    assert "ssl_certificate /var/tls/actual-public-chain.pem;" in rendered
+    assert "ssl_certificate_key /var/tls/actual-public-key.pem;" in rendered
+    assert "/etc/letsencrypt" not in rendered
+    assert "server_name taira-explorer.sora.org" not in rendered
+    assert "map $http_origin $taira_public_torii_cors_origin" in rendered
+    entries = _finality_peer_map(rendered)
+    for index in range(1, 5):
+        assert _selected_peer(entries, "peer_id=" + _bls_key(index)) == f"taira_validator_{index}_upstream"
+    block = _location_block(rendered, "location ~ ^/v1/bridge/finality/attestation/(?:[1-9][0-9]*|latest)$")
+    assert "proxy_next_upstream off;" in block and "proxy_cache off;" in block
+    assert "proxy_pass http://$taira_finality_peer_upstream;" in block and "rewrite " not in block
+    assert "location ^~ / {" not in rendered
+    assert "proxy_pass http://taira_public_edge_upstream;" in _location_block(rendered, "location / {")
+    assert "location = /v1/connect/session" in rendered
+    assert "proxy_pass http://taira_validator_3_upstream;" in _location_block(rendered, "location = /v1/mcp")
+    convenience = rendered.split("upstream taira_public_edge_upstream {", 1)[1].split("}", 1)[0]
+    assert "server 127.0.0.1:18082 max_fails=1 fail_timeout=5s;" in convenience
+
+
+@pytest.mark.parametrize("fault", ["nonshared", "missing_address", "wildcard", "tls_injection", "same_tls", "unknown_pin"])
+def test_public_gateway_requires_exact_shared_root_and_explicit_safe_native_inputs(tmp_path: Path, fault: str) -> None:
+    from dataclasses import replace
+    roster = tmp_path / "roster.toml"
+    _shared_public_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    arguments = dict(listen_addresses=["203.0.113.10"], tls_certificate="/var/tls/chain.pem", tls_certificate_key="/var/tls/key.pem")
+    if fault == "nonshared":
+        validators = [replace(validators[0], validator_host="individual.example.org"), *validators[1:]]
+    elif fault == "missing_address":
+        arguments["listen_addresses"] = []
+    elif fault == "wildcard":
+        arguments["listen_addresses"] = ["0.0.0.0"]
+    elif fault == "tls_injection":
+        arguments["tls_certificate"] = "/var/tls/chain.pem;include /tmp/other"
+    elif fault == "same_tls":
+        arguments["tls_certificate_key"] = arguments["tls_certificate"]
+    else:
+        arguments["public_upstream_validator"] = "unknown-peer"
+    with pytest.raises(ValueError):
+        MODULE.render_public_gateway_conf(validators, **arguments)
+
+
+def test_cli_public_gateway_rejects_incomplete_or_mixed_scope_and_accepts_explicit_shared_gateway(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    output = tmp_path / "public.conf"
+    _shared_public_roster(roster)
+    base = ["--roster", str(roster), "--output", str(output)]
+    scope = ["--public-gateway-only", "--gateway-listen-address", "203.0.113.10",
+        "--tls-certificate", "/var/tls/chain.pem", "--tls-certificate-key", "/var/tls/key.pem"]
+    for args in (scope[:-2], ["--public-gateway-only"], scope + ["--validator-listeners-only"],
+                 scope + ["--validator-listen-address", "203.0.113.10"],
+                 scope + ["--backend-listen-address", "192.168.64.3"],
+                 scope + ["--soracloud-alias-route", "alias.sora=127.0.0.1:8788"],
+                 ["--gateway-listen-address", "203.0.113.10"]):
+        with pytest.raises(SystemExit) as refused:
+            MODULE.main(base + args)
+        assert refused.value.code == 2 and not output.exists()
+    assert MODULE.main(base + scope + ["--public-host", "taira.sora.org", "--public-upstream-validator", "taira-validator-3"]) == 0
+    rendered = output.read_text(encoding="utf-8")
+    assert rendered.count("\nserver {\n") == 1
+    assert "listen 203.0.113.10:443 ssl;" in rendered
+
+
+def test_finality_attestation_prefix_rejects_noncanonical_heights_and_path_aliases(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_public_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    rendered = MODULE.render_public_gateway_conf(validators, listen_addresses=["203.0.113.10"],
+        tls_certificate="/var/tls/chain.pem", tls_certificate_key="/var/tls/key.pem")
+    marker = "location ~ ^/v1/bridge/finality/attestation/(?:[1-9][0-9]*|latest)$"
+    regex_block = _location_block(rendered, marker)
+    prefix = "location /v1/bridge/finality/attestation/ {"
+    refusal = _location_block(rendered, prefix)
+    assert "return 400;" in refusal and "proxy_pass" not in refusal
+    assert "location ^~ /v1/bridge/finality/attestation/" not in rendered
+    assert rendered.index(marker) < rendered.index(prefix)
+    assert "proxy_pass http://$taira_finality_peer_upstream;" in regex_block
+    path_match = re.compile(r"^/v1/bridge/finality/attestation/(?:[1-9][0-9]*|latest)$")
+    entries = _finality_peer_map(rendered)
+    for tail in ("1", "12345", "latest"):
+        assert path_match.fullmatch("/v1/bridge/finality/attestation/" + tail)
+        assert _selected_peer(entries, "peer_id=" + _bls_key(1)) == "taira_validator_1_upstream"
+        assert _selected_peer(entries, "peer_id=unknown") == ""
+    for tail in ("01", "0", "00", "+1", "-1", "1/", "latest/", "LATEST", "1/extra", "latest/extra"):
+        path = "/v1/bridge/finality/attestation/" + tail
+        assert path.startswith("/v1/bridge/finality/attestation/") and not path_match.fullmatch(path)
+        # The plain longest-prefix location returns400 without reaching the
+        # convenience upstream when the canonical regex does not match.
+        assert "proxy_pass" not in refusal
+    assert "X-Iroha-Finality-Challenge" in MODULE.PUBLIC_TORII_CORS_HEADERS
+    assert "X-Iroha-Finality-Challenge" in rendered

@@ -693,7 +693,8 @@ pub(super) fn peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
         .collect()
 }
 
-/// The authenticated finality roster reached through the four admitted public TLS origins.
+/// The authenticated finality roster reached through admitted public TLS roots.
+/// A shared root routes each challenged request by its independently selected peer ID.
 pub(super) fn public_peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
     let mut selected = peers(inventory)?;
     for (peer, client) in selected.iter_mut().zip(&inventory.validator_clients) {

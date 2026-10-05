@@ -5,7 +5,8 @@
 //! identity; Kagami's private localnet files supply only the matching signer keys.
 //! An explicit staging root and both generated base ports select a separate private
 //! network. All three `--staging-*` arguments are required together; absent them,
-//! the public reset retains its existing origins and storage selection.
+//! the public reset retains its existing storage selection. Validator public
+//! contexts use the canonical gateway; their separate probes select local sockets.
 
 use super::*;
 use iroha::data_model::NetworkId;
@@ -18,6 +19,22 @@ use zeroize::Zeroizing;
 const RUNTIME_ROOT: &str = "/private/runtime/taira-public-reset";
 const MAX_CLIENT_INPUT_BYTES: u64 = 1024 * 1024;
 const MAX_KEY_BYTES: u64 = 128;
+
+fn validator_client_origins(
+    index: usize,
+    staging: Option<&StagedRuntimeLayout>,
+) -> Result<(String, String)> {
+    if index >= VALIDATOR_SLUGS.len() {
+        return Err(eyre!(
+            "validator client slot is outside the four-peer roster"
+        ));
+    }
+    let probe = staging
+        .map(|layout| layout.local_origin(index))
+        .transpose()?
+        .unwrap_or_else(|| format!("http://127.0.0.1:{}/", 8080 + index));
+    Ok((format!("{PUBLIC_ROOT}/"), probe))
+}
 
 /// Independent private-root and generated-port selection shared by native staging commands.
 #[derive(clap::Args, Debug, Default)]
@@ -748,11 +765,9 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
         }
         let inventory =
             public_validator_roles(&args.localnet_dir.join(TAIRA_VALIDATOR_ROLES_FILE))?;
-        let canary_origin = staging
-            .as_ref()
-            .map(|layout| layout.local_origin(0))
-            .transpose()?
-            .unwrap_or_else(|| "https://taira.sora.org/".into());
+        // Candidate operations independently select their admitted probe socket;
+        // retained public signer contexts always bind the actual public gateway.
+        let canary_origin = format!("{PUBLIC_ROOT}/");
         let mut files: Vec<(&'static str, Zeroizing<Vec<u8>>)> = vec![(
             "runtime-client.toml",
             render_client(
@@ -800,16 +815,7 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
                 return Err(eyre!("generated validator faucet policies differ"));
             }
             faucet = Some(policy);
-            let probe_origin = staging
-                .as_ref()
-                .map(|layout| layout.local_origin(index))
-                .transpose()?
-                .unwrap_or_else(|| format!("http://127.0.0.1:{}/", 8080 + index));
-            let origin = if staging.is_some() {
-                probe_origin.clone()
-            } else {
-                format!("https://{}.sora.org/", VALIDATOR_SLUGS[index])
-            };
+            let (origin, probe_origin) = validator_client_origins(index, staging.as_ref())?;
             files.push((
                 [
                     "validator-client-1.toml",
@@ -1151,6 +1157,22 @@ mod tests {
             )),
             staging_api_base_port: Some(api),
             staging_p2p_base_port: Some(p2p),
+        }
+    }
+
+    #[test]
+    fn validator_public_contexts_share_gateway_while_candidate_sockets_remain_distinct() {
+        let layout = staged_selection(28080, 21337).layout().unwrap().unwrap();
+        for (staging, base) in [(None, 8080), (Some(&layout), 28080)] {
+            let mut probes = BTreeSet::new();
+            for index in 0..VALIDATOR_SLUGS.len() {
+                let (public, probe) = validator_client_origins(index, staging).unwrap();
+                assert_eq!(public, "https://taira.sora.org/");
+                assert_eq!(probe, format!("http://127.0.0.1:{}/", base + index));
+                assert!(probes.insert(probe));
+            }
+            assert_eq!(probes.len(), 4);
+            assert!(validator_client_origins(4, staging).is_err());
         }
     }
 
