@@ -110,9 +110,10 @@ pub trait KagemushaWalletAdvanceCapsuleV1: KagemushaWalletFrozenFrameV1 {
     /// Predecessor state commitment; zero for Bootstrap.
     fn predecessor_commitment(&self) -> KagemushaWalletStateCommitmentV1;
     /// Operation-dependent `proof_digest` the receipt binds (spec §4.1; G1
-    /// `kagemusha_wallet_proof_digest_v1`): `H("proof", LE32 len(Ω) || Ω || LE32 len(σ) || σ)`
-    /// over Ω(pred) and the step proof for Send, Unload and Retiring, and the distinct σ-only
-    /// domain `H("step-proof", LE32 len(σ) || σ)` for every other operation.
+    /// `kagemusha_wallet_proof_digest_v1`), one canonical σ-field value:
+    /// `P_bytes(kgwprf_1, LE32 len(Ω) || Ω || LE32 len(σ) || σ)` over Ω(pred) and the step proof
+    /// for Send, Unload and Retiring, and the distinct σ-only domain
+    /// `P_bytes(kgwstep1, LE32 len(σ) || σ)` for every other operation.
     ///
     /// # Errors
     ///
@@ -291,8 +292,8 @@ pub struct KagemushaWalletAdvanceRequestV1<C> {
     pub operation_id: [u8; 32],
     /// New head commitment.
     pub new_head: KagemushaWalletStateCommitmentV1,
-    /// Operation-dependent `proof_digest` the receipt binds (spec §4.1): over Ω(pred) and σ
-    /// for Send, Unload and Retiring, over σ alone otherwise.
+    /// Operation-dependent `proof_digest` the receipt binds (spec §4.1), one canonical σ-field
+    /// value: over Ω(pred) and σ for Send, Unload and Retiring, over σ alone otherwise.
     pub proof_digest: [u8; 32],
     /// Frozen recovery capsule.
     pub capsule: C,

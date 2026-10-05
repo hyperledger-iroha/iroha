@@ -1,4 +1,4 @@
-"""Create-only native nginx publication, journal and rollback regressions."""
+"""Owned native nginx publication, replacement, reconciliation and rollback."""
 from __future__ import annotations
 
 import base64
@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 
@@ -24,6 +25,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 SIGNAL_MASTER = MODULE.signal_master
 OPEN_MASTER_HANDLE = MODULE.open_master_handle
+OBSERVE_MASTER = MODULE.observe_master
 
 
 def _identity(path: Path, directory=False):
@@ -59,6 +61,7 @@ if "-T" in sys.argv:
     if (root / "substitute-published").exists():
         replacement=root/"foreign"; replacement.write_text("foreign replacement body"); os.replace(replacement,candidate)
     if (root / "reject-context").exists(): sys.exit(7)
+    (root / "context-completed").touch()
 assert "-s" not in sys.argv, "PID-file-derived reload is forbidden"
 ''')
         nginx.chmod(0o700)
@@ -68,6 +71,7 @@ assert "-s" not in sys.argv, "PID-file-derived reload is forbidden"
         if sys.platform != "darwin":
             master.update(start_ticks="123456", boot_id="00000000-0000-0000-0000-000000000000")
         request = dict(host_kind="macos" if sys.platform == "darwin" else "linux", operation_id="a" * 32,
+            publication=dict(kind="create"),
             master=master, candidate_base64=base64.b64encode(candidate).decode(),
             candidate_sha256=hashlib.sha256(candidate).hexdigest(), renderer_source_sha256="b" * 64,
             native=dict(owner_uid=os.geteuid(), trusted_group_gids=[],
@@ -89,8 +93,8 @@ assert "-s" not in sys.argv, "PID-file-derived reload is forbidden"
         yield request, root, candidate
 
 
-def _journal(root):
-    path = root / (".taira-native-nginx-apply-" + "a" * 32 + ".receipt.ndjson")
+def _journal(root, operation="a" * 32):
+    path = root / (".taira-native-nginx-apply-" + operation + ".receipt.ndjson")
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     assert [row["sequence"] for row in rows] == list(range(1, len(rows)+1))
@@ -190,7 +194,8 @@ def test_closed_apply_plan_refuses_foreign_directory_overwrite_name_and_unbound_
     plan = dict(schema=MODULE.PLAN_SCHEMA, provider="macstadium-dublin", host_kind=request["host_kind"],
         deployment_reference=reference, native=request["native"], renderer_source=reference,
         candidate=dict(path=str(root / "public.conf"), sha256=request["candidate_sha256"], owner_uid=os.geteuid()),
-        operation_id=request["operation_id"], destination=request["destination"], master=request["master"])
+        operation_id=request["operation_id"], destination=request["destination"], master=request["master"],
+        publication=request["publication"])
     assert MODULE.validate_plan(plan) == plan
     for target, value in [("basename", "../nginx.conf"), ("basename", "nginx.conf;reload"), ("basename", "nginx.conf/other")]:
         changed = copy.deepcopy(plan)
@@ -301,7 +306,7 @@ def test_closed_apply_receipt_rejects_private_text_changed_identities_or_false_s
     receipt = MODULE.remote_apply(request)
     plan = dict(host_kind=request["host_kind"], native=request["native"], destination=request["destination"],
                 operation_id=request["operation_id"], candidate=dict(sha256=request["candidate_sha256"]),
-                renderer_source=dict(sha256=request["renderer_source_sha256"]))
+                renderer_source=dict(sha256=request["renderer_source_sha256"]), publication=request["publication"])
     assert MODULE.admit_receipt(receipt, 0, plan) == receipt
     for mutation in ({"private_body": "do-not-export"}, {"qualified": True}, {"operation_id": "c" * 32},
                      {"journal_identity": {"private": "do-not-export"}}, {"phase": "arbitrary-private-text"},
@@ -309,3 +314,387 @@ def test_closed_apply_receipt_rejects_private_text_changed_identities_or_false_s
         with pytest.raises(MODULE.checked.CheckError) as caught:
             MODULE.admit_receipt({**receipt, **mutation}, 0, plan)
         assert "do-not-export" not in str(caught.value)
+
+
+def _prior(root, operation, digest):
+    journal = root / (".taira-native-nginx-apply-" + operation + ".receipt.ndjson")
+    return dict(operation_id=operation,
+                journal=dict(path=str(journal), identity=_identity(journal),
+                             sha256=hashlib.sha256(journal.read_bytes()).hexdigest()),
+                publication=dict(identity=_identity(root / "conf.d/new-scoped.conf"), sha256=digest))
+
+
+def _replacement(native_apply):
+    request, root, original = native_apply
+    result = MODULE.remote_apply(request)
+    assert result["exit_code"] == 0, result
+    candidate = b"upstream selected { server 127.0.0.1:18480; }\n"
+    replacement = {**request, "operation_id": "b" * 32,
+                   "candidate_base64": base64.b64encode(candidate).decode(),
+                   "candidate_sha256": hashlib.sha256(candidate).hexdigest(),
+                   "publication": dict(kind="replace", prior=_prior(root, request["operation_id"], request["candidate_sha256"]))}
+    return replacement, root, original, candidate
+
+
+def _inspection(native_apply):
+    request, root, original, candidate = _replacement(native_apply)
+    result = MODULE.remote_apply(request)
+    assert result["exit_code"] == 0, result
+    request["publication"] = dict(kind="reconcile", prior=_prior(
+        root, request["operation_id"], request["candidate_sha256"]))
+    return request, root
+
+
+def test_local_owned_apply_runs_in_isolated_four_source_capsule_without_retry(native_apply):
+    request, root, candidate = native_apply
+    capsule = root / "capsule"
+    capsule.mkdir(mode=0o700)
+    for name in ("taira_native_nginx_check.py", "taira_native_nginx_apply.py",
+                 "taira_native_validator_forwarding.py", "taira_native_edge_completion.py"):
+        shutil.copyfile(MODULE_PATH.parent / name, capsule / name)
+    public = capsule / "candidate.conf"
+    public.write_bytes(candidate)
+    public.chmod(0o600)
+    renderer = capsule / "renderer.py"
+    renderer.write_bytes(b"# maintained public renderer fixture\n")
+    renderer.chmod(0o600)
+    reference = dict(path=str(renderer), sha256=hashlib.sha256(renderer.read_bytes()).hexdigest())
+    plan = dict(schema=MODULE.PLAN_SCHEMA, provider="macstadium-dublin", host_kind=request["host_kind"],
+        deployment_reference=reference, native=request["native"], renderer_source=reference,
+        candidate=dict(path=str(public), sha256=request["candidate_sha256"], owner_uid=os.geteuid()),
+        operation_id=request["operation_id"], destination=request["destination"], master=request["master"],
+        publication=request["publication"])
+    input_path = capsule / "plan.json"
+    input_path.write_text(json.dumps(plan))
+    runner = '''import json, pathlib, sys, types
+root=pathlib.Path(sys.argv[1])
+for name in ("taira_native_nginx_check", "taira_native_nginx_apply"):
+    module=types.ModuleType(name); module.__file__=str(root/(name+".py"))
+    sys.modules[name]=module
+    exec(compile(pathlib.Path(module.__file__).read_bytes(),module.__file__,"exec"),module.__dict__)
+owner=sys.modules["taira_native_nginx_apply"]
+owner.observe_master=lambda expected: expected
+owner.open_master_handle=lambda expected: None
+owner.signal_master=lambda expected, retained: "adjacent_native_identity"
+assert "taira_retry" not in sys.modules
+result=owner.apply_owned_publication(json.loads((root/"plan.json").read_bytes()))
+assert "taira_retry" not in sys.modules
+print(json.dumps(result))
+'''
+    result = subprocess.run([sys.executable, "-I", "-c", runner, str(capsule)],
+                            capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr.decode()
+    receipt = json.loads(result.stdout)
+    assert receipt["configuration_published"] and receipt["qualified"] is False
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == candidate
+
+
+def test_owned_inspection_is_numeric_read_only_and_has_one_closed_output(native_apply, monkeypatch):
+    request, root = _inspection(native_apply)
+    original_journal = Path(request["publication"]["prior"]["journal"]["path"]).read_bytes()
+    reloads = (root / "reload-count").read_bytes()
+    def forbidden(*args):
+        raise AssertionError("read-only inspection performed a native effect")
+    monkeypatch.setattr(MODULE, "signal_master", forbidden)
+    monkeypatch.setattr(MODULE, "native_exchange", forbidden)
+    result = MODULE.inspect_owned_publication(request)
+    assert set(result) == {"schema", "owned_publication", "nginx", "main_configuration", "master", "phase"}
+    assert result["phase"] == "awaiting_readiness"
+    assert set(result["owned_publication"]) == {"operation_id", "journal", "publication"}
+    identity = result["owned_publication"]["publication"]["file"]["identity"]
+    assert all(type(value) is int for value in identity.values())
+    assert identity["mtime_ns"] > 2 ** 53
+    assert set(result["main_configuration"]) == {"path", "identity"}
+    assert Path(request["publication"]["prior"]["journal"]["path"]).read_bytes() == original_journal
+    assert (root / "reload-count").read_bytes() == reloads
+    _clean(root)
+
+
+@pytest.mark.parametrize("replacement", ["journal", "publication"])
+def test_owned_inspection_rejects_substitution_without_effect(native_apply, replacement):
+    request, root = _inspection(native_apply)
+    reloads = (root / "reload-count").read_bytes()
+    target = (Path(request["publication"]["prior"]["journal"]["path"])
+              if replacement == "journal" else root / "conf.d/new-scoped.conf")
+    substitute = root / "foreign-inspection-input"
+    substitute.write_bytes(target.read_bytes())
+    substitute.chmod(0o600)
+    os.replace(substitute, target)
+    with pytest.raises(RuntimeError, match="owned_publication_inspection_refused"):
+        MODULE.inspect_owned_publication(request)
+    assert (root / "reload-count").read_bytes() == reloads
+    _clean(root)
+
+
+def _plan(request):
+    return dict(host_kind=request["host_kind"], native=request["native"], destination=request["destination"],
+                operation_id=request["operation_id"], candidate=dict(sha256=request["candidate_sha256"]),
+                renderer_source=dict(sha256=request["renderer_source_sha256"]), publication=request["publication"])
+
+
+def test_owned_replacement_retains_original_inode_and_explicit_journal_chain(native_apply):
+    request, root, original, candidate = _replacement(native_apply)
+    prior = copy.deepcopy(request["publication"]["prior"])
+    result = MODULE.remote_apply(request)
+    assert result["exit_code"] == 0, result
+    assert MODULE.admit_receipt(result, 0, _plan(request)) == result
+    assert result["qualified"] is False and result["phase"] == "awaiting_readiness"
+    assert result["publication_kind"] == "replace" and result["prior_operation_id"] == "a" * 32
+    current = root / "conf.d/new-scoped.conf"
+    backup = root / "conf.d" / (".taira-nginx-backup-" + "b" * 32 + ".public")
+    assert current.read_bytes() == candidate and backup.read_bytes() == original
+    assert str(backup.stat().st_ino) == prior["publication"]["identity"]["inode"]
+    assert current.stat().st_nlink == backup.stat().st_nlink == 1
+    rows = _journal(root, "b" * 32)
+    assert all(row["prior"] == prior for row in rows)
+    assert rows[1]["phase"] == "publishing" and rows[1]["temporary_basename"] == backup.name
+    assert rows[-1]["backup_identity"] == _identity(backup)
+    assert _journal(root)[-1]["phase"] == "awaiting_readiness"
+    assert (root / "reload-count").read_text() == "2"
+    _clean(root)
+
+
+@pytest.mark.parametrize("flag", ["reject-context", "omit-source", "reject-reload"])
+def test_replacement_failure_restores_only_original_public_inode(native_apply, flag):
+    request, root, original, _ = _replacement(native_apply)
+    old_inode = request["publication"]["prior"]["publication"]["identity"]["inode"]
+    if flag == "reject-reload":
+        (root / "reload-count").unlink()
+    (root / flag).touch()
+    result = MODULE.remote_apply(request)
+    assert result["exit_code"] == 1 and result["qualified"] is False, result
+    current = root / "conf.d/new-scoped.conf"
+    assert current.read_bytes() == original and str(current.stat().st_ino) == old_inode
+    assert result["configuration_published"] is False
+    assert _journal(root, "b" * 32)[-1]["phase"] == "rolled_back_unqualified", result
+    assert not list((root / "conf.d").glob(".taira-nginx-backup-*"))
+    _clean(root)
+
+
+@pytest.mark.parametrize("field", ["journal_digest", "publication_digest", "publication_inode", "journal_identity"])
+def test_replacement_refuses_drifted_prior_before_effect(native_apply, field):
+    request, root, original, _ = _replacement(native_apply)
+    prior = request["publication"]["prior"]
+    if field == "journal_digest": prior["journal"]["sha256"] = "0" * 64
+    elif field == "publication_digest": prior["publication"]["sha256"] = "0" * 64
+    elif field == "publication_inode": prior["publication"]["identity"]["inode"] = "1"
+    else: prior["journal"]["identity"]["ctime_ns"] = "1"
+    result = MODULE.remote_apply(request)
+    assert result["exit_code"] == 1 and result["configuration_published"] is False
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == original
+    assert (root / "reload-count").read_text() == "1"
+    assert not (root / (".taira-native-nginx-apply-" + "b" * 32 + ".receipt.ndjson")).exists()
+    _clean(root)
+
+
+def test_replacement_cannot_supersede_interrupted_or_qualified_owner(native_apply):
+    request, root, original, _ = _replacement(native_apply)
+    journal = Path(request["publication"]["prior"]["journal"]["path"])
+    rows = _journal(root)
+    for mutation in ({"phase": "reload_requested"}, {"qualified": True}):
+        edited = [*rows[:-1], {**rows[-1], **mutation}]
+        journal.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in edited))
+        request["publication"]["prior"] = _prior(root, "a" * 32, hashlib.sha256(original).hexdigest())
+        result = MODULE.remote_apply(request)
+        assert result["exit_code"] == 1 and (root / "conf.d/new-scoped.conf").read_bytes() == original
+        assert (root / "reload-count").read_text() == "1"
+
+
+def test_exact_same_operation_reconciliation_resumes_after_ambiguous_reload(native_apply, monkeypatch):
+    request, root, original, candidate = _replacement(native_apply)
+    signal_owner = MODULE.signal_master
+    def crash(expected, retained):
+        raise KeyboardInterrupt("owned test crash after journaled reload intent")
+    monkeypatch.setattr(MODULE, "signal_master", crash)
+    with pytest.raises(KeyboardInterrupt): MODULE.remote_apply(request)
+    assert _journal(root, "b" * 32)[-1]["phase"] == "reload_requested"
+    monkeypatch.setattr(MODULE, "signal_master", signal_owner)
+    reconciliation = {**request, "publication": dict(kind="reconcile", prior=_prior(root, "b" * 32, request["candidate_sha256"]))}
+    result = MODULE.remote_apply(reconciliation)
+    assert result["exit_code"] == 0, result
+    assert result["publication_kind"] == "reconcile" and result["qualified"] is False
+    assert MODULE.admit_receipt(result, 0, _plan(reconciliation)) == result
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == candidate
+    assert Path(result["backup_path"]).read_bytes() == original
+    assert _journal(root, "b" * 32)[-1]["phase"] == "awaiting_readiness"
+    assert len(list(root.glob(".taira-native-nginx-apply-*"))) == 2
+
+
+@pytest.mark.parametrize("after_exchange", [False, True])
+def test_interrupted_exchange_keeps_durable_intent_and_never_allows_blind_new_owner(native_apply, monkeypatch, after_exchange):
+    request, root, original, candidate = _replacement(native_apply)
+    exchange = MODULE.native_exchange
+    def crash(*args):
+        if after_exchange: exchange(*args)
+        raise KeyboardInterrupt("owned test crash at native exchange")
+    monkeypatch.setattr(MODULE, "native_exchange", crash)
+    with pytest.raises(KeyboardInterrupt): MODULE.remote_apply(request)
+    assert _journal(root, "b" * 32)[-1]["phase"] == "publishing"
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == (candidate if after_exchange else original)
+    backup = root / "conf.d" / (".taira-nginx-backup-" + "b" * 32 + ".public")
+    assert backup.read_bytes() == (original if after_exchange else candidate)
+    blind = {**request, "operation_id": "c" * 32}
+    result = MODULE.remote_apply(blind)
+    assert result["exit_code"] == 1
+    assert (root / "reload-count").read_text() == "1"
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == (candidate if after_exchange else original)
+
+
+def test_generated_remote_replacement_executes_the_same_owner_and_exchange(native_apply, monkeypatch):
+    request, root, original, candidate = _replacement(native_apply)
+    with monkeypatch.context() as original_functions:
+        original_functions.setattr(MODULE, "observe_master", OBSERVE_MASTER)
+        original_functions.setattr(MODULE, "open_master_handle", OPEN_MASTER_HANDLE)
+        original_functions.setattr(MODULE, "signal_master", SIGNAL_MASTER)
+        program = MODULE.remote_program(request).decode()
+    # Only native master observation/signaling is replaced in this physical
+    # child fixture; all generated custody, journal and exchange code executes.
+    program = program.replace("result = remote_apply(json.loads(",
+        "observe_master = lambda expected: expected\n"
+        "open_master_handle = lambda expected: None\n"
+        "signal_master = lambda expected, retained: 'adjacent_native_identity'\n"
+        "result = remote_apply(json.loads(")
+    child = subprocess.run([sys.executable, "-I", "-"], input=program.encode(),
+                           capture_output=True, timeout=30)
+    assert child.returncode == 0, child.stderr
+    receipt = json.loads(child.stdout)
+    assert MODULE.admit_receipt(receipt, 0, _plan(request)) == receipt
+    assert receipt["qualified"] is False and Path(receipt["backup_path"]).read_bytes() == original
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == candidate
+    assert b"private-existing" not in child.stdout and not child.stderr
+
+
+def test_final_pre_signal_path_swap_is_preserved_and_never_reloaded(native_apply, monkeypatch):
+    request, root, original, candidate = _replacement(native_apply)
+    (root / "context-completed").unlink()
+    read = os.pread
+    swapped = False
+    def swap_after_read(opened, count, offset):
+        nonlocal swapped
+        data = read(opened, count, offset)
+        if not swapped and data == candidate and (root / "context-completed").exists():
+            foreign = root / "foreign-owner"
+            foreign.write_bytes(b"foreign owner body")
+            os.replace(foreign, root / "conf.d/new-scoped.conf")
+            swapped = True
+        return data
+    monkeypatch.setattr(MODULE.os, "pread", swap_after_read)
+    result = MODULE.remote_apply(request)
+    assert swapped and result["exit_code"] == 1 and result["recovery_pending"] is True
+    assert result["rollback_ambiguous"] and result["qualified"] is False
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == b"foreign owner body"
+    backup = root / "conf.d" / (".taira-nginx-backup-" + "b" * 32 + ".public")
+    assert backup.read_bytes() == original
+    assert (root / "reload-count").read_text() == "1"
+    assert _journal(root, "b" * 32)[-1]["phase"] == "rollback_ambiguous"
+
+
+def test_changed_temporary_before_exchange_is_preserved_with_cleanup_ambiguity(native_apply, monkeypatch):
+    request, root, original, _ = _replacement(native_apply)
+    read = os.pread
+    temporary = root / "conf.d" / (".taira-nginx-backup-" + "b" * 32 + ".public")
+    changed = False
+    def change_temporary_and_refuse(opened, count, offset):
+        nonlocal changed
+        data = read(opened, count, offset)
+        if not changed and data == original and temporary.exists():
+            temporary.write_bytes(b"foreign temporary mutation")
+            changed = True
+            raise RuntimeError("test_refusal")
+        return data
+    monkeypatch.setattr(MODULE.os, "pread", change_temporary_and_refuse)
+    result = MODULE.remote_apply(request)
+    assert changed and result["exit_code"] == 1 and result["publication_cleanup_ambiguous"] is True
+    assert temporary.read_bytes() == b"foreign temporary mutation"
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == original
+    assert (root / "reload-count").read_text() == "1"
+
+
+@pytest.mark.parametrize("kind", ["create", "replace"])
+def test_publication_refuses_stage_permission_drift_without_rebaselining(native_apply, monkeypatch, kind):
+    if kind == "replace":
+        request, root, original, candidate = _replacement(native_apply)
+        exchange = MODULE.native_exchange
+        def change_stage_after_exchange(directory, first, second):
+            exchange(directory, first, second)
+            os.chmod(second, 0o666, dir_fd=directory)
+        monkeypatch.setattr(MODULE, "native_exchange", change_stage_after_exchange)
+    else:
+        request, root, candidate = native_apply
+        link = os.link
+        def change_stage_after_link(*args, **kwargs):
+            link(*args, **kwargs)
+            os.chmod(args[0], 0o666, dir_fd=kwargs["src_dir_fd"])
+        monkeypatch.setattr(MODULE.os, "link", change_stage_after_link)
+    result = MODULE.remote_apply(request)
+    assert result["exit_code"] == 1 and result["error_code"] == "publication_stage_changed"
+    assert result["recovery_pending"] and result["rollback_ambiguous"]
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == candidate
+    assert stat.S_IMODE((root / "conf.d/new-scoped.conf").stat().st_mode) == 0o666
+    if kind == "replace":
+        assert (root / "reload-count").read_text() == "1"
+        assert (root / "conf.d" / (".taira-nginx-backup-" + request["operation_id"] + ".public")).read_bytes() == original
+    else:
+        assert not (root / "reload-count").exists()
+    assert not list(root.glob(".taira-nginx-check-*"))
+
+
+def test_nested_ancestor_private_main_is_refused_before_python_read(native_apply, monkeypatch):
+    request, root, original, _ = _replacement(native_apply)
+    reference = request["publication"]["prior"]["journal"]
+    path = Path(reference["path"])
+    rows = [json.loads(row) for row in path.read_text().splitlines()]
+    foreign = dict(operation_id="c" * 32,
+        journal=dict(path=str(root / "nginx.conf"), identity=_identity(root / "nginx.conf"), sha256="0" * 64),
+        publication=copy.deepcopy(request["publication"]["prior"]["publication"]))
+    for row in rows: row["prior"] = foreign
+    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
+    reference.update(identity=_identity(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    private = (root / "nginx.conf").stat()
+    read = os.pread
+    def no_private_read(opened, count, offset):
+        observed = os.fstat(opened)
+        assert (observed.st_dev, observed.st_ino) != (private.st_dev, private.st_ino), "private native main reached Python pread"
+        return read(opened, count, offset)
+    monkeypatch.setattr(MODULE.os, "pread", no_private_read)
+    result = MODULE.remote_apply(request)
+    assert result["exit_code"] == 1 and result["error_code"] == "prior_journal_reference"
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == original
+    assert (root / "reload-count").read_text() == "1"
+    assert not (root / (".taira-native-nginx-apply-" + request["operation_id"] + ".receipt.ndjson")).exists()
+    _clean(root)
+
+
+def test_apply_refuses_same_inode_lock_drift_adjacent_to_reload(native_apply, monkeypatch):
+    request, root, original, candidate = _replacement(native_apply)
+    (root / "context-completed").unlink()
+    read = os.pread
+    changed = False
+    def change_lock_after_read(opened, count, offset):
+        nonlocal changed
+        data = read(opened, count, offset)
+        if not changed and data == candidate and (root / "context-completed").exists():
+            (root / ".taira-native-nginx-check.lock").chmod(0o666)
+            changed = True
+        return data
+    monkeypatch.setattr(MODULE.os, "pread", change_lock_after_read)
+    result = MODULE.remote_apply(request)
+    assert changed and result["exit_code"] == 1 and result["error_code"] == "check_lock_identity_changed"
+    assert result["rollback_ambiguous"] and result["recovery_pending"]
+    assert (root / "reload-count").read_text() == "1"
+    assert (root / "conf.d/new-scoped.conf").read_bytes() == candidate
+    assert (root / "conf.d" / (".taira-nginx-backup-" + request["operation_id"] + ".public")).read_bytes() == original
+    assert not list(root.glob(".taira-nginx-check-*"))
+
+
+def test_read_only_inspection_refuses_same_inode_lock_drift(native_apply, monkeypatch):
+    request, root = _inspection(native_apply)
+    reloads = (root / "reload-count").read_bytes()
+    def change_lock(expected):
+        (root / ".taira-native-nginx-check.lock").chmod(0o666)
+        return expected
+    monkeypatch.setattr(MODULE, "observe_master", change_lock)
+    with pytest.raises(RuntimeError, match="owned_publication_inspection_refused"):
+        MODULE.inspect_owned_publication(request)
+    assert (root / "reload-count").read_bytes() == reloads
+    assert not list(root.glob(".taira-nginx-check-*"))

@@ -2532,6 +2532,7 @@ complete = CompleteReplicationOrderInstruction(
     completion_epoch=27,
     expected_authority=ProviderIngestCompletionAuthorityV1(
         provider_owner=provider_owner,
+        completion_signer=completion_signer,
         signer_policy=ProviderIngestCompletionSignerPolicyV1(
             policy_id=policy_id,
             revision=2,

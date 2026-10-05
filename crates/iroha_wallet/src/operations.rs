@@ -1,5 +1,4 @@
 //! Account balances and exact, quoted native operations with durable submission evidence.
-use crate::operation_journal::Journal;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     blocking::{Client, funding::BalanceReport},
@@ -19,6 +18,7 @@ use iroha::{
     },
 };
 use iroha_model_base::metadata::Metadata;
+use iroha_operation_journal::Journal;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::FeeQuoteResponse;
 #[cfg(test)]

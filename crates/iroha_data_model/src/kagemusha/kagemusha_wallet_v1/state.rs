@@ -1059,10 +1059,7 @@ impl KagemushaWalletQuotaUsageLeafV1 {
 }
 
 /// Exact σ-field preimage of one chain append: `[chain] || entry elements` (§3).
-fn chain_append_preimage_v1(
-    chain: &[u8; 32],
-    entry: Vec<[u8; 32]>,
-) -> WalletResult<Vec<[u8; 32]>> {
+fn chain_append_preimage_v1(chain: &[u8; 32], entry: Vec<[u8; 32]>) -> WalletResult<Vec<[u8; 32]>> {
     require_canonical_field_v1("chain", chain)?;
     let mut items = Vec::with_capacity(entry.len().saturating_add(1));
     items.push(*chain);

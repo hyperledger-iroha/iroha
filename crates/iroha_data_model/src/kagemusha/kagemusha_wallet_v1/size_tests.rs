@@ -18,13 +18,16 @@ use super::{
 /// lane), with the G1 statement encoding. Spec §11: σ is not yet measured for the full §3 core.
 const MEASURED_SIGMA_SEND_BYTES: usize = 3_296;
 /// Placeholder Ω transport proof length; Ω is unbuilt and unmeasured (spec §11).
-// TODO(G3): replace with the measured single-parity transport proof length (owner question Q6).
+// TODO(G3): replace with the exact transport length of the frozen verifying-key allowlist
+// (owner answer Q6).
 const PLACEHOLDER_OMEGA_PROOF_BYTES: usize = 4_000;
 /// Placeholder `σ_recv` length; `σ_recv` is unmeasured for the §3 core.
 // TODO(G3): replace with the measured σ_recv length.
 const PLACEHOLDER_SIGMA_RECV_BYTES: usize = MEASURED_SIGMA_SEND_BYTES;
-/// Placeholder count of non-default siblings in a compressed credit-digest opening.
-// TODO(G3/owner Q7): replace with the bound of the frozen credit-digest tree.
+/// Placeholder count of non-default siblings in a compressed credit-digest opening: the
+/// depth-256 sparse tree of owner answer Q7 carries at most 256, and about `log2` of the number
+/// of recorded credits for random identifiers.
+// TODO(G3): replace with a measured distribution of folded heads' credit counts.
 const PLACEHOLDER_OPENING_SIBLINGS: usize = 32;
 /// Largest proof length searched for.
 const SEARCH_LIMIT: usize = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1;
@@ -303,7 +306,19 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
     assert!(sizes.lineage < sizes.payment);
     assert!(sizes.largest_omega_with_measured_sigma >= PLACEHOLDER_OMEGA_PROOF_BYTES);
     assert!(sizes.largest_omega_in_status >= PLACEHOLDER_OMEGA_PROOF_BYTES);
-    assert!(sizes.payment_overhead < 2_000, "{}", sizes.payment_overhead);
+    // F_payment and the joint R9 budget of |Ω| + |σ_send| (owner answer Q6) are pinned.
+    assert_eq!(
+        sizes.payment_overhead,
+        KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1
+    );
+    assert_eq!(
+        sizes.largest_joint_proof,
+        KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1
+    );
+    assert_eq!(
+        sizes.largest_omega_with_measured_sigma,
+        KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1 - MEASURED_SIGMA_SEND_BYTES
+    );
     assert_eq!(sizes.per_sibling, 32);
 }
 

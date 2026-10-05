@@ -59,8 +59,8 @@ fn capsule_with(
     payment_digest: [u8; 32],
     predecessor_capsule_digest: [u8; 32],
 ) -> KagemushaWalletRecoveryCapsuleV1 {
-    let mut state = KagemushaWalletStateV1::bootstrap(credential, statement.successor.value)
-        .expect("state");
+    let mut state =
+        KagemushaWalletStateV1::bootstrap(credential, statement.successor.value).expect("state");
     state.core.sequence = statement.sequence;
     state.core.next_load = statement.next_load;
     state.core.lifecycle = statement.lifecycle;
@@ -488,12 +488,12 @@ fn kagemusha_wallet_v1_output_descriptors_are_receipt_free() {
             online_charge: 0,
         },
         KagemushaWalletEffectV1::Receive {
-            credit_id: [0x52; 32],
+            credit_id: field_value(0x52),
             payer_wallet_id: [0x53; 32],
             amount: 3,
         },
         KagemushaWalletEffectV1::ArchiveSent {
-            credit_id: [0x55; 32],
+            credit_id: field_value(0x55),
             credited: [0x56; 32],
         },
         KagemushaWalletEffectV1::Unload {
@@ -524,7 +524,7 @@ fn kagemusha_wallet_v1_output_descriptors_are_receipt_free() {
         let proof_digest =
             kagemusha_wallet_proof_digest_v1(kind, lineage.as_ref(), &proof).expect("digest");
         let payment = if kind == KagemushaWalletOperationKindV1::Receive {
-            [0x54; 32]
+            field_value(0x54)
         } else {
             [0; 32]
         };
@@ -543,7 +543,7 @@ fn kagemusha_wallet_v1_output_descriptors_are_receipt_free() {
         );
         // The Payment digest is present exactly for Receive.
         let flipped = if payment == [0; 32] {
-            [0x57; 32]
+            field_value(0x57)
         } else {
             [0; 32]
         };

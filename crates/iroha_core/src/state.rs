@@ -30537,6 +30537,16 @@ impl State {
     pub fn governance_snapshot(&self) -> iroha_config::parameters::actual::Governance {
         self.gov.clone()
     }
+    /// Borrow the voting asset and bond escrow without cloning governance policy graphs.
+    #[must_use]
+    pub fn governance_voting_asset_and_bond_escrow(
+        &self,
+    ) -> (
+        &iroha_data_model::asset::AssetDefinitionId,
+        &iroha_data_model::account::AccountId,
+    ) {
+        (&self.gov.voting_asset_id, &self.gov.bond_escrow_account)
+    }
     /// Snapshot the current content configuration.
     ///
     /// This avoids acquiring a full [`StateView`] when only content limits/settings are needed.

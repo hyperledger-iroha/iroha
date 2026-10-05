@@ -70,7 +70,7 @@ pub struct MusubiNamespaceBindingParent<'a> {
 impl AccountService {
     /// Initialize the original clock-independent namespace parent during fresh generation only.
     ///
-    /// Uses the sole wallet atomic publication owner, with no quote, signature or HTTP. The selected
+    /// Uses the shared journal atomic publication owner, with no quote, signature or HTTP. The selected
     /// namespace is intent; native execution still authenticates current owner and registry policy.
     /// Ordinary open/recovery never calls this constructor and missing custody is never repaired.
     /// # Errors

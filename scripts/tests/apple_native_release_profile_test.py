@@ -61,8 +61,8 @@ class AppleNativeReleaseProfileTests(unittest.TestCase):
         archive = importlib.util.module_from_spec(specification)
         sys.modules[specification.name] = archive
         specification.loader.exec_module(archive)
-        self.assertEqual(archive.MAX_ENTRY_BYTES, 256 * 1024 * 1024)
-        self.assertEqual(archive.MAX_ARCHIVE_BYTES, 512 * 1024 * 1024)
+        self.assertEqual(archive.MAX_ENTRY_BYTES, 512 * 1024 * 1024)
+        self.assertEqual(archive.MAX_ARCHIVE_BYTES, 1024 * 1024 * 1024)
         self.assertEqual(archive.MAX_TOTAL_UNCOMPRESSED_BYTES, 1024 * 1024 * 1024)
 
     def test_all_five_slice_commands_and_provenance_paths_use_the_same_profile(self) -> None:

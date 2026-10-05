@@ -141,7 +141,11 @@ impl KagemushaWalletVerifyingKeyAllowlistV1 {
             }
         }
         for kind in KagemushaWalletOperationKindV1::ALL {
-            if !self.steps.iter().any(|entry| entry.selector() == (kind.tag(), 0)) {
+            if !self
+                .steps
+                .iter()
+                .any(|entry| entry.selector() == (kind.tag(), 0))
+            {
                 return Err(invalid_v1("verifying_keys.missing"));
             }
         }
@@ -178,9 +182,12 @@ impl KagemushaWalletVerifyingKeyAllowlistV1 {
     /// Rejects an invalid allowlist.
     pub fn transcript(&self) -> WalletResult<Vec<u8>> {
         self.validate()?;
-        let count = u32::try_from(self.steps.len())
-            .map_err(|_| overflow_v1("verifying_keys.steps"))?;
-        let capacity = 2 + 4 + 32 + 4
+        let count =
+            u32::try_from(self.steps.len()).map_err(|_| overflow_v1("verifying_keys.steps"))?;
+        let capacity = 2
+            + 4
+            + 32
+            + 4
             + self.steps.len() * KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRY_TRANSCRIPT_BYTES_V1;
         let mut transcript = WalletTranscriptV1::with_capacity(capacity)
             .u16(self.version)

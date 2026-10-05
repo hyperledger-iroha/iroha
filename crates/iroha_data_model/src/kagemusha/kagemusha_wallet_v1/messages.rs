@@ -1546,8 +1546,7 @@ impl KagemushaWalletCreditOpeningV1 {
     pub fn root(&self) -> WalletResult<[u8; 32]> {
         self.validate()?;
         let leaf = self.leaf();
-        self.sparse_opening()
-            .root(&leaf.key(), &leaf.leaf_value()?)
+        self.sparse_opening().root(&leaf.key(), &leaf.leaf_value()?)
     }
 
     /// Exact `credit-opening` transcript:

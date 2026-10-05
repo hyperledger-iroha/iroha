@@ -37,12 +37,12 @@ fn native_wallet_publication_and_reopen_preserve_one_owner() {
             .all(|name| !name.to_string_lossy().starts_with(".pending-"))
     );
     let path = store.operation_path("owner", "admission").unwrap();
-    let journal = crate::operation_journal::Journal::create(&path).unwrap();
+    let journal = iroha_operation_journal::Journal::create(&path).unwrap();
     let operation = norito::json!({"wire": "original"});
     journal.write_operation(&operation).unwrap();
     assert!(journal.record_submission(&operation).unwrap());
     drop(journal);
-    let journal = crate::operation_journal::Journal::open(&path).unwrap();
+    let journal = iroha_operation_journal::Journal::open(&path).unwrap();
     assert!(!journal.record_submission(&operation).unwrap());
     assert_eq!(store.show("owner").unwrap().public_key, info.public_key);
 }

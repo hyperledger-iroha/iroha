@@ -981,11 +981,15 @@ else:
             builder,
         )
         self.assertIn(
-            '"connect_norito_kagemusha_v1_payment_validate"', builder
+            '"connect_norito_domain_id_validate_v1"', builder
         )
         self.assertIn(
-            '"connect_norito_kagemusha_device_execute_v1"', builder
+            '"connect_norito_encode_transfer_instruction_box"', builder
         )
+        required_inventory = builder.split('"required_symbols": [', 1)[1].split(
+            '"forbidden_symbols": [', 1
+        )[0]
+        self.assertNotIn('"connect_norito_kagemusha_', required_inventory)
         self.assertNotIn(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32",
             builder,
@@ -1055,7 +1059,7 @@ else:
             }
             EXPECTED_REQUIRED_SYMBOLS = [
                 "connect_norito_bridge_abi_version",
-                "connect_norito_kagemusha_v1_payment_validate",
+                "connect_norito_domain_id_validate_v1",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = [
                 "connect_norito_forbidden_symbol"
@@ -1070,7 +1074,7 @@ else:
             self.assertEqual(arguments[:-1], ["-gUj"])
             return (
                 "_connect_norito_bridge_abi_version\n"
-                "_connect_norito_kagemusha_v1_payment_validate\n"
+                "_connect_norito_domain_id_validate_v1\n"
             )
 
         with (
@@ -1099,7 +1103,7 @@ else:
             }
             EXPECTED_REQUIRED_SYMBOLS = [
                 "connect_norito_bridge_abi_version",
-                "connect_norito_kagemusha_v1_payment_validate",
+                "connect_norito_domain_id_validate_v1",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = []
 
@@ -1112,7 +1116,7 @@ else:
             if arguments[:-1] == ["-gj"]:
                 return (
                     "_connect_norito_bridge_abi_version\n"
-                    "_connect_norito_kagemusha_v1_payment_validate\n"
+                    "_connect_norito_domain_id_validate_v1\n"
                 )
             self.assertEqual(arguments[:-1], ["-gUj"])
             return "_connect_norito_bridge_abi_version\n"
@@ -1147,7 +1151,7 @@ else:
             }
             EXPECTED_REQUIRED_SYMBOLS = [
                 "connect_norito_bridge_abi_version",
-                "connect_norito_kagemusha_v1_payment_validate",
+                "connect_norito_domain_id_validate_v1",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = [
                 "connect_norito_forbidden_symbol"
@@ -1161,7 +1165,7 @@ else:
                 ) + "\n"
             return (
                 "_connect_norito_bridge_abi_version\n"
-                "_connect_norito_kagemusha_v1_payment_validate\n"
+                "_connect_norito_domain_id_validate_v1\n"
             )
 
         def missing_export(tool: Path, arguments: list[str]) -> str:
@@ -1170,7 +1174,7 @@ else:
                 return " ".join(
                     NativePolicy.EXPECTED_SLICES[identifier]["architectures"]
                 ) + "\n"
-            return "_connect_norito_kagemusha_v1_payment_validate\n"
+            return "_connect_norito_domain_id_validate_v1\n"
 
         with (
             mock.patch.object(owner.sys, "platform", "darwin"),

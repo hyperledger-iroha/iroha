@@ -1,4 +1,4 @@
-//! Complete portable native pin inventory under the sole wallet journal lock.
+//! Complete portable native pin inventory under the shared operation-journal lock.
 //!
 //! Every original and control directory is inspected. The anchored digest commits the original
 //! session and all exact signed pin records; Check/Advance records are fully audited and charged
@@ -14,7 +14,7 @@ use eyre::{Result, ensure};
 use iroha_data_model::{NetworkId, account::AccountId, transaction::TransactionPayload};
 use iroha_fs::{FileSnapshot, PrivateDirectory};
 use iroha_musubi_service::NativeMusubiPinSessionV1;
-use iroha_wallet::operation_journal::{Journal, NativeRecord};
+use iroha_operation_journal::{Journal, NativeRecord};
 use norito::json::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest as _, Sha256};
 use std::{ffi::OsStr, io::Read as _, path::Path};

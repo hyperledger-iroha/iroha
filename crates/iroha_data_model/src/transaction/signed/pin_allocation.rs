@@ -12,6 +12,7 @@ use iroha_allocation::{
     ChargedBufferError, PrepaidBufferError, RetainedPayload,
 };
 use iroha_crypto::{Algorithm, SignatureOf};
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::{bigint::BigIntAdmissionCloneError, const_vec::ConstVec};
 
 use super::{
@@ -112,7 +113,7 @@ impl AllocatedPinTransactionV1 {
                 time_to_live_ms: signed.payload.time_to_live_ms,
                 nonce: signed.payload.nonce,
                 fee_payment,
-                metadata: Default::default(),
+                metadata: Metadata::default(),
                 attachments: None,
             },
             multisig_signatures: None,

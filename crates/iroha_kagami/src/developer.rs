@@ -773,9 +773,17 @@ impl<T: Write> RunArgs<T> for ContractViewArgs {
         let context = managed_contract_context(&store, self.context.as_deref())?;
         let config = context.load_client_config()?;
         let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
-        let deployed =
-            DeploymentRuntime::new(config, store.root().join("deployments").join(&context.name))
-                .current_deployment(&alias)?;
+        let prepared = store.prepared(&context.name)?;
+        ensure!(
+            prepared.context == context,
+            "deployment generation changed before cache selection"
+        );
+        let deployed = DeploymentRuntime::new(
+            config,
+            store.root().join("deployments").join(&context.name),
+            prepared.build_cache_root(),
+        )
+        .current_deployment(&alias)?;
         let result = store.view_contract(&context, &deployed.contract, request)?;
         if self.store.json {
             write_json(writer, &result)
@@ -830,9 +838,15 @@ impl<T: Write> RunArgs<T> for ContractCallArgs {
         } else {
             let (alias, request, max_fee) =
                 requested.ok_or_else(|| eyre!("call request is missing"))?;
+            let prepared = store.prepared(&context.name)?;
+            ensure!(
+                prepared.context == context,
+                "deployment generation changed before cache selection"
+            );
             let deployed = DeploymentRuntime::new(
                 config,
                 store.root().join("deployments").join(&context.name),
+                prepared.build_cache_root(),
             )
             .current_deployment(&alias)?;
             let now = u64::try_from(

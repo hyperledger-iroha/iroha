@@ -54,7 +54,11 @@ pub(in crate::kagemusha::kagemusha_wallet_v1) fn sample_allowlist()
     for kind in KagemushaWalletOperationKindV1::ALL {
         steps.push(entry(kind, 0, SIGMA));
         if kind == KagemushaWalletOperationKindV1::Send {
-            steps.push(entry(kind, KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1, SIGMA + 1));
+            steps.push(entry(
+                kind,
+                KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+                SIGMA + 1,
+            ));
             steps.push(entry(
                 kind,
                 KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1 | KAGEMUSHA_WALLET_CONTROL_QUOTAS_V1,
@@ -90,11 +94,8 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_layout_and_digest() {
     assert_eq!(transcript, expected);
     assert_eq!(transcript.len(), 2 + 4 + 10 * 41 + 32 + 4);
     assert_eq!(
-        allowlist.verifying_key_set_digest(),
-        Ok(kagemusha_wallet_digest_v1(
-            Role::VerifyingKeySet,
-            &expected
-        ))
+        allowlist.verifying_key_set_digest().ok(),
+        Some(kagemusha_wallet_digest_v1(Role::VerifyingKeySet, &expected))
     );
     // Selectors ascend by (tag, mask): Send's masks follow its empty mask.
     let selectors: Vec<(u8, u32)> = allowlist
@@ -108,9 +109,11 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_layout_and_digest() {
     // Canonical frame round trip and the bound.
     let frame = allowlist.to_canonical_bytes().expect("frame");
     assert!(frame.len() <= KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1);
-    let decoded: KagemushaWalletVerifyingKeyAllowlistV1 =
-        decode_frame_v1(&frame, KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1)
-            .expect("decode");
+    let decoded: KagemushaWalletVerifyingKeyAllowlistV1 = decode_frame_v1(
+        &frame,
+        KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1,
+    )
+    .expect("decode");
     assert_eq!(decoded, allowlist);
 }
 
@@ -131,7 +134,10 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_rules() {
         },
         "verifying_keys.order",
     );
-    reject(&|a| a.steps.retain(|e| e.kind != Kind::Retiring), "verifying_keys.missing");
+    reject(
+        &|a| a.steps.retain(|e| e.kind != Kind::Retiring),
+        "verifying_keys.missing",
+    );
     reject(
         &|a| a.steps.retain(|e| e.selector() != (3, 0)),
         "verifying_keys.missing",
@@ -148,13 +154,22 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_rules() {
         &|a| a.steps[1].verifying_key_digest = [0; 32],
         "verifying_keys.verifying_key_digest",
     );
-    reject(&|a| a.steps[1].proof_bytes = 0, "verifying_keys.proof_bytes");
-    reject(&|a| a.steps[1].proof_bytes = 10_001, "verifying_keys.proof_bytes");
+    reject(
+        &|a| a.steps[1].proof_bytes = 0,
+        "verifying_keys.proof_bytes",
+    );
+    reject(
+        &|a| a.steps[1].proof_bytes = 10_001,
+        "verifying_keys.proof_bytes",
+    );
     reject(
         &|a| a.lineage_verifying_key_digest = [0; 32],
         "verifying_keys.lineage_verifying_key_digest",
     );
-    reject(&|a| a.lineage_proof_bytes = 0, "verifying_keys.lineage_proof_bytes");
+    reject(
+        &|a| a.lineage_proof_bytes = 0,
+        "verifying_keys.lineage_proof_bytes",
+    );
     reject(
         &|a| {
             let more = a.steps[3];
@@ -178,7 +193,9 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_rules() {
     let mut at_budget = sample_allowlist();
     at_budget.steps[4].proof_bytes = 3_296;
     at_budget.lineage_proof_bytes = budget - 3_296;
-    at_budget.validate().expect("joint proofs exactly at the budget");
+    at_budget
+        .validate()
+        .expect("joint proofs exactly at the budget");
     let mut over = at_budget.clone();
     over.lineage_proof_bytes += 1;
     assert_invalid(over.validate(), "verifying_keys.budget");
@@ -186,7 +203,9 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_rules() {
     let mut receive = at_budget;
     assert_eq!(receive.steps[5].kind, Kind::Receive);
     receive.steps[5].proof_bytes = 9_000;
-    receive.validate().expect("σ_recv outside the Payment budget");
+    receive
+        .validate()
+        .expect("σ_recv outside the Payment budget");
 }
 
 #[test]
@@ -195,14 +214,17 @@ fn kagemusha_wallet_v1_verifying_key_selection_and_lengths() {
     let allowlist = sample_allowlist();
     let send = allowlist.entry(Kind::Send, 1).expect("send blacklist");
     assert_eq!(send.proof_bytes, SIGMA + 1);
-    assert_eq!(allowlist.entry(Kind::Load, 0).expect("load").proof_bytes, SIGMA);
+    assert_eq!(
+        allowlist.entry(Kind::Load, 0).expect("load").proof_bytes,
+        SIGMA
+    );
     assert_invalid(allowlist.entry(Kind::Load, 1), "verifying_keys.selector");
     assert_invalid(allowlist.entry(Kind::Send, 2), "verifying_keys.selector");
 
     let sigma = stand_in_proof(usize::try_from(SIGMA).expect("len"));
     assert_eq!(
-        allowlist.check_step_proof(Kind::Receive, 0, &sigma),
-        Ok(entry(Kind::Receive, 0, SIGMA).verifying_key_digest)
+        allowlist.check_step_proof(Kind::Receive, 0, &sigma).ok(),
+        Some(entry(Kind::Receive, 0, SIGMA).verifying_key_digest)
     );
     assert_invalid(
         allowlist.check_step_proof(Kind::Send, 1, &sigma),
@@ -223,17 +245,20 @@ fn kagemusha_wallet_v1_verifying_key_selection_and_lengths() {
         KagemushaWalletLineageSlotV1::Present { .. }
     ));
     assert_eq!(
-        allowlist.check_package(&package),
-        Ok(entry(Kind::Send, 0, SIGMA).verifying_key_digest)
+        allowlist.check_package(&package).ok(),
+        Some(entry(Kind::Send, 0, SIGMA).verifying_key_digest)
     );
     let mut short_omega = allowlist.clone();
     short_omega.lineage_proof_bytes -= 1;
     assert_invalid(short_omega.check_package(&package), "lineage.proof_length");
     let bootstrap = signed_package(&f, &f.credential, &bootstrap_statement(&f), sigma);
-    assert!(matches!(bootstrap.statement.effect, KagemushaWalletEffectV1::Bootstrap { .. }));
+    assert!(matches!(
+        bootstrap.statement.effect,
+        KagemushaWalletEffectV1::Bootstrap { .. }
+    ));
     assert_eq!(
-        allowlist.check_package(&bootstrap),
-        Ok(entry(Kind::Bootstrap, 0, SIGMA).verifying_key_digest)
+        allowlist.check_package(&bootstrap).ok(),
+        Some(entry(Kind::Bootstrap, 0, SIGMA).verifying_key_digest)
     );
 }
 

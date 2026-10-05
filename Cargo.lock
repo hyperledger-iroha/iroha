@@ -5266,6 +5266,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_model_base",
  "iroha_musubi_service",
+ "iroha_operation_journal",
  "iroha_primitives",
  "iroha_storage_client",
  "iroha_sumeragi",
@@ -5595,9 +5596,9 @@ dependencies = [
  "iroha_data_model",
  "iroha_fs",
  "iroha_model_base",
+ "iroha_operation_journal",
  "iroha_service_model",
  "iroha_telemetry",
- "iroha_wallet",
  "norito",
  "rcgen",
  "reqwest",
@@ -5605,6 +5606,18 @@ dependencies = [
  "sorafs_manifest",
  "tempfile",
  "url",
+]
+
+[[package]]
+name = "iroha_operation_journal"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "eyre",
+ "hex",
+ "iroha_fs",
+ "norito",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -5841,6 +5854,7 @@ dependencies = [
  "iroha_config_base",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_operation_journal",
  "iroha_sccp",
  "iroha_sccp_rpc",
  "iroha_wallet",
@@ -6167,6 +6181,7 @@ dependencies = [
  "iroha_executor_data_model",
  "iroha_fs",
  "iroha_model_base",
+ "iroha_operation_journal",
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_torii_shared",
@@ -6273,6 +6288,7 @@ dependencies = [
  "iroha_logger",
  "iroha_model_base",
  "iroha_musubi_service",
+ "iroha_operation_journal",
  "iroha_p2p",
  "iroha_panic_hook",
  "iroha_primitives",
@@ -6284,7 +6300,6 @@ dependencies = [
  "iroha_torii",
  "iroha_torii_shared",
  "iroha_version",
- "iroha_wallet",
  "ivm",
  "mv",
  "norito",

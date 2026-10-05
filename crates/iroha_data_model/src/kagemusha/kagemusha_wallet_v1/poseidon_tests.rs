@@ -33,8 +33,11 @@ fn key(seed: u8) -> [u8; 32] {
 
 /// Leaf value of a stand-in leaf.
 fn leaf(seed: u8) -> [u8; 32] {
-    kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_CREDIT_DIGEST_LEAF_DOMAIN_V1, &[int(seed.into())])
-        .expect("leaf")
+    kagemusha_wallet_poseidon_v1(
+        KAGEMUSHA_WALLET_CREDIT_DIGEST_LEAF_DOMAIN_V1,
+        &[int(seed.into())],
+    )
+    .expect("leaf")
 }
 
 fn flip(value: &[u8; 32], height: usize) -> [u8; 32] {
@@ -60,7 +63,10 @@ fn kagemusha_wallet_v1_poseidon_domains_are_distinct_ascii_words() {
         (KAGEMUSHA_WALLET_SEND_CHAIN_DOMAIN_V1, b"kgwschn1"),
         (KAGEMUSHA_WALLET_RECV_CHAIN_DOMAIN_V1, b"kgwrchn1"),
         (KAGEMUSHA_WALLET_CONSUMED_CREDIT_LEAF_DOMAIN_V1, b"kgwccrd1"),
-        (KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1, b"kgwpout1"),
+        (
+            KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1,
+            b"kgwpout1",
+        ),
         (KAGEMUSHA_WALLET_LOAD_RECOVERY_LEAF_DOMAIN_V1, b"kgwload1"),
         (KAGEMUSHA_WALLET_REDEEM_RECOVERY_LEAF_DOMAIN_V1, b"kgwrdm_1"),
         (KAGEMUSHA_WALLET_FEE_CLAIM_LEAF_DOMAIN_V1, b"kgwfee_1"),
@@ -117,7 +123,12 @@ fn kagemusha_wallet_v1_poseidon_reproduces_the_native_prover_kats() {
             .iter()
             .map(|input| hex32(input.as_str().expect("input")))
             .collect();
-        let output = hex32(vector.get("output").and_then(Value::as_str).expect("output"));
+        let output = hex32(
+            vector
+                .get("output")
+                .and_then(Value::as_str)
+                .expect("output"),
+        );
         let domain = u64::from_le_bytes(word);
         assert_eq!(
             kagemusha_wallet_poseidon_v1(domain, &inputs).expect("canonical inputs"),
@@ -175,15 +186,7 @@ fn kagemusha_wallet_v1_poseidon_rejects_noncanonical_items() {
 fn kagemusha_wallet_v1_packed_bytes_rule() {
     assert_eq!(KAGEMUSHA_WALLET_PACKED_CHUNK_BYTES_V1, 31);
     let bytes: Vec<u8> = (1..=63_u8).collect();
-    for (len, elements) in [
-        (0, 1),
-        (1, 2),
-        (30, 2),
-        (31, 2),
-        (32, 3),
-        (62, 3),
-        (63, 4),
-    ] {
+    for (len, elements) in [(0, 1), (1, 2), (30, 2), (31, 2), (32, 3), (62, 3), (63, 4)] {
         let items = kagemusha_wallet_packed_bytes_v1(&bytes[..len]);
         assert_eq!(items.len(), elements, "len {len}");
         assert_eq!(
@@ -230,7 +233,7 @@ fn kagemusha_wallet_v1_sparse_tree_defaults_and_empty_root() {
     let mut node = empty_leaf;
     for height in 1..=KAGEMUSHA_WALLET_SPARSE_TREE_DEPTH_V1 {
         node = kagemusha_wallet_sparse_node_v1(&node, &node).expect("node");
-        assert_eq!(kagemusha_wallet_sparse_default_v1(height), Ok(node));
+        assert_eq!(kagemusha_wallet_sparse_default_v1(height).ok(), Some(node));
     }
     assert_eq!(kagemusha_wallet_empty_map_root_v1(), node);
     assert_eq!(KagemushaWalletSparseTreeV1::new().root(), node);
@@ -251,9 +254,11 @@ fn kagemusha_wallet_v1_pair_keys_are_canonical_and_injective() {
     expected[..16].copy_from_slice(&0x0102_u128.to_le_bytes());
     expected[16] = 2;
     assert_eq!(key, expected);
-    assert!(super::super::digest::kagemusha_wallet_is_canonical_field_v1(
-        &kagemusha_wallet_pair_key_v1(u8::MAX, u128::MAX)
-    ));
+    assert!(
+        super::super::digest::kagemusha_wallet_is_canonical_field_v1(
+            &kagemusha_wallet_pair_key_v1(u8::MAX, u128::MAX)
+        )
+    );
     assert_ne!(
         kagemusha_wallet_pair_key_v1(1, 5),
         kagemusha_wallet_pair_key_v1(2, 5)
@@ -270,8 +275,8 @@ fn kagemusha_wallet_v1_sparse_tree_root_by_hand() {
     let a = key(0x10);
     let b = flip(&a, 0);
     let mut tree = KagemushaWalletSparseTreeV1::new();
-    assert_eq!(tree.insert(a, leaf(1)), Ok(None));
-    assert_eq!(tree.insert(b, leaf(2)), Ok(None));
+    assert_eq!(tree.insert(a, leaf(1)).ok(), Some(None));
+    assert_eq!(tree.insert(b, leaf(2)).ok(), Some(None));
     assert_eq!(tree.len(), 2);
     assert!(!tree.is_empty());
     let (left, right) = if a[0] & 1 == 0 {
@@ -292,7 +297,7 @@ fn kagemusha_wallet_v1_sparse_tree_root_by_hand() {
     }
     assert_eq!(tree.root(), node);
     // Replacing a leaf returns the old value and changes the root.
-    assert_eq!(tree.insert(a, leaf(3)), Ok(Some(leaf(1))));
+    assert_eq!(tree.insert(a, leaf(3)).ok(), Some(Some(leaf(1))));
     assert_ne!(tree.root(), node);
     assert_eq!(tree.get(&a), Some(leaf(3)));
     assert_eq!(tree.remove(&a), Some(leaf(3)));
@@ -311,7 +316,8 @@ fn kagemusha_wallet_v1_sparse_tree_membership_and_absence_openings() {
     tree.insert(base, leaf(1)).expect("base");
     // Neighbours at heights 0, 7 and 200 make exactly those siblings non-default.
     for (seed, height) in [(2, 0_usize), (3, 7), (4, 200)] {
-        tree.insert(flip(&base, height), leaf(seed)).expect("neighbour");
+        tree.insert(flip(&base, height), leaf(seed))
+            .expect("neighbour");
     }
     let root = tree.root();
     let opening = tree.opening(&base).expect("opening");
@@ -324,8 +330,12 @@ fn kagemusha_wallet_v1_sparse_tree_membership_and_absence_openings() {
     assert_eq!(opening.siblings[0], leaf(2));
     KagemushaWalletSparseTreeV1::verify_membership(&root, &base, &leaf(1), &opening)
         .expect("membership");
-    assert_eq!(opening.root(&base, &leaf(1)), Ok(root));
-    for (height, key) in [(0_usize, flip(&base, 0)), (7, flip(&base, 7)), (200, flip(&base, 200))] {
+    assert_eq!(opening.root(&base, &leaf(1)).ok(), Some(root));
+    for (height, key) in [
+        (0_usize, flip(&base, 0)),
+        (7, flip(&base, 7)),
+        (200, flip(&base, 200)),
+    ] {
         let neighbour = tree.opening(&key).expect("neighbour opening");
         assert!(neighbour.path_bitmap[height / 8] & (1 << (height % 8)) != 0);
         KagemushaWalletSparseTreeV1::verify_membership(
@@ -356,7 +366,12 @@ fn kagemusha_wallet_v1_sparse_tree_membership_and_absence_openings() {
         "sparse_opening.root",
     );
     assert_invalid(
-        KagemushaWalletSparseTreeV1::verify_membership(&root, &flip(&base, 100), &leaf(1), &opening),
+        KagemushaWalletSparseTreeV1::verify_membership(
+            &root,
+            &flip(&base, 100),
+            &leaf(1),
+            &opening,
+        ),
         "sparse_opening.root",
     );
 
@@ -373,8 +388,9 @@ fn kagemusha_wallet_v1_sparse_tree_membership_and_absence_openings() {
     let mut extra_bit = opening.clone();
     extra_bit.path_bitmap[1] |= 1;
     assert_invalid(extra_bit.root(&base, &leaf(1)), "sparse_opening.siblings");
+    // Move the height-0 sibling to height 1 (bits 0 and 7 of byte 0 become bits 1 and 7).
     let mut moved = opening.clone();
-    moved.path_bitmap[0] = 0b10;
+    moved.path_bitmap[0] = 0b1000_0010;
     assert_invalid(
         KagemushaWalletSparseTreeV1::verify_membership(&root, &base, &leaf(1), &moved),
         "sparse_opening.root",

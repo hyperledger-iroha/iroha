@@ -10,10 +10,10 @@ use iroha_data_model::kagemusha::{
     KagemushaWalletEffectV1, KagemushaWalletEnrollmentChallengeV1, KagemushaWalletLifecycleV1,
     KagemushaWalletLineagePublicV1, KagemushaWalletLineageSlotV1, KagemushaWalletLineageV1,
     KagemushaWalletMarkerV1, KagemushaWalletOperationKindV1, KagemushaWalletOutputDescriptorV1,
-    KagemushaWalletReceiptV1, KagemushaWalletRecoveryCapsuleV1, KagemushaWalletRetainedInputRoleV1, KagemushaWalletRetainedInputV1,
-    KagemushaWalletStateCommitmentV1, KagemushaWalletStateCoreV1, KagemushaWalletStateRestV1,
-    KagemushaWalletStateV1, KagemushaWalletStatementV1, KagemushaWalletStepProofV1,
-    kagemusha_wallet_proof_digest_v1,
+    KagemushaWalletReceiptV1, KagemushaWalletRecoveryCapsuleV1, KagemushaWalletRetainedInputRoleV1,
+    KagemushaWalletRetainedInputV1, KagemushaWalletStateCommitmentV1, KagemushaWalletStateCoreV1,
+    KagemushaWalletStateRestV1, KagemushaWalletStateV1, KagemushaWalletStatementV1,
+    KagemushaWalletStepProofV1, kagemusha_wallet_proof_digest_v1,
 };
 use std::{
     collections::BTreeMap,

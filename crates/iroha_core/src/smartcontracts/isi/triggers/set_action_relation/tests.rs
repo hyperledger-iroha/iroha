@@ -192,7 +192,7 @@ fn original_contract_failure_still_precedes_new_action_index_corruption() {
 }
 #[test]
 fn independent_noop_and_none_undo_rows_are_not_extra_index_authority() {
-    let set = fixture();
+    let mut set = fixture();
     let mut ids = set.ids.block();
     ids.remove("not_present".parse().unwrap());
     ids.insert("a".parse().unwrap(), TriggeringEventType::Data);

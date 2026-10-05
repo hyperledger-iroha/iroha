@@ -17,7 +17,9 @@ iroha_data_model = { workspace = true, default-features = false }
 iroha_config = { workspace = true }
 # `#[derive(ReadConfig)]` of the client-config `[sccp]` table expands to `::iroha_config_base` paths.
 iroha_config_base = { workspace = true }
+# Native integration retains the mandatory Wallet-to-SDK proving path.
 iroha_wallet = { workspace = true }
+iroha_operation_journal = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 hex = { workspace = true, features = ["std"] }

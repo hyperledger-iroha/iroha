@@ -797,11 +797,6 @@ impl KagemushaWalletRecoveryCapsuleV1 {
                 return Err(invalid_v1(field));
             }
         }
-        // The capsule holds the actual successor state: its computed commitment is the head the
-        // statement and receipt bind (§§3, 4.1).
-        if state.commitment()? != statement.successor {
-            return Err(invalid_v1("capsule.successor_state.commitment"));
-        }
         if let Some(lineage) = self.predecessor_lineage.lineage() {
             statement.validate_against_lineage(&lineage.public)?;
             if lineage.public.wallet_id != self.wallet_id {
@@ -812,6 +807,11 @@ impl KagemushaWalletRecoveryCapsuleV1 {
             if state.core.burned_total != statement.lineage_burned_total {
                 return Err(invalid_v1("capsule.successor_state.burned_total"));
             }
+        }
+        // The capsule holds the actual successor state: its computed commitment is the head the
+        // statement and receipt bind (§§3, 4.1).
+        if state.commitment()? != statement.successor {
+            return Err(invalid_v1("capsule.successor_state.commitment"));
         }
         let rebuilt = KagemushaWalletOutputDescriptorV1::for_transition(
             statement,

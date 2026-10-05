@@ -63,13 +63,13 @@ fn complete_inline_header_child_keeps_original_block_commitments_hash_and_shared
             let held = SharedSignedBlock::reserve(&pool)
                 .unwrap()
                 .initialize(admitted);
-            let header_address = std::ptr::from_ref(held.header());
+            let header_address = std::ptr::from_ref(&held.payload.header);
             let clone = held.clone();
-            assert_eq!(std::ptr::from_ref(clone.header()), header_address);
+            assert_eq!(std::ptr::from_ref(&clone.payload.header), header_address);
             drop(held);
             decoder.clear_consumed();
             drop(decoder);
-            assert_eq!(std::ptr::from_ref(clone.header()), header_address);
+            assert_eq!(std::ptr::from_ref(&clone.payload.header), header_address);
             assert_eq!(clone.header(), original.header());
             assert_eq!(clone.header().hash(), original.header().hash());
             assert_eq!(clone.encode_wire().unwrap(), wire);

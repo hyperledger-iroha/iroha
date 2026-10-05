@@ -16,26 +16,40 @@ changing adjacent code.
 | O6: Complete current-source validation | In progress | Norito/IVM-only, feature, dependency and target guards, focused tests and applicable workspace lint/test gates pass on the current candidate; unresolved external failures are recorded. |
 | O7: Measure improvements | In progress | One warm same-package check records actual timing, source/toolchain and competing load against the September 27 observation; further extraction requires measured benefit. |
 
-Current development validation covers the resolved working tree with its merge
-still uncommitted. The canonical Wallet Selection schema expectation and Cargo
-feature guard now match their owners; all 65 feature-guard tests and the guard
-command pass. The current source budget matches reviewed dependency costs
-exactly. All 21 configured dependency boundaries pass locked offline Cargo
-resolution with their manifest and lock inputs unchanged. The compiler source
-guard seals 305 fixture includes and 605 test names; all 43 Python source-reader
-controls pass. Surface/toolchain workspace lint inheritance and Surface public
-Rustdoc still require correction. The recorded normal Core ZK library check
-passes with its exact four default features, no compiler diagnostics and
-unchanged captured source, Git, invocation
-and selected managed inputs. Focused strict lint, the expanded Wallet registry,
-current Privacy regressions and final workspace validation remain open. These
-scoped checks do not qualify the final merged candidate.
+The merge is closed, but final current-candidate qualification remains open.
+Feature hygiene passes all 65 tests on its recorded cut. All 21 configured
+dependency boundaries pass locked offline resolution on the current post-Journal
+cut, with 119 manifests, 113 workspace members and all 141 protected inputs
+unchanged. Reviewed exact source costs are applied without unused allowance.
+The five post-Journal source guards pass with 464 protected inputs unchanged;
+all 72 dependency metrics match their reviewed limits. The compiler source guard
+seals 308 fixture includes and 616 test names; all 43 Python source-reader
+controls pass with 323 captured inputs unchanged. Surface/toolchain inherit
+workspace lints and Surface public APIs are documented. The shared ABI argument
+and numeric codec extraction is applied; VM decoding, gas and memory custody
+remain in IVM.
+On its recorded coherent source cut, the full default-library run passed
+4,841 Model, 210 ABI and 33 Surface
+tests with 24,823 captured source inputs unchanged, retaining the 135 original
+Model ignores and no filtering. The new codec, const-name and distinct-supply
+Mint/Burn regressions pass. All 13 strict style findings have source repairs;
+fresh strict checks and direct IVM/SDK consumer validation remain pending.
+A subsequent AssetId JSON serializer source change requires fresh Model and
+dependent native validation.
+Shared operation journaling and its Foundation CI routing are implemented, and
+all 88 selection controls pass. Native Journal/Wallet qualification remains
+pending.
+The recorded normal Core ZK check retains its exact
+default-feature/source scope; current
+strict Core ZK, toolchain, Wallet runtime, Privacy regressions and final
+workspace checks remain open. These component results do not complete O1,
+O2, O6 or O7.
 
 The implementation separates compiler, Core ZK, Privacy, timed-OVN, SDK and
-service ownership. Existing source guards retain the 107 declared-target and
-24-default-target inventory, all 21 configured dependency boundaries, required
-Norito/IVM-only constraints. SDK Native custody and genuine production proving
-remain mandatory even with SDK defaults disabled. Earlier component passes
+service ownership. Target guards admit 105 declared binaries and 23
+defaults under the unchanged 24-default ceiling; the 21 configured dependency
+boundaries and Norito/IVM-only constraints remain required. SDK Native custody
+and genuine production proving remain mandatory even with SDK defaults disabled. Earlier component passes
 remain scoped to their recorded source cuts; subsequent source changes require
 fresh qualification. The earlier ordinary Privacy suite ended with 52 failures;
 none may be removed, ignored or replaced with a narrower successful subset.
@@ -44,7 +58,7 @@ The September 27 baseline checked `irohad`, `iroha_cli` and `iroha_kagami`
 without incremental compilation after a data-model edit: 526 seconds overall,
 including Torii 187.0, data model 126.1 and Core 119.5 seconds. A warm check on a
 different source and toolchain is an observation, not a causal speedup or memory
-measurement. Final timing awaits the merge owner's closed candidate.
+measurement. Final timing requires a qualified current candidate.
 
 The [ownership and validation note](../docs/validation/compile-bloat-ownership.md)
 records component evidence and remaining checks. Pinned Mac/Linux resource

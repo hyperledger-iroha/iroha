@@ -100,14 +100,23 @@ pub const KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1: [(&str, u64); 22] = [
         "pending_outgoing_leaf",
         KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1,
     ),
-    ("load_recovery_leaf", KAGEMUSHA_WALLET_LOAD_RECOVERY_LEAF_DOMAIN_V1),
+    (
+        "load_recovery_leaf",
+        KAGEMUSHA_WALLET_LOAD_RECOVERY_LEAF_DOMAIN_V1,
+    ),
     (
         "redeem_recovery_leaf",
         KAGEMUSHA_WALLET_REDEEM_RECOVERY_LEAF_DOMAIN_V1,
     ),
     ("fee_claim_leaf", KAGEMUSHA_WALLET_FEE_CLAIM_LEAF_DOMAIN_V1),
-    ("quota_usage_leaf", KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1),
-    ("credit_digest_leaf", KAGEMUSHA_WALLET_CREDIT_DIGEST_LEAF_DOMAIN_V1),
+    (
+        "quota_usage_leaf",
+        KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1,
+    ),
+    (
+        "credit_digest_leaf",
+        KAGEMUSHA_WALLET_CREDIT_DIGEST_LEAF_DOMAIN_V1,
+    ),
     ("sparse_empty_leaf", KAGEMUSHA_WALLET_SPARSE_EMPTY_DOMAIN_V1),
     ("sparse_node", KAGEMUSHA_WALLET_SPARSE_NODE_DOMAIN_V1),
     ("blacklist_leaf", KAGEMUSHA_WALLET_BLACKLIST_LEAF_DOMAIN_V1),
@@ -219,7 +228,10 @@ pub fn kagemusha_wallet_poseidon_bytes_v1(domain: u64, bytes: &[u8]) -> [u8; 32]
 /// # Errors
 ///
 /// Rejects a noncanonical child.
-pub fn kagemusha_wallet_sparse_node_v1(left: &[u8; 32], right: &[u8; 32]) -> WalletResult<[u8; 32]> {
+pub fn kagemusha_wallet_sparse_node_v1(
+    left: &[u8; 32],
+    right: &[u8; 32],
+) -> WalletResult<[u8; 32]> {
     kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_SPARSE_NODE_DOMAIN_V1, &[*left, *right])
 }
 
@@ -406,7 +418,8 @@ impl KagemushaWalletSparseTreeV1 {
 
     fn levels(&self) -> SparseLevelsV1 {
         let defaults = sparse_defaults_v1();
-        let mut levels: SparseLevelsV1 = Vec::with_capacity(KAGEMUSHA_WALLET_SPARSE_TREE_DEPTH_V1 + 1);
+        let mut levels: SparseLevelsV1 =
+            Vec::with_capacity(KAGEMUSHA_WALLET_SPARSE_TREE_DEPTH_V1 + 1);
         let mut level: BTreeMap<[u64; 4], [u8; 32]> = self
             .leaves
             .iter()

@@ -80,6 +80,74 @@ def canonical_path(value: object) -> str:
     return value
 
 
+def read_declared_public_file(path: str, expected_sha256: str, *, owner: int | None = None,
+                              limit: int = MAX_PUBLIC_BYTES) -> bytes:
+    """Read one declared public input under bounded, no-follow pathname/FD custody.
+
+    Native local callers use this without importing controller transport code.
+    This entry point is exclusively for public candidates and maintained source;
+    existing configuration, keys and tokens are never declared public inputs.
+    """
+    import stat
+
+    canonical_path(path)
+    require(isinstance(expected_sha256, str)
+            and re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is not None
+            and type(limit) is int and 0 < limit <= MAX_PUBLIC_BYTES
+            and (owner is None or type(owner) is int and owner >= 0), "public_input_reference")
+    owners = {0, os.geteuid()}
+    def open_parent():
+        current = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            for part in Path(path).parts[1:-1]:
+                next_directory = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                         dir_fd=current)
+                info = os.fstat(next_directory)
+                if not (info.st_uid in owners and not stat.S_IMODE(info.st_mode) & 0o022):
+                    os.close(next_directory)
+                    raise CheckError("unsafe_public_ancestor")
+                os.close(current)
+                current = next_directory
+            return current
+        except BaseException:
+            os.close(current)
+            raise
+    directory = open_parent()
+    opened = None
+    try:
+        name = Path(path).name
+        opened = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                         dir_fd=directory)
+        def snapshot(info):
+            return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode),
+                    info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        before = os.fstat(opened)
+        observed = snapshot(before)
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and before.st_uid == (os.geteuid() if owner is None else owner)
+                and not stat.S_IMODE(before.st_mode) & 0o022
+                and 0 < before.st_size <= limit, "unsafe_public_input")
+        require(observed == snapshot(os.stat(name, dir_fd=directory, follow_symlinks=False)),
+                "public_input_changed")
+        body = os.pread(opened, before.st_size + 1, 0)
+        require(len(body) == before.st_size and observed == snapshot(os.fstat(opened))
+                == snapshot(os.stat(name, dir_fd=directory, follow_symlinks=False)), "public_input_changed")
+        # Reopen the complete path after the read: a renamed ancestor must not
+        # hide a replacement that the retained parent descriptor cannot see.
+        current_parent = open_parent()
+        try:
+            require(snapshot(os.stat(name, dir_fd=current_parent, follow_symlinks=False)) == observed,
+                    "public_input_changed")
+        finally:
+            os.close(current_parent)
+        require(hashlib.sha256(body).hexdigest() == expected_sha256, "public_input_digest_changed")
+        return body
+    finally:
+        if opened is not None:
+            os.close(opened)
+        os.close(directory)
+
+
 def validate_plan(value: object) -> dict:
     """Validate the closed public plan before reading any referenced input."""
     require(isinstance(value, dict) and set(value) == {
@@ -129,6 +197,7 @@ def remote_check(request: dict, operation=None) -> dict:
                "validation_files_removed": False, "exit_code": 1}
     handles, created = [], []
     directory = lock = None
+    lock_identity = None
 
     def need(condition, code):
         if not condition:
@@ -217,6 +286,9 @@ def remote_check(request: dict, operation=None) -> dict:
         lock_info = os.fstat(lock)
         need(stat.S_ISREG(lock_info.st_mode) and lock_info.st_uid == owner and lock_info.st_nlink == 1
              and stat.S_IMODE(lock_info.st_mode) == 0o600, "unsafe_check_lock")
+        lock_identity = identity(lock_info)
+        need(identity(os.stat(".taira-native-nginx-check.lock", dir_fd=directory, follow_symlinks=False))
+             == identity(os.fstat(lock)) == lock_identity, "check_lock_identity_changed")
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -232,6 +304,14 @@ def remote_check(request: dict, operation=None) -> dict:
         validation_main = str(path(native["directory"]["path"]) / main_name)
         candidate_fd = stage(candidate_name, candidate)
         candidate_identity = identity(os.fstat(candidate_fd))
+        if operation is not None and request["publication"]["kind"] in {"replace", "reconcile"}:
+            # An already included public source cannot be injected a second
+            # time. The apply owner admits its exact journal/inode under this
+            # same lock, then checks the complete native context after exchange.
+            operation(receipt, request, dict(native=native, bound=bound, lock=lock,
+                directory=directory, candidate_fd=candidate_fd, handles=handles, lock_identity=lock_identity,
+                path=path, identity=identity, open_bound=open_bound, revalidate=revalidate))
+            return receipt
         main_fd = stage(main_name, b"")
         environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
         guard = subprocess.run([native["awk"]["path"], "-v", "candidate=" + candidate_path, AWK_PROGRAM],
@@ -257,7 +337,7 @@ def remote_check(request: dict, operation=None) -> dict:
             revalidate(native[name], opened)
         revalidate(native["directory"], directory, True)
         need(identity(os.stat(".taira-native-nginx-check.lock", dir_fd=directory, follow_symlinks=False))
-             == identity(os.fstat(lock)), "check_lock_identity_changed")
+             == identity(os.fstat(lock)) == lock_identity, "check_lock_identity_changed")
         need(checked.returncode == 0, "native_nginx_rejected")
         receipt.update(host_kind=request["host_kind"], owner_uid=owner,
                        native_executable=native["nginx"], main_configuration=native["main"],
@@ -267,11 +347,11 @@ def remote_check(request: dict, operation=None) -> dict:
                        inherited_configuration_checked=True, relative_include_prefix_preserved=True,
                        exit_code=0)
         if operation is not None:
-            # The create-only apply owner receives the same still-held native
+            # The apply owner receives the same still-held native
             # descriptors and lock after successful check admission. The CLI
             # for this module never supplies an operation.
             operation(receipt, request, dict(native=native, bound=bound, lock=lock,
-                directory=directory, candidate_fd=candidate_fd, handles=handles,
+                directory=directory, candidate_fd=candidate_fd, handles=handles, lock_identity=lock_identity,
                 path=path, identity=identity, open_bound=open_bound, revalidate=revalidate))
     except Exception as error:
         receipt["exit_code"] = 1

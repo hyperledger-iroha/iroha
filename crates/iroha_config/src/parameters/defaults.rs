@@ -592,7 +592,7 @@ pub mod compute {
     }
     /// Maximum allowed requests per second (token-bucket rate limit).
     pub const fn max_requests_per_second() -> NonZeroU32 {
-        nonzero!(200_u32)
+        nonzero!(super::torii::DEFAULT_REQUEST_RATE_PER_SEC)
     }
     /// Target p50 latency budget in milliseconds for compute calls.
     pub const fn target_p50_latency_ms() -> NonZeroU64 {

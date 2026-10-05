@@ -626,18 +626,20 @@ fn kagemusha_wallet_v1_blacklist_root_matches_the_full_tree() {
         item
     };
     assert_eq!(
-        Ok(kagemusha_wallet_blacklist_leaf_v1(&[0x10; 32], &[0x20; 32])),
+        Some(kagemusha_wallet_blacklist_leaf_v1(&[0x10; 32], &[0x20; 32])),
         kagemusha_wallet_poseidon_v1(
             KAGEMUSHA_WALLET_BLACKLIST_LEAF_DOMAIN_V1,
             &[limb(0x10), limb(0x10), limb(0x20), limb(0x20)]
         )
+        .ok()
     );
     assert_eq!(
-        kagemusha_wallet_blacklist_node_v1(&[0x10; 32], &[0x20; 32]),
+        kagemusha_wallet_blacklist_node_v1(&[0x10; 32], &[0x20; 32]).ok(),
         kagemusha_wallet_poseidon_v1(
             KAGEMUSHA_WALLET_BLACKLIST_NODE_DOMAIN_V1,
             &[[0x10; 32], [0x20; 32]]
         )
+        .ok()
     );
     assert!(is_invalid(
         kagemusha_wallet_blacklist_node_v1(&[0x10; 32], &[0xff; 32]),
@@ -815,8 +817,8 @@ fn kagemusha_wallet_v1_quota_windows_root_and_share_rules() {
     };
     let empty = kagemusha_wallet_quota_empty_window_leaf_v1();
     assert_eq!(
-        Ok(empty),
-        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1, &[int(0); 4])
+        Some(empty),
+        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1, &[int(0); 4]).ok()
     );
     let expected = vec![
         int(u128::from(windows[0].kind.tag())),
@@ -826,8 +828,8 @@ fn kagemusha_wallet_v1_quota_windows_root_and_share_rules() {
     ];
     assert_eq!(windows[0].field_items(), expected);
     assert_eq!(
-        Ok(windows[0].leaf_value()),
-        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1, &expected)
+        Some(windows[0].leaf_value()),
+        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1, &expected).ok()
     );
     let mut level: Vec<[u8; 32]> = (0..64)
         .map(|slot| {
@@ -848,8 +850,9 @@ fn kagemusha_wallet_v1_quota_windows_root_and_share_rules() {
         level[0]
     );
     assert_eq!(
-        kagemusha_wallet_quota_node_v1(&[1; 32], &[2; 32]),
+        kagemusha_wallet_quota_node_v1(&[1; 32], &[2; 32]).ok(),
         kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_QUOTA_NODE_DOMAIN_V1, &[[1; 32], [2; 32]])
+            .ok()
     );
     assert!(is_invalid(
         kagemusha_wallet_quota_node_v1(&[0xff; 32], &[2; 32]),
@@ -1253,8 +1256,8 @@ fn kagemusha_wallet_v1_refresh_policy_rules() {
         "scheme_policy.policy_epoch"
     ));
     // A credential that permits nothing activates nothing.
-    let plain = KagemushaWalletStateV1::bootstrap(&f.identity.credential, [1; 32])
-        .expect("plain state");
+    let plain =
+        KagemushaWalletStateV1::bootstrap(&f.identity.credential, [1; 32]).expect("plain state");
     let all = f.scheme_policy(1, KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1, [0; 32]);
     assert_eq!(
         plain

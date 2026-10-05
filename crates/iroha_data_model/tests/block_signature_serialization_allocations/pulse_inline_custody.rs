@@ -259,7 +259,7 @@ fn original_pulse_scalar_alignment_refusal_and_inline_hash_invalidity_keep_their
     assert!(alignment > std::mem::align_of::<u16>());
     let pool = AllocationBudget::new(1 << 20);
     let mut input =
-        ChargedBuffer::new(wire.len().checked_add(alignment - 1).unwrap(), &pool).unwrap();
+        ChargedBuffer::<u8>::new(wire.len().checked_add(alignment - 1).unwrap(), &pool).unwrap();
     let prefix = (alignment - input.as_slice().as_ptr().addr() % alignment) % alignment;
     input.append(&vec![0xa5; prefix]).unwrap();
     input.append(&wire).unwrap();

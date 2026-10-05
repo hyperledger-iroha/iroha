@@ -255,7 +255,7 @@ fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_ac
     assert!(alignment > 1);
     let pool = AllocationBudget::new(1 << 20);
     let mut input =
-        ChargedBuffer::new(wire.len().checked_add(alignment - 1).unwrap(), &pool).unwrap();
+        ChargedBuffer::<u8>::new(wire.len().checked_add(alignment - 1).unwrap(), &pool).unwrap();
     let prefix = (1 + alignment - input.as_slice().as_ptr().addr() % alignment) % alignment;
     input.append(&vec![0xa5; prefix]).unwrap();
     input.append(&wire).unwrap();

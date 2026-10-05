@@ -16,8 +16,8 @@ use crate::kagemusha::kagemusha_wallet_v1::{
     state::{
         KagemushaWalletLineageSlotV1,
         state_tests::{
-            bootstrap_statement, field_value, send_effect, signed_package,
-            stand_in_proof, transition_statement,
+            bootstrap_statement, field_value, send_effect, signed_package, stand_in_proof,
+            transition_statement,
         },
     },
 };
@@ -433,8 +433,8 @@ fn kagemusha_wallet_v1_load_voucher_sign_verify_and_effect() {
         voucher.require_charge_quote(Some(&quote)),
         "voucher.charge_quote",
     );
-    let state = KagemushaWalletStateV1::bootstrap(f.credential(), field_value(0x5d))
-        .expect("state");
+    let state =
+        KagemushaWalletStateV1::bootstrap(f.credential(), field_value(0x5d)).expect("state");
     voucher.require_next_for(&state).expect("next voucher");
     let mut later = state;
     later.core.next_load = 1;
@@ -751,7 +751,7 @@ fn kagemusha_wallet_v1_close_loads_requires_a_retiring_package() {
         7,
         KagemushaWalletLifecycleV1::Retiring,
         KagemushaWalletEffectV1::Receive {
-            credit_id: [0x62; 32],
+            credit_id: field_value(0x62),
             payer_wallet_id: [0x63; 32],
             amount: 1,
         },

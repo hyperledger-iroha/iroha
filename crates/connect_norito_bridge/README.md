@@ -25,20 +25,7 @@ input bound is checked before reading or allocating. SDK callers must retain the
 provided spelling and reject missing native admission; this API does not normalize
 Unicode input or provide a managed fallback.
 
-The ordinary Native parent uses the crate-root
-`KagemushaNativeOrdinaryRuntimeStartupV1::from_installed_runtime_and_native_account`
-constructor before mobile startup. Construction authenticates and retains the public inventory
-and exact release artifacts, then registers that same actual Native owner once. Independent
-registration is retired. The native coordinator installer performs the initial fresh four-node
-S/W acquisition under that owner before managed coordinator open. The storage selector must
-equal the independently selected Native path. An unknown construction or initial acquisition
-result cannot restart another clock, read or enrollment journal in the process. A completed
-same-path retry rechecks the live held account selection; it does not revive an expired lease.
-
-The constructor still requires the independently admitted installed runtime authority and an
-actual immutable `AccountClient` with its held Ed25519 ledger key. Those come from the shipping
-Native parent's admitted app release and protected account custody. JNI signing callbacks,
-managed settings, public inventory decoding and a hardware P256 app key cannot supply those
-inputs. App hardware identity admission and the separate current financial/proof/finality
-owners remain mandatory. This source composition does not establish installed SDK, device or
-release qualification.
+KAGEMUSHA canonical wallet objects are owned by
+`iroha_data_model::kagemusha::kagemusha_wallet_v1`. This bridge exposes no
+KAGEMUSHA coordinator or device runtime. Native wallet integration and device
+qualification remain open.

@@ -4,7 +4,7 @@
 //! destinations borrow raw byte leaves and retain physically funded spans instead of
 //! copying each artifact body. Indexed views retain a borrow of the same original
 //! charged source; ordinary owned journals cannot create this provenance.
-//! TODO: physically fund every decoded SignedBlock payload/result/DA and authority
+//! TODO: physically fund every decoded `SignedBlock` payload/result/DA and authority
 //! graph. This storage seam grants no finality or whole-native-graph guarantee.
 
 use super::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits};
@@ -27,7 +27,7 @@ enum Frames<'a> {
     },
 }
 
-/// One borrowed native journal source, with one original block wire per height.
+/// One borrowed native journal source, with one canonical `SignedBlockWire` per height.
 /// This transport view grants no finality authority and never decodes blocks itself.
 /// The consuming block/native verifier must validate each opaque wire and protocol.
 #[derive(Clone, Copy)]
@@ -473,7 +473,7 @@ impl DecodeField<0, Vec<NativeFinalityArtifact>> for JournalDestination<'_, '_> 
             if plan.used() != bytes.len() {
                 return Err(norito::Error::LengthMismatch.into());
             }
-            let blocks = &mut self.blocks;
+            let blocks = &mut *self.blocks;
             let source = self.source;
             plan.decode_elements::<NativeFinalityArtifact, PreparedNativeFinalityDestinationError>(
                 |index, field| {

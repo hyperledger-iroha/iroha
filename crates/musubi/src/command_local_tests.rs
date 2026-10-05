@@ -202,6 +202,8 @@ fn local_graph_without_network_context_has_no_default_address_profile() {
         .map(|member| member.package.selector.clone())
         .collect::<Vec<_>>();
     let options = |requested_chain_discriminant| WorkspaceResolutionOptionsV1 {
+        cache_root: None,
+        archive_transport: None,
         mode: GraphModeArgs::default(),
         config: None,
         config_image: None,

@@ -253,10 +253,7 @@ fn canonical_effect_digest<T: norito::NoritoSerialize>(
             std::io::Error::other("complete effect canonical encoding failed")
         })
     });
-    match encoding_error {
-        Some(error) => Err(error),
-        None => digest.map_err(norito::Error::Io),
-    }
+    encoding_error.map_or_else(|| digest.map_err(norito::Error::Io), Err)
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ use super::{
     KAGEMUSHA_WALLET_FEE_SCHEDULE_MAX_BYTES_V1, KAGEMUSHA_WALLET_QUOTA_SHARE_MAX_BYTES_V1,
     KAGEMUSHA_WALLET_SCHEME_POLICY_MAX_BYTES_V1, KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1,
     WalletResult, WalletVersionsV1, decode_frame_v1,
+    digest::WalletFieldItemsV1,
     digest::{
         KagemushaWalletDigestRoleV1 as Role, KagemushaWalletSignerOutputV1, WalletTranscriptV1,
         kagemusha_wallet_digest_v1, kagemusha_wallet_freeze_signature_v1,
@@ -27,7 +28,6 @@ use super::{
         KagemushaWalletCredentialV1, KagemushaWalletSchemeV1, KagemushaWalletSignerCertificateV1,
         KagemushaWalletSignerRoleV1,
     },
-    digest::WalletFieldItemsV1,
     invalid_v1,
     keys::KagemushaDeviceSignatureV1,
     overflow_v1,
@@ -1490,12 +1490,7 @@ impl KagemushaWalletQuotaWindowV1 {
     /// Window leaf elements: kind tag, start, end, limit (4).
     #[must_use]
     pub fn field_items(&self) -> Vec<[u8; 32]> {
-        quota_window_items_v1(
-            self.kind.tag(),
-            self.start_ms,
-            self.end_ms,
-            self.limit,
-        )
+        quota_window_items_v1(self.kind.tag(), self.start_ms, self.end_ms, self.limit)
     }
 
     /// Window leaf `P(kgwqwin1, elements)` (§7).
@@ -1570,10 +1565,7 @@ pub fn kagemusha_wallet_quota_empty_window_leaf_v1() -> [u8; 32] {
 /// # Errors
 ///
 /// Rejects a noncanonical child.
-pub fn kagemusha_wallet_quota_node_v1(
-    left: &[u8; 32],
-    right: &[u8; 32],
-) -> WalletResult<[u8; 32]> {
+pub fn kagemusha_wallet_quota_node_v1(left: &[u8; 32], right: &[u8; 32]) -> WalletResult<[u8; 32]> {
     require_canonical_field_v1("quota_share.node", left)?;
     require_canonical_field_v1("quota_share.node", right)?;
     Ok(poseidon_items_v1(
@@ -2579,8 +2571,7 @@ impl KagemushaWalletStateV1 {
         if anchor.time_anchor_digest() != self.rest.time_anchor {
             return Err(invalid_v1("state.rest.time_anchor"));
         }
-        let interval =
-            anchored.interval_at(now, self.rest.time_anchor_max_response_ms)?;
+        let interval = anchored.interval_at(now, self.rest.time_anchor_max_response_ms)?;
         let lower = floor.max(interval.lower_ms);
         KagemushaWalletTimeIntervalV1::new(lower, interval.upper_ms.max(lower))
     }

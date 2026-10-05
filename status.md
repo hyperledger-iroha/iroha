@@ -241,21 +241,41 @@ and UI regressions pass, preserving diagnostics.
 SDK Native custody and genuine production proving are mandatory even with SDK
 defaults disabled; assembly tools remain explicit
 `dev-tools` targets, and FASTPQ uses the existing STARK feature. All 21 configured
-dependency boundaries, including exact CoreZK/Halo2 SDK and downstream
-profiles, pass locked offline Cargo resolution with unchanged manifests and
-lock. The current source budget
-passes with exact reviewed declaration costs, without growth headroom or
-relaxed ownership denials; current native frontend and proof qualification
-remain open. Surface/toolchain workspace lint inheritance and Surface public
-Rustdoc still require correction.
-The compiler and proof owners have a recorded clean default Core ZK frontend
-check; focused strict lint and current repaired Privacy regressions remain open.
+CoreZK/Halo2, SDK and downstream boundaries pass locked offline resolution on
+the current post-Journal cut, with 119 manifests, 113 workspace members and all
+141 protected inputs unchanged. Reviewed exact source costs are applied without
+unused allowance. All five post-Journal source guards pass with 464 protected
+inputs unchanged, and all 72 dependency metrics match their reviewed limits.
+Surface/toolchain workspace lint inheritance
+and Surface public Rustdoc are implemented.
+On its recorded coherent source cut, the full default-library run passed
+4,841 Model, 210 ABI and 33 Surface
+tests, including the new distinct-supply Mint/Burn byte oracle, with 24,823
+captured source inputs unchanged. It retains the 135 original Model ignores and
+no filtering. All 13 strict style findings have source repairs; fresh strict
+validation remains pending.
+A subsequent AssetId JSON serializer source change requires fresh Model and
+dependent native validation.
+The recorded default Core ZK frontend pass retains its original source scope.
+A later focused strict attempt stopped before Core ZK with nine dependency
+diagnostics; source repairs need fresh current validation. Current Core ZK,
+toolchain, repaired Privacy regressions and final workspace checks remain open.
+The ABI argument-record and static numeric codecs now have their shared ABI
+owner; consumers import it directly. IVM retains byte decoding, gas and memory
+custody. Direct IVM and SDK consumer validation remains pending.
 The canonical Wallet Selection schema expectation now matches its owner. The
-expanded prospective Wallet registry contains 107 ordinary tests, including
-15 custody controls. Its latest build passes, but dependency source changes
-prevented runtime validation. Feature hygiene passes all 65 controls and its
-guard command. The compiler source guard seals 305 fixture includes and
-605 test names, and all 43 Python source-reader controls pass. Executable
+historical 107-test Wallet registry includes 15 custody controls. Its recorded
+build passes, but dependency source changes prevented runtime validation. The
+applied shared Journal owner contains the whole storage implementation and all
+ten tests. The current finite macOS source inventory contains 191 Wallet and ten
+Journal tests, plus one Windows-only Wallet control, retaining all 15 custody
+controls. Foundation CI routing and all 88 selection controls pass; fresh native
+listing and runtime validation remain required. Feature hygiene passes all 65 tests and its guard
+command; that source-only rerun does not establish a full input-map interval.
+The compiler source guard seals 308 fixture includes and 616 test names, and
+all 43 Python source-reader controls pass with 323 captured inputs unchanged.
+These reader tests do not qualify compiled fixture bytecode. The merge is
+closed; final current-candidate checks and timing remain open. Executable
 metadata freshness
 passes on its recorded source cut. Current workspace and merged-candidate
 qualification remain open.

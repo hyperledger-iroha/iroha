@@ -184,14 +184,14 @@ fn actual_masked_native_history_below_exact_above_includes_the_terminal_pass() {
     block.insert("b".parse().unwrap(), 2);
     block.remove("z".parse().unwrap());
     block.commit();
-    let view = rows.try_committed_view_nonblocking().unwrap();
-    assert_eq!(view.current().len(), 2);
-    assert_eq!(view.undo().len(), 4);
     let expected: Vec<_> = rows
         .history()
         .iter_before_block()
         .map(|(key, value)| (key.clone(), *value))
         .collect();
+    let view = rows.try_committed_view_nonblocking().unwrap();
+    assert_eq!(view.current().len(), 2);
+    assert_eq!(view.undo().len(), 4);
     let exact = 2 * (29 * usize::BITS as u64 + 44) + 8 * (17 * usize::BITS as u64 + 26) + 42; //5 head passes*4 +4 Some/None branches +2 complete a/b comparisons9
     let pool = AllocationBudget::new(0);
     for amount in [exact - 1, exact, exact + 1] {
