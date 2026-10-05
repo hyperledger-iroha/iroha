@@ -524,7 +524,7 @@ def test_kagemusha_release_install_accepts_exact_fixture_and_freezes_nested_reco
     proposal = GovernanceProposalKind.from_payload(fixture)
     assert isinstance(proposal.payload, GovernanceProposalKagemushaVerifierReleaseInstall)
     assert proposal.payload.manifest["version"] == 1
-    assert len(proposal.payload.manifest["artifacts"]) == 50
+    assert len(proposal.payload.manifest["artifacts"]) == 54
     with pytest.raises(TypeError):
         proposal.payload.manifest["version"] = 2  # type: ignore[index]
 

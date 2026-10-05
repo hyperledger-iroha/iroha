@@ -134,8 +134,9 @@ def test_transport_rejections_are_bounded_closed_and_never_replayed(kind):
     if kind == "length_mismatch": headers["Content-Length"] = str(len(body) + 1)
     early = kind in ("media", "declared_oversize")
     with observation_server(body, status=status, headers=headers, probe_before_body=early) as server:
-        expected = requests.ConnectionError if kind == "length_mismatch" else (ValueError, requests.HTTPError)
-        with pytest.raises(expected):
+        expected = (ValueError, requests.ConnectionError) if kind == "length_mismatch" else (ValueError, requests.HTTPError)
+        match = r"^bounded Requests (?:transport failed|rejected response framing or body limits)$" if kind == "length_mismatch" else None
+        with pytest.raises(expected, match=match):
             client(server["url"], prepared.network_id).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
         assert len(server["calls"]) == 1 and server["finished"].wait(1)
         if early: assert server["peer_closed"] and server["body_writes"] == 0

@@ -57,7 +57,7 @@ assert "iroha_python" not in sys.modules
 def test_native_owner_rejects_preseed_with_real_extension_spec(tmp_path):
     root = _owner_without_extension(tmp_path)
     code = '''
-import _json
+import importlib.util
 import importlib.machinery
 from pathlib import Path
 import shutil
@@ -66,7 +66,9 @@ import types
 sys.path.insert(0, sys.argv[1])
 from iroha_native import NativeUnavailableError, require_account_codec_v1
 root = Path(sys.argv[1]) / "iroha_native"
-source = Path(_json.__file__)
+probe = importlib.util.find_spec("blake3.blake3")
+assert type(probe.loader) is importlib.machinery.ExtensionFileLoader
+source = Path(probe.origin)
 suffix = next(s for s in importlib.machinery.EXTENSION_SUFFIXES if source.name.endswith(s))
 shutil.copyfile(source, root / ("_crypto" + suffix))
 spec = importlib.machinery.PathFinder.find_spec("iroha_native._crypto", [str(root)])
@@ -89,7 +91,7 @@ else: raise AssertionError("pre-seeded fake account codec was accepted")
 def test_native_owner_executes_actual_extension_initializer(tmp_path):
     root = _owner_without_extension(tmp_path)
     code = '''
-import _json
+import importlib.util
 import importlib.machinery
 from pathlib import Path
 import shutil
@@ -97,7 +99,9 @@ import sys
 sys.path.insert(0, sys.argv[1])
 from iroha_native import NativeUnavailableError, load_crypto_extension
 root = Path(sys.argv[1]) / "iroha_native"
-source = Path(_json.__file__)
+probe = importlib.util.find_spec("blake3.blake3")
+assert type(probe.loader) is importlib.machinery.ExtensionFileLoader
+source = Path(probe.origin)
 suffix = next(s for s in importlib.machinery.EXTENSION_SUFFIXES if source.name.endswith(s))
 shutil.copyfile(source, root / ("_crypto" + suffix))
 try: load_crypto_extension()

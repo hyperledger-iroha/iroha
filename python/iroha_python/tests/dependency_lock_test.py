@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import sys
+import sysconfig
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -123,12 +126,29 @@ def test_ci_uses_checkout_sources_and_blake3_runtime() -> None:
     import iroha_torii_client
     import norito
 
-    assert (
-        Path(iroha_torii_client.__file__)
-        .resolve()
-        .is_relative_to(PYTHON_ROOT / "iroha_torii_client")
-    )
-    assert Path(norito.__file__).resolve().is_relative_to(PYTHON_ROOT / "norito_py")
+    if os.environ.get("IROHA_PYTHON_TEST_INSTALLED_PACKAGE") == "1":
+        environment_root = Path(sys.prefix).resolve(strict=True)
+        assert environment_root != Path(sys.base_prefix).resolve(strict=True)
+        package_roots = {
+            Path(sysconfig.get_paths()[kind]).resolve(strict=True)
+            for kind in ("purelib", "platlib")
+        }
+        assert all(path.is_relative_to(environment_root) for path in package_roots)
+        for package in (iroha_torii_client, norito):
+            origin = Path(package.__file__)
+            assert origin.is_absolute()
+            assert origin.resolve(strict=True) == origin
+            assert origin.name == "__init__.py"
+            assert origin.parent in {
+                path / package.__name__ for path in package_roots
+            }
+    else:
+        assert (
+            Path(iroha_torii_client.__file__)
+            .resolve()
+            .is_relative_to(PYTHON_ROOT / "iroha_torii_client")
+        )
+        assert Path(norito.__file__).resolve().is_relative_to(PYTHON_ROOT / "norito_py")
     assert len(blake3.blake3(b"numeric-v1").digest()) == 32
 
 
@@ -258,10 +278,22 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         assert block is not None
         source = block.group(1)
         assert source.count("Authenticate canonical privacy graph snapshot") == 1
-        assert source.count("fetch --locked --lockfile-path") == 1
+        fetch = 'fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"'
+        assert source.count(fetch) == 1
+        assert "fetch --locked --lockfile-path" not in source
+        assert source.count("env -u RUSTC_BOOTSTRAP") == 1
+        assert source.count('cmp -s "$release_lock" Cargo.lock') == 1
+        assert 'pathlib.Path("Cargo.lock").read_bytes()' in source
+        assert "pathlib.Path(sys.argv[1]).read_bytes()" in source
         assert "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" in source
         assert "source ci/privacy_sdk_cargo_lockfile.sh" in source
         assert "provision-ci" not in source
+        positions = [
+            source.index("Authenticate canonical privacy graph snapshot"),
+            source.index('cmp -s "$release_lock" Cargo.lock'),
+            source.index(fetch),
+        ]
+        assert positions == sorted(positions)
     for workflow_path in (
         ".gitignore",
         ".cargo/config",

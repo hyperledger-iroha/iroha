@@ -131,7 +131,11 @@ class InstalledPackageConftestSourceTests(unittest.TestCase):
         first_load = next(index for index, event in enumerate(self.events) if event[0] == "load")
         self.assertEqual(self.events[:first_load], [("find", name) for name in (*_PACKAGES, "iroha_native._crypto")])
         self.assertEqual(self.source_executions, ["iroha_native", "norito", "iroha_torii_client", "iroha_python"])
-        self.assertEqual(paths, [str(_CONFTEXT.parent), str(self.site)])
+        self.assertEqual(paths, [
+            str(_CONFTEXT.parents[2] / "iroha_torii_client" / "tests"),
+            str(_CONFTEXT.parent),
+            str(self.site),
+        ])
 
     def test_each_checkout_package_refuses_before_any_initializer(self):
         for name in _PACKAGES:

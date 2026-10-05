@@ -143,6 +143,7 @@ if _INSTALLED_PACKAGE_MODE == "1":
         _assert_loaded(module, name, origin, importlib.machinery.SourceFileLoader, spec)
     _assert_loaded(native, "iroha_native._crypto", native_origin, importlib.machinery.ExtensionFileLoader)
     _add_path(_ROOT / "iroha_python" / "tests")
+    _add_path(_ROOT / "iroha_torii_client" / "tests")
 else:
     _SOURCE_ROOTS = {
         "iroha_python": _ROOT / "iroha_python" / "src" / "iroha_python",
@@ -162,6 +163,7 @@ else:
     _add_path(_ROOT / "norito_py" / "src")
     _add_path(_ROOT / "iroha_torii_client")
     _add_path(_ROOT / "iroha_python" / "tests")
+    _add_path(_ROOT / "iroha_torii_client" / "tests")
     _add_path(_ROOT / "iroha_python" / "src")
     _add_path(_ROOT / "iroha_native" / "src")
 

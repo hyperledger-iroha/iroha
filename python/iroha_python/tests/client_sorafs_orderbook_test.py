@@ -8,13 +8,13 @@ from urllib.parse import parse_qs, urlparse
 import iroha_torii_client.orderbook_submission as orderbook_submission
 import pytest
 import requests
-from iroha_torii_client.tests.orderbook_submission_test import (
+from sorafs_orderbook_test_helpers import (
     IDENTITY,
     SIGNER,
     Verifier,
     stock_session,
 )
-from iroha_torii_client.tests.orderbook_submission_test import (
+from sorafs_orderbook_test_helpers import (
     Response as OrderbookResponse,
 )
 from requests.structures import CaseInsensitiveDict
