@@ -22,17 +22,18 @@ use super::{
     profile::{
         ZK_X509_ATTRIBUTE_DOMAIN_V1, ZK_X509_CLIENT_AUTHENTICATION_EKU_OID_V1,
         ZK_X509_DOCUMENT_SIGNING_EKU_DER_VALUE_V1, ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1,
-        ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_ENTRIES_V1, ZK_X509_MAX_SERIAL_BYTES_V1,
-        ZK_X509_NULLIFIER_DOMAIN_V1, ZK_X509_OWNERSHIP_DOMAIN_V1, ZK_X509_RELATION_VERSION_V1,
-        ZK_X509_SCOPED_KEY_DOMAIN_V1, ZK_X509_SOURCE_PROFILE_V1, ZK_X509_SUITE_V1,
-        ZK_X509_UNCOMPRESSED_P256_BYTES_V1, ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1,
+        ZK_X509_MAX_CRL_ENTRIES_V1, ZK_X509_MAX_SERIAL_BYTES_V1, ZK_X509_NULLIFIER_DOMAIN_V1,
+        ZK_X509_OWNERSHIP_DOMAIN_V1, ZK_X509_RELATION_VERSION_V1, ZK_X509_SCOPED_KEY_DOMAIN_V1,
+        ZK_X509_SOURCE_PROFILE_V1, ZK_X509_SUITE_V1, ZK_X509_UNCOMPRESSED_P256_BYTES_V1,
+        ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1,
     },
 };
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1,
     PrivacyNullifierV1, PrivacyStatementV1, PrivacyX509CrlDerDigestV1,
     PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
-    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
+    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CertificateValidityV1,
+    PrivacyZkX509CrlRecordV1, PrivacyZkX509CrlUpdateIntervalV1, PrivacyZkX509PresentationBoundsV1,
     PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
 };
 use p256::ecdsa::{
@@ -273,13 +274,11 @@ fn validate_certificate_path_v1(
     if chain.len() < 2 || chain.len() > 3 {
         return Err(ZkX509RelationErrorV1::InvalidCertificatePath);
     }
-    for certificate in chain {
-        if statement.presentation_not_before_unix_seconds < certificate.not_before
-            || statement.presentation_not_after_unix_seconds > certificate.not_after
-        {
-            return Err(ZkX509RelationErrorV1::CertificateNotValid);
-        }
-    }
+    // Every certificate bounds the window: the start is at least the latest
+    // notBefore and the end is at most the earliest notAfter in the path.
+    certificate_path_presentation_bounds_v1(chain)?
+        .admit(statement.presentation_window())
+        .map_err(|_| ZkX509RelationErrorV1::CertificateNotValid)?;
     let leaf = &chain[0];
     if leaf.extensions.basic_constraints.ca
         || leaf.extensions.basic_constraints.path_len.is_some()
@@ -364,12 +363,10 @@ fn validate_complete_crl_v1(
         || PrivacyX509CrlDerDigestV1::digest_exact_der(crl_der) != governed_crl.crl_der_digest
         || PrivacyX509CrlIssuerSpkiDigestV1::digest_exact_der(issuer.spki_der)
             != governed_crl.issuer_spki_digest
-        || statement.presentation_not_before_unix_seconds < crl.this_update
-        || statement.presentation_not_after_unix_seconds >= crl.next_update
-        || statement
-            .presentation_not_after_unix_seconds
-            .checked_sub(crl.this_update)
-            .is_none_or(|age| age > ZK_X509_MAX_CRL_AGE_SECONDS_V1)
+        // thisUpdate is inclusive, nextUpdate is exclusive and the CRL is at
+        // most 300 seconds old at the last presentation second.
+        || !crl_presentation_bounds_v1(crl)
+            .is_ok_and(|bounds| bounds.admit(statement.presentation_window()).is_ok())
     {
         return Err(ZkX509RelationErrorV1::InvalidCrl);
     }
@@ -383,6 +380,77 @@ fn validate_complete_crl_v1(
         return Err(ZkX509RelationErrorV1::CertificateRevoked);
     }
     Ok(())
+}
+/// Bounds that every certificate of one parsed path places on the window.
+fn certificate_path_presentation_bounds_v1(
+    chain: &[ParsedCertificateV1<'_>],
+) -> Result<PrivacyZkX509PresentationBoundsV1, ZkX509RelationErrorV1> {
+    // A fixed array keeps the private dates off the heap.
+    let mut validities = [PrivacyZkX509CertificateValidityV1::new(0, 0); 3];
+    if chain.len() > validities.len() {
+        return Err(ZkX509RelationErrorV1::InvalidCertificatePath);
+    }
+    for (validity, certificate) in validities.iter_mut().zip(chain) {
+        *validity =
+            PrivacyZkX509CertificateValidityV1::new(certificate.not_before, certificate.not_after);
+    }
+    PrivacyZkX509PresentationBoundsV1::from_certificate_path(&validities[..chain.len()])
+        .map_err(|_| ZkX509RelationErrorV1::CertificateNotValid)
+}
+/// Bounds that the complete signed CRL places on the window.
+fn crl_presentation_bounds_v1(
+    crl: &ParsedCrlV1<'_>,
+) -> Result<PrivacyZkX509PresentationBoundsV1, ZkX509RelationErrorV1> {
+    PrivacyZkX509PresentationBoundsV1::from_crl(PrivacyZkX509CrlUpdateIntervalV1::new(
+        crl.this_update,
+        crl.next_update,
+    ))
+    .map_err(|_| ZkX509RelationErrorV1::InvalidCrl)
+}
+/// Derive the admissible presentation bounds from the exact private DER.
+///
+/// The start of every admissible window is at least the latest `notBefore` in
+/// the path and the CRL `thisUpdate`; its end is at most the earliest
+/// `notAfter` in the path, strictly before the CRL `nextUpdate` and at most 300
+/// seconds after `thisUpdate`. The relation admits exactly the well-shaped
+/// windows inside the returned bounds, because both consume the same canonical
+/// definition.
+///
+/// Only the validity fields are interpreted here; signatures, path linkage and
+/// governance binding remain the complete relation's responsibility.
+///
+/// # Availability
+///
+/// Like the whole `relation` module, the strict DER parser and prover
+/// preparation, this helper is compiled only under
+/// `cfg(any(test, feature = "privacy-release-evidence"))`. An ordinary build
+/// does not contain it: today it serves the release fixtures and tests. A
+/// holder in an ordinary build parses the validity fields itself and calls the
+/// data-model definition
+/// (`PrivacyZkX509PresentationBoundsV1::from_signed_intervals`), which ships in
+/// every build.
+///
+/// # Errors
+///
+/// Rejects DER outside the closed profile, a path outside the admitted depth,
+/// and signed intervals that share no presentation second.
+// TODO(X.5): ship this helper with the holder prover. It needs the strict DER
+// parser and the relation parsers, which are gated together with the prover.
+pub fn derive_zk_x509_presentation_bounds_v1(
+    certificate_chain_der: &[Vec<u8>],
+    crl_der: &[u8],
+) -> Result<PrivacyZkX509PresentationBoundsV1, ZkX509RelationErrorV1> {
+    if !(2..=3).contains(&certificate_chain_der.len()) {
+        return Err(ZkX509RelationErrorV1::WitnessMismatch);
+    }
+    let mut chain = Vec::with_capacity(certificate_chain_der.len());
+    for certificate in certificate_chain_der {
+        chain.push(parse_certificate_v1(certificate)?);
+    }
+    let crl = parse_crl_v1(crl_der)?;
+    certificate_path_presentation_bounds_v1(&chain)?
+        .intersect(crl_presentation_bounds_v1(&crl)?)
+        .map_err(|_| ZkX509RelationErrorV1::CertificateNotValid)
 }
 fn derive_subject_public_key_digest_v1(
     statement: &IrohaZkX509StarkP256StatementV1,

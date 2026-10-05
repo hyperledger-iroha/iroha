@@ -44,6 +44,80 @@ review or partial test selection closes one of them.
 5. Qualify end-to-end SDK/native/network paths and independent cryptographic
    evidence. Close each goal only with its acceptance evidence.
 
+## Resource bounds
+
+The [resource contract](zk_resource_contract.json) lists the byte, count and
+work bounds from SDK admission to storage with their value, single code owner,
+enforcement sites, tests and class: consensus bound, local resource that defers,
+local scheduling limit or engineering target. It also records the relations
+between bounds. `python3 scripts/check_zk_resource_contract.py` reads each owner
+from the source and fails on drift. The checker scans the owner files, the
+committed-parameter modules and every production source of the directories on
+the path (the transaction, block, proof, parameter and instruction models, the
+consensus core and its node driver, the pipeline, the IVM and its ABI, and the
+P2P layer): a limit defined there is a listed bound or is excluded with a
+reason. It reads the fields of five typed catalogs and fails on a field that is
+neither listed nor excluded: `execution_policy_digest_v1`,
+`compute_zk_consensus_policy_hash` and the Nexus consensus-policy preimage for
+node configuration, and the committed `ExecutionOutputPolicyV1` and
+`FastpqSourcePolicyV1`. A site records how often its text occurs, and a named
+test must be compiled into its crate. `--refresh` rewrites values, expressions
+and site counts from the source and keeps the classifications; `--propose`
+prints a skeleton with candidate sites and tests for an unlisted limit.
+
+Facts it records about the current tree:
+
+- The transaction cap is 10 MiB and the default block payload limit is 4 MiB. A
+  transaction above 4,128,768 bytes (the payload limit less the proposer's
+  64 KiB reserve) cannot be included, so queue admission and
+  `Parameters::check_signed_transaction_bytes` refuse it instead of leaving it
+  queued until it expires. The bound follows the transaction's route: a
+  transaction routed to a native lane also has the budget of that lane's
+  committed record, and a transaction routed to lane zero does not. Block
+  validity is unchanged. The bound holds for the route at admission and is not a
+  promise of inclusion: a lane-routed transaction above the global budget is
+  carried by its lane's proposer only, because the global rescue of a stalled
+  lane selects within the global budget. If the lane stalls or closes, it stays
+  queued until it expires.
+- A default block carries at most eleven of its own transactions, not 512: the
+  proposer selects up to the Network input cap of the committed FASTPQ source
+  policy.
+- The proof attachment list of a signed transaction is at most 16 attachments
+  and 8 MiB of canonical frame, below the 9,437,184-byte proof ceiling. A
+  ceiling-sized proof cannot travel as an attachment today.
+- The privacy action bound equals the proof ceiling, so an action carrying a
+  ceiling-sized proof is rejected as too large; two maximum actions per block
+  do not fit any payload limit.
+- A 16 MiB payload passes the chain parameter rule but has no feasible
+  `sync_max_bytes`; the largest payload with one is 16,185,312 bytes.
+- Transaction gossip frames are 256 KiB: a larger transaction stays with the
+  node that admitted it.
+- 74 limits and gas charges that decide validity are read from node
+  configuration and bound into State only as a hash: decoded-instruction,
+  overlay, quarantine and query limits of `[pipeline]`, the proof, SCCP and
+  confidential limits of `[zk]` and `[confidential]`, and the atomic private
+  settlement, uploaded-model and DA ingest quota limits of `[nexus]`. Eight of
+  them are bound into the hash and compared by no state transition; four of
+  those (the settlement leg proof, capsule and sidecar sizes) are compared only
+  by Torii's settlement service.
+- The configured settlement carrier limit (4,194,304 bytes) is above the
+  includable transaction bound of the default payload (4,128,768 bytes): a
+  carrier near its limit passes the State check and is refused at queue
+  admission.
+- An executed block may be 256 MiB of wire; the authenticated block-proof
+  carrier a client confirms inclusion through serves at most 32 MiB.
+
+These are open relations and defects with owning tasks in the contract, not
+accepted behavior. The 300-second CRL age and presentation window are consensus
+validity bounds. The 300-second zk-X509 proving time is an engineering target
+with the same value, and the 12 GiB and 32 GiB memory limits are applied by the
+prover to itself; none of the three is validity. `exec_budget_ms` and
+`apply_budget_ms` are committed parameters used as local scheduling limits.
+RAM-LFE budgets cover the registered program, key registration, request,
+evaluation, receipt, verification, opening, threshold opening, validator scratch
+and each class; those that need a selected profile have formulas and inputs and
+no number.
+
 ## Current implementation and evidence
 
 Work remains in the existing `optimizations` checkout, with merged HEAD
@@ -330,6 +404,10 @@ initializer, reduction and commitments are prerequisites, not an execution proof
 Secure encryption replacement, exact refresh, malicious-key/input validation,
 circuit privacy, the complete program relation and integrated qualification remain
 open under the [replacement contract](ram_lfe_encryption_replacement.md).
+The [canonical V1 contract](ram_lfe_execution_proof.md#canonical-v1-contract)
+(roles, leakage bound and lifetime query limit, three classes, function identity,
+policy, receipt, opening and cleartext reference) is implemented as types,
+commitments and tests; no evaluator, relation or Core path consumes it yet.
 
 The candidate [packing](ram_lfe_plaintext_packing.md) and
 [semantic](ram_lfe_semantic_commitments.md) interfaces preserve private length,
@@ -704,6 +782,17 @@ composition challenges; both composition and FRI-mask roots precede the common
 DEEP point. All joint openings precede local mixing. The
 [joint relation contract](zk_x509_joint_private_relation.md) records the exact
 schedule, geometry and still-conditional algebraic ledger.
+
+The public presentation window has one definition, recorded in the
+[interval contract](zk_x509_presentation_interval.md): it starts at or after the
+latest `notBefore` and ends at or before the earliest `notAfter` of every
+certificate in the path, and ends strictly before the CRL `nextUpdate`. State
+admission, the native relation, the DER-to-bounds helper, the in-relation
+numeric rows and the RFC 5280 AIR base constraints agree on genuinely signed
+boundary paths. The native relation and the DER-to-bounds helper are compiled
+with the prover, for tests and the `privacy-release-evidence` feature only; no
+SDK builds an X509 statement yet, and no complete proof was generated at those
+shapes.
 
 The latest Linux CPU maximum proof is 9,412,944 bytes, under the unchanged
 9,437,184-byte cap, with SHA-256

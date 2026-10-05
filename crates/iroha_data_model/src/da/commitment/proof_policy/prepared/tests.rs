@@ -139,10 +139,13 @@ fn da_policy_generated_scalar_fields_reject_truncated_scheme_and_invalid_utf8_wi
             .unwrap();
         source.as_mut_slice()[offset] = 0xff;
         let mut pending = PreparedDaProofPolicyBundle::from_source(&source, span, &pool).unwrap();
-        let error = pending.prepare(&source).unwrap_err();
-        assert!(
-            matches!(error,DaProofPolicyCustodyError::Decode(original) if matches!(original.into_error(),norito::Error::InvalidUtf8))
-        );
+        // `into_error` consumes the attempt error, so bind the cause by value
+        // instead of moving it inside a pattern guard.
+        let DaProofPolicyCustodyError::Decode(original) = pending.prepare(&source).unwrap_err()
+        else {
+            panic!("invalid UTF-8 must surface as the original decode cause");
+        };
+        assert!(matches!(original.into_error(), norito::Error::InvalidUtf8));
         assert!(pending.values.value.is_none());
         assert!(!pending.payload_admitted);
         drop(pending);

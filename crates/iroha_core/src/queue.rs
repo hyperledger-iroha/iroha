@@ -1396,7 +1396,8 @@ pub enum Error {
     },
     /// Current consensus cannot execute this transaction admission: {reason}
     UnsupportedTransactionAdmission {
-        /// Unsupported signed intent or resolved multi-route execution.
+        /// Unsupported signed intent, resolved multi-route execution, or a transaction larger
+        /// than any proposer of the committed chain can include.
         reason: String,
     },
     /// Transaction routing could not be resolved: {reason}
@@ -1483,6 +1484,17 @@ pub struct Failure {
 }
 trait QueueAdmissionStateAccess {
     fn authority_exists(&mut self, authority: &AccountId) -> bool;
+    /// Whether a proposer of the committed chain can include `transaction` on its route
+    /// (`sumeragi::payload::check_includable_transaction`).
+    fn check_includable_transaction(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Result<
+        (),
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::parameter::system::TransactionNeverIncludable,
+        >,
+    >;
     /// Classify an external signed transaction's SCCP exemption against committed state
     /// (`specs/sccp.md` §4.19).
     fn sccp_exempt_admission(
@@ -1544,6 +1556,23 @@ impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
 impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, W> {
     fn authority_exists(&mut self, authority: &AccountId) -> bool {
         self.world.accounts().get(authority).is_some()
+    }
+    fn check_includable_transaction(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Result<
+        (),
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::parameter::system::TransactionNeverIncludable,
+        >,
+    > {
+        crate::sumeragi::payload::check_includable_transaction(
+            self.world,
+            &self.nexus.dataspace_catalog,
+            self.ledger_time_ms,
+            self.next_block_height,
+            transaction,
+        )
     }
     fn sccp_exempt_admission(
         &mut self,
@@ -4073,6 +4102,23 @@ impl Queue {
             tx: checked.as_accepted().clone().into(),
             err,
         })?;
+        // A transaction larger than the selection budget of every proposer on its route would
+        // only wait for its expiry. The bound comes from committed parameters and the committed
+        // route, so every node decides alike; an unfinished local read defers the assessment.
+        if let Err(refusal) = state_access.check_includable_transaction(checked.as_accepted()) {
+            use crate::execution_attempt::ExecutionAttemptError;
+            return Err(Failure {
+                tx: checked.as_accepted().clone().into(),
+                err: match refusal {
+                    ExecutionAttemptError::Rejected(never_includable) => {
+                        Error::UnsupportedTransactionAdmission {
+                            reason: never_includable.to_string(),
+                        }
+                    }
+                    ExecutionAttemptError::Deferred(reason) => Error::Deferred(reason),
+                },
+            });
+        }
         // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
         // manifest, privacy-proof, compliance, and gas analysis.
         let _ = self.cull_expired_entries_if_due();
@@ -9473,6 +9519,7 @@ pub mod tests {
     }
     include!("queue/current_admission_tests.rs");
     include!("queue/domain_admission_tests.rs");
+    include!("queue/resource_contract_tests.rs");
     #[test]
     fn push_wakes_sumeragi_when_configured() {
         let kura = Kura::blank_kura_for_testing();

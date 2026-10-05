@@ -87,7 +87,8 @@ pub(crate) const fn schema<T: Encode + NoritoSchema>() -> Schema {
 /// Shape of independent canonical authority; nested owners remain exhaustive.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Canonical {
-    /// Ordered key/value table; key ordering is the declared owner's ordering.
+    /// Keyed table. The Rust owner iterates in its own `Ord`; the keyed State commitment
+    /// orders entries by canonical key bytes instead (`specs/sumeragi.md` §16.1, §16.2).
     Table { key: Schema, value: Schema },
     /// Singleton canonical value.
     Cell(Schema),
@@ -249,6 +250,16 @@ mod fraud_policy;
     )
 )]
 mod governance_policy;
+// Construction-independent contract of the single keyed State commitment
+// (`specs/sumeragi.md` §16). Nothing here is consensus state yet.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(G.2, G.3): candidate constructions and the State publication owner consume the keyed commitment contract"
+    )
+)]
+pub(crate) mod keyed_commitment;
 #[cfg_attr(
     not(test),
     expect(
@@ -316,6 +327,9 @@ pub(in crate::state) mod world;
     )
 )]
 mod zk_policy;
+/// Identities of every canonical table that the exact table catalog reads.
+#[cfg(test)]
+pub(in crate::state) use complete::table_capture::catalog_table_ids;
 /// Classified fields of the concrete State owner.
 pub(crate) const STATE_FIELDS: &[Field] = state::STATE_FIELDS;
 /// Classified fields of the concrete heap-owned World data owner.

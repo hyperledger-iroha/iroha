@@ -7,9 +7,7 @@
 //! unavailable until that separate theorem and its concrete loss are pinned.
 use super::{
     JINDO_RING_DEGREE_V1,
-    ring::{
-        JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, is_prime_modulus_v1,
-    },
+    ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1},
     transcript::JINDO_SIGNED_MONOMIAL_CHALLENGE_CARDINALITY_V1,
 };
 #[cfg(test)]
@@ -20,6 +18,8 @@ use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
 };
+// Scalar arithmetic comes from the shared owner.
+use iroha_fhe::modular::{is_prime_u64, mod_pow_u64, mul_mod_u64};
 use std::sync::OnceLock;
 use thiserror::Error;
 
@@ -189,14 +189,14 @@ fn check_prime_difference_classes_v1(
 ) -> Result<(), JindoUnitDifferenceCertificateErrorV1> {
     let modulus = prime.modulus();
     let psi = prime.psi();
-    if !is_prime_modulus_v1(modulus) {
+    if !is_prime_u64(modulus) {
         return Err(JindoUnitDifferenceCertificateErrorV1::ModulusNotPrime { modulus });
     }
     if (modulus - 1) % u64::from(ROOT_ORDER_V1) != 0 {
         return Err(JindoUnitDifferenceCertificateErrorV1::ModulusNotNttFriendly { modulus });
     }
-    if pow_mod_v1(psi, u64::from(ROOT_ORDER_V1), modulus) != 1
-        || pow_mod_v1(psi, u64::from(NEGACYCLIC_ROOT_COUNT_V1), modulus) != modulus - 1
+    if mod_pow_u64(psi, u64::from(ROOT_ORDER_V1), modulus) != 1
+        || mod_pow_u64(psi, u64::from(NEGACYCLIC_ROOT_COUNT_V1), modulus) != modulus - 1
     {
         return Err(
             JindoUnitDifferenceCertificateErrorV1::InvalidPrimitiveRoot { modulus, root: psi },
@@ -204,7 +204,7 @@ fn check_prime_difference_classes_v1(
     }
     for root_index in 0..NEGACYCLIC_ROOT_COUNT_V1 {
         let exponent = u64::from(2 * root_index + 1);
-        let root = pow_mod_v1(psi, exponent, modulus);
+        let root = mod_pow_u64(psi, exponent, modulus);
         let mut power = root;
         for difference in 1..ROOT_ORDER_V1 {
             if power == 1 {
@@ -214,7 +214,7 @@ fn check_prime_difference_classes_v1(
                     difference,
                 });
             }
-            power = mul_mod_v1(power, root, modulus);
+            power = mul_mod_u64(power, root, modulus);
         }
         debug_assert_eq!(power, 1);
     }
@@ -224,22 +224,6 @@ fn check_prime_difference_classes_v1(
 fn absorb_certificate_field_v1(hash: &mut Shake256, value: &[u8]) {
     hash.update(&(value.len() as u64).to_be_bytes());
     hash.update(value);
-}
-
-fn mul_mod_v1(left: u64, right: u64, modulus: u64) -> u64 {
-    (u128::from(left) * u128::from(right) % u128::from(modulus)) as u64
-}
-
-fn pow_mod_v1(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
-    let mut result = 1_u64;
-    while exponent != 0 {
-        if exponent & 1 == 1 {
-            result = mul_mod_v1(result, base, modulus);
-        }
-        base = mul_mod_v1(base, base, modulus);
-        exponent >>= 1;
-    }
-    result
 }
 
 #[cfg(test)]
@@ -345,8 +329,8 @@ pub fn jindo_challenge_pair_has_unit_difference_v1(
     .into_iter()
     .all(|prime| {
         (0..JINDO_RING_DEGREE_V1).all(|root_index| {
-            let root = pow_mod_v1(prime.psi(), (2 * root_index + 1) as u64, prime.modulus());
-            pow_mod_v1(root, u64::from(difference), prime.modulus()) != 1
+            let root = mod_pow_u64(prime.psi(), (2 * root_index + 1) as u64, prime.modulus());
+            mod_pow_u64(root, u64::from(difference), prime.modulus()) != 1
         })
     }))
 }

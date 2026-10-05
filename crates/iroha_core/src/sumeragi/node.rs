@@ -1253,6 +1253,8 @@ pub(crate) fn startup_nonce() -> u64 {
 mod tests {
     #[path = "dataspace_roots.rs"]
     mod dataspace_roots;
+    #[path = "history_cutover_tests.rs"]
+    mod history_cutover_tests;
     #[path = "p2p_owner_tests.rs"]
     mod p2p_owner_tests;
     #[path = "root_owner_tests.rs"]

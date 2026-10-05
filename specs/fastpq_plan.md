@@ -53,6 +53,17 @@ circuits, verifier keys, query counts or transcript internals. The public Rustdo
 contains an executable typed example. The public guide is maintained in
 [iroha-docs](https://docs.iroha.tech/blockchain/fastpq).
 
+Relation authors write against `fastpq_prover::air` (`SemanticAir`, the sealed
+`PolynomialField`, public IO, `WorkLimits` and `Observer`). The committed q77
+engine takes its limits only as `air::q77::VerifierLimits` and
+`air::q77::ProducerLimits`, each carrying one `WorkLimits`; the facade policies
+below are mapped to them with `for_segment`. Today the engine proves only its
+sealed transfer relations; any other relation gets the uncommitted algebraic
+reference until the shared engine of the
+[ZK delivery plan](zk_delivery_plan.md) task B.2 exists. The
+[shared-backend inventory](fastpq/shared_backend_inventory.md) lists every
+duplicate STARK owner and its importers and is checked against the source.
+
 `quantity_artifact_resources` provides witness-free planning. The real producer
 independently admits its exact statement-dependent plan before private work.
 Default limits remain 524,288 bytes per child, 2 GiB of charged payload per

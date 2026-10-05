@@ -1920,7 +1920,7 @@ mod tests {
                 }],
             };
             let record =
-                crate::argument_record::encode_argument_record_from_json(&schema, &json).unwrap();
+                ivm_abi::arguments::encode_argument_record_from_json(&schema, &json).unwrap();
             assert_eq!(
                 crate::argument_record::validate_argument_record(&schema, &record)
                     .unwrap()

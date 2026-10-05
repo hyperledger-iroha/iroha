@@ -454,6 +454,86 @@ fn execution_retries_back_off_and_cancelled_is_retried() {
     assert_eq!(votes_of(&h.all, VoteKind::Prepare).len(), 1);
 }
 
+/// Resource contract (`specs/zk_resource_contract.json`, class `local_defer`): an executor
+/// that lacks a local resource defers. The validator signs no Prepare vote and no timeout
+/// vote, rejects no payload and reports no evidence; the same block is then executed and
+/// voted. Only a deterministic invalid outcome rejects, and validators at different committee
+/// positions with different node-local settings reach the same verdict on the same block.
+#[test]
+fn local_resource_failure_defers_without_vote_and_invalid_rejects_deterministically() {
+    fn start(position: impl Fn(&Topology) -> ValidatorIndex, t_base: u64) -> (H, Hash32) {
+        // A long view timeout so that the retries finish within the view.
+        let local = LocalParams {
+            t_base,
+            ..LocalParams::default()
+        };
+        let mut h = H::with(4, local, ChainParams::default(), position);
+        let b = h.block(0, b"B");
+        prop(&mut h, 0, &b, None);
+        let bh = h.bh(&b);
+        (h, bh)
+    }
+    let rejected = |actions: &[Action]| {
+        actions
+            .iter()
+            .filter(|a| matches!(a, Action::PayloadRejected { .. }))
+            .count()
+    };
+    // Deferred: a local fault, a scheduled retry and nothing signed.
+    let (mut h, bh) = start(pick::set_a(0), 20_000);
+    for _ in 0..3 {
+        let out = h.exec(bh, ExecOutcome::Failed("execution pool exhausted".into()));
+        assert_eq!(faults(&out), vec![LocalFault::ExecutorFailed { height: 1 }]);
+        assert!(votes_of(&out, VoteKind::Prepare).is_empty());
+        assert!(timeouts(&out).is_empty() && evidence(&out).is_empty());
+        assert_eq!(rejected(&out), 0);
+        assert!(h.my_sigs(crate::preimage::KIND_PREPARE, 1, 0).is_empty());
+        assert!(h.my_sigs(crate::preimage::KIND_TIMEOUT, 1, 0).is_empty());
+        let wake = h
+            .core
+            .deadlines()
+            .into_iter()
+            .find_map(|(name, at)| (name == "exec").then_some(at).flatten())
+            .expect("the deferred execution is retried");
+        h.run_until(wake);
+        assert_eq!(h.pending_exec.len(), 1, "the same block is executed again");
+    }
+    // The resource returns: the unchanged block is executed and voted.
+    h.exec_all();
+    assert_eq!(h.my_sigs(crate::preimage::KIND_PREPARE, 1, 0).len(), 1);
+    assert_eq!(rejected(&h.all), 0);
+    assert!(h.my_sigs(crate::preimage::KIND_TIMEOUT, 1, 0).is_empty());
+
+    // Invalid: one rejection and one timeout vote, no Prepare vote and no local fault. The
+    // verdict is taken on three different validators of the committee, each with its own
+    // node-local view timeout: local position and local settings change nothing.
+    let verdict = |position: &dyn Fn(&Topology) -> ValidatorIndex, t_base: u64| {
+        let (mut h, bh) = start(position, t_base);
+        let me = h.me;
+        let out = h.exec(bh, ExecOutcome::Invalid);
+        (
+            me,
+            (
+                rejected(&out),
+                timeouts(&out).len(),
+                votes_of(&out, VoteKind::Prepare).len(),
+                faults(&out),
+                h.my_sigs(crate::preimage::KIND_PREPARE, 1, 0).len(),
+            ),
+        )
+    };
+    let (first, first_verdict) = verdict(&pick::set_a(0), 20_000);
+    let (second, second_verdict) = verdict(&pick::proxy_tail(0), 35_000);
+    let (third, third_verdict) = verdict(&pick::set_b(0), 50_000);
+    assert!(
+        first != second && second != third && first != third,
+        "three different validators"
+    );
+    assert_eq!(first_verdict, (1, 1, 0, Vec::new(), 0));
+    assert_eq!(second_verdict, first_verdict, "the proxy tail agrees");
+    assert_eq!(third_verdict, first_verdict, "a set-B validator agrees");
+}
+
 #[test]
 fn bodies_only_when_wanted() {
     let mut h = H::new(4, pick::set_a(0));
@@ -527,6 +607,39 @@ fn oversized_payload_waits_for_bounded_rebuild() {
     let out = h.run_until(h.params.payload_retry_interval + h.local.build_timeout);
     assert!(proposals(&out).is_empty());
     assert_eq!(h.core.tip.height, 0);
+}
+
+/// Proposer stage of the resource contract (`specs/zk_resource_contract.json`,
+/// `block.max_block_bytes`): the committed payload limit is inclusive for the leader, as it
+/// is for the follower's signed-header check.
+#[test]
+fn payload_at_the_committed_limit_is_proposed_and_one_byte_over_is_not() {
+    let params = ChainParams {
+        max_block_bytes: 8,
+        ..ChainParams::default()
+    };
+    let local = LocalParams {
+        sync_max_bytes: 1 << 20,
+        ..LocalParams::default()
+    };
+    let mut h = H::with(4, local, params, pick::leader(0));
+    h.run_until(1_000);
+    let out = h.built(&[1; 8]);
+    let proposed = proposals(&out);
+    assert_eq!(
+        proposed.len(),
+        1,
+        "a payload of exactly the limit is proposed"
+    );
+    assert_eq!(proposed[0].header.payload_len, 8);
+
+    let mut h = H::with(4, local, params, pick::leader(0));
+    h.run_until(1_000);
+    let out = h.built(&[1; 9]);
+    assert!(
+        proposals(&out).is_empty(),
+        "one byte over is never proposed"
+    );
 }
 
 #[test]

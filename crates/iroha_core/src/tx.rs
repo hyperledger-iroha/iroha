@@ -10143,6 +10143,30 @@ pub mod tests {
             other => panic!("Expected MaxCyclesExceedsFuel error, got {other:?}"),
         }
     }
+    /// The committed fuel is inclusive: a cycle ceiling equal to it passes admission, and
+    /// the next value is the first one refused (the test above).
+    #[test]
+    fn validate_ivm_max_cycles_equal_to_fuel_is_admitted() {
+        let mut fixture = IvmAdmissionFixture::new();
+        let mut pipeline = fixture.state.pipeline.clone();
+        let fuel_limit = fixture
+            .state
+            .world
+            .parameters
+            .view()
+            .smart_contract()
+            .fuel()
+            .get();
+        // Keep the node-local ceiling above the fuel so only the fuel comparison decides.
+        pipeline.ivm_max_cycles_upper_bound =
+            std::num::NonZeroU64::new(fuel_limit + 10).expect("fuel limit plus ten is non-zero");
+        fixture.state.set_pipeline(pipeline);
+        let result = fixture.validate_program(minimal_ivm_program_with_max_cycles(1, fuel_limit));
+        assert!(
+            result.is_ok(),
+            "a cycle ceiling equal to the fuel is admitted: {result:?}"
+        );
+    }
     #[test]
     fn validate_ivm_instruction_limit_enforced() {
         let mut fixture = IvmAdmissionFixture::new();

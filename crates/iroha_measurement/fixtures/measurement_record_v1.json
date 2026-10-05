@@ -1,0 +1,293 @@
+{
+  "address_space": {
+    "classification": "local_scheduling",
+    "enforced": true,
+    "hard_limit_bytes": 34359738368,
+    "soft_limit_bytes": 34359738368,
+    "source": "getrlimit.RLIMIT_AS"
+  },
+  "allocations": {
+    "classification": "measured",
+    "sources": [
+      {
+        "allocated_bytes": 8192,
+        "allocations": 2,
+        "freed_bytes": 4096,
+        "frees": 1,
+        "kind": "scoped_counter",
+        "label": "lde_columns",
+        "live_buffers": 1,
+        "live_buffers_high_water": 2,
+        "live_bytes": 4096,
+        "live_bytes_high_water": 8192
+      },
+      {
+        "allocated_bytes": 0,
+        "allocations": 0,
+        "freed_bytes": 0,
+        "frees": 0,
+        "kind": "allocation_budget",
+        "label": "prover_pool",
+        "live_buffers": 0,
+        "live_buffers_high_water": 0,
+        "live_bytes": 1024,
+        "live_bytes_high_water": 65536
+      }
+    ]
+  },
+  "byte_counters": {
+    "classification": "measured",
+    "entries": [
+      {
+        "count": 1,
+        "kind": "proof",
+        "label": "proof_frame",
+        "max_bytes": 973089,
+        "min_bytes": 973089,
+        "phase": 2,
+        "total_bytes": 973089
+      },
+      {
+        "count": 3,
+        "kind": "transaction",
+        "label": "transfer",
+        "max_bytes": 800,
+        "min_bytes": 600,
+        "phase": 0,
+        "total_bytes": 2100
+      }
+    ]
+  },
+  "declared": [
+    {
+      "classification": "engineering_target",
+      "label": "prover_seconds_target",
+      "provenance": "specs/zk_delivery_plan.md",
+      "provenance_kind": "plan_target",
+      "unit": "seconds",
+      "value": 300
+    },
+    {
+      "classification": "deterministic_consensus_bound",
+      "label": "max_proof_bytes",
+      "provenance": "zk_x509/profile.rs:ZK_X509_MAX_PROOF_BYTES_V1",
+      "provenance_kind": "protocol_constant",
+      "unit": "bytes",
+      "value": 9437184
+    },
+    {
+      "classification": "local_scheduling",
+      "label": "prover_pool",
+      "provenance": "iroha_allocation.AllocationBudget.limit_bytes",
+      "provenance_kind": "local_configuration",
+      "unit": "bytes",
+      "value": 65536
+    },
+    {
+      "classification": "projection",
+      "label": "maximum_shape_seconds",
+      "provenance": "model:linear_rows",
+      "provenance_kind": "model_projection",
+      "unit": "seconds",
+      "value": 1200
+    }
+  ],
+  "failures": {
+    "classification": "measured",
+    "dropped": 0,
+    "entries": []
+  },
+  "identity": {
+    "artifact": "sha256:9a3f",
+    "cache_policy": "cold",
+    "config": "defaults/privacy@taira",
+    "emitter": "rust.iroha_measurement",
+    "flow": "proof",
+    "hardware": "Mac13,2/apple-m1-ultra/20c/128GiB",
+    "profile": "release+fastpq-final-v1",
+    "source_commit": "7e93d3e0497e93d3e0497e93d3e0497e93d3e049",
+    "source_dirty": true,
+    "source_dirty_digest": "4f0d6c1c8f3b2a1e9d7c5b3a19e8f7d6c5b4a3928170f6e5d4c3b2a1908f7e6d",
+    "workload": "sample_prove"
+  },
+  "outcome": "succeeded",
+  "phase_tree": {
+    "classification": "measured",
+    "nodes": [
+      {
+        "active_threads_max": 1,
+        "allocated_bytes": 0,
+        "allocations": 0,
+        "calls": 1,
+        "completed": 1,
+        "interrupted": 0,
+        "label": "prove",
+        "live_bytes_high_water": 8192,
+        "load_milli_first_enter": 2500,
+        "load_milli_last_exit": 3000,
+        "load_milli_max": 3200,
+        "parent": null,
+        "peak_concurrent_children": 1,
+        "process_cpu_window_exclusive_ns": 5000000,
+        "process_cpu_window_inclusive_ns": 1330000000,
+        "thread_cpu_exclusive_ns": 3000000,
+        "thread_cpu_inclusive_ns": 885000000,
+        "truncated": 0,
+        "unwound": 0,
+        "wall_exclusive_ns": 1000000,
+        "wall_inclusive_ns": 1000000000
+      },
+      {
+        "active_threads_max": 1,
+        "allocated_bytes": 0,
+        "allocations": 0,
+        "calls": 1,
+        "completed": 1,
+        "interrupted": 0,
+        "label": "commit",
+        "live_bytes_high_water": 8192,
+        "load_milli_first_enter": 2500,
+        "load_milli_last_exit": 3000,
+        "load_milli_max": 3200,
+        "parent": 0,
+        "peak_concurrent_children": 1,
+        "process_cpu_window_exclusive_ns": 280000000,
+        "process_cpu_window_inclusive_ns": 875000000,
+        "thread_cpu_exclusive_ns": 280000000,
+        "thread_cpu_inclusive_ns": 870000000,
+        "truncated": 0,
+        "unwound": 0,
+        "wall_exclusive_ns": 279000000,
+        "wall_inclusive_ns": 879000000
+      },
+      {
+        "active_threads_max": 1,
+        "allocated_bytes": 8192,
+        "allocations": 2,
+        "calls": 3,
+        "completed": 3,
+        "interrupted": 0,
+        "label": "transform",
+        "live_bytes_high_water": 8192,
+        "load_milli_first_enter": 2500,
+        "load_milli_last_exit": 3000,
+        "load_milli_max": 3200,
+        "parent": 1,
+        "peak_concurrent_children": 0,
+        "process_cpu_window_exclusive_ns": 595000000,
+        "process_cpu_window_inclusive_ns": 595000000,
+        "thread_cpu_exclusive_ns": 590000000,
+        "thread_cpu_inclusive_ns": 590000000,
+        "truncated": 0,
+        "unwound": 0,
+        "wall_exclusive_ns": 600000000,
+        "wall_inclusive_ns": 600000000
+      },
+      {
+        "active_threads_max": 5,
+        "allocated_bytes": 0,
+        "allocations": 0,
+        "calls": 1,
+        "completed": 1,
+        "interrupted": 0,
+        "label": "fold",
+        "live_bytes_high_water": 8192,
+        "load_milli_first_enter": 2500,
+        "load_milli_last_exit": 3000,
+        "load_milli_max": 3200,
+        "parent": 0,
+        "peak_concurrent_children": 4,
+        "process_cpu_window_exclusive_ns": 10000000,
+        "process_cpu_window_inclusive_ns": 450000000,
+        "thread_cpu_exclusive_ns": 12000000,
+        "thread_cpu_inclusive_ns": 12000000,
+        "truncated": 0,
+        "unwound": 0,
+        "wall_exclusive_ns": 10000000,
+        "wall_inclusive_ns": 120000000
+      },
+      {
+        "active_threads_max": 5,
+        "allocated_bytes": 0,
+        "allocations": 0,
+        "calls": 4,
+        "completed": 4,
+        "interrupted": 0,
+        "label": "worker",
+        "live_bytes_high_water": 8192,
+        "load_milli_first_enter": 2500,
+        "load_milli_last_exit": 3000,
+        "load_milli_max": 3200,
+        "parent": 3,
+        "peak_concurrent_children": 0,
+        "process_cpu_window_exclusive_ns": 1560000000,
+        "process_cpu_window_inclusive_ns": 1560000000,
+        "thread_cpu_exclusive_ns": 390000000,
+        "thread_cpu_inclusive_ns": 390000000,
+        "truncated": 0,
+        "unwound": 0,
+        "wall_exclusive_ns": 400000000,
+        "wall_inclusive_ns": 400000000
+      }
+    ]
+  },
+  "process": {
+    "classification": "measured",
+    "cpu_system_ns": 500000000,
+    "cpu_user_ns": 9000000000,
+    "load_milli_begin": 2500,
+    "load_milli_finish": 9800,
+    "logical_cpus": 20,
+    "peak_rss_bytes": 2147483648,
+    "peak_rss_bytes_at_begin": 52428800,
+    "peak_rss_source": "kernel_lifetime_high_water",
+    "pid": 4242,
+    "thermal_begin": "nominal",
+    "thermal_finish": "fair",
+    "thermal_source": "darwin.notify.thermalpressurelevel"
+  },
+  "recorder": {
+    "classification": "measured",
+    "clock_anomaly_events": 0,
+    "counter_overflow_events": 0,
+    "forced_closes": 0,
+    "invalid_label_events": 0,
+    "node_overflow_events": 0,
+    "span_overflow_events": 0,
+    "stale_guard_events": 0,
+    "stale_parent_events": 0
+  },
+  "scheduling": {
+    "classification": "local_scheduling",
+    "phase_workers": [
+      {
+        "phase": 3,
+        "workers": 4
+      }
+    ],
+    "workers": 20,
+    "workers_provenance": "rayon.current_num_threads"
+  },
+  "schema": "iroha.measurement.record.v1",
+  "work_counters": {
+    "classification": "measured",
+    "entries": [
+      {
+        "count": 3,
+        "label": "transform_columns",
+        "max_units": 8,
+        "min_units": 4,
+        "phase": 2,
+        "total_units": 20
+      },
+      {
+        "count": 4,
+        "label": "fold_rows",
+        "max_units": 1024,
+        "min_units": 1024,
+        "phase": 4,
+        "total_units": 4096
+      }
+    ]
+  }
+}

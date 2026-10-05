@@ -3,7 +3,7 @@
 //! Logical ranks are not physical RNS levels. Counts exclude unknown algorithm
 //! workspaces, noise transfers and sanitization, which remain mandatory blockers.
 
-use super::{HiddenRamFheInstruction as Op, HiddenRamFheProgram};
+use super::{HiddenRamFheInstruction as Op, HiddenRamFheProgram, RamLfeClassV1};
 use crate::fhe_bfv::plaintext_packing_candidate::GALOIS_EXPONENTS;
 use std::fmt;
 use zeroize::Zeroize;
@@ -65,6 +65,8 @@ const COUNT_LENGTH: usize = Count::Outputs as usize + 1;
 #[derive(Debug, PartialEq, Eq)]
 enum PlanError {
     RequestShape,
+    // This lowering has no refresh operation: it plans `bounded.v1` tapes only.
+    OutsideBoundedClass,
     Allocation,
     Capacity,
     ArithmeticOverflow,
@@ -450,6 +452,11 @@ fn plan_with_hook(
     if envelope_bytes == 0 || envelope_bytes > 1_048_576 || associated_data_bytes > 512 {
         return Err(PlanError::RequestShape);
     }
+    // The tape owner admits every structurally valid tape. Rank is a class
+    // limit, and this planner models no refresh.
+    RamLfeClassV1::Bounded
+        .membership(program)
+        .map_err(|_| PlanError::OutsideBoundedClass)?;
     let mut work = Work::new()?;
     // Every universal position is accounted even for a short private tape.
     // Inactive positions preserve every owner and emit nothing. This is neither
@@ -602,24 +609,31 @@ mod tests {
         );
         assert_eq!(branch_alias.output_ranks[0], 16);
         assert_eq!(branch_alias.count(Count::Mul), 25);
-        let mut rejected = HiddenRamFheProgram::builder().unwrap();
-        for op in std::iter::repeat_n(Op::Mul(0, 0, 0), 7)
-            .chain([Op::SelectEqZero(0, 0, 1, 2), Op::Output(0)])
-        {
-            rejected.push(op).unwrap();
-        }
-        assert!(rejected.finish().is_err());
+        // Rank seventeen is outside `bounded.v1`; the planner refuses it and
+        // only `refresh.v1` admits the tape.
+        let rejected = tape(
+            std::iter::repeat_n(Op::Mul(0, 0, 0), 7)
+                .chain([Op::SelectEqZero(0, 0, 1, 2), Op::Output(0)]),
+        );
+        assert_eq!(
+            plan(&rejected, 1, 0).err(),
+            Some(PlanError::OutsideBoundedClass)
+        );
+        assert!(RamLfeClassV1::Bounded.membership(&rejected).is_err());
+        assert!(RamLfeClassV1::Refresh.membership(&rejected).is_ok());
     }
 
     #[test]
-    fn actual_tape_owner_enforces_instruction_output_rank_and_operand_caps() {
+    fn tape_owner_enforces_shape_and_the_bounded_class_enforces_rank() {
         let max = lower(std::iter::repeat_n(Op::Mul(0, 0, 0), 16).chain([Op::Output(0)]));
         assert_eq!(max.output_ranks[0], 16);
+        let too_deep = tape(std::iter::repeat_n(Op::Mul(0, 0, 0), 17).chain([Op::Output(0)]));
+        assert_eq!(
+            plan(&too_deep, 1, 0).err(),
+            Some(PlanError::OutsideBoundedClass)
+        );
         for ops in [
             vec![Op::Output(0); 65],
-            std::iter::repeat_n(Op::Mul(0, 0, 0), 17)
-                .chain([Op::Output(0)])
-                .collect(),
             vec![Op::LoadInput(0, 64), Op::Output(0)],
             vec![Op::LoadState(0, 32), Op::Output(0)],
             vec![Op::LoadConst(0, 257), Op::Output(0)],

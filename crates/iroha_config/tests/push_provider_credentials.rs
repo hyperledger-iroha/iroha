@@ -255,3 +255,63 @@ fn ram_lfe_rejects_empty_duplicate_and_malformed_program_lists() {
         "private input leaked: {report}"
     );
 }
+
+#[test]
+fn ram_lfe_rejects_a_hidden_program_outside_the_runtime_class_at_parse() {
+    use iroha_crypto::{HiddenRamFheInstruction as Op, HiddenRamFheProgram};
+
+    // A chain of ciphertext squarings: rank equals the number of squarings.
+    let literal = |squarings: usize| {
+        let mut builder = HiddenRamFheProgram::builder().unwrap();
+        builder.push(Op::LoadInput(0, 1)).unwrap();
+        for _ in 0..squarings {
+            builder.push(Op::Mul(0, 0, 0)).unwrap();
+        }
+        builder.push(Op::Output(0)).unwrap();
+        let frame = builder.finish().unwrap().to_bytes().unwrap();
+        format!("0x{}", hex::encode(&*frame))
+    };
+    let overlay = |squarings: usize| {
+        let mut table = ram_lfe_overlay();
+        ram_lfe_programs_mut(&mut table)[0]
+            .as_table_mut()
+            .expect("RAM-LFE program table")
+            .insert(
+                "hidden_program_hex".to_owned(),
+                Value::String(literal(squarings)),
+            );
+        // Both tapes are structurally valid, so typed decoding accepts both.
+        decode_ram_lfe_overlay(table)
+    };
+
+    // Rank 16 is the deepest tape the configured runtime executes.
+    let admitted = overlay(16)
+        .parse()
+        .expect("a bounded tape configures the runtime");
+    assert_eq!(
+        admitted
+            .torii
+            .ram_lfe
+            .as_ref()
+            .expect("configured RAM-LFE")
+            .programs[0]
+            .hidden_program
+            .instruction_count(),
+        18
+    );
+
+    // Rank 17 is refused when the configuration is parsed, not at a request.
+    let error = overlay(17)
+        .parse()
+        .expect_err("a tape outside the runtime class must not configure it");
+    let report = format!("{error:?}");
+    assert!(
+        report.contains(
+            "torii.ram_lfe.programs[0].hidden_program_hex is outside the program class the configured runtime executes"
+        ),
+        "{report}"
+    );
+    // The refusal names no position inside the hidden tape.
+    assert!(!report.contains("instruction 17"), "{report}");
+    assert!(!report.contains("multiplicative-depth"), "{report}");
+}

@@ -25,7 +25,9 @@ consensus = ["rand", "bls"]
 # Complete portable shipping node surface.
 node-crypto = ["application", "consensus", "gost", "sm", "rayon"]
 json = ["norito/json"]
-bfv-accel = []
+# Exact CRT-NTT ring products for BFV and the NEON/AVX2 kernels of the shared
+# FHE arithmetic. Both return the words of the scalar reference.
+bfv-accel = ["iroha_fhe/simd"]
 # Enable GOST R 34.10-2012 with Streebog, CryptoPro 256-bit A/B/C and RFC 7836 512-bit A/B.
 # Implementation and parameter ownership live in `signature::gost`.
 gost = ["dep:once_cell", "dep:num-bigint", "dep:num-traits", "dep:streebog", "dep:crypto-bigint"]
@@ -52,6 +54,7 @@ pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:soranet_pq"]
 [dependencies]
 iroha_allocation = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
+iroha_fhe = { path = "../iroha_fhe", default-features = false }
 iroha_primitives = { workspace = true }
 iroha_schema = { workspace = true }
 

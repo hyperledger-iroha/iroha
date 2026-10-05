@@ -117,8 +117,10 @@ use crate::{
     },
 };
 
-/// Payload bytes kept free for the block's non-transaction fields when selecting.
-const PAYLOAD_OVERHEAD: usize = 64 * 1024;
+/// Payload bytes kept free for the block's non-transaction fields when selecting. The data
+/// model owns the reserve so queue admission and SDK preflight use the same value.
+const PAYLOAD_OVERHEAD: usize =
+    iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES as usize;
 
 /// What the executor thread needs.
 #[derive(Clone)]

@@ -609,6 +609,11 @@ node enforces that policy unconditionally.
   scalar and legacy `NoritoBytes(Numeric)` amount arguments remain invalid.
 - Compiler transport normalizes semantic request bytes to `NoritoBytes` before strict VRF
   verification, while typed durable `bytes` values persist only canonical `Blob` atoms.
+- Every `abi_syscall_list()` entry, with its `syscall_name`, is mapped to its proof-relation
+  obligations in [`proof_coverage/syscalls.rs`](../src/proof_coverage/syscalls.rs). There is no
+  default exclusion list: an added, removed or renamed syscall fails the inventory tests until
+  it is mapped, and an unfinished syscall relation keeps complete proof coverage open. See
+  [`proof_coverage.md`](proof_coverage.md).
 - Any future post-release ABI break must be delivered through a new policy/version
   with updated tests and docs.
 
@@ -749,7 +754,7 @@ node enforces that policy unconditionally.
 | 0x10001 | CORE_QUERY_GET | r10=CoreQueryEntityTagV1:u64, r11=&typed entity id | r10=Option<View> sum handle (typed leaf TLVs) | asset:gas/G_scq@ivm.core/v2 + query items + encoded bytes |
 | 0x10002 | CORE_QUERY_PAGE | r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64 | r10=List<View,64> handle, r11=Option<int> sum handle | asset:gas/G_scq@ivm.core/v2 + offset + query items + encoded bytes |
 | 0x10006 | QUERY_GET_PARAMETER | r10=&NoritoBytes(Name) | r10=ptr (&NoritoBytes(Parameter)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractArtifactId) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
+| 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractAddress | Hash) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10008 | QUERY_GET_CONTRACT_INSTANCE | r10=&NoritoBytes(ContractAddress | Name) | r10=ptr (&NoritoBytes(ContractInstance)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10020 | SYSVAR_CHAIN_ID | - | r10=ptr (&Blob(chain_id)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10021 | SYSVAR_BLOCK_HEIGHT | - | r10=height:u64 | asset:gas/G_sysvar@ivm.core/v2 |
@@ -837,10 +842,10 @@ node enforces that policy unconditionally.
 | 0x10200 | SET_ASSET_TRANSFER_AVAILABILITY | r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<string> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10202 | SET_ASSET_HOLDING_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement), r12=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 <!-- END GENERATED SYSCALLS -->
 
 

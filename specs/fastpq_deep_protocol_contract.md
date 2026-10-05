@@ -22,6 +22,43 @@ The public facade compares all seven PublicIO fields and the canonical statement
 digest; AXT additionally compares complete binding, metadata, mirrors and remote
 preimages. Every segment binds its ordinal, complete batch and ordered root chain.
 
+The typed [`fastpq_prover::air`](../crates/fastpq_prover/src/backend/air.rs)
+interface is consumed by the engine at three points. `air::q77` views a sealed
+relation as a `SemanticAir` (its own declared schema, statement bytes, the 41
+public columns and one field-generic evaluator):
+
+- the out-of-domain check of the verifier, and of the producer before it
+  commits its answers, compares that view's geometry with the engine constants
+  and evaluates the relation through it;
+- bounded verification and the producer's whole-attempt plan take only
+  `air::q77::VerifierLimits` and `air::q77::ProducerLimits`. Each carries one
+  `air::WorkLimits`, checked against the view's declared shape and statement and
+  against the operation's declared payload and work before a proof byte is
+  decoded or a private column is read. The public facade maps its segment
+  policies to them with `for_segment`. For verification the declared payload
+  charge is the frame bytes plus the admitted decode allocation charges, and
+  the declared work charge is 29,751 units: one per enumerated field-value slot
+  and numerator evaluation of a maximal frame. Neither is verifier scratch,
+  peak memory, a complete arithmetic cost, gas or a work-security statement;
+  complete resource accounting stays open under B.2 and F.2. `WorkLimits::default()`
+  is the producer's default projection;
+- construction and verification report their public outcome to the
+  `air::q77` process observer, which cannot change a result.
+
+These readers still bypass the interface and are B.2 work: transcript binding
+reads the relation identity and statement from `FixedAir`
+([`deep_binding`](../crates/fastpq_prover/src/backend/deep_binding.rs)); the
+producer's masked quotient uses the prepared evaluator and the degree owner of
+`CompactTransferAir`
+([`deep_masked_quotient`](../crates/fastpq_prover/src/backend/deep_masked_quotient.rs));
+and public columns are rebuilt by the closed-form `PublicColumnReconstruction`,
+not from `SemanticAir::public_value`.
+
+The accepted relation set stays closed; `air::q77::PROFILE` and
+`SEALED_RELATIONS` publish this geometry and every sealed identity as data.
+A relation outside that set has only the uncommitted `build_reference` /
+`check_reference` algebra, which is nonsuccinct, non-hiding and not a proof.
+
 [`deep_geometry`](../crates/fastpq_prover/src/backend/deep_geometry.rs) fixes:
 
 | Item | Value |

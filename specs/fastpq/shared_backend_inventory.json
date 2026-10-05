@@ -1,0 +1,4435 @@
+{
+  "schema": "fastpq.shared_backend_inventory.v1",
+  "plan": {
+    "document": "specs/zk_delivery_plan.md",
+    "task": "B.1",
+    "consumed_by": [
+      "B.2",
+      "B.3",
+      "A.4"
+    ]
+  },
+  "purpose": "Every owner of FASTPQ-style field/AIR/FRI/transcript/commitment code in the workspace, the production consumers that use each one, and every importer. crates/fastpq_prover/tests/shared_backend_inventory.rs fails when a listed path or symbol disappears, when an importer appears or disappears (file by file, also inside a listed tree), when a constant equal to the Goldilocks modulus is defined in an unlisted file, when a new *stark*/*fri* source file is not covered, when a chip module is added at any depth, when a sealed q77 relation type is added, or when a path recorded as having no engine starts importing one.",
+  "scan": {
+    "roots": [
+      "crates",
+      "integration_tests",
+      "xtask",
+      "tools",
+      "scripts",
+      "python",
+      "mochi",
+      "fuzz",
+      "data_model",
+      "fixtures"
+    ],
+    "skip_directories": [
+      "target",
+      "vendor",
+      "node_modules",
+      "dist",
+      "build"
+    ],
+    "exclude_files": [
+      "crates/fastpq_prover/tests/shared_backend_inventory.rs"
+    ],
+    "extension": ".rs",
+    "matching": "Line comments are removed. A needle matches only at identifier boundaries; a fragment (identifier characters only, at least 12 bytes) matches any identifier that contains it, also inside a string literal. A rule matches a file when any needle or fragment and every `also` token match, the file is under one of `within` (when given) and under none of `exclude`. Files under an engine's owner_paths are never its importers. A `tree` importer lists in `files` every matching file below it; the tree is one migration unit. Hidden directories and skip_directories are not entered; exclude_files holds the checker itself, whose self-test strings would otherwise match. A Goldilocks modulus definition is a `const` or `static` of type u64 or u128 whose initializer evaluates to 2^64 - 2^32 + 1 in any spelling (literals, MAX constants, casts, `from`, shifts and arithmetic, on one line or several), or whose name claims the modulus while its initializer cannot be evaluated and is not a plain rename of another constant."
+  },
+  "canonical_owner": {
+    "engine": "fastpq-q77",
+    "interface": "fastpq_prover::air",
+    "replacement": "B.2 generalizes this engine behind fastpq_prover::air; B.3 moves every importer of a duplicate owner to it.",
+    "limits": "air::WorkLimits is the one work-limit value of every owner behind the interface. The committed engine takes it only inside air::q77::VerifierLimits (bounded verification) and air::q77::ProducerLimits (whole-attempt plan); the public quantity facade maps VerifyLimits, VerificationLimits and ProvingLimits to them with for_segment. B.3 moves VerifyLimits out of the superseded driver file src/proof.rs.",
+    "sealed_relations": [
+      {
+        "type": "CompactTransferAir",
+        "implemented_in": "crates/fastpq_prover/src/backend/deep_relation.rs",
+        "role": "CompactTransfer",
+        "test_only": false
+      },
+      {
+        "type": "ExecutionEffectSegmentAir",
+        "implemented_in": "crates/fastpq_prover/src/backend/compact_execution_effect_batch.rs",
+        "role": "ExecutionEffectSegment",
+        "test_only": false
+      },
+      {
+        "type": "PublicTransferSegmentAir",
+        "implemented_in": "crates/fastpq_prover/src/backend/compact_public_batch.rs",
+        "role": "OrdinaryTransferSegment",
+        "test_only": false
+      },
+      {
+        "type": "AxtTransferSegmentAir",
+        "implemented_in": "crates/fastpq_prover/src/backend/compact_axt_batch.rs",
+        "role": "AxtTransferSegment",
+        "test_only": false
+      },
+      {
+        "type": "Retagged",
+        "implemented_in": "crates/fastpq_prover/src/backend/compact_quantity_diagnostic.rs",
+        "role": null,
+        "test_only": true,
+        "test_gate": {
+          "declared_in": "crates/fastpq_prover/src/backend.rs",
+          "module": "compact_quantity_diagnostic"
+        }
+      },
+      {
+        "type": "Tagged",
+        "implemented_in": "crates/fastpq_prover/src/backend/air/q77_tests.rs",
+        "role": null,
+        "test_only": true
+      },
+      {
+        "type": "Misdeclared",
+        "implemented_in": "crates/fastpq_prover/src/backend/air/q77_tests.rs",
+        "role": null,
+        "test_only": true
+      }
+    ]
+  },
+  "engines": [
+    {
+      "id": "fastpq-q77",
+      "class": "canonical",
+      "family": "fastpq-stark",
+      "summary": "Canonical masked DEEP/FRI engine of fastpq_prover: the sole committed prover and bounded verifier for ordinary execution effects and AXT, sealed to the 65,536 x 342 x 923 compact transfer relation. crate::air exposes its typed interface.",
+      "components": {
+        "field": "Goldilocks p = 2^64 - 2^32 + 1 with quartic extension F_p[u]/(u^4 - 7) (src/field.rs, backend/polynomial_field.rs)",
+        "air": "SemanticAir over CompactTransferAir, 923 slots (backend/air.rs, backend/compact_transfer_air.rs)",
+        "composition": "masked DEEP composition with 606 power-batched components (backend/deep_composition.rs, backend/deep_polynomial.rs)",
+        "commitment": "SHA3-256 Merkle trees with canonical multiproofs (backend/compact_sha3.rs, backend/merkle_multiproof.rs)",
+        "fri": "arities [16,16,8,8,4], 77 distinct queries, complete degree-<2 terminal (backend/fri_fold.rs, backend/deep_engine.rs)",
+        "transcript": "ten atomic SHAKE256 whole tapes with SHA3-256 chain commitments (backend/deep_binding.rs, fastpq_isi compact_challenge)",
+        "acceleration": "Metal/CUDA digest and transform owners with deterministic CPU fallback (src/metal.rs, src/fastpq_cuda.rs, src/goldilocks_transform.rs)"
+      },
+      "owner_paths": [
+        "crates/fastpq_prover/"
+      ],
+      "detect": [
+        {
+          "needles": [
+            "fastpq_prover::"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_cli/src/audit.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/iroha_core/src/bin/fastpq_fixture_capture.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/block/axt_anchored_spend_admission_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/frame_identity_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/kura/tests/09_lane_artifacts_and_fastpq.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/world_validation_fee_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/axt_unanchored_admission_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/state/fastpq_quantity_capture_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/state/fastpq_quantity_domain_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/state/fastpq_source_inventory/statement_reservation/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/state/output_network_source_tail_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/unit_test_support.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/stark/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_torii/src/lib_pipeline_handlers.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_5.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_torii/tests/pipeline_recovery_endpoint.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/irohad/src/main.rs",
+          "role": "source"
+        },
+        {
+          "tree": "crates/iroha_core/src/fastpq/",
+          "files": [
+            "crates/iroha_core/src/fastpq/lane.rs",
+            "crates/iroha_core/src/fastpq/lane/source.rs",
+            "crates/iroha_core/src/fastpq/mod.rs",
+            "crates/iroha_core/src/fastpq/quantity_fixture.rs",
+            "crates/iroha_core/src/fastpq/quantity_statement.rs",
+            "crates/iroha_core/src/fastpq/quantity_statement/tests.rs",
+            "crates/iroha_core/src/fastpq/source_capture.rs",
+            "crates/iroha_core/src/fastpq/source_capture/budget/tests.rs",
+            "crates/iroha_core/src/fastpq/source_prefix_lengths.rs",
+            "crates/iroha_core/src/fastpq/source_prefix_lengths/checked.rs",
+            "crates/iroha_core/src/fastpq/source_prefix_lengths/checked/reservation_tests.rs",
+            "crates/iroha_core/src/fastpq/source_prefix_lengths/checked/tests.rs",
+            "crates/iroha_core/src/fastpq/source_prefix_lengths/entry/tests.rs",
+            "crates/iroha_core/src/fastpq/source_prefix_lengths/tests.rs",
+            "crates/iroha_core/src/fastpq/source_reservation/entry_bundle/tests.rs"
+          ]
+        },
+        {
+          "tree": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/",
+          "files": [
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_aggregate.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_ca_links.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fft_scheduler_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_coset.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_coset_device_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_key_joins.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_cache.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_cache_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_resources.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_retained_rfc.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sample_commit_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sha_union.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_shared_fft_powers_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_links.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_weighted.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay_inverse_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fastpq-isi-parameters",
+      "class": "canonical-support",
+      "family": "fastpq-stark",
+      "summary": "Shared FASTPQ parameter, Poseidon digest384, Keccak/SHA3 and compact-challenge owner. Both the canonical engine and several duplicates take their hashes and parameters from it.",
+      "components": {
+        "field": "Goldilocks Poseidon-x7 permutation and parameters (src/poseidon.rs, src/params.rs)",
+        "commitment": "six-lane Goldilocks digest384 frames (src/poseidon_digest384.rs) and SHA3/Keccak-256 (src/keccak256.rs)",
+        "transcript": "q77 raw tape rounds and query sampler (src/compact_challenge.rs)",
+        "limits": "node resource defaults (src/resource_limits.rs)"
+      },
+      "owner_paths": [
+        "crates/fastpq_isi/"
+      ],
+      "detect": [
+        {
+          "needles": [
+            "fastpq_isi::"
+          ],
+          "exclude": [
+            "crates/fastpq_isi/",
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_config/src/parameters/defaults.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/fastpq/mod.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/stark/aggregate_stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/outer_hash_experiment.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_ace.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_ace_stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_crypto/src/privacy.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_data_model/src/confidential/spentness.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_data_model/src/fastpq/commitment.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_data_model/src/kaigi/authorization.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_data_model/src/privacy.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_data_model/src/zk.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_data_model/tests/manual_frame_identity/protocol.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_data_model/tests/privacy_generated_schema_identity.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_zkp_halo2/tests/vega_engine_reachability.rs",
+          "role": "test"
+        },
+        {
+          "path": "scripts/fastpq/src/bin/poseidon_gen.rs",
+          "role": "cli"
+        },
+        {
+          "path": "scripts/fastpq/src/digest384_report.rs",
+          "role": "cli"
+        },
+        {
+          "tree": "crates/iroha_zkp_halo2/src/vega/zk_ams/",
+          "files": [
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_rns_native_tail_publication_v2/pretranscript_public_statement_v2/claimed_qpcs_source_carrier_v2_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_cross_field_rlwe_direct.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_global_lookup_z_commitment_view_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_global_membership_direct_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_profile.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_proof_hash.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_proof_sampling.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_field_wire.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_initial.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_initial_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_leaf.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_prefix.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_prefix_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_rlwe_source_statement.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_rlwe_source_statement_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_section_codec.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_section_codec_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_terminal_cross_basis.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_terminal_cross_basis_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_transcript_tests.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fastpq-legacy-replay",
+      "class": "duplicate",
+      "family": "fastpq-stark",
+      "summary": "Transparent batch-replay STARK driver retained only for tests and the dev-tools feature. It is a second complete pipeline (binary FRI, six-lane Poseidon digest384 commitments, Poseidon transcript, lookup grand product) beside the q77 engine.",
+      "components": {
+        "field": "Goldilocks base and Fp4 through the same src/field.rs owner",
+        "air": "fixed transition-batch trace AIR (src/trace.rs, gated items of src/backend.rs)",
+        "commitment": "six-lane Goldilocks Poseidon digest384 Merkle trees (gated items of src/backend.rs, backend/merkle_cache.rs)",
+        "fri": "binary/joint FRI (backend/joint_fri.rs, backend/fri_openings.rs)",
+        "transcript": "Poseidon digest384 Fiat-Shamir transcript (gated Transcript in src/backend.rs)"
+      },
+      "owner_paths": [
+        "crates/fastpq_prover/src/proof.rs",
+        "crates/fastpq_prover/src/proof/",
+        "crates/fastpq_prover/src/backend/air_quotient.rs",
+        "crates/fastpq_prover/src/backend/joint_fri.rs",
+        "crates/fastpq_prover/src/backend/merkle_cache.rs",
+        "crates/fastpq_prover/src/backend/fri_openings.rs"
+      ],
+      "shared_owner_paths": [
+        "crates/fastpq_prover/src/backend.rs",
+        "crates/fastpq_prover/src/trace.rs"
+      ],
+      "note": "src/backend.rs and src/trace.rs also own still-used canonical utilities (see retained_utilities); only their cfg(any(test, feature = \"dev-tools\")) items belong to this driver.",
+      "detect": [
+        {
+          "needles": [
+            "StarkBackend",
+            "BackendConfig",
+            "BackendArtifact",
+            "verify_raw_statement",
+            "verify_raw_statement_with_limits",
+            "JointFriBatch",
+            "AirQuotientDomain",
+            "AirQuotientWeights",
+            "MerkleNodeCache",
+            "FriOpeningTrees",
+            "hash_lde_leaves",
+            "merkle_paths_for_queries",
+            "compute_lookup_grand_product",
+            "lde_chunk_size",
+            "preflight_native_v1_gpu_backend",
+            "Prover"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/fuzz/fuzz_targets/lookup_grand_product.rs",
+          "role": "fuzz"
+        },
+        {
+          "path": "crates/fastpq_prover/fuzz/fuzz_targets/merkle_paths.rs",
+          "role": "fuzz"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/extension_trace.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fixed_domain.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/phased_trace.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/digest384_gpu.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/backend_regression.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/realistic_flows.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/resource_profile.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/transcript_replay.rs",
+          "role": "test"
+        }
+      ]
+    },
+    {
+      "id": "privacy-execution-fork",
+      "class": "duplicate",
+      "family": "fastpq-style-stark",
+      "summary": "Execution-only fork of the transparent STARK substrate inside iroha_core_privacy::execution_proofs: Goldilocks/Fp4 arithmetic, FFT, masking, framed Fiat-Shamir, six-lane Poseidon-x7 Merkle commitments, binary FRI, grinding and the aggregate proof codec.",
+      "components": {
+        "field": "own Goldilocks base and quartic extension (stark/transparent_stark.rs)",
+        "air": "relation-supplied AggregateOpenedRowEvaluatorV1 (stark/aggregate_stark.rs)",
+        "commitment": "six-lane Goldilocks Poseidon-x7 vector-row Merkle multiproofs via fastpq_isi digest384",
+        "fri": "binary FRI with grinding (stark/transparent_stark.rs, stark/aggregate_stark.rs)",
+        "transcript": "framed Fiat-Shamir over the six-lane digest"
+      },
+      "owner_paths": [
+        "crates/iroha_core_privacy/src/execution_proofs/stark/"
+      ],
+      "detect": [
+        {
+          "needles": [
+            "transparent_stark",
+            "aggregate_stark",
+            "proof_managed_note_stark"
+          ],
+          "within": [
+            "crates/iroha_core_privacy/src/execution_proofs/"
+          ]
+        },
+        {
+          "needles": [
+            "execution_proofs::stark"
+          ],
+          "exclude": [
+            "crates/iroha_core_privacy/src/execution_proofs/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/checked_integer_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/staged_race_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/error.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/integer_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/staged_race_air.rs",
+          "role": "source"
+        },
+        {
+          "tree": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/",
+          "files": [
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/branch.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/branch/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/callable_lookup/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/frame_access/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/frame_descriptor/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/frame_lifecycle/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/memory_initialization/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/memory_load/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/memory_store/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/native_invocation/instructions/memory_access/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/native_invocation/instructions/schedule.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/native_invocation/returning/validation.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/native_invocation/terminal/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/native_invocation/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/call_descriptor/scalar_arguments/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/call_descriptor/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/jump_tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/load_success/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/native_witness/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/scalar/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/scalar/tests/jumps.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/store_success/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_history/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/return_copyback/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/tests/native.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/memory_address.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/shift.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/shift/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/tests.rs",
+            "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/trace/tests.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "privacy-substrate",
+      "class": "duplicate",
+      "family": "fastpq-style-stark",
+      "summary": "Privacy transparent STARK substrate inside iroha_core_privacy::privacy_engines: the same construction as the execution fork with SHA3-384 byte commitments, shared by the note family, ZK-ACE transforms and the X509 aggregate.",
+      "components": {
+        "field": "own Goldilocks base and quartic extension (transparent_stark.rs)",
+        "air": "relation-supplied AggregateOpenedRowEvaluatorV1 (aggregate_stark.rs) and shared note chips (proof_managed_note_stark.rs)",
+        "commitment": "SHA3-384 byte vector-row Merkle multiproofs (privacy_outer_hash.rs, aggregate_stark/)",
+        "fri": "binary FRI with grinding (transparent_stark.rs, aggregate_stark.rs)",
+        "transcript": "framed SHA3-384 Fiat-Shamir (privacy_outer_hash.rs)"
+      },
+      "owner_paths": [
+        "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/",
+        "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark_compact_ca_geometry_tests.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark_fixed_queries.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/outer_hash_experiment.rs"
+      ],
+      "detect": [
+        {
+          "needles": [
+            "transparent_stark",
+            "aggregate_stark",
+            "proof_managed_note_stark",
+            "privacy_outer_hash"
+          ],
+          "exclude": [
+            "crates/iroha_core_privacy/src/execution_proofs/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/facade.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/facade.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/mod.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/facade.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_ace_stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
+          "role": "source"
+        },
+        {
+          "tree": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/",
+          "files": [
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_joint_prover.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_private_links.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_retained_columns.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_retained_columns_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stages_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/composition_masking.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/credential_joint.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/credential_joint_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/credential_pre_aux.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/credential_stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/der_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/der_native_columns.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/der_stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/der_stark_fp4_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/der_stark_unit_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic_oods_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic_p256.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic_sha.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/io_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/main_assembly.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_aggregate_adapter.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_arithmetic_fp4_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_auxiliary_replay_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_binding_sink_fp4_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_cross_trace_bus.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_external_binding_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_fixed_replay_batch_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_reduction_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_scalar_bit_bus.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_scalar_bit_bus_fp4_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_selected_input_binding_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_value_bus.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_window_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_writer_inactive_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/private_table.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile/readiness_certificates.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/projection_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/projection_air_fp4_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/proof_instance.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_aux_replay.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_copy_census_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_inverse_window.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_inverse_window_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_key_output_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_name_policy_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_name_values_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_numeric_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_private_output_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_profile_identity_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_projection_disclosure_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_projection_serial_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_spki_output_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_stark_fp4_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_stark_preflight_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_variable_output_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_zero_safe_inverse_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha256_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha256_word_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_call_bus_stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_cyclic_padding_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_native_aux_cache.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_native_aux_cache_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_word_stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_word_stark_polynomial_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/der_and_native_proof_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/io_fp4_air_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_common22_coarse_diagnostic_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fft_scheduler_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_coset.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_mask_sampling_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_mixed_deep_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_native_deep.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_native_deep_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_oods_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_p256_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_stripes.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_resource_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_resources.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sample_commit_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_selected_coset_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sha_fp4_air_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_shared_fft_powers_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_family_batch_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_weighted.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/native_registration_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/registration_phase_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/support_and_io_tests.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zk-ace-stark",
+      "class": "duplicate",
+      "family": "fastpq-style-stark",
+      "summary": "Self-contained masked execution-trace STARK of the first-release ZK-ACE engine: own AIR, DEEP linkage, Fp4 FRI and proof wire, using the privacy substrate only for its FFT.",
+      "components": {
+        "field": "Goldilocks/Fp4 from the privacy substrate",
+        "air": "twelve Poseidon-x7 lanes with byte range decomposition (zk_ace_stark.rs)",
+        "commitment": "typed opaque SHA3-384 digest trees",
+        "fri": "binary Fp4 FRI, 8x LDE, 136 distinct queries, degree-<=2 terminal",
+        "transcript": "SHA3-384 Fiat-Shamir"
+      },
+      "owner_paths": [
+        "crates/iroha_core_privacy/src/privacy_engines/zk_ace_stark.rs"
+      ],
+      "detect": [
+        {
+          "needles": [
+            "zk_ace_stark"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core/src/privacy_release_evidence.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/mod.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_ace.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "id": "zk-x509-driver",
+      "class": "duplicate",
+      "family": "fastpq-style-stark",
+      "summary": "Segmented transparent proof container and MAIN/compact-CA proving driver of zk-X509: its own commitment, quotient, Merkle-opening, binary-FRI, grinding and codec machinery on top of the privacy substrate, with FASTPQ transform accelerators.",
+      "components": {
+        "field": "Goldilocks/Fp4 from the privacy substrate plus its own modulus constant (profile.rs)",
+        "air": "DER, RFC 5280, SHA-256, P-256 and accumulator adapters (zk_x509/*_stark.rs, *_air.rs)",
+        "composition": "adjacent-chunk quotient masking (composition_masking.rs) and fixed algebraic openings (fixed_algebraic.rs)",
+        "commitment": "privacy-substrate SHA3-384 aggregate commitments (stark.rs, stark/main_aggregate.rs)",
+        "fri": "binary FRI with retention and terminal links (stark.rs, stark/main_fri_retention.rs)",
+        "acceleration": "fastpq_prover::goldilocks_transform and ExecutionMode (stark/main_transform.rs and siblings)"
+      },
+      "owner_paths": [
+        "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/",
+        "crates/iroha_core_privacy/src/privacy_engines/zk_x509/composition_masking.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic.rs"
+      ],
+      "note": "The remaining files of the zk_x509 tree are the relation, its adapters and their tests; the whole tree migrates with X.3. Outside the tree the rule matches import forms only (a path use, a module declaration, a use-list member, a rename, or a file path with a leading directory): a bare `zk_x509` inside a string, such as the provenance label `zk_x509/profile.rs:...` in the iroha_measurement fixtures, names the engine without importing it and is not an importer.",
+      "detect": [
+        {
+          "needles": [
+            "zk_x509::",
+            "privacy_engines::zk_x509",
+            "zk_x509;",
+            "zk_x509,",
+            "zk_x509}",
+            "zk_x509 as",
+            "/zk_x509/"
+          ],
+          "exclude": [
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/"
+          ]
+        },
+        {
+          "needles": [
+            "stark::",
+            "super::stark",
+            "composition_masking",
+            "fixed_algebraic"
+          ],
+          "within": [
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core/src/privacy_release_evidence.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/privacy_release_evidence/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/privacy_release_evidence/verange_and_rng.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/mod.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
+          "role": "source"
+        },
+        {
+          "tree": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/",
+          "files": [
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stages.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stark_oods_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/credential_pre_aux.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/der_stark_unit_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic_p256.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic_sha.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/io_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/main_assembly.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/mod.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_aggregate_adapter.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_cross_trace_bus.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_external_binding_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_scalar_bit_bus.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/p256_value_bus.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha256_word_air.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_call_bus_stark.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_word_stark.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "core-zk-native-stark",
+      "class": "duplicate",
+      "family": "fastpq-style-stark",
+      "summary": "Native STARK/FRI verifier behind the stark/fri/* backends of generic proof verification, also reused by the SoraCloud verifying-key and BFV proof checks.",
+      "components": {
+        "field": "own Goldilocks element and GoldilocksFp4V1 wrapper (stark.rs)",
+        "air": "generic Binding AIR and the BFV full-bootstrap AIR (stark.rs)",
+        "commitment": "six-lane Poseidon-x7 digest384 Merkle paths via fastpq_isi",
+        "fri": "multi-round binary FRI consistency check",
+        "transcript": "digest384 transcript replay"
+      },
+      "owner_paths": [
+        "crates/iroha_core_zk/src/stark.rs",
+        "crates/iroha_core_zk/src/stark/"
+      ],
+      "detect": [
+        {
+          "needles": [
+            "iroha_core_zk::stark"
+          ]
+        },
+        {
+          "needles": [
+            "zk_stark"
+          ],
+          "within": [
+            "crates/iroha_core/"
+          ]
+        },
+        {
+          "needles": [
+            "stark::"
+          ],
+          "within": [
+            "crates/iroha_core_zk/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core/src/executor.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/frame_identity_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/zk_verification_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/tests/grouped/group_05.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/tests/zk_stark.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/frame_test_support.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/ivm_proof_identity/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/strict_verifying_key_preparation_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/verification/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_torii/src/zk_prover.rs",
+          "role": "source"
+        },
+        {
+          "path": "integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs",
+          "role": "test"
+        },
+        {
+          "path": "integration_tests/tests/queries/proof.rs",
+          "role": "test"
+        },
+        {
+          "path": "integration_tests/tests/zk_stark_network.rs",
+          "role": "test"
+        }
+      ]
+    },
+    {
+      "id": "soracloud-bfv-native-stark",
+      "class": "duplicate",
+      "family": "goldilocks-stark-material",
+      "summary": "SoraCloud BFV full-bootstrap proof material in iroha_crypto: its own Goldilocks prime and add/sub/mul/reduce, the BFV arithmetic AIR constraint-system, trace, evaluation-material and composition-challenge digests and values, the native STARK/FRI key profile constants, and the verifying/prover key payload types and encoders. It has no FRI prover or verifier of its own; core-zk-native-stark verifies against this material.",
+      "components": {
+        "field": "Goldilocks prime as u64::MAX - u32::MAX + 1 with private add, sub, mul and u128 reduction (bfv_full_bootstrap_goldilocks_*_v1)",
+        "air": "BFV full-bootstrap arithmetic AIR constraint-system and evaluation material, composition challenge and composition values (bfv_full_bootstrap_arithmetic_air_*)",
+        "commitment": "Goldilocks Digest384 bindings of the generated circuit body and key payloads (bfv_native_stark_*_digest_v1; hash owner is fastpq_isi)",
+        "fri": "profile constants only: n_log2 10, blowup_log2 3, fold arity 2, 64 queries, Merkle arity 2 (BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_*)",
+        "transcript": "transcript label constant IROHA-BFV-FULL-BOOTSTRAP-AIR-V1 and the native AIR domain tag",
+        "key_material": "BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 and the transparent prover payload with their canonical encoders and validators"
+      },
+      "owner_paths": [
+        "crates/iroha_crypto/src/fhe_bfv.rs"
+      ],
+      "note": "The same file owns the BFV scheme itself, which is FHE and not a FASTPQ-style owner; specs/fhe_ownership_inventory.json maps that side. The engine owner is the STARK material named by the detect fragments.",
+      "detect": [
+        {
+          "fragments": [
+            "full_bootstrap_native_stark",
+            "FULL_BOOTSTRAP_NATIVE_STARK",
+            "FullBootstrapNativeStark",
+            "full_bootstrap_arithmetic_air",
+            "FULL_BOOTSTRAP_ARITHMETIC_AIR",
+            "FullBootstrapArithmeticAir",
+            "full_bootstrap_goldilocks",
+            "full_bootstrap_hash_goldilocks",
+            "full_bootstrap_bound_mode_goldilocks",
+            "bfv_native_stark"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_full_bootstrap_preflight_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_initial_fixture_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/stark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/stark/bfv_full_bootstrap_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv/captured_schema_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv/conformance.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv/tests/release_audit/evidence_codec.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv/tests/release_audit/manifest_codec.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv/tests/release_audit/review_fixture.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv/tests/release_audit/signoff_authority.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_data_model/src/soracloud.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_data_model/src/soracloud/tests/fixtures_and_manifests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_data_model/src/soracloud/tests/schema_assertions.rs",
+          "role": "test"
+        }
+      ]
+    },
+    {
+      "id": "zk-ams-rns-qpcs",
+      "class": "conditional",
+      "family": "fri-over-rns-field",
+      "summary": "qPCS of the replacement 40-limb ZK-AMS MKHE proof: FRI over the RNS-native Fq2 fields with its own transcript and proof hash. It becomes a migration target only if the PCS selected in C.5 is the FASTPQ backend.",
+      "components": {
+        "field": "RNS-native moduli below 2^60 and their Fq2 extension (rns_native_qpcs_prefix.rs, rns_native_qpcs_field_wire.rs)",
+        "commitment": "oracle trees over Goldilocks digest384 frames (rns_native_qpcs_leaf.rs, rns_native_qpcs_tree.rs)",
+        "fri": "seventeen-fold correlated FRI with terminal degree equation (rns_native_qpcs_prefix.rs, rns_native_qpcs_fri_complete.rs)",
+        "transcript": "move-only staged Fiat-Shamir transcript (rns_native_transcript.rs, rns_native_proof_hash.rs)"
+      },
+      "owner_paths": [
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_prefix.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_prefix_tests.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_prefix_tests/",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_fri_complete.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_fri_complete_tests.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_initial.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_initial_tests.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_leaf.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_tree.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_field_wire.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_opening_work.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_transcript.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_transcript_tests.rs",
+        "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_proof_hash.rs"
+      ],
+      "detect": [
+        {
+          "needles": [
+            "rns_native_qpcs_prefix",
+            "rns_native_qpcs_fri_complete",
+            "rns_native_qpcs_initial",
+            "rns_native_qpcs_leaf",
+            "rns_native_qpcs_tree",
+            "rns_native_qpcs_field_wire",
+            "rns_native_qpcs_opening_work",
+            "rns_native_transcript",
+            "rns_native_proof_hash"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "tree": "crates/iroha_zkp_halo2/src/vega/zk_ams/",
+          "files": [
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1/commitment_session_v1/retained_source_u15_kernel_v1_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_rns_native_tail_publication_v2.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_rns_native_tail_publication_v2/numeric_opening_handoff_v2.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_rns_native_tail_publication_v2/numeric_opening_handoff_v2_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_rns_native_tail_publication_v2/pretranscript_public_statement_v2.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_rns_native_tail_publication_v2/pretranscript_public_statement_v2/claimed_qpcs_source_carrier_v2.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_rns_native_tail_publication_v2/pretranscript_public_statement_v2/claimed_qpcs_source_carrier_v2_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_centering_subtraction_relation.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_comparator_product.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_comparator_range_carry_product.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_composite_verifier.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_composite_verifier_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_cross_field_inventory.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_cross_field_inventory_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_cross_field_rlwe_direct.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_cross_field_rlwe_direct_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_global_lookup_z_commitment_view.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_global_membership_direct.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_global_membership_direct_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_proof_sampling.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_public_polynomial_publisher.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_public_polynomial_reader.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_public_polynomial_reader_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_q_mask_linear_relations.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_resource_budget_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_rlwe_source_statement.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_rlwe_source_statement_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_section_codec.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_section_codec_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_small_sign_disjointness_product.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_packing_same_opening.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_terminal_cross_field.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_terminal_cross_field_tests.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_terminal_cross_basis.rs",
+            "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_terminal_cross_basis_tests.rs"
+          ]
+        }
+      ]
+    }
+  ],
+  "consumers": [
+    {
+      "id": "ordinary-effects",
+      "plan_role": "ordinary FASTPQ effects",
+      "engines": [
+        "fastpq-q77"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/fastpq_prover/src/backend/offline_compact/execution_effect.rs",
+          "symbol": "pub fn prove_quantity_ordinary_artifact"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/offline_compact/execution_effect.rs",
+          "symbol": "pub fn verify_quantity_ordinary_artifact"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_execution_effect_batch.rs",
+          "symbol": "struct ExecutionEffectSegmentAir"
+        },
+        {
+          "path": "crates/iroha_core/src/fastpq/lane.rs",
+          "symbol": "offline_compact::prove_quantity_ordinary_artifact"
+        }
+      ],
+      "migration": "Already on the canonical owner. A.2 completes the ordinary effect relation on the B.2 engine."
+    },
+    {
+      "id": "axt",
+      "plan_role": "AXT",
+      "engines": [
+        "fastpq-q77"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/fastpq_prover/src/axt_binding.rs",
+          "symbol": "pub fn prove_axt_bound_batch"
+        },
+        {
+          "path": "crates/fastpq_prover/src/axt_binding.rs",
+          "symbol": "pub fn verify_axt_proof_envelope_with_outer_metadata"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/offline_compact.rs",
+          "symbol": "pub fn verify_quantity_axt_artifact"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_axt_batch.rs",
+          "symbol": "struct AxtTransferSegmentAir"
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "symbol": "fastpq_prover::verify_axt_proof_envelope_with_outer_metadata"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+          "symbol": "fastpq_prover::verify_axt_proof_envelope_with_outer_metadata"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "symbol": "fastpq_prover::verify_axt_proof_envelope_with_outer_metadata"
+        }
+      ],
+      "migration": "Already on the canonical owner. A.3 delivers anchored AXT on the B.2 engine."
+    },
+    {
+      "id": "race-v1",
+      "plan_role": "RaceV1",
+      "engines": [
+        "privacy-execution-fork"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs",
+          "symbol": "pub fn prove_race_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs",
+          "symbol": "pub fn verify_race_proof_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/registry.rs",
+          "symbol": "pub fn verify_execution_proof_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/staged_race_air.rs",
+          "symbol": "transparent_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/race_air.rs",
+          "symbol": "struct RaceAirV1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/environment_air.rs",
+          "symbol": "fn lateral_velocity"
+        }
+      ],
+      "migration": "B.3 replaces the fork adapter with a FASTPQ adapter (commitment hash and transcript from the shared backend, Digest384 only for retained native identities).",
+      "facade": {
+        "detect": [
+          {
+            "needles": [
+              "iroha_core_privacy::execution_proofs"
+            ],
+            "exclude": [
+              "crates/iroha_core_privacy/src/"
+            ]
+          },
+          {
+            "needles": [
+              "crate::execution_proofs"
+            ],
+            "within": [
+              "crates/iroha_core/"
+            ]
+          }
+        ],
+        "owner_paths": [],
+        "importers": [
+          {
+            "path": "crates/iroha_cli/src/execution.rs",
+            "role": "cli"
+          },
+          {
+            "path": "crates/iroha_cli/src/execution_finality.rs",
+            "role": "cli"
+          },
+          {
+            "path": "crates/iroha_core/examples/race_prover.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/game.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/game_items.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/game_resources.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_torii/src/game.rs",
+            "role": "source"
+          },
+          {
+            "path": "integration_tests/tests/native_game_sessions.rs",
+            "role": "test"
+          }
+        ]
+      }
+    },
+    {
+      "id": "classed-race-v1",
+      "plan_role": "classed RaceV1",
+      "engines": [
+        "privacy-execution-fork"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof.rs",
+          "symbol": "pub fn prove_classed_race_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof.rs",
+          "symbol": "pub fn verify_classed_race_proof_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof.rs",
+          "symbol": "proof_managed_note_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/staged_race_air.rs",
+          "symbol": "transparent_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/race_air.rs",
+          "symbol": "struct ClassedRaceAirV1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/environment_air.rs",
+          "symbol": "fn lateral_velocity"
+        }
+      ],
+      "migration": "B.3, together with RaceV1; its proof profile is not registered today."
+    },
+    {
+      "id": "ivm-step-chips",
+      "plan_role": "all IVM step chips",
+      "engines": [
+        "privacy-execution-fork"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air.rs",
+          "symbol": "transparent_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/integer_air.rs",
+          "symbol": "transparent_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/checked_integer_air.rs",
+          "symbol": "transparent_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/",
+          "symbol": null
+        }
+      ],
+      "migration": "M.2 re-expresses every chip on the B.2 engine for the complete IVM proved-invocation ISI.",
+      "module_sets": [
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air.rs",
+          "modules": [
+            "alu",
+            "bitwise",
+            "branch",
+            "machine_bus",
+            "memory_address",
+            "residues",
+            "shift",
+            "trace",
+            "word"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus.rs",
+          "modules": [
+            "callable_lookup",
+            "frame_access",
+            "frame_descriptor",
+            "frame_lifecycle",
+            "memory_initialization",
+            "memory_load",
+            "memory_store",
+            "native_invocation",
+            "packet",
+            "permutation",
+            "private_dispatch",
+            "private_history",
+            "return_copyback",
+            "sorted"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/callable_lookup.rs",
+          "modules": [
+            "native_root",
+            "scan_storage"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/memory_load.rs",
+          "modules": [
+            "payload"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/native_invocation.rs",
+          "modules": [
+            "instructions",
+            "returning",
+            "root",
+            "terminal"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/native_invocation/instructions.rs",
+          "modules": [
+            "memory_access",
+            "schedule"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/native_invocation/returning.rs",
+          "modules": [
+            "validation"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch.rs",
+          "modules": [
+            "call_descriptor",
+            "code_words",
+            "load_success",
+            "native_witness",
+            "scalar",
+            "store_success"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/call_descriptor.rs",
+          "modules": [
+            "scalar_arguments"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/load_success.rs",
+          "modules": [
+            "effect"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/scalar.rs",
+          "modules": [
+            "gcd",
+            "native_witness"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_dispatch/store_success.rs",
+          "modules": [
+            "effect"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/private_history.rs",
+          "modules": [
+            "view"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus/return_copyback.rs",
+          "modules": [
+            "native_witness"
+          ]
+        },
+        {
+          "declared_in": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/trace.rs",
+          "modules": [
+            "absolute",
+            "bit_count",
+            "ceiling",
+            "division",
+            "gcd",
+            "mean",
+            "multiply",
+            "square_root"
+          ]
+        }
+      ],
+      "module_root": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air.rs"
+    },
+    {
+      "id": "generic-semantic-verification",
+      "plan_role": "generic semantic proof verification",
+      "engines": [
+        "core-zk-native-stark"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core_zk/src/stark.rs",
+          "symbol": "pub fn verify_stark_fri_envelope"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/verification.rs",
+          "symbol": "pub fn verify_for_relation"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/lib.rs",
+          "symbol": "pub fn verify_backend"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/lib.rs",
+          "symbol": "pub fn preverify_with_budget"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "symbol": "crate::zk_stark::"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/lib.rs",
+          "symbol": "pub fn verify_backend_with_timing_guardrails"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/confidential_v2.rs",
+          "symbol": "norito::decode_canonical::<StarkFriOpenProofV1>"
+        },
+        {
+          "path": "crates/iroha_data_model/src/zk.rs",
+          "symbol": "pub struct StarkFriOpenProofV1"
+        },
+        {
+          "path": "crates/iroha_data_model/src/zk.rs",
+          "symbol": "pub const ZK_BACKEND_STARK_FRI_V1"
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "symbol": "preverify_with_budget"
+        }
+      ],
+      "migration": "B.3 after P.4/P.5: a closed typed-relation registry on the shared backend replaces the generic stark/fri envelope.",
+      "note": "verify_backend, preverify_with_budget and verify_for_relation dispatch on the backend tag, so the facade also lists callers that reach only the distinct Halo2 family through them. StarkFriOpenProofV1 is the generic STARK envelope wire type of the data model. ZK_BACKEND_STARK_FRI_V1, BackendTag::Stark and STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES find the callers that select the generic STARK backend only by its label, its tag or its verifying-key size limit.",
+      "facade": {
+        "detect": [
+          {
+            "needles": [
+              "preverify_with_budget",
+              "verify_for_relation",
+              "StarkFriOpenProofV1",
+              "ZK_BACKEND_STARK_FRI_V1",
+              "STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES",
+              "BackendTag::Stark"
+            ],
+            "fragments": [
+              "verify_backend"
+            ]
+          }
+        ],
+        "owner_paths": [],
+        "importers": [
+          {
+            "path": "crates/iroha_cli/src/zk.rs",
+            "role": "cli"
+          },
+          {
+            "path": "crates/iroha_core/src/executor.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/privacy_release_evidence/kaigi/tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/identifier.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/ivm/host/zk_verification_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/src/state.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/state/state_preverify_backend_admission_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/src/state/verifying_key_index_validation/frozen_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/src/state/verifying_key_index_validation/test_support.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/src/zk_guardrails.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/tests/zk_stark.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/tests/zk_testkit.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/tests/zk_vote_tally_audit.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/confidential/tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/confidential_v2.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/confidential_v2_builder_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/confidential_v2_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/halo2_backend_01_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/halo2_backend_03_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/ivm_proof_identity/tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/kaigi_usage_v1_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/lib.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/stark.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/stark/tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/strict_verifying_key_preparation_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/verification.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/verification/tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/tests/zk_ipa_native.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/tests/zk_preverify_budget.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud/fhe.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud/tests/fixtures_and_manifests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud/tests/proof_validation.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_data_model/src/zk.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_data_model/src/zk/captured_zk_schema_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_js_codec/src/verifying_key_instruction_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_js_host/src/kaigi_authorization_v1.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_js_host/src/kaigi_proof_v1.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_js_host/src/kaigi_usage_v1.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_torii/src/lib.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_torii/src/zk_prover.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_torii/tests/zk_vote_tally_handler.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/ivm/tests/zk_verify_gating.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/ivm/tests/zk_verify_goldilocks.rs",
+            "role": "test"
+          },
+          {
+            "path": "integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs",
+            "role": "test"
+          },
+          {
+            "path": "integration_tests/tests/proof_fixtures.rs",
+            "role": "test"
+          },
+          {
+            "path": "integration_tests/tests/proofs/full_tree_wallet.rs",
+            "role": "test"
+          },
+          {
+            "path": "integration_tests/tests/queries/proof.rs",
+            "role": "test"
+          },
+          {
+            "path": "integration_tests/tests/zk_stark_network.rs",
+            "role": "test"
+          },
+          {
+            "path": "xtask/src/vote_tally.rs",
+            "role": "cli"
+          }
+        ]
+      }
+    },
+    {
+      "id": "soracloud-vk-bfv",
+      "plan_role": "SoraCloud verifying-key registration/update and BFV proof checks",
+      "engines": [
+        "core-zk-native-stark",
+        "soracloud-bfv-native-stark"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+          "symbol": "fn validate_soracloud_fhe_stark_verifying_key_record"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+          "symbol": "fn validate_soracloud_fhe_stark_verifying_key_payload"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+          "symbol": "crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_structure_with_limits"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/stark.rs",
+          "symbol": "pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/stark.rs",
+          "symbol": "pub fn validate_stark_fri_canonical_verifying_key_payload"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+          "symbol": "fn validate_soracloud_fhe_stark_native_air_binding"
+        },
+        {
+          "path": "crates/iroha_data_model/src/soracloud/fhe.rs",
+          "symbol": "fn validate_soracloud_fhe_stark_native_envelope_bytes"
+        },
+        {
+          "path": "crates/iroha_data_model/src/soracloud.rs",
+          "symbol": "pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_GAS_SCHEDULE_ID_V1"
+        },
+        {
+          "path": "crates/iroha_data_model/src/soracloud.rs",
+          "symbol": "stark_fri_soracloud_full_bootstrap_execution_v1"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv.rs",
+          "symbol": "pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv.rs",
+          "symbol": "fn bfv_full_bootstrap_goldilocks_mul_v1"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv.rs",
+          "symbol": "pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv.rs",
+          "symbol": "pub struct BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1"
+        },
+        {
+          "path": "crates/iroha_crypto/src/fhe_bfv.rs",
+          "symbol": "pub fn encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1"
+        }
+      ],
+      "migration": "C.6, C.7 and C.9 deliver the SoraCloud slices on the shared backend and C.8 the shared bootstrap arithmetic proof; B.3 removes the remaining callers and the duplicate Goldilocks and AIR material in iroha_crypto.",
+      "facade": {
+        "detect": [
+          {
+            "fragments": [
+              "soracloud_fhe_stark",
+              "SORACLOUD_FHE_STARK",
+              "SoracloudFheStark",
+              "SORACLOUD_STARK",
+              "STARK_WRAPPER_BYTES",
+              "stark_fri_soracloud_",
+              "stark_fri_bfv",
+              "stark_fri_canonical_verifying_key",
+              "full_bootstrap_stark",
+              "FULL_BOOTSTRAP_STARK",
+              "full_bootstrap_arithmetic_stark",
+              "full_bootstrap_execution_stark",
+              "full_bootstrap_native_air",
+              "FULL_BOOTSTRAP_NATIVE_AIR",
+              "full_bootstrap_bfv_native_air",
+              "full_bootstrap_execution_native_air",
+              "GENERIC_BINDING_AIR"
+            ]
+          }
+        ],
+        "owner_paths": [],
+        "importers": [
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/ivm_proof_identity/tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/lib.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/stark.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/stark/bfv_full_bootstrap_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/stark/frame_identity_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/stark/tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core_zk/src/verification.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud/fhe.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud/prelude.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_data_model/src/soracloud/tests/proof_validation.rs",
+            "role": "test"
+          }
+        ]
+      }
+    },
+    {
+      "id": "x509-main-ca",
+      "plan_role": "X509 MAIN/CA",
+      "engines": [
+        "zk-x509-driver",
+        "privacy-substrate",
+        "fastpq-q77"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs",
+          "symbol": "pub fn verify_zk_x509_credential_proof_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/credential_stark.rs",
+          "symbol": "pub fn decode_zk_x509_credential_envelope_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_aggregate.rs",
+          "symbol": "goldilocks_transform"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs",
+          "symbol": "ExecutionMode"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stark.rs",
+          "symbol": "ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/mod.rs",
+          "symbol": "pub fn validate_zk_x509_credential_proof_container_v1"
+        }
+      ],
+      "migration": "X.3 builds the complete bounded joint construction on the B.2 engine; X.2 fixes the transport first.",
+      "note": "Uses three owners at once: its own driver, the privacy substrate and FASTPQ transform accelerators (fastpq_prover::goldilocks_transform, ExecutionMode)."
+    },
+    {
+      "id": "ivm-private-notes",
+      "plan_role": "IVM private notes",
+      "engines": [
+        "privacy-substrate"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/facade.rs",
+          "symbol": "pub fn prove_ivm_private_note_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/facade.rs",
+          "symbol": "pub fn verify_ivm_private_note_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/stark.rs",
+          "symbol": "aggregate_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/air.rs",
+          "symbol": "transparent_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/air.rs",
+          "symbol": "include!(\"../shared_note_air.rs\")"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/shared_note_air.rs",
+          "symbol": "macro_rules! define_note_air_trace_core_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/shared_note_profile_constraints.rs",
+          "symbol": "macro_rules! define_note_profile_constraint_residues_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/shared_note_sha256_helpers.rs",
+          "symbol": "fn xor_three"
+        }
+      ],
+      "migration": "P.18",
+      "facade": {
+        "detect": [
+          {
+            "needles": [
+              "privacy_engines::ivm_private_note",
+              "ivm_private_note::"
+            ],
+            "exclude": [
+              "crates/iroha_core_privacy/src/"
+            ]
+          }
+        ],
+        "owner_paths": [],
+        "importers": [
+          {
+            "path": "crates/iroha_core/src/privacy_release_evidence.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/privacy_release_evidence/network_actions/retained.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/privacy_release_evidence/retained_native.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/privacy_release_evidence/verange_and_rng.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+            "role": "source"
+          },
+          {
+            "path": "integration_tests/tests/nexus/atomic_private_settlement_localnet.rs",
+            "role": "test"
+          },
+          {
+            "path": "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs",
+            "role": "source"
+          },
+          {
+            "path": "python/iroha_python/iroha_python_rs/src/privacy_wallet_bundle.rs",
+            "role": "source"
+          }
+        ]
+      }
+    },
+    {
+      "id": "pq-masp",
+      "plan_role": "PQ-MASP",
+      "engines": [
+        "privacy-substrate"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/facade.rs",
+          "symbol": "pub fn prove_pq_masp_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/facade.rs",
+          "symbol": "pub fn verify_pq_masp_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/stark.rs",
+          "symbol": "aggregate_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/air.rs",
+          "symbol": "transparent_stark"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/air.rs",
+          "symbol": "include!(\"../shared_note_air.rs\")"
+        }
+      ],
+      "migration": "P.19",
+      "facade": {
+        "detect": [
+          {
+            "needles": [
+              "privacy_engines::pq_masp",
+              "pq_masp::"
+            ],
+            "exclude": [
+              "crates/iroha_core_privacy/src/"
+            ]
+          }
+        ],
+        "owner_paths": [],
+        "importers": [
+          {
+            "path": "crates/iroha_core/src/privacy_release_evidence.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/privacy_release_evidence/network_actions.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/privacy_release_evidence/retained_native.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/privacy_release_evidence/verange_and_rng.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+            "role": "source"
+          },
+          {
+            "path": "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs",
+            "role": "source"
+          },
+          {
+            "path": "python/iroha_python/iroha_python_rs/src/privacy_wallet_bundle.rs",
+            "role": "source"
+          }
+        ]
+      }
+    },
+    {
+      "id": "atomic-private-settlement",
+      "plan_role": "atomic private settlement",
+      "engines": [
+        "privacy-substrate"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/facade.rs",
+          "symbol": "pub fn prove_atomic_private_settlement_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/facade.rs",
+          "symbol": "pub fn verify_atomic_private_settlement_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/stark.rs",
+          "symbol": "aggregate_stark"
+        }
+      ],
+      "migration": "P.20",
+      "facade": {
+        "detect": [
+          {
+            "needles": [
+              "privacy_engines::atomic_private_settlement",
+              "prove_atomic_private_settlement_v1",
+              "verify_atomic_private_settlement_v1"
+            ],
+            "exclude": [
+              "crates/iroha_core_privacy/src/"
+            ]
+          }
+        ],
+        "owner_paths": [],
+        "importers": [
+          {
+            "path": "crates/iroha_core/src/private_settlement/auditor.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/private_settlement/sidecar_store.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/private_settlement/state.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_core/src/state.rs",
+            "role": "source"
+          },
+          {
+            "path": "crates/iroha_torii/src/private_settlement.rs",
+            "role": "source"
+          },
+          {
+            "path": "integration_tests/tests/nexus/atomic_private_settlement_localnet.rs",
+            "role": "test"
+          },
+          {
+            "path": "python/iroha_python/iroha_python_rs/src/privacy_wallet_worker.rs",
+            "role": "source"
+          }
+        ]
+      }
+    },
+    {
+      "id": "zk-ace",
+      "plan_role": "ZK-ACE",
+      "engines": [
+        "zk-ace-stark",
+        "privacy-substrate"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_ace.rs",
+          "symbol": "pub fn prove_zk_ace_privacy_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_ace.rs",
+          "symbol": "pub fn verify_zk_ace_privacy_v1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_ace_stark.rs",
+          "symbol": "goldilocks_fft_v1"
+        },
+        {
+          "path": "crates/zk_ace_prover/src/lib.rs",
+          "symbol": "pub fn build_signed_zk_ace_privacy_transfer_v1"
+        }
+      ],
+      "migration": "P.15",
+      "facade": {
+        "detect": [
+          {
+            "needles": [
+              "zk_ace_prover::",
+              "privacy_engines::zk_ace"
+            ],
+            "exclude": [
+              "crates/iroha_core_privacy/src/"
+            ]
+          }
+        ],
+        "owner_paths": [],
+        "importers": [
+          {
+            "path": "crates/zk_ace_prover/src/lib.rs",
+            "role": "source"
+          },
+          {
+            "path": "integration_tests/tests/zk_ace_localnet.rs",
+            "role": "test"
+          },
+          {
+            "path": "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs",
+            "role": "source"
+          },
+          {
+            "path": "python/iroha_python/iroha_python_rs/src/privacy_wallet_bundle.rs",
+            "role": "source"
+          }
+        ]
+      }
+    },
+    {
+      "id": "zk-ams-qpcs",
+      "plan_role": "ZK-AMS qPCS/FRI (conditional)",
+      "engines": [
+        "zk-ams-rns-qpcs"
+      ],
+      "entry_points": [
+        {
+          "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_fri_complete.rs",
+          "symbol": "struct RnsNativeQpcsFriCompleteStageV1"
+        },
+        {
+          "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_prefix.rs",
+          "symbol": "struct Fq2V1"
+        },
+        {
+          "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_transcript.rs",
+          "symbol": "pub enum ZkAmsMkheRnsNativeTranscriptErrorV1"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_ams.rs",
+          "symbol": "iroha_zkp_halo2::vega::"
+        }
+      ],
+      "migration": "C.5 selects the PCS. Only if that PCS is the FASTPQ backend does this owner migrate in B.3; otherwise it stays a distinct FRI over the RNS field."
+    }
+  ],
+  "distinct_families": [
+    {
+      "id": "halo2-ipa",
+      "family": "Halo2 / PLONKish with IPA",
+      "reason": "Polynomial IOP over Pasta/BN254 with inner-product-argument openings; a different arithmetization, commitment and transcript than a hash-based STARK.",
+      "owner_paths": [
+        "crates/iroha_zkp_halo2/src/ipa.rs",
+        "crates/iroha_zkp_halo2/src/poly.rs",
+        "crates/iroha_zkp_halo2/src/transcript.rs",
+        "crates/iroha_zkp_halo2/src/backend/",
+        "crates/iroha_core_zk/src/halo2_backend.rs",
+        "crates/kaigi_zk/src/",
+        "crates/iroha_core_privacy/src/privacy_engines/orchard.rs"
+      ],
+      "migration_target": false
+    },
+    {
+      "id": "bulletproofs",
+      "family": "Bulletproofs / generalized inner-product arguments",
+      "reason": "Discrete-log commitments and logarithmic inner-product arguments on elliptic curves; no FRI, no Merkle commitments.",
+      "owner_paths": [
+        "crates/iroha_zkp_halo2/src/generalized_bulletproof.rs",
+        "crates/iroha_zkp_halo2/src/generalized_bulletproof/",
+        "crates/iroha_zkp_halo2/src/vega/bulletproof_t256.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/bulletproof.rs"
+      ],
+      "migration_target": false
+    },
+    {
+      "id": "lattice-pcs",
+      "family": "Lattice polynomial commitment (Jindo)",
+      "reason": "Module-lattice polynomial commitment with its own ring arithmetic and soundness argument.",
+      "owner_paths": [
+        "crates/iroha_core_privacy/src/privacy_engines/jindo.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/jindo/"
+      ],
+      "migration_target": false
+    },
+    {
+      "id": "spartan-nova",
+      "family": "Spartan / Nova folding (Vega)",
+      "reason": "Relaxed-R1CS folding with sum-check and Hyrax openings over T256; transcript and commitments are required by that construction.",
+      "owner_paths": [
+        "crates/iroha_zkp_halo2/src/vega/spartan.rs",
+        "crates/iroha_zkp_halo2/src/vega/nifs.rs",
+        "crates/iroha_zkp_halo2/src/vega/sumcheck.rs",
+        "crates/iroha_zkp_halo2/src/vega/r1cs.rs",
+        "crates/iroha_zkp_halo2/src/vega/hyrax.rs",
+        "crates/iroha_zkp_halo2/src/vega/masked_relaxed.rs"
+      ],
+      "migration_target": false
+    }
+  ],
+  "goldilocks_modulus_definitions": [
+    {
+      "path": "crates/fastpq_isi/src/poseidon.rs",
+      "engine": "fastpq-isi-parameters"
+    },
+    {
+      "path": "crates/fastpq_prover/benches/planner.rs",
+      "engine": "fastpq-q77"
+    },
+    {
+      "path": "crates/fastpq_prover/fuzz/fuzz_targets/lookup_grand_product.rs",
+      "engine": "fastpq-q77"
+    },
+    {
+      "path": "crates/fastpq_prover/src/backend.rs",
+      "engine": "fastpq-q77"
+    },
+    {
+      "path": "crates/fastpq_prover/src/backend/air_degree/reference.rs",
+      "engine": "fastpq-q77"
+    },
+    {
+      "path": "crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs",
+      "engine": "fastpq-q77"
+    },
+    {
+      "path": "crates/fastpq_prover/src/field.rs",
+      "engine": "fastpq-q77"
+    },
+    {
+      "path": "crates/fastpq_prover/src/gadgets/compact_trace_columns.rs",
+      "engine": "fastpq-q77"
+    },
+    {
+      "path": "crates/fastpq_prover/src/proof.rs",
+      "engine": "fastpq-legacy-replay"
+    },
+    {
+      "path": "crates/fastpq_prover/src/trace.rs",
+      "engine": "fastpq-q77"
+    },
+    {
+      "path": "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs",
+      "engine": "privacy-execution-fork"
+    },
+    {
+      "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs",
+      "engine": "privacy-substrate"
+    },
+    {
+      "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
+      "engine": "zk-x509-driver"
+    },
+    {
+      "path": "crates/iroha_core_zk/src/lib.rs",
+      "engine": "core-zk-native-stark",
+      "note": "generic STARK envelope preverification bound"
+    },
+    {
+      "path": "crates/iroha_core_zk/src/stark.rs",
+      "engine": "core-zk-native-stark"
+    },
+    {
+      "path": "crates/iroha_crypto/src/fhe_bfv.rs",
+      "engine": "soracloud-bfv-native-stark",
+      "note": "spelled u64::MAX - u32::MAX as u64 + 1 over two lines"
+    },
+    {
+      "path": "crates/ivm/src/field.rs",
+      "engine": null,
+      "note": "IVM vector field opcodes; execution semantics, not a proof engine"
+    },
+    {
+      "path": "crates/ivm/tests/field_ops.rs",
+      "engine": null,
+      "note": "IVM field opcode tests"
+    },
+    {
+      "path": "crates/kaigi_zk/src/relation_v1.rs",
+      "engine": null,
+      "note": "Kaigi relation digest domain constant; Halo2 family"
+    }
+  ],
+  "retained_utilities": [
+    {
+      "symbol": "VerifyLimits",
+      "kind": "limits",
+      "defined_in": "crates/fastpq_prover/src/proof.rs",
+      "module_file": false,
+      "why": "Per-segment verifier policy of the public bundle limits. The q77 engine no longer takes it: the facade maps it to air::q77::VerifierLimits with for_segment. It lives in the superseded replay driver file.",
+      "detect": [
+        {
+          "needles": [
+            "VerifyLimits"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "VerifyLimits"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/axt_binding/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/air/q77.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/air/q77_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_artifact_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_axt_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_axt_batch.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_axt_context.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_bundle.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_bundle/execution_effect/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_execution_effect_batch.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_api.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_batch.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_diagnostic.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_transfer.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_quantity_artifact_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_quantity_diagnostic.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_quantity_producer/decode_policy.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_quantity_producer/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_quantity_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_transfer_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_engine/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_fixture.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/offline_compact.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/gadgets/public_transfer_statement.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/offline_compact.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/resource_profile.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/transcript_replay.rs",
+          "role": "test"
+        }
+      ]
+    },
+    {
+      "symbol": "PublicIO",
+      "kind": "public-io",
+      "defined_in": "crates/fastpq_prover/src/proof.rs",
+      "module_file": false,
+      "why": "Seven-field public IO compared by the quantity facade; lives in the superseded replay driver file.",
+      "detect": [
+        {
+          "needles": [
+            "PublicIO"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "PublicIO"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_artifact.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_artifact_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_axt_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_axt_batch.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_axt_context.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_bundle.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_bundle/execution_effect.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_model_statement.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_api.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_batch.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_diagnostic.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_transfer.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_quantity_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_relation/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/joint_fri.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/offline_compact.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/phased_trace.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/frame_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/proof/tests/wire_contract.rs",
+          "role": "test"
+        }
+      ]
+    },
+    {
+      "symbol": "ExecutionMode",
+      "kind": "accelerator",
+      "defined_in": "crates/fastpq_prover/src/backend.rs",
+      "module_file": false,
+      "why": "Requested/resolved execution mode shared by the transform planners and the X509 driver.",
+      "detect": [
+        {
+          "needles": [
+            "ExecutionMode"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "ExecutionMode"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/benches/planner.rs",
+          "role": "bench"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fri_openings.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/merkle_cache.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/merkle_multiproof.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_metal_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/goldilocks_transform.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/proof.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/trace.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/backend_regression.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/resource_profile.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/transcript_replay.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs",
+          "role": "test"
+        },
+        {
+          "tree": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/",
+          "files": [
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_ca_links.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fft_scheduler_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_coset.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_coset_device_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_cache.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_cache_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sample_commit_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sha_union.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_shared_fft_powers_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_weighted.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay_inverse_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "symbol": "set_execution_mode_observer",
+      "kind": "observer",
+      "defined_in": "crates/fastpq_prover/src/backend.rs",
+      "module_file": false,
+      "why": "Daemon telemetry hook for requested, resolved and backend labels.",
+      "detect": [
+        {
+          "needles": [
+            "set_execution_mode_observer"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "set_execution_mode_observer"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_metal_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/irohad/src/main.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "clear_execution_mode_observer",
+      "kind": "observer",
+      "defined_in": "crates/fastpq_prover/src/backend.rs",
+      "module_file": false,
+      "why": "Removes the execution-mode telemetry hook.",
+      "detect": [
+        {
+          "needles": [
+            "clear_execution_mode_observer"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "clear_execution_mode_observer"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_metal_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "build_trace",
+      "kind": "cli-trace-builder",
+      "defined_in": "crates/fastpq_prover/src/trace.rs",
+      "module_file": false,
+      "why": "Transition-batch trace builder used by the CLI audit command, a fuzz target and developer binaries.",
+      "detect": [
+        {
+          "needles": [
+            "build_trace"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "build_trace"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/fuzz/fuzz_targets/trace_builder.rs",
+          "role": "fuzz"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/digest.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_cli/src/audit.rs",
+          "role": "cli"
+        }
+      ]
+    },
+    {
+      "symbol": "RowUsage",
+      "kind": "cli-trace-builder",
+      "defined_in": "crates/fastpq_prover/src/trace.rs",
+      "module_file": false,
+      "why": "Row accounting reported by the CLI audit command.",
+      "detect": [
+        {
+          "needles": [
+            "RowUsage"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "RowUsage"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/digest.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_cli/src/audit.rs",
+          "role": "cli"
+        }
+      ]
+    },
+    {
+      "symbol": "TraceColumn",
+      "kind": "cli-trace-builder",
+      "defined_in": "crates/fastpq_prover/src/trace.rs",
+      "module_file": false,
+      "why": "Trace column type consumed by developer benchmark binaries.",
+      "detect": [
+        {
+          "needles": [
+            "TraceColumn"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "TraceColumn"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/benchmark_geometry.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_metal_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/digest.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/digest384_benchmark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "set_poseidon_pipeline_observer",
+      "kind": "observer",
+      "defined_in": "crates/fastpq_prover/src/trace.rs",
+      "module_file": false,
+      "why": "Daemon telemetry hook for the Poseidon pipeline policy.",
+      "detect": [
+        {
+          "needles": [
+            "set_poseidon_pipeline_observer"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "set_poseidon_pipeline_observer"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/irohad/src/main.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "set_poseidon_gpu_event_observer",
+      "kind": "observer",
+      "defined_in": "crates/fastpq_prover/src/trace.rs",
+      "module_file": false,
+      "why": "Daemon telemetry hook for Poseidon GPU events.",
+      "detect": [
+        {
+          "needles": [
+            "set_poseidon_gpu_event_observer"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "set_poseidon_gpu_event_observer"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/irohad/src/main.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "goldilocks_transform",
+      "kind": "accelerator",
+      "defined_in": "crates/fastpq_prover/src/goldilocks_transform.rs",
+      "module_file": true,
+      "why": "Exact-root bounded-column Goldilocks transforms with deterministic fallback, used by the X509 MAIN driver.",
+      "detect": [
+        {
+          "needles": [
+            "goldilocks_transform"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "tree": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/",
+          "files": [
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_aggregate.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_ca_links.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fft_scheduler_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_coset.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_coset_device_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_key_joins.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_cache.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_resources.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_retained_rfc.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sha_union.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_shared_fft_powers_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_links.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_weighted.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "symbol": "Planner",
+      "kind": "accelerator",
+      "defined_in": "crates/fastpq_prover/src/fft.rs",
+      "module_file": false,
+      "why": "FFT/LDE planner used by the q77 public preparation, benches and developer binaries.",
+      "detect": [
+        {
+          "needles": [
+            "Planner"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/benches/planner.rs",
+          "role": "bench"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_hash_quotient.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_columns/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_smt_quotient.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_transfer_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/extension_trace.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fixed_schedule.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/public_table.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_metal_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/metal_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/trace.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "apply_metal_overrides",
+      "kind": "accelerator",
+      "defined_in": "crates/fastpq_prover/src/overrides.rs",
+      "module_file": false,
+      "why": "Node-local Metal tuning entry point called by Core and the daemon.",
+      "detect": [
+        {
+          "needles": [
+            "apply_metal_overrides"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "apply_metal_overrides"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/fastpq/lane.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/irohad/src/main.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "DigestExecutionV1",
+      "kind": "accelerator",
+      "defined_in": "crates/fastpq_prover/src/digest_executor.rs",
+      "module_file": false,
+      "why": "Explicit digest execution policy of the q77 producer.",
+      "detect": [
+        {
+          "needles": [
+            "DigestExecutionV1"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "DigestExecutionV1"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/air/q77.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_quantity_producer/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_coefficient_commitment.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_coefficient_commitment/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_leaf_batch.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_leaf_batch/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_node_cache.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_node_cache/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_parent_batch.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_prover.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_prover/integration_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_prover/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_striped_merkle.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_striped_merkle/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/offline_compact.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/offline_compact/resources.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/digest.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/digest384_batch.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/digest384_benchmark.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/metal_digest384.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/metal_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/offline_compact.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/support/offline_compact_single.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/support/offline_compact_two.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/fastpq/lane.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "resource_limits",
+      "kind": "limits",
+      "defined_in": "crates/fastpq_isi/src/resource_limits.rs",
+      "module_file": true,
+      "why": "Node resource defaults read by iroha_config.",
+      "detect": [
+        {
+          "needles": [
+            "resource_limits"
+          ],
+          "also": [
+            "fastpq_isi"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/proof.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/trace.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/resource_profile.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_config/src/parameters/defaults.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs",
+          "role": "test"
+        }
+      ]
+    },
+    {
+      "symbol": "PoseidonExecutionMode",
+      "kind": "accelerator",
+      "defined_in": "crates/fastpq_prover/src/backend.rs",
+      "module_file": false,
+      "why": "Requested/resolved Poseidon execution mode reported with the pipeline policy; re-exported at the crate root.",
+      "detect": [
+        {
+          "needles": [
+            "PoseidonExecutionMode"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "PoseidonExecutionMode"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/proof.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/trace.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "PoseidonPipelinePolicy",
+      "kind": "accelerator",
+      "defined_in": "crates/fastpq_prover/src/trace.rs",
+      "module_file": false,
+      "why": "Poseidon pipeline policy delivered to the pipeline observer; re-exported at the crate root.",
+      "detect": [
+        {
+          "needles": [
+            "PoseidonPipelinePolicy"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "PoseidonPipelinePolicy"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "Trace",
+      "kind": "cli-trace-builder",
+      "defined_in": "crates/fastpq_prover/src/trace.rs",
+      "module_file": false,
+      "why": "Trace type returned by build_trace; re-exported at the crate root.",
+      "detect": [
+        {
+          "needles": [
+            "Trace"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "Trace"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/merkle_cache.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/merkle_multiproof.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/bin/fastpq_metal_bench.rs",
+          "role": "cli"
+        },
+        {
+          "path": "crates/fastpq_prover/src/digest.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "clear_poseidon_gpu_event_observer",
+      "kind": "observer",
+      "defined_in": "crates/fastpq_prover/src/trace.rs",
+      "module_file": false,
+      "why": "Removes the Poseidon GPU event telemetry hook.",
+      "detect": [
+        {
+          "needles": [
+            "clear_poseidon_gpu_event_observer"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "clear_poseidon_gpu_event_observer"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "clear_poseidon_pipeline_observer",
+      "kind": "observer",
+      "defined_in": "crates/fastpq_prover/src/trace.rs",
+      "module_file": false,
+      "why": "Removes the Poseidon pipeline telemetry hook.",
+      "detect": [
+        {
+          "needles": [
+            "clear_poseidon_pipeline_observer"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        },
+        {
+          "needles": [
+            "clear_poseidon_pipeline_observer"
+          ],
+          "also": [
+            "fastpq_prover"
+          ],
+          "exclude": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/backend.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/lib.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "backend-field-helpers",
+      "kind": "arithmetic",
+      "defined_in": "crates/fastpq_prover/src/backend.rs",
+      "module_file": false,
+      "symbols": [
+        "field_pow",
+        "mul_mod",
+        "add_mod",
+        "sub_mod",
+        "field_inverse",
+        "FriDomain"
+      ],
+      "why": "Scalar Goldilocks helpers and the FRI domain type of the superseded driver file that the canonical engine and air/reference.rs still import.",
+      "detect": [
+        {
+          "needles": [
+            "field_pow",
+            "mul_mod",
+            "add_mod",
+            "sub_mod",
+            "field_inverse",
+            "FriDomain"
+          ],
+          "within": [
+            "crates/fastpq_prover/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/fuzz/fuzz_targets/lookup_grand_product.rs",
+          "role": "fuzz"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/air/q77_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/air/reference.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/air_expression.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/air_quotient.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/coefficient_masking/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_hash_quotient.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_protocol.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_columns/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_smt_quotient.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_transfer_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_coefficient_replay.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_engine.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_engine/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_geometry.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_geometry/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_masked_quotient/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_masked_replay.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_masked_replay/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_prover/integration_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/extension_trace.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fixed_domain.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fixed_schedule.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fri_fold.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fri_fold/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fri_openings.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/joint_fri.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/polynomial_field.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/polynomial_field/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/polynomial_reference.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/polynomial_transform.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/public_table.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/cyclotomic.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/fft.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/proof.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "symbol": "GOLDILOCKS_MODULUS",
+      "kind": "arithmetic",
+      "defined_in": "crates/fastpq_prover/src/backend.rs",
+      "module_file": false,
+      "why": "The driver file's private modulus constant, imported by the backend modules below it; files outside backend/ define their own copy and are listed under goldilocks_modulus_definitions.",
+      "detect": [
+        {
+          "needles": [
+            "GOLDILOCKS_MODULUS"
+          ],
+          "within": [
+            "crates/fastpq_prover/src/backend/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/fastpq_prover/src/backend/air_quotient.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/coefficient_masking.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/coefficient_masking/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_axt_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_hash_quotient.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_protocol.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_public_columns/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_smt_quotient.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/compact_transfer_air.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_coefficient_replay/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_composition/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_geometry.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_geometry/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_masked_replay.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_masked_replay/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_polynomial/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_proof/fri_values.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_proof/row_values.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_proof/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/deep_prover_plan/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fixed_domain.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fixed_schedule.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fri_fold.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/fri_fold/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/masked_quotient.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/merkle_cache.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/merkle_multiproof.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/merkle_multiproof/parallel_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/polynomial_division/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/polynomial_field.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/polynomial_field/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/polynomial_reference.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/polynomial_transform/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/public_table.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/src/backend/tests.rs",
+          "role": "test"
+        }
+      ]
+    }
+  ],
+  "crate_dependents": [
+    {
+      "manifest": "Cargo.toml",
+      "depends_on": [
+        "fastpq_prover"
+      ]
+    },
+    {
+      "manifest": "crates/fastpq_prover/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi"
+      ]
+    },
+    {
+      "manifest": "crates/fastpq_prover/fuzz/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi",
+        "fastpq_prover"
+      ]
+    },
+    {
+      "manifest": "crates/iroha_cli/Cargo.toml",
+      "depends_on": [
+        "fastpq_prover"
+      ]
+    },
+    {
+      "manifest": "crates/iroha_config/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi"
+      ]
+    },
+    {
+      "manifest": "crates/iroha_core/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi",
+        "fastpq_prover"
+      ]
+    },
+    {
+      "manifest": "crates/iroha_core_privacy/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi",
+        "fastpq_prover"
+      ]
+    },
+    {
+      "manifest": "crates/iroha_core_zk/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi",
+        "fastpq_prover"
+      ]
+    },
+    {
+      "manifest": "crates/iroha_crypto/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi"
+      ]
+    },
+    {
+      "manifest": "crates/iroha_data_model/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi"
+      ]
+    },
+    {
+      "manifest": "crates/iroha_torii/Cargo.toml",
+      "depends_on": [
+        "fastpq_prover"
+      ]
+    },
+    {
+      "manifest": "crates/iroha_zkp_halo2/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi"
+      ]
+    },
+    {
+      "manifest": "crates/irohad/Cargo.toml",
+      "depends_on": [
+        "fastpq_prover"
+      ]
+    },
+    {
+      "manifest": "scripts/fastpq/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi"
+      ]
+    },
+    {
+      "manifest": "xtask/Cargo.toml",
+      "depends_on": [
+        "fastpq_isi"
+      ]
+    }
+  ],
+  "roles_without_an_engine": [
+    {
+      "id": "ram-lfe",
+      "plan_role": "RAM-LFE program classes (affine, bounded, refresh), verifiable opening and threshold opening",
+      "current_engine": null,
+      "finding": "No RAM-LFE path proves or verifies with a FASTPQ-style engine today. Core refuses proof mode: policy validation and receipt verification both return PROOF_RELATION_UNAVAILABLE and never reach a verifier; the Core file's only use of the generic verification facade is a negative-control test showing that a valid proof of another relation is still refused. iroha_crypto's RAM-LFE code has no STARK, FRI or AIR code; it uses the fastpq_isi Digest384 hash for commitments only. The three iroha_core_zk modules are test-only Halo2 capacity experiments for the unavailable relation and belong to the distinct Halo2 family. The checker fails when a listed path starts importing a proof engine.",
+      "checked_paths": [
+        "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs",
+        "crates/iroha_crypto/src/ram_lfe.rs",
+        "crates/iroha_crypto/src/ram_lfe/",
+        "crates/iroha_core_zk/src/ram_lfe_byte.rs",
+        "crates/iroha_core_zk/src/ram_lfe_byte_tests.rs",
+        "crates/iroha_core_zk/src/ram_lfe_poseidon.rs",
+        "crates/iroha_core_zk/src/ram_lfe_poseidon_tests.rs",
+        "crates/iroha_core_zk/src/ram_lfe_word.rs",
+        "crates/iroha_core_zk/src/ram_lfe_word_tests.rs",
+        "crates/iroha_data_model/src/ram_lfe.rs",
+        "crates/iroha_data_model/src/ram_lfe/",
+        "crates/iroha_data_model/src/isi/ram_lfe.rs",
+        "crates/iroha_data_model/tests/ram_lfe_canonical_v1.rs"
+      ],
+      "evidence": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs",
+          "symbol": "const PROOF_RELATION_UNAVAILABLE"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs",
+          "symbol": "Err(PROOF_RELATION_UNAVAILABLE.to_owned())"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/ram_lfe_word.rs",
+          "symbol": "halo2_proofs"
+        }
+      ],
+      "planned_tasks": [
+        "R.11",
+        "R.2",
+        "R.3",
+        "R.8",
+        "R.12",
+        "R.7",
+        "R.9",
+        "R.10"
+      ],
+      "planned": "R.11 (client well-formedness and circuit privacy) depends on B.1; R.2, R.3 and R.8 (phone-control, affine execution, verifiable opening and identifier PRF) depend on B.2; R.12, R.7, R.9 and R.10 deliver the affine, bounded, refresh and threshold flows. Whether a relation uses the shared FASTPQ backend and its transcript follows from the construction R.0 selects, not from a switch. Each one becomes a consumer entry here when it lands."
+    }
+  ],
+  "engine_utilities": [
+    {
+      "engine": "core-zk-native-stark",
+      "symbol": "StarkVerifierLimits",
+      "kind": "limits",
+      "defined_in": "crates/iroha_core_zk/src/stark.rs",
+      "module_file": false,
+      "why": "Caller caps of the native STARK envelope verifier (domain, blowup, fold arity, queries, Merkle depth, row width).",
+      "detect": [
+        {
+          "needles": [
+            "StarkVerifierLimits"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/tests/zk_stark.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/lib.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/stark/bfv_full_bootstrap_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/stark/tests.rs",
+          "role": "test"
+        }
+      ]
+    },
+    {
+      "engine": "core-zk-native-stark",
+      "symbol": "ZkVerifyGuardrails",
+      "kind": "limits",
+      "defined_in": "crates/iroha_core_zk/src/lib.rs",
+      "module_file": false,
+      "why": "Backend enable flags and envelope/proof byte caps of the generic verifier. iroha_core/src/zk_guardrails.rs fills them from node configuration, which the plan removes from validity-affecting inputs.",
+      "detect": [
+        {
+          "needles": [
+            "ZkVerifyGuardrails",
+            "guardrails_from_config"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/identifier.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/identifier_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core/src/zk_guardrails.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/confidential/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/confidential_v2.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/ivm_proof_identity/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/verification.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/verification/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_torii/src/lib.rs",
+          "role": "source"
+        }
+      ]
+    },
+    {
+      "engine": "privacy-substrate",
+      "symbol": "proof_phase_diagnostics",
+      "kind": "observer",
+      "defined_in": "crates/iroha_core_privacy/src/privacy_engines/proof_phase_diagnostics.rs",
+      "module_file": true,
+      "why": "Opt-in public phase timing events of synchronous native proof construction.",
+      "detect": [
+        {
+          "needles": [
+            "proof_phase_diagnostics",
+            "ProofPhaseV1",
+            "ProofPhaseClockV1",
+            "ProofPhaseInvocationV1",
+            "ManagedNotePhaseCursorV1"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/facade.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/mod.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs",
+          "role": "source"
+        }
+      ]
+    }
+  ]
+}

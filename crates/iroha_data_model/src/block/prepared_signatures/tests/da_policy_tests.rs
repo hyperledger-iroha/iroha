@@ -1,7 +1,7 @@
 //! Actual canonical SignedBlock policy child walk and retained source/error owners.
 use super::*;
 use crate::da::commitment::{DaProofPolicy, DaProofScheme};
-use crate::nexus::{DataSpaceId, LaneId};
+use iroha_model_base::topology::{DataSpaceId, LaneId};
 fn policy_fixture(count: usize) -> SignedBlock {
     let mut block = fixture(0);
     let policies = DaProofPolicyBundle::new(

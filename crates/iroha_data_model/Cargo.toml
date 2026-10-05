@@ -202,6 +202,21 @@ path = "tests/manual_frame_identity.rs"
 name = "validator_staking_sdk_fixtures"
 path = "tests/validator_staking_sdk_fixtures.rs"
 
+# Canonical V1 RAM-LFE receipt and opening commitments.
+[[test]]
+name = "ram_lfe_canonical_v1"
+path = "tests/ram_lfe_canonical_v1.rs"
+
+# Canonical zk-X509 presentation-interval definition and its shared SDK vectors.
+[[test]]
+name = "zk_x509_presentation_interval"
+path = "tests/zk_x509_presentation_interval.rs"
+
+# Exact-limit and one-over checks of the unified resource contract's committed bounds.
+[[test]]
+name = "resource_contract_v1"
+path = "tests/resource_contract_v1.rs"
+
 # Standalone allocator observer for the canonical fixed-limb quantity kernel.
 [[test]]
 name = "fastpq_quantity_units_allocations"

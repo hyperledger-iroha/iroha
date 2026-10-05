@@ -53,7 +53,7 @@ source bindings.
 
 Recorded normal native/JS/Python and ordinary daemon/CLI frontend checks pass.
 The native consumers use the state-free owners without Core/P2P in their normal
-graphs. Current target-inventory validation admits 105 declared binaries and 23
+graphs. Current target-inventory validation admits 106 declared binaries and 23
 defaults. The canonical `ivm_artifact_admit` developer executable independently
 verifies contracts and creates their manifests without the node CLI; it requires
 explicit `dev-tools` selection under the unchanged 24-default ceiling. The

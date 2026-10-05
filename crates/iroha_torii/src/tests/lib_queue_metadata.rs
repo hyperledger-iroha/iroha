@@ -97,6 +97,38 @@ mod tests_queue_metadata {
         assert_eq!(envelope.code, "unsupported_transaction_admission");
         assert!(envelope.details.unwrap().retry_after_seconds.is_none());
     }
+    /// Torii stage of the resource contract (`specs/zk_resource_contract.json`): a transaction
+    /// no block can carry is a permanent refusal, not backpressure, and its detail carries the
+    /// actual and the permitted bytes.
+    #[test]
+    fn never_includable_transaction_refusal_is_permanent_and_reports_both_byte_counts() {
+        let never = iroha_data_model::parameter::system::TransactionNeverIncludable {
+            encoded_bytes: 4_128_769,
+            max_bytes: 4_128_768,
+        };
+        let error = queue::Error::UnsupportedTransactionAdmission {
+            reason: never.to_string(),
+        };
+        assert_eq!(
+            Error::status_code_for_queue_error(&error),
+            StatusCode::BAD_REQUEST
+        );
+        let (reject_code, detail) = queue_rejection_metadata(&error);
+        assert_eq!(reject_code, "PRTRY:UNSUPPORTED_TRANSACTION_ADMISSION");
+        assert!(
+            detail.contains("4128769") && detail.contains("4128768"),
+            "{detail}"
+        );
+        let envelope = Error::queue_error_envelope(&error, None);
+        assert_eq!(envelope.code, "unsupported_transaction_admission");
+        assert!(envelope.message.contains("a transaction a block can carry"));
+        let details = envelope.details.unwrap();
+        assert!(details.retry_after_seconds.is_none());
+        assert_eq!(
+            details.reject_code.as_deref(),
+            Some("PRTRY:UNSUPPORTED_TRANSACTION_ADMISSION")
+        );
+    }
     #[test]
     fn queue_domain_mismatch_is_permanent_and_matches_stateless_rejection_category() {
         use iroha_data_model::{isi::error::Mismatch, transaction::TransactionDomain};

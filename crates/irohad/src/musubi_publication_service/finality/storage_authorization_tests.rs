@@ -35,16 +35,6 @@ impl MusubiSeedIngressBackendV1 for UnusedSeed {
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
         panic!("storage route cannot stage another seed")
     }
-    fn verify_staged_car(
-        &self,
-        _: [u8; 32],
-        _: &MusubiSeedIngressReceiptBindingV1,
-        _: &MusubiArchiveCommitmentV1,
-        _: &sorafs_car::CarBuildPlan,
-        _: &[u8],
-    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
-        panic!("storage route cannot verify seed custody")
-    }
 }
 struct UnusedReadback;
 impl MusubiProviderReadbackBackendV1 for UnusedReadback {

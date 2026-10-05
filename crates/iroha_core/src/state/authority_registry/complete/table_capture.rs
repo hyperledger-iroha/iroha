@@ -950,6 +950,20 @@ fn capture_actual_state_tables_once(
     capture_tables_once(state, STATE_FIELDS, TABLE_MATERIALIZERS, limits)
 }
 
+/// Identities of every canonical table that the exact catalog reads, in catalog order.
+///
+/// The State table inventory (`specs/state_table_inventory.json`) records, for each
+/// canonical table of the registry, that this catalog has a reader for it.
+#[cfg(test)]
+pub(in crate::state) fn catalog_table_ids() -> Vec<&'static str> {
+    require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS)
+        .expect("the table catalog matches the registry exactly");
+    TABLE_MATERIALIZERS
+        .iter()
+        .flat_map(|owner| owner.table_ids())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1224,6 +1224,9 @@ pub mod network {
     /// Maximum frame size for block sync / consensus payload traffic.
     pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_PLAINTEXT_FRAME_BYTES;
     /// Maximum frame size for transaction gossip.
+    // TODO(X.2): a transaction above this frame is not gossiped, so a maximum-proof
+    // transaction is proposed only when its ingress node leads
+    // (`specs/zk_resource_contract.json`, `gossip_frame_carries_max_transaction`).
     pub const MAX_FRAME_BYTES_TX_GOSSIP: NonZeroUsize = nonzero!(262_144_usize); // 256 KiB
     /// Maximum frame size for peer gossip.
     pub const MAX_FRAME_BYTES_PEER_GOSSIP: NonZeroUsize = nonzero!(65_536_usize); // 64 KiB
@@ -4056,6 +4059,9 @@ pub mod accel {
     pub const ARTIFACT_BYTES: usize = RESOURCE_LIMITS.artifact_bytes;
 }
 /// Zero-knowledge subsystem defaults used by Torii and the host runtime.
+// TODO(F.4): the proof-size, circuit-size and SCCP limits below decide validity but are read
+// from node configuration and bound into State only as a hash. Move their source into
+// committed State (`specs/zk_resource_contract.json`, bounds `proof.config_*`).
 pub mod zk {
     /// SCCP proof-admission and deterministic verifier-work defaults.
     pub mod sccp {

@@ -5,6 +5,7 @@
 //! a host-created list of dates is not a substitute for that census.
 
 use super::{F, PolynomialAirFieldV1, ZkX509Rfc5280GrammarRoleV1, ZkX509Rfc5280StarkErrorV1};
+use iroha_data_model::privacy::{ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_UNIX_SECONDS_V1};
 
 pub(super) const TEMPORAL_SLOTS_V1: usize = 72;
 pub(super) const DECIMAL_ROWS_PER_TIME_V1: usize = 15;
@@ -12,7 +13,13 @@ pub(super) const CALENDAR_PHASES_V1: usize = 7;
 pub(super) const RELATION_SLOTS_V1: usize = 73;
 pub(super) const RELATION_PHASES_V1: usize = 2;
 pub(super) const RANGE_BYTES_PER_RELATION_V1: usize = 8;
-pub(super) const MAXIMUM_TIMESTAMP_V1: u64 = 253_402_300_799;
+/// Last RFC 5280 calendar second; the canonical interval definition owns it.
+pub(super) const MAXIMUM_TIMESTAMP_V1: u64 = ZK_X509_MAX_UNIX_SECONDS_V1;
+/// Public affine offset of the CRL-age relation `thisUpdate + 300 >= end`.
+pub(super) const CRL_AGE_SECONDS_V1: u16 = {
+    assert!(ZK_X509_MAX_CRL_AGE_SECONDS_V1 <= u16::MAX as u64);
+    ZK_X509_MAX_CRL_AGE_SECONDS_V1 as u16
+};
 pub(super) const SLACK_BITS_V1: usize = 38;
 pub(super) const TIME_NODE_DOMAIN_V1: u64 = 100;
 pub(super) const TIMESTAMP_DOMAIN_V1: u64 = 101;
@@ -20,7 +27,8 @@ pub(super) const LOOKUP_LANES_V1: usize = 4;
 #[cfg(test)]
 pub(super) const LOOKUP_AUX_WIDTH_V1: usize = 4 * LOOKUP_LANES_V1;
 pub(super) const LOOKUP_RESIDUES_V1: usize = 3 + 12 * LOOKUP_LANES_V1;
-const _: () = assert!(MAXIMUM_TIMESTAMP_V1 + 300 < 1_u64 << SLACK_BITS_V1);
+const _: () =
+    assert!(MAXIMUM_TIMESTAMP_V1 + ZK_X509_MAX_CRL_AGE_SECONDS_V1 < 1_u64 << SLACK_BITS_V1);
 
 /// One fixed semantic time slot; its instance is not a prover-chosen ordinal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,7 +193,7 @@ pub(super) fn relation_slot_v1(index: usize) -> Option<NumericRelationSlotV1> {
             NumericActivityV1::Required,
             Time {
                 slot: CrlThisUpdate,
-                add_seconds: 300,
+                add_seconds: CRL_AGE_SECONDS_V1,
             },
             WindowEnd,
         ),

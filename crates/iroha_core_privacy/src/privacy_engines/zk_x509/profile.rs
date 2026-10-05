@@ -45,9 +45,9 @@ pub(crate) const ZK_X509_MAX_CRL_BYTES_V1: usize = 4_096;
 pub const ZK_X509_MAX_CRL_ENTRIES_V1: usize = 64;
 /// Maximum canonical unsigned certificate-serial bytes.
 pub(crate) const ZK_X509_MAX_SERIAL_BYTES_V1: usize = 20;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-/// Maximum accepted lag between trusted block time and CRL `thisUpdate`.
-pub(crate) const ZK_X509_MAX_CRL_AGE_SECONDS_V1: u64 = 300;
+// The CRL-age and presentation-window ceilings have one owner:
+// `iroha_data_model::privacy::ZK_X509_MAX_CRL_AGE_SECONDS_V1` and the canonical
+// interval definition beside it.
 /// Fixed private salt width for one subject-attribute commitment.
 pub(crate) const ZK_X509_ATTRIBUTE_SALT_BYTES_V1: usize = 32;
 /// Maximum exact DER content bytes in one committed subject attribute.

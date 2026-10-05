@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::{
+    VerifyLimits,
     backend::{
+        air::WorkLimits,
         compact_protocol::FixedAir,
         compact_public_columns::COMMITTED_COLUMN_COUNT,
         compact_transfer_air::CompactTransferAir,
@@ -931,14 +933,21 @@ fn policy_relation() -> CompactTransferAir {
 
 #[test]
 fn committed_policy_checks_every_segment_dimension_before_decoding() {
-    type Setter = fn(&mut VerifyLimits, usize);
+    type Setter = fn(&mut VerifierLimits, usize);
     let relation = policy_relation();
     let bytes = vec![0; deep_proof::MAX_FRAME_BYTES];
-    let exact = VerifyLimits {
-        // The enclosing public bundle checks its transition table, before any
-        // segment is constructed. This private helper has no transition table.
-        max_transitions: 0,
-        max_batch_bytes: relation.statement_bytes().len(),
+    // The enclosing public bundle checks its transition table before any
+    // segment is constructed; the engine's typed limits carry no transition
+    // ceiling. Every value below is written out independently of the engine.
+    let exact = VerifierLimits {
+        work: WorkLimits {
+            max_trace_rows: 65_536,
+            max_trace_cells: 65_536 * 342,
+            max_constraints: 923,
+            max_statement_bytes: relation.statement_bytes().len(),
+            max_payload_bytes: bytes.len() + deep_proof::MAX_ALLOCATION_CHARGES,
+            max_work_units: 29_751,
+        },
         max_proof_bytes: bytes.len(),
         max_fri_layers: 6,
         max_queries: QUERY_COUNT,
@@ -946,14 +955,32 @@ fn committed_policy_checks_every_segment_dimension_before_decoding() {
         max_query_path_len: 23,
         max_fri_round_values: 16,
         max_air_row_values: COMMITTED_COLUMN_COUNT,
+        max_decode_allocation_charges: deep_proof::MAX_ALLOCATION_CHARGES,
     };
+    assert_eq!(
+        exact,
+        VerifierLimits::exact(relation.statement_bytes().len())
+    );
     preflight(&relation, bytes.len(), exact).unwrap();
-    let dimensions: [(&str, usize, Setter); 8] = [
+    let dimensions: [(&str, usize, Setter); 13] = [
         (
             "max_compact_statement_bytes",
-            exact.max_batch_bytes,
-            |l, v| l.max_batch_bytes = v,
+            exact.work.max_statement_bytes,
+            |l, v| l.work.max_statement_bytes = v,
         ),
+        ("max_trace_rows", 65_536, |l, v| l.work.max_trace_rows = v),
+        ("max_trace_cells", 65_536 * 342, |l, v| {
+            l.work.max_trace_cells = v
+        }),
+        ("max_constraints", 923, |l, v| l.work.max_constraints = v),
+        (
+            "max_verifier_payload_bytes",
+            exact.work.max_payload_bytes,
+            |l, v| l.work.max_payload_bytes = v,
+        ),
+        ("max_verifier_work_units", 29_751, |l, v| {
+            l.work.max_work_units = v
+        }),
         ("max_proof_bytes", exact.max_proof_bytes, |l, v| {
             l.max_proof_bytes = v
         }),
@@ -973,21 +1000,51 @@ fn committed_policy_checks_every_segment_dimension_before_decoding() {
     for (name, required, set) in dimensions {
         let mut limited = exact;
         set(&mut limited, required - 1);
-        assert!(matches!(
-            verify_committed(&relation, &bytes, limited, deep_proof::MAX_ALLOCATION_CHARGES),
-            Err(Error::VerifierLimitExceeded { limit, actual, max })
-                if limit == name && actual == required && max == required - 1
-        ));
+        assert!(
+            matches!(
+                verify_committed(&relation, &bytes, limited),
+                Err(Error::VerifierLimitExceeded { limit, actual, max })
+                    if limit == name && actual == required && max == required - 1
+            ),
+            "{name}"
+        );
     }
-    // Inclusive geometry does not grant a success result to malformed bytes.
-    assert!(
-        verify_committed(&relation, &bytes, exact, deep_proof::MAX_ALLOCATION_CHARGES).is_err()
+    // The declared payload counts only the decode charges the engine admits:
+    // a caller ceiling above the fixed decode bound adds nothing, and a lower
+    // one lowers the declared payload with it.
+    preflight(
+        &relation,
+        bytes.len(),
+        VerifierLimits {
+            max_decode_allocation_charges: usize::MAX,
+            ..exact
+        },
+    )
+    .unwrap();
+    preflight(
+        &relation,
+        bytes.len(),
+        VerifierLimits {
+            work: WorkLimits {
+                max_payload_bytes: bytes.len(),
+                ..exact.work
+            },
+            max_decode_allocation_charges: 0,
+            ..exact
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        verification_payload_bytes(usize::MAX, usize::MAX),
+        usize::MAX
     );
+    // Inclusive geometry does not grant a success result to malformed bytes.
+    assert!(verify_committed(&relation, &bytes, exact).is_err());
     assert!(matches!(
         preflight(
             &relation,
             deep_proof::MAX_FRAME_BYTES + 1,
-            VerifyLimits {
+            VerifierLimits {
                 max_proof_bytes: usize::MAX,
                 ..exact
             }
@@ -1001,26 +1058,64 @@ fn committed_policy_checks_every_segment_dimension_before_decoding() {
 }
 
 #[test]
+fn declared_verification_work_covers_every_value_a_frame_can_carry() {
+    // Each term is written out independently of the engine's constants: one
+    // evaluation of 923 slots over two 342-cell rows, 604 out-of-domain
+    // answers, 77 queries of one 301-value row, one three-value quotient leaf
+    // and one full fiber per round, and the 128-value terminal.
+    assert_eq!(
+        VERIFICATION_WORK_UNITS,
+        923 + 2 * 342 + 604 + 77 * (301 + 3 + 16 + 16 + 8 + 8 + 4) + 128
+    );
+    assert_eq!(VERIFICATION_WORK_UNITS, 29_751);
+    assert_eq!(
+        (QUERY_CHUNK_VALUES, MAX_FRI_GROUP_VALUES, QUERY_PATH_LEN),
+        (2, 16, 23)
+    );
+    assert_eq!(max_arity(), 16);
+    assert_eq!(arity_sum(), 52);
+    for spread in [false, true] {
+        let (proof, _, _) = constant_fixture(&queries(spread));
+        let fibers: usize = proof
+            .rounds
+            .iter()
+            .flat_map(|round| &round.groups)
+            .map(|group| group.values.arity())
+            .sum();
+        let carried = proof.ood.current.len()
+            + proof.ood.next.len()
+            + proof.ood.quotient.len()
+            + proof.rows.len() * COMMITTED_COLUMN_COUNT
+            + 3 * proof.quotients.len()
+            + fibers
+            + proof.terminal.len();
+        // The remainder is the single evaluation of every slot over both rows.
+        assert!(
+            carried + 923 + 2 * 342 <= VERIFICATION_WORK_UNITS,
+            "spread={spread} carried={carried}"
+        );
+        // The spread positions open a distinct group in every round, so the
+        // declared work is attained exactly, not merely bounded.
+        if spread {
+            assert_eq!(carried + 923 + 2 * 342, VERIFICATION_WORK_UNITS);
+        }
+    }
+}
+
+#[test]
 fn committed_result_is_unavailable_for_decoded_but_unauthenticated_carriers() {
     let relation = policy_relation();
     let (proof, _, _) = constant_fixture(&queries(true));
     let bytes = norito::encode_canonical(&proof).unwrap();
-    let limits = VerifyLimits {
+    let segment = VerifyLimits {
         max_proof_bytes: bytes.len(),
         ..VerifyLimits::default()
     };
+    let limits = VerifierLimits::for_segment(segment, deep_proof::MAX_ALLOCATION_CHARGES);
     preflight(&relation, bytes.len(), limits).unwrap();
     assert!(deep_proof::decode(&bytes, bytes.len()).is_ok());
-    assert!(verify_committed(&relation, &bytes, limits, 0).is_err());
-    assert!(
-        verify_committed(
-            &relation,
-            &bytes,
-            limits,
-            deep_proof::MAX_ALLOCATION_CHARGES
-        )
-        .is_err()
-    );
+    assert!(verify_committed(&relation, &bytes, VerifierLimits::for_segment(segment, 0)).is_err());
+    assert!(verify_committed(&relation, &bytes, limits).is_err());
 }
 
 #[test]
@@ -1043,10 +1138,13 @@ fn producer_preflight_rejects_the_fixed_statement_envelope_before_private_work()
     )
     .unwrap();
     assert!(oversized.statement_bytes().len() > context.len());
-    let policy = VerifyLimits {
-        max_batch_bytes: oversized.statement_bytes().len(),
-        ..VerifyLimits::default()
-    };
+    let policy = VerifierLimits::for_segment(
+        VerifyLimits {
+            max_batch_bytes: oversized.statement_bytes().len(),
+            ..VerifyLimits::default()
+        },
+        deep_proof::MAX_ALLOCATION_CHARGES,
+    );
     preflight(&reference, deep_proof::MAX_FRAME_BYTES, policy).unwrap();
     assert!(matches!(
         preflight(&oversized, deep_proof::MAX_FRAME_BYTES, policy),

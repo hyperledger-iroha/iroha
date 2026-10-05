@@ -36590,6 +36590,338 @@ mod explorer_lookup_tests {
         assert!(!global_json["circulating_quantity"].is_null());
     }
 
+    /// Decode one successful Explorer detail response after checking its status and media type.
+    async fn explorer_detail_json(response: AxResponse) -> Value {
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("detail body")
+            .to_bytes();
+        norito::json::from_slice(&body).expect("detail JSON")
+    }
+
+    routing_test! { async governance_supply_enrichment_lists_locked_and_circulating_for_a_global_reader
+        let (owner_id, _) = checked_explorer_lookup_account(
+            0x1a,
+            "derive supply enrichment owner fixture key",
+        );
+        let (escrow_id, _) = checked_explorer_lookup_account(
+            0x19,
+            "derive supply enrichment escrow fixture key",
+        );
+        let domain_id = DomainId::try_new("treasury", "universal").expect("supply domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "vote".parse().expect("voting asset name"),
+        );
+        // Initial issuance is the sum of the balances: 60 circulating and 40 in escrow.
+        let mut world = World::with_assets(
+            [dm::Domain::new(domain_id.clone()).build(&owner_id)],
+            [
+                dm::Account::new(owner_id.clone()).build(&owner_id),
+                dm::Account::new(escrow_id.clone()).build(&owner_id),
+            ],
+            [dm::AssetDefinition::numeric(
+                definition_id.clone(),
+                "Governance vote",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id),
+            )
+            .build(&owner_id)],
+            [
+                dm::Asset::new(
+                    dm::AssetId::new(definition_id.clone(), owner_id),
+                    iroha_primitives::numeric::Quantity::from(60_u32),
+                ),
+                dm::Asset::new(
+                    dm::AssetId::new(definition_id.clone(), escrow_id.clone()),
+                    iroha_primitives::numeric::Quantity::from(40_u32),
+                ),
+            ],
+            [],
+        );
+        crate::test_utils::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
+        let mut state = State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus::default(),
+            LiveQueryStore::start_test(),
+        );
+        state.gov.voting_asset_id = definition_id.clone();
+        state.gov.bond_escrow_account = escrow_id;
+        let state = Arc::new(state);
+        let list = handle_v1_explorer_asset_definitions(
+            state,
+            DataspaceReadVisibility::all_for_tests(),
+            crate::explorer::ExplorerCursorQuery {
+                cursor: None,
+                limit: 10,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("global voting asset definition list");
+        let list_json = explorer_detail_json(list).await;
+        let items = list_json["items"].as_array().expect("definition items");
+        assert_eq!(items.len(), 1);
+        let listed = &items[0];
+        assert_eq!(
+            listed["id"].as_str(),
+            Some(definition_id.to_string().as_str())
+        );
+        // The committed escrow balance is copied once into the owned DTO field and the
+        // circulating figure is derived from it.
+        assert_eq!(listed["total_quantity"].as_str(), Some("100"));
+        assert_eq!(listed["locked_quantity"].as_str(), Some("40"));
+        assert_eq!(listed["circulating_quantity"].as_str(), Some("60"));
+    }
+
+    routing_test! { async explorer_detail_json_response_equals_json_body_and_admits_world_borrows
+        use iroha_data_model::{
+            common::{Owned, Ref},
+            rwa::{RwaControlPolicy, RwaData, RwaId},
+        };
+
+        // An owned payload gets exactly the status, media type and bytes of `JsonBody`.
+        let owned = vec![1_u32, 2, 3];
+        let expected = JsonBody(owned.clone()).into_response();
+        let actual = explorer_detail_json_response(&owned).expect("owned detail payload");
+        assert_eq!(actual.status(), expected.status());
+        assert_eq!(
+            actual.headers().get(header::CONTENT_TYPE),
+            expected.headers().get(header::CONTENT_TYPE)
+        );
+        assert_eq!(
+            actual
+                .into_body()
+                .collect()
+                .await
+                .expect("actual body")
+                .to_bytes(),
+            expected
+                .into_body()
+                .collect()
+                .await
+                .expect("expected body")
+                .to_bytes()
+        );
+
+        // An RWA record borrows its identifier and stored value, which `JsonBody` cannot carry.
+        let (owner_id, _) =
+            checked_explorer_lookup_account(0x1c, "derive RWA detail fixture key");
+        let id = RwaId::generated(
+            DomainId::try_new("vault", "universal").expect("RWA domain"),
+            iroha_crypto::Hash::prehashed([0x31; 32]),
+        );
+        let value = Owned::new(RwaData {
+            quantity: iroha_primitives::numeric::Quantity::from(7_u32),
+            spec: iroha_primitives::numeric::NumericSpec::default(),
+            primary_reference: "https://example.org/certificate".to_owned(),
+            status: None,
+            metadata: Default::default(),
+            parents: Vec::new(),
+            controls: RwaControlPolicy::default(),
+            owned_by: owner_id.clone(),
+            is_frozen: false,
+            held_quantity: iroha_primitives::numeric::Quantity::from(2_u32),
+        });
+        let dto = crate::explorer::ExplorerRwaDto::from_entry(Ref::new(&id, &value));
+        let rwa = explorer_detail_json(
+            explorer_detail_json_response(&dto).expect("borrowed RWA detail"),
+        )
+        .await;
+        assert_eq!(rwa["id"].as_str(), Some(id.to_string().as_str()));
+        assert_eq!(
+            rwa["owned_by"].as_str(),
+            Some(owner_id.to_string().as_str())
+        );
+        assert_eq!(rwa["quantity"].as_str(), Some("7"));
+        assert_eq!(rwa["held_quantity"].as_str(), Some("2"));
+    }
+
+    routing_test! { async explorer_detail_handlers_encode_records_borrowed_from_the_world
+        let (owner_id, _) = checked_explorer_lookup_account(
+            0x1b,
+            "derive explorer detail owner fixture key",
+        );
+        let domain_id = DomainId::try_new("gallery", "universal").expect("detail domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("detail asset name"),
+        );
+        let asset_id = dm::AssetId::new(definition_id.clone(), owner_id.clone());
+        let nft_id = dm::NftId::of(
+            domain_id.clone(),
+            "portrait".parse().expect("detail NFT name"),
+        );
+        let mut content = iroha_model_base::metadata::Metadata::default();
+        content.insert(
+            "artist".parse().expect("detail metadata key"),
+            Value::String("Alice".into()),
+        );
+        let mut world = World::with_assets(
+            [dm::Domain::new(domain_id.clone()).build(&owner_id)],
+            [dm::Account::new(owner_id.clone()).build(&owner_id)],
+            [dm::AssetDefinition::numeric(
+                definition_id.clone(),
+                "Rose",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            )
+            .build(&owner_id)],
+            [dm::Asset::new(
+                asset_id.clone(),
+                iroha_primitives::numeric::Quantity::from(42_u32),
+            )],
+            [dm::Nft::new(nft_id.clone(), content).build(&owner_id)],
+        );
+        crate::test_utils::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
+        let state = Arc::new(State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus::default(),
+            LiveQueryStore::start_test(),
+        ));
+        let all = DataspaceReadVisibility::all_for_tests();
+
+        let account = explorer_detail_json(
+            handle_v1_explorer_account_detail(state.clone(), all.clone(), owner_id.clone())
+                .await
+                .expect("account detail"),
+        )
+        .await;
+        assert_eq!(account["id"].as_str(), Some(owner_id.to_string().as_str()));
+        assert_eq!(account["owned_domains"].as_u64(), Some(1));
+        assert_eq!(account["owned_assets"].as_u64(), Some(1));
+        assert_eq!(account["owned_nfts"].as_u64(), Some(1));
+
+        let domain = explorer_detail_json(
+            handle_v1_explorer_domain_detail(state.clone(), all.clone(), domain_id.clone())
+                .await
+                .expect("domain detail"),
+        )
+        .await;
+        assert_eq!(domain["id"].as_str(), Some(domain_id.to_string().as_str()));
+        assert_eq!(
+            domain["owned_by"].as_str(),
+            Some(owner_id.to_string().as_str())
+        );
+        assert_eq!(domain["nfts"].as_u64(), Some(1));
+
+        let asset = explorer_detail_json(
+            handle_v1_explorer_asset_detail(state.clone(), all.clone(), asset_id.clone())
+                .await
+                .expect("asset detail"),
+        )
+        .await;
+        assert_eq!(asset["id"].as_str(), Some(asset_id.to_string().as_str()));
+        assert_eq!(
+            asset["definition_id"].as_str(),
+            Some(definition_id.to_string().as_str())
+        );
+        assert_eq!(
+            asset["account_id"].as_str(),
+            Some(owner_id.to_string().as_str())
+        );
+        assert_eq!(asset["value"].as_str(), Some("42"));
+
+        let nft = explorer_detail_json(
+            handle_v1_explorer_nft_detail(state.clone(), all.clone(), nft_id.clone())
+                .await
+                .expect("NFT detail"),
+        )
+        .await;
+        assert_eq!(nft["id"].as_str(), Some(nft_id.to_string().as_str()));
+        assert_eq!(nft["owned_by"].as_str(), Some(owner_id.to_string().as_str()));
+        assert_eq!(nft["metadata"]["artist"].as_str(), Some("Alice"));
+
+        // An absent record stays indistinguishable from a hidden one.
+        let absent_nft = dm::NftId::of(
+            domain_id.clone(),
+            "absent".parse().expect("absent NFT name"),
+        );
+        let absent_rwa = iroha_data_model::rwa::RwaId::generated(
+            domain_id,
+            iroha_crypto::Hash::prehashed([0x32; 32]),
+        );
+        let absent = [
+            handle_v1_explorer_nft_detail(state.clone(), all.clone(), absent_nft).await,
+            handle_v1_explorer_rwa_detail(state, all, absent_rwa).await,
+        ];
+        for response in absent {
+            let error = response.expect_err("absent record");
+            assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+        }
+    }
+
+    routing_test! { async explorer_rwa_detail_encodes_a_registered_lot_borrowed_from_the_world
+        let (owner_id, _) = checked_explorer_lookup_account(
+            0x1d,
+            "derive RWA detail owner fixture key",
+        );
+        let domain_id = DomainId::try_new("vault", "universal").expect("RWA domain");
+        let world = World::with_assets(
+            [dm::Domain::new(domain_id.clone()).build(&owner_id)],
+            [dm::Account::new(owner_id.clone()).build(&owner_id)],
+            [],
+            [],
+            [],
+        );
+        let state = Arc::new(State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus::default(),
+            LiveQueryStore::start_test(),
+        ));
+        // `RegisterRwa` is the only writer of the lot table; it generates the identifier.
+        crate::explorer::register_rwa_lots_for_tests(&state, &[(&domain_id, &owner_id, 7)]);
+        let rwa_id = {
+            let world = state.world_view();
+            let mut lots = world.rwas_iter().map(|lot| lot.id().clone());
+            let registered = lots.next().expect("registered lot");
+            assert!(lots.next().is_none());
+            registered
+        };
+
+        let rwa = explorer_detail_json(
+            handle_v1_explorer_rwa_detail(
+                state.clone(),
+                DataspaceReadVisibility::all_for_tests(),
+                rwa_id.clone(),
+            )
+            .await
+            .expect("RWA detail"),
+        )
+        .await;
+        assert_eq!(rwa["id"].as_str(), Some(rwa_id.to_string().as_str()));
+        assert_eq!(rwa["owned_by"].as_str(), Some(owner_id.to_string().as_str()));
+        assert_eq!(rwa["quantity"].as_str(), Some("7"));
+        assert_eq!(rwa["held_quantity"].as_str(), Some("0"));
+        assert_eq!(
+            rwa["primary_reference"].as_str(),
+            Some("https://example.org/lot/0")
+        );
+        assert_eq!(rwa["is_frozen"].as_bool(), Some(false));
+        assert!(rwa["status"].is_null());
+
+        // A reader without the lot's domain route gets the answer an absent lot gets.
+        let hidden = handle_v1_explorer_rwa_detail(
+            state,
+            DataspaceReadVisibility::default(),
+            rwa_id,
+        )
+        .await
+        .expect_err("hidden lot");
+        assert_eq!(hidden.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
     routing_test! { sync generic_query_and_explorer_visibility_require_every_committed_route_leg
         use iroha_data_model::block::{
             BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
@@ -52970,6 +53302,16 @@ fn bounded_explorer_json_response<T: norito::json::JsonSerialize + ?Sized>(
         .map_err(|_| explorer_response_capacity_error())?;
     Ok(([(header::CONTENT_TYPE, "application/json")], axum::body::Bytes::from(encoded.into_vec())).into_response())
 }
+/// Encode one borrowed Explorer detail record while its committed World references
+/// are live. The body and media type are exactly those of [`JsonBody`], which cannot
+/// carry a record that borrows from a World view.
+fn explorer_detail_json_response<T: json::JsonSerialize + ?Sized>(
+    payload: &T,
+) -> Result<AxResponse, Error> {
+    json::to_vec(payload)
+        .map(application_json_response)
+        .map_err(norito_internal_error)
+}
 fn explorer_response_capacity_error() -> Error {
     Error::AppServiceUnavailable {
         code: "explorer_response_capacity_exceeded",
@@ -52981,9 +53323,10 @@ mod explorer_response_byte_budget_tests {
     use super::*;
     #[tokio::test]
     async fn selected_records_and_exact_response_share_one_phase() {
-        let payload=[1_u32,2,3,4];
+        // Norito JSON serializes `Vec<T>`, not `[T; N]`; the retained bytes stay the four records.
+        let payload=vec![1_u32,2,3,4];
         let encoded=norito::json::to_json(&payload).unwrap();
-        let retained=core::mem::size_of_val(&payload);
+        let retained=core::mem::size_of_val(payload.as_slice());
         let exact=retained+encoded.len();
         let response=with_explorer_response_byte_budget(exact, || {
             norito::core::reserve_decode_allocation(retained).map_err(|_| explorer_response_capacity_error())?;
@@ -53140,12 +53483,14 @@ fn handle_v1_explorer_asset_definitions_sync(
             .and_then(|assets| assets.iter().find(|asset| asset.definition() == voting_asset_id
                 && matches!(asset.scope(), dm::asset::AssetBalanceScope::Global)));
         if visibility.can_read_all || escrow_asset_id.is_some_and(|id| visibility.allows_asset(&world, id)) {
+            // `Quantity` owns its digits and the DTO field is owned, so this is the one
+            // copy of the committed escrow balance; it runs at most once per page.
             let locked = escrow_asset_id.and_then(|id| world.assets().get(id))
-                .map_or_else(Quantity::zero, |value| *value.as_ref());
+                .map_or_else(Quantity::zero, |value| Quantity::clone(value.as_ref()));
             for item in &mut page.items {
                 if item.id == voting_asset_id {
-                    item.locked_quantity = Some(locked);
                     item.circulating_quantity = Some(explorer_circulating_quantity(item.total_quantity, &locked)?);
+                    item.locked_quantity = Some(locked);
                     break;
                 }
             }
@@ -54743,7 +55088,7 @@ pub async fn handle_v1_explorer_account_detail(
             )
         })
         .map_err(|_| explorer_not_found())?;
-    Ok(JsonBody(dto).into_response())
+    explorer_detail_json_response(&dto)
 }
 pub async fn handle_v1_explorer_account_qr(
     state: Arc<CoreState>,
@@ -54781,7 +55126,7 @@ pub async fn handle_v1_explorer_domain_detail(
             )
         })
         .map_err(|_| explorer_not_found())?;
-    Ok(JsonBody(dto).into_response())
+    explorer_detail_json_response(&dto)
 }
 #[cfg(test)]
 pub async fn handle_v1_explorer_asset_definition_detail(
@@ -54821,7 +55166,7 @@ pub async fn handle_v1_explorer_asset_definition_detail(
             dto.circulating_quantity = Some(circulating);
         }
     }
-    Ok(JsonBody(dto).into_response())
+    explorer_detail_json_response(&dto)
 }
 /// First-release ceiling for holder rows examined by one explorer distribution snapshot.
 const EXPLORER_SNAPSHOT_MAX_EXAMINED_HOLDERS_V1: usize = 65_536;
@@ -56212,7 +56557,7 @@ pub async fn handle_v1_explorer_asset_detail(
         .asset(&asset_id)
         .map(crate::explorer::ExplorerAssetDto::from_entry)
         .map_err(|_| explorer_not_found())?;
-    Ok(JsonBody(dto).into_response())
+    explorer_detail_json_response(&dto)
 }
 pub async fn handle_v1_explorer_nft_detail(
     state: Arc<CoreState>,
@@ -56227,7 +56572,7 @@ pub async fn handle_v1_explorer_nft_detail(
         .nft(&nft_id)
         .map(crate::explorer::ExplorerNftDto::from_entry)
         .map_err(|_| explorer_not_found())?;
-    Ok(JsonBody(dto).into_response())
+    explorer_detail_json_response(&dto)
 }
 pub async fn handle_v1_explorer_rwa_detail(
     state: Arc<CoreState>,
@@ -56242,7 +56587,7 @@ pub async fn handle_v1_explorer_rwa_detail(
         .rwa(&rwa_id)
         .map(crate::explorer::ExplorerRwaDto::from_entry)
         .map_err(|_| explorer_not_found())?;
-    Ok(JsonBody(dto).into_response())
+    explorer_detail_json_response(&dto)
 }
 /// Explorer can display an explicitly absent body as journal metadata, but never
 /// treats allocation refusal or a contradictory body as missing history.

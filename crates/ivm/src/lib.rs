@@ -102,6 +102,8 @@ mod poseidon;
 mod prepared;
 pub mod private_input;
 mod private_memory_ranges;
+/// ABI V1 whole-invocation semantic and proof-coverage inventory.
+pub mod proof_coverage;
 mod registers;
 pub mod runtime;
 pub mod schema_registry;

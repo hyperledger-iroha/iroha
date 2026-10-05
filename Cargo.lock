@@ -5028,6 +5028,8 @@ dependencies = [
  "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fhe",
+ "iroha_measurement",
  "iroha_model_base",
  "iroha_schema",
  "iroha_zkp_halo2",
@@ -5139,6 +5141,7 @@ dependencies = [
  "hex-literal",
  "hkdf",
  "iroha_allocation",
+ "iroha_fhe",
  "iroha_primitives",
  "iroha_schema",
  "k256",
@@ -5352,6 +5355,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_fhe"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "num-bigint 0.4.6",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
 name = "iroha_file_mmap"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5544,6 +5556,15 @@ name = "iroha_macro"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_derive",
+]
+
+[[package]]
+name = "iroha_measurement"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "iroha_allocation",
+ "libc",
+ "norito",
 ]
 
 [[package]]
@@ -6206,6 +6227,7 @@ dependencies = [
  "hex",
  "hex-literal",
  "iroha_crypto",
+ "iroha_fhe",
  "iroha_schema",
  "iroha_zkp_poseidon",
  "norito",

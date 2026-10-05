@@ -178,7 +178,10 @@ Four registers start at scalar zero. Reads before the first load are valid:
 the source initializes these registers, rather than treating them as undefined.
 Thirty-two memory lanes are rederived for each evaluation from the private key,
 function identity and associated data; `StoreState` persists only within that
-tape invocation. No cross-request state transition is introduced.
+tape invocation. No cross-request state transition is introduced. The
+[canonical V1 contract](ram_lfe_execution_proof.md#exact-plaintext-semantics)
+fixes these semantics, and its cleartext reference is the oracle any lowering
+below must match.
 
 Preserve 1..256 tape instructions, four registers, 32 lanes and 1..64 ordered
 outputs. Scalars and immediates range over `0..256`. An output is a scalar, not
@@ -192,8 +195,8 @@ opening remains distinct from the execution proof and ciphertext commitment.
 The existing outer request cap is 1 MiB; associated data is `0..512` bytes. The
 hidden tape owner reserves 12,288 instruction bytes and its explicit frame cap
 remains `RAM_LFE_HIDDEN_PROGRAM_MAX_BYTES`. Existing generic secrets remain
-`1..4096` bytes for their separate backends. The proposed programmed `ProgramKey`
-is exactly one canonical nonzero 32-byte Fp element; arbitrary old secret bytes
+`1..4096` bytes for their separate backends. The program key
+`RamLfeProgramKeyV1` is exactly 32 nonzero bytes; arbitrary old secret bytes
 are not silently converted into that key. Planning consumes no secret key,
 plaintext input or randomness. It borrows the validated clearing tape, keeps
 its program-dependent counts/indices private, and clears owned plan scratch.
@@ -284,8 +287,10 @@ The table's ranks are dependency depths, **not RNS modulus levels or noise
 budgets**. A physical level scheduler may map ranks to a reviewed chain only
 when its exact switching/rounding semantics and correctness bounds are supplied.
 Addition or plaintext multiplication can exhaust noise without changing rank.
-The existing logical rank ceiling 16 is retained as a planning bound, not a
-promise that any encryption profile supports that depth.
+The logical rank ceiling 16 is the `bounded.v1` class limit and the
+`refresh.v1` limit between refreshes. It is a recorded candidate, not a
+promise that any encryption profile supports that depth. The same rank rules
+are implemented once, in `RamLfeClassV1::membership`.
 
 For `SelectEqZero`, perform exactly eight repeated ciphertext squarings of c,
 then one ciphertext multiplication by `Embed(1)` as in the source exponentiation
@@ -311,11 +316,12 @@ The seven Galois-key roles and relinearization role must be authenticated from
 the typed policy. The old diagnostic bundle's prohibition of rotation keys
 cannot be reused for this replacement. Required actual level/basis variants,
 decomposition digits, special primes and key sizes remain explicit unresolved
-profile requirements. No bootstrap/refresh algorithm is implemented or
-authorized by this plaintext contract. A future reviewed encryption profile
-must specify its complete refresh/sanitization algorithm, extra authenticated
-keys, public schedule, exact arithmetic and resource/noise rules. A refresh mask
-is not a bootstrap, and no implicit modulus reset is permitted.
+profile requirements. No bootstrap/refresh algorithm is implemented. The
+`refresh.v1` class fixes only where a refresh occurs and how many are allowed:
+its schedule is a function of the tape and is private with it. A future reviewed
+encryption profile must specify the complete refresh/sanitization algorithm,
+extra authenticated keys, exact arithmetic and resource/noise rules. A refresh
+mask is not a bootstrap, and no implicit modulus reset is permitted.
 
 ### Resource accounting and unresolved qualification
 
@@ -383,8 +389,9 @@ Poseidon prototype already measured 233–239 ms complete IPA verification,
 exceeding the existing 20 ms soft budget; no complete execution/admission budget
 has passed.
 
-The next test-only planner can implement tape/rank/count/alias bookkeeping and
-symbolic primitive requirements without keys or encryption. Required controls
+The test-only planner implements tape/rank/count/alias bookkeeping and
+symbolic primitive requirements without keys or encryption. It models no
+refresh, so it accepts `bounded.v1` tapes only. Required controls
 cover all eleven operations, all register/lane alias cases, zero-initialized
 reads, exact 256/257 and 64/65 boundaries, rank-16/17 cases, all ten select
 multiplications, the two extrema above, output snapshots, checked byte arithmetic

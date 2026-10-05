@@ -412,6 +412,40 @@ fn signed_header_defects_reproduce_but_poison_execution_does_not() {
     );
 }
 
+/// Follower stage of the resource contract (`specs/zk_resource_contract.json`,
+/// `block.max_block_bytes`): the signed payload length is inclusive at the committed limit,
+/// and one byte over is the same reproducible defect for every independent verifier.
+#[test]
+fn payload_limit_is_inclusive_and_one_over_rejects_identically_on_every_verifier() {
+    let verdicts = |fixture: &Fixture| {
+        let limit = fixture.config.params.max_block_bytes;
+        let report = |payload_len: u32| {
+            let mut header = fixture.header(0);
+            header.payload_len = payload_len;
+            fixture.verify(&Evidence::InvalidProposal {
+                proposal: Box::new(fixture.proposal(header, 0)),
+                defect: Defect::PayloadTooLarge,
+            })
+        };
+        (report(limit), report(limit + 1), report(u32::MAX))
+    };
+    let first = verdicts(&Fixture::new());
+    // A payload of exactly the limit carries no defect: the accusation does not reproduce.
+    assert_eq!(first.0, Err(EvidenceError::DefectMismatch));
+    // One byte over is malformed carried evidence: it reproduces from the signed header alone.
+    let over = first.1.as_ref().expect("one byte over is a signed defect");
+    assert_eq!(over.offenders.count_ones(), 1);
+    assert!(first.2.is_ok());
+    // A second, independently constructed verifier derives the identical verdicts.
+    assert_eq!(verdicts(&Fixture::new()), first);
+    // The verdict follows the committed limit, never a local setting.
+    let mut smaller = Fixture::new();
+    smaller.config.params.max_block_bytes = 1;
+    let (at_limit, one_over, _) = verdicts(&smaller);
+    assert_eq!(at_limit, Err(EvidenceError::DefectMismatch));
+    assert!(one_over.is_ok());
+}
+
 #[test]
 fn justification_defect_and_tc_rule_require_original_signed_attachments() {
     let fixture = Fixture::new();

@@ -722,7 +722,10 @@ message; no node-local execution cache supplies historical verification authorit
 - `R` is the application's 32-byte execution commitment. It MUST commit to everything the chain
   must agree on for that block: at least the post-state root, the root of per-transaction outcomes
   (accepted/rejected + reason), the event root, and the height configuration scheduled by this
-  block (`C_{h+2}` and chain parameters, §10). The core treats `R` as opaque.
+  block (`C_{h+2}` and chain parameters, §10). The core treats `R` as opaque. After G.3, `R` binds
+  `parent_keyed_state_root = root(P_{h−1})` and the post-execution
+  `keyed_state_root = root(X_h)`, as specified in §16; until then E51 describes the as-built
+  behaviour.
 - The Prepare vote, the PrepareQC, the Commit vote and the CommitQC all sign
   `(I, h, v, block_hash, R)`. A CommitQC therefore finalizes order **and** result. The next
   block's header repeats the certified `R` as `parent_result`.
@@ -3669,6 +3672,370 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
    describes erasure geometry; it alone is not a validator-fault bandwidth guarantee.
 8. **Epoch length** of AMX-participating instances (handoff cadence for light clients, §11.7).
 
+## 16. Keyed State commitment (application layer)
+
+**Status: specified by ZK delivery plan task G.1, built by G.3; until then row E51 of Appendix E
+is the as-built behaviour**, and nothing in this section is consensus behaviour. The section
+defines what the single State-owned keyed commitment commits, what its witnesses establish, how
+its roots enter `R` and who publishes them. It selects no tree, arity, hash or witness encoding:
+G.2 measures candidates against this section and G.3 selects and builds one.
+
+Machine-checked companions:
+
+- `specs/state_table_inventory.json` lists every field of `State`, `World`, the trigger set and
+  the canonical runtime with the roots it affects today, every commitment over State content
+  that exists in the tree with its owner and disposition, and the open defects. It is generated
+  from the authority registry and the source, and compared with both by
+  `crates/iroha_core/src/state/state_table_inventory_tests.rs`. The same tests pin the as-built
+  premises of §16.5 and §16.6 and the rule identifiers of this section.
+- `crates/iroha_core/src/state/authority_registry/keyed_commitment.rs` is the typed interface
+  (`KeyedStateCommitment`, `StateSchema`, `KeyRange`, `Witness`, `KeyedStateRoot`) with its
+  conformance suite (`conformance::check_contract`) and a test-only reference oracle.
+
+### 16.1 Committed object, canonical order and schema descriptor
+
+The keyed State at one cut is a finite map `(table, key) ↦ value`.
+
+- `table` is the registry identity of a canonical table or cell, for example `world.accounts`,
+  `triggers.data`, `state.transactions.current` or `runtime.lanes`. Nested owners are flattened.
+  The committed set is exactly the tables and cells that the exhaustive authority registry
+  (`crates/iroha_core/src/state/authority_registry.rs`, `STATE_FIELDS`) declares canonical
+  (`StateSchema::from_registry`). World and State-level fields are one schema.
+- A **cell** is the single entry of its table at the empty key (K8).
+- **Derived** fields are not entries. Each is rebuilt from its registered sources and checked by
+  its registered procedure; the root binds it only through those sources. The inventory lists a
+  derived field whose sources include an uncommitted or historical field with `unbound_bases`.
+- **History** fields are authenticated by the header chain and the certified results (§16.7).
+  **Local** fields are authenticated by nothing. Neither is an entry, and a local field never
+  influences a root.
+
+**Canonical order.** Tables are ordered by the ascending bytes of their identity. Entries are
+ordered by table position, then by key bytes. This is the only order: of the schema descriptor,
+of every range and of any layout derived from the root.
+
+**Schema descriptor.** Every construction binds these bytes into its root (K1):
+
+```text
+"iroha:state-keyed-commitment:schema:v1\0" ‖ le32(count) ‖ for each table in canonical order:
+    shape ‖ le32(len(id)) ‖ id ‖ le32(len(key codec)) ‖ key codec ‖ le32(len(value codec)) ‖ value codec
+shape        = 0x00 table | 0x01 cell
+codec        = "norito:<nominal name>@<major>.<minor>.<flags>"      declared Norito type
+             | "semantic:<identity>@<major>.<minor>.<flags>"        registered semantic projection
+key codec    = "" for a cell
+```
+
+The schema is part of the protocol: adding, removing, renaming or re-typing a canonical field
+changes the descriptor and therefore every root. Under the first-release rules that is a coherent
+replacement with a fresh genesis.
+
+### 16.2 Key and value encodings
+
+- **Key bytes** are the bare Norito payload of the declared key type under the fixed V1 layout
+  (compact lengths; `norito::codec::encode_adaptive`), with no header and no added length prefix.
+  The Rust type's nominal Norito identity must equal the registry's.
+- **Value bytes** are the bare V1 Norito payload of the declared value type, or of the registered
+  semantic projection for a semantic field (the projection excludes runtime caches; the registry
+  names its encoder). Where a projection exists today only as a digest function (trigger actions,
+  the executor), G.3 names the byte string that function hashes as the committed value.
+- An empty value is **present** (K5). Absence is the lack of an entry.
+- **Key order is byte order**, not the `Ord` of the Rust key. Norito integers are little-endian,
+  so numeric order is not a byte range; a consumer that needs a numeric range proof needs a table
+  whose declared key codec is order-preserving, which is a schema change.
+- A tuple or record key encodes every component as `[len][payload]` (Norito's field framing).
+  "Every key whose leading components are `c`" is therefore the byte interval
+  `[p, prefix_upper_bound(p))`, where `p` is the exact leading bytes the key encoding emits for
+  those components, framing included. The bare encoding of a component alone is not that prefix.
+- A construction may commit a digest of the value bytes in its leaves. The statement a witness
+  proves is still over the full value bytes, and the digest must bind the value codec identity and
+  the byte length.
+
+### 16.3 Statements and witnesses
+
+A witness is an opaque canonical byte string carried by the consumer. Each kind establishes one
+statement against one keyed State root:
+
+| Kind | Statement |
+|---|---|
+| Inclusion | `root` commits `(table, key) ↦ value`. |
+| Absence | `root` commits no entry at `(table, key)`. |
+| Complete range | The ascending list `entries` is exactly every entry of `table` that `root` commits with `lower ≤ key < upper`. |
+
+A range is a half-open interval of key bytes inside one table; `upper = None` is unbounded and
+`[ε, None)` is the complete table. An interval with `upper ≤ lower` is ill-formed, and so is a
+claimed entry outside the interval. An empty result is a valid statement.
+
+Verification is a pure function of the schema, the root, the statement and the witness bytes. It
+reads no State, cache, Kura, clock or node configuration. Its outcomes are acceptance and
+deterministic rejection; it has no local-failure outcome. Proving and updating may fail locally
+(`LocalFailure`); a local failure is never a verdict.
+
+### 16.4 Rules every construction satisfies
+
+`conformance::check_contract` checks each rule and reports the first violation. The reference
+oracle passes, and each deliberately faulty variant of it, at least one per rule, is reported
+under the rule it breaks.
+
+| Rule | Requirement |
+|---|---|
+| K1 | **Schema binding.** The root binds the schema descriptor bytes: a different table set, shape or codec identity gives a different root, also for the empty State. |
+| K2 | **Content function.** The root is a function of the schema and the committed entries alone, independent of the order, batching and history of updates. |
+| K3 | **Binding.** Different contents have different roots, including contents that differ in one value, one table, one empty-valued entry or only in how the same bytes split into key and value. |
+| K4 | **Inclusion.** A committed entry has a witness; verification accepts its exact value bytes and no other value, key or table. |
+| K5 | **Absence.** An absent key has a witness; a present key has none, also when its value is empty. |
+| K6 | **Complete range.** The honest list verifies; omission, substitution, addition, reordering, duplication and a claimed entry outside the interval are rejected, the last also when that entry is committed. `lower` is inclusive and `upper` exclusive. |
+| K7 | **Table isolation.** A statement names one declared table. An undeclared table is ill-formed. An entry of one table never satisfies a statement about another, including identities that are prefixes of each other. |
+| K8 | **Cells.** A cell has only the empty key; any other key is ill-formed in updates, proofs and verification. |
+| K9 | **Canonical witness encoding.** Verification consumes the complete canonical encoding: a truncated encoding and an encoding followed by further bytes are rejected, and every carried byte is charged against the committed byte and work caps. A changed witness never establishes a false statement. Proofs need not be non-malleable: an independently valid alternative witness of the same true statement may verify. |
+| K10 | **Atomic update.** One block's net change set names each `(table, key)` at most once and is applied completely or not at all. Removing an absent key and rewriting an equal value do not change the root. |
+| K11 | **Incremental equals cold.** After any sequence of change sets the root equals a cold build of the same content. |
+| K12 | **Root binding.** A statement that a later State falsifies is rejected at the later root with the earlier witness; verification at the earlier root is unaffected. |
+
+Further requirements that the suite cannot observe:
+
+- **Determinism.** Root, witnesses and verdicts are identical on every platform; an accelerated
+  path is bit-identical to the scalar one.
+- **Bounded verification.** Verification work is bounded by a function of the witness length and
+  the claimed entry count. G.4 caps both from committed State before verification.
+- **Cross-witness consistency.** For one root it is infeasible to produce an inclusion and an
+  absence witness for the same position, two inclusion witnesses with different values, or a range
+  witness that omits a position for which an inclusion witness exists. A construction built from
+  more than one tree (for example a hashed lookup tree paired with an ordered tree) must prove
+  this from its root, not assume it.
+- **In-circuit form.** Each witness kind has an AIR relation over the same statement and bytes;
+  G.2 measures both forms.
+
+### 16.5 One owner, atomic publication and recovery
+
+The commitment is owned by the existing State publication owner
+(`crates/iroha_core/src/state/publication.rs`), which today advances the World state accumulator
+once per block, after `world_commit::PreparedWorldCommit::prepare_overlay_mutations`.
+
+- **P1. One owner, one scheme.** Only the State publication owner advances the authoritative
+  complete-State commitment. Exactly one such commitment scheme exists, including its historical
+  roots; independently authoritative per-table State roots are forbidden. Inventoried per-block
+  witness roots retain their specified roles. Application accumulators may retain
+  application-statement proofs under §16.8, but a commitment that independently authenticates
+  canonical State entries is a per-table State root regardless of its carrier. A protocol
+  fingerprint may remain only as an inventoried comparison value that every consuming validator
+  recomputes from committed canonical entries at the specified State cut, using only its
+  inventoried block-header context and registered historical inputs authenticated under §§16.1
+  and 16.7, or from canonical entries staged from the signed genesis. It has no State-witness
+  form and never substitutes for a keyed State witness. A derived State field takes its
+  authority only from its registered sources; a protocol-carried copy may be installed only
+  after equality with an independent derivation from those sources at the specified State cut,
+  and remains a comparison value under the protocol-fingerprint rule. Node-local binding
+  commitments may remain only with an inventoried owner and reason; they may authenticate
+  local artifacts, including snapshot file bytes through chunk proofs, but never authenticate
+  State reads, determine transaction validity, or enter protocol-authenticated roots or State
+  witnesses. They may compose into inventoried local binding identifiers. Local binding
+  failures require recovery or deferral.
+- **P2. One change set.** The update consumes the frozen journals of the same publication cut as
+  the State view: every canonical World and State-level field, from each journal's own undo
+  entries. The cost is proportional to the change set.
+- **P3. Two cuts per height.** `X_h` is the State after block `h`'s execution is sealed; `P_h` is
+  the State after its deterministic apply-time tail writes. `R_h` binds `X_h`; `R_{h+1}` binds
+  `P_h` (§16.6).
+- **P4. Atomic publication.** The State view generation of height `h` and the commitment version
+  of `P_h` become visible in one step. A reader, a prover and a witness server never observe one
+  without the other. A failed, refused or replaced publication leaves the commitment at `P_{h−1}`.
+- **P5. Recovery.** Persisted nodes of a construction are a cache. Restart replays the certified
+  chain and requires each recomputed root to equal the certified one, and the incremental root to
+  equal a cold build (K11). The three outcomes are distinct: a certified-root mismatch while
+  applying a block is `ApplyDiverged`; a block that does not replay at restart is
+  `NodeError::Replay`; lost or corrupt local publication is `PublicationRecoveryRequired`. None of
+  them changes transaction validity.
+- **P6. Local independence.** Cache size, serving retention, worker count, acceleration and
+  available memory change no root and no verdict. A node that cannot serve or build a witness
+  defers; it does not reject.
+
+### 16.6 Result layout and non-circular binding
+
+`ExecutionCommitment` keeps its field order. Two fields are replaced in place:
+
+```text
+ExecutionCommitment {
+    parent_state_root,              // witnessed pre-values: a per-block witness root, unchanged
+    post_state_root,                // witnessed writes with top-ups, unchanged
+    ordinary_writes_root,           // unchanged
+    kagemusha_top_up_root,          // unchanged
+    kagemusha_top_up_count,         // unchanged
+    parent_keyed_state_root,        // replaces parent_world_state_root: root(P_{h−1})
+    keyed_state_root,               // replaces world_state_root: root(X_h)
+    event_commitment,               // unchanged
+    executed_block_wire_len,        // unchanged
+    executed_block_wire_hash,       // unchanged
+    transaction_input_commitment,   // unchanged
+    transaction_output_commitment,  // unchanged
+}
+```
+
+- `parent_keyed_state_root` of block `h` is the root of `P_{h−1}`: the complete keyed State the
+  block executes on. For genesis it is the root of the empty State under the schema, so genesis
+  absorbs everything the State holds.
+- `keyed_state_root` is the root of `X_h`. Both cover the whole schema of §16.1, not only World.
+- **Wire type.** Both fields have the type `KeyedStateRoot([u8; 32])`. Its Norito payload is
+  exactly 32 raw bytes, preserving all 256 bits, with no `iroha_crypto::Hash` marker and no
+  alternate representation; the enclosing record framing remains. The codec is explicit, because
+  ordinary array serialization frames each element. G.3 defines the one shared type beside
+  `ExecutionCommitment`, replacing the prototype type of the interface. G.2 measures and G.3
+  freezes the canonical encoding of a construction's native root and any normalisation hash, with
+  its domain and its raw 256-bit output; a marker-setting `Hash` conversion is never used. The
+  codec is tested with both values of the marker bit and rejects every alternate framing.
+- `R = H("iroha/sumeragi/result/v1" ‖ norito(ExecutionResultCommitment))` is unchanged in form.
+  There is one layout and one tag.
+
+```text
+P_{h−1}
+header_h   = (…, parent_hash = bh_{h−1}, parent_result = R_{h−1}, payload_hash, …)
+bh_h       = H(TAG_BLOCK ‖ header_h)
+X_h        = exec(P_{h−1}, body_h)
+R_h        = H(RESULT_TAG ‖ norito({h, execution{root(P_{h−1}), root(X_h), …}, schedule, beacon, native_lanes}))
+CommitQC_h = q_h votes over (I, E, h, v, bh_h, R_h)
+P_h        = tail(X_h, body_h, R_h)
+header_{h+1}.parent_result = R_h,   R_{h+1} binds root(P_h)
+```
+
+- **N1.** A block's own result is not in its header (§3.2). `header_h` binds `R_{h−1}` only.
+- **N2.** Nothing in `X_h` depends on `R_h`, on a vote or on a certificate of height `h`.
+  Execution reads `P_{h−1}`, the header and the body.
+- **N3.** No State cut depends on certificate bytes at any height. Different exact-quorum signer
+  sets certify the same `(bh, R)` (§3.4), so signer bitmaps, aggregate signatures and attestations
+  are not replicated State. `P_h` may depend on `R_h`, which is unique.
+- **N4.** A root is never an input of the root that commits it. In particular the commitment's own
+  nodes, counters and roots are not entries of the schema (the derived `world.state_accumulator`
+  cell has no successor).
+- **N5.** The CommitQC authenticates `R_h`, and through it `root(P_{h−1})` and `root(X_h)`.
+  Neither root depends on that certificate.
+
+### 16.7 Root history
+
+Carried witnesses name an anchor root. Validators check the anchor against replicated State
+alone, so recent roots are committed entries:
+
+- A canonical table (working identity `state.keyed_root_history`) maps a height `j` to
+  `root(P_j)`.
+- The entry for `j` is written while block `j + 1` executes or later. A row written at height `h`
+  names only heights below `h` (N4). `root(P_{h−1})` needs no row at height `h`: it is
+  `parent_keyed_state_root`.
+- Retention and anchor ages come from committed State (G.4). Rows are pruned deterministically in
+  the block that makes them inadmissible.
+- The table holds no result, certificate or post-execution root. `root(X_h)` is available to
+  external verifiers from `R_h` and its CommitQC.
+- The table authenticates published State roots only. It does not authenticate a result: a
+  consumer that opens `R_j` (for example `ordinary_writes_root` or a transaction outcome of height
+  `j`) authenticates that opening against replicated execution authority (G.4, A.1).
+
+G.3 freezes the table identity and codec; G.4 defines ages, caps and the admission checks.
+
+### 16.8 One root and cutover
+
+- The cutover replaces the two LtHash16 fields; it does not add fields beside them. The same
+  change deletes `WorldStateAccumulator`, the `world.state_accumulator` cell, the World-element
+  snapshot format and their `world_state_*_v1` helpers.
+- No binary computes both roots for consensus, and none selects a layout by height,
+  configuration, feature or environment. A chain built on the LtHash16 layout is not replayed by
+  the keyed binary: the cutover is a fresh genesis. A second calculation is permitted only under
+  `#[cfg(test)]` as a differential.
+- No per-table root is added to the result. Per-table and per-key proofs are witnesses against
+  the one keyed root; contract-state value proofs use `world.smart_contract_state` in it.
+- Every existing commitment over State content is enumerated under `roots` or, where the
+  application-accumulator exclusion applies, under `application_accumulator`. Each entry of
+  `roots` has one class, one owner task and one disposition. The classes are: certified State
+  roots (the World state root, replaced in place, and any per-table State root, removed under
+  its open defect); per-block witness roots and their witnessed values (kept in their E51 roles;
+  a witnessed value that digests State content is retained as a certified per-block witness
+  value, not as State-read authority, and consumers requiring State reads use keyed State
+  witnesses); protocol fingerprints, flat digests or composite summaries of State content
+  carried for comparison in a header, the block result, signed genesis or peer handshake (made
+  a function of committed canonical entries or removed under their open defects; none
+  authenticates a State read); consensus bindings (kept: see below); uncertified drafts
+  (deleted, or kept only as an internal component of the selected construction without an
+  independently authoritative root); and node-local binding commitments (kept under P1).
+- The protocol fingerprints that exist today are the execution-policy digest (signed genesis
+  and the peer handshake, which also carries the Nexus policy digest on its own), the Nexus/AMX
+  context hash (signed genesis), the DA proof-policy bundle hash (every block header; the bundle
+  is in the block) and the confidential feature digest (every block header and the peer
+  handshake: the effective verifying-key projection, the selected parameter identifiers with
+  their registry-effectiveness checks, and the ZK policy). Block or genesis validation
+  recomputes each from State and rejects on a difference. Open defects G1-D3 and G1-D10 of the
+  inventory track them. The block result also carries the AXT policy snapshot, tracked by
+  G1-D11. It is the AXT policy projection of the derived table `world.axt_policies` with a
+  64-bit version, a truncated hash of its entries; validation compares the whole record with
+  the projection it reads from State after execution, and the apply path installs the carried
+  rows into the derived table without rebuilding them from the table's registered sources.
+  The other State-compared content of the block payload and result is classified field by
+  field in the inventory (`protocol_carriers`): per-input routing contexts, proposal inputs,
+  references to certified lane blocks and execution results commit no State table, and the
+  roots of a FASTPQ transfer transcript concern transcript-local balances.
+- Consensus bindings are digests or embedded records that bind consensus authority, scheduling
+  and finalized beacon inputs in their specified roles under §§3, 4.1 and 10; they authenticate
+  no State read, and their canonical State source entries are also committed by the keyed State
+  root. They are the epoch context identity `EpochId.context` in every header, vote and
+  certificate, and the `schedule` and `beacon` fields of `R`; `native_lanes` keeps its
+  classification as a certified per-block witness value. A lane instance has the same binding
+  for its own authority: the pinned committee digest and parameters in every lane result, and
+  the genesis hash and genesis result of the lane incarnation, whose source is the lane cell
+  (`specs/sumeragi_lanes.md`). Authority follows signed genesis and
+  authenticated predecessor transitions; it does not depend on a State opening authenticated by
+  the certificate being verified.
+- Local bindings cover the tiered backend's separate key and value hashes, the projection
+  rowset hash and compressed archive/blob hash, and both private-settlement evidence
+  commitments: seven-table ledger evidence and replicated staged-lock evidence. They
+  authenticate only local artifacts or test observations, never State reads or transaction
+  validity. Shipping builds do not compile the two private-settlement commitments, and the
+  projection producer is still pending. The other local bindings are listed in the inventory
+  with their owners.
+- An application accumulator is maintained by deterministic execution over application records;
+  its authoritative root and canonical persisted data are committed as State values by the keyed
+  State root, and its proofs establish application statements without substituting for keyed
+  State inclusion, absence or complete-range witnesses.
+- The drift test discovers hash-domain literals independently of ROOTS across both crates and
+  rejects every unclassified literal use, commitment-construction use and hash-bearing
+  execution-witness field; exemptions identify exact reviewed uses and never match an open
+  prefix. The drift test walks the listed consensus-carried types and their declared nested
+  types, rejecting unclassified hash-bearing fields or unclassified nested types. It
+  independently enumerates `iroha_core` functions and methods with a State/World receiver or
+  reader argument and a hash-bearing return value under documented type rules, rejecting
+  unclassified matches. Generated JSON pins each listed domain literal's source paths and
+  occurrence counts. These checks detect carrier, signature and literal drift; they do not
+  establish arbitrary State-dataflow completeness.
+- The test is `crates/iroha_core/src/state/state_table_inventory_tests.rs`. The literal and
+  construction scan reads every non-test source of `iroha_core` and `iroha_data_model`; the
+  signature scan reads every non-test source of `iroha_core`; the carrier walk reads the
+  declarations of the block header, the block payload and block result, the signed genesis
+  consensus parameters, `R` and the lane result with their nested records, and also those of
+  every Sumeragi wire message (`crates/iroha_sumeragi`, from its `WireMessage` enumeration),
+  of the peer handshake capabilities (`crates/iroha_p2p`) and of the node's network envelope
+  (`iroha_core::NetworkMessage`, whose every variant is classified), and the inventory cites
+  the hashing of the Nexus/AMX context in `crates/iroha_config`. In the types that hold a
+  carrier's State digests (the block, its payload and its result, the header, `R`, the lane
+  result, the genesis context parameters, the epoch identity, the handshake capabilities and
+  the network envelope) every field is classified, so a new field fails the check whatever
+  its type (`protocol_carriers[*].every_field_classified`). The signature scan reads the whole
+  header of an `impl` or `trait` block, also of a literal block in a macro body; it does not
+  expand macros. Its reader types (`source_scan.state_reader_types`) are `State`, `World` and
+  the owners of the other registry fields (the transaction storage, the block-hash journal, the
+  trigger set and the canonical runtime) with their handles and reader traits, and the table
+  and cell handles. The inventory states the form of literal that it
+  discovers (`source_scan.domain_literal_rule`), the construction identifiers that it counts,
+  the signature rules (`source_scan.state_reader_rule`, `source_scan.hash_return_rule`), the
+  carriers with every classified field (`protocol_carriers`), the detectors that report each
+  commitment (`roots[*].detected_by`), the commitments that only a review found
+  (`source_scan.found_by_review`), the carried values that only a review found because the
+  hash rules do not match their type, for example an integer
+  (`protocol_carriers[*].found_by_review`), and what the checks do not detect
+  (`source_scan.not_detected`). The per-table mapping of the witnessed roots
+  (`witness_families[*].fields`) is read from the World accessors of the listed deriving
+  functions; a helper that such a function calls is listed by hand.
+- Consumers: G.2 implements each candidate behind `KeyedStateCommitment`, passes
+  `conformance::check_contract` and then measures it. G.3 selects and freezes the construction,
+  commits the State-level fields, binds it to the publication owner, replaces E51 and closes the
+  open defects of the inventory. G.4 defines carried witnesses, anchor ages and caps against
+  §16.3, §16.4 and §16.7. G.5 ships the witness-assertion operation over the three statement
+  kinds. For A.1 a State witness verifies against a §16.7 anchor, a carried result opening is
+  authenticated against replicated execution authority and not by a published root, and
+  `new_root` of ordinary effects stays `ordinary_writes_root`.
+
 ---
 
 ## Appendix E. As-built reconciliation
@@ -3734,7 +4101,7 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E38 | Chain parameters | Historical rule, superseded by the no-empty-block design: `Core::new` also applies the transport-independent §9.4 chain-parameter rules to the initial configurations (`block_time ≤ payload_retry_interval`, `empty_after_views ≥ 1`), and the leader applies the voters' fresh-block rule (§6.2 step 6) to every fresh payload, at view 0 too: with `empty_after_views = 0` from a committed configuration it proposes `EMPTY` instead of a payload every voter reports as a signed defect. | `machine::restart::Core::new`, `machine::propose::propose_fresh` |
 | E45 | `CoreStatus` | Also reports the leader and the proxy tail of `(h, view)` (`None` while awaiting: the next round's committee is not known yet) and the view of the lock (`high_pqc`), for the node's status endpoint, which replaces the v2 leader and QC endpoints. | `machine::Core::status` |
 | E49 | Driver bounds and failure handling (§12.2, §12.3, §12.5) | The `iroha_core` driver bounds every queue the core's peers or a failing device can grow. Serving: the node's own `FetchPayload`s go first (one per body), then peers round-robin with at most one pending `ServeBlocks` and one `ServePayload` each (a newer one replaces it) within a per-peer token bucket of response bytes; the rest is dropped (O6). The O2 barrier holds at most 1 024 effects and 32 MiB of block payload, dropping the oldest `Send`, `Broadcast`, `ServeBlocks` or `ServePayload` beyond (the core rebroadcasts; `CommitBlock`, evidence and `Halt` are never dropped; a newer `FetchPayload` of a body replaces a held one); a record still queued is superseded by a newer one of the same key, and what waited for it waits for the newer; queued bodies of applied heights are dropped. Released effects leave in batches of 64 with a due `Tick` in between (O5). A prepared commit runs alone on the executor (nothing between its prepare and its commit, also while a step backs off), and a retryable refusal re-prepares the same original owner without a second append. Consuming publication failure or prepare/commit unwind halts for recovery; ordinary idempotent write failures and missing reads remain retryable; a thread that stops anyway, or an unreachable worker, stops the instance and is reported. Frames are decoded within the transport limit (O10). | `driver::{serve::ServeSched, barrier::Barrier, persist::PersistQueue, exec::ExecSched, Kernel, Driver}` |
-| E51 | Application `R` (node integration, §4.1) | `R = H("iroha/sumeragi/result/v1" ‖ norito(ExecutionResultCommitment))` with `ExecutionResultCommitment{height, execution, schedule, beacon, native_lanes}`. `execution` (`ExecutionCommitment`) binds: (1) the **complete World state**: `parent_world_state_root`, the World the block executed on (every canonical World entry after the parent block's publication, including the parent's apply-time deterministic writes; for genesis the empty World, so genesis absorbs everything the World holds, including state seeded before it executes), and `world_state_root`, the World after the execution; (2) the **event root** `event_commitment`: the Merkle root (`iroha_crypto::MerkleTree`, leaves the hashes of the canonical Norito events) and count of the events the execution emitted, in emission order, `None` without events (pipeline status notifications are delivery, not results); (3) the witnessed pre- and post-state roots and the ordinary-write root (sparse Merkle roots over the execution witness; the ordinary-write root carries the per-key write proofs of §11 records and KAGEMUSHA receipts) and the KAGEMUSHA top-up root and count; (4) the length and hash of the result-bearing block wire (every transaction result and output) and the network-input and typed-output Merkle commitments. `schedule` retains the complete current epoch context and the lag-2 successor schedule with every ordered key and verified BLS proof of possession, `beacon` the finalized pulse the execution consumed and `native_lanes` the complete lane-context proof against the ordinary-write root. The canonical preimage is stored as `CommitCertificate.result_preimage` in the block's Kura frame. **World state root.** The root of an incremental homomorphic multiset hash (LtHash16). Each canonical World entry, a table row `(k, v)` or the value `v` of a cell `f` that the exhaustive World authority registry declares canonical (derived indexes and local buffers excluded; the trigger owner's authoritative stores included), expands to `e = BLAKE3-XOF(derive_key("iroha 2026-09-30 world-state lthash16 element v1"), P_f ‖ presence ‖ H(k) ‖ H(v))` read as 1 024 little-endian `u16` lanes, where `P_f` binds the field identity and kind and `H` is the bare-Norito value hash or the registry's declared semantic projection. The accumulator is the lane-wise sum of all elements modulo 2^16 with the entry count modulo 2^64 (order independent; removal is the exact inverse of addition), and the root is `H("iroha:world-state:root:v1\0" ‖ S ‖ entries ‖ lanes)` (little-endian count and lanes) with `S` the digest of the registry's canonical field identities, kinds and key/value schemas. A block subtracts `e(before)` and adds `e(after)` for every entry of every canonical World storage and cell that its overlay touched, read from the overlay's own undo journal, so the per-block cost is proportional to the change set and never to the World; every pass must visit exactly the registry's canonical fields (the registry destructures `WorldData` without `..`). The accumulator is the derived World cell `state_accumulator`: the node stores it after the block's last deterministic World write at publication, and it is the next block's parent root, so the apply-time writes of block `h` enter `R_{h+1}`. Chosen over a persistent sparse Merkle tree over the World: no consumer needs per-key membership proofs against the complete state (§11 and the §12.7 readers prove writes against the ordinary-write root), and the accumulator needs 2 KiB of state and no per-entry tree nodes. Replay re-executes every certified block and so recomputes and checks both World roots and the event root; after replay, startup also requires the accumulator to equal a cold capture of the rebuilt World. Each sparse Merkle tree is built once per block. | `iroha_core::sumeragi::commitment::{execution_result, WorldStateTransition}`, `iroha_core::state::world_projection::WorldStateAccumulator` |
+| E51 | Application `R` (node integration, §4.1) | `R = H("iroha/sumeragi/result/v1" ‖ norito(ExecutionResultCommitment))` with `ExecutionResultCommitment{height, execution, schedule, beacon, native_lanes}`. `execution` (`ExecutionCommitment`) binds: (1) the **complete World state**: `parent_world_state_root`, the World the block executed on (every canonical World entry after the parent block's publication, including the parent's apply-time deterministic writes; for genesis the empty World, so genesis absorbs everything the World holds, including state seeded before it executes), and `world_state_root`, the World after the execution; (2) the **event root** `event_commitment`: the Merkle root (`iroha_crypto::MerkleTree`, leaves the hashes of the canonical Norito events) and count of the events the execution emitted, in emission order, `None` without events (pipeline status notifications are delivery, not results); (3) the witnessed pre- and post-state roots and the ordinary-write root (sparse Merkle roots over the execution witness; the ordinary-write root carries the per-key write proofs of §11 records and KAGEMUSHA receipts) and the KAGEMUSHA top-up root and count; (4) the length and hash of the result-bearing block wire (every transaction result and output) and the network-input and typed-output Merkle commitments. `schedule` retains the complete current epoch context and the lag-2 successor schedule with every ordered key and verified BLS proof of possession, `beacon` the finalized pulse the execution consumed and `native_lanes` the complete lane-context proof against the ordinary-write root. The canonical preimage is stored as `CommitCertificate.result_preimage` in the block's Kura frame. **World state root.** The root of an incremental homomorphic multiset hash (LtHash16). Each canonical World entry, a table row `(k, v)` or the value `v` of a cell `f` that the exhaustive World authority registry declares canonical (derived indexes and local buffers excluded; the trigger owner's authoritative stores included), expands to `e = BLAKE3-XOF(derive_key("iroha 2026-09-30 world-state lthash16 element v1"), P_f ‖ presence ‖ H(k) ‖ H(v))` read as 1 024 little-endian `u16` lanes, where `P_f` binds the field identity and kind and `H` is the bare-Norito value hash or the registry's declared semantic projection. The accumulator is the lane-wise sum of all elements modulo 2^16 with the entry count modulo 2^64 (order independent; removal is the exact inverse of addition), and the root is `H("iroha:world-state:root:v1\0" ‖ S ‖ entries ‖ lanes)` (little-endian count and lanes) with `S` the digest of the registry's canonical field identities, kinds and key/value schemas. A block subtracts `e(before)` and adds `e(after)` for every entry of every canonical World storage and cell that its overlay touched, read from the overlay's own undo journal, so the per-block cost is proportional to the change set and never to the World; every pass must visit exactly the registry's canonical fields (the registry destructures `WorldData` without `..`). The accumulator is the derived World cell `state_accumulator`: the node stores it after the block's last deterministic World write at publication, and it is the next block's parent root, so the apply-time writes of block `h` enter `R_{h+1}`. Chosen over a persistent sparse Merkle tree over the World: no consumer needs per-key membership proofs against the complete state (§11 and the §12.7 readers prove writes against the ordinary-write root), and the accumulator needs 2 KiB of state and no per-entry tree nodes. Replay re-executes every certified block and so recomputes and checks both World roots and the event root; after replay, startup also requires the accumulator to equal a cold capture of the rebuilt World. Each sparse Merkle tree is built once per block. **Specified replacement (prospective: specified by ZK delivery plan G.1 in §16, not built).** G.3 replaces the "World state root" part of this row by the following text in one fresh-genesis cutover that deletes the accumulator; until then this row is the as-built rule and no second State root is published. *Keyed State roots.* `execution` binds the complete keyed State: `parent_keyed_state_root`, the State the block executed on (every canonical State and World entry after the parent block's publication, including the parent's deterministic apply-time writes; for genesis the empty State), and `keyed_state_root`, the State after the execution. Both have the type `KeyedStateRoot` (a Norito payload of exactly 32 raw bytes without a `Hash` marker, §16.6) and are roots of the one State-owned keyed commitment of §16 over the canonical tables and cells of the exhaustive authority registry, in ascending identity order, with keys and values in their registered bare Norito V1 or semantic encodings. The construction is the one G.3 selects. Inclusion, absence and complete-range witnesses verify against either root from the witness bytes alone. A block updates the commitment from its complete change set, read from the overlay's own undo journal; the State publication owner advances it once, after the block's last deterministic write, and that root is the next block's parent root. Replay recomputes and checks both roots at every certified block and requires the incremental root to equal a cold build. Exactly one complete-State commitment scheme exists and no per-table State root is independently authoritative; the witnessed roots of (3) keep their roles, `schedule`, `beacon` and the epoch context identity keep their roles as consensus bindings (§16.8), application accumulators keep their application-statement proofs, a protocol fingerprint remains only as a comparison value recomputed from committed canonical entries (§16.5 P1), and node-local binding commitments remain only under §16.5 P1. The result, header and certificate order is unchanged: a header binds only its parent's `R`, `R` binds the State before and after execution, and no State cut depends on the certificate that authenticates it (§16.6). | `iroha_core::sumeragi::commitment::{execution_result, WorldStateTransition}`, `iroha_core::state::world_projection::WorldStateAccumulator` |
 | E52 | Application schedule (node integration, §10.1, §9.4) | World retains the authenticated current native epoch and bounded three-slot schedule. Parameters retain lag two; membership beyond a boundary is Pending until original certified boundary application atomically installs its exact next epoch. Genesis uses its signed context. Parameter validation consumes the exported `FRAME_OVERHEAD`, including source-complete Pasta witnesses and control bytes, against the protocol transport bound. | `iroha_core::sumeragi::schedule` |
 | E54 | Production driver backends (§7.4, §12.2, §12.3 O2, O8, O10) | `iroha_core::sumeragi`: `crypto` — `H = iroha_crypto::Hash`; BLS-normal signatures (48-byte keys, 96-byte signatures); a committee key's proof of possession is verified once when the height schedule admits it and every aggregate naming a key not admitted fails (fail closed); a TC verifies with one multi-pairing over its `hq` groups (`iroha_crypto::bls_normal_verify_preaggregated_multi_message`); the signer is the node's key pair (BLS signatures are unique, so deterministic). `records` — one file per `(I, K)` under `records_dir/<I hex>/<H(K) hex>.record` and the store id beside them, each replaced by temp file, fsync, rename and directory fsync; the installation log is an append-only file of length-prefixed Norito entries outside `records_dir`, fsynced per entry; a torn or corrupt tail ends the log (cut before the next append), which the store-id check then sees as a mismatch (safe). The operator's assertion is a one-shot boot flag, never a configuration key. `bodies` — `<root>/bodies/<I hex>/<h>/<bh hex>`, written like records, never replaced, verified against `(h, bh)` when read, pruned through the applied height, and bounded by a byte cap that fails a write like a full disk (retried; never an eviction). `net` — `NetworkMessage::Sumeragi` carries the exact frame and `I`; one classifier (`traffic_class_of_frame`) serves the raw and the decoded P2P paths; Control → `ConsensusSafety` (the reserved safety FIFO), Proposal → `ConsensusPayload`, Bulk → `BlockSync`; one `post_recoverable` per recipient; payload streams retain the exact returned post and admission ticket under backpressure until admission succeeds; the driver owns its three FIFOs on `SubscriberRoute::Sumeragi`; relayed frames (origin ≠ authenticated connection) are not accepted, so ingress stays keyed by authenticated peers. | `sumeragi::{crypto, records, bodies, net}` |
 | E55 | Driver builds (§6.10 rule 1, §12.1 `PayloadReady`); found by the node's n = 4 in-process test with `payload_retry_interval` = 600 s | Two lost wakeups at a view-0 leader. (a) A transaction arriving while `BuildPayload{req}` runs (the builder may have read the queue before it) is remembered, and an `EMPTY` answer to `req` is followed by `PayloadReady{req}` at once. (b) A builder that first waits for the parent's apply can answer after `t_propose + build_timeout`: the core has then used `EMPTY` and waits for the heartbeat, and ignores the late answer (its `req` is no longer in `build`). The driver sends `PayloadReady{req}` after every non-empty answer too; in `Requested{req}` the answer is proposed first and the readiness is ignored, in `IdleWait{req}` it requests again at once. Without either, a transaction waited up to `payload_retry_interval`. The core is unchanged. | `driver::exec::ExecSched::{transactions_available, done}` |

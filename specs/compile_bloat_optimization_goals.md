@@ -46,7 +46,7 @@ workspace checks remain open. These component results do not complete O1,
 O2, O6 or O7.
 
 The implementation separates compiler, Core ZK, Privacy, timed-OVN, SDK and
-service ownership. Target guards admit 105 declared binaries and 23
+service ownership. Target guards admit 106 declared binaries and 23
 defaults under the unchanged 24-default ceiling; the 21 configured dependency
 boundaries and Norito/IVM-only constraints remain required. SDK Native custody
 and genuine production proving remain mandatory even with SDK defaults disabled. Earlier component passes

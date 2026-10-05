@@ -19,6 +19,7 @@ profile protects encrypted inputs or hidden functions.
 | `ram_lfe_bfv_parameters_v1` | Ring degree 64, `t = 257`, `q = 257*2^48`, decomposition base `2^12`. Registration recognizes this exact diagnostic shape; it supplies no security qualification. |
 | `keygen_bounded_noise_with_relinearization_from_seed` and `encrypt_bounded_noise_from_seed` | Diagnostic ternary secrets/masks, centered errors bounded by one, public-key relation `b = -a*s-e`, plaintext scale `q/t`, and matching noisy relinearization material. These private constructors are available through explicit test fixtures only. |
 | `multiply_ciphertexts_bounded_noise` and `multiply_ciphertexts_bounded_noise_rns_exact` | Centered raw products, deterministic coefficient scale-and-round, then relinearization. RNS bridges accelerate exact reconstruction around the scalar modulus; their reconstruction-prime product is not the ciphertext modulus `Q`. |
+| [`iroha_fhe`](../crates/iroha_fhe/README.md) | Owns the reusable exact arithmetic these owners call through private adapters: modular scalars, radix-2 transforms, CRT reconstruction, basis extension, digit decomposition, automorphisms and explicit rounding (ties away from zero). It defines no scheme, parameter set or security profile; a genuine RNS profile is built on it, not by renaming the BFV adapters. [`specs/fhe_ownership_inventory.json`](fhe_ownership_inventory.json) records each owner and is checked against the source. |
 | `BfvIdentifierCiphertext::slots` | 64 separate scalar ciphertexts, including the input-length slot. This is not 64 SIMD positions inside one ciphertext. |
 | [`eq_zero_indicator`, `pow_ciphertext`, `select_eq_zero`](../crates/iroha_crypto/src/ram_lfe.rs) | `1-c^256` over the field of 257 elements, evaluated with eight squarings, a final multiply by encrypted one, then a multiply by the branch difference. A planner must charge the entire expansion. |
 
@@ -83,16 +84,20 @@ input, output, keys, proof and private witness costs need a new measured budget.
 
 ## Milestones and acceptance evidence
 
-1. **Fix the threat model and plaintext contract.** Specify the key owner,
-   evaluator, opening authority and verifier; who may choose malformed keys or
-   ciphertexts; adaptive query limits; visible errors, timing, lengths and unused
-   slots. Input confidentiality does not imply hidden-circuit privacy. Review a
-   concrete circuit-private or sanitizing construction and its assumptions;
+1. **Fix the threat model and plaintext contract.** The roles, their collusion
+   assumptions, the output and oracle leakage bound, the committed lifetime
+   query limit and who may request an opening, the exact plaintext semantics,
+   the three classes and the canonical policy, receipt and opening are
+   specified and implemented in the
+   [canonical V1 contract](ram_lfe_execution_proof.md#canonical-v1-contract).
+   Still open: who may choose malformed keys or ciphertexts and how they are
+   rejected, enforcement of the query limit in State, visible errors, timing
+   and padded lengths, and a concrete circuit-private or sanitizing
+   construction with its assumptions. Input confidentiality does not imply hidden-circuit privacy.
    [Hwang, Min and Song](https://eprint.iacr.org/2025/203) is relevant research,
-   not an adopted implementation or qualification. Retain the separately trusted
-   plaintext-opening attestation. ZK execution alone cannot authorize a claimed
-   plaintext. Produce one normative encoding/operation specification and explicit
-   leakage statement before freezing a parameter profile.
+   not an adopted implementation or qualification. An execution proof alone
+   cannot authorize a claimed plaintext, and neither can a signature: the
+   opening needs its own decryption and PRF proofs.
 
 2. **Create a genuine RNS parameter and residue owner.** In the existing crypto
    boundary, introduce one immutable validated internal profile with pinned
@@ -173,10 +178,11 @@ input, output, keys, proof and private witness costs need a new measured budget.
    2,305 Poseidon permutations/149,825 round rows is not an estimate for the new
    encryption profile. Require real proofs, arbitrary-field witness mutations,
    modular aliases, malformed frames, policy/key swaps, rekey stability and wrong
-   opening-authority/output tests. Qualify the same source candidate through
-   registration, activation, restoration, stateless/identifier receipt consumers
-   and a four-validator network before replacing refusal. Retire old profiles,
-   keys, roots and frames with no aliases or fallback; ABI remains V1.
+   opening-authority/output tests. Test registration, restoration,
+   stateless/identifier receipt consumers and a four-validator network. The
+   genuine relation replaces the refusal in the change that delivers it, with
+   no activation or qualification step in between. Retire old profiles, keys,
+   roots and frames with no aliases or fallback; ABI remains V1.
 
 ## Developer boundary and first implementation gate
 

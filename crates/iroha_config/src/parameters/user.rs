@@ -19586,6 +19586,23 @@ impl ToriiRamLfeProgram {
                 }
             };
         let hidden_program = self.hidden_program_hex;
+        // The tape owner admits every structurally valid tape. The diagnostic
+        // runtime this table configures executes `bounded.v1` tapes only, so a
+        // tape outside that class is refused here, at startup, and not at the
+        // first request. The class error names hidden instruction positions
+        // and is not reported.
+        // TODO(R.12): the canonical policy declares its class; check the tape
+        // against `RamLfeClassV1::membership` of that class when the canonical
+        // execution path replaces this runtime.
+        if iroha_crypto::validate_hidden_ram_fhe_program(&hidden_program).is_err() {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.ram_lfe.programs[{index}].hidden_program_hex is outside the program class the configured runtime executes"
+                ),
+            );
+            return None;
+        }
         if let Err(err) = KeyPair::from_private_key(self.signer_private_key.clone()) {
             emit_torii_config_error(
                 emitter,

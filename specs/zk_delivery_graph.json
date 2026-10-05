@@ -814,9 +814,55 @@
         "Maintain the final plan, graph and self-contained r6 requirement/finding reconciliation with a single checker."
       ],
       "acceptance": [
-        "Validate true roots, cycles, delivery reachability, required/forbidden ancestry, per-delivery operation-v1, all23 r6 findings, every earlier F report and original task mapping. Both output formats execute identical checks. Missing ignored dist sources do not break validation; mappings are traceability, not semantic proof."
+        "Validate true roots, cycles, delivery reachability, required/forbidden ancestry, per-delivery operation-v1, all 23 r6 findings, every earlier F report and original task mapping. Both output formats execute identical checks. Missing ignored dist sources do not break validation; mappings are traceability, not semantic proof."
       ],
-      "status": "planned"
+      "status": "implemented",
+      "evidence": {
+        "source": "7e93d3e0495017db7c606dc72c7ac9180792d696 plus the uncommitted V.1 changes to the checker, its tests and the plan text",
+        "paths": [
+          "scripts/check_zk_delivery_plan.py",
+          "scripts/tests/check_zk_delivery_plan_test.py",
+          "specs/zk_delivery_graph.json",
+          "specs/zk_delivery_plan.md",
+          "specs/zk_delivery_reconciliation.json"
+        ],
+        "commands": [
+          {
+            "command": "python3 scripts/check_zk_delivery_plan.py",
+            "outcome": "passed"
+          },
+          {
+            "command": "python3 scripts/check_zk_delivery_plan.py --format json",
+            "outcome": "passed"
+          },
+          {
+            "command": "python3 -m unittest discover -s scripts/tests -p check_zk_delivery_plan_test.py",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Maintain the final plan, graph and self-contained r6 requirement/finding reconciliation with a single checker.",
+            "state": "met",
+            "proof": "scripts/check_zk_delivery_plan.py is the one validator for specs/zk_delivery_graph.json, specs/zk_delivery_plan.md and specs/zk_delivery_reconciliation.json; python3 scripts/check_zk_delivery_plan.py passes on them."
+          },
+          {
+            "clause": "Validate true roots, cycles, delivery reachability, required/forbidden ancestry, per-delivery operation-v1, all 23 r6 findings, every earlier F report and original task mapping.",
+            "state": "met",
+            "proof": "Each named check is enforced in scripts/check_zk_delivery_plan.py and protected by scripts/tests/check_zk_delivery_plan_test.py (90 tests; three rounds of independent mutation testing left no non-equivalent surviving mutant in the sets run): python3 -m unittest discover -s scripts/tests -p check_zk_delivery_plan_test.py."
+          },
+          {
+            "clause": "Both output formats execute identical checks.",
+            "state": "met",
+            "proof": "Both formats render one check_plan report; python3 scripts/check_zk_delivery_plan.py --format json and the text run agree, and parity tests in scripts/tests/check_zk_delivery_plan_test.py compare exit status and diagnostics in both directions."
+          },
+          {
+            "clause": "Missing ignored dist sources do not break validation; mappings are traceability, not semantic proof.",
+            "state": "met",
+            "proof": "The checker never opens the archived sources (audit-hook run and the missing-source test in scripts/tests/check_zk_delivery_plan_test.py); its scope line and docstring in scripts/check_zk_delivery_plan.py state that mappings and recorded status are traceability only."
+          }
+        ]
+      }
     },
     {
       "id": "V.2",

@@ -68,7 +68,7 @@ pub struct LocalParams {
     pub sync_batch: u16,
     /// Sync request retry interval.
     pub sync_retry: Millis,
-    /// Bytes per sync response (`≥ max_block_bytes + 64 KiB`).
+    /// Bytes per sync response (`≥ max_block_bytes + FRAME_OVERHEAD`).
     pub sync_max_bytes: u32,
     /// Observers kept in the peer table besides the committee.
     pub max_observers: u32,
@@ -133,7 +133,7 @@ pub enum ConfigError {
     SyncBatchZero,
     /// `sync_batch` above the decode limit of a sync response.
     SyncBatchTooLarge,
-    /// `sync_max_bytes < max_block_bytes + 64 KiB`.
+    /// `sync_max_bytes < max_block_bytes + FRAME_OVERHEAD`.
     SyncMaxBytesTooSmall,
     /// `fetch_retry > rebroadcast_interval`.
     FetchRetryTooLong,

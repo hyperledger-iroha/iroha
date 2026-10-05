@@ -1,0 +1,285 @@
+{
+  "classification_by_section": {
+    "address_space": "local_scheduling",
+    "allocations": "measured",
+    "byte_counters": "measured",
+    "failures": "measured",
+    "phase_tree": "measured",
+    "process": "measured",
+    "recorder": "measured",
+    "scheduling": "local_scheduling",
+    "work_counters": "measured"
+  },
+  "context_file": "context.json",
+  "context_schema": "iroha.measurement.context.v1",
+  "declared_provenance": {
+    "deterministic_consensus_bound": [
+      "protocol_constant",
+      "committed_state"
+    ],
+    "engineering_target": [
+      "plan_target"
+    ],
+    "local_scheduling": [
+      "local_configuration",
+      "operating_system"
+    ],
+    "projection": [
+      "model_projection"
+    ]
+  },
+  "decode_fixed_classification": [
+    "recorder"
+  ],
+  "enums": {
+    "allocation_source_kind": [
+      "scoped_counter",
+      "allocation_budget"
+    ],
+    "byte_kind": [
+      "ciphertext",
+      "key",
+      "proof",
+      "transaction",
+      "public_input",
+      "other"
+    ],
+    "cache_policy": [
+      "cold",
+      "warm"
+    ],
+    "classification": [
+      "projection",
+      "engineering_target",
+      "deterministic_consensus_bound",
+      "local_scheduling",
+      "measured"
+    ],
+    "flow": [
+      "proof",
+      "verification",
+      "native",
+      "sdk"
+    ],
+    "outcome": [
+      "succeeded",
+      "failed",
+      "abandoned",
+      "unwound"
+    ],
+    "peak_rss_source": [
+      "kernel_lifetime_high_water",
+      "unavailable"
+    ],
+    "provenance_kind": [
+      "protocol_constant",
+      "committed_state",
+      "local_configuration",
+      "operating_system",
+      "plan_target",
+      "model_projection"
+    ],
+    "thermal_state": [
+      "nominal",
+      "fair",
+      "serious",
+      "critical",
+      "unavailable"
+    ],
+    "unit": [
+      "nanoseconds",
+      "milliseconds",
+      "seconds",
+      "bytes",
+      "count"
+    ]
+  },
+  "fields": {
+    "address_space": {
+      "classification": "enum:classification",
+      "enforced": "bool",
+      "hard_limit_bytes": "u64?",
+      "soft_limit_bytes": "u64?",
+      "source": "text"
+    },
+    "allocation_source": {
+      "allocated_bytes": "u64",
+      "allocations": "u64",
+      "freed_bytes": "u64",
+      "frees": "u64",
+      "kind": "enum:allocation_source_kind",
+      "label": "text",
+      "live_buffers": "u64",
+      "live_buffers_high_water": "u64",
+      "live_bytes": "u64",
+      "live_bytes_high_water": "u64"
+    },
+    "allocations": {
+      "classification": "enum:classification",
+      "sources": "list:allocation_source"
+    },
+    "byte_counter": {
+      "count": "u64",
+      "kind": "enum:byte_kind",
+      "label": "text",
+      "max_bytes": "u64",
+      "min_bytes": "u64",
+      "phase": "u32",
+      "total_bytes": "u64"
+    },
+    "byte_counters": {
+      "classification": "enum:classification",
+      "entries": "list:byte_counter"
+    },
+    "context": {
+      "artifact": "text",
+      "cache_policy": "enum:cache_policy",
+      "config": "text",
+      "hardware": "text",
+      "profile": "text",
+      "schema": "text",
+      "source_commit": "text",
+      "source_dirty": "bool",
+      "source_dirty_digest": "text?"
+    },
+    "declared_quantity": {
+      "classification": "enum:classification",
+      "label": "text",
+      "provenance": "text",
+      "provenance_kind": "enum:provenance_kind",
+      "unit": "enum:unit",
+      "value": "u64"
+    },
+    "failure": {
+      "code": "text",
+      "phase": "u32",
+      "stage": "text"
+    },
+    "failures": {
+      "classification": "enum:classification",
+      "dropped": "u64",
+      "entries": "list:failure"
+    },
+    "identity": {
+      "artifact": "text",
+      "cache_policy": "enum:cache_policy",
+      "config": "text",
+      "emitter": "text",
+      "flow": "enum:flow",
+      "hardware": "text",
+      "profile": "text",
+      "source_commit": "text",
+      "source_dirty": "bool",
+      "source_dirty_digest": "text?",
+      "workload": "text"
+    },
+    "phase_node": {
+      "active_threads_max": "u32",
+      "allocated_bytes": "u64",
+      "allocations": "u64",
+      "calls": "u64",
+      "completed": "u64",
+      "interrupted": "u64",
+      "label": "text",
+      "live_bytes_high_water": "u64",
+      "load_milli_first_enter": "u64",
+      "load_milli_last_exit": "u64",
+      "load_milli_max": "u64",
+      "parent": "u32?",
+      "peak_concurrent_children": "u32",
+      "process_cpu_window_exclusive_ns": "u64",
+      "process_cpu_window_inclusive_ns": "u64",
+      "thread_cpu_exclusive_ns": "u64",
+      "thread_cpu_inclusive_ns": "u64",
+      "truncated": "u64",
+      "unwound": "u64",
+      "wall_exclusive_ns": "u64",
+      "wall_inclusive_ns": "u64"
+    },
+    "phase_tree": {
+      "classification": "enum:classification",
+      "nodes": "list:phase_node"
+    },
+    "phase_workers": {
+      "phase": "u32",
+      "workers": "u32"
+    },
+    "process": {
+      "classification": "enum:classification",
+      "cpu_system_ns": "u64",
+      "cpu_user_ns": "u64",
+      "load_milli_begin": "u64",
+      "load_milli_finish": "u64",
+      "logical_cpus": "u32",
+      "peak_rss_bytes": "u64",
+      "peak_rss_bytes_at_begin": "u64",
+      "peak_rss_source": "enum:peak_rss_source",
+      "pid": "u32",
+      "thermal_begin": "enum:thermal_state",
+      "thermal_finish": "enum:thermal_state",
+      "thermal_source": "text"
+    },
+    "record": {
+      "address_space": "object:address_space",
+      "allocations": "object:allocations",
+      "byte_counters": "object:byte_counters",
+      "declared": "list:declared_quantity",
+      "failures": "object:failures",
+      "identity": "object:identity",
+      "outcome": "enum:outcome",
+      "phase_tree": "object:phase_tree",
+      "process": "object:process",
+      "recorder": "object:recorder",
+      "scheduling": "object:scheduling",
+      "schema": "text",
+      "work_counters": "object:work_counters"
+    },
+    "recorder": {
+      "classification": "enum:classification",
+      "clock_anomaly_events": "u64",
+      "counter_overflow_events": "u64",
+      "forced_closes": "u64",
+      "invalid_label_events": "u64",
+      "node_overflow_events": "u64",
+      "span_overflow_events": "u64",
+      "stale_guard_events": "u64",
+      "stale_parent_events": "u64"
+    },
+    "scheduling": {
+      "classification": "enum:classification",
+      "phase_workers": "list:phase_workers",
+      "workers": "u32",
+      "workers_provenance": "text"
+    },
+    "work_counter": {
+      "count": "u64",
+      "label": "text",
+      "max_units": "u64",
+      "min_units": "u64",
+      "phase": "u32",
+      "total_units": "u64"
+    },
+    "work_counters": {
+      "classification": "enum:classification",
+      "entries": "list:work_counter"
+    }
+  },
+  "harness_output_dir_env": "IROHA_MEASUREMENT_OUTPUT_DIR",
+  "invalid_label": "invalid_label",
+  "limits": {
+    "identity_max_bytes": 160,
+    "label_max_bytes": 96,
+    "unattributed_denominator": 100,
+    "unattributed_numerator": 1
+  },
+  "norito_sibling_emitter_prefixes": [
+    "rust."
+  ],
+  "record_schema": "iroha.measurement.record.v1",
+  "structural_number_keys": [
+    "parent",
+    "phase",
+    "pid"
+  ],
+  "unbound": "unbound"
+}

@@ -1130,18 +1130,18 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1061,
-        "declared_external_dependency_edges": 642,
+        "declared_dependency_edges": 1066,
+        "declared_external_dependency_edges": 644,
         "declared_external_packages": 180,
-        "declared_local_packages": 78,
+        "declared_local_packages": 79,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 74,
-        "required_dependency_edges": 910,
-        "required_external_dependency_edges": 518,
+        "declared_workspace_packages": 75,
+        "required_dependency_edges": 914,
+        "required_external_dependency_edges": 520,
         "required_external_packages": 131,
-        "required_local_packages": 75,
+        "required_local_packages": 76,
         "required_path_packages": 4,
-        "required_workspace_packages": 71
+        "required_workspace_packages": 72
       },
       "roots": [
         "iroha_cli"
@@ -1150,18 +1150,18 @@
     "iroha-data-model-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 278,
-        "declared_external_dependency_edges": 214,
+        "declared_dependency_edges": 280,
+        "declared_external_dependency_edges": 215,
         "declared_external_packages": 104,
-        "declared_local_packages": 28,
+        "declared_local_packages": 29,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 25,
-        "required_dependency_edges": 215,
-        "required_external_dependency_edges": 157,
+        "declared_workspace_packages": 26,
+        "required_dependency_edges": 217,
+        "required_external_dependency_edges": 158,
         "required_external_packages": 72,
-        "required_local_packages": 25,
+        "required_local_packages": 26,
         "required_path_packages": 3,
-        "required_workspace_packages": 22
+        "required_workspace_packages": 23
       },
       "roots": [
         "iroha_data_model"
@@ -1170,18 +1170,18 @@
     "iroha-model-base-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 173,
-        "declared_external_dependency_edges": 140,
+        "declared_dependency_edges": 176,
+        "declared_external_dependency_edges": 142,
         "declared_external_packages": 79,
-        "declared_local_packages": 20,
+        "declared_local_packages": 21,
         "declared_path_packages": 1,
-        "declared_workspace_packages": 19,
-        "required_dependency_edges": 113,
-        "required_external_dependency_edges": 86,
+        "declared_workspace_packages": 20,
+        "required_dependency_edges": 116,
+        "required_external_dependency_edges": 88,
         "required_external_packages": 49,
-        "required_local_packages": 16,
+        "required_local_packages": 17,
         "required_path_packages": 1,
-        "required_workspace_packages": 15
+        "required_workspace_packages": 16
       },
       "roots": [
         "iroha_model_base"
@@ -1190,18 +1190,18 @@
     "iroha-sdk-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 457,
-        "declared_external_dependency_edges": 322,
+        "declared_dependency_edges": 460,
+        "declared_external_dependency_edges": 323,
         "declared_external_packages": 128,
-        "declared_local_packages": 43,
+        "declared_local_packages": 44,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 39,
-        "required_dependency_edges": 344,
-        "required_external_dependency_edges": 231,
+        "declared_workspace_packages": 40,
+        "required_dependency_edges": 346,
+        "required_external_dependency_edges": 232,
         "required_external_packages": 90,
-        "required_local_packages": 39,
+        "required_local_packages": 40,
         "required_path_packages": 4,
-        "required_workspace_packages": 35
+        "required_workspace_packages": 36
       },
       "roots": [
         "iroha"
@@ -1210,18 +1210,18 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1070,
-        "declared_external_dependency_edges": 653,
+        "declared_dependency_edges": 1075,
+        "declared_external_dependency_edges": 654,
         "declared_external_packages": 186,
-        "declared_local_packages": 76,
+        "declared_local_packages": 77,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 72,
-        "required_dependency_edges": 891,
-        "required_external_dependency_edges": 524,
+        "declared_workspace_packages": 73,
+        "required_dependency_edges": 895,
+        "required_external_dependency_edges": 525,
         "required_external_packages": 137,
-        "required_local_packages": 71,
+        "required_local_packages": 72,
         "required_path_packages": 4,
-        "required_workspace_packages": 67
+        "required_workspace_packages": 68
       },
       "roots": [
         "irohad"
@@ -1230,18 +1230,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 2046,
-        "declared_external_dependency_edges": 1121,
+        "declared_dependency_edges": 2056,
+        "declared_external_dependency_edges": 1124,
         "declared_external_packages": 231,
-        "declared_local_packages": 117,
+        "declared_local_packages": 119,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 113,
-        "required_dependency_edges": 1875,
-        "required_external_dependency_edges": 988,
+        "declared_workspace_packages": 115,
+        "required_dependency_edges": 1884,
+        "required_external_dependency_edges": 991,
         "required_external_packages": 184,
-        "required_local_packages": 117,
+        "required_local_packages": 119,
         "required_path_packages": 4,
-        "required_workspace_packages": 113
+        "required_workspace_packages": 115
       },
       "roots": [
         "*"

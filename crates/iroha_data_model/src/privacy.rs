@@ -167,6 +167,10 @@ pub const PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1: usize = 256;
 /// Maximum number of authoritative ZK-ACE policy lineages in world state.
 pub const PRIVACY_ZK_ACE_MAX_POLICIES_V1: usize = 4_096;
 /// Maximum encoded bytes admitted for one Taira privacy action.
+// TODO(X.2): this equals the proof ceiling, so an action carrying a 9,437,184-byte proof is
+// rejected as too large, and two maximum actions per block exceed every payload limit. Set
+// the action, transaction and block bounds from the measured maximum envelope
+// (`specs/zk_resource_contract.json`, `action_envelope_holds_a_ceiling_proof`).
 pub const TAIRA_PRIVACY_MAX_ACTION_BYTES_V1: u32 = 9 * 1024 * 1024;
 /// Maximum privacy bytes admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_BYTES_PER_TRANSACTION_V1: u32 = 9 * 1024 * 1024;
@@ -1517,6 +1521,8 @@ mod policy;
 pub use capability_manifest::*;
 mod release_manifest;
 pub use release_manifest::*;
+mod zk_x509_interval;
+pub use zk_x509_interval::*;
 include!("privacy/credentials.rs");
 include!("privacy/statements.rs");
 include!("privacy/proofs.rs");

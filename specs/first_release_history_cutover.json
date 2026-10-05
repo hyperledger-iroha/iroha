@@ -1,0 +1,1088 @@
+{
+  "schema": "iroha.first_release_history_cutover.v1",
+  "contract": "specs/first_release_history_cutover.md",
+  "plan_task": "T.1",
+  "history_wire": [
+    {
+      "type": "SignedBlock",
+      "path": "crates/iroha_data_model/src/block/mod.rs",
+      "version": 1
+    },
+    {
+      "type": "SignedTransaction",
+      "path": "crates/iroha_data_model/src/transaction/signed.rs",
+      "version": 1
+    },
+    {
+      "type": "TransactionEntrypoint",
+      "path": "crates/iroha_data_model/src/transaction/signed.rs",
+      "version": 1
+    },
+    {
+      "type": "SignedQuery",
+      "path": "crates/iroha_data_model/src/query/mod.rs",
+      "version": 1
+    }
+  ],
+  "test_only_version_impls": [
+    {
+      "type": "ExactPayload",
+      "path": "crates/iroha_version/src/lib.rs"
+    },
+    {
+      "type": "VersionedContainer",
+      "path": "crates/iroha_version/src/lib.rs"
+    },
+    {
+      "type": "TextPayload",
+      "path": "crates/iroha_version/src/lib.rs"
+    },
+    {
+      "type": "Dummy",
+      "path": "crates/iroha_torii/src/utils.rs"
+    },
+    {
+      "type": "BadExact",
+      "path": "crates/iroha_torii/src/tests/lib_routed_reads/fanout_memory_bounds.rs"
+    },
+    {
+      "type": "PayloadOnly",
+      "path": "crates/iroha_torii/src/tests/lib_routed_reads/fanout_memory_bounds.rs"
+    }
+  ],
+  "replay_tests": [
+    {
+      "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+      "test": "current_genesis_history_replays_from_reopened_stores_to_the_identical_state",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "four validators on on-disk stores: every store is closed, reopened from its directory and replayed with no supplied genesis and no snapshot; each reproduces its World root and execution tip, the persisted frames are byte-identical before and after reopen and replay, and the cluster restarts on the reopened stores and extends the chain"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+      "test": "pinned_history_of_an_earlier_build_replays_to_its_pinned_state",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "replay across builds: the committed frames of fixtures/core/first_release_history are stored, read back from disk and replayed to the pinned block hashes, World root and execution tip; one flipped byte of a persisted frame stops startup"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+      "test": "a_store_never_replays_under_another_genesis",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "another genesis is another history: a reopened old store is refused by its durable network binding in the empty-state preflight and when a State of the new network is anchored, a supplied foreign genesis is refused by startup, the old store stays replayable under its own genesis, and the new genesis starts on a fresh store"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+      "test": "stored_block_wire_is_exactly_the_framed_first_release_layout",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "block wire version 1 only; the decoder storage and distribution use refuses other versions, headerless payloads and other Norito header layouts"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/node.rs",
+      "test": "idle_chain_never_advances_and_real_work_survives_restart",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "four validators restart on their in-memory store handles and hold the World root they had before shutdown"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/node.rs",
+      "test": "all_seat_restart_reproduces_missing_original_context_archives_from_certified_execution",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "replay reproduces the exact certified execution projections; conflicting archives are refused, never overwritten"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/node.rs",
+      "test": "replay_rejects_a_block_whose_certified_result_differs",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "replay compares every re-executed block with its certified result"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/test_chain/world_state_tests.rs",
+      "test": "replay_from_scratch_reproduces_the_world_state_accumulator",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "replay from genesis reproduces the complete World state accumulator"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/test_chain/world_state_tests.rs",
+      "test": "replay_rejects_a_tampered_world_and_startup_rejects_a_stale_accumulator",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "a forged or stale World cannot pass replay or the startup cold capture"
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs",
+      "test": "native_storage_original_frames_and_certificates_survive_strict_restart",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "a store reopened from disk returns the byte-identical canonical frames and certificates"
+    },
+    {
+      "path": "crates/iroha_genesis/src/genesis_tail_tests.rs",
+      "test": "completed_default_genesis_source_template_uses_the_single_framed_block_wire",
+      "package": "iroha_genesis",
+      "target": "lib",
+      "covers": "the canonical default genesis template signs into the single framed block wire and round-trips byte for byte"
+    },
+    {
+      "path": "crates/iroha_genesis/src/genesis_tail_tests.rs",
+      "test": "completed_default_genesis_source_template_proposal_roundtrips",
+      "package": "iroha_genesis",
+      "target": "lib",
+      "covers": "the canonical default genesis template keeps its execution policy and consensus metadata through signing and decode"
+    },
+    {
+      "path": "integration_tests/tests/sumeragi.rs",
+      "test": "validators_restart_one_and_all",
+      "package": "integration_tests",
+      "target": "test:sumeragi",
+      "covers": "real peer processes: one validator, then the whole cluster, restart from Kura and commit again"
+    },
+    {
+      "path": "integration_tests/tests/sumeragi_lanes.rs",
+      "test": "a_fixed_lane_carries_transactions_over_p2p_across_a_restart",
+      "package": "integration_tests",
+      "target": "test:sumeragi_lanes",
+      "covers": "real peer processes: lane blocks and their merge survive a restart"
+    }
+  ],
+  "obsolete_layout_rejection_tests": [
+    {
+      "path": "crates/iroha_data_model/src/block/header.rs",
+      "test": "header_rejects_pre_release_payload_without_execution_context_hash_field",
+      "package": "iroha_data_model",
+      "target": "lib"
+    },
+    {
+      "path": "crates/iroha_data_model/src/block/header.rs",
+      "test": "header_rejects_pre_release_layout_with_retired_roster_slot",
+      "package": "iroha_data_model",
+      "target": "lib"
+    },
+    {
+      "path": "crates/iroha_data_model/src/block/tests.rs",
+      "test": "block_payload_rejects_pre_release_layout_with_retired_roster_slot",
+      "package": "iroha_data_model",
+      "target": "lib"
+    },
+    {
+      "path": "crates/iroha_data_model/src/transaction/signed_model_tests.rs",
+      "test": "transaction_v1_rejects_pre_release_binary_layouts_without_nullable_fields",
+      "package": "iroha_data_model",
+      "target": "lib"
+    },
+    {
+      "path": "crates/iroha_core/src/kura/lane_geometry_tests/03_gc_and_startup.rs",
+      "test": "recovery_rejects_both_branch_v5_journal_layouts_without_migration",
+      "package": "iroha_core",
+      "target": "lib"
+    },
+    {
+      "path": "crates/iroha_core/src/state/deserialize_world.rs",
+      "test": "take_parameters_cell_rejects_legacy_blocks_envelope",
+      "package": "iroha_core",
+      "target": "lib"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+      "test": "every_inventoried_retired_store_artifact_stops_strict_startup",
+      "package": "iroha_core",
+      "target": "lib"
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs",
+      "test": "strict_startup_rejects_every_retired_kura_artifact_after_fast_defers_the_audit",
+      "package": "iroha_core",
+      "target": "lib"
+    }
+  ],
+  "blocked_test_targets": [],
+  "pinned_history": {
+    "manifest": "fixtures/core/first_release_history/manifest.json",
+    "format": "iroha.first_release_history.pinned.v1",
+    "history_sha256": "a8c09a43a8a0496d93ec280914cf035afac835cb0205272406e2cd5bff939ffd",
+    "generator": {
+      "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+      "test": "capture_pinned_first_release_history"
+    },
+    "replay_test": {
+      "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+      "test": "pinned_history_of_an_earlier_build_replays_to_its_pinned_state"
+    }
+  },
+  "loader_paths": [
+    "crates/iroha_version/src",
+    "crates/iroha_data_model/src/block",
+    "crates/iroha_data_model/src/transaction",
+    "crates/iroha_data_model/src/query",
+    "crates/iroha_data_model/src/isi",
+    "crates/iroha_genesis/src",
+    "crates/norito/src/core.rs",
+    "crates/norito/src/core",
+    "crates/iroha_core/src/kura.rs",
+    "crates/iroha_core/src/kura",
+    "crates/iroha_core/src/snapshot.rs",
+    "crates/iroha_core/src/snapshot",
+    "crates/iroha_core/src/state.rs",
+    "crates/iroha_core/src/state/deserialize_*.rs",
+    "crates/iroha_core/src/tx.rs",
+    "crates/iroha_core/src/sumeragi/startup.rs",
+    "crates/iroha_core/src/sumeragi/node.rs",
+    "crates/iroha_core/src/sumeragi/block_store.rs",
+    "crates/iroha_core/src/sumeragi/block_store",
+    "crates/iroha_core/src/sumeragi/executor/replay.rs"
+  ],
+  "loader_rejection_helpers": [
+    {
+      "path": "crates/iroha_core/src/state/deserialize_core.rs",
+      "name": "reject_legacy_musubi_state",
+      "reason": "refuses a snapshot that still carries the pre-release generic Musubi state paths; decodes nothing"
+    },
+    {
+      "path": "crates/iroha_core/src/state/deserialize_core.rs",
+      "name": "is_legacy_musubi_state_path",
+      "reason": "names the refused pre-release paths for reject_legacy_musubi_state"
+    },
+    {
+      "path": "crates/iroha_core/src/kura.rs",
+      "name": "ensure_no_retired_rollback_intents",
+      "reason": "re-runs reject_retired_rollback_intents on the active block directory before canonical writes"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "name": "reject_retired_heartbeat_metadata",
+      "reason": "refuses a transaction that carries the retired sumeragi_heartbeat metadata key; interprets nothing"
+    }
+  ],
+  "loader_classified_definitions": [
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "name": "compat_signed_hash",
+      "classification": "retypes the single entrypoint hash as HashOf<SignedTransaction> for the accepted-transaction cache; it computes no second hash and decodes no second layout. The name is a leftover, not a compatibility path"
+    },
+    {
+      "path": "crates/iroha_core/src/kura/bound_progress_and_retained_support.rs",
+      "name": "prepend_old_layout",
+      "classification": "reads the index image a bound-progress prepend intent recorded before it rewrote the same sidecar; `old` is the pre-mutation state of the current layout during crash recovery, not an earlier layout version"
+    },
+    {
+      "path": "crates/iroha_core/src/kura/bound_progress_and_retained_support.rs",
+      "name": "validate_against_old_layout",
+      "classification": "checks an append or prepend intent against the sidecar index it is about to replace; same current layout, no version dispatch"
+    }
+  ],
+  "test_only_references": [
+    {
+      "needle": "frame_versioned_signed_block_bytes",
+      "finding": "T1-A15",
+      "reason": "frames a headerless block payload; storage, distribution and genesis loading take only framed blocks"
+    },
+    {
+      "needle": "SignedBlock::decode_all_versioned",
+      "finding": "T1-A15",
+      "reason": "the headerless DecodeVersioned of SignedBlock"
+    },
+    {
+      "needle": "SignedBlock as iroha_version::codec::DecodeVersioned",
+      "finding": "T1-A15",
+      "reason": "the headerless DecodeVersioned of SignedBlock, qualified form"
+    },
+    {
+      "needle": "SignedBlock as DecodeVersioned",
+      "finding": "T1-A15",
+      "reason": "the headerless DecodeVersioned of SignedBlock, qualified form"
+    }
+  ],
+  "retired_identifier_roots": [
+    "crates",
+    "integration_tests"
+  ],
+  "retired_identifiers": [
+    {
+      "identifier": "BlockHeaderForConsensusLegacy",
+      "retired": "second consensus header layout hashed for pre-release Taira blocks"
+    },
+    {
+      "identifier": "BlockHeaderForConsensusWithNposEffects",
+      "retired": "alternate consensus header layout selected by field presence"
+    },
+    {
+      "identifier": "has_pre_release_empty_genesis_result_placeholder",
+      "retired": "acceptance of a pre-release genesis without execution results"
+    },
+    {
+      "identifier": "normalized_legacy_genesis",
+      "retired": "rewrite of a pre-release genesis into the current layout before validation"
+    },
+    {
+      "identifier": "LegacyBlockHeader",
+      "retired": "pre-release block header decode layout"
+    },
+    {
+      "identifier": "LegacyBlockPayload",
+      "retired": "pre-release block payload decode layout"
+    },
+    {
+      "identifier": "LegacyBlockExecutionContextBundle",
+      "retired": "pre-release execution-context bundle decode layout"
+    },
+    {
+      "identifier": "LegacyExternalExecutionContext",
+      "retired": "pre-release external execution-context decode layout"
+    },
+    {
+      "identifier": "LegacyExecutionCommitment",
+      "retired": "pre-release execution commitment layout"
+    },
+    {
+      "identifier": "LegacyClaimV2",
+      "retired": "pre-release autonomous entrypoint claim layout"
+    },
+    {
+      "identifier": "LegacyLaneBlockCommitment",
+      "retired": "pre-release lane block commitment decode layout"
+    },
+    {
+      "identifier": "LegacyLaneBlockApplicationReceiptArtifact",
+      "retired": "pre-release Kura lane application receipt artifact"
+    },
+    {
+      "identifier": "LegacyLaneBlockExecutionInputArtifact",
+      "retired": "pre-release Kura lane execution input artifact"
+    },
+    {
+      "identifier": "LegacyPipelineRecoverySidecar",
+      "retired": "pre-release Kura pipeline recovery sidecar decode layout"
+    },
+    {
+      "identifier": "legacy_state_snapshot_hash_without_space_directory_manifests",
+      "retired": "second snapshot hash accepted for snapshots written before a State section existed"
+    },
+    {
+      "identifier": "block_payload_decodes_legacy_payload_without_execution_context",
+      "retired": "test asserting that a pre-release block payload decodes"
+    },
+    {
+      "identifier": "header_decodes_legacy_payload_without_execution_context_hash",
+      "retired": "test asserting that a pre-release block header decodes"
+    },
+    {
+      "identifier": "legacy_lane_block_commitment_decodes_with_empty_nexus_fee_receipts",
+      "retired": "test asserting that a pre-release lane commitment decodes"
+    },
+    {
+      "identifier": "legacy_snapshot_missing_space_directory_section",
+      "retired": "tests asserting that a snapshot missing a State section loads by default or from Kura"
+    }
+  ],
+  "retired_store_artifacts": [
+    {
+      "refusal": "reject_retired_snapshot_tail",
+      "kind": "function",
+      "path": "crates/iroha_core/src/kura/retired_snapshot_rejection.rs",
+      "called_from": [
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "function": "new_inner"
+        }
+      ],
+      "location": "blocks_root",
+      "error": "RetiredKuraArtifact",
+      "constants": [
+        {
+          "name": "VERIFIED_SNAPSHOT_TAIL_FILE_NAME",
+          "value": "verified_snapshot_tail.norito",
+          "path": "crates/iroha_core/src/kura.rs"
+        }
+      ],
+      "literals": [
+        "verified_snapshot_tail.norito.tmp",
+        ".verified-snapshot-tail-"
+      ],
+      "messages": [],
+      "artifacts": [
+        {
+          "name": "verified_snapshot_tail.norito",
+          "plant": "verified_snapshot_tail.norito",
+          "kind": "file"
+        },
+        {
+          "name": "verified_snapshot_tail.norito.tmp",
+          "plant": "verified_snapshot_tail.norito.tmp",
+          "kind": "file"
+        },
+        {
+          "name": ".verified-snapshot-tail-*",
+          "plant": ".verified-snapshot-tail-unpublished",
+          "kind": "file"
+        }
+      ]
+    },
+    {
+      "refusal": "reject_retired_commit_roster_artifacts",
+      "kind": "function",
+      "path": "crates/iroha_core/src/kura.rs",
+      "called_from": [
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "function": "new_inner"
+        }
+      ],
+      "location": "store_root",
+      "error": "RetiredKuraArtifact",
+      "constants": [],
+      "literals": [
+        "commit-rosters",
+        "commit-rosters.norito",
+        "autonomous_",
+        ".autonomous-",
+        "native_amx_",
+        "pending_queue_plan"
+      ],
+      "messages": [],
+      "artifacts": [
+        {
+          "name": "commit-rosters",
+          "plant": "commit-rosters",
+          "kind": "directory"
+        },
+        {
+          "name": "commit-rosters.norito*",
+          "plant": "commit-rosters.norito.tmp",
+          "kind": "file"
+        },
+        {
+          "name": "autonomous_*",
+          "plant": "autonomous_publication.norito",
+          "kind": "file"
+        },
+        {
+          "name": ".autonomous-*",
+          "plant": ".autonomous-stage",
+          "kind": "file"
+        },
+        {
+          "name": "native_amx_*",
+          "plant": "native_amx_outbox",
+          "kind": "directory"
+        },
+        {
+          "name": "pending_queue_plan*",
+          "plant": "pending_queue_plan.norito",
+          "kind": "file"
+        }
+      ]
+    },
+    {
+      "refusal": "reject_retired_merge_storage",
+      "kind": "function",
+      "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+      "called_from": [
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "function": "new_inner"
+        }
+      ],
+      "location": "store_root",
+      "error": "retired merge storage namespace",
+      "constants": [],
+      "literals": [
+        "merge_ledger",
+        "retired/merge_ledger"
+      ],
+      "messages": [
+        "retired merge storage namespace is not a current storage owner"
+      ],
+      "artifacts": [
+        {
+          "name": "merge_ledger",
+          "plant": "merge_ledger",
+          "kind": "directory"
+        },
+        {
+          "name": "retired/merge_ledger",
+          "plant": "retired/merge_ledger",
+          "kind": "directory"
+        }
+      ]
+    },
+    {
+      "refusal": "reject_retired_pipeline_artifacts",
+      "kind": "function",
+      "path": "crates/iroha_core/src/kura/retired_pipeline_roster_rejection.rs",
+      "called_from": [
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "function": "new_inner"
+        }
+      ],
+      "location": "blocks_root",
+      "error": "RetiredKuraArtifact",
+      "constants": [
+        {
+          "name": "PIPELINE_DIR_NAME",
+          "value": "pipeline",
+          "path": "crates/iroha_core/src/kura.rs"
+        }
+      ],
+      "literals": [
+        "block_",
+        ".json",
+        "roster_sidecars"
+      ],
+      "messages": [],
+      "artifacts": [
+        {
+          "name": "pipeline/roster_sidecars*",
+          "plant": "pipeline/roster_sidecars.norito",
+          "kind": "file"
+        },
+        {
+          "name": "pipeline/block_<height>.json",
+          "plant": "pipeline/block_7.json",
+          "kind": "file"
+        }
+      ]
+    },
+    {
+      "refusal": "reject_retired_rollback_intents",
+      "kind": "function",
+      "path": "crates/iroha_core/src/kura.rs",
+      "called_from": [
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "function": "new_inner"
+        }
+      ],
+      "location": "blocks_root",
+      "error": "RetiredKuraArtifact",
+      "constants": [
+        {
+          "name": "ROLLBACK_INTENT_FILE_NAME",
+          "value": "rollback-intent.norito",
+          "path": "crates/iroha_core/src/kura.rs",
+          "via": "rollback_intent_path"
+        }
+      ],
+      "literals": [
+        "norito.tmp"
+      ],
+      "messages": [],
+      "artifacts": [
+        {
+          "name": "rollback-intent.norito",
+          "plant": "rollback-intent.norito",
+          "kind": "file"
+        },
+        {
+          "name": "rollback-intent.norito.tmp",
+          "plant": "rollback-intent.norito.tmp",
+          "kind": "file"
+        }
+      ]
+    },
+    {
+      "refusal": "new_inner",
+      "kind": "inline_array",
+      "index": 0,
+      "path": "crates/iroha_core/src/kura.rs",
+      "called_from": [],
+      "location": "blocks_root",
+      "error": "retired pre-release storage owner",
+      "constants": [],
+      "literals": [
+        "v2_finality",
+        "retained_blocks",
+        "retained_blocks_rewrite_staging",
+        "wsv_checkpoints",
+        "commit_manifests",
+        "canonical_association_stage.norito",
+        "lane_artifacts",
+        "kagemusha_v1_finality_staging",
+        "kagemusha_v1_finality"
+      ],
+      "messages": [],
+      "artifacts": [
+        {
+          "name": "v2_finality",
+          "plant": "v2_finality",
+          "kind": "directory"
+        },
+        {
+          "name": "retained_blocks",
+          "plant": "retained_blocks",
+          "kind": "directory"
+        },
+        {
+          "name": "retained_blocks_rewrite_staging",
+          "plant": "retained_blocks_rewrite_staging",
+          "kind": "directory"
+        },
+        {
+          "name": "wsv_checkpoints",
+          "plant": "wsv_checkpoints",
+          "kind": "directory"
+        },
+        {
+          "name": "commit_manifests",
+          "plant": "commit_manifests",
+          "kind": "directory"
+        },
+        {
+          "name": "canonical_association_stage.norito",
+          "plant": "canonical_association_stage.norito",
+          "kind": "file"
+        },
+        {
+          "name": "lane_artifacts",
+          "plant": "lane_artifacts",
+          "kind": "directory"
+        },
+        {
+          "name": "kagemusha_v1_finality_staging",
+          "plant": "kagemusha_v1_finality_staging",
+          "kind": "directory"
+        },
+        {
+          "name": "kagemusha_v1_finality",
+          "plant": "kagemusha_v1_finality",
+          "kind": "directory"
+        }
+      ]
+    },
+    {
+      "refusal": "new_inner",
+      "kind": "inline_array",
+      "index": 1,
+      "path": "crates/iroha_core/src/kura.rs",
+      "called_from": [],
+      "location": "store_root",
+      "error": "retired pre-release storage owner",
+      "constants": [],
+      "literals": [
+        "prune_intent.norito",
+        "prune_intent.norito.tmp",
+        "pending_merge_entries",
+        "merge_carriers"
+      ],
+      "messages": [],
+      "artifacts": [
+        {
+          "name": "prune_intent.norito",
+          "plant": "prune_intent.norito",
+          "kind": "file"
+        },
+        {
+          "name": "prune_intent.norito.tmp",
+          "plant": "prune_intent.norito.tmp",
+          "kind": "file"
+        },
+        {
+          "name": "pending_merge_entries",
+          "plant": "pending_merge_entries",
+          "kind": "directory"
+        },
+        {
+          "name": "merge_carriers",
+          "plant": "merge_carriers",
+          "kind": "directory"
+        }
+      ]
+    }
+  ],
+  "incompatible_change_surfaces": [
+    {
+      "id": "wire",
+      "surface": "block, transaction, entrypoint and query wire",
+      "cutover": "fresh_genesis",
+      "anchors": [
+        {
+          "path": "crates/iroha_data_model/src/block/mod.rs",
+          "contains": "fn validate_signed_block_header"
+        },
+        {
+          "path": "crates/iroha_data_model/src/transaction/signed/wire_v1.rs",
+          "contains": "no second format or fallback decoder is retained"
+        },
+        {
+          "path": "crates/iroha_data_model/src/query/mod.rs",
+          "contains": "impl iroha_version::Version for SignedQuery"
+        }
+      ],
+      "regenerate": [
+        {
+          "artifact": "fixtures/core/first_release_history",
+          "generator": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+          "mention": "capture_pinned_first_release_history"
+        },
+        {
+          "artifact": "fixtures/core/frame_identity_observations.v1.json",
+          "checked_by": "crates/iroha_core/src/frame_identity_tests.rs",
+          "mention": "frame_identity_observations.v1.json"
+        },
+        {
+          "artifact": "fixtures/norito_rpc",
+          "generator": "xtask/src/main.rs",
+          "mention": "norito-rpc-fixtures"
+        },
+        {
+          "artifact": "crates/norito/tests/data/json_golden",
+          "generator": "scripts/norito_regen.sh",
+          "mention": "json_golden"
+        },
+        {
+          "artifact": "fixtures/prepared_transactions/prepared_transaction_signature_v1.json",
+          "generator": "crates/iroha_torii/src/routing.rs",
+          "mention": "print_prepared_transaction_signature_fixture"
+        },
+        {
+          "artifact": "norito.md",
+          "document": true
+        }
+      ]
+    },
+    {
+      "id": "state_layout",
+      "surface": "instruction, event and State layout",
+      "cutover": "fresh_genesis",
+      "anchors": [
+        {
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "contains": "pub fn init_instruction_registry"
+        },
+        {
+          "path": "crates/iroha_core/src/state/deserialize_core.rs",
+          "contains": "fn reject_legacy_musubi_state"
+        }
+      ],
+      "regenerate": [
+        {
+          "artifact": "fixtures/core/first_release_history",
+          "generator": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+          "mention": "capture_pinned_first_release_history"
+        },
+        {
+          "artifact": "fixtures/norito_instructions",
+          "checked_by": "integration_tests/tests/norito_burn_fixture.rs",
+          "mention": "norito_instructions"
+        },
+        {
+          "artifact": "fixtures/core/trigger_set_frame_identity_observations.v1.json",
+          "checked_by": "crates/iroha_core/src/smartcontracts/isi/triggers/set_frame_identity_tests.rs",
+          "mention": "trigger_set_frame_identity_observations.v1.json"
+        },
+        {
+          "artifact": "crates/iroha_torii/src/openapi/tests/openapi_contracts_v1.json",
+          "generator": "scripts/update_torii_openapi_contract_pins.py",
+          "mention": "openapi_contracts_v1.json"
+        }
+      ]
+    },
+    {
+      "id": "execution_root",
+      "surface": "certified execution result and complete World state root (specs/sumeragi.md Appendix E, E51)",
+      "cutover": "fresh_genesis",
+      "anchors": [
+        {
+          "path": "crates/iroha_core/src/sumeragi/node.rs",
+          "contains": "verify_world_state_accumulator"
+        }
+      ],
+      "regenerate": [
+        {
+          "artifact": "fixtures/core/first_release_history",
+          "generator": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+          "mention": "capture_pinned_first_release_history"
+        },
+        {
+          "artifact": "fixtures/sumeragi/native-finality",
+          "generator": "crates/iroha_data_model/src/sumeragi_finality/test_fixtures.rs",
+          "mention": "capture_native_checkpoint_fixtures"
+        },
+        {
+          "artifact": "specs/sumeragi.md",
+          "document": true
+        }
+      ]
+    },
+    {
+      "id": "genesis",
+      "surface": "signed genesis manifest and its consensus metadata",
+      "cutover": "fresh_genesis",
+      "anchors": [
+        {
+          "path": "crates/iroha_genesis/src/lib.rs",
+          "contains": "pub struct RawGenesisTransaction"
+        }
+      ],
+      "regenerate": [
+        {
+          "artifact": "fixtures/core/first_release_history",
+          "generator": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+          "mention": "capture_pinned_first_release_history"
+        },
+        {
+          "artifact": "defaults/genesis.template.json",
+          "checked_by": "crates/iroha_genesis/src/genesis_tail_tests.rs",
+          "mention": "defaults/genesis.template.json"
+        }
+      ]
+    },
+    {
+      "id": "execution_semantics",
+      "surface": "gas, executor and verifier semantics of anything a stored block contains",
+      "cutover": "fresh_genesis",
+      "anchors": [
+        {
+          "path": "crates/irohad/src/compatibility_probe.rs",
+          "contains": "pub gas_schedule_hash: String"
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/node.rs",
+          "contains": ".replay(&body, &commit_qc)"
+        }
+      ],
+      "regenerate": [
+        {
+          "artifact": "fixtures/core/first_release_history",
+          "generator": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
+          "mention": "capture_pinned_first_release_history"
+        },
+        {
+          "artifact": "crates/ivm/tests/gas_golden.rs",
+          "document": true
+        },
+        {
+          "artifact": "crates/ivm/tests/gas_schedule_hash.rs",
+          "document": true
+        }
+      ]
+    },
+    {
+      "id": "abi",
+      "surface": "ABI V1: syscall list and semantics, pointer types, abi_hash",
+      "cutover": "contract_redeployment",
+      "anchors": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm.rs",
+          "contains": "compute_abi_hash(ivm::SyscallPolicy::AbiV1)"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm.rs",
+          "contains": "pub(crate) fn validate_manifest_hashes("
+        }
+      ],
+      "regenerate": [
+        {
+          "artifact": "crates/ivm/tests/abi_syscall_list_golden.rs",
+          "document": true
+        },
+        {
+          "artifact": "crates/ivm/tests/abi_hash_versions.rs",
+          "document": true
+        },
+        {
+          "artifact": "crates/ivm/tests/pointer_type_ids_golden.rs",
+          "document": true
+        },
+        {
+          "artifact": "crates/ivm/docs/syscalls.md",
+          "document": true
+        },
+        {
+          "artifact": "crates/iroha_core/tests/ivm_manifest_abi_reject.rs",
+          "document": true
+        },
+        {
+          "artifact": "scripts/ivm_artifacts.tsv",
+          "generator": "scripts/regenerate_kotodama_goldens.py",
+          "mention": "ivm_artifacts.tsv"
+        },
+        {
+          "artifact": "javascript/iroha_js/test/fixtures/current_rust_contract_artifact.json",
+          "generator": "scripts/regenerate_current_rust_contract_artifact.py",
+          "mention": "current_rust_contract_artifact.json"
+        }
+      ]
+    },
+    {
+      "id": "proof",
+      "surface": "proof relation, statement, transcript and parameters",
+      "cutover": "fresh_genesis_when_stored",
+      "anchors": [
+        {
+          "path": "crates/iroha_core/src/zk_guardrails.rs",
+          "contains": "pub fn verify_backend_with_timing_checked("
+        },
+        {
+          "path": "crates/iroha_data_model/src/fastpq/public_artifact.rs",
+          "contains": "pub enum FastpqProofKindV1"
+        }
+      ],
+      "regenerate": [
+        {
+          "artifact": "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64",
+          "generator": "crates/iroha_data_model/src/bin/privacy_exact12_fixtures.rs",
+          "mention": "exact12_typed_fixture_bundle_v1.norito.b64"
+        },
+        {
+          "artifact": "fixtures/native_prover/kats_v1.json",
+          "checked_by": "crates/iroha_plonk/tests/pinned_params.rs",
+          "mention": "kats_v1.json"
+        },
+        {
+          "artifact": "fixtures/core/stark_frame_identity_observations.v1.json",
+          "checked_by": "crates/iroha_core_zk/src/stark/frame_identity_tests.rs",
+          "mention": "stark_frame_identity_observations.v1.json"
+        }
+      ]
+    }
+  ],
+  "obsolete_history_evidence": {
+    "tool": "scripts/first_release_history_evidence.py",
+    "tool_test": "pytests/scripts/first_release_history_evidence_test.py",
+    "manifest_schema": "iroha.obsolete_history_evidence.v1",
+    "anchors": [
+      {
+        "path": "crates/irohad/src/main.rs",
+        "contains": "pub check_storage: bool,"
+      },
+      {
+        "path": "crates/irohad/src/main.rs",
+        "contains": "pub check_config: bool,"
+      },
+      {
+        "path": "crates/irohad/src/main.rs",
+        "contains": "compatibility_probe::run_check_storage(&config)"
+      },
+      {
+        "path": "crates/irohad/src/compatibility_probe.rs",
+        "contains": "pub fn check_storage(config: &Config) -> Result<StorageCheckReportV1, String>"
+      },
+      {
+        "path": "crates/irohad/src/compatibility_probe.rs",
+        "contains": "pub struct StorageCheckReportV1"
+      },
+      {
+        "path": "crates/irohad/src/compatibility_probe.rs",
+        "contains": "pub fn config_compatibility_v1("
+      },
+      {
+        "path": "crates/irohad/src/compatibility_probe.rs",
+        "contains": "pub struct ConfigCompatibilityV1"
+      },
+      {
+        "path": "crates/irohad/src/compatibility_probe.rs",
+        "contains": "pub struct DiagnosticBuildIdentityV1"
+      },
+      {
+        "path": "crates/iroha_cli/src/taira_public_reset_history.rs",
+        "contains": "Immutable inventory custody for a terminal predecessor, never executable input."
+      }
+    ]
+  },
+  "open_findings": [
+    {
+      "id": "T1-A01",
+      "owner": "I.3",
+      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+      "anchor": "TODO(ws45): drop 2=RecordSccpMessage from the ivm_abi 0xA0 args text",
+      "summary": "stale operation tag 2 of the generic instruction syscall still described by the ABI text; removing it changes abi_hash"
+    },
+    {
+      "id": "T1-A02",
+      "owner": "I.5",
+      "path": "crates/iroha_core/src/executor.rs",
+      "anchor": "if let Ok(verdict) = MigrationUnitPayload::decode(&mut slice_unit)",
+      "summary": "executor migrate entrypoint result is decoded as one layout, then as a second one"
+    },
+    {
+      "id": "T1-A03",
+      "owner": "A.4",
+      "path": "crates/iroha_data_model/src/fastpq/public_artifact.rs",
+      "anchor": "LegacyReplay,",
+      "summary": "FASTPQ public artifact still names the replay-based proof kind next to the compact ones"
+    },
+    {
+      "id": "T1-A04",
+      "owner": "A.4",
+      "path": "crates/iroha_data_model/src/fastpq/public_artifact.rs",
+      "anchor": "LegacyPreprocessing(GoldilocksDigest384V1),",
+      "summary": "FASTPQ commitment description still carries the replay-driver preprocessing commitment"
+    },
+    {
+      "id": "T1-A05",
+      "owner": "B.3",
+      "path": "crates/fastpq_prover/src/axt_binding.rs",
+      "anchor": "Parse the exact legacy public encodings and compare their outer mirrors.",
+      "summary": "AXT binding parses the replay driver's public encodings next to the compact statement"
+    },
+    {
+      "id": "T1-A06",
+      "owner": "B.3",
+      "path": "crates/fastpq_prover/src/backend.rs",
+      "anchor": "Preserve the legacy empty-input branch",
+      "summary": "prover backend keeps a branch for the replay driver's empty-input shape"
+    },
+    {
+      "id": "T1-A07",
+      "owner": "R.6",
+      "path": "crates/iroha_crypto/src/ram_lfe.rs",
+      "anchor": "RamLfeBackend::HkdfSha3_512PrfV1 => evaluate_hkdf_prf(secret, commitment, request),",
+      "summary": "plaintext HKDF RAM-LFE backend is still evaluated next to the BFV backends"
+    },
+    {
+      "id": "T1-A08",
+      "owner": "R.6",
+      "path": "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs",
+      "anchor": "RamLfeVerificationMode::Signed => {",
+      "summary": "signed-receipt RAM-LFE verification mode is still admitted"
+    },
+    {
+      "id": "T1-A09",
+      "owner": "R.6",
+      "path": "crates/iroha_core/src/smartcontracts/isi/identifier.rs",
+      "anchor": "RamLfeVerificationMode::Signed => {",
+      "summary": "identifier claims still accept the signed-receipt RAM-LFE mode"
+    },
+    {
+      "id": "T1-A10",
+      "owner": "C.5",
+      "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_rns_native_tail_publication_v2.rs",
+      "anchor": "const LEGACY_LIMBS_V2: usize = 38;",
+      "summary": "ZK-AMS MKHE keeps the 38-limb release basis and its V1 read receipts next to the native 40-limb target"
+    },
+    {
+      "id": "T1-A11",
+      "owner": "C.5",
+      "path": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_public_polynomial_reader.rs",
+      "anchor": "const LEGACY_RNS_LIMBS_V1: usize = 38;",
+      "summary": "ZK-AMS MKHE public-polynomial reader still handles the 38-limb release layout"
+    },
+    {
+      "id": "T1-A15",
+      "owner": "T.1",
+      "path": "crates/iroha_data_model/src/block/mod.rs",
+      "anchor": "pub fn frame_versioned_signed_block_bytes(",
+      "summary": "SignedBlock keeps a public headerless DecodeVersioned and frame_versioned_signed_block_bytes frames a headerless payload; tests, one bench and one integration test call them, the guard (test_only_references) refuses any other caller, and storage, distribution and genesis loading decode only framed blocks"
+    },
+    {
+      "id": "T1-A12",
+      "owner": "outside-zk-plan:consensus",
+      "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+      "anchor": "Preserve deterministic lifecycle history for legacy fixture",
+      "summary": "peer unregistration synthesizes a consensus-key record for peers registered without a proof of possession"
+    },
+    {
+      "id": "T1-A13",
+      "owner": "outside-zk-plan:query",
+      "path": "crates/iroha_data_model/src/query/tx_predicate.rs",
+      "anchor": "Convert the legacy flat filter representation into the lossless predicate tree.",
+      "summary": "transaction query predicates keep a flat representation convertible to and from the typed tree"
+    }
+  ]
+}

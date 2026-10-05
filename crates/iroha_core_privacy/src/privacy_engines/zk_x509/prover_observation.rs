@@ -3,9 +3,28 @@
 //! Collection is explicitly scoped to the calling test thread. It never
 //! records field values, source bytes, random masks or witness-dependent row
 //! positions. Durations of nested phases overlap and must not be summed.
+//!
+//! Every timer also opens a phase in the shared `iroha_measurement` tree of
+//! its observation, so the same instrumentation yields inclusive and exclusive
+//! times and the unattributed share. The public geometry counters and the
+//! proof size are recorded in the same record as work and byte counters. The
+//! record carries only the static labels below and never returns a value to
+//! the prover.
+//!
+//! When a harness directory is given, the session itself writes the record
+//! there, so a producer that fails, returns early or unwinds still leaves a
+//! failed, abandoned or unwound record for the harness.
 
 use core::cell::RefCell;
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+
+use iroha_measurement::{
+    ByteKind, CollectingSink, DirectoryReport, DirectorySink, FlowKind, MeasurementRecord,
+    PhaseGuard, RecordSink, RunContext, RunIdentity, Session, TeeSink, WorkerDeclaration,
+};
 
 /// Fixed public implementation phases; the receipt cannot grow with the witness.
 #[derive(Clone, Copy, Debug)]
@@ -145,6 +164,84 @@ const PHASES: [PhaseV1; 65] = [
     PhaseV1::SourceP256ScalarBitBusAux,
 ];
 
+/// Static public labels of [`PHASES`] in the shared phase tree, in that order.
+const PHASE_LABELS_V1: [&str; PHASES.len()] = [
+    "Preparation",
+    "Assembly",
+    "BaseSources",
+    "BaseSampleAndCommit",
+    "CompactCa",
+    "BoundSources",
+    "DerBinding",
+    "RfcBinding",
+    "AuxSampleAndCommit",
+    "Composition",
+    "DeepAndFri",
+    "QueryOpenings",
+    "EnvelopeAndSelfCheck",
+    "SampleSourceColumns",
+    "SampleMaskDraws",
+    "CompositionRegistration",
+    "CompositionTraceCache",
+    "CompositionDenominators",
+    "CompositionBaseReplay",
+    "CompositionAuxReplay",
+    "CompositionFixedReplay",
+    "CompositionResiduesAndFold",
+    "CompositionInverseTransform",
+    "CompositionDegreeChunks",
+    "InitialJoinedSourceBatch",
+    "InitialJoinedTransform",
+    "QueryJoinedSourceBatch",
+    "QueryJoinedTransform",
+    "CompositionArithmeticFixedRows",
+    "CompositionArithmeticFixedInverseTransform",
+    "CompositionProviders",
+    "CompositionRegisteredProviders",
+    "CompositionRegistrationFold",
+    "CompositionTerminalLinks",
+    "CompositionKeyLinks",
+    "CompositionShaUnion",
+    "CompositionCaRetention",
+    "CompositionCaLinks",
+    "CompositionBlinding",
+    "CompositionFp4Evaluations",
+    "CompositionCommitment",
+    "SourceByteMemoryBase",
+    "SourceByteMemoryAux",
+    "SourceStrictDerBase",
+    "SourceStrictDerAux",
+    "SourceRfc5280Base",
+    "SourceRfc5280Aux",
+    "SourceSha256CallBusBase",
+    "SourceSha256CallBusAux",
+    "SourceCaAccumulatorBase",
+    "SourceCaAccumulatorAux",
+    "SourceProjectionBase",
+    "SourceProjectionAux",
+    "SourceP256ArithmeticBase",
+    "SourceP256ArithmeticAux",
+    "SourceP256ReductionBase",
+    "SourceP256ReductionAux",
+    "SourceP256LowSBase",
+    "SourceP256LowSAux",
+    "SourceP256WindowBase",
+    "SourceP256WindowAux",
+    "SourceP256ValueBusBase",
+    "SourceP256ValueBusAux",
+    "SourceP256ScalarBitBusBase",
+    "SourceP256ScalarBitBusAux",
+];
+
+/// Workload label of the X509 credential prover in the shared phase tree.
+const MEASUREMENT_WORKLOAD_V1: &str = "zk_x509_credential_prove";
+/// Root phase of one observation: everything between begin and finish.
+const MEASUREMENT_ROOT_V1: &str = "zk_x509_observation";
+/// Adapter identity written into every record this site emits.
+const MEASUREMENT_EMITTER_V1: &str = "rust.iroha_core_privacy.zk_x509";
+/// File stem of the records this site writes into a harness directory.
+const MEASUREMENT_RECORD_STEM_V1: &str = "zk_x509-phase-tree";
+
 #[derive(Clone, Copy, Default)]
 struct PhaseCountV1 {
     calls: u64,
@@ -176,10 +273,21 @@ pub(super) struct ReceiptV1 {
     fixed_inverse_columns: u64,
     fixed_forward_butterflies: u64,
     fixed_inverse_butterflies: u64,
+    // Shared phase tree: live while the observation collects, then the
+    // finished public record. Boxed so the receipt itself stays small.
+    session: Option<Session>,
+    sink: CollectingSink,
+    measurement: Option<Box<MeasurementRecord>>,
+    // What the session wrote into the harness directory, if one was given.
+    harness: Option<DirectoryReport>,
 }
 impl Default for ReceiptV1 {
     fn default() -> Self {
         Self {
+            session: None,
+            sink: CollectingSink::new(),
+            measurement: None,
+            harness: None,
             scope: std::rc::Rc::new(()),
             phases: [PhaseCountV1::default(); PHASES.len()],
             policies: [0; 9],
@@ -206,20 +314,92 @@ thread_local! {
 /// One diagnostic owns collection; unrelated parallel tests remain unobserved.
 pub(super) struct ObservationV1(core::marker::PhantomData<std::rc::Rc<()>>);
 impl ObservationV1 {
+    /// Observe without a harness: the record's identity stays unbound.
     pub(super) fn begin_v1() -> Self {
+        Self::begin_with_context_v1(RunContext::unbound())
+    }
+    /// Observe a run whose source, artifact, profile, configuration, hardware
+    /// and cache identity the harness supplied before the prover starts.
+    pub(super) fn begin_with_context_v1(context: RunContext) -> Self {
+        Self::begin_with_harness_v1(context, None)
+    }
+    /// Observe a run and have the session itself write its record into the
+    /// harness directory when it ends, however it ends: an observation that is
+    /// dropped on an error return or during an unwind still leaves an
+    /// abandoned or unwound record there.
+    pub(super) fn begin_with_harness_v1(
+        context: RunContext,
+        harness_directory: Option<PathBuf>,
+    ) -> Self {
         ACTIVE.with(|active| {
             assert!(active.borrow().is_none(), "nested prover observation");
-            *active.borrow_mut() = Some(ReceiptV1::default());
+            let mut receipt = ReceiptV1::default();
+            let memory: Box<dyn RecordSink> = Box::new(receipt.sink.clone());
+            let sink = match harness_directory {
+                Some(directory) => {
+                    let files = DirectorySink::new(directory, MEASUREMENT_RECORD_STEM_V1);
+                    receipt.harness = Some(files.report());
+                    Box::new(TeeSink::new(memory, Box::new(files)))
+                }
+                None => memory,
+            };
+            receipt.session = Some(Session::begin(
+                RunIdentity::new(
+                    context,
+                    MEASUREMENT_WORKLOAD_V1,
+                    FlowKind::Proof,
+                    MEASUREMENT_EMITTER_V1,
+                ),
+                MEASUREMENT_ROOT_V1,
+                WorkerDeclaration {
+                    workers: u32::try_from(rayon::current_num_threads()).unwrap_or(u32::MAX),
+                    provenance: "rayon.current_num_threads",
+                },
+                sink,
+            ));
+            *active.borrow_mut() = Some(receipt);
         });
         Self(core::marker::PhantomData)
     }
-    pub(super) fn finish_v1(self) -> ReceiptV1 {
+    /// Record the size of the encoded public proof. Only the length is taken.
+    pub(super) fn record_proof_bytes_v1(&self, bytes: u64) {
         ACTIVE.with(|active| {
+            if let Some(session) = active
+                .borrow()
+                .as_ref()
+                .and_then(|receipt| receipt.session.as_ref())
+            {
+                session.record_bytes(ByteKind::Proof, "credential_proof", bytes);
+            }
+        });
+    }
+    /// Retain a raw producer failure in the shared record. Both arguments are
+    /// literals: an error payload cannot be recorded.
+    pub(super) fn record_failure_v1(&self, stage: &'static str, code: &'static str) {
+        ACTIVE.with(|active| {
+            if let Some(session) = active
+                .borrow()
+                .as_ref()
+                .and_then(|receipt| receipt.session.as_ref())
+            {
+                session.record_failure(stage, code);
+            }
+        });
+    }
+    pub(super) fn finish_v1(self) -> ReceiptV1 {
+        let mut receipt = ACTIVE.with(|active| {
             active
                 .borrow_mut()
                 .take()
                 .expect("active prover observation")
-        })
+        });
+        if let Some(session) = receipt.session.take() {
+            // The thread-local borrow has ended: closing the root delivers
+            // the finished record to this receipt's own collector.
+            session.finish();
+            receipt.measurement = receipt.sink.take().pop().map(Box::new);
+        }
+        receipt
     }
 }
 impl Drop for ObservationV1 {
@@ -232,7 +412,7 @@ impl Drop for ObservationV1 {
 
 /// RAII records errors and unwinds without needing an error payload.
 pub(super) struct PhaseTimerV1 {
-    active: Option<(PhaseV1, Instant, std::rc::Rc<()>)>,
+    active: Option<(PhaseV1, Instant, std::rc::Rc<()>, Option<PhaseGuard>)>,
     complete: bool,
     thread_bound: core::marker::PhantomData<std::rc::Rc<()>>,
 }
@@ -240,10 +420,17 @@ impl PhaseTimerV1 {
     pub(super) fn start_v1(phase: PhaseV1) -> Self {
         Self {
             active: ACTIVE.with(|active| {
-                active
-                    .borrow()
-                    .as_ref()
-                    .map(|receipt| (phase, Instant::now(), std::rc::Rc::clone(&receipt.scope)))
+                active.borrow().as_ref().map(|receipt| {
+                    (
+                        phase,
+                        Instant::now(),
+                        std::rc::Rc::clone(&receipt.scope),
+                        receipt
+                            .session
+                            .as_ref()
+                            .map(|session| session.enter(PHASE_LABELS_V1[phase as usize])),
+                    )
+                })
             }),
             complete: false,
             thread_bound: core::marker::PhantomData,
@@ -255,7 +442,13 @@ impl PhaseTimerV1 {
 }
 impl Drop for PhaseTimerV1 {
     fn drop(&mut self) {
-        if let Some((phase, started, scope)) = self.active.take() {
+        if let Some((phase, started, scope, guard)) = self.active.take() {
+            // Close the shared-tree phase first. A guard whose observation
+            // has already finished is stale and writes nothing.
+            match guard {
+                Some(guard) if self.complete => guard.complete(),
+                other => drop(other),
+            }
             ACTIVE.with(|active| {
                 if let Some(receipt) = active
                     .borrow_mut()
@@ -282,6 +475,7 @@ pub(super) fn policy_v1(device_columns: usize) {
                 "bounded device policy"
             );
             receipt.policies[device_columns] += 1;
+            receipt.work_v1("transform_policy_max_device_columns", device_columns as u64);
         }
     });
 }
@@ -295,9 +489,11 @@ pub(super) fn completed_transform_v1(metal: bool, columns: usize) {
             if metal {
                 receipt.metal_calls += 1;
                 receipt.metal_columns += columns as u64;
+                receipt.work_v1("transform_metal_columns", columns as u64);
             } else {
                 receipt.cpu_calls += 1;
                 receipt.cpu_columns += columns as u64;
+                receipt.work_v1("transform_cpu_columns", columns as u64);
             }
         }
     });
@@ -312,9 +508,13 @@ pub(super) fn completed_fixed_coset_v1(columns: usize, rows: usize, recovery: bo
             let butterflies = columns * (rows / 2) as u64 * u64::from(rows.ilog2());
             receipt.fixed_forward_columns += columns;
             receipt.fixed_forward_butterflies += butterflies;
+            receipt.work_v1("fixed_coset_forward_columns", columns);
+            receipt.work_v1("fixed_coset_forward_butterflies", butterflies);
             if recovery {
                 receipt.fixed_inverse_columns += columns;
                 receipt.fixed_inverse_butterflies += butterflies;
+                receipt.work_v1("fixed_coset_recovery_inverse_columns", columns);
+                receipt.work_v1("fixed_coset_recovery_inverse_butterflies", butterflies);
             }
         }
     });
@@ -327,6 +527,15 @@ pub(super) fn completed_fixed_backend_v1(metal: bool, inverse: bool, columns: us
         if let Some(receipt) = active.borrow_mut().as_mut() {
             receipt.fixed_backend_columns[usize::from(metal)][usize::from(inverse)] +=
                 columns as u64;
+            receipt.work_v1(
+                match (metal, inverse) {
+                    (false, false) => "fixed_coset_cpu_forward_columns",
+                    (false, true) => "fixed_coset_cpu_inverse_columns",
+                    (true, false) => "fixed_coset_metal_forward_columns",
+                    (true, true) => "fixed_coset_metal_inverse_columns",
+                },
+                columns as u64,
+            );
         }
     });
 }
@@ -337,6 +546,14 @@ pub(super) fn completed_quotient_backend_v1(metal: bool, columns: usize) {
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             receipt.quotient_backend_columns[usize::from(metal)] += columns as u64;
+            receipt.work_v1(
+                if metal {
+                    "quotient_stripe_metal_forward_columns"
+                } else {
+                    "quotient_stripe_cpu_forward_columns"
+                },
+                columns as u64,
+            );
         }
     });
 }
@@ -347,6 +564,14 @@ pub(super) fn completed_native_replay_backend_v1(metal: bool, columns: usize) {
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             receipt.native_replay_backend_columns[usize::from(metal)] += columns as u64;
+            receipt.work_v1(
+                if metal {
+                    "native_replay_metal_inverse_columns"
+                } else {
+                    "native_replay_cpu_inverse_columns"
+                },
+                columns as u64,
+            );
         }
     });
 }
@@ -356,6 +581,7 @@ pub(super) fn failed_fixed_coset_v1() {
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             receipt.fixed_failures += 1;
+            receipt.work_v1("fixed_coset_failed_calls", 1);
         }
     });
 }
@@ -364,10 +590,29 @@ pub(super) fn failed_transform_v1() {
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             receipt.failures += 1;
+            receipt.work_v1("transform_failed_calls", 1);
         }
     });
 }
 impl ReceiptV1 {
+    /// Record one public geometry count in the shared record, in the phase
+    /// that is open on this thread. The label is a literal of this file.
+    // TODO: X.3 — the shared record of this adapter carries no allocation
+    // source yet: the prover's allocation ledger is not exposed to this
+    // diagnostic. Observe it with `observe_allocation_budget` once it is.
+    fn work_v1(&self, label: &'static str, units: u64) {
+        if let Some(session) = &self.session {
+            session.record_work(label, units);
+        }
+    }
+    /// The shared public phase-tree record of this finished observation.
+    pub(super) fn measurement_v1(&self) -> Option<&MeasurementRecord> {
+        self.measurement.as_deref()
+    }
+    /// What the session wrote into the harness directory, when one was given.
+    pub(super) fn harness_v1(&self) -> Option<&DirectoryReport> {
+        self.harness.as_ref()
+    }
     pub(super) fn public_text_v1(&self) -> String {
         let mut text = format!(
             "observation_scope=calling-thread-public-geometry-counters\nphase_durations=nested-not-additive\ntransform_scope=MAIN-common-domain-FFT-only\ntransform_policy_counts_by_max_device_columns={:?}\ntransform_cpu_calls={}\ntransform_cpu_columns={}\ntransform_metal_calls={}\ntransform_metal_columns={}\ntransform_failed_calls={}\nfixed_coset_backend=observed\nfixed_coset_failed_calls={}\nfixed_coset_cpu_forward_columns={}\nfixed_coset_cpu_inverse_columns={}\nfixed_coset_metal_forward_columns={}\nfixed_coset_metal_inverse_columns={}\nfixed_coset_forward_columns={}\nfixed_coset_recovery_inverse_columns={}\nfixed_coset_forward_butterflies={}\nfixed_coset_recovery_inverse_butterflies={}\nquotient_stripe_backend=observed\nquotient_stripe_cpu_forward_columns={}\nquotient_stripe_metal_forward_columns={}\nnative_replay_backend=observed\nnative_replay_scope=initial-resident-and-original-mask-replay\nnative_replay_cpu_inverse_columns={}\nnative_replay_metal_inverse_columns={}\nother_transform_backends=unobserved",
@@ -766,5 +1011,476 @@ mod tests {
             receipt.phases[PhaseV1::CompositionTraceCache as usize].completed,
             1
         );
+    }
+
+    fn tree_node<'a>(
+        record: &'a MeasurementRecord,
+        label: &str,
+    ) -> (u32, &'a iroha_measurement::PhaseNode) {
+        let mut found = record
+            .phase_tree
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.label == label);
+        let (index, node) = found.next().unwrap_or_else(|| panic!("no phase {label}"));
+        assert!(found.next().is_none(), "phase {label} appears twice");
+        (u32::try_from(index).unwrap(), node)
+    }
+
+    #[test]
+    fn shared_tree_labels_are_the_static_names_of_the_fixed_phase_inventory() {
+        assert_eq!(PHASE_LABELS_V1.len(), PHASES.len());
+        for (phase, label) in PHASES.iter().zip(PHASE_LABELS_V1) {
+            assert_eq!(format!("{phase:?}"), label);
+            assert!(iroha_measurement::text::is_public_label(label));
+        }
+        for label in [
+            MEASUREMENT_WORKLOAD_V1,
+            MEASUREMENT_ROOT_V1,
+            MEASUREMENT_EMITTER_V1,
+        ] {
+            assert!(iroha_measurement::text::is_public_label(label));
+        }
+    }
+
+    #[test]
+    fn timers_build_the_shared_phase_tree_with_exact_exclusive_time() {
+        let observation = ObservationV1::begin_v1();
+        let outer = PhaseTimerV1::start_v1(PhaseV1::Composition);
+        let middle = PhaseTimerV1::start_v1(PhaseV1::CompositionKeyLinks);
+        for _ in 0..3 {
+            PhaseTimerV1::start_v1(PhaseV1::SourceP256ValueBusBase).complete_v1();
+        }
+        middle.complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::CompositionCommitment).complete_v1();
+        outer.complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::DeepAndFri).complete_v1();
+        let receipt = observation.finish_v1();
+        let record = receipt.measurement_v1().expect("shared phase tree record");
+
+        assert_eq!(record.identity.workload, MEASUREMENT_WORKLOAD_V1);
+        assert_eq!(record.identity.flow, FlowKind::Proof);
+        assert_eq!(record.identity.emitter, MEASUREMENT_EMITTER_V1);
+        assert_eq!(record.identity.context, RunContext::unbound());
+        assert_eq!(record.outcome, iroha_measurement::RunOutcome::Succeeded);
+        assert_eq!(
+            record.scheduling.workers,
+            u32::try_from(rayon::current_num_threads()).unwrap()
+        );
+
+        let (root, observed) = tree_node(record, MEASUREMENT_ROOT_V1);
+        let (composition, outer) = tree_node(record, "Composition");
+        let (key_links, middle) = tree_node(record, "CompositionKeyLinks");
+        let (_, source) = tree_node(record, "SourceP256ValueBusBase");
+        let (_, commitment) = tree_node(record, "CompositionCommitment");
+        let (_, fri) = tree_node(record, "DeepAndFri");
+        assert_eq!((root, observed.parent), (0, None));
+        assert_eq!(record.phase_tree.nodes.len(), 6);
+        // The tree records the nesting that the flat counters cannot.
+        assert_eq!(outer.parent, Some(0));
+        assert_eq!(middle.parent, Some(composition));
+        assert_eq!(source.parent, Some(key_links));
+        assert_eq!(commitment.parent, Some(composition));
+        assert_eq!(fri.parent, Some(0));
+        assert_eq!((source.calls, source.completed), (3, 3));
+        // Exclusive time is exactly inclusive minus the sequential children.
+        assert_eq!(
+            outer.wall_exclusive_ns,
+            outer.wall_inclusive_ns - middle.wall_inclusive_ns - commitment.wall_inclusive_ns
+        );
+        assert_eq!(
+            middle.wall_exclusive_ns,
+            middle.wall_inclusive_ns - source.wall_inclusive_ns
+        );
+        assert_eq!(
+            observed.wall_exclusive_ns,
+            observed.wall_inclusive_ns - outer.wall_inclusive_ns - fri.wall_inclusive_ns
+        );
+        let attribution = record.attribution().unwrap();
+        assert_eq!(attribution.root_wall_ns, observed.wall_inclusive_ns);
+        assert_eq!(attribution.unattributed_wall_ns, observed.wall_exclusive_ns);
+        // The flat X509 counters and the shared tree observe the same calls.
+        for (phase, label) in PHASES.iter().zip(PHASE_LABELS_V1) {
+            let flat = receipt.phases[*phase as usize];
+            let (calls, completed): (u64, u64) = record
+                .phase_tree
+                .nodes
+                .iter()
+                .filter(|node| node.label == label)
+                .fold((0, 0), |sum, node| {
+                    (sum.0 + node.calls, sum.1 + node.completed)
+                });
+            assert_eq!((flat.calls, flat.completed), (calls, completed), "{label}");
+        }
+        // Only an unbound identity and timing coverage can be reported: the
+        // record's accounting itself has no finding.
+        assert!(record.findings().iter().all(|finding| matches!(
+            finding,
+            iroha_measurement::Finding::IdentityIncomplete { .. }
+                | iroha_measurement::Finding::DirtyDigestMismatch
+                | iroha_measurement::Finding::UnattributedExceedsLimit { .. }
+        )));
+        assert!(iroha_measurement::unclassified_numbers(&record.to_json_value()).is_empty());
+    }
+
+    #[test]
+    fn shared_tree_counts_error_returns_and_unwinds_like_the_flat_receipt() {
+        let observation = ObservationV1::begin_v1();
+        PhaseTimerV1::start_v1(PhaseV1::Preparation).complete_v1();
+        drop(PhaseTimerV1::start_v1(PhaseV1::Assembly));
+        let _ = std::panic::catch_unwind(|| {
+            let _timer = PhaseTimerV1::start_v1(PhaseV1::BoundSources);
+            panic!("synthetic observer unwind");
+        });
+        observation.record_failure_v1("producer", "error");
+        let receipt = observation.finish_v1();
+        let record = receipt.measurement_v1().unwrap();
+        let (_, preparation) = tree_node(record, "Preparation");
+        let (_, assembly) = tree_node(record, "Assembly");
+        let (_, bound) = tree_node(record, "BoundSources");
+        assert_eq!((preparation.completed, preparation.interrupted), (1, 0));
+        assert_eq!((assembly.completed, assembly.interrupted), (0, 1));
+        assert_eq!((assembly.unwound, bound.unwound), (0, 1));
+        assert_eq!(bound.interrupted, 1);
+        for phase in [
+            PhaseV1::Preparation,
+            PhaseV1::Assembly,
+            PhaseV1::BoundSources,
+        ] {
+            let flat = receipt.phases[phase as usize];
+            let (_, node) = tree_node(record, PHASE_LABELS_V1[phase as usize]);
+            assert_eq!(
+                (flat.calls, flat.completed, flat.interrupted, flat.unwound),
+                (node.calls, node.completed, node.interrupted, node.unwound)
+            );
+        }
+        // The raw failure is retained and makes the run a failed one.
+        assert_eq!(record.outcome, iroha_measurement::RunOutcome::Failed);
+        assert_eq!(record.failures.entries.len(), 1);
+        assert_eq!(record.failures.entries[0].stage, "producer");
+        assert_eq!(record.failures.entries[0].code, "error");
+        assert!(
+            record
+                .findings()
+                .contains(&iroha_measurement::Finding::RunNotSucceeded {
+                    outcome: iroha_measurement::RunOutcome::Failed
+                })
+        );
+    }
+
+    #[test]
+    fn shared_tree_is_thread_scoped_and_closed_to_stale_timers() {
+        let first = ObservationV1::begin_v1();
+        let stale = PhaseTimerV1::start_v1(PhaseV1::Assembly);
+        std::thread::spawn(|| {
+            // No observation is active on this thread: nothing is recorded.
+            PhaseTimerV1::start_v1(PhaseV1::CompositionResiduesAndFold).complete_v1();
+        })
+        .join()
+        .unwrap();
+        let first = first.finish_v1();
+        let record = first.measurement_v1().unwrap();
+        // The timer still open at finish is truncated in the first tree ...
+        let (_, assembly) = tree_node(record, "Assembly");
+        assert_eq!(
+            (assembly.calls, assembly.interrupted, assembly.truncated),
+            (1, 1, 1)
+        );
+        assert!(
+            record
+                .phase_tree
+                .nodes
+                .iter()
+                .all(|node| node.label != "CompositionResiduesAndFold")
+        );
+        let second = ObservationV1::begin_v1();
+        // ... and cannot write into the tree of a later observation.
+        stale.complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::Preparation).complete_v1();
+        let second = second.finish_v1();
+        let labels: Vec<_> = second
+            .measurement_v1()
+            .unwrap()
+            .phase_tree
+            .nodes
+            .iter()
+            .map(|node| node.label.as_str())
+            .collect();
+        assert_eq!(labels, [MEASUREMENT_ROOT_V1, "Preparation"]);
+        // An observation dropped without finishing leaves nothing active.
+        drop(ObservationV1::begin_v1());
+        assert!(
+            ObservationV1::begin_v1()
+                .finish_v1()
+                .measurement_v1()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn harness_context_binds_the_identity_of_the_shared_record() {
+        let context = RunContext {
+            source_commit: "7e93d3e049".repeat(4),
+            source_dirty: false,
+            source_dirty_digest: None,
+            artifact: "sha256:x509-test-binary".into(),
+            profile: "complete49-MAIN-plus-compactCA".into(),
+            config: "taira_default".into(),
+            hardware: "reference/unit-test-host".into(),
+            cache_policy: iroha_measurement::CachePolicy::Cold,
+        };
+        let observation = ObservationV1::begin_with_context_v1(context.clone());
+        PhaseTimerV1::start_v1(PhaseV1::Preparation).complete_v1();
+        let receipt = observation.finish_v1();
+        let record = receipt.measurement_v1().unwrap();
+        assert_eq!(record.identity.context, context);
+        let bytes = record.to_norito_bytes().unwrap();
+        assert_eq!(
+            &MeasurementRecord::from_norito_bytes(&bytes).unwrap(),
+            record
+        );
+        assert!(!record.findings().iter().any(|finding| matches!(
+            finding,
+            iroha_measurement::Finding::IdentityIncomplete { .. }
+        )));
+    }
+
+    fn work_total(record: &MeasurementRecord, label: &str) -> (u64, u64) {
+        record
+            .work_counters
+            .entries
+            .iter()
+            .filter(|counter| counter.label == label)
+            .fold((0, 0), |sum, counter| {
+                (sum.0 + counter.count, sum.1 + counter.total_units)
+            })
+    }
+
+    #[test]
+    fn public_geometry_counters_and_proof_size_are_in_the_shared_record() {
+        let observation = ObservationV1::begin_v1();
+        for columns in [0, 2, 2] {
+            policy_v1(columns);
+        }
+        let phase = PhaseTimerV1::start_v1(PhaseV1::BaseSampleAndCommit);
+        completed_transform_v1(false, 8);
+        completed_transform_v1(false, 3);
+        completed_transform_v1(true, 2);
+        phase.complete_v1();
+        completed_fixed_coset_v1(8, 16, false);
+        completed_fixed_coset_v1(3, 16, true);
+        completed_fixed_backend_v1(false, false, 8);
+        completed_fixed_backend_v1(false, true, 2);
+        completed_fixed_backend_v1(true, false, 3);
+        completed_fixed_backend_v1(true, true, 1);
+        completed_quotient_backend_v1(false, 8);
+        completed_quotient_backend_v1(true, 3);
+        completed_native_replay_backend_v1(false, 8);
+        completed_native_replay_backend_v1(true, 4);
+        failed_fixed_coset_v1();
+        failed_transform_v1();
+        failed_transform_v1();
+        observation.record_proof_bytes_v1(8_123_456);
+        let receipt = observation.finish_v1();
+        let record = receipt.measurement_v1().unwrap();
+        // Every flat counter of the receipt has the same value in the record:
+        // (number of reports, sum of units).
+        for (label, expected) in [
+            (
+                "transform_cpu_columns",
+                (receipt.cpu_calls, receipt.cpu_columns),
+            ),
+            (
+                "transform_metal_columns",
+                (receipt.metal_calls, receipt.metal_columns),
+            ),
+            ("transform_failed_calls", (2, receipt.failures)),
+            ("transform_policy_max_device_columns", (3, 4)),
+            (
+                "fixed_coset_forward_columns",
+                (2, receipt.fixed_forward_columns),
+            ),
+            (
+                "fixed_coset_forward_butterflies",
+                (2, receipt.fixed_forward_butterflies),
+            ),
+            (
+                "fixed_coset_recovery_inverse_columns",
+                (1, receipt.fixed_inverse_columns),
+            ),
+            (
+                "fixed_coset_recovery_inverse_butterflies",
+                (1, receipt.fixed_inverse_butterflies),
+            ),
+            (
+                "fixed_coset_cpu_forward_columns",
+                (1, receipt.fixed_backend_columns[0][0]),
+            ),
+            (
+                "fixed_coset_cpu_inverse_columns",
+                (1, receipt.fixed_backend_columns[0][1]),
+            ),
+            (
+                "fixed_coset_metal_forward_columns",
+                (1, receipt.fixed_backend_columns[1][0]),
+            ),
+            (
+                "fixed_coset_metal_inverse_columns",
+                (1, receipt.fixed_backend_columns[1][1]),
+            ),
+            ("fixed_coset_failed_calls", (1, receipt.fixed_failures)),
+            (
+                "quotient_stripe_cpu_forward_columns",
+                (1, receipt.quotient_backend_columns[0]),
+            ),
+            (
+                "quotient_stripe_metal_forward_columns",
+                (1, receipt.quotient_backend_columns[1]),
+            ),
+            (
+                "native_replay_cpu_inverse_columns",
+                (1, receipt.native_replay_backend_columns[0]),
+            ),
+            (
+                "native_replay_metal_inverse_columns",
+                (1, receipt.native_replay_backend_columns[1]),
+            ),
+        ] {
+            assert_eq!(work_total(record, label), expected, "{label}");
+            assert!(iroha_measurement::text::is_public_label(label));
+        }
+        assert_eq!(
+            (
+                receipt.cpu_calls,
+                receipt.cpu_columns,
+                receipt.metal_columns
+            ),
+            (2, 11, 2)
+        );
+        assert_eq!(
+            record
+                .work_counters
+                .entries
+                .iter()
+                .map(|counter| counter.label.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            17
+        );
+        // A counter is attributed to the phase that was open when it was reported.
+        let (commit, _) = tree_node(record, "BaseSampleAndCommit");
+        let transform = record
+            .work_counters
+            .entries
+            .iter()
+            .find(|counter| counter.label == "transform_cpu_columns")
+            .unwrap();
+        assert_eq!(
+            (transform.phase, transform.min_units, transform.max_units),
+            (commit, 3, 8)
+        );
+        // The proof is recorded as its size in the root phase, never as bytes.
+        assert_eq!(record.byte_counters.entries.len(), 1);
+        let proof = &record.byte_counters.entries[0];
+        assert_eq!(
+            (
+                proof.kind,
+                proof.label.as_str(),
+                proof.phase,
+                proof.total_bytes
+            ),
+            (ByteKind::Proof, "credential_proof", 0, 8_123_456)
+        );
+        assert!(record.findings().iter().all(|finding| matches!(
+            finding,
+            iroha_measurement::Finding::IdentityIncomplete { .. }
+                | iroha_measurement::Finding::DirtyDigestMismatch
+                | iroha_measurement::Finding::NoPhases
+                | iroha_measurement::Finding::UnattributedExceedsLimit { .. }
+        )));
+        assert!(iroha_measurement::unclassified_numbers(&record.to_json_value()).is_empty());
+        // Counters reported with no active observation change nothing.
+        completed_transform_v1(false, 8);
+        failed_transform_v1();
+        assert_eq!(ObservationV1::begin_v1().finish_v1().cpu_columns, 0);
+    }
+
+    fn harness_records(directory: &std::path::Path) -> Vec<MeasurementRecord> {
+        let mut paths: Vec<_> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|kind| kind == "norito"))
+            .collect();
+        paths.sort();
+        paths
+            .iter()
+            .map(|path| {
+                let record =
+                    MeasurementRecord::from_norito_bytes(&std::fs::read(path).unwrap()).unwrap();
+                // The JSON view the harness reads is written beside it.
+                let view = std::fs::read_to_string(path.with_extension("json")).unwrap();
+                assert_eq!(MeasurementRecord::from_json_view(&view).unwrap(), record);
+                record
+            })
+            .collect()
+    }
+
+    #[test]
+    fn finished_abandoned_and_unwound_observations_all_reach_the_harness_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let harness = || Some(directory.path().to_path_buf());
+        // A finished observation with a producer failure: written once.
+        let observation = ObservationV1::begin_with_harness_v1(RunContext::unbound(), harness());
+        PhaseTimerV1::start_v1(PhaseV1::Preparation).complete_v1();
+        observation.record_failure_v1("producer", "error");
+        let receipt = observation.finish_v1();
+        let written = receipt.harness_v1().unwrap();
+        assert!(written.errors().is_empty() && written.partial().is_empty());
+        assert_eq!(written.written().len(), 1);
+        assert_eq!(
+            harness_records(directory.path()),
+            [receipt.measurement_v1().unwrap().clone()]
+        );
+        // An observation dropped without finishing, as on an error return.
+        let abandoned = ObservationV1::begin_with_harness_v1(RunContext::unbound(), harness());
+        let open = PhaseTimerV1::start_v1(PhaseV1::Composition);
+        drop(abandoned);
+        drop(open);
+        // An observation dropped while the producer unwinds.
+        let unwound = std::panic::catch_unwind(|| {
+            let _observation =
+                ObservationV1::begin_with_harness_v1(RunContext::unbound(), harness());
+            let _timer = PhaseTimerV1::start_v1(PhaseV1::DeepAndFri);
+            panic!("synthetic producer unwind");
+        });
+        assert!(unwound.is_err());
+        let records = harness_records(directory.path());
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.outcome)
+                .collect::<Vec<_>>(),
+            [
+                iroha_measurement::RunOutcome::Failed,
+                iroha_measurement::RunOutcome::Abandoned,
+                iroha_measurement::RunOutcome::Unwound,
+            ]
+        );
+        // The interrupted records keep the phases that were open.
+        let (_, composition) = tree_node(&records[1], "Composition");
+        assert_eq!((composition.interrupted, composition.truncated), (1, 1));
+        let (_, fri) = tree_node(&records[2], "DeepAndFri");
+        assert_eq!((fri.interrupted, fri.unwound), (1, 1));
+        for record in &records[1..] {
+            assert!(record.findings().iter().any(|finding| matches!(
+                finding,
+                iroha_measurement::Finding::RunNotSucceeded { .. }
+            )));
+        }
+        // Without a harness directory nothing is written anywhere.
+        let receipt = ObservationV1::begin_v1().finish_v1();
+        assert!(receipt.harness_v1().is_none());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 6);
     }
 }

@@ -14,6 +14,14 @@
 //! - a BFV-backed secret affine evaluator that consumes BFV-encrypted input,
 //! - and a BFV-backed secret programmed evaluator with an instruction-driven
 //!   RAM-style encrypted state machine.
+//!
+//! The canonical V1 contract lives beside them: the three program classes and
+//! exact plaintext semantics (`class`), the function identity with its query
+//! limit, the policy and the commitment owners (`canonical`), the cleartext
+//! reference interpreter (`reference`) and the heap owner of their fixed-size
+//! secrets (`clearing`). `specs/ram_lfe_execution_proof.md` is its specification.
+//! The backends above keep their own superseded policy and receipt bindings
+//! until the tasks named at each `TODO` retire them.
 use crate::{
     BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH_U8, BfvAffineCircuit, BfvCiphertext, BfvError,
     BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvParameters,
@@ -42,11 +50,40 @@ mod affine_secret;
 #[cfg(test)]
 mod availability_tests;
 use affine_secret::SecretAffineCircuit;
+mod canonical;
+mod class;
+mod clearing;
 mod initialization;
+mod reference;
+#[cfg(test)]
+mod specification_tests;
 mod trace;
+pub use canonical::{
+    RAM_LFE_V1_OUTPUT_LEAKAGE_BITS, RAM_LFE_V1_PRIVATE_CONTEXTS, RAM_LFE_V1_PUBLIC_DOMAINS,
+    RamLfeAssociatedDataHashV1, RamLfeEncryptionKeyCommitmentV1, RamLfeEvaluationKeyCommitmentV1,
+    RamLfeExecutionContextIdV1, RamLfeFunctionCommitmentV1, RamLfeFunctionIdV1,
+    RamLfeFunctionIdentityV1, RamLfeInitializedMemoryCommitmentV1, RamLfeInitializerCommitmentV1,
+    RamLfeInputCiphertextCommitmentV1, RamLfeOpeningKeyCommitmentV1, RamLfeOutputBlindingV1,
+    RamLfeOutputCiphertextCommitmentV1, RamLfeOutputCommitmentV1, RamLfePolicyCommitmentV1,
+    RamLfePolicyV1, RamLfePrfKeyCommitmentV1, RamLfeProfileIdV1, RamLfeProgramKeyV1,
+    RamLfeQueryLimitV1, RamLfeRelationIdV1,
+};
+pub use class::{
+    RAM_LFE_V1_BOUNDED_MAX_RANK, RAM_LFE_V1_INPUT_SLOTS, RAM_LFE_V1_MAX_INPUT_BYTES,
+    RAM_LFE_V1_MAX_INSTRUCTIONS, RAM_LFE_V1_MAX_OUTPUTS, RAM_LFE_V1_PLAINTEXT_MODULUS,
+    RAM_LFE_V1_PLAINTEXT_SEMANTICS_DESCRIPTOR, RAM_LFE_V1_REFRESH_MAX_RANK_BETWEEN_REFRESHES,
+    RAM_LFE_V1_REFRESH_MAX_REFRESHES, RAM_LFE_V1_REGISTERS, RAM_LFE_V1_SELECT_BRANCH_RANK,
+    RAM_LFE_V1_SELECT_CONDITION_RANK, RAM_LFE_V1_STATE_LANES, RamLfeClassReportV1, RamLfeClassV1,
+    RamLfeOpcodeV1, RamLfeRefreshPointV1, ram_lfe_v1_plaintext_semantics_hash,
+};
 pub use initialization::{
     BFV_PROGRAM_INITIALIZER_DESCRIPTOR, RAM_LFE_PROGRAM_ASSOCIATED_DATA_MAX_BYTES,
     bfv_program_initializer_descriptor_hash,
+};
+pub use reference::{
+    RAM_LFE_V1_TRACE_ROW_SCALARS, RamLfeInitialMemoryV1, RamLfeOrderedOutputV1,
+    RamLfeReferenceExecutionV1, RamLfeReferenceInputV1, RamLfeReferenceTraceV1,
+    ram_lfe_reference_evaluate_v1, ram_lfe_reference_execute_v1,
 };
 pub use trace::RamLfeProgramExecutionTrace;
 use trace::{OwnedCiphertext, OwnedCiphertexts};
@@ -202,6 +239,8 @@ pub enum BfvRamEncryptedInputMode {
     /// canonicalize it through resolver-side decryption.
     EncryptedEnvelopeV1,
 }
+// TODO(R.12): superseded by `RamLfeProfileIdV1` in the canonical policy; retire
+// with the diagnostic BFV programmed backend.
 /// Public RAM-FHE execution profile for the programmed BFV backend.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(
@@ -235,6 +274,8 @@ pub struct BfvRamProgramProfile {
     /// Exact compiled secret-commitment and initialized-memory derivation contract.
     pub initializer_descriptor_hash: Hash,
 }
+// TODO(R.6): remove with the obsolete Signed execution mode. The canonical
+// `RamLfePolicyV1` has no verification mode.
 /// Receipt attestation mode published by a RAM-LFE program policy.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -248,6 +289,8 @@ pub enum RamLfeVerificationMode {
     /// Binding payload bytes to a proof alone does not establish execution.
     Proof,
 }
+// TODO(R.12): superseded by `RamLfeRelationIdV1`. A policy does not publish a
+// caller-selected backend, circuit identifier or verifying key.
 /// Public proof-verifier metadata published by proof-carrying RAM-LFE policies.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
@@ -292,6 +335,8 @@ pub enum HiddenRamFheInstruction {
     /// Append one ciphertext register to the encrypted output envelope.
     Output(u16),
 }
+// TODO(R.12): superseded by `RamLfePolicyV1`; retire with the diagnostic BFV
+// programmed backend.
 /// Public parameter bundle published by programmed BFV policies.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
@@ -320,6 +365,9 @@ pub struct BfvProgrammedPublicParameters {
     #[norito(default)]
     pub proof_verifier: Option<RamLfeProofVerifierMetadata>,
 }
+// TODO(R.6): remove `HkdfSha3_512PrfV1` and its policy, evaluator and tag
+// branches. R.12 retires the two diagnostic BFV tags when the canonical
+// classes (`RamLfeClassV1`) have a genuine encrypted evaluator.
 /// Supported RAM-LFE backends.
 #[derive(
     Debug,
@@ -395,6 +443,8 @@ impl json::JsonDeserialize for RamLfeBackend {
         }
     }
 }
+// TODO(R.12): superseded by `RamLfePolicyV1` and `RamLfePolicyCommitmentV1`.
+// This record binds opaque public-parameter bytes and one secret commitment.
 /// Public commitment to a hidden identifier-derivation policy.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(
@@ -423,6 +473,8 @@ pub struct ClientRequest {
     #[norito(default)]
     pub associated_data: Vec<u8>,
 }
+// TODO(R.12): replace with a typed ciphertext result and a separate verified
+// opening. No encrypted backend returns plaintext.
 /// Deterministic RAM-LFE evaluation output.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(
@@ -483,6 +535,65 @@ pub enum RamLfeError {
     /// The private phone-nullifier key must carry at least 256 bits of entropy.
     #[error("phone nullifier secret must be at least 32 bytes")]
     WeakPhoneNullifierSecret,
+    /// The declared class does not admit an instruction of the hidden program.
+    #[error("instruction {instruction} ({opcode}) is not admitted by RAM-LFE class {class}")]
+    InstructionOutsideClass {
+        /// Declared class.
+        class: RamLfeClassV1,
+        /// Index of the offending instruction in the hidden tape.
+        instruction: usize,
+        /// Opcode the class does not admit.
+        opcode: RamLfeOpcodeV1,
+    },
+    /// A value of the hidden program exceeds the class's logical rank.
+    #[error(
+        "instruction {instruction} reaches logical rank {rank}; RAM-LFE class {class} allows {limit}"
+    )]
+    ClassRankExceeded {
+        /// Declared class.
+        class: RamLfeClassV1,
+        /// Index of the offending instruction in the hidden tape.
+        instruction: usize,
+        /// Logical rank the instruction's result would reach.
+        rank: u16,
+        /// Maximum logical rank of the class.
+        limit: u16,
+    },
+    /// The canonical refresh schedule needs more refreshes than the class allows.
+    #[error(
+        "instruction {instruction} needs another refresh; RAM-LFE class {class} allows {limit} in total"
+    )]
+    ClassRefreshLimitExceeded {
+        /// Declared class.
+        class: RamLfeClassV1,
+        /// Index of the instruction that required the refresh.
+        instruction: usize,
+        /// Maximum number of refreshes of the class.
+        limit: u16,
+    },
+    /// A canonical V1 value is malformed.
+    #[error("invalid RAM-LFE V1 value: {0}")]
+    InvalidCanonicalValue(&'static str),
+    /// The operating-system random source failed.
+    #[error("operating-system randomness is unavailable")]
+    RandomnessUnavailable,
+    /// The function identity has accepted every receipt its query limit allows.
+    #[error(
+        "RAM-LFE query limit exhausted: the function identity already accepted {limit} receipts"
+    )]
+    ReceiptLimitExhausted {
+        /// Committed lifetime total of the function identity.
+        limit: u64,
+    },
+    /// The beneficiary has had every opening the query limit allows.
+    #[error("RAM-LFE query limit exhausted: the beneficiary already had {limit} openings")]
+    BeneficiaryOpeningLimitExhausted {
+        /// Committed lifetime limit of one beneficiary.
+        limit: u32,
+    },
+    /// An opening was requested by an account other than the receipt's beneficiary.
+    #[error("only the beneficiary of a RAM-LFE receipt may request its opening")]
+    UnauthorizedOpeningRequester,
 }
 
 /// Derive a stable, non-enumerable retail-phone nullifier after canonicalization.
@@ -1679,7 +1790,24 @@ impl<'a> HiddenProgramMachine<'a> {
             .ok_or_else(|| invalid_program_error(&format!("lane {lane} out of bounds")))
     }
 }
+// The diagnostic BFV evaluator has no refresh, so it admits exactly the
+// structurally valid tapes of the canonical `bounded.v1` class.
 fn validate_hidden_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeError> {
+    match RamLfeClassV1::Bounded.membership(program) {
+        Ok(_) => Ok(()),
+        Err(RamLfeError::ClassRankExceeded {
+            instruction, limit, ..
+        }) => Err(invalid_program_error(&format!(
+            "instruction {instruction} exceeds the RAM-FHE multiplicative-depth budget {limit}"
+        ))),
+        Err(error) => Err(error),
+    }
+}
+/// Validate the class-independent shape of a hidden tape.
+///
+/// Class membership, including every rank and refresh limit, is checked
+/// separately by [`RamLfeClassV1::membership`].
+fn validate_hidden_program_structure(program: &HiddenRamFheProgram) -> Result<(), RamLfeError> {
     if program.version() != 1 {
         return Err(invalid_program_error("unsupported hidden program version"));
     }
@@ -1717,12 +1845,9 @@ fn validate_hidden_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeEr
 fn validate_hidden_program_instruction_tape(
     program: &HiddenRamFheProgram,
 ) -> Result<(), RamLfeError> {
-    let budget = u16::from(bfv_program_profile().ciphertext_mul_per_step);
-    let mut register_depths = Zeroizing::new(vec![0_u16; usize::from(program.register_count())]);
-    let mut state_depths = Zeroizing::new(vec![0_u16; usize::from(program.memory_lane_count())]);
     let mut output_count = 0_usize;
     for (pc, instruction) in program.instructions().enumerate() {
-        let next_depth = match instruction {
+        match instruction {
             HiddenRamFheInstruction::LoadInput(dst, input_index) => {
                 validate_program_register_index(program, dst, pc)?;
                 if usize::from(input_index) >= BFV_PROGRAM_IDENTIFIER_SLOT_COUNT {
@@ -1730,80 +1855,48 @@ fn validate_hidden_program_instruction_tape(
                         "instruction {pc} input slot {input_index} out of bounds"
                     )));
                 }
-                Some((dst, 0))
             }
-            HiddenRamFheInstruction::LoadState(dst, lane) => {
-                validate_program_register_index(program, dst, pc)?;
-                let lane_depth = *state_depths.get(usize::from(lane)).ok_or_else(|| {
-                    invalid_program_error(&format!(
+            HiddenRamFheInstruction::LoadState(register, lane)
+            | HiddenRamFheInstruction::StoreState(lane, register) => {
+                validate_program_register_index(program, register, pc)?;
+                if usize::from(lane) >= usize::from(program.memory_lane_count()) {
+                    return Err(invalid_program_error(&format!(
                         "instruction {pc} memory lane {lane} out of bounds"
-                    ))
-                })?;
-                Some((dst, lane_depth))
-            }
-            HiddenRamFheInstruction::StoreState(lane, src) => {
-                let src_depth = program_depth_register(&register_depths, src, pc)?;
-                let lane_depth = state_depths.get_mut(usize::from(lane)).ok_or_else(|| {
-                    invalid_program_error(&format!(
-                        "instruction {pc} memory lane {lane} out of bounds"
-                    ))
-                })?;
-                *lane_depth = src_depth;
-                None
+                    )));
+                }
             }
             HiddenRamFheInstruction::LoadConst(dst, value) => {
                 validate_program_register_index(program, dst, pc)?;
                 validate_plaintext_immediate(value, pc)?;
-                Some((dst, 0))
             }
-            HiddenRamFheInstruction::Add(dst, lhs, rhs) => {
+            HiddenRamFheInstruction::Add(dst, lhs, rhs)
+            | HiddenRamFheInstruction::Mul(dst, lhs, rhs) => {
                 validate_program_register_index(program, dst, pc)?;
-                let depth = program_depth_register(&register_depths, lhs, pc)?
-                    .max(program_depth_register(&register_depths, rhs, pc)?);
-                Some((dst, depth))
+                validate_program_register_index(program, lhs, pc)?;
+                validate_program_register_index(program, rhs, pc)?;
             }
             HiddenRamFheInstruction::AddPlain(dst, src, value)
             | HiddenRamFheInstruction::SubPlain(dst, src, value)
             | HiddenRamFheInstruction::MulPlain(dst, src, value) => {
                 validate_program_register_index(program, dst, pc)?;
                 validate_plaintext_immediate(value, pc)?;
-                Some((dst, program_depth_register(&register_depths, src, pc)?))
-            }
-            HiddenRamFheInstruction::Mul(dst, lhs, rhs) => {
-                validate_program_register_index(program, dst, pc)?;
-                let depth = program_depth_register(&register_depths, lhs, pc)?
-                    .max(program_depth_register(&register_depths, rhs, pc)?)
-                    .saturating_add(1);
-                Some((dst, depth))
+                validate_program_register_index(program, src, pc)?;
             }
             HiddenRamFheInstruction::SelectEqZero(dst, condition, if_zero, if_non_zero) => {
                 validate_program_register_index(program, dst, pc)?;
-                let condition_depth =
-                    program_depth_register(&register_depths, condition, pc)?.saturating_add(10);
-                let zero_depth =
-                    program_depth_register(&register_depths, if_zero, pc)?.saturating_add(1);
-                let non_zero_depth =
-                    program_depth_register(&register_depths, if_non_zero, pc)?.saturating_add(1);
-                Some((dst, condition_depth.max(zero_depth).max(non_zero_depth)))
+                validate_program_register_index(program, condition, pc)?;
+                validate_program_register_index(program, if_zero, pc)?;
+                validate_program_register_index(program, if_non_zero, pc)?;
             }
             HiddenRamFheInstruction::Output(src) => {
-                program_depth_register(&register_depths, src, pc)?;
+                validate_program_register_index(program, src, pc)?;
                 output_count = output_count.saturating_add(1);
                 if output_count > BFV_PROGRAM_IDENTIFIER_SLOT_COUNT {
                     return Err(invalid_program_error(&format!(
                         "instruction {pc} emits too many output slots"
                     )));
                 }
-                None
             }
-        };
-        if let Some((dst, depth)) = next_depth {
-            if depth > budget {
-                return Err(invalid_program_error(&format!(
-                    "instruction {pc} exceeds the RAM-FHE multiplicative-depth budget {budget}"
-                )));
-            }
-            register_depths[usize::from(dst)] = depth;
         }
     }
     Ok(())
@@ -1843,20 +1936,6 @@ fn validate_program_register_index(
         )));
     }
     Ok(())
-}
-fn program_depth_register(
-    register_depths: &[u16],
-    register: u16,
-    pc: usize,
-) -> Result<u16, RamLfeError> {
-    register_depths
-        .get(usize::from(register))
-        .copied()
-        .ok_or_else(|| {
-            invalid_program_error(&format!(
-                "instruction {pc} register {register} out of bounds"
-            ))
-        })
 }
 fn program_register(
     registers: &[BfvCiphertext],

@@ -12,19 +12,106 @@ use std::{num::NonZeroUsize, time::Duration};
 
 use iroha_primitives::time::TimeSource;
 
+use super::lanes::routing::{GLOBAL_LANE, RoutingInputs, read_routing_root_scope};
 use crate::{
     block::{BlockBuilder, ValidBlock},
+    execution_attempt::ExecutionAttemptError,
     queue::Queue,
     state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
     tx::AcceptedTransaction,
 };
 use iroha_data_model::{
     block::{BlockExecutionContextBundle, SignedBlock},
-    sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection},
+    nexus::DataSpaceCatalog,
+    parameter::{
+        Parameters,
+        system::{TransactionInclusionRoute, TransactionNeverIncludable},
+    },
+    sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection, SumeragiLaneState},
 };
+use iroha_model_base::topology::LaneId;
 
 /// How many queued transactions one build inspects at most.
 pub const MAX_QUEUE_SCAN: NonZeroUsize = NonZeroUsize::new(4096).expect("non-zero");
+
+/// Largest framed transaction a proposer of the committed chain can select for a transaction
+/// routed to `lane`: the committed transaction cap, bounded by the selection budget of the
+/// proposers that can carry it (`Parameters::max_includable_transaction_bytes`). Lane zero is
+/// carried by the global proposer only. A native lane adds its own proposer's budget. The
+/// global chain rescues a transaction of a stalled lane (`specs/sumeragi_lanes.md` §6.4) only
+/// within the global budget ([`select`] skips a larger one), so a transaction above the global
+/// budget depends on its lane's proposer alone. The lane budget is the payload limit pinned by
+/// the lane's committed record, which is what the lane proposer builds within; a later change
+/// of the lane policy does not move it. A transaction without a route, or routed to a lane
+/// without a committed record, is given the global budget.
+#[must_use]
+pub fn max_includable_transaction_bytes_on_route(
+    parameters: &Parameters,
+    lanes: &SumeragiLaneState,
+    lane: Option<LaneId>,
+) -> u64 {
+    parameters.max_includable_transaction_bytes(inclusion_route(lanes, lane))
+}
+
+/// The proposers that carry a transaction routed to `lane`, from the committed lane records.
+fn inclusion_route(lanes: &SumeragiLaneState, lane: Option<LaneId>) -> TransactionInclusionRoute {
+    lane.filter(|lane| *lane != GLOBAL_LANE)
+        .and_then(|lane| lanes.lane(lane))
+        .map_or(TransactionInclusionRoute::Global, |record| {
+            TransactionInclusionRoute::NativeLane {
+                max_block_bytes: record.params.max_block_bytes,
+            }
+        })
+}
+
+/// Decide whether a proposer of the committed chain in `world` can include `transaction` at
+/// global height `height`. Queue admission refuses a transaction no proposer can select,
+/// because [`select`] and the lane builder would only skip it until it expires.
+///
+/// A transaction within the global budget needs no route or lane policy read. A larger one
+/// is includable only when it is routed to a native lane whose budget carries it. That
+/// verdict is for the route at `height`: such a transaction has no global rescue, so it
+/// waits for its lane's proposer and expires if the lane stalls or closes or its route
+/// changes first.
+///
+/// # Errors
+/// `Rejected` when the transaction is larger than the budget of every proposer on its route;
+/// `Deferred` when the committed root scope, lane policy or route cannot be read with local
+/// resources. A deferred assessment is neither an admission nor a rejection.
+pub fn check_includable_transaction<W: WorldReadOnly>(
+    world: &W,
+    dataspaces: &DataSpaceCatalog,
+    ledger_time_ms: u64,
+    height: u64,
+    transaction: &AcceptedTransaction<'_>,
+) -> Result<(), ExecutionAttemptError<TransactionNeverIncludable>> {
+    let encoded_bytes = u64::try_from(transaction.encoded_len()).unwrap_or(u64::MAX);
+    let parameters = world.parameters();
+    let Err(global) =
+        parameters.check_signed_transaction_bytes(encoded_bytes, TransactionInclusionRoute::Global)
+    else {
+        return Ok(());
+    };
+    let Some(policy) = super::lanes::lane_policy(world).map_err(ExecutionAttemptError::Deferred)?
+    else {
+        return Err(ExecutionAttemptError::Rejected(global));
+    };
+    let lanes = world.sumeragi_lanes();
+    let inputs = RoutingInputs {
+        root_scope: read_routing_root_scope(world).map_err(ExecutionAttemptError::Deferred)?,
+        policy: Some(&policy),
+        lanes,
+        dataspaces,
+        world,
+        ledger_time_ms,
+    };
+    let lane = inputs
+        .route(transaction, height)
+        .map_err(ExecutionAttemptError::Deferred)?;
+    parameters
+        .check_signed_transaction_bytes(encoded_bytes, inclusion_route(lanes, lane))
+        .map_err(ExecutionAttemptError::Rejected)
+}
 
 /// Why a payload could not be built or decoded.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -409,7 +496,8 @@ fn require_proposal(block: SignedBlock) -> Result<SignedBlock, PayloadError> {
 /// within `max_bytes` of transaction bytes, the on-chain transaction cap and the FASTPQ source
 /// policy's Network input cap less `reserved` (the block's merged lane transactions).
 /// Fresh inputs routed to a native lane are selected by that lane; the global
-/// chain selects direct inputs and rescues inputs whose lane has stalled.
+/// chain selects direct inputs and rescues inputs whose lane has stalled. A rescue is
+/// subject to the same `max_bytes`: a lane input larger than the global budget is skipped.
 pub fn select(
     state: &State,
     queue: &std::sync::Arc<Queue>,
@@ -790,3 +878,7 @@ mod tests {
 #[cfg(test)]
 #[path = "payload/work_tests.rs"]
 mod work_tests;
+
+#[cfg(test)]
+#[path = "payload/resource_contract_tests.rs"]
+mod resource_contract_tests;

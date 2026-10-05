@@ -9114,10 +9114,8 @@ fn validate_genesis_execution_offline(
         .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))?;
     let initial_committee_size = initial_configs
         .iter()
-        .find_map(|(_, slot)| match slot {
-            iroha_sumeragi::types::ConfigSlot::Ready(config) => Some(config.committee.n()),
-            iroha_sumeragi::types::ConfigSlot::PendingBoundary { .. } => None,
-        })
+        // Only an installed slot carries a committee; a pending boundary fails closed.
+        .find_map(|(_, slot)| slot.ready().map(|config| config.committee.n()))
         .ok_or_else(|| {
             Report::new(MainError::Config)
                 .attach("executed native genesis has no authenticated ready committee")

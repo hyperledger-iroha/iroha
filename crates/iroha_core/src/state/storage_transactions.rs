@@ -70,6 +70,54 @@ pub struct TransactionsStorage {
     // observation/abort cleanup must never wake this source while it is held.
     history_released: iroha_allocation::release::ReleaseNotification,
 }
+
+/// How one physical field of [`TransactionsStorage`] relates to State authority.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::state) enum MembershipFieldRole {
+    /// Holds rows, or the cell value, of the named canonical registry identities.
+    Canonical(&'static [&'static str]),
+    /// Node-local machinery whose value cannot affect a canonical row.
+    Local(&'static str),
+}
+
+// The authority registry declares the three semantic membership identities by hand
+// (`authority_registry::state::TRANSACTION_MEMBERSHIP_FIELDS`): they are projections of
+// two physical fields, not fields themselves. This declaration destructures the owner
+// without `..` and pins every field type, so a new or re-typed physical field does not
+// compile until it is classified here. The State table inventory lists the result.
+macro_rules! classified_transactions_storage {
+    ($( $field:ident : $ty:ty => $role:expr; )+) => {
+        /// Every physical field of [`TransactionsStorage`] in declaration order, with the
+        /// canonical registry identities it holds or the reason it is node-local.
+        #[cfg(test)]
+        pub(in crate::state) const TRANSACTIONS_STORAGE_FIELDS: &[(&str, MembershipFieldRole)] =
+            &[ $( (stringify!($field), $role), )+ ];
+        fn check_transactions_storage_fields(owner: &TransactionsStorage) {
+            let TransactionsStorage { $( $field, )+ } = owner;
+            $( let _: &$ty = $field; )+
+        }
+        const _: fn(&TransactionsStorage) = check_transactions_storage_fields;
+    };
+}
+classified_transactions_storage! {
+    latest_block: TipStore => MembershipFieldRole::Canonical(
+        &["state.transactions.frontier", "state.transactions.current"]);
+    blocks: history::Map => MembershipFieldRole::Canonical(
+        &["state.transactions.current", "state.transactions.rollback"]);
+    write_lock: Mutex<Identity> => MembershipFieldRole::Local(
+        "Writer lease and opaque publication identity; it rotates per writer and is never a row");
+    budget: iroha_allocation::AllocationBudget => MembershipFieldRole::Local(
+        "Original process-local allocation pool; a refusal defers and cannot change membership");
+    pending: Mutex<Option<history::Pending>> => MembershipFieldRole::Local(
+        "In-flight preparation of the next history generation; unpublished work, never committed membership");
+    publication_sequence: AtomicU64 => MembershipFieldRole::Local(
+        "Counter of local publications observed by readers; it orders publications and is no row");
+    released: iroha_allocation::release::ReleaseNotification => MembershipFieldRole::Local(
+        "Original-pool release notification of logical membership and preparation loans");
+    history_released: iroha_allocation::release::ReleaseNotification => MembershipFieldRole::Local(
+        "Original-pool release notification of the physical history writer");
+}
 type Tip = Shared<BlockInfo, AllocationCharge>;
 
 /// Short lock protecting the shared committed tip pointer. The payload and its

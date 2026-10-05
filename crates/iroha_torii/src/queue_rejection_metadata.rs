@@ -54,9 +54,11 @@ impl Error {
                 "kagemusha_v1_operation_carrier_rejected",
                 "KAGEMUSHA V1 operation carrier failed canonical admission",
             ),
+            // The detail carries the exact reason: an unsupported intent or route, or a
+            // transaction larger than any proposer can include.
             queue::Error::UnsupportedTransactionAdmission { .. } => (
                 "unsupported_transaction_admission",
-                "current consensus requires Ordinary admission with a single resolved route",
+                "current consensus requires Ordinary admission, a single resolved route and a transaction a block can carry",
             ),
             queue::Error::UnresolvedRoute { .. } => (
                 "queue_unresolved_route",

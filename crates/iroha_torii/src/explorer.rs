@@ -1739,6 +1739,12 @@ fn explorer_checked_key_text<T: json::JsonSerialize + ?Sized>(
         .map_err(|_| ExplorerCursorError::InvalidKey)?;
     json::from_slice::<String>(&encoded).map_err(|_| ExplorerCursorError::ByteLimitExceeded)
 }
+/// Borrow one optional selector as the checked JSON serializer hashed by
+/// [`explorer_filter_digest`]: an unsizing coercion, never an owned copy.
+fn explorer_filter<T: json::JsonSerialize>(value: Option<&T>) -> Option<&dyn json::JsonSerialize> {
+    let value: &dyn json::JsonSerialize = value?;
+    Some(value)
+}
 fn explorer_filter_digest(
     collection: ExplorerCursorCollection,
     filters: &[Option<&dyn json::JsonSerialize>],
@@ -2214,8 +2220,8 @@ pub(crate) fn accounts_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Accounts,
         &[
-            domain_filter.map(|value| value as &dyn json::JsonSerialize),
-            definition_filter.map(|value| value as &dyn json::JsonSerialize),
+            explorer_filter(domain_filter),
+            explorer_filter(definition_filter),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2323,7 +2329,7 @@ pub(crate) fn domains_page_for_filters<'world>(
     let limit = query.validated_limit()?;
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Domains,
-        &[owned_by.map(|value| value as &dyn json::JsonSerialize)],
+        &[explorer_filter(owned_by)],
         visibility.visible_route_set_digest(),
         byte_budget,
     )?;
@@ -2395,8 +2401,8 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::AssetDefinitions,
         &[
-            owning_domain_filter.map(|value| value as &dyn json::JsonSerialize),
-            owner_filter.map(|value| value as &dyn json::JsonSerialize),
+            explorer_filter(owning_domain_filter),
+            explorer_filter(owner_filter),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2494,9 +2500,9 @@ pub(crate) fn assets_page_for_filters<'world>(
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Assets,
         &[
-            owned_by.map(|value| value as &dyn json::JsonSerialize),
-            definition_filter.map(|value| value as &dyn json::JsonSerialize),
-            asset_filter.map(|value| value as &dyn json::JsonSerialize),
+            explorer_filter(owned_by),
+            explorer_filter(definition_filter),
+            explorer_filter(asset_filter),
         ],
         visibility.visible_route_set_digest(),
         byte_budget,
@@ -2621,10 +2627,7 @@ pub(crate) fn nfts_page_for_filters<'world>(
     let limit = query.validated_limit()?;
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Nfts,
-        &[
-            owned_by.map(|value| value as &dyn json::JsonSerialize),
-            domain_filter.map(|value| value as &dyn json::JsonSerialize),
-        ],
+        &[explorer_filter(owned_by), explorer_filter(domain_filter)],
         visibility.visible_route_set_digest(),
         byte_budget,
     )?;
@@ -2719,10 +2722,7 @@ pub(crate) fn rwas_page_for_filters<'world>(
     let limit = query.validated_limit()?;
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Rwas,
-        &[
-            owned_by.map(|value| value as &dyn json::JsonSerialize),
-            domain_filter.map(|value| value as &dyn json::JsonSerialize),
-        ],
+        &[explorer_filter(owned_by), explorer_filter(domain_filter)],
         visibility.visible_route_set_digest(),
         byte_budget,
     )?;
@@ -2808,6 +2808,47 @@ pub(crate) fn block_created_at(duration: Duration) -> String {
 }
 fn saturating_usize_to_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
+}
+/// Commit Explorer fixture lots through `RegisterRwa`, the only writer of the RWA table and
+/// its owner index. Each lot is `(domain, owner, quantity)`; the domain and the owner must
+/// already exist. Identifiers are generated, so callers read them back from the World.
+#[cfg(test)]
+pub(crate) fn register_rwa_lots_for_tests(
+    state: &iroha_core::state::State,
+    lots: &[(&DomainId, &AccountId, u32)],
+) {
+    use iroha_core::smartcontracts::Execute as _;
+    use iroha_data_model::{
+        isi::rwa::RegisterRwa,
+        rwa::{NewRwa, RwaControlPolicy},
+    };
+    let height = std::num::NonZeroU64::new(1).expect("fixture height is non-zero");
+    let mut block = state.block(BlockHeader::new(height, None, None, 0, 0));
+    let mut transaction = block.transaction();
+    // A generated identifier is derived from the entrypoint hash and a per-transaction ordinal.
+    transaction.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+        [0xB1; iroha_crypto::Hash::LENGTH],
+    ));
+    for (index, &(domain, owner, quantity)) in lots.iter().enumerate() {
+        RegisterRwa {
+            rwa: NewRwa::new(
+                domain.clone(),
+                Quantity::from(quantity),
+                iroha_primitives::numeric::NumericSpec::integer(),
+                format!("https://example.org/lot/{index}"),
+                None,
+                Metadata::default(),
+                Vec::new(),
+                RwaControlPolicy::default(),
+            ),
+        }
+        .execute(owner, &mut transaction)
+        .expect("register fixture lot");
+    }
+    transaction.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit fixture lots");
 }
 #[cfg(test)]
 mod tests {
@@ -3093,10 +3134,7 @@ mod tests {
     }
     #[test]
     fn explorer_cursor_is_canonical_collection_and_filter_bound() {
-        let filters = [
-            Some(&"wonderland.universal" as &dyn json::JsonSerialize),
-            None,
-        ];
+        let filters = [explorer_filter(Some(&"wonderland.universal")), None];
         let visibility_digest = [0x11; 32];
         let digest = explorer_filter_digest(
             ExplorerCursorCollection::Accounts,
@@ -3119,7 +3157,7 @@ mod tests {
         .expect("canonical account cursor")
         .expect("cursor key");
         assert_eq!(decoded, ALICE_ID.clone());
-        let other_filters = [Some(&"garden.universal" as &dyn json::JsonSerialize), None];
+        let other_filters = [explorer_filter(Some(&"garden.universal")), None];
         let other_digest = explorer_filter_digest(
             ExplorerCursorCollection::Accounts,
             &other_filters,
@@ -3417,9 +3455,9 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, domain.metadata()));
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id": domain.id().to_string(), "logo": "sorafs://manifest/logo.png", "metadata": {"label":"value"},
-                "owned_by": ALICE_ID.to_string(), "accounts":2, "assets":3, "nfts":4
+            norito::json!({
+                "id": (domain.id().to_string()), "logo": "sorafs://manifest/logo.png", "metadata": {"label":"value"},
+                "owned_by": (ALICE_ID.to_string()), "accounts":2, "assets":3, "nfts":4
             }),
         );
     }
@@ -3465,8 +3503,8 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, details.metadata()));
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id": expected_id, "network_prefix": dto.network_prefix,
+            norito::json!({
+                "id": expected_id, "network_prefix": (dto.network_prefix),
                 "metadata": {}, "owned_domains":1, "owned_assets":2, "owned_nfts":3
             }),
         );
@@ -3505,9 +3543,9 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, definition.metadata()));
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id":def_id.to_string(), "owning_domain":null, "mintable":"Once", "logo":null,
-                "metadata":{"ticker":"ROSE"}, "owned_by":ALICE_ID.to_string(), "assets":7,
+            norito::json!({
+                "id":(def_id.to_string()), "owning_domain":null, "mintable":"Once", "logo":null,
+                "metadata":{"ticker":"ROSE"}, "owned_by":(ALICE_ID.to_string()), "assets":7,
                 "total_quantity":"100", "locked_quantity":null, "circulating_quantity":null
             }),
         );
@@ -3528,9 +3566,9 @@ mod tests {
         assert_eq!(dto.account_id, &*ALICE_ID);
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id":asset_id.to_string(), "definition_id":asset_id.definition().to_string(),
-                "account_id":ALICE_ID.to_string(), "value":"42"
+            norito::json!({
+                "id":(asset_id.to_string()), "definition_id":(asset_id.definition().to_string()),
+                "account_id":(ALICE_ID.to_string()), "value":"42"
             }),
         );
     }
@@ -3565,8 +3603,8 @@ mod tests {
         assert!(std::ptr::eq(dto.metadata, &value.content));
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id":nft_id.to_string(), "owned_by":ALICE_ID.to_string(), "metadata":{"artist":"Alice"}
+            norito::json!({
+                "id":(nft_id.to_string()), "owned_by":(ALICE_ID.to_string()), "metadata":{"artist":"Alice"}
             }),
         );
     }
@@ -3622,10 +3660,10 @@ mod tests {
         assert_eq!(dto.parents.0.as_ptr(), value.parents.as_ptr());
         assert_explorer_wire(
             &dto,
-            json::json!({
-                "id":id.to_string(), "owned_by":ALICE_ID.to_string(), "quantity":"7", "held_quantity":"2",
+            norito::json!({
+                "id":(id.to_string()), "owned_by":(ALICE_ID.to_string()), "quantity":"7", "held_quantity":"2",
                 "primary_reference":"https://example.org/certificate", "status":"held", "is_frozen":true,
-                "metadata":{}, "parents":[{"rwa":id.to_string(),"quantity":"3"}]
+                "metadata":{}, "parents":[{"rwa":(id.to_string()),"quantity":"3"}]
             }),
         );
         let many = vec![parent; 2048];
@@ -3709,8 +3747,8 @@ mod tests {
         }
         expected.update([0x11; 32]);
         let filters = [
-            Some(&domain as &dyn json::JsonSerialize),
-            Some(&*ALICE_ID as &dyn json::JsonSerialize),
+            explorer_filter(Some(&domain)),
+            explorer_filter(Some(&*ALICE_ID)),
         ];
         assert_eq!(
             explorer_filter_digest(
@@ -3736,6 +3774,513 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn explorer_filter_borrows_the_selector_and_keeps_absence() {
+        let domain = DomainId::try_new("vault", "universal").unwrap();
+        let borrowed = explorer_filter(Some(&domain)).expect("present selector");
+        assert!(std::ptr::addr_eq(
+            std::ptr::from_ref(borrowed),
+            std::ptr::from_ref(&domain)
+        ));
+        assert_eq!(
+            json::to_json(borrowed).unwrap(),
+            json::to_json(&domain).unwrap()
+        );
+        assert!(explorer_filter::<DomainId>(None).is_none());
+        let absent = [explorer_filter::<DomainId>(None)];
+        let present = [explorer_filter(Some(&domain))];
+        assert_ne!(
+            explorer_filter_digest(ExplorerCursorCollection::Domains, &absent, [0; 32], 1024)
+                .unwrap(),
+            explorer_filter_digest(ExplorerCursorCollection::Domains, &present, [0; 32], 1024)
+                .unwrap(),
+        );
+    }
+    /// Byte budget of the selector-binding page fixtures.
+    const SELECTOR_PAGE_BUDGET: usize = 64 * 1024;
+    /// Listed key texts with the pagination of one world-collection page.
+    type SelectorPage = Result<(Vec<String>, ExplorerCursorMeta), ExplorerCursorError>;
+    /// The decoded JSON text of one identifier, taken from the ordinary serializer and not
+    /// from the selector helper under test.
+    fn canonical_text<T: json::JsonSerialize>(value: &T) -> String {
+        match json::to_value(value).expect("identifier JSON") {
+            Value::String(text) => text,
+            other => panic!("an identifier must serialize as one JSON string, got {other:?}"),
+        }
+    }
+    /// Independent oracle for the world cursor issued to a global reader: the collection
+    /// tag, each selector's presence flag and text in route order, the visibility digest
+    /// and the last listed key.
+    fn selector_cursor_oracle(
+        collection: ExplorerCursorCollection,
+        selectors: &[Option<String>],
+        key: &str,
+    ) -> String {
+        let mut digest = Sha256::new();
+        digest.update(EXPLORER_CURSOR_FILTER_DOMAIN);
+        digest.update([collection.tag()]);
+        digest.update(
+            u32::try_from(selectors.len())
+                .expect("selector count fits u32")
+                .to_be_bytes(),
+        );
+        for selector in selectors {
+            match selector {
+                Some(text) => {
+                    digest.update([1]);
+                    digest.update(
+                        u32::try_from(text.len())
+                            .expect("selector length fits u32")
+                            .to_be_bytes(),
+                    );
+                    digest.update(text.as_bytes());
+                }
+                None => digest.update([0]),
+            }
+        }
+        digest.update(DataspaceReadVisibility::all_for_tests().visible_route_set_digest());
+        encode_explorer_cursor(collection, digest.finalize().into(), key).expect("oracle cursor")
+    }
+    /// Page two records one at a time under one selector combination and return the query
+    /// that carries its continuation cursor. The cursor must equal the oracle for exactly
+    /// `selectors` and must resume under the same combination.
+    #[track_caller]
+    fn issue_selector_bound_cursor(
+        collection: ExplorerCursorCollection,
+        selectors: &[Option<String>],
+        expected: [&str; 2],
+        page: impl Fn(&ExplorerCursorQuery) -> SelectorPage,
+    ) -> ExplorerCursorQuery {
+        let (listed, pagination) = page(&ExplorerCursorQuery {
+            cursor: None,
+            limit: 1,
+        })
+        .expect("first page");
+        assert_eq!(listed, [expected[0]]);
+        assert!(pagination.has_more);
+        let cursor = pagination.next_cursor.expect("continuation cursor");
+        assert_eq!(
+            cursor,
+            selector_cursor_oracle(collection, selectors, expected[0]),
+            "the cursor must bind exactly these selectors in route order"
+        );
+        let resume = ExplorerCursorQuery {
+            cursor: Some(cursor),
+            limit: 1,
+        };
+        let (listed, pagination) = page(&resume).expect("resumed page");
+        assert_eq!(listed, [expected[1]]);
+        assert!(!pagination.has_more);
+        assert!(pagination.next_cursor.is_none());
+        resume
+    }
+    /// A cursor replayed under another selector combination is out of scope.
+    #[track_caller]
+    fn assert_out_of_selector_scope(page: SelectorPage) {
+        assert_eq!(page.err(), Some(ExplorerCursorError::ScopeMismatch));
+    }
+    /// A World in which the selectors of the world collections match two records each.
+    struct SelectorWorld {
+        world: World,
+        /// Owned by ALICE.
+        alpha: DomainId,
+        /// Owned by ALICE.
+        beta: DomainId,
+        /// Owned by BOB.
+        gamma: DomainId,
+        /// Owned by ALICE in `alpha`; held by ALICE and by BOB.
+        coin: AssetDefinitionId,
+        /// Owned by ALICE in `alpha`; held by ALICE and by BOB.
+        gem: AssetDefinitionId,
+    }
+    /// The four balances of [`SelectorWorld`] in committed key order.
+    fn selector_world_assets(fixture: &SelectorWorld) -> [AssetId; 4] {
+        let mut assets = [
+            AssetId::new(fixture.coin.clone(), ALICE_ID.clone()),
+            AssetId::new(fixture.coin.clone(), BOB_ID.clone()),
+            AssetId::new(fixture.gem.clone(), ALICE_ID.clone()),
+            AssetId::new(fixture.gem.clone(), BOB_ID.clone()),
+        ];
+        assets.sort();
+        assets
+    }
+    fn selector_world() -> SelectorWorld {
+        let domain = |name: &str| DomainId::try_new(name, "universal").expect("fixture domain");
+        let (alpha, beta, gamma) = (domain("alpha"), domain("beta"), domain("gamma"));
+        let definition_id = |name: &str| {
+            AssetDefinitionId::derive_from_components(
+                alpha.clone(),
+                name.parse().expect("fixture asset name"),
+            )
+        };
+        let (coin, gem) = (definition_id("coin"), definition_id("gem"));
+        let definition = |id: &AssetDefinitionId, name: &str| {
+            AssetDefinition::numeric(
+                id.clone(),
+                name.to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(alpha.clone()),
+            )
+            .build(&ALICE_ID)
+        };
+        let balance = |id: &AssetDefinitionId, holder: &AccountId, quantity: u32| {
+            iroha_data_model::asset::Asset::new(
+                AssetId::new(id.clone(), holder.clone()),
+                Quantity::from(quantity),
+            )
+        };
+        let nft = |id: &str, owner: &AccountId| {
+            iroha_data_model::nft::Nft::new(id.parse().expect("fixture NFT"), Metadata::default())
+                .build(owner)
+        };
+        let world = World::with_assets(
+            [
+                Domain::new(alpha.clone()).build(&ALICE_ID),
+                Domain::new(beta.clone()).build(&ALICE_ID),
+                Domain::new(gamma.clone()).build(&BOB_ID),
+            ],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&BOB_ID),
+            ],
+            [definition(&coin, "coin"), definition(&gem, "gem")],
+            [
+                balance(&coin, &ALICE_ID, 5),
+                balance(&coin, &BOB_ID, 7),
+                balance(&gem, &ALICE_ID, 3),
+                balance(&gem, &BOB_ID, 2),
+            ],
+            [
+                nft("one$alpha.universal", &ALICE_ID),
+                nft("two$alpha.universal", &ALICE_ID),
+                nft("three$gamma.universal", &BOB_ID),
+            ],
+        );
+        SelectorWorld {
+            world,
+            alpha,
+            beta,
+            gamma,
+            coin,
+            gem,
+        }
+    }
+    #[test]
+    fn accounts_page_binds_domain_and_definition_selectors_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |domain: Option<&DomainId>,
+                    definition: Option<&AssetDefinitionId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            accounts_page_for_filters(&view, domain, definition, &all, query, SELECTOR_PAGE_BUDGET)
+                .map(|page| {
+                    let listed = page.items.iter().map(|item| canonical_text(item.id));
+                    (listed.collect(), page.pagination)
+                })
+        };
+        let mut accounts = [ALICE_ID.clone(), BOB_ID.clone()];
+        accounts.sort();
+        let accounts = accounts.map(|account| canonical_text(&account));
+        let expected = [accounts[0].as_str(), accounts[1].as_str()];
+
+        // Both accounts hold `coin`.
+        let by_definition = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Accounts,
+            &[None, Some(canonical_text(&fixture.coin))],
+            expected,
+            |query| page(None, Some(&fixture.coin), query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&fixture.gem), &by_definition));
+        assert_out_of_selector_scope(page(None, None, &by_definition));
+        assert_out_of_selector_scope(page(
+            Some(&fixture.alpha),
+            Some(&fixture.coin),
+            &by_definition,
+        ));
+
+        let unfiltered = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Accounts,
+            &[None, None],
+            expected,
+            |query| page(None, None, query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&fixture.coin), &unfiltered));
+
+        // The fixture binds no account to a domain, so a domain selector lists nothing and
+        // issues no cursor. Replay the cursor the route would issue under it instead.
+        let by_domain = ExplorerCursorQuery {
+            cursor: Some(selector_cursor_oracle(
+                ExplorerCursorCollection::Accounts,
+                &[Some(canonical_text(&fixture.alpha)), None],
+                expected[0],
+            )),
+            limit: 1,
+        };
+        let (listed, pagination) = page(Some(&fixture.alpha), None, &by_domain)
+            .expect("the domain selector accepts its own cursor");
+        assert!(listed.is_empty());
+        assert!(!pagination.has_more);
+        assert_out_of_selector_scope(page(Some(&fixture.beta), None, &by_domain));
+        assert_out_of_selector_scope(page(None, None, &by_domain));
+        assert_out_of_selector_scope(page(Some(&fixture.alpha), Some(&fixture.coin), &by_domain));
+    }
+    #[test]
+    fn domains_page_binds_the_owner_selector_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |owner: Option<&AccountId>, query: &ExplorerCursorQuery| -> SelectorPage {
+            domains_page_for_filters(&view, owner, &all, query, SELECTOR_PAGE_BUDGET).map(|page| {
+                let listed = page.items.iter().map(|item| canonical_text(item.id));
+                (listed.collect(), page.pagination)
+            })
+        };
+        let mut owned = [fixture.alpha.clone(), fixture.beta.clone()];
+        owned.sort();
+        let owned = owned.map(|domain| canonical_text(&domain));
+
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Domains,
+            &[Some(canonical_text(&*ALICE_ID))],
+            [owned[0].as_str(), owned[1].as_str()],
+            |query| page(Some(&ALICE_ID), query),
+        );
+        assert_out_of_selector_scope(page(Some(&BOB_ID), &by_owner));
+        assert_out_of_selector_scope(page(None, &by_owner));
+    }
+    #[test]
+    fn asset_definitions_page_binds_domain_and_owner_selectors_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |domain: Option<&DomainId>,
+                    owner: Option<&AccountId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            asset_definitions_page_for_filters(
+                &view,
+                domain,
+                owner,
+                &all,
+                query,
+                SELECTOR_PAGE_BUDGET,
+            )
+            .map(|page| {
+                let listed = page.items.iter().map(|item| canonical_text(item.id));
+                (listed.collect(), page.pagination)
+            })
+        };
+        let mut definitions = [fixture.coin.clone(), fixture.gem.clone()];
+        definitions.sort();
+        let definitions = definitions.map(|definition| canonical_text(&definition));
+        let expected = [definitions[0].as_str(), definitions[1].as_str()];
+
+        let by_domain = issue_selector_bound_cursor(
+            ExplorerCursorCollection::AssetDefinitions,
+            &[Some(canonical_text(&fixture.alpha)), None],
+            expected,
+            |query| page(Some(&fixture.alpha), None, query),
+        );
+        assert_out_of_selector_scope(page(Some(&fixture.gamma), None, &by_domain));
+        assert_out_of_selector_scope(page(None, None, &by_domain));
+        assert_out_of_selector_scope(page(Some(&fixture.alpha), Some(&ALICE_ID), &by_domain));
+
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::AssetDefinitions,
+            &[None, Some(canonical_text(&*ALICE_ID))],
+            expected,
+            |query| page(None, Some(&ALICE_ID), query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&BOB_ID), &by_owner));
+        assert_out_of_selector_scope(page(None, None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&fixture.alpha), Some(&ALICE_ID), &by_owner));
+    }
+    #[test]
+    fn assets_page_binds_owner_definition_and_asset_selectors_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |owner: Option<&AccountId>,
+                    definition: Option<&AssetDefinitionId>,
+                    asset: Option<&AssetId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            assets_page_for_filters(
+                &view,
+                owner,
+                definition,
+                asset,
+                &all,
+                query,
+                SELECTOR_PAGE_BUDGET,
+            )
+            .map(|page| {
+                let listed = page.items.iter().map(|item| canonical_text(item.id));
+                (listed.collect(), page.pagination)
+            })
+        };
+        let assets = selector_world_assets(&fixture);
+        let texts = |keep: &dyn Fn(&AssetId) -> bool| -> Vec<String> {
+            let kept = assets.iter().filter(|asset| keep(asset));
+            kept.map(canonical_text).collect()
+        };
+
+        let held_by_alice = texts(&|asset| asset.account() == &*ALICE_ID);
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Assets,
+            &[Some(canonical_text(&*ALICE_ID)), None, None],
+            [held_by_alice[0].as_str(), held_by_alice[1].as_str()],
+            |query| page(Some(&ALICE_ID), None, None, query),
+        );
+        assert_out_of_selector_scope(page(Some(&BOB_ID), None, None, &by_owner));
+        assert_out_of_selector_scope(page(None, None, None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&fixture.coin), None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), None, Some(&assets[3]), &by_owner));
+
+        let coins = texts(&|asset| asset.definition() == &fixture.coin);
+        let by_definition = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Assets,
+            &[None, Some(canonical_text(&fixture.coin)), None],
+            [coins[0].as_str(), coins[1].as_str()],
+            |query| page(None, Some(&fixture.coin), None, query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&fixture.gem), None, &by_definition));
+        assert_out_of_selector_scope(page(None, None, None, &by_definition));
+        assert_out_of_selector_scope(page(
+            Some(&ALICE_ID),
+            Some(&fixture.coin),
+            None,
+            &by_definition,
+        ));
+
+        // An exact-asset selector lists at most one record and so issues no cursor. Replay
+        // the cursor the route would issue under it after a preceding key instead.
+        let (first, last) = (&assets[0], &assets[3]);
+        let by_asset = ExplorerCursorQuery {
+            cursor: Some(selector_cursor_oracle(
+                ExplorerCursorCollection::Assets,
+                &[None, None, Some(canonical_text(last))],
+                &canonical_text(first),
+            )),
+            limit: 1,
+        };
+        let (listed, pagination) = page(None, None, Some(last), &by_asset)
+            .expect("the asset selector accepts its own cursor");
+        assert_eq!(listed, [canonical_text(last)]);
+        assert!(!pagination.has_more);
+        assert_out_of_selector_scope(page(None, None, Some(&assets[1]), &by_asset));
+        assert_out_of_selector_scope(page(None, None, None, &by_asset));
+        assert_out_of_selector_scope(page(None, Some(last.definition()), None, &by_asset));
+    }
+    #[test]
+    fn nfts_page_binds_owner_and_domain_selectors_into_its_cursor() {
+        let fixture = selector_world();
+        let view = fixture.world.view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |owner: Option<&AccountId>,
+                    domain: Option<&DomainId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            nfts_page_for_filters(&view, owner, domain, &all, query, SELECTOR_PAGE_BUDGET).map(
+                |page| {
+                    let listed = page.items.iter().map(|item| canonical_text(item.id));
+                    (listed.collect(), page.pagination)
+                },
+            )
+        };
+        let mut nfts: [NftId; 2] = ["one$alpha.universal", "two$alpha.universal"]
+            .map(|id| id.parse().expect("fixture NFT"));
+        nfts.sort();
+        let nfts = nfts.map(|nft| canonical_text(&nft));
+        let expected = [nfts[0].as_str(), nfts[1].as_str()];
+
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Nfts,
+            &[Some(canonical_text(&*ALICE_ID)), None],
+            expected,
+            |query| page(Some(&ALICE_ID), None, query),
+        );
+        assert_out_of_selector_scope(page(Some(&BOB_ID), None, &by_owner));
+        assert_out_of_selector_scope(page(None, None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&fixture.alpha), &by_owner));
+
+        let by_domain = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Nfts,
+            &[None, Some(canonical_text(&fixture.alpha))],
+            expected,
+            |query| page(None, Some(&fixture.alpha), query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&fixture.gamma), &by_domain));
+        assert_out_of_selector_scope(page(None, None, &by_domain));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&fixture.alpha), &by_domain));
+    }
+    #[test]
+    fn rwas_page_binds_owner_and_domain_selectors_into_its_cursor() {
+        let SelectorWorld {
+            world,
+            alpha,
+            gamma,
+            ..
+        } = selector_world();
+        let state = iroha_core::state::State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus::default(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        register_rwa_lots_for_tests(
+            &state,
+            &[
+                (&alpha, &ALICE_ID, 7),
+                (&alpha, &ALICE_ID, 9),
+                (&gamma, &BOB_ID, 5),
+            ],
+        );
+        let view = state.world_view();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let page = |owner: Option<&AccountId>,
+                    domain: Option<&DomainId>,
+                    query: &ExplorerCursorQuery|
+         -> SelectorPage {
+            rwas_page_for_filters(&view, owner, domain, &all, query, SELECTOR_PAGE_BUDGET).map(
+                |page| {
+                    let listed = page.items.iter().map(|item| item.id.0.to_string());
+                    (listed.collect(), page.pagination)
+                },
+            )
+        };
+        // `RegisterRwa` generates the identifiers: read ALICE's two `alpha` lots back from
+        // the primary table, which iterates in key order.
+        let lots: Vec<String> = view
+            .rwas_iter()
+            .filter(|lot| lot.value().owned_by == *ALICE_ID && lot.id().domain() == &alpha)
+            .map(|lot| lot.id().to_string())
+            .collect();
+        assert_eq!(lots.len(), 2);
+        assert_eq!(view.rwas_iter().count(), 3);
+        let expected = [lots[0].as_str(), lots[1].as_str()];
+
+        let by_owner = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Rwas,
+            &[Some(canonical_text(&*ALICE_ID)), None],
+            expected,
+            |query| page(Some(&ALICE_ID), None, query),
+        );
+        assert_out_of_selector_scope(page(Some(&BOB_ID), None, &by_owner));
+        assert_out_of_selector_scope(page(None, None, &by_owner));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&alpha), &by_owner));
+
+        let by_domain = issue_selector_bound_cursor(
+            ExplorerCursorCollection::Rwas,
+            &[None, Some(canonical_text(&alpha))],
+            expected,
+            |query| page(None, Some(&alpha), query),
+        );
+        assert_out_of_selector_scope(page(None, Some(&gamma), &by_domain));
+        assert_out_of_selector_scope(page(None, None, &by_domain));
+        assert_out_of_selector_scope(page(Some(&ALICE_ID), Some(&alpha), &by_domain));
     }
     #[test]
     fn explorer_selection_admits_exact_layout_before_projecting() {
