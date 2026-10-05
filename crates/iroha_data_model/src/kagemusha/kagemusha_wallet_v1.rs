@@ -6,14 +6,19 @@
 //! software state provider running in the released app on a stock, uncompromised phone.
 //! There is no per-payment issuer call, no Reserve/Commit approval and no signature-only
 //! alternative. This module owns the G1 canonical objects of that protocol (§10): Norito
-//! layouts, fixed-layout transcripts, domain-separated digests, signer roles, enrollment
-//! identities, the issuer-signed credential, renewal requests, the artifact manifest, the
-//! private state and its packages, signed policy objects, peer messages and their envelope,
-//! local custody objects of the state provider, and ledger boundary objects.
+//! layouts, fixed-layout transcripts, domain-separated digests, the P-256 device key and
+//! signature values, signer roles, enrollment identities, the issuer-signed credential,
+//! renewal requests, the artifact manifest, the private state and its packages, signed policy
+//! objects, peer messages and their envelope, local custody objects of the state provider,
+//! and ledger boundary objects.
 //!
 //! # Digests and signatures (§8)
 //!
-//! Every digest is
+//! Two hash families apply (§3). Every value a step relation computes or opens is a Poseidon
+//! value `P` of the σ field, computed natively with `iroha_pasta`: `credit_id`, the state
+//! commitment, chains, map, blacklist, quota-window and credit-digest trees, the σ statement
+//! digest, and (packed-byte `P_bytes`) `proof_digest` and the Payment digest. Every other digest
+//! is
 //!
 //! ```text
 //! H(role, body) = SHA-256("iroha:kagemusha:wallet:v1:" || role || 0x00 || LE64(len(body)) || body)
@@ -44,15 +49,18 @@
 //! confers only the authority of its named role (§2.3); monetary admission also requires the
 //! recursive proofs, provider receipts and ledger state owned by the components in §9.
 
-use crate::{kagemusha::KagemushaValidationErrorV1, nexus::AxtAssetIncarnationValidationError};
+use crate::nexus::AxtAssetIncarnationValidationError;
 
 mod custody;
 mod digest;
 mod identity;
+mod keys;
 mod ledger;
 mod messages;
 mod policy;
+mod poseidon;
 mod state;
+mod verifying_keys;
 // `vectors_tests` writes and compares `fixtures/kagemusha/wallet_v1_vectors.json`; the Kotlin
 // `core-jvm` (`KagemushaWalletWireV1`) and Swift (`KagemushaWalletWireV1`) consumers recompute
 // it (design §8, C11).
@@ -67,17 +75,19 @@ mod vectors_tests;
 
 pub use self::{
     custody::{
-        KAGEMUSHA_WALLET_OUTPUT_KIND_INPUT_BYTES_V1, KAGEMUSHA_WALLET_OUTPUT_TRANSCRIPT_BYTES_V1,
-        KagemushaWalletCompletionRecordV1, KagemushaWalletMarkerStateV1, KagemushaWalletMarkerV1,
+        KAGEMUSHA_WALLET_OUTPUT_TRANSCRIPT_BYTES_V1, KagemushaWalletCompletionRecordV1,
+        KagemushaWalletFoldRecordV1, KagemushaWalletMarkerStateV1, KagemushaWalletMarkerV1,
         KagemushaWalletOutputDescriptorV1, KagemushaWalletRecoveryCapsuleV1,
         KagemushaWalletRetainedInputRoleV1, KagemushaWalletRetainedInputV1,
         KagemushaWalletTerminalReasonV1, kagemusha_wallet_output_digest_v1,
         kagemusha_wallet_output_transcript_v1,
     },
     digest::{
-        KAGEMUSHA_WALLET_DIGEST_PREFIX_V1, KAGEMUSHA_WALLET_SIGNED_OBJECT_TRANSCRIPT_BYTES_V1,
-        KagemushaWalletDigestRoleV1, KagemushaWalletSignerOutputV1, kagemusha_wallet_digest_v1,
-        kagemusha_wallet_freeze_signature_v1, kagemusha_wallet_preimage_v1,
+        KAGEMUSHA_WALLET_DIGEST_PREFIX_V1, KAGEMUSHA_WALLET_FIELD_MODULUS_V1,
+        KAGEMUSHA_WALLET_SIGNED_OBJECT_TRANSCRIPT_BYTES_V1, KagemushaWalletDigestRoleV1,
+        KagemushaWalletSignerOutputV1, kagemusha_wallet_digest_v1,
+        kagemusha_wallet_field_from_u128_v1, kagemusha_wallet_freeze_signature_v1,
+        kagemusha_wallet_is_canonical_field_v1, kagemusha_wallet_preimage_v1,
         kagemusha_wallet_signed_object_digest_v1, kagemusha_wallet_verify_signature_v1,
     },
     identity::{
@@ -131,6 +141,10 @@ pub use self::{
         kagemusha_wallet_renewal_challenge_transcript_v1,
         kagemusha_wallet_renewal_key_binding_transcript_v1,
     },
+    keys::{
+        KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1, KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1,
+        KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
+    },
     ledger::{
         KAGEMUSHA_WALLET_LEDGER_CONTROL_BODY_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_LEDGER_CONTROL_UNION_BYTES_V1,
@@ -142,37 +156,35 @@ pub use self::{
         KagemushaWalletUnloadChargeV1, KagemushaWalletUnloadClaimV1, KagemushaWalletUnloadPayoutV1,
     },
     messages::{
-        KAGEMUSHA_WALLET_CREDIT_STATUS_STATEMENT_TRANSCRIPT_BYTES_V1,
+        KAGEMUSHA_WALLET_CREDIT_OPENING_DEPTH_V1,
+        KAGEMUSHA_WALLET_CREDIT_STATUS_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_CREDITED_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_OFFER_BODY_TRANSCRIPT_BYTES_V1,
-        KAGEMUSHA_WALLET_PAYMENT_TRANSCRIPT_BYTES_V1,
+        KAGEMUSHA_WALLET_PAYMENT_TRANSCRIPT_BYTES_V1, KAGEMUSHA_WALLET_REQUEST_BODY_FIELD_ITEMS_V1,
         KAGEMUSHA_WALLET_REQUEST_BODY_TRANSCRIPT_BYTES_V1,
-        KAGEMUSHA_WALLET_SEND_DEPENDENCIES_COUNT_V1,
-        KAGEMUSHA_WALLET_SEND_DEPENDENCIES_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_SESSION_CONTROL_BODY_TRANSCRIPT_BYTES_V1,
-        KAGEMUSHA_WALLET_SESSION_CONTROL_UNION_BYTES_V1, KagemushaWalletCreditStatusStatementV1,
+        KAGEMUSHA_WALLET_SESSION_CONTROL_UNION_BYTES_V1, KagemushaWalletCreditOpeningV1,
         KagemushaWalletCreditStatusV1, KagemushaWalletCreditedEvidenceV1,
-        KagemushaWalletCreditedV1, KagemushaWalletEnvelopeV1, KagemushaWalletFeeScheduleSlotV1,
+        KagemushaWalletCreditedV1, KagemushaWalletDeliveryStatusV1, KagemushaWalletEnvelopeV1,
+        KagemushaWalletFeeScheduleSlotV1, KagemushaWalletLineageMessageV1,
         KagemushaWalletMessageV1, KagemushaWalletOfferBodyV1, KagemushaWalletOfferV1,
         KagemushaWalletPaymentDigestsV1, KagemushaWalletPaymentV1, KagemushaWalletPolicyDataItemV1,
         KagemushaWalletPolicyDataV1, KagemushaWalletRequestBodyV1, KagemushaWalletRequestV1,
         KagemushaWalletSessionAuthV1, KagemushaWalletSessionControlKindV1,
-        KagemushaWalletSessionControlV1, kagemusha_wallet_payment_transcript_v1,
-        kagemusha_wallet_send_dependencies_transcript_v1, kagemusha_wallet_send_dependencies_v1,
-        kagemusha_wallet_text_decode_v1, kagemusha_wallet_text_encode_v1,
+        KagemushaWalletSessionControlV1, KagemushaWalletSignedRequestV1,
+        kagemusha_wallet_payment_transcript_v1, kagemusha_wallet_text_decode_v1,
+        kagemusha_wallet_text_encode_v1,
     },
     policy::{
         KAGEMUSHA_WALLET_BLACKLIST_BODY_TRANSCRIPT_BYTES_V1,
-        KAGEMUSHA_WALLET_BLACKLIST_ENTRIES_MAX_V1,
-        KAGEMUSHA_WALLET_BLACKLIST_LEAF_TRANSCRIPT_BYTES_V1, KAGEMUSHA_WALLET_BLACKLIST_LEAVES_V1,
+        KAGEMUSHA_WALLET_BLACKLIST_ENTRIES_MAX_V1, KAGEMUSHA_WALLET_BLACKLIST_LEAVES_V1,
         KAGEMUSHA_WALLET_BLACKLIST_SENTINEL_HIGH_V1, KAGEMUSHA_WALLET_BLACKLIST_SENTINEL_LOW_V1,
         KAGEMUSHA_WALLET_BLACKLIST_TREE_DEPTH_V1,
         KAGEMUSHA_WALLET_CHARGE_QUOTE_BODY_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_FEE_BASIS_POINTS_DENOMINATOR_V1,
         KAGEMUSHA_WALLET_FEE_SCHEDULE_BODY_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_QUOTA_SHARE_BODY_TRANSCRIPT_BYTES_V1,
-        KAGEMUSHA_WALLET_QUOTA_TREE_DEPTH_V1, KAGEMUSHA_WALLET_QUOTA_WINDOW_TRANSCRIPT_BYTES_V1,
-        KAGEMUSHA_WALLET_QUOTA_WINDOWS_MAX_V1,
+        KAGEMUSHA_WALLET_QUOTA_TREE_DEPTH_V1, KAGEMUSHA_WALLET_QUOTA_WINDOWS_MAX_V1,
         KAGEMUSHA_WALLET_SCHEME_POLICY_BODY_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_TIME_ANCHOR_BODY_TRANSCRIPT_BYTES_V1, KagemushaWalletAnchoredTimeV1,
         KagemushaWalletBlacklistBodyV1, KagemushaWalletBlacklistEntryV1,
@@ -191,29 +203,55 @@ pub use self::{
         kagemusha_wallet_quota_empty_window_leaf_v1, kagemusha_wallet_quota_node_v1,
         kagemusha_wallet_quota_windows_root_v1, kagemusha_wallet_unload_account_payout_v1,
     },
-    state::{
-        KAGEMUSHA_WALLET_COMMITMENT_TRANSCRIPT_BYTES_V1,
-        KAGEMUSHA_WALLET_CONSUMED_CREDIT_LEAF_DOMAIN_V1,
-        KAGEMUSHA_WALLET_EFFECT_TRANSCRIPT_BYTES_V1, KAGEMUSHA_WALLET_EFFECT_UNION_BYTES_V1,
+    poseidon::{
+        KAGEMUSHA_WALLET_BLACKLIST_LEAF_DOMAIN_V1, KAGEMUSHA_WALLET_BLACKLIST_NODE_DOMAIN_V1,
+        KAGEMUSHA_WALLET_CONSUMED_CREDIT_LEAF_DOMAIN_V1, KAGEMUSHA_WALLET_CORE_DOMAIN_V1,
+        KAGEMUSHA_WALLET_CREDIT_DIGEST_LEAF_DOMAIN_V1, KAGEMUSHA_WALLET_CREDIT_DOMAIN_V1,
         KAGEMUSHA_WALLET_FEE_CLAIM_LEAF_DOMAIN_V1, KAGEMUSHA_WALLET_LOAD_RECOVERY_LEAF_DOMAIN_V1,
+        KAGEMUSHA_WALLET_PACKED_CHUNK_BYTES_V1, KAGEMUSHA_WALLET_PAYMENT_DOMAIN_V1,
+        KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1, KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1,
+        KAGEMUSHA_WALLET_PROOF_DOMAIN_V1, KAGEMUSHA_WALLET_QUOTA_NODE_DOMAIN_V1,
+        KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1, KAGEMUSHA_WALLET_QUOTA_WINDOW_DOMAIN_V1,
+        KAGEMUSHA_WALLET_RECV_CHAIN_DOMAIN_V1, KAGEMUSHA_WALLET_REDEEM_RECOVERY_LEAF_DOMAIN_V1,
+        KAGEMUSHA_WALLET_REST_DOMAIN_V1, KAGEMUSHA_WALLET_SEND_CHAIN_DOMAIN_V1,
+        KAGEMUSHA_WALLET_SPARSE_EMPTY_DOMAIN_V1, KAGEMUSHA_WALLET_SPARSE_NODE_DOMAIN_V1,
+        KAGEMUSHA_WALLET_SPARSE_TREE_DEPTH_V1, KAGEMUSHA_WALLET_STATEMENT_DOMAIN_V1,
+        KAGEMUSHA_WALLET_STEP_PROOF_DOMAIN_V1, KagemushaWalletSparseOpeningV1,
+        KagemushaWalletSparseTreeV1, kagemusha_wallet_empty_map_root_v1,
+        kagemusha_wallet_packed_bytes_v1, kagemusha_wallet_pair_key_v1,
+        kagemusha_wallet_poseidon_bytes_v1, kagemusha_wallet_poseidon_v1,
+        kagemusha_wallet_sparse_default_v1, kagemusha_wallet_sparse_node_v1,
+    },
+    state::{
+        KAGEMUSHA_WALLET_COMMITMENT_TRANSCRIPT_BYTES_V1, KAGEMUSHA_WALLET_CORE_FIELD_ITEMS_V1,
+        KAGEMUSHA_WALLET_EFFECT_FIELD_ITEMS_V1, KAGEMUSHA_WALLET_EFFECT_TRANSCRIPT_BYTES_V1,
+        KAGEMUSHA_WALLET_EFFECT_UNION_BYTES_V1,
+        KAGEMUSHA_WALLET_LINEAGE_PUBLIC_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_OPERATION_ID_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_PACKAGE_TRANSCRIPT_BYTES_V1,
-        KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1,
-        KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1,
-        KAGEMUSHA_WALLET_RECEIPT_BODY_TRANSCRIPT_BYTES_V1,
-        KAGEMUSHA_WALLET_REDEEM_RECOVERY_LEAF_DOMAIN_V1,
-        KAGEMUSHA_WALLET_STATEMENT_TRANSCRIPT_BYTES_V1,
+        KAGEMUSHA_WALLET_RECEIPT_BODY_TRANSCRIPT_BYTES_V1, KAGEMUSHA_WALLET_REST_FIELD_ITEMS_V1,
+        KAGEMUSHA_WALLET_STATEMENT_FIELD_ITEMS_V1, KAGEMUSHA_WALLET_STATEMENT_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_UNLOAD_NULLIFIER_TRANSCRIPT_BYTES_V1, KagemushaWalletConsumedCreditLeafV1,
-        KagemushaWalletEffectV1, KagemushaWalletEmptyMapRootsV1, KagemushaWalletFeeClaimLeafV1,
-        KagemushaWalletLifecycleV1, KagemushaWalletLoadLeafV1, KagemushaWalletOperationKindV1,
+        KagemushaWalletCreditDigestLeafV1, KagemushaWalletEffectV1, KagemushaWalletFeeClaimLeafV1,
+        KagemushaWalletLifecycleV1, KagemushaWalletLineagePublicV1, KagemushaWalletLineageSlotV1,
+        KagemushaWalletLineageV1, KagemushaWalletLoadLeafV1, KagemushaWalletOperationKindV1,
         KagemushaWalletPackageDigestsV1, KagemushaWalletPackageV1,
-        KagemushaWalletPendingOutgoingLeafV1, KagemushaWalletPolicyStateV1,
-        KagemushaWalletPolicyUpdateKindV1, KagemushaWalletProofV1, KagemushaWalletQuotaUsageLeafV1,
-        KagemushaWalletReceiptBodyV1, KagemushaWalletReceiptV1, KagemushaWalletRedeemLeafV1,
-        KagemushaWalletStateCommitmentV1, KagemushaWalletStateV1, KagemushaWalletStatementV1,
-        kagemusha_wallet_digest_limbs_v1, kagemusha_wallet_operation_id_transcript_v1,
-        kagemusha_wallet_operation_id_v1, kagemusha_wallet_package_digest_v1,
+        KagemushaWalletPendingOutgoingLeafV1, KagemushaWalletPolicyUpdateKindV1,
+        KagemushaWalletQuotaUsageLeafV1, KagemushaWalletReceiptBodyV1,
+        KagemushaWalletReceiptSignerV1, KagemushaWalletReceiptV1, KagemushaWalletRecoveryKindV1,
+        KagemushaWalletRecvChainEntryV1, KagemushaWalletRedeemLeafV1,
+        KagemushaWalletSendChainEntryV1, KagemushaWalletStateCommitmentV1,
+        KagemushaWalletStateCoreV1, KagemushaWalletStateRestV1, KagemushaWalletStateV1,
+        KagemushaWalletStatementV1, KagemushaWalletStepProofV1,
+        kagemusha_wallet_operation_id_transcript_v1, kagemusha_wallet_operation_id_v1,
+        kagemusha_wallet_package_digest_v1, kagemusha_wallet_proof_digest_v1,
         kagemusha_wallet_unload_nullifier_transcript_v1, kagemusha_wallet_unload_nullifier_v1,
+    },
+    verifying_keys::{
+        KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1,
+        KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1,
+        KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRY_TRANSCRIPT_BYTES_V1,
+        KagemushaWalletVerifyingKeyAllowlistV1, KagemushaWalletVerifyingKeyEntryV1,
     },
 };
 
@@ -225,8 +263,8 @@ pub const KAGEMUSHA_WALLET_VERSION_V1: u16 = 1;
 pub const KAGEMUSHA_WALLET_TEXT_PREFIX_V1: &str = "kgm1:";
 /// Maximum complete canonical envelope frame for Offer and `SessionControl` (§8).
 pub const KAGEMUSHA_WALLET_SESSION_MAX_BYTES_V1: usize = 2_048;
-/// Maximum complete canonical envelope frame for Request, Payment, Credited and `PolicyData`
-/// (§8, R9).
+/// Maximum complete canonical envelope frame for Request, Payment, Credited, `PolicyData` and
+/// Lineage (§8, R9).
 pub const KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1: usize = 10_000;
 /// Maximum complete `kgm1:` text for a session-bounded envelope.
 pub const KAGEMUSHA_WALLET_SESSION_TEXT_MAX_BYTES_V1: usize =
@@ -235,15 +273,16 @@ pub const KAGEMUSHA_WALLET_SESSION_TEXT_MAX_BYTES_V1: usize =
 pub const KAGEMUSHA_WALLET_MESSAGE_TEXT_MAX_BYTES_V1: usize =
     text_max_bytes_v1(KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1);
 
-/// Provisional G1 decode cap for one transition proof (design C2).
-///
-/// The message bounds remain authoritative; the concrete proof layout is fixed by the G3
-/// artifact set.
-// TODO(G3): replace this provisional budget with the measured cap of the frozen relation.
-pub const KAGEMUSHA_WALLET_PROOF_MAX_BYTES_V1: usize = 6_016;
-/// Provisional G1 decode cap for one read-only `CreditStatus` proof (design C2).
-// TODO(G3): replace this provisional budget with the measured cap of the frozen relation.
-pub const KAGEMUSHA_WALLET_CREDIT_STATUS_PROOF_MAX_BYTES_V1: usize = 2_000;
+/// `F_payment`: every byte of the largest valid Payment envelope other than the Ω
+/// transport-proof bytes and the `σ_send` bytes (§8), for proof lengths of 128 to 9,999 bytes
+/// each (pinned by `size_tests`).
+pub const KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1: usize = 1_615;
+/// Joint R9 budget of the Ω transport proof and the largest `σ_send`:
+/// `10,000 − F_payment` (§8, owner answer Q6). The σ and Ω byte caps are the exact lengths of
+/// the frozen verifying-key allowlist, which must satisfy this budget; until the artifacts
+/// freeze, G1 bounds σ and Ω only through the frames that carry them.
+pub const KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1: usize =
+    KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 - KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1;
 /// Maximum signer certificates in one certificate set: payer issuer, receiver issuer and
 /// fee-schedule signer (design C2).
 pub const KAGEMUSHA_WALLET_CERTIFICATE_SET_MAX_V1: usize = 3;
@@ -288,6 +327,11 @@ pub const KAGEMUSHA_WALLET_RENEWAL_REQUEST_MAX_BYTES_V1: usize = 73_728;
 pub const KAGEMUSHA_WALLET_COMPLETION_RECORD_MAX_BYTES_V1: usize = 65_536;
 /// Maximum standalone canonical frame of one local recovery capsule.
 pub const KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1: usize = 262_144;
+/// Maximum standalone canonical frame of one local fold record.
+///
+/// The record carries one Ω, which must fit the 10,000-byte Payment that carries it (§8), so
+/// the record shares the message bound.
+pub const KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1: usize = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1;
 /// Maximum standalone canonical frame of one complete signed blacklist: 2,228,736 bytes.
 ///
 /// The blacklist is not a peer message and has no envelope: a wallet downloads this frame only
@@ -389,18 +433,6 @@ impl From<norito::Error> for KagemushaWalletValidationErrorV1 {
     }
 }
 
-impl From<KagemushaValidationErrorV1> for KagemushaWalletValidationErrorV1 {
-    fn from(error: KagemushaValidationErrorV1) -> Self {
-        match error {
-            KagemushaValidationErrorV1::Codec(error) => Self::Codec(error),
-            KagemushaValidationErrorV1::EncodedSizeExceeded { actual, max } => {
-                Self::EncodedSizeExceeded { actual, max }
-            }
-            KagemushaValidationErrorV1::InvalidField { field } => Self::InvalidField { field },
-        }
-    }
-}
-
 impl From<AxtAssetIncarnationValidationError> for KagemushaWalletValidationErrorV1 {
     fn from(_: AxtAssetIncarnationValidationError) -> Self {
         Self::InvalidField {
@@ -478,6 +510,21 @@ fn require_nonzero_v1(field: &'static str, digest: &[u8; 32]) -> WalletResult<()
     } else {
         Ok(())
     }
+}
+
+/// Reject a noncanonical σ-field encoding (`>= p`, design §1.2).
+fn require_canonical_field_v1(field: &'static str, value: &[u8; 32]) -> WalletResult<()> {
+    if digest::kagemusha_wallet_is_canonical_field_v1(value) {
+        Ok(())
+    } else {
+        Err(invalid_v1(field))
+    }
+}
+
+/// Reject a noncanonical or zero σ-field encoding.
+fn require_nonzero_field_v1(field: &'static str, value: &[u8; 32]) -> WalletResult<()> {
+    require_nonzero_v1(field, value)?;
+    require_canonical_field_v1(field, value)
 }
 
 fn require_scheme_v1(

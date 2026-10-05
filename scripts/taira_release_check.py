@@ -978,9 +978,9 @@ DATA_MODEL_STAGES += (("authenticated executed transaction inclusion", (
 )),)
 
 MODEL_MONETARY_CODEC_STAGES = (('canonical monetary authority payload schemas and codecs', (
-    'isi::kagemusha_v1::epoch_binding_codec_tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema',
-    'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json',
-    'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_authorization_binding_keeps_fixed_width_identity',
+    'sumeragi::epoch::authorization::tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema',
+    'sumeragi::epoch::authorization::tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json',
+    'sumeragi::epoch::authorization::tests::epoch_authorization_binding_keeps_fixed_width_identity',
     'nexus::staking::monetary_codec_tests::monetary_variants_roundtrip_canonical_binary_and_tagged_json',
     'nexus::staking::monetary_codec_tests::monetary_schema_names_every_variant_and_distinct_named_payload',
 )),)

@@ -7,46 +7,19 @@ publication, including slices restored from CI. Its host macOS consumer also
 checks SHA3-256/SHAKE256 known answers, ML-DSA signing/verification and tamper
 rejection, and ML-KEM encapsulation/decapsulation.
 
-Current source ABI: 25. ABI 14 added
-`connect_norito_encode_transfer_instruction_box` for native multisig proposal
-instruction boxes; later additive revisions include the bounded KAGEMUSHA V1
-wire validators and SoraFS Governance DAG block/head-chain reference
-validators consumed by the C# SDK. The ABI-25 Kotlin/JVM and Java/Android
-`NativeSignerBridge` surface additionally requires native-signer JNI contract
-revision 7. Revision 4 sealed the removal of generic `Shield`, `ZkTransfer`, and
-`Unshield` transaction encoders plus native anonymous-escrow and authority-free
-Kaigi helpers from the C and JNI surfaces. The bridge retains specialized
-KAGEMUSHA raw/text validators for the sole ordered IPM1 lifecycle—request (`1`),
-payment (`2`), and durable acknowledgement (`3`)—plus mint authorization, bound
-mint credit, and redemption voucher. Every progressive validator requires the
-exact preceding messages, and the exchange validator enforces the complete
-three-message binding and aggregate caps. The fail-closed device surface exposes
-the sole contiguous 22-operation lifecycle and exact `0x0000ffff` capability mask.
-The generic C and JNI execute paths now parse the complete `IKGMJCM1` frame and
-reject bad magic, version, operation, flags, request ID, length, digest, or
-suffix before reporting service availability. Receiver operations use distinct
-bounded canonical Norito schemas and exact credit-ID recovery selectors; their
-reply validators bind the staged request/payment bytes and receipt context and
-retain full-width `u128` inbox revisions. Operation 16 has shared canonical
-mint-stage command/result bodies and two structural C validation exports. Both
-C and JNI reject malformed operation-16 bodies before returning unavailable.
-The command binds the exact pre-debit authorization and finalized mint credit;
-the result binds the same credit ID with a closed new-stage/duplicate status.
-Private reservation openings and full Guard certificates remain native-only.
-The current exact artifact inventory requires the current KAGEMUSHA C exports,
-including both mint-stage validators; previous binaries do not satisfy it.
-This is wire and dispatcher code only:
-the stock capabilities and valid execution results remain unavailable, and no
-test engine, host flag, or shape-valid reply grants monetary authority.
-`RegisterZkAsset`
-now carries exactly
-`asset` and optional `vk_unshield`; the retired shield verifier is absent from
-both native signatures and the encoded instruction. Bridge ABI 25 and native
-signer contract revision 7 reject older packages with incompatible signatures.
-Revision 5 hard-cuts native transaction signing from human chain labels to the
-exact genesis-derived `NetworkId`: JNI accepts exactly 32 marked hash bytes,
-while the C and Swift surface accepts only canonical checksummed `NetworkId`
-text. No label conversion or compatibility fallback exists.
+Current source ABI: 25. The bridge exports native transaction and instruction
+encoding, account admission, SoraFS reference validation, privacy proofs and
+Parliament timed-OVN verification. Its Kotlin/JVM and Java/Android
+`NativeSignerBridge` surface requires native-signer JNI contract revision 7.
+`RegisterZkAsset` carries exactly `asset` and optional `vk_unshield`.
+Transaction signing requires the genesis-derived `NetworkId`: JNI accepts
+exactly 32 marked hash bytes, while the C and Swift surface accepts canonical
+checksummed `NetworkId` text.
+
+Canonical KAGEMUSHA wallet objects are owned by
+`iroha_data_model::kagemusha::kagemusha_wallet_v1`. The bridge exposes no
+KAGEMUSHA coordinator or device runtime. Native wallet integration and device
+qualification remain open.
 
 The exact-12 privacy KAT ABI is compiled through the narrow
 `iroha_data_model/privacy-exact12-conformance` feature. Shipping bridge builds

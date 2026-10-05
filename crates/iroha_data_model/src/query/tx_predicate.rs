@@ -1185,16 +1185,24 @@ fn write_predicate_expression_to(
     write_arguments: impl FnOnce(&mut dyn json::JsonWriteSink) -> Result<(), json::BoundedJsonError>,
 ) -> Result<(), json::BoundedJsonError> {
     out.begin_container()?;
-    out.push_str("{\"args\":")?;
-    out.begin_container()?;
-    out.push('[')?;
-    write_arguments(out)?;
-    out.push(']')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        out.push_str("{\"args\":")?;
+        out.begin_container()?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            write_arguments(out)?;
+            out.push(']')?;
+            Ok(())
+        })();
+        out.end_container();
+        result?;
+        out.push_str(",\"op\":")?;
+        json::write_json_string_to(operation, out)?;
+        out.push('}')?;
+        Ok(())
+    })();
     out.end_container();
-    out.push_str(",\"op\":")?;
-    json::write_json_string_to(operation, out)?;
-    out.push('}')?;
-    out.end_container();
+    result?;
     Ok(())
 }
 
@@ -1244,15 +1252,19 @@ fn write_json_slice_to<T: JsonSerialize>(
     out: &mut dyn json::JsonWriteSink,
 ) -> Result<(), json::BoundedJsonError> {
     out.begin_container()?;
-    out.push('[')?;
-    for (index, value) in values.iter().enumerate() {
-        if index != 0 {
-            out.push(',')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        out.push('[')?;
+        for (index, value) in values.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            value.json_serialize_to(out)?;
         }
-        value.json_serialize_to(out)?;
-    }
-    out.push(']')?;
+        out.push(']')?;
+        Ok(())
+    })();
     out.end_container();
+    result?;
     Ok(())
 }
 
@@ -1261,15 +1273,19 @@ fn write_json_display_slice_to<T: core::fmt::Display>(
     out: &mut dyn json::JsonWriteSink,
 ) -> Result<(), json::BoundedJsonError> {
     out.begin_container()?;
-    out.push('[')?;
-    for (index, value) in values.iter().enumerate() {
-        if index != 0 {
-            out.push(',')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        out.push('[')?;
+        for (index, value) in values.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            json::write_json_display_to(value, out)?;
         }
-        json::write_json_display_to(value, out)?;
-    }
-    out.push(']')?;
+        out.push(']')?;
+        Ok(())
+    })();
     out.end_container();
+    result?;
     Ok(())
 }
 
@@ -3019,5 +3035,44 @@ mod tests {
         );
         let too_many = vec![wire::Node::Const(true); MAX_COMMITTED_TX_PREDICATE_NODES + 1];
         assert!(wire::inflate(&too_many).is_err());
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit_write;
+
+    #[test]
+    fn original_predicate_expression_checked_container_retains_both_levels_and_exact_error() {
+        let expected = "{\"args\":[7],\"op\":\"const\"}";
+        audit_write(expected, |out| {
+            write_predicate_expression_to("const", out, |out| 7_u64.json_serialize_to(out))
+        });
+        let mut original = crate::checked_container_refusal_controls::OriginalSink::new(usize::MAX);
+        assert_eq!(
+            write_predicate_expression_to("const", &mut original, |_out| Err(
+                norito::json::BoundedJsonError::Unsupported
+            )),
+            Err(norito::json::BoundedJsonError::Unsupported)
+        );
+        assert_eq!(
+            original.depth,
+            crate::checked_container_refusal_controls::ORIGINAL_DEPTH
+        );
+        assert_eq!(original.text, "{\"args\":[");
+    }
+
+    #[test]
+    fn original_predicate_json_slice_checked_container_retains_bytes_errors_and_depth() {
+        audit_write("[7,9]", |out| write_json_slice_to(&[7_u64, 9], out));
+    }
+
+    #[test]
+    fn original_predicate_display_slice_checked_container_retains_bytes_errors_and_depth() {
+        audit_write("[\"7\",\"9\"]", |out| {
+            write_json_display_slice_to(&[7_u64, 9], out)
+        });
     }
 }

@@ -2,16 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../contracts_call_integration.rs"]
 mod contracts_call_integration;
-#[path = "../kagemusha_api_contract.rs"]
-mod kagemusha_api_contract;
-#[path = "../kagemusha_operation_contract.rs"]
-mod kagemusha_operation_contract;
-#[path = "../kagemusha_readiness_smoke.rs"]
-mod kagemusha_readiness_smoke;
-#[path = "../kagemusha_redeem_contract.rs"]
-mod kagemusha_redeem_contract;
-#[path = "../kagemusha_top_up_contract.rs"]
-mod kagemusha_top_up_contract;
 #[path = "../kaigi_endpoints.rs"]
 mod kaigi_endpoints;
 #[path = "../kaigi_operator_reads.rs"]

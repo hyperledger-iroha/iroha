@@ -60,11 +60,13 @@ impl KagemushaKeyLimitsV1 {
 
     #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(super) const fn guarded_real_proof() -> Self {
-        // These are serialization envelopes, not resident-memory allowances.  The sole caller is
-        // additionally confined by scripts/run_kagemusha_real_proof_guarded.py's aggregate
-        // process-group limit. Keeping this opt-in behind either `cfg(test)` or the non-shipping
-        // dedicated harness feature prevents an oversized key from becoming release-eligible by
-        // accident; the dedicated binary remains confined by the same guard.
+        // These are serialization envelopes, not resident-memory allowances. Keeping this opt-in
+        // behind either `cfg(test)` or the non-shipping dedicated harness feature prevents an
+        // oversized key from becoming release-eligible by accident.
+        // TODO(S19): the external process-group memory guard for the dedicated binary
+        // (`scripts/run_kagemusha_real_proof_guarded.py`) was deleted with the old KAGEMUSHA
+        // evidence tooling, so nothing confines that binary now. Delete this harness, its
+        // feature and `bin/kagemusha_real_proof.rs` with the old recursion code.
         Self {
             proving_key_maximum: 1024 * 1024 * 1024,
             verifying_key_maximum: 2 * 1024 * 1024,

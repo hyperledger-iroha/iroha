@@ -13,11 +13,6 @@ use crate::{
     account::AccountId,
     asset::AssetId,
     isi::sorafs::SorafsProviderGovernanceActionV1,
-    kagemusha::{
-        KagemushaGovernedVerifierRegistryV1, KagemushaInternalValidationReceiptV1,
-        KagemushaReleaseAttestationV1, KagemushaReleaseAuthorityPolicyV1,
-        KagemushaReleaseManifestV1,
-    },
     musubi::MusubiParliamentActionV1,
     runtime::RuntimeUpgradeManifest,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
@@ -619,18 +614,6 @@ pub enum ProposalKind {
     /// Grant or revoke one exact account's global data-trigger capability.
     #[codec(index = 9)]
     GlobalDataTriggerPermissionGovernance(GlobalDataTriggerPermissionGovernanceProposalV1),
-    /// Propose the initial KAGEMUSHA verifier signer policy through Parliament.
-    #[codec(index = 10)]
-    KagemushaVerifierPolicyInstall(KagemushaVerifierPolicyInstallProposalV1),
-    /// Install one threshold-authenticated verifier release as inactive standby.
-    #[codec(index = 11)]
-    KagemushaVerifierReleaseInstall(KagemushaVerifierReleaseInstallProposalV1),
-    /// First activate the sole installed standby KAGEMUSHA verifier release.
-    #[codec(index = 12)]
-    KagemushaVerifierReleaseActivate(KagemushaVerifierReleaseActivateProposalV1),
-    /// Retire one unused standby release without removing active or historical authority.
-    #[codec(index = 13)]
-    KagemushaVerifierReleaseRetire(KagemushaVerifierReleaseRetireProposalV1),
 }
 /// Proposal payload for deploying an IVM contract via governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -827,221 +810,6 @@ pub struct GlobalDataTriggerPermissionGovernanceProposalV1 {
     /// Closed grant-or-revoke effect.
     pub action: GlobalDataTriggerPermissionGovernanceActionV1,
 }
-/// Exact first-install preimage for a governed KAGEMUSHA verifier signer policy.
-///
-/// Enactment installs the policy only through a certified Parliament reducer and
-/// a move-only State transition owner.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[norito(deny_unknown_fields)]
-#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_data_model::parliament_types::KagemushaVerifierPolicyInstallProposalV1"
-)]
-pub struct KagemushaVerifierPolicyInstallProposalV1 {
-    /// Canonical transaction authority that created this exact proposal.
-    pub proposal_operator: AccountId,
-    /// Exact network whose governed verifier policy would change.
-    pub network_id: NetworkId,
-    /// Full canonical predecessor; initial installation requires the empty registry.
-    pub expected_predecessor: KagemushaGovernedVerifierRegistryV1,
-    /// Complete proposed signer policy.
-    pub authority_policy: KagemushaReleaseAuthorityPolicyV1,
-}
-
-impl KagemushaVerifierPolicyInstallProposalV1 {
-    /// Validate the exact initial-install predecessor and proposed policy.
-    ///
-    /// # Errors
-    /// Returns an error for a nonempty or malformed predecessor or an invalid signer policy.
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.expected_predecessor != KagemushaGovernedVerifierRegistryV1::default() {
-            return Err(
-                "KAGEMUSHA initial policy proposal requires the exact empty registry predecessor",
-            );
-        }
-        self.authority_policy
-            .validate()
-            .map_err(|_| "KAGEMUSHA initial policy proposal has an invalid signer policy")
-    }
-}
-/// Proposal payload for one exact, inactive KAGEMUSHA verifier-release install.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[norito(deny_unknown_fields)]
-#[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_data_model::parliament_types::KagemushaVerifierReleaseInstallProposalV1"
-)]
-pub struct KagemushaVerifierReleaseInstallProposalV1 {
-    /// Canonical transaction authority that created this exact proposal.
-    pub proposal_operator: AccountId,
-    /// Exact governed network, independent of local artifact paths.
-    pub network_id: NetworkId,
-    /// Full registry predecessor bound into the Parliament compare-and-set head.
-    pub expected_predecessor: KagemushaGovernedVerifierRegistryV1,
-    /// Complete immutable release manifest.
-    pub manifest: KagemushaReleaseManifestV1,
-    /// Internal release qualification evidence.
-    pub receipt: KagemushaInternalValidationReceiptV1,
-    /// Threshold signatures under the finalized registry signer policy.
-    pub attestation: KagemushaReleaseAttestationV1,
-}
-
-impl KagemushaVerifierReleaseInstallProposalV1 {
-    fn first_release_exact_json_u64_invariant_error(&self, maximum: u64) -> Option<&'static str> {
-        // The release receipt embeds hardware profiles and qualification measurements.
-        // Walk its actual JSON projection so additions to those nested records cannot
-        // silently evade the first-release SDK integer bound.
-        let json = match norito::json::to_value(self) {
-            Ok(json) => json,
-            Err(_) => return Some("verifier-release proposal JSON projection is invalid"),
-        };
-        let mut pending = vec![&json];
-        while let Some(value) = pending.pop() {
-            match value {
-                norito::json::Value::Number(number)
-                    if number
-                        .as_u128()
-                        .is_some_and(|number| number > u128::from(maximum)) =>
-                {
-                    return Some(
-                        "verifier-release proposal exceeds the exact JSON integer maximum",
-                    );
-                }
-                norito::json::Value::Array(values) => pending.extend(values),
-                norito::json::Value::Object(values) => pending.extend(values.values()),
-                _ => {}
-            }
-        }
-        None
-    }
-
-    /// Authenticate and project the sole permitted standby successor.
-    ///
-    /// # Errors
-    /// Rejects an invalid predecessor, ungoverned signer policy, forged release,
-    /// duplicate release, or exhausted registry.
-    pub fn successor(&self) -> Result<KagemushaGovernedVerifierRegistryV1, &'static str> {
-        if self.manifest.network_id != self.network_id {
-            return Err(
-                "KAGEMUSHA verifier-release manifest belongs to a different exact NetworkId",
-            );
-        }
-        self.expected_predecessor.validate()?;
-        if self.expected_predecessor.authority_policy.is_none() {
-            return Err("KAGEMUSHA verifier-release install requires a governed signer policy");
-        }
-        let mut successor = self.expected_predecessor.clone();
-        successor.install_authenticated_release(
-            &self.manifest,
-            &self.receipt,
-            &self.attestation,
-        )?;
-        Ok(successor)
-    }
-
-    /// Validate the exact release and predecessor without mutating State.
-    ///
-    /// # Errors
-    /// Returns a static failure reason when the proposed standby transition is invalid.
-    pub fn validate(&self) -> Result<(), &'static str> {
-        self.successor().map(|_| ())
-    }
-}
-
-/// Proposal payload for the exact first activation of the sole standby release.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[norito(deny_unknown_fields)]
-#[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_data_model::parliament_types::KagemushaVerifierReleaseActivateProposalV1"
-)]
-pub struct KagemushaVerifierReleaseActivateProposalV1 {
-    /// Canonical transaction authority that created this exact proposal.
-    pub proposal_operator: AccountId,
-    /// Exact governed network.
-    pub network_id: NetworkId,
-    /// Complete finalized signer policy, release set, and active pointer.
-    pub expected_predecessor: KagemushaGovernedVerifierRegistryV1,
-    /// Installed standby release to make the first active release at the due height.
-    #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub successor_release_id: [u8; 32],
-}
-
-impl KagemushaVerifierReleaseActivateProposalV1 {
-    /// Compute the sole permitted active successor without changing the predecessor.
-    ///
-    /// # Errors
-    /// Rejects an ungoverned or malformed predecessor, a previously active
-    /// registry, an absent or non-standby target, and replay.
-    pub fn successor(&self) -> Result<KagemushaGovernedVerifierRegistryV1, &'static str> {
-        self.expected_predecessor.validate()?;
-        if self.expected_predecessor.authority_policy.is_none() {
-            return Err("KAGEMUSHA release activation requires a governed signer policy");
-        }
-        if self.expected_predecessor.active_release_id.is_some() {
-            return Err("KAGEMUSHA first activation requires an inactive predecessor");
-        }
-        if self.expected_predecessor.releases.len() != 1 {
-            return Err("KAGEMUSHA first activation requires exactly one standby release");
-        }
-        let mut successor = self.expected_predecessor.clone();
-        successor.activate_standby(None, self.successor_release_id)?;
-        Ok(successor)
-    }
-
-    /// Validate the exact activation before it can enter Parliament.
-    ///
-    /// # Errors
-    /// Returns a static failure reason when the transition is not permitted.
-    pub fn validate(&self) -> Result<(), &'static str> {
-        self.successor().map(|_| ())
-    }
-}
-
-/// Proposal payload for retiring one exact unused standby verifier release.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[norito(deny_unknown_fields)]
-#[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_data_model::parliament_types::KagemushaVerifierReleaseRetireProposalV1"
-)]
-pub struct KagemushaVerifierReleaseRetireProposalV1 {
-    /// Canonical transaction authority that created this exact proposal.
-    pub proposal_operator: AccountId,
-    /// Exact governed network, checked against original State at admission and execution.
-    pub network_id: NetworkId,
-    /// Complete registry predecessor, including retained active and historical rows.
-    pub expected_predecessor: KagemushaGovernedVerifierRegistryV1,
-    /// Never-activated standby release to retire at the certified due height.
-    #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub standby_release_id: [u8; 32],
-}
-
-impl KagemushaVerifierReleaseRetireProposalV1 {
-    /// Project only the exact standby removal while preserving all other authority.
-    ///
-    /// # Errors
-    /// Rejects a malformed or ungoverned predecessor, an absent, active or
-    /// historically active release, and replay after retirement.
-    pub fn successor(&self) -> Result<KagemushaGovernedVerifierRegistryV1, &'static str> {
-        self.expected_predecessor.validate()?;
-        if self.expected_predecessor.authority_policy.is_none() {
-            return Err("KAGEMUSHA release retirement requires a governed signer policy");
-        }
-        let mut successor = self.expected_predecessor.clone();
-        successor.retire_standby(self.standby_release_id)?;
-        Ok(successor)
-    }
-
-    /// Validate the exact retirement without mutating State.
-    ///
-    /// # Errors
-    /// Returns the original registry refusal when the transition is not permitted.
-    pub fn validate(&self) -> Result<(), &'static str> {
-        self.successor().map(|_| ())
-    }
-}
-
 /// Proposal payload for scheduling a runtime upgrade through governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
@@ -3740,10 +3508,6 @@ impl ProposalKind {
             Self::ValidationFeePolicy(payload) => Some(&payload.proposal_operator),
             Self::ValidationFeePayoutLifecycle(payload) => Some(&payload.proposal_operator),
             Self::ContractLifecycleGovernance(payload) => Some(&payload.proposal_operator),
-            Self::KagemushaVerifierPolicyInstall(payload) => Some(&payload.proposal_operator),
-            Self::KagemushaVerifierReleaseInstall(payload) => Some(&payload.proposal_operator),
-            Self::KagemushaVerifierReleaseActivate(payload) => Some(&payload.proposal_operator),
-            Self::KagemushaVerifierReleaseRetire(payload) => Some(&payload.proposal_operator),
             Self::SccpRouteGovernance(_)
             | Self::MusubiRegistryGovernance(_)
             | Self::SorafsProviderGovernance(_)
@@ -3765,13 +3529,7 @@ impl ProposalKind {
             | Self::ValidationFeePolicy(_)
             | Self::ValidationFeePayoutLifecycle(_)
             | Self::GlobalDataTriggerPermissionGovernance(_)
-            | Self::SorafsProviderGovernance(_)
-            | Self::KagemushaVerifierPolicyInstall(_)
-            | Self::KagemushaVerifierReleaseActivate(_)
-            | Self::KagemushaVerifierReleaseRetire(_) => None,
-            Self::KagemushaVerifierReleaseInstall(proposal) => {
-                proposal.first_release_exact_json_u64_invariant_error(maximum)
-            }
+            | Self::SorafsProviderGovernance(_) => None,
             Self::ContractLifecycleGovernance(proposal) => (proposal.expected_revision > maximum)
                 .then_some(
                     "contract lifecycle expected revision exceeds the exact JSON integer maximum",
@@ -3832,18 +3590,6 @@ impl ProposalKind {
             }
             Self::GlobalDataTriggerPermissionGovernance(_) => {
                 crate::governance_fingerprint::GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE_V1
-            }
-            Self::KagemushaVerifierPolicyInstall(_) => {
-                crate::governance_fingerprint::KAGEMUSHA_VERIFIER_POLICY_INSTALL_V1
-            }
-            Self::KagemushaVerifierReleaseInstall(_) => {
-                crate::governance_fingerprint::KAGEMUSHA_VERIFIER_RELEASE_INSTALL_V1
-            }
-            Self::KagemushaVerifierReleaseActivate(_) => {
-                crate::governance_fingerprint::KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE_V1
-            }
-            Self::KagemushaVerifierReleaseRetire(_) => {
-                crate::governance_fingerprint::KAGEMUSHA_VERIFIER_RELEASE_RETIRE_V1
             }
         };
         crate::governance_fingerprint::fingerprint(domain, self)
@@ -3927,18 +3673,6 @@ impl ProposalKind {
             Self::GlobalDataTriggerPermissionGovernance(proposal) => {
                 GovernanceSubjectPreimageV1::GlobalDataTriggerPermission(proposal.authority.clone())
             }
-            Self::KagemushaVerifierPolicyInstall(proposal) => {
-                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id)
-            }
-            Self::KagemushaVerifierReleaseInstall(proposal) => {
-                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id)
-            }
-            Self::KagemushaVerifierReleaseActivate(proposal) => {
-                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id)
-            }
-            Self::KagemushaVerifierReleaseRetire(proposal) => {
-                GovernanceSubjectPreimageV1::KagemushaVerifierRegistry(proposal.network_id)
-            }
         };
         Ok(crate::governance_fingerprint::fingerprint(
             crate::governance_fingerprint::GOVERNANCE_SUBJECT_ID_V1,
@@ -3976,8 +3710,6 @@ enum GovernanceSubjectPreimageV1 {
     SorafsAdmissionCouncil,
     #[codec(index = 12)]
     SorafsProviderAdmission(crate::sorafs::capacity::ProviderId),
-    #[codec(index = 13)]
-    KagemushaVerifierRegistry(NetworkId),
 }
 
 impl ProposalContentId {

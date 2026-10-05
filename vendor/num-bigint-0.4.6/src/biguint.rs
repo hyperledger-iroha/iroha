@@ -207,11 +207,7 @@ impl Integer for BigUint {
     #[inline]
     fn div_ceil(&self, other: &BigUint) -> BigUint {
         let (d, m) = division::div_rem_ref(self, other);
-        if m.is_zero() {
-            d
-        } else {
-            d + 1u32
-        }
+        if m.is_zero() { d } else { d + 1u32 }
     }
 
     /// Calculates the Greatest Common Divisor (GCD) of the number and `other`.
@@ -543,6 +539,22 @@ impl BigUint {
     #[inline]
     pub fn from_native_digits(digits: Vec<u32>) -> BigUint {
         biguint_from_vec(digits)
+    }
+
+    /// Borrow the exact native magnitude backing without copying or exposing mutation.
+    ///
+    /// This is a storage observation only; the native digit width is target-specific.
+    #[cfg(target_pointer_width = "64")]
+    #[inline]
+    pub fn native_digits(&self) -> &[u64] {
+        &self.data
+    }
+
+    /// Borrow the exact native magnitude backing on 32-bit digit targets.
+    #[cfg(not(target_pointer_width = "64"))]
+    #[inline]
+    pub fn native_digits(&self) -> &[u32] {
+        &self.data
     }
 
     /// Creates and initializes a [`BigUint`].
@@ -974,11 +986,7 @@ impl BigUint {
             t1 = t2;
         }
 
-        if r0.is_one() {
-            Some(t0)
-        } else {
-            None
-        }
+        if r0.is_one() { Some(t0) } else { None }
     }
 
     /// Returns the truncated principal square root of `self` --

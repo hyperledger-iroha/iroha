@@ -12,15 +12,17 @@ use iroha_data_model::{
         consensus::{SumeragiGenesisContextParameters, ValidatorPower},
     },
     isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
     sumeragi::{
         BeaconHorizonStatusV1, PROTOCOL_VERSION, SumeragiFootprint, SumeragiHaltReason,
         SumeragiStatus,
+        epoch::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochAuthorizationV1,
+            ValidatorEpochDecisionV1,
+        },
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -62,8 +64,8 @@ fn mint_finality_authority(
 fn mint_finality_genesis_authorization(
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
     last_height: u64,
-) -> KagemushaMintFinalityEpochAuthorizationV1 {
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+) -> ValidatorEpochAuthorizationV1 {
+    let authorization = ValidatorEpochAuthorizationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id: authority.network_id,
         epoch: 0,
@@ -74,7 +76,7 @@ fn mint_finality_genesis_authorization(
         beacon: BeaconEpochBindingV1::Bootstrap,
         previous_authorization_id: [0; 32],
         transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+        decision: ValidatorEpochDecisionV1::Genesis,
     };
     authorization
         .validate_against_authority(authority)
@@ -315,7 +317,7 @@ fn authority_generations_and_epoch_authorizations_roundtrip() {
             } else {
                 mint_finality_authority(network_id, 1, &roster)
             };
-            let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+            let authorization = ValidatorEpochAuthorizationV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
                 network_id,
                 epoch: 1,
@@ -334,9 +336,9 @@ fn authority_generations_and_epoch_authorizations_roundtrip() {
                     .expect("valid fixture predecessor"),
                 transition_id: if retained { [0; 32] } else { [0xB3; 32] },
                 decision: if retained {
-                    KagemushaMintFinalityEpochDecisionV1::Retain
+                    ValidatorEpochDecisionV1::Retain
                 } else {
-                    KagemushaMintFinalityEpochDecisionV1::Activate
+                    ValidatorEpochDecisionV1::Activate
                 },
             };
             authorization

@@ -554,13 +554,13 @@ mod tests {
                 let error = get_status_with_retry_async(&client)
                     .await
                     .expect_err("the final SDK error must remain typed");
-                assert_eq!(
+                assert!(matches!(
                     error.downcast_ref::<iroha::Error>(),
-                    Some(&iroha::Error::ResponseTooLarge {
+                    Some(iroha::Error::ResponseTooLarge {
                         maximum: 7,
                         actual: Some(8),
                     })
-                );
+                ));
                 assert_eq!(transport.requests.load(Ordering::SeqCst), 4);
                 // This drops the facade's owned runtime from inside the caller runtime.
                 drop(client);

@@ -192,26 +192,6 @@ const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] = &[
     "transaction_dispatch_outcome_unknown",
     "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
 ];
-const KAGEMUSHA_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
-    "kagemusha_auth_header_unsupported",
-    "PRTRY:QUEUE_GOVERNANCE_REJECTED",
-    "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
-    "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
-    "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
-];
-const KAGEMUSHA_COMMAND_CONFLICT_REJECT_CODES: &[&str] = &[
-    "idempotency_key_conflict",
-    "operation_id_conflict",
-    "kagemusha_operation_retry_exhausted",
-    "PRTRY:ALREADY_COMMITTED",
-    "PRTRY:ALREADY_ENQUEUED",
-    "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT",
-];
-const KAGEMUSHA_COMMAND_RATE_LIMIT_REJECT_CODES: &[&str] = &[
-    "PRTRY:QUEUE_FULL",
-    "PRTRY:QUEUE_LATENCY",
-    "PRTRY:QUEUE_RATE",
-];
 fn transaction_submission_bad_request_reject_codes() -> Vec<&'static str> {
     let mut codes = vec!["invalid_transaction_payload"];
     codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);

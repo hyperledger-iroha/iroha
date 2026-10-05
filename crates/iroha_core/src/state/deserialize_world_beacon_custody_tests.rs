@@ -71,7 +71,10 @@ fn rows() -> (NativeBeaconSessionSnapshot, usize, usize, usize) {
         NativeBeaconSessionSnapshot {
             blocks: std::collections::BTreeMap::from([(current_id, current)]),
             revert: std::collections::BTreeMap::from([
-                (previous_id, Some(previous)),
+                (
+                    previous_id,
+                    Some(mv::json::SnapshotUndoValue { value: previous }),
+                ),
                 (current_id, None),
             ]),
         },
@@ -135,7 +138,7 @@ fn beacon_snapshot_current_and_undo_share_only_their_original_admitted_graphs() 
     assert_eq!(current.record(), &source.blocks[&current_id].session);
     assert_eq!(
         previous.record(),
-        &source.revert[&previous_id].as_ref().unwrap().session
+        &source.revert[&previous_id].as_ref().unwrap().value.session
     );
     assert_eq!(
         pool.reserved_bytes(),

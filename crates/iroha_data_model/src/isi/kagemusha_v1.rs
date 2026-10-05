@@ -25,6 +25,10 @@ use crate::{
         kagemusha_liability_pool_id_v1,
     },
     nexus::AxtAssetIncarnationV1,
+    sumeragi::epoch::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochAuthorizationErrorV1,
+        ValidatorEpochAuthorizationV1, ValidatorEpochDecisionV1,
+    },
     sumeragi_finality::{
         SumeragiFinalityCheckpoint, SumeragiFinalityProof, SumeragiFinalityVerifier,
     },
@@ -61,8 +65,6 @@ const MINT_FINALITY_SEAL_MESSAGE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:mint-finality-seal-message";
 const MINT_FINALITY_AUTHORITY_GENERATION_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:mint-finality-authority-generation";
-const MINT_FINALITY_EPOCH_AUTHORIZATION_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:v1:mint-finality-epoch-authorization";
 const MINT_FINALITY_PEER_ID_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality-peer-id";
 /// Domain for the marked SHA-256 bridge from paired Poseidon roots to `ExecutionCommitment`.
 pub const KAGEMUSHA_MINT_FINALITY_ROOT_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality-root";
@@ -284,322 +286,6 @@ impl KagemushaMintFinalityAuthorityGenerationV1 {
     }
 }
 
-/// Exact authority of an installed threshold-beacon transcript.
-///
-/// Norito encodes `session_id` before `transcript_hash`. The installed enum
-/// variant owns one length-delimited instance of this body.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct InstalledBeaconEpochBindingV1 {
-    /// Non-zero session identifier.
-    #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub session_id: [u8; 32],
-    /// Recomputed complete transcript commitment.
-    #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub transcript_hash: [u8; 32],
-}
-
-/// Exact beacon authority bound to one scheduling epoch.
-///
-/// JSON uses a closed `kind`/`value` envelope with `bootstrap` and `installed`
-/// tags; only `bootstrap` has a null value.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(
-    tag = "kind",
-    content = "value",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-pub enum BeaconEpochBindingV1 {
-    /// Generation-zero genesis before the authenticated initial ceremony is installed.
-    Bootstrap,
-    /// Complete binding to an authenticated installed threshold-beacon transcript.
-    Installed(InstalledBeaconEpochBindingV1),
-}
-
-/// Decision certified by the incumbent boundary quorum for the next scheduling epoch.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[repr(u8)]
-#[norito(
-    tag = "kind",
-    content = "value",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-pub enum KagemushaMintFinalityEpochDecisionV1 {
-    /// Signed genesis establishes the initial authorization.
-    Genesis = 0,
-    /// Activate one complete prepared successor generation.
-    Activate = 1,
-    /// Retain the exact incumbent generation and installed beacon authority.
-    Retain = 2,
-    /// Retain the incumbent and certify cancellation of the named frozen attempt.
-    RetainAndCancel = 3,
-}
-
-/// Complete scheduling authority certified through the boundary context and paired seals.
-///
-/// This body excludes its certificate, so its identity is independent of signer subset and
-/// cannot recursively depend on the context or certificate which authenticates it.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1"
-)]
-pub struct KagemushaMintFinalityEpochAuthorizationV1 {
-    /// Sole first-release layout version.
-    pub version: u16,
-    /// Exact genesis-derived network identity.
-    pub network_id: NetworkId,
-    /// Monotonic scheduling epoch, advanced even when the incumbent is retained.
-    pub epoch: u64,
-    /// First governed height, inclusive.
-    pub first_height: u64,
-    /// Last governed height, inclusive.
-    pub last_height: u64,
-    /// Generation whose paired-Pasta keys are authorized.
-    pub authority_generation: u64,
-    /// Exact immutable ordered authority commitment.
-    #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub authority_id: [u8; 32],
-    /// Exact installed beacon authority, or the explicit genesis bootstrap state.
-    pub beacon: BeaconEpochBindingV1,
-    /// Previous authorization identity; zero only for genesis.
-    #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub previous_authorization_id: [u8; 32],
-    /// Frozen attempt identity for activation or certified cancellation; otherwise zero.
-    #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub transition_id: [u8; 32],
-    /// Incumbent-certified disposition of the next scheduling epoch.
-    pub decision: KagemushaMintFinalityEpochDecisionV1,
-}
-
-impl KagemushaMintFinalityEpochAuthorizationV1 {
-    /// Construct the initial scheduling authorization from the signed genesis authority.
-    ///
-    /// The network and complete key commitment come from the validated generation-zero
-    /// authority. This constructs the body; callers still authenticate the signed genesis.
-    ///
-    /// # Errors
-    /// Rejects invalid authorities, nonzero generations, and an empty height interval.
-    pub fn genesis(
-        authority: &KagemushaMintFinalityAuthorityGenerationV1,
-        last_height: u64,
-    ) -> Result<Self, KagemushaIsiValidationErrorV1> {
-        let authorization = Self {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id: authority.network_id,
-            epoch: 0,
-            first_height: 1,
-            last_height,
-            authority_generation: authority.generation,
-            authority_id: authority.authority_id()?,
-            beacon: BeaconEpochBindingV1::Bootstrap,
-            previous_authorization_id: [0; 32],
-            transition_id: [0; 32],
-            decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-        };
-        authorization.validate_against_authority(authority)?;
-        Ok(authorization)
-    }
-
-    /// Validate canonical shape without treating this body as a certificate.
-    ///
-    /// # Errors
-    /// Rejects invalid versions, empty identities or intervals, and contradictory decisions.
-    pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
-        require_chain_version(self.version)?;
-        if self.network_id.as_bytes() == &[0; 32]
-            || self.authority_id == [0; 32]
-            || self.first_height == 0
-            || self.last_height < self.first_height
-        {
-            return Err(invalid("mint_finality.epoch_authorization"));
-        }
-        match self.beacon {
-            BeaconEpochBindingV1::Bootstrap => {
-                if self.decision != KagemushaMintFinalityEpochDecisionV1::Genesis {
-                    return Err(invalid("mint_finality.epoch_authorization.beacon"));
-                }
-            }
-            BeaconEpochBindingV1::Installed(binding) => {
-                if binding.session_id == [0; 32] || binding.transcript_hash == [0; 32] {
-                    return Err(invalid("mint_finality.epoch_authorization.beacon"));
-                }
-            }
-        }
-        match self.decision {
-            KagemushaMintFinalityEpochDecisionV1::Genesis => {
-                if self.epoch != 0
-                    || self.authority_generation != 0
-                    || self.first_height != 1
-                    || self.previous_authorization_id != [0; 32]
-                    || self.transition_id != [0; 32]
-                    || self.beacon != BeaconEpochBindingV1::Bootstrap
-                {
-                    return Err(invalid("mint_finality.epoch_authorization.genesis"));
-                }
-            }
-            decision => {
-                if self.epoch == 0
-                    || self.first_height == 1
-                    || self.previous_authorization_id == [0; 32]
-                    || matches!(self.beacon, BeaconEpochBindingV1::Bootstrap)
-                    || ((decision == KagemushaMintFinalityEpochDecisionV1::Retain)
-                        != (self.transition_id == [0; 32]))
-                {
-                    return Err(invalid("mint_finality.epoch_authorization.decision"));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Validate the exact generation selected by this authorization.
-    ///
-    /// # Errors
-    /// Rejects any mismatch in network, generation number, or complete authority commitment.
-    pub fn validate_against_authority(
-        &self,
-        authority: &KagemushaMintFinalityAuthorityGenerationV1,
-    ) -> Result<(), KagemushaIsiValidationErrorV1> {
-        self.validate()?;
-        if self.network_id != authority.network_id {
-            return Err(invalid("mint_finality.epoch_authorization.authority"));
-        }
-        // The authorization's authority_generation names this record's generation.
-        if self.authority_generation != authority.generation {
-            return Err(invalid("mint_finality.epoch_authorization.authority"));
-        }
-        if self.authority_id != authority.authority_id()? {
-            return Err(invalid("mint_finality.epoch_authorization.authority"));
-        }
-        Ok(())
-    }
-
-    /// Validate one contiguous scheduling transition from an authenticated predecessor.
-    ///
-    /// The caller must separately verify the incumbent boundary certificate and, for activation,
-    /// the complete prepared target and all-seat custody readiness. A genesis-to-retain transition
-    /// binds the initial ceremony from authenticated state; later retention preserves its binding.
-    ///
-    /// # Errors
-    /// Rejects epoch or height gaps, stale parent identity, generation relabeling, or changed
-    /// incumbent authority on retention.
-    pub fn validate_successor(&self, previous: &Self) -> Result<(), KagemushaIsiValidationErrorV1> {
-        self.validate()?;
-        previous.validate()?;
-        if self.network_id != previous.network_id
-            || previous.epoch.checked_add(1) != Some(self.epoch)
-            || previous.last_height.checked_add(1) != Some(self.first_height)
-            || self.previous_authorization_id != previous.authorization_id()?
-        {
-            return Err(invalid("mint_finality.epoch_authorization.predecessor"));
-        }
-        match self.decision {
-            KagemushaMintFinalityEpochDecisionV1::Genesis => {
-                return Err(invalid("mint_finality.epoch_authorization.successor"));
-            }
-            KagemushaMintFinalityEpochDecisionV1::Activate => {
-                if previous.authority_generation.checked_add(1) != Some(self.authority_generation)
-                    || self.authority_id == previous.authority_id
-                {
-                    return Err(invalid("mint_finality.epoch_authorization.activation"));
-                }
-            }
-            KagemushaMintFinalityEpochDecisionV1::Retain
-            | KagemushaMintFinalityEpochDecisionV1::RetainAndCancel => {
-                if self.authority_generation != previous.authority_generation
-                    || self.authority_id != previous.authority_id
-                    || (previous.beacon != BeaconEpochBindingV1::Bootstrap
-                        && self.beacon != previous.beacon)
-                {
-                    return Err(invalid("mint_finality.epoch_authorization.retention"));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Compute the fixed-width identity certified by both BLS consensus and paired-Pasta seals.
-    ///
-    /// # Errors
-    /// Returns an error unless the authorization has a canonical shape.
-    pub fn authorization_id(&self) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
-        self.validate()?;
-        let mut hasher = Sha256::new();
-        hasher.update(MINT_FINALITY_EPOCH_AUTHORIZATION_DOMAIN_V1);
-        hasher.update([0]);
-        hasher.update(self.version.to_le_bytes());
-        hasher.update(self.network_id.as_bytes());
-        hasher.update(self.epoch.to_le_bytes());
-        hasher.update(self.first_height.to_le_bytes());
-        hasher.update(self.last_height.to_le_bytes());
-        hasher.update(self.authority_generation.to_le_bytes());
-        hasher.update(self.authority_id);
-        match self.beacon {
-            BeaconEpochBindingV1::Bootstrap => {
-                hasher.update([0]);
-                hasher.update([0; 64]);
-            }
-            BeaconEpochBindingV1::Installed(binding) => {
-                hasher.update([1]);
-                hasher.update(binding.session_id);
-                hasher.update(binding.transcript_hash);
-            }
-        }
-        hasher.update(self.previous_authorization_id);
-        hasher.update(self.transition_id);
-        hasher.update([self.decision as u8]);
-        Ok(hasher.finalize().into())
-    }
-}
-
 /// Return the fixed-width identity used for a consensus peer in the mint-finality roster.
 ///
 /// # Errors
@@ -669,6 +355,9 @@ pub enum KagemushaIsiValidationErrorV1 {
     /// A terminal result was inspected without an externally pinned consensus context.
     #[error("KAGEMUSHA terminal validation requires a caller-pinned finality context")]
     MissingTrustAnchor,
+    /// The bound scheduling authorization failed its own validation.
+    #[error(transparent)]
+    EpochAuthorization(#[from] ValidatorEpochAuthorizationErrorV1),
 }
 
 /// Immutable kind of one idempotent reserve operation.
@@ -1689,7 +1378,7 @@ pub struct KagemushaMintFinalitySealMessageV1 {
     /// Chain layout version.
     pub version: u16,
     /// Complete certified authorization binding scheduling epoch and immutable key generation.
-    pub epoch_authorization: KagemushaMintFinalityEpochAuthorizationV1,
+    pub epoch_authorization: ValidatorEpochAuthorizationV1,
     /// Exact `3f + 1` validator count baked into the mint helper keys.
     pub validator_count: u32,
     /// Genesis-derived network identity.
@@ -1718,7 +1407,7 @@ pub struct KagemushaMintFinalitySealMessageV1 {
     /// Retention advances the scheduling epoch while preserving the authority generation. The
     /// paired seals carry this decision even when the boundary block has no top-ups.
     #[norito(required)]
-    pub next_epoch_authorization: Option<KagemushaMintFinalityEpochAuthorizationV1>,
+    pub next_epoch_authorization: Option<ValidatorEpochAuthorizationV1>,
 }
 
 impl KagemushaMintFinalitySealMessageV1 {
@@ -1749,7 +1438,7 @@ impl KagemushaMintFinalitySealMessageV1 {
     /// or a successor authorization.
     pub fn validate_bootstrap(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
         self.validate_header()?;
-        if self.epoch_authorization.decision != KagemushaMintFinalityEpochDecisionV1::Genesis
+        if self.epoch_authorization.decision != ValidatorEpochDecisionV1::Genesis
             || self.block_height != 1
             || self.kagemusha_top_up_count != 0
             || self.next_epoch_authorization.is_some()
@@ -1983,12 +1672,10 @@ impl KagemushaMintFinalitySeatReadinessContextV1 {
             return Err(invalid("mint_finality.seat_readiness"));
         }
         match self.beacon {
-            BeaconEpochBindingV1::Installed(
-                crate::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
-                    session_id,
-                    transcript_hash,
-                },
-            ) if session_id != [0; 32] && transcript_hash != [0; 32] => Ok(()),
+            BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id,
+                transcript_hash,
+            }) if session_id != [0; 32] && transcript_hash != [0; 32] => Ok(()),
             _ => Err(invalid("mint_finality.seat_readiness.beacon")),
         }
     }
@@ -2022,12 +1709,10 @@ impl KagemushaMintFinalitySeatReadinessContextV1 {
         hasher.update(self.first_height.to_le_bytes());
         hasher.update(self.last_height.to_le_bytes());
         hasher.update(self.validator_index.to_le_bytes());
-        if let BeaconEpochBindingV1::Installed(
-            crate::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
-                session_id,
-                transcript_hash,
-            },
-        ) = self.beacon
+        if let BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+            session_id,
+            transcript_hash,
+        }) = self.beacon
         {
             hasher.update(session_id);
             hasher.update(transcript_hash);
@@ -3094,253 +2779,6 @@ mod tests {
         )))
     }
 
-    #[test]
-    fn beacon_epoch_binding_has_one_tagged_json_and_binary_layout() {
-        let installed = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-            session_id: [7; 32],
-            transcript_hash: [8; 32],
-        });
-        let installed_json = format!(
-            "{{\"kind\":\"installed\",\"value\":{{\"session_id\":[{}],\"transcript_hash\":[{}]}}}}",
-            ["7"; 32].join(","),
-            ["8"; 32].join(","),
-        );
-        // Fixed-v1 COMPACT_LEN: u32 variant, 66-byte body, then two
-        // length-prefixed 32-byte fields in their declared order.
-        let mut installed_bytes = vec![1, 0, 0, 0, 66, 32];
-        installed_bytes.extend([7; 32]);
-        installed_bytes.push(32);
-        installed_bytes.extend([8; 32]);
-        for (value, expected_json, expected_bytes) in [
-            (
-                BeaconEpochBindingV1::Bootstrap,
-                r#"{"kind":"bootstrap","value":null}"#.to_owned(),
-                vec![0, 0, 0, 0],
-            ),
-            (installed, installed_json, installed_bytes),
-        ] {
-            assert_eq!(norito::json::to_json(&value).unwrap(), expected_json);
-            assert_eq!(
-                norito::json::from_str::<BeaconEpochBindingV1>(&expected_json).unwrap(),
-                value
-            );
-            assert_eq!(value.encode(), expected_bytes);
-            assert_eq!(
-                BeaconEpochBindingV1::decode(&mut expected_bytes.as_slice()).unwrap(),
-                value
-            );
-        }
-    }
-
-    #[test]
-    fn beacon_epoch_binding_rejects_noncanonical_json_shapes() {
-        for json in [
-            r#""bootstrap""#,
-            r#"{"kind":"Bootstrap","value":null}"#,
-            r#"{"kind":"unknown","value":null}"#,
-            r#"{"kind":"bootstrap"}"#,
-            r#"{"kind":"bootstrap","value":{}}"#,
-            r#"{"kind":"bootstrap","value":null,"unknown":0}"#,
-            r#"{"kind":"bootstrap","kind":"installed","value":null}"#,
-            r#"{"kind":"bootstrap","value":null,"value":null}"#,
-            r#"{"kind":"installed","value":null}"#,
-        ] {
-            assert!(
-                norito::json::from_str::<BeaconEpochBindingV1>(json).is_err(),
-                "{json}"
-            );
-        }
-        let installed = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-            session_id: [7; 32],
-            transcript_hash: [8; 32],
-        });
-        let canonical = norito::json::to_value(&installed).unwrap();
-        for mutation in 0..4 {
-            let mut malformed = canonical.clone();
-            let body = malformed
-                .as_object_mut()
-                .unwrap()
-                .get_mut("value")
-                .unwrap()
-                .as_object_mut()
-                .unwrap();
-            match mutation {
-                0 => {
-                    body.insert("unknown".into(), norito::json::Value::Null);
-                }
-                1 => {
-                    body.remove("session_id");
-                }
-                2 => {
-                    body.insert("session_id".into(), norito::json::Value::Array(Vec::new()));
-                }
-                _ => {
-                    body.insert(
-                        "transcript_hash".into(),
-                        norito::json::Value::String("08".repeat(32)),
-                    );
-                }
-            }
-            assert!(
-                norito::json::from_value::<BeaconEpochBindingV1>(malformed).is_err(),
-                "mutation {mutation}"
-            );
-        }
-    }
-
-    #[test]
-    fn mint_finality_epoch_decisions_preserve_tags_and_discriminants() {
-        for (value, tag, discriminant) in [
-            (
-                KagemushaMintFinalityEpochDecisionV1::Genesis,
-                "genesis",
-                0_u32,
-            ),
-            (
-                KagemushaMintFinalityEpochDecisionV1::Activate,
-                "activate",
-                1,
-            ),
-            (KagemushaMintFinalityEpochDecisionV1::Retain, "retain", 2),
-            (
-                KagemushaMintFinalityEpochDecisionV1::RetainAndCancel,
-                "retain_and_cancel",
-                3,
-            ),
-        ] {
-            let json = format!("{{\"kind\":\"{tag}\",\"value\":null}}");
-            assert_eq!(norito::json::to_json(&value).unwrap(), json);
-            assert_eq!(
-                norito::json::from_str::<KagemushaMintFinalityEpochDecisionV1>(&json).unwrap(),
-                value
-            );
-            assert_eq!(u32::from(value as u8), discriminant);
-            assert_eq!(value.encode(), discriminant.to_le_bytes());
-            assert_eq!(
-                KagemushaMintFinalityEpochDecisionV1::decode(
-                    &mut discriminant.to_le_bytes().as_slice()
-                )
-                .unwrap(),
-                value
-            );
-        }
-        for json in [
-            r#"{"kind":"Genesis","value":null}"#,
-            r#"{"kind":"retain_and_cancel","value":0}"#,
-            r#"{"kind":"retain","value":null,"unknown":true}"#,
-            r#"{"kind":"activate"}"#,
-        ] {
-            assert!(norito::json::from_str::<KagemushaMintFinalityEpochDecisionV1>(json).is_err());
-        }
-        assert!(
-            KagemushaMintFinalityEpochDecisionV1::decode(&mut 4_u32.to_le_bytes().as_slice())
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn beacon_epoch_binding_schema_preserves_owner_and_field_order() {
-        use iroha_schema::{EnumVariant, Metadata, TypeId as _};
-        let schema = BeaconEpochBindingV1::schema();
-        let Some(Metadata::Enum(binding)) = schema.get::<BeaconEpochBindingV1>() else {
-            panic!("beacon binding schema must be an enum");
-        };
-        assert_eq!(BeaconEpochBindingV1::id(), "BeaconEpochBindingV1");
-        assert_eq!(BeaconEpochBindingV1::type_name(), "BeaconEpochBindingV1");
-        assert_eq!(
-            binding.variants,
-            vec![
-                EnumVariant {
-                    tag: "bootstrap".into(),
-                    discriminant: 0,
-                    ty: None
-                },
-                EnumVariant {
-                    tag: "installed".into(),
-                    discriminant: 1,
-                    ty: Some(core::any::TypeId::of::<InstalledBeaconEpochBindingV1>())
-                },
-            ]
-        );
-        let Some(Metadata::Struct(body)) = schema.get::<InstalledBeaconEpochBindingV1>() else {
-            panic!("installed beacon body must own its named schema fields");
-        };
-        assert_eq!(
-            body.declarations
-                .iter()
-                .map(|field| field.name.as_str())
-                .collect::<Vec<_>>(),
-            ["session_id", "transcript_hash"]
-        );
-        assert!(
-            body.declarations
-                .iter()
-                .all(|field| field.ty == core::any::TypeId::of::<[u8; 32]>())
-        );
-        let decisions = KagemushaMintFinalityEpochDecisionV1::schema();
-        let Some(Metadata::Enum(decision)) =
-            decisions.get::<KagemushaMintFinalityEpochDecisionV1>()
-        else {
-            panic!("epoch decision schema must be an enum");
-        };
-        assert_eq!(
-            KagemushaMintFinalityEpochDecisionV1::id(),
-            "KagemushaMintFinalityEpochDecisionV1"
-        );
-        assert_eq!(
-            decision
-                .variants
-                .iter()
-                .map(|variant| (variant.tag.as_str(), variant.discriminant, variant.ty))
-                .collect::<Vec<_>>(),
-            [
-                ("genesis", 0, None),
-                ("activate", 1, None),
-                ("retain", 2, None),
-                ("retain_and_cancel", 3, None),
-            ]
-        );
-    }
-
-    #[test]
-    fn mint_finality_epoch_authorization_digest_is_independent_of_body_framing() {
-        let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-            version: 1,
-            network_id: NetworkId::from_genesis_hash(
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
-            ),
-            epoch: 1,
-            first_height: 11,
-            last_height: 20,
-            authority_generation: 0,
-            authority_id: [0x22; 32],
-            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id: [7; 32],
-                transcript_hash: [8; 32],
-            }),
-            previous_authorization_id: [0x33; 32],
-            transition_id: [0; 32],
-            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
-        };
-        // SHA-256 of the fixed 281-byte domain-separated authorization preimage.
-        assert_eq!(
-            hex::encode(authorization.authorization_id().unwrap()),
-            "c44b44f659b5854ccdcd49bbaac9a0a4d26410627ec92ab593225e79042541d0"
-        );
-        let json = norito::json::to_json(&authorization).unwrap();
-        assert_eq!(
-            norito::json::from_str::<KagemushaMintFinalityEpochAuthorizationV1>(&json).unwrap(),
-            authorization
-        );
-        assert_eq!(
-            KagemushaMintFinalityEpochAuthorizationV1::decode(
-                &mut authorization.encode().as_slice()
-            )
-            .unwrap(),
-            authorization
-        );
-    }
-
     fn mint_finality_template(
         generation: u64,
     ) -> KagemushaMintFinalityAuthorityGenerationTemplateV1 {
@@ -3419,87 +2857,22 @@ mod tests {
         );
     }
 
-    fn genesis_authorization() -> KagemushaMintFinalityEpochAuthorizationV1 {
+    fn genesis_authorization() -> ValidatorEpochAuthorizationV1 {
         let authority = mint_finality_template(0)
             .bind_network_id(network())
             .unwrap();
-        KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10).unwrap()
-    }
-
-    #[test]
-    fn genesis_authorization_binds_authority_network_and_interval() {
-        let authority = mint_finality_template(0)
-            .bind_network_id(network())
-            .unwrap();
-        let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10)
-            .expect("valid initial authority");
-        authorization
-            .validate_against_authority(&authority)
-            .unwrap();
-        assert_eq!(authorization.network_id, authority.network_id);
-        assert_eq!(
-            authorization.authority_id,
-            authority.authority_id().unwrap()
-        );
-        assert_eq!(
-            (
-                authorization.epoch,
-                authorization.first_height,
-                authorization.last_height
-            ),
-            (0, 1, 10)
-        );
-        assert_eq!(authorization.beacon, BeaconEpochBindingV1::Bootstrap);
-        assert_eq!(authorization.previous_authorization_id, [0; 32]);
-        assert_eq!(authorization.transition_id, [0; 32]);
-        assert_eq!(
-            authorization.decision,
-            KagemushaMintFinalityEpochDecisionV1::Genesis
-        );
-        let longer = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 11).unwrap();
-        assert_ne!(
-            authorization.authorization_id().unwrap(),
-            longer.authorization_id().unwrap()
-        );
-        assert_ne!(
-            authorization.authorization_id().unwrap(),
-            authority.authority_id().unwrap()
-        );
-    }
-
-    #[test]
-    fn genesis_authorization_rejects_invalid_authority_or_interval() {
-        let authority = mint_finality_template(0)
-            .bind_network_id(network())
-            .unwrap();
-        assert!(KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 0).is_err());
-        for mutation in 0..5 {
-            let mut invalid = authority.clone();
-            match mutation {
-                0 => invalid.generation = 1,
-                1 => invalid.validators[1].validator = invalid.validators[0].validator.clone(),
-                2 => invalid.version += 1,
-                3 => {
-                    invalid.validators.pop();
-                }
-                _ => invalid.validators[0].eq_proof_public_key = [0; 32],
-            }
-            assert!(
-                KagemushaMintFinalityEpochAuthorizationV1::genesis(&invalid, 10).is_err(),
-                "mutation {mutation}"
-            );
-        }
+        ValidatorEpochAuthorizationV1::genesis(&authority, 10).unwrap()
     }
 
     fn retained_authorization(
-        previous: &KagemushaMintFinalityEpochAuthorizationV1,
-    ) -> KagemushaMintFinalityEpochAuthorizationV1 {
-        KagemushaMintFinalityEpochAuthorizationV1 {
+        previous: &ValidatorEpochAuthorizationV1,
+    ) -> ValidatorEpochAuthorizationV1 {
+        ValidatorEpochAuthorizationV1 {
             epoch: previous.epoch + 1,
             first_height: previous.last_height + 1,
             last_height: previous.last_height + 10,
             previous_authorization_id: previous.authorization_id().unwrap(),
-            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+            decision: ValidatorEpochDecisionV1::Retain,
             beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
                 session_id: [7; 32],
                 transcript_hash: [8; 32],
@@ -3654,105 +3027,14 @@ mod tests {
     }
 
     #[test]
-    fn scheduling_authorization_retains_keys_without_retaining_epoch() {
-        let genesis = genesis_authorization();
-        let retained = retained_authorization(&genesis);
-        let retained_again = retained_authorization(&retained);
-        retained.validate_successor(&genesis).unwrap();
-        retained_again.validate_successor(&retained).unwrap();
-        assert_eq!(retained.authority_id, genesis.authority_id);
-        assert_eq!(retained_again.authority_generation, 0);
-        assert_ne!(
-            retained.authorization_id().unwrap(),
-            genesis.authorization_id().unwrap()
-        );
-        assert_ne!(
-            retained_again.authorization_id().unwrap(),
-            retained.authorization_id().unwrap()
-        );
+    fn mint_finality_generation_and_parameters_roundtrip_canonical_norito() {
         let authority = mint_finality_template(0)
             .bind_network_id(network())
             .unwrap();
-        retained_again
-            .validate_against_authority(&authority)
-            .unwrap();
-    }
-
-    #[test]
-    fn scheduling_authorization_rejects_gaps_stale_parent_and_relabeling() {
-        let genesis = genesis_authorization();
-        let current = retained_authorization(&genesis);
-        let valid = retained_authorization(&current);
-        for mutation in 0..8 {
-            let mut invalid = valid;
-            match mutation {
-                0 => invalid.epoch += 1,
-                1 => invalid.first_height += 1,
-                2 => invalid.previous_authorization_id = genesis.authorization_id().unwrap(),
-                3 => invalid.authority_generation += 1,
-                4 => invalid.authority_id = [3; 32],
-                5 => invalid.beacon = BeaconEpochBindingV1::Bootstrap,
-                6 => {
-                    invalid.beacon =
-                        BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                            session_id: [9; 32],
-                            transcript_hash: [8; 32],
-                        })
-                }
-                _ => invalid.transition_id = [5; 32],
-            }
-            assert!(
-                invalid.validate_successor(&current).is_err(),
-                "mutation {mutation}"
-            );
-        }
-    }
-
-    #[test]
-    fn scheduling_authorization_activation_and_cancellation_bind_attempts() {
-        let current = retained_authorization(&genesis_authorization());
-        let mut successor = retained_authorization(&current);
-        successor.decision = KagemushaMintFinalityEpochDecisionV1::Activate;
-        successor.authority_generation = 1;
-        let target = mint_finality_template(1)
-            .bind_network_id(network())
-            .unwrap();
-        successor.authority_id = target.authority_id().unwrap();
-        assert!(successor.validate_successor(&current).is_err());
-        successor.transition_id = [4; 32];
-        successor.validate_successor(&current).unwrap();
-        successor.validate_against_authority(&target).unwrap();
-        let mut cancelled = retained_authorization(&current);
-        cancelled.decision = KagemushaMintFinalityEpochDecisionV1::RetainAndCancel;
-        cancelled.transition_id = [4; 32];
-        cancelled.validate_successor(&current).unwrap();
-        assert_ne!(
-            cancelled.authorization_id().unwrap(),
-            retained_authorization(&current).authorization_id().unwrap()
-        );
-        cancelled.transition_id = [0; 32];
-        assert!(cancelled.validate().is_err());
-    }
-
-    #[test]
-    fn scheduling_authorization_and_generation_roundtrip_canonical_norito() {
-        let authorization = retained_authorization(&genesis_authorization());
-        let authority = mint_finality_template(0)
-            .bind_network_id(network())
-            .unwrap();
-        let bytes = authorization.encode();
-        let decoded: KagemushaMintFinalityEpochAuthorizationV1 =
-            Decode::decode(&mut bytes.as_slice()).unwrap();
-        assert_eq!(decoded, authorization);
         let bytes = authority.encode();
         let decoded: KagemushaMintFinalityAuthorityGenerationV1 =
             Decode::decode(&mut bytes.as_slice()).unwrap();
         assert_eq!(decoded, authority);
-        let decoded = norito::json::value::from_value::<KagemushaMintFinalityEpochAuthorizationV1>(
-            norito::json::to_value(&authorization).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(decoded, authorization);
         let parameters = KagemushaMintFinalityGenesisParametersV1 {
             authority_generation: mint_finality_template(0),
         };
@@ -4936,10 +4218,6 @@ mod additional_frame_owner_identity_tests {
         >("iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptWitnessV1");
     }
 }
-
-#[cfg(test)]
-#[path = "kagemusha_v1_epoch_binding_tests.rs"]
-mod epoch_binding_codec_tests;
 
 #[cfg(all(test, feature = "transparent_api"))]
 #[path = "kagemusha_v1_native_finality_tests.rs"]

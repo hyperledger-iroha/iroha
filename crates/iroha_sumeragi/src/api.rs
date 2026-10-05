@@ -234,7 +234,7 @@ pub enum Event {
         /// Original funded nonempty payload, or no includable work.
         payload: Option<PayloadBytes>,
         /// The application flag of a block with this payload (§3.7 A1): its Commit votes need
-        /// attestations. The core additionally requires attestation at every epoch boundary.
+        /// attestations. The core adds no flag of its own, not even at an epoch boundary.
         /// Empty builder responses are never proposed.
         attest: bool,
     },

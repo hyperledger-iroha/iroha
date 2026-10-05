@@ -316,7 +316,6 @@ impl DecodeField<3, DaProofScheme> for PolicyFields<'_> {
 /// work repeated by construction, refusal, filling or unchanged-source retry.
 pub struct PreparedDaProofPolicyBundle {
     source: Identity,
-    span: SequenceSpan,
     sequence: SequenceSpan,
     flags: u8,
     count: usize,
@@ -375,7 +374,6 @@ impl PreparedDaProofPolicyBundle {
         })?;
         Ok(Self {
             source: Identity::of(input.as_slice()),
-            span,
             sequence,
             flags,
             count,

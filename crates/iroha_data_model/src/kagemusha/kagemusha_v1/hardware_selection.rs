@@ -18,7 +18,9 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, NetworkId};
 use core::ops::Range;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use p256::ecdsa::{Signature as P256Signature, signature::Verifier as _};
+use p256::ecdsa::{
+    Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
+};
 use sha2::{Digest as _, Sha256};
 
 const SIGNING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:hardware-transition-selection\0";
@@ -535,9 +537,9 @@ impl KagemushaAppAttestHardwareTransitionSelectionV1 {
         message.extend_from_slice(&client_data_hash);
         // App Attest signs this nonce with ECDSA-SHA256, whose verifier hashes its input again.
         let nonce = Sha256::digest(&message);
-        credential
-            .device_public_key
-            .verifying_key()?
+        credential.device_public_key.validate()?;
+        P256VerifyingKey::from_sec1_bytes(credential.device_public_key.as_sec1_bytes())
+            .map_err(|_| invalid("device_public_key"))?
             .verify(&nonce, &signature)
             .map_err(|_| invalid("kagemusha.app_attest.signature"))?;
         require_encoded_size(self, KAGEMUSHA_APP_ATTEST_SELECTION_MAX_BYTES_V1)?;

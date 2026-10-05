@@ -83,3 +83,6 @@ mod metal_disable_on_mismatch;
 mod kotodama_call_tables;
 #[path = "../tiny_workload_dispatch.rs"]
 mod tiny_workload_dispatch;
+
+#[path = "../kotodama_compact_call_schema.rs"]
+mod kotodama_compact_call_schema;

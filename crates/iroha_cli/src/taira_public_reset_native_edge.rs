@@ -4,7 +4,7 @@
 //! the signed Mac producer and streamed uploads certify their exact public bytes.
 //! The persistent forwarding service remains owned by its original publisher.
 
-use super::super::{host_pair, native_edge_protocol as protocol};
+use super::super::{host_pair, native_edge_protocol as protocol, validate_lower_hex};
 use super::*;
 use host_pair::{NativeObservedFileV1, NativePublicFileV1, SignedHostPhaseV1};
 use iroha_fs::{PrivateDirectory, PublishMode, RetainedFile};
@@ -320,7 +320,7 @@ impl NativeCapsule {
         let request_owner =
             requests.ensure_child(sha256_hex(directory.path().as_os_str().as_encoded_bytes()))?;
         let name = format!("{action}.json");
-        request_owner.write_atomic(&name, &bytes, PublishMode::ReplaceOwned)?;
+        request_owner.write_atomic(&name, &bytes, PublishMode::Replace)?;
         request_owner.sync()?;
         let request = PublicPin::open(&request_owner.path().join(name), MAX_PLAN as u64, true)?;
         let request_file = request.retained.file().try_clone()?;
@@ -527,7 +527,7 @@ impl NativeOperation {
                     edge.write_atomic(
                         "active-lease.json",
                         json::to_json(&lease)?.as_bytes(),
-                        PublishMode::ReplaceOwned,
+                        PublishMode::Replace,
                     )?;
                 }
             }
@@ -614,7 +614,7 @@ impl NativeOperation {
         self.root.write_atomic(
             "progress.json",
             json::to_json(&next)?.as_bytes(),
-            PublishMode::ReplaceOwned,
+            PublishMode::Replace,
         )?;
         self.root.sync()?;
         self.progress = next;
@@ -899,7 +899,7 @@ fn admit_apply_plan(plan: &json::Value, edge: &EdgeV1) -> Result<()> {
         || candidate.get("path").and_then(json::Value::as_str)
             != Some(selected.remote_path.as_str())
         || candidate.get("sha256").and_then(json::Value::as_str) != Some(selected.sha256.as_str())
-        || Path::new(directory).join(basename) != Path::new(&edge.nginx_configuration)
+        || Path::new(directory).join(basename) != Path::new(&edge.nginx_config)
     {
         return Err(eyre!(
             "native plan is not joined to the signed edge renderer artifact and installed destination"
@@ -1017,7 +1017,7 @@ fn verify_ready(
         admitted.inventory.hosts.native_edge.owner_uid,
         MAX_PLAN,
     )?;
-    let request = json::json!({ "plan": json::from_slice::<json::Value>(&plan)?, "identity_receipt": json::from_slice::<json::Value>(&identity)? });
+    let request = norito::json!({ "plan": (json::from_slice::<json::Value>(&plan)?), "identity_receipt": (json::from_slice::<json::Value>(&identity)?) });
     let _forwarding = capsule.run(
         &operation.root,
         "forwarding",
@@ -1035,11 +1035,11 @@ fn verify_ready(
 }
 
 fn native_identity_json(identity: &host_pair::NativeFileIdentityV1) -> json::Value {
-    json::json!({ "device": identity.device.to_string(), "inode": identity.inode.to_string(), "uid": identity.uid.to_string(), "gid": identity.gid.to_string(), "mode": identity.mode.to_string(), "links": identity.links.to_string(), "size": identity.size.to_string(), "mtime_ns": identity.mtime_ns.to_string(), "ctime_ns": identity.ctime_ns.to_string() })
+    norito::json!({ "device": (identity.device.to_string()), "inode": (identity.inode.to_string()), "uid": (identity.uid.to_string()), "gid": (identity.gid.to_string()), "mode": (identity.mode.to_string()), "links": (identity.links.to_string()), "size": (identity.size.to_string()), "mtime_ns": (identity.mtime_ns.to_string()), "ctime_ns": (identity.ctime_ns.to_string()) })
 }
 
 fn owner_reference(pin: &PublicPin) -> json::Value {
-    json::json!({ "path": pin.reference.file.path, "identity": native_identity_json(&pin.reference.file.identity), "sha256": pin.reference.sha256 })
+    norito::json!({ "path": (pin.reference.file.path), "identity": (native_identity_json(&pin.reference.file.identity)), "sha256": (pin.reference.sha256) })
 }
 
 fn reconcile_plan(plan: &json::Value) -> Result<json::Value> {
@@ -1064,7 +1064,7 @@ fn reconcile_plan(plan: &json::Value) -> Result<json::Value> {
     )?;
     let publication =
         PublicPin::open(&Path::new(directory).join(basename), MAX_PLAN as u64, false)?;
-    result.as_object_mut().ok_or_else(|| eyre!("native plan object missing"))?.insert("publication".into(), json::json!({ "kind": "reconcile", "prior": { "operation_id": op, "journal": owner_reference(&journal), "publication": owner_reference(&publication) } }));
+    result.as_object_mut().ok_or_else(|| eyre!("native plan object missing"))?.insert("publication".into(), norito::json!({ "kind": "reconcile", "prior": { "operation_id": op, "journal": (owner_reference(&journal)), "publication": (owner_reference(&publication)) } }));
     Ok(result)
 }
 
@@ -1077,7 +1077,7 @@ fn inspection_request(plan: &json::Value) -> Result<json::Value> {
     let mut candidate = PublicPin::open(Path::new(path), MAX_PLAN as u64, false)?;
     let bytes = candidate.bytes(MAX_PLAN)?;
     Ok(
-        json::json!({ "host_kind": plan.get("host_kind").ok_or_else(|| eyre!("native host kind missing"))?, "native": plan.get("native").ok_or_else(|| eyre!("native plan metadata missing"))?, "candidate_sha256": candidate.reference.sha256, "candidate_base64": BASE64.encode(bytes), "renderer_source_sha256": plan.get("renderer_source").and_then(|value| value.get("sha256")).ok_or_else(|| eyre!("renderer SHA missing"))?, "master": plan.get("master").ok_or_else(|| eyre!("native master missing"))?, "destination": plan.get("destination").ok_or_else(|| eyre!("native destination missing"))?, "operation_id": plan_operation(plan)?, "publication": plan.get("publication").ok_or_else(|| eyre!("native publisher missing"))? }),
+        norito::json!({ "host_kind": (plan.get("host_kind").ok_or_else(|| eyre!("native host kind missing"))?), "native": (plan.get("native").ok_or_else(|| eyre!("native plan metadata missing"))?), "candidate_sha256": (candidate.reference.sha256), "candidate_base64": (BASE64.encode(bytes)), "renderer_source_sha256": (plan.get("renderer_source").and_then(|value| value.get("sha256")).ok_or_else(|| eyre!("renderer SHA missing"))?), "master": (plan.get("master").ok_or_else(|| eyre!("native master missing"))?), "destination": (plan.get("destination").ok_or_else(|| eyre!("native destination missing"))?), "operation_id": (plan_operation(plan)?), "publication": (plan.get("publication").ok_or_else(|| eyre!("native publisher missing"))?) }),
     )
 }
 
@@ -1248,7 +1248,7 @@ fn no_effect_completion_plan(
                 .clone(),
         );
     }
-    object.insert("candidate".into(), json::json!({ "path": observed.publication.file.path, "owner_uid": admitted.inventory.hosts.native_edge.owner_uid, "sha256": observed.publication.sha256 }));
+    object.insert("candidate".into(), norito::json!({ "path": (observed.publication.file.path), "owner_uid": (admitted.inventory.hosts.native_edge.owner_uid), "sha256": (observed.publication.sha256) }));
     object
         .get_mut("renderer_source")
         .and_then(json::Value::as_object_mut)
@@ -1613,4 +1613,49 @@ fn complete(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_plan_binds_the_admitted_native_publication_destination() {
+        let inventory = super::super::super::sample_inventory_fixture();
+        let edge = &inventory.edge;
+        let selected = artifact(&edge.artifacts, "edge_config").unwrap();
+        let destination = Path::new(&edge.nginx_config);
+        let plan = norito::json!({
+            "schema": "iroha.taira.native-nginx-apply.plan.v1",
+            "provider": "macstadium-dublin",
+            "host_kind": "macos",
+            "operation_id": ("a".repeat(32)),
+            "candidate": {
+                "path": (selected.remote_path),
+                "sha256": (selected.sha256)
+            },
+            "destination": {
+                "directory": {"path": (destination.parent().unwrap().to_str().unwrap())},
+                "basename": (destination.file_name().unwrap().to_str().unwrap())
+            }
+        });
+        admit_apply_plan(&plan, edge).expect("exact native publication destination");
+
+        for (field, replacement) in [
+            (
+                "directory",
+                norito::json!({"path": "/another/native/publication"}),
+            ),
+            ("basename", json::Value::String("another.conf".into())),
+        ] {
+            let mut changed = plan.clone();
+            changed
+                .get_mut("destination")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), replacement);
+            assert!(admit_apply_plan(&changed, edge).is_err(), "{field}");
+        }
+    }
 }

@@ -79,52 +79,16 @@ APPROVED_PRIVACY_C_EXPORTS = (
     "iroha_privacy_validate_exact12_capability_manifest_v1",
     "iroha_privacy_free_buffer",
 )
-APPROVED_KAGEMUSHA_C_EXPORTS = (
-    "connect_norito_kagemusha_v1_payment_request_validate",
-    "connect_norito_kagemusha_v1_payment_validate",
-    "connect_norito_kagemusha_v1_acknowledgement_validate",
-    "connect_norito_kagemusha_v1_complete_exchange_validate",
-    "connect_norito_kagemusha_v1_mint_authorization_validate",
-    "connect_norito_kagemusha_v1_mint_credit_validate",
-    "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
-    "connect_norito_kagemusha_v1_redemption_voucher_validate",
-    "connect_norito_kagemusha_v1_payment_request_text_validate",
-    "connect_norito_kagemusha_v1_payment_text_validate",
-    "connect_norito_kagemusha_v1_acknowledgement_text_validate",
-    "connect_norito_kagemusha_v1_complete_exchange_text_validate",
-    "connect_norito_kagemusha_v1_mint_authorization_text_validate",
-    "connect_norito_kagemusha_v1_mint_credit_text_validate",
-    "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
-    "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
-    "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
-    "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
-    "connect_norito_kagemusha_contract_vector_v1",
-    "connect_norito_kagemusha_core_coordinator_contract_v1",
-    "connect_norito_kagemusha_core_coordinator_install_v1",
-    "connect_norito_kagemusha_core_coordinator_open_v1",
-    "connect_norito_kagemusha_core_coordinator_invoke_v1",
-    "connect_norito_kagemusha_core_coordinator_close_v1",
-    "connect_norito_kagemusha_testnet_state_proof_observe_v1",
-    "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
-    "connect_norito_kagemusha_testnet_value_admit_v1",
-    "connect_norito_kagemusha_testnet_value_credit_v1",
-    "connect_norito_kagemusha_testnet_native_startup_contract_v1",
-    "connect_norito_kagemusha_testnet_native_startup_activate_v1",
-    "connect_norito_kagemusha_ordinary_runtime_startup_v1",
-    "connect_norito_kagemusha_ordinary_current_control_v1",
-    "connect_norito_kagemusha_ordinary_outgoing_v1",
-    "connect_norito_kagemusha_ordinary_incoming_v1",
-    "connect_norito_kagemusha_ordinary_integrity_refresh_v1",
-    "connect_norito_kagemusha_ordinary_mint_funding_v1",
-    "connect_norito_kagemusha_device_capabilities_v1",
-    "connect_norito_kagemusha_device_execute_v1",
-    "connect_norito_kagemusha_device_command_response_v1_verify",
-    "connect_norito_kagemusha_reserve_finality_hint_v1",
-    "connect_norito_kagemusha_reserve_finality_verify_v1",
-    "connect_norito_kagemusha_top_up_signed_request_validate_v1",
-)
 RETIRED_KAGEMUSHA_C_PREFIX = (
     "connect_norito_" + "_".join(reversed(("cash", "offline"))) + "_"
+)
+RETIRED_KAGEMUSHA_EXPORT_PREFIXES = (
+    RETIRED_KAGEMUSHA_C_PREFIX,
+    "connect_norito_kagemusha_",
+    "Java_org_hyperledger_iroha_sdk_offline_Kagemusha",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_Kagemusha",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_Kagemusha",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_",
 )
 STALE_PRIVACY_ABI_MARKER_RE = re.compile(
     r"(?:abi[_-]?(?:21|22|23|24)|(?:^|_)v(?:21|22|23|24)(?:$|_))",
@@ -157,7 +121,6 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
-        *APPROVED_KAGEMUSHA_C_EXPORTS,
         "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeBridgeAbiVersion",
         "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeIntentHashV1",
         "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeAssessmentMarkerV1",
@@ -174,39 +137,6 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyCommandResponseV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInstallV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1",
-        # Android-only application binding/account custody is checked by the mobile gate.
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeStartupV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeCurrentControlV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeOutgoingV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeIncomingV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeIntegrityRefreshV1",
-        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeMintFundingV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeContractV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeObserveV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeContractV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeObserveV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeContractV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeAdmitV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeContractV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeCreditV1",
-        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeContractV1",
-        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeActivateV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeContractV1",
-        "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeCreateV1",
-        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeBridgeAbiVersion",
-        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeHint",
-        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeVerify",
-        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeBridgeAbiVersion",
-        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeValidate",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     ),
     "csharp": (
@@ -220,7 +150,6 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
-        *APPROVED_KAGEMUSHA_C_EXPORTS,
         "connect_norito_retail_fee_intent_hash_v1",
         "connect_norito_retail_fee_assessment_marker_v1",
         "connect_norito_retail_fee_assessment_decode_v1",
@@ -796,22 +725,13 @@ def validate_retired_protocol_symbols(symbols: Sequence[str], *, sdk: str) -> No
     """Reject first-release artifacts that expose retired protocol entrypoints."""
 
     explicitly_retired = set(RETIRED_PROTOCOL_SYMBOLS[sdk])
-    approved_kagemusha = (
-        set(APPROVED_KAGEMUSHA_C_EXPORTS)
-        if sdk in EXACT_PRIVACY_C_EXPORT_SDKS
-        else set()
-    )
     retired = sorted(
         {
             symbol
             for symbol in symbols
             if symbol in explicitly_retired
             or (sdk == "c-jni" and symbol.startswith("Java_org_hyperledger_iroha_android_"))
-            or symbol.startswith(RETIRED_KAGEMUSHA_C_PREFIX)
-            or (
-                symbol.startswith("connect_norito_kagemusha_")
-                and symbol not in approved_kagemusha
-            )
+            or symbol.startswith(RETIRED_KAGEMUSHA_EXPORT_PREFIXES)
         }
     )
     if retired:

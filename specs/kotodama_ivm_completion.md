@@ -409,9 +409,9 @@ They return only existing scoped paired-table snapshots. Raw encoding does not
 validate dependent indexes or other fields' modes and identities. Verifier and
 domain-owner, account-identity, account-alias, asset-definition, asset-balance,
 proof-status, validation-fee, contract-alias, contract-subject, escrow,
-repo-agreement, NFT/RWA and account-rekey captures use their complete bounded
-inverse relations. The scoped catalog has 192 raw adapters, 15 checked outputs
-and 10 structural, trigger, Musubi and membership outputs with an explicit
+repo-agreement, NFT/RWA, account-rekey and trigger action/contract captures use their
+complete bounded inverse relations. The scoped catalog has 192 raw adapters, 20 checked outputs
+and 5 Musubi and membership outputs with an explicit
 missing original adapter; missing adapters cannot yield partial success. Complete structural/cell/history checks and the sole
 StatePublication integration remain open.
 Account-rekey capture shares one complete four-source relation across committed
@@ -419,6 +419,31 @@ and frozen owners, preserving canonical rekey provenance and historical audit
 occurrences. It retains native probes and encoding results through the final State
 fence, with the original pool and Ordinary/Replace owners. Fresh compilation and
 execution remain required; see the [source-coupled relation](frozen_account_rekey_occurrence_relation.md).
+
+Trigger-contract capture shares one complete relation across committed readers,
+startup validation and the original frozen Set owners. It checks every physical
+action/contract history stream in Current-before-Predecessor order, retaining
+complete lookup, code, count and dangling-occurrence checks. Its fixed counter
+backing uses the original State pool. All five committed currentness Results
+precede propagation; canonical encoding and reader release precede the final
+State fence. Frozen capture requires all ten actual Set targets and one common
+Ordinary/Replace mode. The registered image-order and inherited codec-budget
+controls still require fresh execution; cold/warm allocator evidence and full
+native physical custody remain open. Complete State publication remains unfinished.
+See the [source-coupled relation](frozen_trigger_contract_owner_relation.md).
+
+The four trigger-action outputs share one relation across committed and frozen
+readers. Both images require exactly one typed action for each ID, its exact
+ID-kind row, and active membership matching non-depleted, enabled actions. Every
+capture retains all ten original Set sources, validates the contract relation
+first, scans complete action/ID/active and metadata tails, and uses the same
+original-pool counter. Bool-first and then u64 eligibility decoding is shared
+with ordinary execution over borrowed Norito JSON text. All native currentness
+Results, held encoding, reader release and the final State fence precede exposure.
+Frozen capture requires all ten actual targets and one Ordinary/Replace mode.
+Fresh runtime, allocation and canonical-byte controls remain required; these
+local inverse checks do not establish complete State publication or finality.
+See the [source-coupled relation](frozen_trigger_action_owner_relation.md).
 
 Contract-subject capture shares one sealed native relation with committed readers
 and startup history. It preserves source-before-index and Current-before-

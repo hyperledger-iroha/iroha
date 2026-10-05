@@ -1,9 +1,10 @@
 //! The RP57 Poseidon permutation and sponge against the vendored stack.
 //!
-//! `iroha_pasta::poseidon` replaces `iroha_core_zk::kagemusha_v1_poseidon`,
-//! which builds `snark-verifier`'s native `Poseidon<F, F, 3, 2>` from
-//! halo2-base's `OptimizedPoseidonSpec::<F, 3, 2>::new::<8, 57, 0>()`. On both
-//! fields this module checks:
+//! `iroha_pasta::poseidon` replaces the vendored sponge: `snark-verifier`'s
+//! native `Poseidon<F, F, 3, 2>` built from halo2-base's
+//! `OptimizedPoseidonSpec::<F, 3, 2>::new::<8, 57, 0>()`, which the KAGEMUSHA
+//! domain hash and the confidential V3 hash run on. On both fields this module
+//! checks:
 //!
 //! - the pinned round constants and MDS matrix against halo2-base's
 //!   `unoptimized_constants::<8, 57, 0>()`, the in-crate Grain regeneration and
@@ -36,7 +37,7 @@ use crate::{array_at, data_rng, field_from_hex, fixture_at, str_at};
 /// The vendored native sponge.
 type VendoredSponge<F> = Poseidon<F, F, WIDTH, RATE>;
 
-/// A fresh vendored sponge, built exactly as `kagemusha_v1_poseidon` builds it.
+/// A fresh vendored sponge, built exactly as the domain hashes build it.
 fn vendored_sponge<F: PrimeField + FromUniformBytes<64> + Ord>() -> VendoredSponge<F> {
     VendoredSponge::<F>::from_spec(
         &NativeLoader,

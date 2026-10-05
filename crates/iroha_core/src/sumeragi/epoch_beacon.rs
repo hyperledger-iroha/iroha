@@ -16,6 +16,7 @@ use crate::{
     },
     state::{BlockHashRead, GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, WorldReadOnly},
 };
+use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1};
 use iroha_data_model::{
     block::consensus::SumeragiRootScope,
     consensus::{
@@ -23,7 +24,6 @@ use iroha_data_model::{
         GlobalThresholdBeaconPulseContextV1,
     },
     governance::types::BeaconSessionId,
-    isi::kagemusha_v1::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1},
     parameter::system::ConsensusMode,
     sumeragi::epoch::ValidatorEpochContextV1,
 };

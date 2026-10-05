@@ -831,11 +831,13 @@ mod tests {
     #[test]
     fn captured_block_synthetic_write_families_share_one_authenticated_root() {
         use crate::exec_witness as recorder;
+        use iroha_data_model::{asset::AssetId, execution_witness::ExecutionWitnessKeyTagV1};
+        use mv::storage::StorageReadOnly;
         let receipts = [sample_receipt([0x61; 32]), sample_receipt([0x62; 32])];
         for include_receipts in [false, true] {
             crate::state::native_capture_fixture::with_native_capture_source(
                 true,
-                |state, mut state_block, _recording, mut source, _| {
+                |state, mut state_block, _recording, mut source, source_hash| {
                     let header = source.header();
                     if include_receipts {
                         // Reverse insertion order also exercises the canonical operation-id order.
@@ -855,6 +857,31 @@ mod tests {
                         &mut source,
                     )
                     .unwrap();
+                    // This root-composition control deliberately retains the one ordinary
+                    // balance leaf from the original test. Its bytes now come from the
+                    // genuine completed transfer and its actual applied World overlay;
+                    // the producer's quantity provenance remains owned by the D7 seal.
+                    assert_eq!(source.fastpq_transcripts().len(), 1);
+                    let transcripts = &source.fastpq_transcripts()[&source_hash];
+                    assert_eq!(transcripts.len(), 1);
+                    assert_eq!(transcripts[0].deltas.len(), 1);
+                    let delta = &transcripts[0].deltas[0];
+                    let asset =
+                        AssetId::of(delta.asset_definition.clone(), delta.from_account.clone());
+                    let post = state_block
+                        .world
+                        .assets
+                        .get(&asset)
+                        .expect("the genuine transfer retains its source balance")
+                        .as_ref();
+                    assert_eq!(post, &delta.from_balance_after);
+                    recorder::record_write_asset(&asset, post);
+                    let mut ordinary_key = vec![ExecutionWitnessKeyTagV1::AssetBalance as u8];
+                    ordinary_key.extend_from_slice(asset.to_string().as_bytes());
+                    let ordinary_value = iroha_primitives::json::Json::new(post.clone())
+                        .get()
+                        .as_bytes()
+                        .to_vec();
                     assert_eq!(
                         state_block
                             .fastpq_source_inventory()
@@ -872,6 +899,18 @@ mod tests {
                         norito::decode_canonical(&encoded).expect("decode witness");
                     assert_eq!(&decoded, witness.wire());
                     assert_eq!(witness.writes.len(), if include_receipts { 8 } else { 6 });
+                    let mut ordinary = witness
+                        .writes
+                        .iter()
+                        .filter(|write| write.key == ordinary_key);
+                    assert_eq!(
+                        ordinary
+                            .next()
+                            .expect("the ordinary balance leaf is retained")
+                            .value,
+                        ordinary_value,
+                    );
+                    assert!(ordinary.next().is_none());
                     // All four fixed native contexts and the ordinary source manifest
                     // remain authenticated alongside this genuine transfer's writes.
                     for key in [

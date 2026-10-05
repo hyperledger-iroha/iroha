@@ -22,7 +22,8 @@ use iroha_data_model::{
     },
     isi::repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     kagemusha::{
-        KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaIpm1PayloadKindV1,
+        KagemushaIpm1PayloadKindV1,
+        kagemusha_wallet_v1::{KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1},
     },
     privacy::{
         GoldilocksDigest384V1, PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1,

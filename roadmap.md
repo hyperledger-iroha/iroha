@@ -7,13 +7,17 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
 
 ## Current priorities
 
-1. Rebuild and qualify the Nexus proposal projection, retained peer context,
-   telemetry/status retirement and restricted lane gossip on the real workload;
-   measure repeated accepted settlements.
+1. Complete Nexus fault/restart qualification and restricted lane isolation;
+   preserve original funded execution through publication and replay, qualify lane
+   retirement ownership, and reclaim physical storage only after retained global
+   history releases its certified dependencies.
 2. Complete original funded execution through State/World acquisition,
    certification, Kura publication and restart; finish DS-local State and AMX.
-3. Qualify Sumeragi and authenticated Linux artifacts; extend Taira's verified
-   four-validator readiness, paid writes and rolling restart to DPN/contracts.
+3. Qualify Sumeragi and authenticated Linux artifacts; Taira's deployment
+   owner manages cutover, live four-validator readiness, paid writes and restart
+   evidence, including DPN/contracts. This coding task owns H1–H5 in the
+   [Sumeragi handoff goals](specs/sumeragi_goals.md#active-handoff-completion-gates)
+   and works only in `/Users/takemiyamakoto/dev/iroha` on `optimizations`.
 4. Validate the combined fixture/runtime repairs through fresh workspace,
    genuine fixture and native SDK artifacts on one source candidate. Qualify the
    joint X509 relation and transcript privacy, and resolve its proving-time and
@@ -119,7 +123,7 @@ compared by no state transition, become committed State (F.4).
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
 | C1 | Norito/derive closure | Norito/derives/primitives/MV | Explicit archive context, fallible aligned/scalar/tree allocations and owned values; retire unused adapters, share emitters, meet compile budgets/UI tests. |
-| C2 | Deterministic VM/compiler | IVM/Kotodama/hosts | G1–G8, ABI V1, fallible lifecycle/erasure and detached proof custody; complete State/Kura publication and native execution/private invocation/AXT; identical gas/traps/state/proofs, complete cache/index/control and host/native scratch allocation custody, retained observation recovery and authenticated calibration. |
+| C2 | Deterministic VM/compiler | IVM/Kotodama/hosts | G1–G8, ABI V1, fallible lifecycle/erasure and detached proof custody; qualify integrated trigger-action relations, complete Musubi and membership/frontier capture and State/Kura publication, then native execution/private invocation/AXT; identical gas/traps/state/proofs, complete cache/index/control and host/native scratch allocation custody, retained observation recovery and authenticated calibration. |
 | C3 | Signature audit | Crypto/consumers | ML-DSA/SM2/GOST/FHE feature/lint/custody, mixed-torsion Ed25519, PoP and threshold-BLS/timed-OVN/side-channel review; Musubi State-reader prerequisites. |
 | C4 | FASTPQ/backend | Prover/verifier/reviewers | Masked 301-column/77-query SHA3/SHAKE DEEP ordinary/AXT relations and bounded work/RSS; preserve current maximum ordinary/AXT component proof passes while completing finalized-source admission, AIR/FRI/hash/qROM/privacy review, hardware/four-peer parity, embedded authenticated Metal and driver-loaded CUDA host. |
 | C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; qualify the joint X509 relation and transcript privacy, and complete its maximum proof within unchanged byte/RSS, literal address-space and 300-second limits; unsupported paths stay disabled. |

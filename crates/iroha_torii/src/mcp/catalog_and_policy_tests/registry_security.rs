@@ -1226,27 +1226,6 @@ fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
     );
 }
 #[test]
-fn kagemusha_routes_are_available_to_operator_mcp_tools() {
-    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
-    cfg.profile = ToriiMcpProfile::Operator;
-    cfg.expose_operator_routes = true;
-    let tools = build_tool_specs(&cfg);
-    for path in [
-        iroha_torii_shared::route_catalog::kagemusha::READINESS_PATH,
-        iroha_torii_shared::route_catalog::kagemusha::TOP_UP_PATH,
-        iroha_torii_shared::route_catalog::kagemusha::REDEEM_PATH,
-        iroha_torii_shared::route_catalog::kagemusha::OPERATION_PATH,
-    ] {
-        assert!(
-            tools.iter().any(|tool| {
-                tool.route_backing()
-                    .is_some_and(|(_, _, path_template)| path_template == path)
-            }),
-            "universal KAGEMUSHA route is missing from the operator MCP registry: {path}"
-        );
-    }
-}
-#[test]
 fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
     use iroha_torii_shared::route_catalog::{
         ApiSurface, AuthenticationPolicy, Listener, RouteProjections,
@@ -1438,54 +1417,43 @@ fn audited_faucet_handshake_allowlist_requires_exact_name_method_and_path() {
     }
 }
 #[test]
-fn tool_registry_honors_universal_kagemusha_mcp_projection() {
+fn tool_registry_keeps_signed_ledger_original_carriers_outside_mcp() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
-    assert!(
-        route_catalog::kagemusha::AUTHORITY_STATE
-            .projections()
-            .mcp(),
-        "the challenged data-only World publication has the catalog's MCP projection"
-    );
     for route in [
-        route_catalog::kagemusha::RESOURCE_NAMES_STATE,
-        route_catalog::kagemusha::AUTHORITY_ORIGINALS,
-        route_catalog::kagemusha::ORDINARY_WALLET_CURRENT,
-        route_catalog::kagemusha::ORDINARY_MINT_ISSUER_PURPOSE,
-        route_catalog::kagemusha::ORDINARY_MINT_FINALIZED,
-        route_catalog::kagemusha::ORDINARY_MINT_CREDIT,
+        route_catalog::core::RESOURCE_NAMES_STATE,
+        route_catalog::core::AUTHORITY_ORIGINALS,
     ] {
         assert!(
             !route.projections().mcp(),
             "scoped native read authority must remain outside MCP: {}",
             route.path()
         );
-    }
-    for route in route_catalog::kagemusha::ROUTES {
         let method = match route.method() {
-            CatalogHttpMethod::Any => {
-                panic!("KAGEMUSHA routes must never use protocol-wide ANY matching")
-            }
             CatalogHttpMethod::Get => Method::GET,
             CatalogHttpMethod::Post => Method::POST,
-            CatalogHttpMethod::Put => Method::PUT,
-            CatalogHttpMethod::Patch => Method::PATCH,
-            CatalogHttpMethod::Delete => Method::DELETE,
+            other => panic!("ledger original carrier uses an unexpected method: {other:?}"),
         };
-        assert_eq!(
-            tools.iter().any(|tool| tool.route_backing().is_some_and(
+        assert!(
+            !tools.iter().any(|tool| tool.route_backing().is_some_and(
                 |(_, tool_method, path_template)| {
                     tool_method == &method && path_template == route.path()
                 }
             )),
-            route.projections().mcp(),
-            "KAGEMUSHA route disagrees with its declared MCP projection: {} {}",
+            "no MCP tool may back a signed ledger original carrier: {} {}",
             route.method().as_str(),
             route.path()
         );
     }
+}
+#[test]
+fn operator_mcp_registry_keeps_core_tools_and_transaction_route_projection() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
     assert!(tools.iter().any(|tool| tool.name == "iroha.health"));
     assert!(
         tools

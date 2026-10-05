@@ -5448,7 +5448,7 @@ def main() -> int:
         "active_global_beacon_key_session() != Some(previous.session_id)",
         "old.retire(outcome.first_height)", "next.activate(outcome.first_height)",
         "beacon_rotation = Some((old, next))", "if let Some((old, next)) = beacon_rotation",
-        "KagemushaMintFinalityEpochDecisionV1::RetainAndCancel",
+        "ValidatorEpochDecisionV1::RetainAndCancel",
         "retention must cancel the exact frozen attempt",
     ))
 

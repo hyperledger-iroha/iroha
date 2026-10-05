@@ -109,7 +109,7 @@ public enum SumeragiStatusWire {
         try r.finish(); return ["reason": names[Int(tag)], "details": details]
     }
     private static func encodeKey(_ literal: String) throws -> Data {
-        let key = try governanceKagemushaPublicKeyOrderV1(literal, codingPath: [])
+        let key = try governancePublicKeyOrderV1(literal, codingPath: [])
         let bytes = [key.algorithm] + key.payload
         return integer(UInt64(bytes.count), 8) + record(bytes.map { Data([$0]) })
     }

@@ -1,25 +1,40 @@
-//! The in-circuit **prototype** step relations (M7 `m7_step`, two-level and
-//! flat layouts) on the `iroha_plonk_gadgets` chips.
+//! The in-circuit **prototype** step relations (spec section 3 core,
+//! two-level and flat layouts) on the `iroha_plonk_gadgets` chips.
 //!
 //! Every value is either range-checked where it is assigned (`u128` and
 //! `u64` fields, via [`UintChip`]), a constant pinned through the constants
-//! column, or a free glue witness pinned by the copies that hash it. Every
-//! hash output is compared with the native reference
-//! ([`StepWitness::evaluate`]) while the witness is known, so a successful
-//! synthesis also proves digest parity.
+//! column, a hash output, or a free glue witness. Every free witness is one
+//! of:
+//!
+//! - an opened core or remainder field (bound by the predecessor
+//!   commitment, which a consumer compares with the lineage proof's head);
+//! - a carried successor field (a state nonce or an updated map root, bound
+//!   by the successor commitment; spec section 3.2 assigns root transitions
+//!   to the native Advance check and to the lineage relation);
+//! - a Request term (bound by the credit identifier, whose canonical limbs
+//!   the statement effect carries and which `sigma_send` also exposes; both
+//!   wallets recompute it from the Request body they hold);
+//! - the pending-outgoing lineage input of `sigma_send` (bound by the
+//!   statement, which a consumer compares with the lineage proof).
+//!
+//! The identity limbs of the Request and of the statement are the opened
+//! core cells, never fresh witnesses. Every hash output is compared with the
+//! native reference ([`StepWitness::evaluate`]) while the witness is known,
+//! so a successful synthesis also proves digest parity.
 
 use iroha_pasta::poseidon::PoseidonField;
 use iroha_plonk::frontend::{Error, Region, Value};
 use iroha_plonk_gadgets::{
     AbsorbInput, GlueChip, RunningSumChip, SpongeChip, U64, U128, UintChip, Word,
-    statement::{StatementCells, StepRelation, statement_digest},
+    statement::{StatementCells, StepRelation, assign_canonical_limbs, statement_digest},
 };
 
 use crate::{
     circuit::{HashSite, Inventory, LanePlan, RelationOutput, RelationShape},
     witness::{
-        CORE_FIELDS, LIFECYCLE_ACTIVE, NativeStep, REMAINDER_FIELDS, REQUEST_VERSION, SendInputs,
-        StateLayout, StateRemainder, StepDigests, StepInputs, StepWitness, core_index, limbs,
+        CORE_FIELDS, CoreState, LIFECYCLE_ACTIVE, NativeStep, REMAINDER_FIELDS, REQUEST_VERSION,
+        RequestTerms, StateLayout, StateRemainder, StepDigests, StepInputs, StepWitness,
+        core_index, limbs,
     },
 };
 
@@ -111,11 +126,49 @@ fn preimage<'w, F: PoseidonField>(
     words
 }
 
+/// The batch indices of the opened core fields that are not range-checked.
+struct CoreSlots {
+    lifecycle: usize,
+    scheme: [usize; 2],
+    asset: [usize; 2],
+    wallet: [usize; 2],
+    credential: [usize; 2],
+    burned_total: usize,
+    next_load: usize,
+    next_redeem: usize,
+    send_chain: usize,
+    recv_chain: usize,
+    roots: [usize; 5],
+    enabled_controls: usize,
+    quota_windows_root: usize,
+    blacklist_version: usize,
+    blacklist_root: usize,
+    lease_expiry: usize,
+    state_nonce: usize,
+    /// `sigma_recv` only (`sigma_send` range-checks them): the send
+    /// ordinal, the policy epoch and the accepted-time floor.
+    unchecked: Option<[usize; 3]>,
+}
+
+/// The Request terms `sigma_send` does not range-check (indices into the
+/// batch), or every term for `sigma_recv`.
+struct TermSlots {
+    receiver_credential: Option<[usize; 2]>,
+    send_ordinal: Option<usize>,
+    fee: Option<usize>,
+    fee_schedule: [usize; 2],
+    policy_epoch: Option<usize>,
+    scheme_policy: [usize; 2],
+    request_time: Option<usize>,
+    certificates: [usize; 2],
+    nonce: [usize; 2],
+}
+
 /// Lays out one step relation and returns its public outputs, in-circuit
 /// digests and inventory.
 #[allow(
     clippy::too_many_lines,
-    reason = "one straight-line port of the M7 relation, in its order"
+    reason = "one straight-line layout of the step relation, in its order"
 )]
 pub fn assign<F: PoseidonField>(
     chips: &mut Chips<F>,
@@ -140,306 +193,420 @@ pub fn assign<F: PoseidonField>(
     let core = state.map(|state| &state.core);
     let remainder = state.map(|state| &state.remainder);
     let send = witness.and_then(|witness| match &witness.inputs {
-        StepInputs::Send(send) => Some(send),
+        StepInputs::Send(send) => Some(send.as_ref()),
         StepInputs::Receive(_) => None,
     });
+    let receive = witness.and_then(|witness| match &witness.inputs {
+        StepInputs::Receive(receive) => Some(receive.as_ref()),
+        StepInputs::Send(_) => None,
+    });
+    let terms = witness.map(|witness| witness.inputs.terms());
     let is_send = shape.step == StepRelation::Send;
     let two_level = shape.layout == StateLayout::TwoLevel;
 
-    // Range-checked predecessor fields (M7: balance and sequence always;
-    // the send ordinal, policy epoch and time floor only where `sigma_send`
-    // compares them).
+    // Range-checked fields: the balance, the sequence and the amount always;
+    // the send ordinal, policy epoch, accepted-time floor, lineage
+    // `burned_total`, fee, Request epoch and times where `sigma_send`
+    // compares them.
     let balance: U128<F> = uint.assign_u128(region, value(core, |core| core.balance))?;
     let sequence: U128<F> = uint.assign_u128(region, value(core, |core| core.sequence))?;
-    let checked_send: Option<(U128<F>, U64<F>, U64<F>)> = if is_send {
-        Some((
-            uint.assign_u128(region, value(core, |core| core.next_send))?,
-            uint.assign_u64(region, value(core, |core| core.policy_epoch))?,
-            uint.assign_u64(region, value(core, |core| core.accepted_time_floor))?,
-        ))
+    let amount: U128<F> = uint.assign_u128(region, value(terms, |terms| terms.amount))?;
+    let checked_send = if is_send {
+        Some(SendChecked {
+            next_send: uint.assign_u128(region, value(core, |core| core.next_send))?,
+            policy_epoch: uint.assign_u64(region, value(core, |core| core.policy_epoch))?,
+            floor: uint.assign_u64(region, value(core, |core| core.accepted_time_floor))?,
+            burned_in: uint.assign_u128(region, value(send, |send| send.lineage.burned_total))?,
+            fee: uint.assign_u128(region, value(terms, |terms| terms.fee))?,
+            request_epoch: uint.assign_u64(region, value(terms, |terms| terms.policy_epoch))?,
+            request_time: uint.assign_u64(region, value(terms, |terms| terms.request_time))?,
+            lower: uint.assign_u64(region, value(send, |send| send.accepted_lower))?,
+            upper: uint.assign_u64(region, value(send, |send| send.accepted_upper))?,
+        })
     } else {
         None
     };
-    let amount: U128<F> =
-        uint.assign_u128(region, value(witness, |witness| witness.inputs.amount()))?;
 
     // Free witnesses, four per glue row.
     let mut batch = Batch { values: Vec::new() };
-    let core_field = |index: usize| value(core, |core| core.fields()[index]);
-    let free_next_send = (!is_send).then(|| batch.push(core_field(core_index::NEXT_SEND)));
-    let next_load = batch.push(core_field(core_index::NEXT_LOAD));
-    let send_chain = batch.push(core_field(core_index::SEND_CHAIN));
-    let recv_chain = batch.push(core_field(core_index::RECEIVE_CHAIN));
-    let state_nonce = batch.push(core_field(core_index::STATE_NONCE));
-    let lifecycle = batch.push(core_field(core_index::LIFECYCLE));
-    let free_policy = (!is_send).then(|| batch.push(core_field(core_index::POLICY_EPOCH)));
-    let free_floor = (!is_send).then(|| batch.push(core_field(core_index::TIME_FLOOR)));
-    let successor_nonce = batch.push(value(witness, |witness| witness.successor_nonce));
-    // The remainder: its digest (two-level) or all 30 fields (flat).
-    let (rest_digest, rest_fields) = if two_level {
-        (
-            Some(batch.push(value(remainder, StateRemainder::digest))),
-            Vec::new(),
-        )
-    } else {
-        let fields = value(remainder, StateRemainder::fields).transpose_array();
-        (
-            None,
-            fields.into_iter().map(|field| batch.push(field)).collect(),
-        )
+    let core_values = core.map(CoreState::fields);
+    let core_field = |index: usize| value(core_values.as_ref(), |fields| fields[index]);
+    let core_pair = |batch: &mut Batch<F>, index: usize| {
+        [
+            batch.push(core_field(index)),
+            batch.push(core_field(index + 1)),
+        ]
     };
-    // Identity limbs: fresh witnesses (two-level) or the opened cells (flat).
-    let identity =
-        |batch: &mut Batch<F>, offset: usize, bytes: fn(&StateRemainder<F>) -> &[u8; 32]| {
-            if two_level {
-                batch.pair(value(remainder, |remainder| limbs::<F>(bytes(remainder))))
-            } else {
-                [rest_fields[offset], rest_fields[offset + 1]]
-            }
-        };
-    let scheme = identity(&mut batch, 1, |remainder| &remainder.scheme_id);
-    let asset = identity(&mut batch, 3, |remainder| &remainder.asset);
-    let credential = identity(&mut batch, 7, |remainder| &remainder.credential);
-    let payer = is_send.then(|| identity(&mut batch, 5, |remainder| &remainder.wallet_id));
-    let fee_schedule =
-        is_send.then(|| identity(&mut batch, 9, |remainder| &remainder.fee_schedule));
-    let credit_id = batch.pair(value(witness, |witness| match &witness.inputs {
-        StepInputs::Send(send) => limbs::<F>(&send.credit_id),
-        StepInputs::Receive(receive) => limbs::<F>(&receive.credit_id),
-    }));
+    let slots = CoreSlots {
+        lifecycle: batch.push(core_field(core_index::LIFECYCLE)),
+        scheme: core_pair(&mut batch, core_index::SCHEME),
+        asset: core_pair(&mut batch, core_index::ASSET),
+        wallet: core_pair(&mut batch, core_index::WALLET),
+        credential: core_pair(&mut batch, core_index::CREDENTIAL),
+        burned_total: batch.push(core_field(core_index::BURNED_TOTAL)),
+        next_load: batch.push(core_field(core_index::NEXT_LOAD)),
+        next_redeem: batch.push(core_field(core_index::NEXT_REDEEM)),
+        send_chain: batch.push(core_field(core_index::SEND_CHAIN)),
+        recv_chain: batch.push(core_field(core_index::RECEIVE_CHAIN)),
+        roots: [
+            batch.push(core_field(core_index::CONSUMED_CREDIT_ROOT)),
+            batch.push(core_field(core_index::PENDING_OUTGOING_ROOT)),
+            batch.push(core_field(core_index::LOAD_REDEEM_ROOT)),
+            batch.push(core_field(core_index::FEE_CLAIM_ROOT)),
+            batch.push(core_field(core_index::QUOTA_USAGE_ROOT)),
+        ],
+        enabled_controls: batch.push(core_field(core_index::ENABLED_CONTROLS)),
+        quota_windows_root: batch.push(core_field(core_index::QUOTA_WINDOWS_ROOT)),
+        blacklist_version: batch.push(core_field(core_index::BLACKLIST_VERSION)),
+        blacklist_root: batch.push(core_field(core_index::BLACKLIST_ROOT)),
+        lease_expiry: batch.push(core_field(core_index::LEASE_EXPIRY)),
+        state_nonce: batch.push(core_field(core_index::STATE_NONCE)),
+        unchecked: (!is_send).then(|| {
+            [
+                batch.push(core_field(core_index::NEXT_SEND)),
+                batch.push(core_field(core_index::POLICY_EPOCH)),
+                batch.push(core_field(core_index::TIME_FLOOR)),
+            ]
+        }),
+    };
+    // The remainder: its digest (two-level) or all its fields (flat).
+    let rest_slots: Vec<usize> = if two_level {
+        vec![batch.push(value(remainder, StateRemainder::digest))]
+    } else {
+        value(remainder, StateRemainder::fields)
+            .transpose_array()
+            .into_iter()
+            .map(|field| batch.push(field))
+            .collect()
+    };
+    if rest_slots.len() != if two_level { 1 } else { REMAINDER_FIELDS } {
+        return Err(Error::Synthesis);
+    }
+    // Carried successor fields.
+    let successor_nonce = batch.push(value(witness, |witness| witness.successor_nonce));
+    // `sigma_send` updates the pending-outgoing and fee-claim roots,
+    // `sigma_recv` the consumed-credit root (twice the same slot).
+    let successor_roots = if is_send {
+        [
+            batch.push(value(send, |send| send.successor_pending_outgoing)),
+            batch.push(value(send, |send| send.successor_fee_claim)),
+        ]
+    } else {
+        let consumed = batch.push(value(receive, |receive| receive.successor_consumed_credit));
+        [consumed, consumed]
+    };
+    // The lineage pending-outgoing input of `sigma_send`.
+    let pending_in =
+        is_send.then(|| batch.push(value(send, |send| send.lineage.pending_outgoing_root)));
     // The receiver wallet (`sigma_send`) or the payer wallet (`sigma_recv`).
     let counterparty = batch.pair(value(witness, |witness| match &witness.inputs {
         StepInputs::Send(send) => limbs::<F>(&send.receiver_wallet),
         StepInputs::Receive(receive) => limbs::<F>(&receive.payer_wallet),
     }));
-    let predecessor_other = batch.pair(value(witness, |witness| {
-        limbs::<F>(&witness.predecessor_other)
-    }));
-    let successor_other = batch.pair(value(witness, |witness| {
-        limbs::<F>(&witness.successor_other)
-    }));
-    let send_limbs = is_send.then(|| {
-        let mut pair = |read: fn(&SendInputs) -> &[u8; 32]| {
-            batch.pair(value(send, |send| limbs::<F>(read(send))))
-        };
-        [
-            pair(|send| &send.request_digest),
-            pair(|send| &send.dependencies),
-            pair(|send| &send.receiver_credential),
-            pair(|send| &send.scheme_policy),
-            pair(|send| &send.certificates),
-            pair(|send| &send.request_nonce),
-        ]
-    });
+    // The Request terms that are not range-checked.
+    let term = |batch: &mut Batch<F>, read: fn(&RequestTerms) -> &[u8; 32]| {
+        batch.pair(value(terms, |terms| limbs::<F>(read(terms))))
+    };
+    // The Request digest the Send effect binds (a witness: σ_send does not
+    // recompute the SHA-256 digest; the statement digest binds it).
+    let request_digest =
+        is_send.then(|| batch.pair(value(send, |send| limbs::<F>(&send.request_digest))));
+    let term_slots = TermSlots {
+        receiver_credential: is_send
+            .then(|| batch.pair(value(send, |send| limbs::<F>(&send.receiver_credential)))),
+        send_ordinal: (!is_send)
+            .then(|| batch.push(value(receive, |receive| F::from_u128(receive.send_ordinal)))),
+        fee: (!is_send).then(|| batch.push(value(terms, |terms| F::from_u128(terms.fee)))),
+        fee_schedule: term(&mut batch, |terms| &terms.fee_schedule),
+        policy_epoch: (!is_send)
+            .then(|| batch.push(value(terms, |terms| F::from(terms.policy_epoch)))),
+        scheme_policy: term(&mut batch, |terms| &terms.scheme_policy),
+        request_time: (!is_send)
+            .then(|| batch.push(value(terms, |terms| F::from(terms.request_time)))),
+        certificates: term(&mut batch, |terms| &terms.certificates),
+        nonce: term(&mut batch, |terms| &terms.nonce),
+    };
     let words = uint.glue().witnesses(region, &batch.values)?;
     let word = |index: usize| at(&words, index);
 
-    // Lifecycle Active (M7 `assert_is_const`).
-    let lifecycle = word(lifecycle)?;
+    // Lifecycle Active, a nonzero amount, a sequence that does not overflow.
+    let lifecycle = word(slots.lifecycle)?;
     GlueChip::assert_constant(region, lifecycle, F::from(LIFECYCLE_ACTIVE))?;
-    // A nonzero amount and a sequence that does not overflow.
     uint.assert_nonzero(region, &amount)?;
     let sequence_after = uint.checked_add_constant(region, &sequence, 1)?;
+    let enabled_controls = word(slots.enabled_controls)?;
 
-    let next_load = word(next_load)?;
-    let send_chain = word(send_chain)?;
-    let recv_chain = word(recv_chain)?;
-    let state_nonce = word(state_nonce)?;
-    let successor_nonce = word(successor_nonce)?;
-    let credit_id = pair_at(&words, credit_id)?;
+    // Distinct payer and receiver wallets: not (lo equal and hi equal).
+    let wallet = pair_at(&words, slots.wallet)?;
     let counterparty = pair_at(&words, counterparty)?;
-    let scheme = pair_at(&words, scheme)?;
-    let asset = pair_at(&words, asset)?;
-    let credential = pair_at(&words, credential)?;
-    let rest: Vec<&Word<F>> = match rest_digest {
-        Some(index) => vec![word(index)?],
-        None => rest_fields
-            .iter()
-            .map(|index| word(*index))
-            .collect::<Result<_, _>>()?,
-    };
-    if !two_level && rest.len() != REMAINDER_FIELDS {
-        return Err(Error::Synthesis);
-    }
+    let same_lo = uint.glue().is_equal(region, wallet[0], counterparty[0])?;
+    let same_hi = uint.glue().is_equal(region, wallet[1], counterparty[1])?;
+    let same_wallet = uint.glue().and(region, &same_lo, &same_hi)?;
+    GlueChip::assert_constant(region, same_wallet.word(), F::ZERO)?;
 
-    // The step: balance, ordinal and window checks, chain append, Request.
-    let mut request_digest = None;
-    let (next_send, policy_epoch, time_floor, successor_balance, next_send_after, chain, effect);
-    match (checked_send, send_limbs, payer, fee_schedule) {
-        (Some((ordinal, policy, floor)), Some(send_limbs), Some(payer), Some(fee_schedule)) => {
-            let [
-                digest_pair,
-                dependencies,
-                receiver_credential,
-                scheme_policy,
-                certificates,
-                nonce,
-            ] = send_limbs;
-            let fee: U128<F> = uint.assign_u128(region, value(send, |send| send.fee))?;
-            // balance' = balance - (amount + fee) >= 0 (M7: the debit itself is
-            // not range-checked; balance - debit < 0 wraps above 2^128).
-            let debit = uint.glue().add(region, amount.word(), fee.word())?;
-            let difference = uint.glue().sub(region, balance.word(), &debit)?;
-            let balance_after: U128<F> = uint.range_check::<128>(region, &difference)?;
-            let ordinal_after = uint.checked_add_constant(region, &ordinal, 1)?;
-            // The Request policy epoch is not newer than the payer's.
-            let request_epoch: U64<F> =
-                uint.assign_u64(region, value(send, |send| send.request_policy_epoch))?;
-            uint.assert_le(region, &request_epoch, &policy)?;
-            // max(floor, request time) <= lower <= upper.
-            let request_time: U64<F> =
-                uint.assign_u64(region, value(send, |send| send.request_time))?;
-            let lower: U64<F> = uint.assign_u64(region, value(send, |send| send.accepted_lower))?;
-            let upper: U64<F> = uint.assign_u64(region, value(send, |send| send.accepted_upper))?;
-            uint.assert_le(region, &floor, &lower)?;
-            uint.assert_le(region, &request_time, &lower)?;
-            uint.assert_le(region, &lower, &upper)?;
+    let scheme = pair_at(&words, slots.scheme)?;
+    let asset = pair_at(&words, slots.asset)?;
+    let credential = pair_at(&words, slots.credential)?;
+    let fee_schedule = pair_at(&words, term_slots.fee_schedule)?;
+    let scheme_policy = pair_at(&words, term_slots.scheme_policy)?;
+    let certificates = pair_at(&words, term_slots.certificates)?;
+    let nonce = pair_at(&words, term_slots.nonce)?;
 
-            let digest_pair = pair_at(&words, digest_pair)?;
-            let entry = absorb(&[
-                send_chain,
-                credit_id[0],
-                credit_id[1],
-                counterparty[0],
-                counterparty[1],
-                ordinal.word(),
-                amount.word(),
-                fee.word(),
-                digest_pair[0],
-                digest_pair[1],
-            ]);
-            let send_chain_after =
-                hash_site(sponges, region, shape, plan, HashSite::Chain, &entry)?;
-            check_digest(&send_chain_after, digests.map(|digests| digests.chain))?;
-
-            let payer = pair_at(&words, payer)?;
-            let fee_schedule = pair_at(&words, fee_schedule)?;
-            let receiver_credential = pair_at(&words, receiver_credential)?;
-            let scheme_policy = pair_at(&words, scheme_policy)?;
-            let certificates = pair_at(&words, certificates)?;
-            let nonce = pair_at(&words, nonce)?;
-            let mut request = vec![AbsorbInput::Constant(F::from(REQUEST_VERSION))];
-            request.extend(absorb(&[
-                scheme[0],
-                scheme[1],
-                asset[0],
-                asset[1],
-                payer[0],
-                payer[1],
-                counterparty[0],
-                counterparty[1],
-                ordinal.word(),
-                receiver_credential[0],
-                receiver_credential[1],
-                amount.word(),
-                fee_schedule[0],
-                fee_schedule[1],
-                fee.word(),
-                request_epoch.word(),
-                scheme_policy[0],
-                scheme_policy[1],
-                request_time.word(),
-                certificates[0],
-                certificates[1],
-                nonce[0],
-                nonce[1],
-            ]));
-            let request = hash_site(sponges, region, shape, plan, HashSite::Request, &request)?;
-            check_digest(&request, digests.and_then(|digests| digests.request))?;
-            request_digest = Some(request);
-
-            let dependencies = pair_at(&words, dependencies)?;
-            effect = vec![
-                credit_id[0].clone(),
-                credit_id[1].clone(),
-                counterparty[0].clone(),
-                counterparty[1].clone(),
-                ordinal.word().clone(),
-                amount.word().clone(),
-                fee.word().clone(),
-                digest_pair[0].clone(),
-                digest_pair[1].clone(),
-                dependencies[0].clone(),
-                dependencies[1].clone(),
-                lower.word().clone(),
-                upper.word().clone(),
-            ];
-            next_send = ordinal.word().clone();
-            next_send_after = ordinal_after.word().clone();
-            policy_epoch = policy.word().clone();
-            time_floor = floor.word().clone();
-            successor_balance = balance_after.word().clone();
-            chain = send_chain_after;
-        }
-        (None, None, None, None) => {
-            let (Some(ordinal), Some(policy), Some(floor)) =
-                (free_next_send, free_policy, free_floor)
-            else {
-                return Err(Error::Synthesis);
-            };
-            // balance + amount < 2^128.
-            let balance_after = uint.checked_add(region, &balance, &amount)?;
-            let entry = absorb(&[
-                recv_chain,
-                credit_id[0],
-                credit_id[1],
-                counterparty[0],
-                counterparty[1],
-                amount.word(),
-            ]);
-            let recv_chain_after =
-                hash_site(sponges, region, shape, plan, HashSite::Chain, &entry)?;
-            check_digest(&recv_chain_after, digests.map(|digests| digests.chain))?;
-            // Precomputed sigma_recv: the payment digest is zero.
-            let zero = uint.glue().constant(region, F::ZERO)?;
-            effect = vec![
-                credit_id[0].clone(),
-                credit_id[1].clone(),
-                counterparty[0].clone(),
-                counterparty[1].clone(),
-                zero.clone(),
-                zero.clone(),
-                amount.word().clone(),
-            ];
-            next_send = word(ordinal)?.clone();
-            next_send_after = next_send.clone();
-            policy_epoch = word(policy)?.clone();
-            time_floor = word(floor)?.clone();
-            successor_balance = balance_after.word().clone();
-            chain = recv_chain_after;
-        }
+    // The step: balance, ordinal and window checks; the Request fields that
+    // depend on the step.
+    let (next_send, policy_epoch, time_floor) = match (&checked_send, slots.unchecked) {
+        (Some(checked), None) => (
+            checked.next_send.word().clone(),
+            checked.policy_epoch.word().clone(),
+            checked.floor.word().clone(),
+        ),
+        (None, Some([ordinal, policy, floor])) => (
+            word(ordinal)?.clone(),
+            word(policy)?.clone(),
+            word(floor)?.clone(),
+        ),
         _ => return Err(Error::Synthesis),
-    }
+    };
+    let mut next_send_after = next_send.clone();
+    let mut time_floor_after = time_floor.clone();
+    let successor_balance: Word<F>;
+    let burned_after: Word<F>;
+    let request_cells = if let Some(checked) = &checked_send {
+        // The enabled-controls mask is empty: this relation enforces no
+        // control (spec section 7).
+        GlueChip::assert_constant(region, enabled_controls, F::ZERO)?;
+        // spendable = balance - burned_total (the lineage input), and
+        // amount + fee <= spendable, all checked.
+        let debit = uint.checked_add(region, &amount, &checked.fee)?;
+        let spendable = uint.checked_sub(region, &balance, &checked.burned_in)?;
+        let remaining = uint.checked_sub(region, &spendable, &debit)?;
+        // balance' = remaining + burned_total = balance - amount - fee.
+        successor_balance = uint
+            .glue()
+            .add(region, remaining.word(), checked.burned_in.word())?;
+        burned_after = checked.burned_in.word().clone();
+        next_send_after = uint
+            .checked_add_constant(region, &checked.next_send, 1)?
+            .word()
+            .clone();
+        // The Request policy epoch is not newer than the payer's.
+        uint.assert_le(region, &checked.request_epoch, &checked.policy_epoch)?;
+        // max(floor, request time) <= lower <= upper; the successor floor
+        // is `lower`, so accepted time never goes back.
+        uint.assert_le(region, &checked.floor, &checked.lower)?;
+        uint.assert_le(region, &checked.request_time, &checked.lower)?;
+        uint.assert_le(region, &checked.lower, &checked.upper)?;
+        time_floor_after = checked.lower.word().clone();
+        StepCells {
+            payer: wallet,
+            receiver: counterparty,
+            ordinal: checked.next_send.word(),
+            receiver_credential: pair_at(
+                &words,
+                term_slots.receiver_credential.ok_or(Error::Synthesis)?,
+            )?,
+            fee: checked.fee.word(),
+            request_epoch: checked.request_epoch.word(),
+            request_time: checked.request_time.word(),
+        }
+    } else {
+        // balance + amount < 2^128.
+        successor_balance = uint.checked_add(region, &balance, &amount)?.word().clone();
+        burned_after = word(slots.burned_total)?.clone();
+        StepCells {
+            payer: counterparty,
+            receiver: wallet,
+            ordinal: word(term_slots.send_ordinal.ok_or(Error::Synthesis)?)?,
+            receiver_credential: credential,
+            fee: word(term_slots.fee.ok_or(Error::Synthesis)?)?,
+            request_epoch: word(term_slots.policy_epoch.ok_or(Error::Synthesis)?)?,
+            request_time: word(term_slots.request_time.ok_or(Error::Synthesis)?)?,
+        }
+    };
+
+    // credit_id = H(credit, Request body), and its canonical limbs.
+    let mut request = vec![AbsorbInput::Constant(F::from(REQUEST_VERSION))];
+    request.extend(absorb(&[
+        scheme[0],
+        scheme[1],
+        asset[0],
+        asset[1],
+        request_cells.payer[0],
+        request_cells.payer[1],
+        request_cells.receiver[0],
+        request_cells.receiver[1],
+        request_cells.ordinal,
+        request_cells.receiver_credential[0],
+        request_cells.receiver_credential[1],
+        amount.word(),
+        fee_schedule[0],
+        fee_schedule[1],
+        request_cells.fee,
+        request_cells.request_epoch,
+        scheme_policy[0],
+        scheme_policy[1],
+        request_cells.request_time,
+        certificates[0],
+        certificates[1],
+        nonce[0],
+        nonce[1],
+    ]));
+    let credit = hash_site(sponges, region, shape, plan, HashSite::Credit, &request)?;
+    check_digest(&credit, digests.map(|digests| digests.credit))?;
+    let credit_limbs = assign_canonical_limbs(&mut uint, region, &credit)?;
+    let [credit_lo, credit_hi] = credit_limbs.words();
+
+    // The chain append and the effect.
+    let send_chain = word(slots.send_chain)?;
+    let recv_chain = word(slots.recv_chain)?;
+    let (chain, effect) = if let Some(checked) = &checked_send {
+        let request_digest = pair_at(&words, request_digest.ok_or(Error::Synthesis)?)?;
+        let entry = absorb(&[
+            send_chain,
+            credit_lo,
+            credit_hi,
+            counterparty[0],
+            counterparty[1],
+            checked.next_send.word(),
+            amount.word(),
+            checked.fee.word(),
+        ]);
+        let chain = hash_site(sponges, region, shape, plan, HashSite::Chain, &entry)?;
+        let effect = [
+            credit_lo,
+            credit_hi,
+            counterparty[0],
+            counterparty[1],
+            checked.next_send.word(),
+            amount.word(),
+            checked.fee.word(),
+            request_digest[0],
+            request_digest[1],
+            checked.lower.word(),
+            checked.upper.word(),
+        ]
+        .map(Clone::clone)
+        .to_vec();
+        (chain, effect)
+    } else {
+        let entry = absorb(&[
+            recv_chain,
+            credit_lo,
+            credit_hi,
+            counterparty[0],
+            counterparty[1],
+            amount.word(),
+        ]);
+        let chain = hash_site(sponges, region, shape, plan, HashSite::Chain, &entry)?;
+        let effect = [
+            credit_lo,
+            credit_hi,
+            counterparty[0],
+            counterparty[1],
+            amount.word(),
+        ]
+        .map(Clone::clone)
+        .to_vec();
+        (chain, effect)
+    };
+    check_digest(&chain, digests.map(|digests| digests.chain))?;
 
     // Predecessor and successor commitments.
-    let predecessor_core = [
+    let rest: Vec<&Word<F>> = rest_slots
+        .iter()
+        .map(|index| word(*index))
+        .collect::<Result<_, _>>()?;
+    let [consumed, pending, load_redeem, fee_claim, quota_usage] = slots.roots;
+    let (consumed, pending, load_redeem, fee_claim, quota_usage) = (
+        word(consumed)?,
+        word(pending)?,
+        word(load_redeem)?,
+        word(fee_claim)?,
+        word(quota_usage)?,
+    );
+    let next_load = word(slots.next_load)?;
+    let next_redeem = word(slots.next_redeem)?;
+    let quota_windows_root = word(slots.quota_windows_root)?;
+    let blacklist_version = word(slots.blacklist_version)?;
+    let blacklist_root = word(slots.blacklist_root)?;
+    let lease_expiry = word(slots.lease_expiry)?;
+    let burned_total = word(slots.burned_total)?;
+    let state_nonce = word(slots.state_nonce)?;
+    let predecessor_core: [&Word<F>; CORE_FIELDS] = [
+        lifecycle,
+        scheme[0],
+        scheme[1],
+        asset[0],
+        asset[1],
+        wallet[0],
+        wallet[1],
+        credential[0],
+        credential[1],
         balance.word(),
+        burned_total,
         sequence.word(),
         &next_send,
         next_load,
+        next_redeem,
         send_chain,
         recv_chain,
-        state_nonce,
-        lifecycle,
+        consumed,
+        pending,
+        load_redeem,
+        fee_claim,
+        quota_usage,
+        enabled_controls,
+        quota_windows_root,
+        blacklist_version,
+        blacklist_root,
+        lease_expiry,
         &policy_epoch,
         &time_floor,
+        state_nonce,
     ];
     let (successor_send_chain, successor_recv_chain) = if is_send {
         (&chain, recv_chain)
     } else {
         (send_chain, &chain)
     };
-    let successor_core = [
+    let successor_nonce = word(successor_nonce)?;
+    let [updated_first, updated_second] = [word(successor_roots[0])?, word(successor_roots[1])?];
+    let (consumed_after, pending_after, fee_claim_after) = if is_send {
+        (consumed, updated_first, updated_second)
+    } else {
+        (updated_first, pending, fee_claim)
+    };
+    let successor_core: [&Word<F>; CORE_FIELDS] = [
+        lifecycle,
+        scheme[0],
+        scheme[1],
+        asset[0],
+        asset[1],
+        wallet[0],
+        wallet[1],
+        credential[0],
+        credential[1],
         &successor_balance,
+        &burned_after,
         sequence_after.word(),
         &next_send_after,
         next_load,
+        next_redeem,
         successor_send_chain,
         successor_recv_chain,
-        successor_nonce,
-        lifecycle,
+        consumed_after,
+        pending_after,
+        load_redeem,
+        fee_claim_after,
+        quota_usage,
+        enabled_controls,
+        quota_windows_root,
+        blacklist_version,
+        blacklist_root,
+        lease_expiry,
         &policy_epoch,
-        &time_floor,
+        &time_floor_after,
+        successor_nonce,
     ];
     let predecessor = hash_site(
         sponges,
@@ -460,26 +627,29 @@ pub fn assign<F: PoseidonField>(
     )?;
     check_digest(&successor, digests.map(|digests| digests.successor))?;
 
-    // The G1 statement digest.
-    let predecessor_other = pair_at(&words, predecessor_other)?;
-    let successor_other = pair_at(&words, successor_other)?;
+    // The statement digest.
+    let pending_in = pending_in.map(word).transpose()?;
     let cells = StatementCells {
         scheme_id: scheme,
-        credential,
         asset,
+        credential,
         lifecycle,
         sequence: sequence_after.word(),
         next_load,
         predecessor: &predecessor,
-        predecessor_other,
         successor: &successor,
-        successor_other,
+        enabled_controls,
+        burned_total: checked_send
+            .as_ref()
+            .map(|checked| checked.burned_in.word()),
+        pending_outgoing_root: pending_in,
         effect: &effect,
     };
     let statement_lane = plan.lane_of(HashSite::Statement);
     let statement = statement_digest(
         sponges.get_mut(statement_lane).ok_or(Error::Synthesis)?,
         region,
+        &shape.relation_id(),
         shape.step,
         &cells,
     )?;
@@ -489,24 +659,21 @@ pub fn assign<F: PoseidonField>(
         .value()
         .zip(predecessor.value())
         .zip(successor.value())
+        .zip(credit.value())
         .zip(chain.value())
         .map(
-            |(((statement, predecessor), successor), chain)| StepDigests {
+            |((((statement, predecessor), successor), credit), chain)| StepDigests {
                 predecessor,
                 successor,
+                credit,
                 chain,
-                request: None,
                 statement,
             },
-        )
-        .zip(
-            request_digest
-                .as_ref()
-                .map_or_else(|| Value::known(None), |request| request.value().map(Some)),
-        )
-        .map(|(digests, request)| StepDigests { request, ..digests });
+        );
     let mut public = vec![statement];
-    public.extend(request_digest);
+    if is_send {
+        public.push(credit);
+    }
     let glue_end = uint.glue().next_row();
     let range_rows = uint.range().next_row();
     let glue_rows = glue_end
@@ -541,4 +708,28 @@ pub fn assign<F: PoseidonField>(
             cells,
         },
     })
+}
+
+/// The range-checked fields of `sigma_send`.
+struct SendChecked<F: PoseidonField> {
+    next_send: U128<F>,
+    policy_epoch: U64<F>,
+    floor: U64<F>,
+    burned_in: U128<F>,
+    fee: U128<F>,
+    request_epoch: U64<F>,
+    request_time: U64<F>,
+    lower: U64<F>,
+    upper: U64<F>,
+}
+
+/// The Request fields whose cells depend on the step.
+struct StepCells<'a, F: PoseidonField> {
+    payer: [&'a Word<F>; 2],
+    receiver: [&'a Word<F>; 2],
+    ordinal: &'a Word<F>,
+    receiver_credential: [&'a Word<F>; 2],
+    fee: &'a Word<F>,
+    request_epoch: &'a Word<F>,
+    request_time: &'a Word<F>,
 }

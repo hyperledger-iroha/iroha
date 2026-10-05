@@ -620,40 +620,53 @@ fn parent_defects_use_the_authenticated_parent_configuration() {
     );
 }
 
+/// An epoch boundary carries only its application's flag (§3.7 A1): a well-formed boundary
+/// proposal, flagged or not, reproduces no signed defect, so no claimed defect attributes it.
 #[test]
-fn boundary_attestation_defect_uses_exact_epoch_cutoff() {
+fn epoch_boundary_flag_is_no_signed_defect() {
     let fixture = Fixture::new();
     let mut config = fixture.config.clone();
     config.epoch.last_height = 2;
     let mut context = fixture.context();
     context.config = &config;
-    let ordinary = fixture.proposal(fixture.header(0), 0);
-    assert!(
-        verify_evidence(
-            &fixture.validators.crypto,
-            &FakeVerifier,
-            &context,
-            &Evidence::InvalidProposal {
-                proposal: Box::new(ordinary),
-                defect: Defect::BoundaryAttestation
-            }
-        )
-        .is_ok()
-    );
-    let mut header = fixture.header(0);
-    header.attest = true;
-    assert_eq!(
-        verify_evidence(
-            &fixture.validators.crypto,
-            &FakeVerifier,
-            &context,
-            &Evidence::InvalidProposal {
-                proposal: Box::new(fixture.proposal(header, 0)),
-                defect: Defect::BoundaryAttestation
-            }
-        ),
-        Err(EvidenceError::DefectMismatch)
-    );
+    for attest in [false, true] {
+        let mut header = fixture.header(0);
+        header.attest = attest;
+        let proposal = fixture.proposal(header, 0);
+        for defect in [
+            Defect::UnexpectedJustify,
+            Defect::MissingJustify,
+            Defect::InvalidJustify,
+            Defect::MissingParentQc,
+            Defect::UnexpectedParentQc,
+            Defect::InvalidParentQc,
+            Defect::HeaderInstance,
+            Defect::HeaderHeight,
+            Defect::EpochContext,
+            Defect::ParentHash,
+            Defect::ParentResult,
+            Defect::PayloadTooLarge,
+            Defect::TcRule,
+            Defect::OriginView,
+            Defect::Proposer,
+            Defect::SkippedLeaders,
+            Defect::EmptyPayload,
+        ] {
+            assert_eq!(
+                verify_evidence(
+                    &fixture.validators.crypto,
+                    &FakeVerifier,
+                    &context,
+                    &Evidence::InvalidProposal {
+                        proposal: Box::new(proposal.clone()),
+                        defect,
+                    }
+                ),
+                Err(EvidenceError::DefectMismatch),
+                "attest = {attest}, claimed {defect:?}"
+            );
+        }
+    }
 }
 
 #[test]

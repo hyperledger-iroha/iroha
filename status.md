@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-10-04. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-05. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -20,7 +20,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
 | Torii collection queries | Seventeen collections and eleven explorer feeds share the [query contract](specs/torii/collection_queries.md) across Rust, Kotlin/Java, Swift, JavaScript, Python, C#, CLI and MCP. Identity-ordered reads seek and stream; authenticated history checkpoints bound deep reads. Global-state collections execute once per read for exact totals and aggregates. History and explorer feeds explicitly reject unsupported controls. Signed query selectors have one feature-independent layout; client network context is explicit. | Current-candidate live multi-dataspace paging and full SDK/native delivery qualification remain open. Swift package tests require the missing NoritoBridge XCFramework; JS and Python native suites require matching authenticated artifacts. See the [completion goals](specs/torii/query_completion_goals.md). |
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
-| IVM/Kotodama | IVM is the sole VM with ABI V1 and program header 1.1; header 1.0 is rejected. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. FASTPQ Metal uses one embedded-bundle admission owner; runtime source/path loading is removed. Ordinary Linux/Windows daemon dependencies include driver-loaded IVM CUDA; genuine bundle absence permits CPU build/startup, and supplied unapproved material is rejected. Original-pool idle-runtime rows and scoped committed/frozen account-rekey capture are integrated; fresh runtime validation remains pending. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. FASTPQ has no approved Metal bundle. IVM CUDA approval is `None`; genuine signed ten-family artifacts, driverless runtime checks and physical qualification remain open. |
+| IVM/Kotodama | IVM is the sole VM with ABI V1 and program header 1.1; header 1.0 is rejected. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. FASTPQ Metal uses one embedded-bundle admission owner; runtime source/path loading is removed. Ordinary Linux/Windows daemon dependencies include driver-loaded IVM CUDA; genuine bundle absence permits CPU build/startup, and supplied unapproved material is rejected. Original-pool idle-runtime rows and scoped committed/frozen account-rekey, trigger-contract and all four trigger-action captures are integrated; fresh compilation and runtime validation remain pending. | Lifecycle/custody closure, complete State/Kura publication, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. FASTPQ has no approved Metal bundle. IVM CUDA approval is `None`; genuine signed ten-family artifacts, driverless runtime checks and physical qualification remain open. |
 | ZK delivery plan | The [plan](specs/zk_delivery_plan.md) and its [task graph](specs/zk_delivery_graph.json) own the ZK, privacy, authenticated-State and FHE work. Landed as source-checked contracts and inventories: plan and graph checks; the zk-X509 presentation interval with shared vectors; the FASTPQ `air` interface with the shared-backend inventory; the IVM proof-coverage inventory; the first-release history and cutover contract with a pinned history; the FHE ownership inventory; the RAM-LFE V1 policy, receipt, opening, class and query-limit contract with a cleartext reference; the State table and root inventory with the keyed-commitment contract (`specs/sumeragi.md` §16); and the unified resource contract. Two shared crates exist: `iroha_fhe` (exact RNS, NTT, basis-conversion and rounding arithmetic used by BFV, ZK-AMS, Jindo and Bootle-Lantern) and `iroha_measurement` (phase and resource records, with `scripts/zk_resource_harness.py`). | No new proof relation, FHE construction, native ISI or SDK operation exists yet, and nothing consumes the RAM-LFE V1 types. The certified State root is still the World-only accumulator (inventory defects G1-D1 to G1-D11). The resource contract records eleven relations violated today, so a maximum zk-X509 proof transaction cannot be committed under current defaults. AVX2 on a physical x86-64 CPU, Metal/CUDA parity, Linux `RLIMIT_AS` enforcement, a complete X509 proof under the harness and four-validator evidence are unexecuted. |
 | SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented; the ordinary Node library tests pass. | Matched daemon/harness, provider resilience and L1/L2 promotion. |
 | KAGEMUSHA | Single-design G1 canonical objects (`kagemusha_wallet_v1`) and shared Rust/Kotlin/Swift vectors are implemented and tested; no relation, provider or ledger consumes them yet. The empty `iroha_kagemusha_attested`/`iroha_kagemusha_issuer` crates are deleted; results are in the [checklist](specs/kagemusha_evidence_gate.md#8-recorded-results). | Owner decisions on proof size versus R9 and 2 s p95 (measured: one in-circuit P-256 check alone gives a 10,112-byte k=16 proof); stock-OS journal/marker Advance, the single recursive relation, ledger load/unload and device recovery measurements. |
@@ -28,20 +28,39 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 
 ## Immediate blockers
 
-The proxied pipeline-status JSON accounting mismatch is repaired. Scoped node runs
-have passed repeated paid settlements, sixteen-peer settlement with restart and
-disjoint lane isolation with restart. The latest paid 4→7→4 attempt halted after
-restart at height 66 when an ordinary State publication change was classified as
-terminal recovery. Its source-authentication retry repair passes component controls;
-fresh daemon qualification remains open. The earlier queued paid transaction after
-the certified return boundary at height 72 remains a required liveness regression.
-The runtime and trigger permission guards now reject malformed recognized payloads
-before delegation; decoder refusals preserve local deferral. Core strict lint still
-fails on unused production/resource graphs. The repaired Rust SDK client source
-passes its unit suite and strict lint; qualification of the final combined source,
-signed RS16 loss/withholding and release remains open. Exact finalized-carrier retries
-retain original execution without requeueing or charging again; changed source
-requires fresh evidence.
+The Nexus proposal/status repairs and original invocation binding have recorded native
+functional coverage: the rebuilt daemon and harness passed ten fresh sixteen-validator
+paid settlements and the original serial all-seat restart/readback diagnostic. The
+independent disjoint-lane control also passed stopped-committee progress, recovery
+without resubmission and all-process restart. Subsequent crypto, evidence and snapshot
+repairs require a fresh combined-candidate run. Full fault/leakage campaigns and the
+complete original funded execution graph remain open.
+
+Native ceremony handoff preserves overlapping descriptors and read-only phase pipes.
+The rebuilt paid committee attempt authenticated seven-seat activation at height 129
+and its E+3 four-seat election, completed the corrected reward and exit-scheduling
+checks, then failed during four-seat return preparation when the original ceremony
+transport deadline expired. The original overall runtime limit was also exceeded.
+Full paid 4→7→4, withdrawal, return-boundary liveness, restart and slashing qualification
+remain open. Lane retirement component controls now cover original reads, publications,
+historical opening joins, final-reader release and authentication/refusal propagation.
+Physical retirement and complete retained-history dependency closure remain open;
+certified disk frames remain retained for global replay.
+
+Actual original-library regressions reproduce generic snapshot undo loss: a present
+previous null value is serialized indistinguishably from no previous value in Cell and
+Storage. Writers and readers now use explicit present-value undo framing; current-source
+qualification of the coordinated repair remains open.
+Strict startup still rejects nonempty snapshot caches and uses certified replay;
+accelerated complete-State restoration remains open.
+
+The runtime and trigger permission guards reject malformed recognized payloads before
+delegation; decoder refusals preserve local deferral. Core strict lint still fails on
+unused production/resource graphs. The repaired Rust SDK client source passes its unit
+suite and strict lint; qualification of the final combined source, signed RS16
+loss/withholding and release remains open. Exact finalized-carrier retries retain
+original execution without requeueing or charging again; changed source requires fresh
+evidence.
 
 Core/World acquisition retains original frozen readers for verifier, proof-status
 and validation-fee indexes. Complete authenticated State/Kura publication remains
@@ -71,8 +90,9 @@ coverage does not qualify cold registry fetches, the complete 64 MiB fetch-proce
 bound, signed native releases or reference-host p95 latency.
 
 The private-settlement five-second proof-through-settlement target is unmet.
-Current-source repeated settlement, fault and leakage campaigns are unqualified;
-prior component timings and network observations do not qualify changed source.
+Current-source happy-day settlements and serial restart have functional coverage;
+fault, leakage, performance and release campaigns remain open. Earlier source or
+component observations do not qualify the final combined candidate.
 See the [protocol](specs/private_settlement.md).
 
 Focused runs on the combined ZK-plan tree on 2026-10-05 pass `cargo check` for
@@ -146,9 +166,14 @@ require the explicitly approved OVH target.
 ## Build and release qualification
 
 The current `optimizations` checkout has merged HEAD
-`68d8bb58ff4af339aba2229f18da3ed00d58d2e6` and subsequent reviewed repairs.
-The latest eighteen-target Core/Kagami build and all 262 selected native
-executions pass with unchanged source and artifacts. They account for all original
+`f6903d2de355a71aba2dc75cab5450d5a85eb645` and uncommitted handoff repairs.
+Fresh combined Core, node, workspace and SDK qualification remains open.
+The repaired MV and crypto dependency graph compiles, but observed Core release
+compiler memory exceeds the 13 GiB ceiling. Normal-stack Core unit tests and
+fresh native network consumers still require the same repaired candidate.
+The earlier eighteen-target Core/Kagami build and all 262 selected native
+executions passed with their recorded source and artifacts; they do not qualify
+the changed combined candidate. They account for all original
 247 obligations through genuine producer/consumer replacements and paired
 identical captures, plus the corrected chronology and FASTPQ context controls.
 The genuine producer reproduces all four canonical fixtures with actual genesis

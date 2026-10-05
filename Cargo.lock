@@ -5204,6 +5204,7 @@ dependencies = [
  "iroha_data_model_derive",
  "iroha_macro",
  "iroha_model_base",
+ "iroha_pasta",
  "iroha_primitives",
  "iroha_schema",
  "iroha_sumeragi",
@@ -5530,6 +5531,7 @@ dependencies = [
  "norito",
  "rand_chacha 0.3.1",
  "rayon",
+ "rustix 1.1.4",
 ]
 
 [[package]]
@@ -6315,6 +6317,7 @@ dependencies = [
  "iroha_sccp",
  "iroha_sccp_rpc",
  "iroha_storage_client",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",

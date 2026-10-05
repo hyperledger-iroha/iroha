@@ -10,16 +10,14 @@ use iroha::data_model::{
         AbiVersion, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, DeployContractProposal,
         GovernanceAttemptId, ParliamentBody, ProposalKind,
     },
-    isi::{
-        governance::{
-            CreateParliamentGovernanceAttemptV1, ParliamentConsumeSortitionPulseBatchV1,
-            ParliamentLifecycleTransitionV1, ProposeDeployContract, RegisterCitizen,
-            SubmitParliamentLifecycleTransitionV1,
-        },
-        kagemusha_v1::BeaconEpochBindingV1,
+    isi::governance::{
+        CreateParliamentGovernanceAttemptV1, ParliamentConsumeSortitionPulseBatchV1,
+        ParliamentLifecycleTransitionV1, ProposeDeployContract, RegisterCitizen,
+        SubmitParliamentLifecycleTransitionV1,
     },
     permission::Permission,
     smart_contract::ContractAddress,
+    sumeragi::epoch::BeaconEpochBindingV1,
 };
 use iroha_core::{
     beacon::{

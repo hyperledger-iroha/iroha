@@ -528,19 +528,23 @@ impl norito::json::FastJsonWrite for ExecutableBatchItem {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        match self {
-            Self::Instruction(instruction) => {
-                out.push_str("\"Instruction\":")?;
-                norito::json::JsonSerialize::json_serialize_to(instruction, out)?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            match self {
+                Self::Instruction(instruction) => {
+                    out.push_str("\"Instruction\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(instruction, out)?;
+                }
+                Self::ContractCall(invocation) => {
+                    out.push_str("\"ContractCall\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(invocation, out)?;
+                }
             }
-            Self::ContractCall(invocation) => {
-                out.push_str("\"ContractCall\":")?;
-                norito::json::JsonSerialize::json_serialize_to(invocation, out)?;
-            }
-        }
-        out.push('}')?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -594,16 +598,20 @@ impl norito::json::FastJsonWrite for IvmProved {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"bytecode\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.bytecode, out)?;
-        out.push_str(",\"overlay\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.overlay, out)?;
-        out.push_str(",\"events_commitment\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.events_commitment, out)?;
-        out.push_str(",\"gas_policy_commitment\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.gas_policy_commitment, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"bytecode\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.bytecode, out)?;
+            out.push_str(",\"overlay\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.overlay, out)?;
+            out.push_str(",\"events_commitment\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.events_commitment, out)?;
+            out.push_str(",\"gas_policy_commitment\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.gas_policy_commitment, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -836,31 +844,35 @@ impl norito::json::FastJsonWrite for Executable {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        match self {
-            Executable::Instructions(instructions) => {
-                out.push_str("\"Instructions\":")?;
-                norito::json::JsonSerialize::json_serialize_to(instructions, out)?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            match self {
+                Executable::Instructions(instructions) => {
+                    out.push_str("\"Instructions\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(instructions, out)?;
+                }
+                Executable::ContractCall(invocation) => {
+                    out.push_str("\"ContractCall\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(invocation, out)?;
+                }
+                Executable::Ivm(bytecode) => {
+                    out.push_str("\"Ivm\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(bytecode, out)?;
+                }
+                Executable::IvmProved(proved) => {
+                    out.push_str("\"IvmProved\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(proved, out)?;
+                }
+                Executable::Batch(items) => {
+                    out.push_str("\"Batch\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(items, out)?;
+                }
             }
-            Executable::ContractCall(invocation) => {
-                out.push_str("\"ContractCall\":")?;
-                norito::json::JsonSerialize::json_serialize_to(invocation, out)?;
-            }
-            Executable::Ivm(bytecode) => {
-                out.push_str("\"Ivm\":")?;
-                norito::json::JsonSerialize::json_serialize_to(bytecode, out)?;
-            }
-            Executable::IvmProved(proved) => {
-                out.push_str("\"IvmProved\":")?;
-                norito::json::JsonSerialize::json_serialize_to(proved, out)?;
-            }
-            Executable::Batch(items) => {
-                out.push_str("\"Batch\":")?;
-                norito::json::JsonSerialize::json_serialize_to(items, out)?;
-            }
-        }
-        out.push('}')?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1238,5 +1250,77 @@ mod tests {
         assert!(json.contains("\"ContractCall\""));
         let deserialized: Executable = norito::json::from_str(&json).expect("deserialize batch");
         assert_eq!(batch_executable, deserialized);
+    }
+}
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_batch_item_checked_container_retains_bytes_errors_and_depth() {
+        audit(&ExecutableBatchItem::Instruction(
+            crate::isi::Log::new(crate::Level::INFO, "original".into()).into(),
+        ));
+        audit(&ExecutableBatchItem::ContractCall(ContractInvocation {
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+                .parse()
+                .unwrap(),
+            expected_code_hash: iroha_crypto::Hash::new(b"original contract"),
+            entrypoint: "original".into(),
+            arguments: Some(ContractArgumentRecord::try_new(vec![1, 2, 255]).unwrap()),
+        }));
+    }
+
+    #[test]
+    fn original_ivm_proved_checked_container_retains_overlay_and_depth() {
+        let value = IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0, 1, 255]),
+            overlay: vec![crate::isi::Log::new(crate::Level::INFO, "overlay".into()).into()].into(),
+            events_commitment: iroha_crypto::Hash::new(b"original events"),
+            gas_policy_commitment: iroha_crypto::Hash::new(b"original gas"),
+        };
+        let bytecode = value.bytecode.0.as_ptr();
+        let overlay = value.overlay.as_ptr();
+        audit(&value);
+        assert_eq!(value.bytecode.0.as_ptr(), bytecode);
+        assert_eq!(value.overlay.as_ptr(), overlay);
+    }
+
+    #[test]
+    fn original_executable_checked_container_retains_every_legal_variant_and_depth() {
+        audit(&Executable::Instructions(
+            vec![crate::isi::Log::new(crate::Level::INFO, "original".into()).into()].into(),
+        ));
+        audit(&Executable::ContractCall(ContractInvocation {
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+                .parse()
+                .unwrap(),
+            expected_code_hash: iroha_crypto::Hash::new(b"original contract"),
+            entrypoint: "original".into(),
+            arguments: Some(ContractArgumentRecord::try_new(vec![1, 2, 255]).unwrap()),
+        }));
+        audit(&Executable::Ivm(IvmBytecode::from_compiled(vec![
+            0, 1, 255,
+        ])));
+        audit(&Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0, 1, 255]),
+            overlay: vec![crate::isi::Log::new(crate::Level::INFO, "overlay".into()).into()].into(),
+            events_commitment: iroha_crypto::Hash::new(b"original events"),
+            gas_policy_commitment: iroha_crypto::Hash::new(b"original gas"),
+        }));
+        audit(&Executable::Batch(
+            vec![ExecutableBatchItem::ContractCall(ContractInvocation {
+                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+                    .parse()
+                    .unwrap(),
+                expected_code_hash: iroha_crypto::Hash::new(b"original contract"),
+                entrypoint: "original".into(),
+                arguments: Some(ContractArgumentRecord::try_new(vec![1, 2, 255]).unwrap()),
+            })]
+            .into(),
+        ));
     }
 }

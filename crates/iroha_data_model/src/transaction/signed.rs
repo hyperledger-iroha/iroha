@@ -2040,23 +2040,27 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        match self {
-            TransactionEntrypoint::External(tx) => {
-                out.push_str("\"External\":")?;
-                norito::json::JsonSerialize::json_serialize_to(tx, out)?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            match self {
+                TransactionEntrypoint::External(tx) => {
+                    out.push_str("\"External\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(tx, out)?;
+                }
+                TransactionEntrypoint::SealedCommitment(commitment) => {
+                    out.push_str("\"SealedCommitment\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(commitment, out)?;
+                }
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    out.push_str("\"SealedReveal\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(reveal, out)?;
+                }
             }
-            TransactionEntrypoint::SealedCommitment(commitment) => {
-                out.push_str("\"SealedCommitment\":")?;
-                norito::json::JsonSerialize::json_serialize_to(commitment, out)?;
-            }
-            TransactionEntrypoint::SealedReveal(reveal) => {
-                out.push_str("\"SealedReveal\":")?;
-                norito::json::JsonSerialize::json_serialize_to(reveal, out)?;
-            }
-        }
-        out.push('}')?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -2123,23 +2127,27 @@ impl norito::json::JsonSerialize for TransactionResult {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        match &self.0 {
-            Ok(sequence) => {
-                out.push_str("\"Ok\":")?;
-                norito::json::JsonSerialize::json_serialize_to(sequence, out)?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            match &self.0 {
+                Ok(sequence) => {
+                    out.push_str("\"Ok\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(sequence, out)?;
+                }
+                Err(reason) => {
+                    out.push_str("\"Err\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(reason, out)?;
+                }
             }
-            Err(reason) => {
-                out.push_str("\"Err\":")?;
-                norito::json::JsonSerialize::json_serialize_to(reason, out)?;
-            }
-        }
-        out.push_str(",\"batch_transfer_outcomes\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.1, out)?;
-        out.push_str(",\"nexus_fee_receipt\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.2, out)?;
-        out.push('}')?;
+            out.push_str(",\"batch_transfer_outcomes\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.1, out)?;
+            out.push_str(",\"nexus_fee_receipt\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.2, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -2715,3 +2723,72 @@ impl core::fmt::Display for TransactionResult {
     }
 }
 include!("signed_norito_rpc_fixture_tests.rs");
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::{account, audit, definition};
+
+    #[test]
+    fn original_entrypoint_checked_container_retains_every_legal_variant_and_depth() {
+        let key = iroha_crypto::KeyPair::from_seed(vec![61; 32], iroha_crypto::Algorithm::Ed25519);
+        let authority = crate::account::AccountId::new(key.public_key().clone());
+        let network =
+            crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"original network"),
+            ));
+        let fees = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                definition(),
+                7_u32.into(),
+            )],
+            None,
+        );
+        let tx = TransactionBuilder::new(network, authority.clone(), fees)
+            .with_instructions([crate::isi::Log::new(crate::Level::INFO, "original".into())])
+            .sign(key.private_key());
+        audit(&TransactionEntrypoint::External(tx));
+        let commitment = SealedTransactionCommitmentPayload::new(
+            network,
+            authority,
+            iroha_crypto::Hash::new(b"sealed original"),
+            3,
+            7,
+            None,
+        );
+        audit(&TransactionEntrypoint::SealedCommitment(
+            SignedSealedTransactionCommitment::sign(commitment, key.private_key()),
+        ));
+        let fees = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                definition(),
+                7_u32.into(),
+            )],
+            None,
+        );
+        let reveal_tx = TransactionBuilder::new(network, account(61), fees)
+            .with_instructions([crate::isi::Log::new(crate::Level::INFO, "reveal".into())])
+            .sign(key.private_key());
+        audit(&TransactionEntrypoint::SealedReveal(
+            SealedTransactionReveal::new(
+                iroha_crypto::Hash::new(b"original reveal"),
+                reveal_tx,
+                [7; 32],
+            ),
+        ));
+    }
+
+    #[test]
+    fn original_transaction_result_checked_container_retains_success_rejection_and_depth() {
+        audit(&TransactionResult::new(Ok(Default::default())));
+        let rejection = crate::transaction::error::TransactionRejectionReason::LimitCheck(
+            crate::transaction::error::TransactionLimitError {
+                reason: "original rejection".into(),
+            },
+        );
+        audit(&TransactionResult::new(Err(rejection)));
+    }
+}

@@ -1,8 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
 import org.hyperledger.iroha.sdk.crypto.Blake2b
-import org.hyperledger.iroha.sdk.norito.NoritoHeader
-import org.hyperledger.iroha.sdk.norito.SchemaHash
 import java.io.ByteArrayOutputStream
 import java.util.zip.DataFormatException
 import java.util.zip.Deflater
@@ -13,7 +11,11 @@ enum class IrohaPeerPayloadProfile(
     val code: Int,
     val requiredSchemaVersion: Int,
 ) {
-    KAGEMUSHA_V1(1, 1);
+    /**
+     * KAGEMUSHA wallet V1 peer messages: each canonical payload is one complete
+     * `KagemushaWalletEnvelopeV1` frame (`specs/kagemusha_wallet_wire_v1.md` sections 2 and 3.4).
+     */
+    KAGEMUSHA_WALLET_V1(1, KagemushaWalletWireV1.VERSION);
 
     companion object {
         @JvmStatic fun fromCode(code: Int): IrohaPeerPayloadProfile? =
@@ -21,15 +23,33 @@ enum class IrohaPeerPayloadProfile(
     }
 }
 
-/** Frozen three-message KAGEMUSHA V1 lifecycle identifiers carried by IPM1. */
-enum class IrohaPeerPayloadKind(val code: Int) {
-    REQUEST(1),
-    PAYMENT(2),
-    ACKNOWLEDGEMENT(3);
+/**
+ * Message kinds carried by IPM1. Each code equals the KAGEMUSHA wallet V1 envelope message tag
+ * ([KagemushaWalletMessageKindV1.wireTag]) of the frame the message carries.
+ */
+enum class IrohaPeerPayloadKind(
+    val code: Int,
+    /** Wallet envelope message kind carried under this IPM1 kind. */
+    val walletMessageKind: KagemushaWalletMessageKindV1,
+) {
+    OFFER(1, KagemushaWalletMessageKindV1.OFFER),
+    REQUEST(2, KagemushaWalletMessageKindV1.REQUEST),
+    PAYMENT(3, KagemushaWalletMessageKindV1.PAYMENT),
+    CREDITED(4, KagemushaWalletMessageKindV1.CREDITED),
+    SESSION_CONTROL(5, KagemushaWalletMessageKindV1.SESSION_CONTROL),
+    POLICY_DATA(6, KagemushaWalletMessageKindV1.POLICY_DATA),
+    LINEAGE(7, KagemushaWalletMessageKindV1.LINEAGE);
+
+    /** Exact complete-frame cap of a wallet envelope of this kind, header and padding included. */
+    val maximumWalletFrameBytes: Int get() = walletMessageKind.maximumFrameBytes
 
     companion object {
         @JvmStatic fun fromCode(code: Int): IrohaPeerPayloadKind? =
             entries.firstOrNull { it.code == code }
+
+        /** IPM1 kind that carries a wallet envelope of [kind]. */
+        @JvmStatic fun of(kind: KagemushaWalletMessageKindV1): IrohaPeerPayloadKind =
+            entries.first { it.walletMessageKind == kind }
     }
 }
 
@@ -51,12 +71,12 @@ enum class IrohaPeerWireCompressionPolicyV1 {
 
 /** Allocation limits shared byte-for-byte by all peer V1 transports. */
 class IrohaPeerWireLimitsV1 @JvmOverloads constructor(
-    val maximumCanonicalBytes: Int = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES,
-    val maximumKagemushaEncodedBytes: Int = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES,
+    val maximumCanonicalBytes: Int = KagemushaWalletWireV1.MESSAGE_MAX_BYTES,
+    val maximumWalletEncodedBytes: Int = KagemushaWalletWireV1.MESSAGE_MAX_BYTES,
 ) {
     init {
-        require(maximumCanonicalBytes in 1..KagemushaWireV1.MAXIMUM_PAYMENT_BYTES)
-        require(maximumKagemushaEncodedBytes in 1..KagemushaWireV1.MAXIMUM_PAYMENT_BYTES)
+        require(maximumCanonicalBytes in 1..KagemushaWalletWireV1.MESSAGE_MAX_BYTES)
+        require(maximumWalletEncodedBytes in 1..KagemushaWalletWireV1.MESSAGE_MAX_BYTES)
     }
 
     companion object {
@@ -81,7 +101,7 @@ class IrohaPeerCanonicalPayload(
             "Peer payload profile ${profile.name} requires schema " +
                 "${profile.requiredSchemaVersion}, received $schemaVersion"
         }
-        require(canonicalBytes.size <= maximumCanonicalBytes(profile, kind)) {
+        require(canonicalBytes.size <= kind.maximumWalletFrameBytes) {
             "${profile.name} ${kind.name} payload exceeds its frozen protocol bound"
         }
         validateTypedCanonicalPayload(profile, kind, canonicalBytes)
@@ -108,52 +128,32 @@ private fun ByteArray.boundedCanonicalCopy(): ByteArray {
     return copyOf()
 }
 
+/**
+ * A wallet-profile payload must be one complete canonical `KagemushaWalletEnvelopeV1` frame within
+ * its kind's bound whose message tag is this IPM1 kind. The check is structural
+ * ([KagemushaWalletWireV1.inspectEnvelope]): the wallet still decodes, validates and verifies the
+ * message, and decides its scheme, before acting on it.
+ */
 private fun validateTypedCanonicalPayload(
     profile: IrohaPeerPayloadProfile,
     kind: IrohaPeerPayloadKind,
     bytes: ByteArray,
 ) {
-    if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_V1) return
-    val schema = when (kind) {
-        IrohaPeerPayloadKind.REQUEST ->
-            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1"
-        IrohaPeerPayloadKind.PAYMENT ->
-            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1"
-        IrohaPeerPayloadKind.ACKNOWLEDGEMENT ->
-            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1"
-    }
-    val alignment = KagemushaNoritoV1.canonicalAlignment(schema)
-    val requiredPadding =
-        (alignment - NoritoHeader.HEADER_LENGTH % alignment) % alignment
-    try {
-        val decoded = NoritoHeader.decode(bytes, SchemaHash.hash16(schema))
-        val header = decoded.header
-        require(
-            header.compression == NoritoHeader.COMPRESSION_NONE &&
-                header.flags == NoritoHeader.COMPACT_LEN &&
-                decoded.payload.isNotEmpty() &&
-                bytes.size == NoritoHeader.HEADER_LENGTH + requiredPadding + decoded.payload.size &&
-                header.encode().contentEquals(
-                    bytes.copyOfRange(0, NoritoHeader.HEADER_LENGTH),
-                ),
-        ) { "KAGEMUSHA V1 payload must use canonical compact Norito framing" }
-        header.validateChecksum(decoded.payload)
-    } catch (failure: RuntimeException) {
-        throw IllegalArgumentException(
-            "Invalid KAGEMUSHA V1 payload for ${kind.name.lowercase()}",
-            failure,
-        )
-    }
-}
-
-private fun maximumCanonicalBytes(
-    profile: IrohaPeerPayloadProfile,
-    kind: IrohaPeerPayloadKind,
-): Int = when (profile) {
-    IrohaPeerPayloadProfile.KAGEMUSHA_V1 -> when (kind) {
-        IrohaPeerPayloadKind.REQUEST -> KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES
-        IrohaPeerPayloadKind.PAYMENT -> KagemushaWireV1.MAXIMUM_PAYMENT_BYTES
-        IrohaPeerPayloadKind.ACKNOWLEDGEMENT -> KagemushaWireV1.MAXIMUM_ACKNOWLEDGEMENT_BYTES
+    when (profile) {
+        IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1 -> {
+            val envelope = try {
+                KagemushaWalletWireV1.inspectEnvelope(bytes)
+            } catch (failure: RuntimeException) {
+                throw IllegalArgumentException(
+                    "Invalid KAGEMUSHA wallet V1 envelope for ${kind.name.lowercase()}",
+                    failure,
+                )
+            }
+            require(envelope.kind == kind.walletMessageKind) {
+                "KAGEMUSHA wallet V1 ${envelope.kind.label} envelope cannot travel as " +
+                    kind.name.lowercase()
+            }
+        }
     }
 }
 
@@ -246,8 +246,8 @@ class IrohaPeerWireMessageV1 private constructor(
     companion object {
         const val VERSION = 1
         const val HEADER_LENGTH = 84
-        const val MAXIMUM_CANONICAL_BYTES = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES
-        const val MAXIMUM_KAGEMUSHA_ENCODED_BYTES = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES
+        const val MAXIMUM_CANONICAL_BYTES = KagemushaWalletWireV1.MESSAGE_MAX_BYTES
+        const val MAXIMUM_WALLET_ENCODED_BYTES = KagemushaWalletWireV1.MESSAGE_MAX_BYTES
         private val MAGIC = "IPM1".toByteArray(Charsets.US_ASCII)
         private val CANONICAL_DOMAIN = "IROHA-PEER-PAYLOAD-V1\u0000".toByteArray(Charsets.UTF_8)
         private val MESSAGE_DOMAIN = "IROHA-PEER-MESSAGE-V1\u0000".toByteArray(Charsets.UTF_8)
@@ -280,7 +280,7 @@ class IrohaPeerWireMessageV1 private constructor(
             val canonicalLength = checkedLength(data.readU32(12), limits.maximumCanonicalBytes)
             val encodedLength = checkedLength(
                 data.readU32(16),
-                limits.maximumKagemushaEncodedBytes,
+                limits.maximumWalletEncodedBytes,
             )
             require(data.size == HEADER_LENGTH + encodedLength) { "Peer message length mismatch" }
             require(encoding != IrohaPeerContentEncodingV1.ZLIB ||
@@ -349,7 +349,7 @@ class IrohaPeerWireMessageV1 private constructor(
             val canonicalLength = checkedLength(data.readU32(12), limits.maximumCanonicalBytes)
             val encodedLength = checkedLength(
                 data.readU32(16),
-                limits.maximumKagemushaEncodedBytes,
+                limits.maximumWalletEncodedBytes,
             )
             require(encoding != IrohaPeerContentEncodingV1.NONE || canonicalLength == encodedLength) {
                 "Malformed IPM1 header"
@@ -391,7 +391,7 @@ class IrohaPeerWireMessageV1 private constructor(
             require(payload.byteCount <= limits.maximumCanonicalBytes) {
                 "Peer canonical payload exceeds its bound"
             }
-            val maximumEncoded = limits.maximumKagemushaEncodedBytes
+            val maximumEncoded = limits.maximumWalletEncodedBytes
             val digest = canonicalHash(payload)
             val canonical = payload.bytes
             val compressed = if (policy == IrohaPeerWireCompressionPolicyV1.PEER_OPTIMIZED) {
@@ -520,25 +520,27 @@ class IrohaPeerWireMessageV1 private constructor(
     )
 }
 
-/** Bounded handoff adapter for the sole canonical KAGEMUSHA V1 wire values. */
-object IrohaPeerKagemushaAdapterV1 {
-    const val ARCHIVE_SCHEMA_VERSION = 1
-
+/**
+ * Bounded handoff adapter for KAGEMUSHA wallet V1 envelopes: the IPM1 kind is the envelope's own
+ * message tag, so a caller never chooses it separately.
+ */
+object IrohaPeerKagemushaWalletAdapterV1 {
+    /** Wrap one canonical wallet envelope frame in IPM1 under the kind its message tag names. */
     @JvmStatic
     @JvmOverloads
     fun wrap(
-        kind: IrohaPeerPayloadKind,
-        canonicalPayload: ByteArray,
+        envelope: ByteArray,
         compressionPolicy: IrohaPeerWireCompressionPolicyV1 =
             IrohaPeerWireCompressionPolicyV1.DISABLED,
         limits: IrohaPeerWireLimitsV1 = IrohaPeerWireLimitsV1.PEER_V1,
     ): IrohaPeerWireMessageV1 {
-        val bytes = canonicalPayload.copyOf()
+        val bytes = envelope.copyOf()
         return try {
+            val kind = IrohaPeerPayloadKind.of(KagemushaWalletWireV1.inspectEnvelope(bytes).kind)
             IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.KAGEMUSHA_V1,
+                IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1,
                 kind,
-                ARCHIVE_SCHEMA_VERSION,
+                IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1.requiredSchemaVersion,
                 bytes,
             ), compressionPolicy, limits)
         } finally {
@@ -546,14 +548,12 @@ object IrohaPeerKagemushaAdapterV1 {
         }
     }
 
+    /** Canonical wallet envelope frame carried by a verified wallet-profile IPM1 message. */
     @JvmStatic
     fun decode(message: IrohaPeerWireMessageV1): ByteArray {
         val payload = message.canonicalPayload
-        require(payload.profile == IrohaPeerPayloadProfile.KAGEMUSHA_V1) {
+        require(payload.profile == IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1) {
             "Unexpected peer payload profile"
-        }
-        require(payload.schemaVersion == ARCHIVE_SCHEMA_VERSION) {
-            "Unsupported KAGEMUSHA V1 archive schema"
         }
         return payload.bytes
     }

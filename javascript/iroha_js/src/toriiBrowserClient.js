@@ -32,14 +32,6 @@ import {
 } from "./operatorRequest.browser.js";
 import { ensureCanonicalAccountId } from "./normalizers.js";
 import {
-  kagemushaOperationIdHexV1,
-  normalizeKagemushaReadinessV1,
-  normalizeUnverifiedKagemushaOperationStatusV1,
-  requireKagemushaJsonContentTypeV1,
-  requireKagemushaSubmissionResponseV1,
-} from "./kagemushaToriiV1.js";
-import { _encodeRedemptionRequestV1 } from "./kagemusha.js";
-import {
   SUMERAGI_LANES_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
 } from "./sumeragiTypedLimits.js";
@@ -111,7 +103,6 @@ const WIRE_FIELD_FAILOVERS_TOTAL = "failovers_total";
 const CONTEXT_KAIGI_RELAY_DETAIL_RESPONSE = "kaigi relay detail response";
 const CONTEXT_KAIGI_RELAY_HEALTH_RESPONSE = "kaigi relay health response";
 const FIELD_CONTENT_TYPE = "content-type";
-const CONTEXT_KAGEMUSHA_OPERATION_RESPONSE = "KAGEMUSHA operation response";
 const FIELD_APPLICATION_X_NORITO = "application/x-norito";
 const FIELD_V1_CONTRACTS_DEPLOYMENT_STATE = (TEXT_V1_CONTRACTS + "deployment-state");
 const FIELD_QUANTITY = "quantity";
@@ -121,8 +112,6 @@ const DEFAULT_SUCCESS_STATUSES = Object.freeze([200]);
 const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
 const DEFAULT_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const DEFAULT_BINARY_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
-const KAGEMUSHA_READINESS_JSON_MAX_BYTES_V1 = 4 * 1024;
-const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024;
 const KAIGI_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
 const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
@@ -1858,114 +1847,6 @@ export class ToriiBrowserClient {
     } finally {
       cleanup();
     }
-  }
-
-  getKagemushaReadiness(options = {}) {
-    const opts = signalOnlyOptions(options, "getKagemushaReadiness options");
-    return this._json("GET", "/v1/kagemusha/readiness", {
-      signal: opts.signal,
-      oneShot: true,
-      maximumBodyBytes: KAGEMUSHA_READINESS_JSON_MAX_BYTES_V1,
-      jsonParser: (text) => parseStrictLosslessIntegerJson(
-        text,
-        "KAGEMUSHA readiness response",
-      ),
-      responseObserver: (response) => requireKagemushaJsonContentTypeV1(
-        response.headers.get(FIELD_CONTENT_TYPE),
-        "KAGEMUSHA readiness response",
-      ),
-    }).then((payload) => normalizeKagemushaReadinessV1(payload));
-  }
-
-  /** Submit one payer-signed canonical KAGEMUSHA V1 top-up transaction. */
-  submitKagemushaTopUp(signedTransaction, operationId, options = {}) {
-    const opts = signalOnlyOptions(options, "submitKagemushaTopUp options");
-    if (typeof operationId === "string") {
-      rejectType("submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data");
-    }
-    const operationIdHex = kagemushaOperationIdHexV1(operationId);
-    const body = requireTransactionBytes(
-      signedTransaction,
-      "submitKagemushaTopUp signedTransaction",
-    );
-    browserSignedTransactionHashHex(body, this.#networkPrefix);
-    return this._submitKagemushaOperationBodyV1(
-      "/v1/kagemusha/top-up",
-      "top_up",
-      body,
-      operationIdHex,
-      opts.signal,
-    );
-  }
-
-  /** Submit one canonical KAGEMUSHA V1 full or partial redemption intent. */
-  submitKagemushaRedemption(request, options = {}) {
-    const opts = signalOnlyOptions(options, "submitKagemushaRedemption options");
-    return this._submitKagemushaOperationBodyV1(
-      "/v1/kagemusha/redeem",
-      "redemption",
-      _encodeRedemptionRequestV1(request),
-      kagemushaOperationIdHexV1(request.operationId),
-      opts.signal,
-    );
-  }
-
-  /** Read one KAGEMUSHA V1 operation without exposing an unverified monetary result. */
-  getKagemushaOperation(operationId, options = {}) {
-    const opts = signalOnlyOptions(options, "getKagemushaOperation options");
-    const operationIdHex = kagemushaOperationIdHexV1(operationId);
-    return this._json("GET", `/v1/kagemusha/operations/${operationIdHex}`, {
-      signal: opts.signal,
-      oneShot: true,
-      maximumBodyBytes: KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      jsonParser: (text) => parseStrictLosslessIntegerJson(text, CONTEXT_KAGEMUSHA_OPERATION_RESPONSE),
-      responseObserver: (response) => requireKagemushaJsonContentTypeV1(
-        response.headers.get(FIELD_CONTENT_TYPE),
-        CONTEXT_KAGEMUSHA_OPERATION_RESPONSE,
-      ),
-    }).then((payload) => {
-      const status = normalizeUnverifiedKagemushaOperationStatusV1(payload);
-      if (kagemushaOperationIdHexV1(status.operationId) !== operationIdHex) {
-        rejectType(("KAGEMUSHA operation response ID" + TEXT_DOES_NOT_MATCH_THE + "requested resource"));
-      }
-      return status;
-    });
-  }
-
-  _submitKagemushaOperationBodyV1(path, kind, body, operationIdHex, signal) {
-    let transportResponse = null;
-    return this._json("POST", path, {
-      rawBody: body,
-      contentType: FIELD_APPLICATION_X_NORITO,
-      headers: { Accept: FIELD_APPLICATION_JSON, "Idempotency-Key": operationIdHex },
-      signal,
-      oneShot: true,
-      successStatuses: [200, 202],
-      maximumBodyBytes: KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      jsonParser: (text) => parseStrictLosslessIntegerJson(text, CONTEXT_KAGEMUSHA_OPERATION_RESPONSE),
-      responseObserver: (response) => {
-        requireKagemushaJsonContentTypeV1(
-          response.headers.get(FIELD_CONTENT_TYPE),
-          CONTEXT_KAGEMUSHA_OPERATION_RESPONSE,
-        );
-        transportResponse = {
-          statusCode: response.status,
-          location: response.headers.get("location"),
-          retryAfter: response.headers.get("retry-after"),
-        };
-      },
-    }).then((payload) => {
-      const status = normalizeUnverifiedKagemushaOperationStatusV1(payload);
-      if (kagemushaOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
-        rejectType(("KAGEMUSHA operation response" + TEXT_DOES_NOT_MATCH_THE + "submitted request"));
-      }
-      requireKagemushaSubmissionResponseV1({
-        ...transportResponse,
-        operationIdHex,
-        operationState: status.state,
-      });
-      return status;
-    });
   }
 
   _url(path, params) {

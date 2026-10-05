@@ -421,8 +421,7 @@ fn every_golden_case_name_parses() {
 
 /// The vendored KAGEMUSHA path is self-consistent on a golden: the
 /// augmented proof verifies, and a wrong public input, a wrong suffix and
-/// trailing bytes are rejected (as `iroha_core_zk::prover_golden_tests`
-/// checks for its goldens).
+/// trailing bytes are rejected.
 #[test]
 fn vendored_kagemusha_path_verifies_its_goldens() {
     use iroha_plonk_oracle::convert::Pallas;

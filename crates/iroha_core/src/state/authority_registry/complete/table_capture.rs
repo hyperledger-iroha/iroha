@@ -302,20 +302,117 @@ capture_world_table_once!(
     "world.tx_sequences"
 );
 
-capture_trigger_semantic_once!(capture_trigger_data_once, capture_data_authority_table);
-capture_trigger_semantic_once!(
-    capture_trigger_pipeline_once,
-    capture_pipeline_authority_table
-);
-capture_trigger_semantic_once!(capture_trigger_time_once, capture_time_authority_table);
-capture_trigger_semantic_once!(
-    capture_trigger_by_call_once,
-    capture_by_call_authority_table
-);
-capture_trigger_semantic_once!(
-    capture_trigger_contracts_once,
-    capture_contracts_authority_table
-);
+fn capture_trigger_action_once(
+    state: &State,
+    table: crate::smartcontracts::triggers::set::ActionTable,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    use crate::smartcontracts::triggers::set::{
+        CheckedActions, TriggerContractError, action_source_work,
+    };
+    let generation = state.state_view_generation();
+    if generation & 1 != 0 {
+        return Ok(None);
+    }
+    let budget = state.ivm_execution_budget();
+    let checked =
+        CheckedActions::capture(&state.world.triggers, action_source_work(limits), &budget);
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    let mut checked = match checked {
+        Ok(checked) => checked,
+        Err(TriggerContractError::Publication(mv::PublicationPreparationError::Changed)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let outcome = checked.encode(table, limits);
+    let current = checked.matches_current();
+    drop(checked);
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    if !current? {
+        return Ok(None);
+    }
+    Ok(Some(outcome?))
+}
+fn capture_trigger_data_once(
+    state: &State,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    capture_trigger_action_once(
+        state,
+        crate::smartcontracts::triggers::set::ActionTable::Data,
+        limits,
+    )
+}
+fn capture_trigger_pipeline_once(
+    state: &State,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    capture_trigger_action_once(
+        state,
+        crate::smartcontracts::triggers::set::ActionTable::Pipeline,
+        limits,
+    )
+}
+fn capture_trigger_time_once(
+    state: &State,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    capture_trigger_action_once(
+        state,
+        crate::smartcontracts::triggers::set::ActionTable::Time,
+        limits,
+    )
+}
+fn capture_trigger_by_call_once(
+    state: &State,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    capture_trigger_action_once(
+        state,
+        crate::smartcontracts::triggers::set::ActionTable::ByCall,
+        limits,
+    )
+}
+fn capture_trigger_contracts_once(
+    state: &State,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    use crate::smartcontracts::triggers::set::{
+        CheckedContracts, TriggerContractError, contract_source_work,
+    };
+    let generation = state.state_view_generation();
+    if generation & 1 != 0 {
+        return Ok(None);
+    }
+    let budget = state.ivm_execution_budget();
+    let checked =
+        CheckedContracts::capture(&state.world.triggers, contract_source_work(limits), &budget);
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    let mut checked = match checked {
+        Ok(checked) => checked,
+        Err(TriggerContractError::Publication(mv::PublicationPreparationError::Changed)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let outcome = checked.encode(limits);
+    let current = checked.matches_current();
+    drop(checked);
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    if !current? {
+        return Ok(None);
+    }
+    Ok(Some(outcome?))
+}
 
 capture_world_table_once!(
     capture_consensus_keys_once,

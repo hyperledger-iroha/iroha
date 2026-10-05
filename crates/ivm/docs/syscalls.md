@@ -598,6 +598,12 @@ node enforces that policy unconditionally.
   v1 surface and must be updated in the same change whenever the first-release
   surface intentionally changes.
 - Callable metadata carries complete flat `CallSchemaV1` argument/result trees.
+  The sole CS1 body uses magic `43533100`, fixed `u64` node count and one-byte
+  node tags with complete canonical payloads; enclosing Norito flags declare
+  child length layouts. It removes enum/vector framing redundancy while
+  preserving every callable root, role, error identity and eager table check.
+  The former vector body is rejected and its ABI hash/captures must be replaced
+  by genuine current native output.
   It preserves Option/Result payloads, exact List capacities and element types,
   nominal products/errors, privacy, and `StateCursor(EntrypointValueKindV1)` keys.
   Table counts derive from the trees; active nested values use the same checks as

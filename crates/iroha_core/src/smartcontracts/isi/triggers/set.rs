@@ -10,14 +10,23 @@ pub(crate) mod invocation_identity;
 
 #[path = "set_acquisition.rs"]
 mod acquisition;
+#[path = "set_action_relation.rs"]
+mod action_relation;
 #[path = "set_authority_capture.rs"]
 mod authority_capture;
 #[path = "set_authority_registry.rs"]
 mod authority_registry;
+#[path = "set_contract_capture.rs"]
+mod contract_capture;
+#[path = "set_contract_relation.rs"]
+mod contract_relation;
 #[path = "set_detachment.rs"]
 mod detachment;
 pub(crate) use acquisition::SetBlockAcquisition;
+pub(crate) use action_relation::{ActionTable, scheduled_work as action_source_work};
 pub(crate) use authority_registry::{AUTHORITY_FIELDS, SetReadReleases};
+pub(crate) use contract_capture::{CheckedActions, CheckedContracts};
+pub(crate) use contract_relation::{TriggerContractError, scheduled_work as contract_source_work};
 pub(crate) use detachment::{
     AbortedSet, DetachError, DetachedSet, DetachedSetPublicationSlot, PreparedSet, PublishedSet,
     SetBlockCapture, SetPublicationError,
@@ -1622,42 +1631,7 @@ pub trait SetReadOnly {
     fn contracts(&self) -> &impl StorageReadOnly<HashOf<IvmBytecode>, IvmBytecodeEntry>;
     /// Verify every contract's lookup identity and its derived live action count.
     fn validate_world_contract_rows(&self) -> core::result::Result<(), String> {
-        let mut expected_counts: BTreeMap<HashOf<IvmBytecode>, u64> = BTreeMap::new();
-        macro_rules! count_references {
-            ($store:expr) => {
-                for (_, action) in $store.iter() {
-                    if let Some(hash) = action.extract_blob_hash() {
-                        let count = expected_counts.entry(hash).or_default();
-                        *count = count.checked_add(1).ok_or_else(|| {
-                            "trigger contract reference count exceeds u64".to_owned()
-                        })?;
-                    }
-                }
-            };
-        }
-        count_references!(self.data_triggers());
-        count_references!(self.pipeline_triggers());
-        count_references!(self.time_triggers());
-        count_references!(self.by_call_triggers());
-        for (key, entry) in self.contracts().iter() {
-            if HashOf::new(&entry.original_contract) != *key {
-                return Err(
-                    "trigger contract lookup hash does not match its original bytecode".into(),
-                );
-            }
-            if ivm::contract_code_hash(entry.original_contract.as_ref()) != entry.code_hash {
-                return Err(
-                    "trigger contract code hash does not match its original bytecode".into(),
-                );
-            }
-            if expected_counts.remove(key) != Some(entry.count.get()) {
-                return Err("trigger contract reference count does not match its actions".into());
-            }
-        }
-        if !expected_counts.is_empty() {
-            return Err("trigger action references a missing original contract".into());
-        }
-        Ok(())
+        contract_relation::validate_current(self)
     }
     /// Get original [`IvmBytecode`] for [`TriggerId`]. Returns `None` if there's no [`Trigger`]
     /// with specified `id` that has IVM executable

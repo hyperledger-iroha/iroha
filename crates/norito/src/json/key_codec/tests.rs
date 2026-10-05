@@ -68,3 +68,68 @@ fn malformed_tuple_keys_are_rejected() {
     assert!(<(String, u32)>::decode_json_key("one\u{1f}4294967296").is_err());
     assert!(<(String, String, u16)>::decode_json_key("one\u{1f}two\u{1f}65536").is_err());
 }
+
+struct CheckedKey<'a, T>(&'a T);
+impl<T: JsonKeyCodec> json::JsonSerialize for CheckedKey<'_, T> {
+    fn json_serialize(&self, output: &mut String) {
+        self.0.encode_json_key(output);
+    }
+    fn json_serialize_to(
+        &self,
+        output: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.encode_json_key_to(output)
+    }
+}
+fn checked_parity<T: JsonKeyCodec + Debug + PartialEq>(key: T) {
+    let value = CheckedKey(&key);
+    let ordinary = json::to_json(&value).unwrap();
+    assert_eq!(
+        json::to_json_bounded(&value, ordinary.len()),
+        Ok(ordinary.clone())
+    );
+    for cap in 0..ordinary.len() {
+        assert_eq!(
+            json::to_json_bounded(&value, cap),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+    let parsed: String = json::from_str(&ordinary).unwrap();
+    assert_eq!(T::decode_json_key(&parsed).unwrap(), key);
+}
+#[test]
+fn checked_keys_match_ordinary_uppercase_hex_and_every_tuple_shape() {
+    checked_parity(String::new());
+    checked_parity("quote\"\\\n\u{1f}😀".to_owned());
+    checked_parity(0_u64);
+    checked_parity(u64::MAX);
+    checked_parity([0_u8; 0]);
+    checked_parity([0xab, 0x00, 0xff]);
+    checked_parity(("left".to_owned(), "right".to_owned()));
+    checked_parity(("one".to_owned(), "two\n".to_owned(), "three".to_owned()));
+    checked_parity(("circuit".to_owned(), u32::MAX));
+    checked_parity(("service".to_owned(), "version".to_owned(), u16::MAX));
+    checked_parity(("a\u{1f}\"b\\c😀".to_owned(), u64::MAX, 0));
+    checked_parity(([0xff, 0], 0, u64::MAX));
+    checked_parity((("left".to_owned(), "right".to_owned()), 1, 2));
+}
+struct UnmigratedKey;
+impl JsonKeyCodec for UnmigratedKey {
+    fn encode_json_key(&self, _: &mut String) {
+        panic!("unmigrated checked key may not allocate an ordinary String");
+    }
+    fn decode_json_key(_: &str) -> Result<Self, json::Error> {
+        Err(json::Error::Message("unused decoder".into()))
+    }
+}
+#[test]
+fn checked_key_default_and_nested_tuple_refuse_before_ordinary_fallback() {
+    assert_eq!(
+        json::to_json_bounded(&CheckedKey(&UnmigratedKey), 1024),
+        Err(json::BoundedJsonError::Unsupported)
+    );
+    assert_eq!(
+        json::to_json_bounded(&CheckedKey(&(UnmigratedKey, 1, 2)), 1024),
+        Err(json::BoundedJsonError::Unsupported)
+    );
+}

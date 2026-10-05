@@ -7,9 +7,11 @@
 //! - `oracle_baseline`: the commits and toolchain the vectors were recorded from.
 //! - `golden_proofs`: the proof SHA-256 tables of
 //!   `vendor/halo2-axiom/tests/golden_proof_bytes.rs` (Blake2b transcript,
-//!   compiled in) and `crates/iroha_core_zk/src/prover_golden_tests.rs`
-//!   (KAGEMUSHA Poseidon transcript, read at run time; see
-//!   [`KAGEMUSHA_GOLDEN_SOURCE`]).
+//!   compiled in) and of the eight KAGEMUSHA Poseidon-transcript goldens
+//!   (`iroha_core_zk_kagemusha`). The fixture is the pinned authority for the
+//!   KAGEMUSHA table: nothing regenerates it, so this test carries its cases
+//!   over unchanged and checks only their names and digest format (see
+//!   [`PINNED_GOLDEN_CASES`]).
 //! - `params_ipa`: length and SHA-256 of `ParamsIPA::new(k)` written bytes for
 //!   k = 6..=16 on both curves, with digests of the generator and Lagrange
 //!   sections.
@@ -18,12 +20,14 @@
 //!   (personalization `Halo2-Transcript`), and decoding rejections.
 //! - `poseidon_transcript`: snark-verifier
 //!   `PoseidonTranscript<C, NativeLoader, _, 3, 2, 8, 57>::new::<0>`, the
-//!   KAGEMUSHA transcript of `iroha_core_zk`, and decoding rejections.
+//!   KAGEMUSHA RP57 transcript that `iroha_plonk`
+//!   `TranscriptV1::KagemushaPoseidonRp57` reproduces in oracle mode (spec
+//!   section 6.2), and decoding rejections.
 //! - `poseidon_constants`: the unoptimized round constants and MDS matrix of
 //!   halo2-base `OptimizedPoseidonSpec<F, 3, 2>` with 8 full and 57 partial
 //!   rounds, for Fp and Fq.
-//! - `kagemusha_v1_poseidon`: a reproduction of
-//!   `iroha_core_zk::kagemusha_v1_poseidon::hash` (see below).
+//! - `kagemusha_v1_poseidon`: the KAGEMUSHA domain hash
+//!   `hash([domain, len, inputs...])` on the vendored sponge (see below).
 //! - `confidential_v3_poseidon`: a reproduction of
 //!   `iroha_core_zk::confidential_v2::confidential_poseidon_hash_v3`.
 //!
@@ -31,21 +35,20 @@
 //! compressed `to_bytes` hex. The file is `norito::json` pretty output with
 //! canonically ordered keys; the test rejects any other formatting.
 //!
-//! Both native hashes are reproduced here with the exact halo2-base and
-//! snark-verifier types those modules use: they are `pub(crate)`, and
-//! `iroha_core_zk` will take this crate as a dev-dependency, so calling them
-//! would create a dependency cycle. Production anchors differ per section and
-//! are recorded in the fixture (`production_anchors`):
+//! Both domain hashes are computed here with the vendored halo2-base and
+//! snark-verifier types. The confidential hash is `pub(crate)` in
+//! `iroha_core_zk`, so it is reproduced rather than called. Production anchors
+//! differ per section and are recorded in the fixture (`production_anchors`):
 //!
 //! - the shared sponge and the confidential domains are anchored to the three
 //!   KATs pinned in `crates/iroha_core_zk/src/confidential_v2_tests.rs`
 //!   (`confidential_reproduction_matches_iroha_core_zk_kats`);
-//! - no `iroha_core_zk` test pins a KAGEMUSHA hash value yet, so the
-//!   `kagemusha_v1_poseidon` vectors are anchored only through that shared
-//!   sponge. TODO (`iroha_core_zk` owner): add a `#[cfg(test)]` test in
-//!   `kagemusha_v1_poseidon.rs` (and one for `confidential_poseidon_hash_v3`)
-//!   that parses `fixtures/native_prover/kats_v1.json` with `norito::json` and
-//!   asserts every vector and the empty depth-256 replay root on both fields.
+//! - the `kagemusha_v1_poseidon` vectors are anchored through that shared
+//!   sponge and asserted by their native consumers:
+//!   `iroha_pasta::poseidon::hash_with_domain` (`tests/pasta_parity`, which
+//!   also checks the empty depth-256 replay root), the `iroha_plonk_gadgets`
+//!   sponge chip and `iroha_kagemusha_proof` (`tests/digest_parity.rs` in
+//!   each).
 //!
 //! By default the test regenerates every vector and compares it with the
 //! fixture, reporting the JSON path of the first difference. The k = 15 and
@@ -150,17 +153,26 @@ const PARAMS_K_DEBUG: std::ops::RangeInclusive<u32> = 6..=14;
 /// `ParamsIPA` sizes recorded only by the ignored release test (k >= 15 is
 /// release-only in every suite).
 const PARAMS_K_RELEASE: std::ops::RangeInclusive<u32> = 15..=16;
-/// The KAGEMUSHA golden table, relative to this crate.
+/// Key of the pinned KAGEMUSHA golden table in the `golden_proofs` section.
+const PINNED_GOLDENS: &str = "iroha_core_zk_kagemusha";
+/// Where the pinned KAGEMUSHA golden table was recorded from.
+const PINNED_GOLDEN_SOURCE: &str = "pinned here, never regenerated: recorded from crates/iroha_core_zk/src/prover_golden_tests.rs at oracle_baseline.repository_head";
+/// The cases of the pinned KAGEMUSHA golden table, in fixture order.
 ///
-/// Read at run time rather than through `include_str!`, so that renaming or
-/// deleting that private test file fails only `native_prover_kats_match_fixture`
-/// (with this path in the message) instead of the whole test target.
-/// TODO (`iroha_core_zk` owner): `prover_golden_tests.rs` should read its
-/// `GOLDEN_SHA256` table from `golden_proofs.iroha_core_zk_kagemusha` in
-/// `kats_v1.json` (fixture changes select the full CI run); this crate then
-/// stops reading another crate's source. Until then a change to the table runs
-/// this test only in a full CI run.
-const KAGEMUSHA_GOLDEN_SOURCE: &str = "../iroha_core_zk/src/prover_golden_tests.rs";
+/// Their circuits are not part of the native prover, so the digests cannot
+/// be regenerated here: the fixture is their only authority. The test carries
+/// the recorded digests over unchanged and checks that exactly these cases are
+/// present, each with a distinct lowercase SHA-256 hex digest.
+const PINNED_GOLDEN_CASES: [&str; 8] = [
+    "sigma_native_k11/eq",
+    "sigma_native_k11/ep",
+    "p256_k16/eq",
+    "p256_k16/ep",
+    "rec_inner_w1_k16/eq",
+    "rec_scalar_half_w1_k16/eq",
+    "rec_inner_w1_k16/ep",
+    "rec_scalar_half_w1_k16/ep",
+];
 /// Generators listed explicitly in the `generators` section.
 const LISTED_GENERATORS: usize = 64;
 /// Domain of the `ParamsIPA` hash-to-curve generators.
@@ -177,7 +189,8 @@ const POSEIDON_PARTIAL_ROUNDS: usize = 57;
 /// Secure-MDS selector of the KAGEMUSHA and confidential Poseidon permutation.
 const POSEIDON_SECURE_MDS: usize = 0;
 
-/// The KAGEMUSHA proof transcript (`iroha_core_zk` `KAGEMUSHA_IPA_POSEIDON_*_V1`).
+/// The KAGEMUSHA RP57 proof transcript (`iroha_plonk`
+/// `TranscriptV1::KagemushaPoseidonRp57` reproduces it in oracle mode).
 type KagemushaTranscript<C, S> = PoseidonTranscript<
     C,
     NativeLoader,
@@ -187,12 +200,13 @@ type KagemushaTranscript<C, S> = PoseidonTranscript<
     POSEIDON_FULL_ROUNDS,
     POSEIDON_PARTIAL_ROUNDS,
 >;
-/// The native sponge behind `kagemusha_v1_poseidon` and `confidential_v2`.
+/// The vendored native sponge behind the `kagemusha_v1_poseidon` and
+/// `confidential_v3_poseidon` sections.
 type NativePoseidon<F> = Poseidon<F, F, POSEIDON_T, POSEIDON_RATE>;
 /// The halo2-base specification behind [`NativePoseidon`].
 type PoseidonSpec<F> = OptimizedPoseidonSpec<F, POSEIDON_T, POSEIDON_RATE>;
 
-/// KAGEMUSHA domains (`iroha_core_zk::kagemusha_v1_poseidon`).
+/// Domains of the `kagemusha_v1_poseidon` section: empty leaf, leaf, node, state.
 const KAGEMUSHA_DOMAINS: [[u8; 8]; 4] = [*b"kgmemp_1", *b"kgmleaf1", *b"kgmnode1", *b"kgmstate"];
 /// Confidential V3 domains (`iroha_core_zk::confidential_v2`).
 const CONFIDENTIAL_DOMAINS: [[u8; 8]; 7] = [
@@ -377,46 +391,96 @@ fn oracle_baseline() -> Value {
         .collect())
 }
 
-/// Text of the KAGEMUSHA golden source ([`KAGEMUSHA_GOLDEN_SOURCE`]).
-fn kagemusha_golden_source() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(KAGEMUSHA_GOLDEN_SOURCE);
-    std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!(
-            "read {}: {error}; the KAGEMUSHA GOLDEN_SHA256 table moved, update \
-             KAGEMUSHA_GOLDEN_SOURCE",
-            path.display()
-        )
-    })
+/// The checked `cases` of the pinned KAGEMUSHA golden table of `fixture`.
+///
+/// The table must hold exactly [`PINNED_GOLDEN_CASES`], in order, each entry
+/// with only a `case` and a distinct lowercase SHA-256 hex `sha256`.
+fn pinned_golden_cases(fixture: &Value) -> Value {
+    let cases = fixture
+        .get("golden_proofs")
+        .and_then(|section| section.get(PINNED_GOLDENS))
+        .and_then(|table| table.get("cases"))
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| {
+            panic!(
+                "golden_proofs.{PINNED_GOLDENS}.cases is missing; the table is pinned and \
+                 cannot be regenerated, restore it from version control"
+            )
+        });
+    let mut digests = Vec::with_capacity(cases.len());
+    let names = cases
+        .iter()
+        .map(|entry| {
+            let mut keys = entry
+                .as_object()
+                .map(|map| map.keys().map(String::as_str).collect::<Vec<_>>())
+                .unwrap_or_default();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                ["case", "sha256"],
+                "{PINNED_GOLDENS}: an entry holds only case and sha256"
+            );
+            let field = |key: &str| {
+                entry
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| panic!("{PINNED_GOLDENS}: {key} is a string"))
+            };
+            let (case, digest) = (field("case"), field("sha256"));
+            assert!(
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "{PINNED_GOLDENS}: {case}: lowercase SHA-256 hex"
+            );
+            assert!(
+                !digests.contains(&digest),
+                "{PINNED_GOLDENS}: {case}: digest repeats an earlier case"
+            );
+            digests.push(digest);
+            case
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names, PINNED_GOLDEN_CASES,
+        "{PINNED_GOLDENS}: the pinned cases, in order"
+    );
+    Value::Array(cases.clone())
 }
 
-/// The `golden_proofs` section, read from the two golden test sources.
-fn golden_proofs() -> Value {
-    let table = |path: &str, transcript: &str, source: &str| {
-        let cases = golden_table(source)
-            .into_iter()
-            .map(|(case, digest)| obj(vec![("case", s(case)), ("sha256", s(digest))]))
-            .collect();
+/// The `golden_proofs` section: the vendored table, read from its source,
+/// and the pinned KAGEMUSHA `cases` (see [`pinned_golden_cases`]).
+fn golden_proofs(pinned_cases: &Value) -> Value {
+    let table = |path: &str, transcript: &str, cases: Value| {
         obj(vec![
             ("source", s(path)),
             ("transcript", s(transcript)),
-            ("cases", Value::Array(cases)),
+            ("cases", cases),
         ])
     };
+    let vendored = golden_table(include_str!(
+        "../../../vendor/halo2-axiom/tests/golden_proof_bytes.rs"
+    ))
+    .into_iter()
+    .map(|(case, digest)| obj(vec![("case", s(case)), ("sha256", s(digest))]))
+    .collect();
     obj(vec![
         (
             "vendored_halo2_axiom",
             table(
                 "vendor/halo2-axiom/tests/golden_proof_bytes.rs",
                 "Blake2bWrite<_, C, Challenge255<C>>; prover RNG ChaCha20Rng::from_seed([seed; 32])",
-                include_str!("../../../vendor/halo2-axiom/tests/golden_proof_bytes.rs"),
+                Value::Array(vendored),
             ),
         ),
         (
-            "iroha_core_zk_kagemusha",
+            PINNED_GOLDENS,
             table(
-                "crates/iroha_core_zk/src/prover_golden_tests.rs",
+                PINNED_GOLDEN_SOURCE,
                 "KAGEMUSHA PoseidonTranscript<C, NativeLoader, _, 3, 2, 8, 57>; recovery seed [7; 32]; folded generator appended",
-                &kagemusha_golden_source(),
+                pinned_cases.clone(),
             ),
         ),
     ])
@@ -931,7 +995,7 @@ fn poseidon_transcript() -> Value {
         (
             "users",
             s(
-                "iroha_core_zk KAGEMUSHA_IPA_POSEIDON_{WIDTH,RATE,FULL_ROUNDS,PARTIAL_ROUNDS,SECURE_MDS}_V1 = 3, 2, 8, 57, 0",
+                "iroha_plonk TranscriptV1::KagemushaPoseidonRp57 in oracle mode (spec section 6.2): width 3, rate 2, 8 full and 57 partial rounds, MDS 0",
             ),
         ),
         (
@@ -997,7 +1061,7 @@ fn poseidon_constants() -> Value {
     ])
 }
 
-/// The native sponge exactly as `kagemusha_v1_poseidon` and `confidential_v2` build it.
+/// The vendored native sponge, exactly as the domain hashes build it.
 fn native_sponge<F: FieldExt>() -> NativePoseidon<F> {
     NativePoseidon::<F>::from_spec(
         &NativeLoader,
@@ -1008,7 +1072,8 @@ fn native_sponge<F: FieldExt>() -> NativePoseidon<F> {
 
 /// `hash(domain, inputs)`: one fresh sponge over `[domain, len, inputs...]`.
 ///
-/// This is `kagemusha_v1_poseidon::hash` and `confidential_poseidon_hash_v3`.
+/// This is the KAGEMUSHA domain hash (`iroha_pasta::poseidon::hash_with_domain`)
+/// and `confidential_poseidon_hash_v3`.
 fn domain_hash<F: FieldExt>(sponge: &mut NativePoseidon<F>, domain: u64, inputs: &[F]) -> F {
     let mut preimage = Vec::with_capacity(inputs.len() + 2);
     preimage.push(F::from(domain));
@@ -1077,12 +1142,14 @@ fn kagemusha_v1_poseidon() -> Value {
     obj(vec![
         (
             "reproduces",
-            s("iroha_core_zk::kagemusha_v1_poseidon::hash::<F>(domain, inputs)"),
+            s(
+                "the KAGEMUSHA domain hash hash::<F>(domain, inputs) on the vendored sponge; natively iroha_pasta::poseidon::hash_with_domain::<F>(domain, inputs)",
+            ),
         ),
         (
             "production_anchors",
             s(
-                "none yet: no iroha_core_zk test pins a KAGEMUSHA hash value (the module is pub(crate)). These vectors come from the oracle reproduction (construction below, built from the same halo2-base and snark-verifier types as production), whose sponge is anchored by the confidential_v3_poseidon production anchors. TODO: an iroha_core_zk test asserts these vectors and the empty replay root",
+                "the vendored sponge (construction below) is anchored by the confidential_v3_poseidon production anchors; iroha_pasta::poseidon::hash_with_domain (iroha_plonk_oracle tests/pasta_parity, with the empty replay root), the iroha_plonk_gadgets sponge chip and iroha_kagemusha_proof (tests/digest_parity.rs in each) assert every vector",
             ),
         ),
         (
@@ -1186,12 +1253,16 @@ fn confidential_v3_poseidon() -> Value {
     ])
 }
 
-/// Build the fixture document with the `params_ipa` sizes in `params_ks`.
-fn build(params_ks: &std::ops::RangeInclusive<u32>) -> Value {
+/// Build the fixture document with the `params_ipa` sizes in `params_ks`,
+/// carrying over the pinned KAGEMUSHA golden cases of `fixture`.
+fn build(params_ks: &std::ops::RangeInclusive<u32>, fixture: &Value) -> Value {
     obj(vec![
         ("format", s(FORMAT)),
         ("oracle_baseline", oracle_baseline()),
-        ("golden_proofs", golden_proofs()),
+        (
+            "golden_proofs",
+            golden_proofs(&pinned_golden_cases(fixture)),
+        ),
         ("params_ipa", params_ipa(params_ks)),
         ("generators", generators()),
         ("blake2b_transcript", blake2b_transcript()),
@@ -1207,20 +1278,32 @@ fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE)
 }
 
-/// Read, parse and canonicality-check the fixture.
-fn read_fixture() -> Value {
+/// Read and parse the fixture, returning its text and its value.
+///
+/// The fixture must exist even when it is rewritten: it holds the pinned
+/// KAGEMUSHA golden table, which nothing can regenerate.
+fn parse_fixture() -> (String, Value) {
     let path = fixture_path();
     let mut text = String::new();
     std::fs::File::open(&path)
         .and_then(|mut file| file.read_to_string(&mut text))
         .unwrap_or_else(|error| {
             panic!(
-                "read {}: {error}; record it with {UPDATE_ENV}=1",
+                "read {}: {error}; restore it from version control (its \
+                 golden_proofs.{PINNED_GOLDENS} table is pinned), then rewrite the rest \
+                 with {UPDATE_ENV}=1",
                 path.display()
             )
         });
     let fixture = norito::json::parse_value(&text)
         .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+    (text, fixture)
+}
+
+/// Read, parse and canonicality-check the fixture.
+fn read_fixture() -> Value {
+    let path = fixture_path();
+    let (text, fixture) = parse_fixture();
     assert!(
         render(&fixture) == text,
         "{} is not in canonical form; regenerate it with {UPDATE_ENV}=1",
@@ -1261,14 +1344,14 @@ fn assert_matches(expected: &Value, fixture: &Value) {
 fn native_prover_kats_match_fixture() {
     if std::env::var(UPDATE_ENV).as_deref() == Ok("1") {
         let all = *PARAMS_K_DEBUG.start()..=*PARAMS_K_RELEASE.end();
-        let text = render(&build(&all));
+        let text = render(&build(&all, &parse_fixture().1));
         std::fs::write(fixture_path(), text).expect("write the fixture");
         println!("wrote {}", fixture_path().display());
         return;
     }
     let mut fixture = read_fixture();
     retain_params(&mut fixture, &PARAMS_K_DEBUG);
-    assert_matches(&build(&PARAMS_K_DEBUG), &fixture);
+    assert_matches(&build(&PARAMS_K_DEBUG, &fixture), &fixture);
 }
 
 #[test]
@@ -1398,19 +1481,85 @@ fn retain_params_filters_by_k() {
 }
 
 #[test]
-fn kagemusha_golden_source_is_read_at_run_time() {
-    let table = golden_table(&kagemusha_golden_source());
-    assert_eq!(table.len(), 8, "the eight KAGEMUSHA prover goldens");
+fn pinned_kagemusha_goldens_are_carried_over_unchanged() {
     let fixture = read_fixture();
-    let cases = fixture
+    let recorded = fixture
         .get("golden_proofs")
-        .and_then(|section| section.get("iroha_core_zk_kagemusha"))
-        .and_then(|section| section.get("cases"))
-        .and_then(Value::as_array)
-        .expect("golden_proofs.iroha_core_zk_kagemusha.cases");
-    assert_eq!(cases.len(), table.len());
+        .and_then(|section| section.get(PINNED_GOLDENS))
+        .expect("the pinned KAGEMUSHA golden table");
+    let pinned = pinned_golden_cases(&fixture);
+    assert_eq!(Some(&pinned), recorded.get("cases"));
+    assert_eq!(
+        pinned.as_array().map(Vec::len),
+        Some(PINNED_GOLDEN_CASES.len())
+    );
+    let built = golden_proofs(&pinned);
+    assert_eq!(built.get(PINNED_GOLDENS), Some(recorded));
     assert!(PARAMS_K_DEBUG.end() < PARAMS_K_RELEASE.start());
     assert_eq!(*PARAMS_K_RELEASE.start(), 15);
+}
+
+#[test]
+fn pinned_golden_cases_rejects_altered_tables() {
+    fn document(cases: Vec<Value>) -> Value {
+        obj(vec![(
+            "golden_proofs",
+            obj(vec![(
+                PINNED_GOLDENS,
+                obj(vec![("cases", Value::Array(cases))]),
+            )]),
+        )])
+    }
+    fn entry(case: &str, digest: &str) -> Value {
+        obj(vec![("case", s(case)), ("sha256", s(digest))])
+    }
+    fn rejects(cases: Vec<Value>) -> bool {
+        let document = document(cases);
+        std::panic::catch_unwind(|| pinned_golden_cases(&document)).is_err()
+    }
+    let digest = |index: usize| format!("{index:064x}");
+    let valid = || {
+        PINNED_GOLDEN_CASES
+            .iter()
+            .enumerate()
+            .map(|(index, case)| entry(case, &digest(index)))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        pinned_golden_cases(&document(valid())),
+        Value::Array(valid())
+    );
+
+    let mut missing = valid();
+    missing.pop();
+    assert!(rejects(missing), "a missing case");
+    let mut reordered = valid();
+    reordered.swap(0, 1);
+    assert!(rejects(reordered), "reordered cases");
+    let mut renamed = valid();
+    renamed[2] = entry("p256_k15/eq", &digest(2));
+    assert!(rejects(renamed), "a renamed case");
+    let mut uppercase = valid();
+    uppercase[3] = entry(PINNED_GOLDEN_CASES[3], &"AB".repeat(32));
+    assert!(rejects(uppercase), "an uppercase digest");
+    let mut short = valid();
+    short[4] = entry(PINNED_GOLDEN_CASES[4], "00");
+    assert!(rejects(short), "a short digest");
+    let mut repeated = valid();
+    repeated[5] = entry(PINNED_GOLDEN_CASES[5], &digest(0));
+    assert!(rejects(repeated), "a repeated digest");
+    let mut extra = valid();
+    extra[6] = obj(vec![
+        ("case", s(PINNED_GOLDEN_CASES[6])),
+        ("sha256", s(digest(6))),
+        ("note", s("x")),
+    ]);
+    assert!(rejects(extra), "an extra field");
+    let empty = obj(vec![("golden_proofs", obj(Vec::new()))]);
+    assert!(
+        std::panic::catch_unwind(|| pinned_golden_cases(&empty)).is_err(),
+        "a missing table"
+    );
 }
 
 #[test]

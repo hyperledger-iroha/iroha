@@ -1,6 +1,7 @@
 //! Native CLI packaging contract tests; no build or validator is started.
 
 use super::*;
+use iroha_deploy::bootstrap::InstalledNetworkProfiles;
 
 #[test]
 fn locked_build_selects_both_native_cli_programs_without_gui_or_feature_changes() {
@@ -76,7 +77,8 @@ fn two_program_package_has_exact_runtime_profile_location_and_sorted_hash_invent
     let temporary = tempfile::tempdir().unwrap();
     let source = source(temporary.path());
     let package = temporary.path().join("native-cli");
-    let profiles = InstalledNetworkProfiles::new(Vec::new()).unwrap();
+    let profiles =
+        network_profiles::development(&InstalledNetworkProfiles::new(Vec::new()).unwrap()).unwrap();
     publish(&source, &package, "debug", Some(&profiles)).unwrap();
     let runtime = KagamiBundleLayout::runtime_directory(&package);
     let installed = InstalledRuntime::from_directory(&runtime).unwrap();
@@ -89,6 +91,7 @@ fn two_program_package_has_exact_runtime_profile_location_and_sorted_hash_invent
     assert!(!package.join("Mochi.app").exists());
     let manifest: Value =
         json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["network_profiles"], profiles.provenance());
     let files = manifest.get("files").unwrap().as_array().unwrap();
     assert_eq!(files.len(), 3);
     let mut previous = "";
@@ -233,7 +236,9 @@ fn staged_program_profile_manifest_or_inventory_drift_refuses_atomic_publication
         let temporary = tempfile::tempdir().unwrap();
         let programs = source(temporary.path());
         let package = temporary.path().join("native-cli");
-        let profiles = InstalledNetworkProfiles::new(Vec::new()).unwrap();
+        let profiles =
+            network_profiles::development(&InstalledNetworkProfiles::new(Vec::new()).unwrap())
+                .unwrap();
         assert!(
             publish_checked(&programs, &package, "debug", Some(&profiles), &mut || {
                 assert!(!package.exists());
@@ -258,4 +263,117 @@ fn staged_program_profile_manifest_or_inventory_drift_refuses_atomic_publication
         );
         assert!(!package.exists());
     }
+}
+
+#[test]
+fn cli_release_selection_refuses_before_build_or_destination_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("output");
+    fs::create_dir(&output).unwrap();
+    let retained = output.join("kept");
+    fs::write(&retained, b"original package").unwrap();
+    let absent = root.path().join("not-created");
+    for destination in [&output, &absent] {
+        let error = bundle_at(root.path(), destination, "release", None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("approved release-owned network profiles")
+        );
+        let error = bundle_at(
+            root.path(),
+            destination,
+            "release",
+            Some(Path::new("override.nrt")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("development-only"));
+    }
+    assert!(!absent.exists());
+    assert_eq!(fs::read(&retained).unwrap(), b"original package");
+    assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+
+    // Even the private publication owner cannot relabel development selection as a release.
+    // No source program is read or output parent created before this rejection.
+    let development =
+        network_profiles::development(&InstalledNetworkProfiles::new(Vec::new()).unwrap()).unwrap();
+    for selection in [None, Some(&development)] {
+        assert!(
+            publish(
+                &BTreeMap::new(),
+                &absent.join("package"),
+                "release",
+                selection
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("release-owned Taira profile")
+        );
+        assert!(!absent.exists());
+    }
+}
+
+#[test]
+fn cli_development_preserves_exact_selected_image_and_shared_provenance() {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_deploy::bootstrap::InstalledNetworkProfile;
+
+    let root = tempfile::tempdir().unwrap();
+    let programs = source(root.path());
+    let supplied = root.path().join("fixture.nrt");
+    // Deliberately a fixture network, never a source of official Taira authority.
+    let image = InstalledNetworkProfiles::new(vec![
+        InstalledNetworkProfile::new(
+            "fixture".into(),
+            KeyPair::from_seed(vec![29; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+            11,
+            "https://fixture.invalid/checkpoint.nrt".into(),
+        )
+        .unwrap(),
+    ])
+    .unwrap()
+    .encode_installation()
+    .unwrap();
+    fs::write(&supplied, &image).unwrap();
+    let selected = network_profiles::select(root.path(), "debug", Some(&supplied))
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.bytes(), image.as_slice());
+    // A changed source cannot substitute for the retained original selection during publication.
+    fs::write(&supplied, b"changed after selection").unwrap();
+    let package = root.path().join("native-cli");
+    publish(&programs, &package, "debug", Some(&selected)).unwrap();
+    let path = KagamiBundleLayout::profiles_path(&package);
+    selected.verify_installed(&path).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), image);
+    let manifest: Value =
+        json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["network_profiles"], selected.provenance());
+    assert_eq!(
+        manifest["network_profiles"]["kind"].as_str(),
+        Some("explicit_development_input")
+    );
+    assert_eq!(manifest["network_profiles"]["source_commit"], Value::Null);
+    assert_eq!(
+        manifest["network_profiles"]["sha256"].as_str(),
+        Some(hex::encode(Sha256::digest(&image)).as_str())
+    );
+    let runtime =
+        InstalledRuntime::from_directory(&KagamiBundleLayout::runtime_directory(&package)).unwrap();
+    assert_eq!(
+        runtime
+            .network_profiles()
+            .unwrap()
+            .names()
+            .collect::<Vec<_>>(),
+        vec!["fixture"]
+    );
+    fs::write(&path, b"substituted installed profile").unwrap();
+    assert!(selected.verify_installed(&path).is_err());
+    fs::remove_file(&path).unwrap();
+    assert!(selected.verify_installed(&path).is_err());
+    assert!(!path.exists());
 }

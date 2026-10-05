@@ -430,7 +430,7 @@ pub(crate) fn decode_prepared(
         BlockSignatureCustodyError, PreparedSignatureBlockError,
         commit_certificate::CertificateCustodyError,
     };
-    use iroha_data_model::da::commitment::DaProofPolicyCustodyError;
+    use iroha_data_model::da::commitment::{DaCommitmentCustodyError, DaProofPolicyCustodyError};
     use norito::core::{PreparedDecodeError, SequenceSpan};
     let block = decoder
         .decode(
@@ -448,6 +448,12 @@ pub(crate) fn decode_prepared(
                 PreparedSignatureBlockError::Frame(_)
                     | PreparedSignatureBlockError::Certificate(CertificateCustodyError::Decode(_))
                     | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Decode(_))
+                    | PreparedSignatureBlockError::Commitments(DaCommitmentCustodyError::Decode(_))
+                    | PreparedSignatureBlockError::Commitments(
+                        DaCommitmentCustodyError::Signature(
+                            iroha_crypto::PreparedCryptoDecodeError::Signature(_)
+                        )
+                    )
                     | PreparedSignatureBlockError::Decode(PreparedDecodeError::Codec(_))
                     | PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
                         BlockSignatureCustodyError::Decode(_)

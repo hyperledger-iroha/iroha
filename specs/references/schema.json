@@ -11231,74 +11231,6 @@
       }
     ]
   },
-  "KagemushaMintFinalityEpochAuthorizationV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "network_id",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "epoch",
-        "type": "u64"
-      },
-      {
-        "name": "first_height",
-        "type": "u64"
-      },
-      {
-        "name": "last_height",
-        "type": "u64"
-      },
-      {
-        "name": "authority_generation",
-        "type": "u64"
-      },
-      {
-        "name": "authority_id",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "beacon",
-        "type": "BeaconEpochBindingV1"
-      },
-      {
-        "name": "previous_authorization_id",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "transition_id",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "decision",
-        "type": "KagemushaMintFinalityEpochDecisionV1"
-      }
-    ]
-  },
-  "KagemushaMintFinalityEpochDecisionV1": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "genesis"
-      },
-      {
-        "discriminant": 1,
-        "tag": "activate"
-      },
-      {
-        "discriminant": 2,
-        "tag": "retain"
-      },
-      {
-        "discriminant": 3,
-        "tag": "retain_and_cancel"
-      }
-    ]
-  },
   "KagemushaMintFinalityValidatorKeysV1": {
     "Struct": [
       {
@@ -30510,6 +30442,54 @@
       }
     ]
   },
+  "ValidatorEpochAuthorizationV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u16"
+      },
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "epoch",
+        "type": "u64"
+      },
+      {
+        "name": "first_height",
+        "type": "u64"
+      },
+      {
+        "name": "last_height",
+        "type": "u64"
+      },
+      {
+        "name": "authority_generation",
+        "type": "u64"
+      },
+      {
+        "name": "authority_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "beacon",
+        "type": "BeaconEpochBindingV1"
+      },
+      {
+        "name": "previous_authorization_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "transition_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "decision",
+        "type": "ValidatorEpochDecisionV1"
+      }
+    ]
+  },
   "ValidatorEpochBoundaryV1": {
     "Struct": [
       {
@@ -30562,7 +30542,7 @@
       },
       {
         "name": "authorization",
-        "type": "KagemushaMintFinalityEpochAuthorizationV1"
+        "type": "ValidatorEpochAuthorizationV1"
       },
       {
         "name": "committee",
@@ -30571,6 +30551,26 @@
       {
         "name": "leader_seed",
         "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "ValidatorEpochDecisionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "genesis"
+      },
+      {
+        "discriminant": 1,
+        "tag": "activate"
+      },
+      {
+        "discriminant": 2,
+        "tag": "retain"
+      },
+      {
+        "discriminant": 3,
+        "tag": "retain_and_cancel"
       }
     ]
   },

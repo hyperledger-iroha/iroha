@@ -61,7 +61,29 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             {
                 return Err("Network execution is repeated or has already started".into());
             }
-            self.network_sources = Some(self.freeze_network_sources(genesis)?);
+            let sources = self.freeze_network_sources(genesis)?;
+            if !self.source_entries.is_empty()
+                || !self.source_routes.is_empty()
+                || sources.sources.len() > self.source_entries.capacity()
+                || sources.sources.len() > self.source_routes.capacity()
+            {
+                return Err("Network source storage differs from its retained plan".into());
+            }
+            // Existing bounded backing retains canonical source order even if
+            // execution visits a reveal out of that order. No second map exists.
+            for (index, frozen) in sources.sources.iter().enumerate() {
+                let input = self
+                    .source
+                    .network_entrypoint_at(index)
+                    .ok_or("Network source lost its exact original input")?;
+                self.source_entries.push(OwnedExecutionSource::new(
+                    Hash::from(input.execution_call_hash()),
+                    Some(frozen.routing.lane_id),
+                    frozen.routing.dataspace_id,
+                ));
+                self.source_routes.push(frozen.routing);
+            }
+            self.network_sources = Some(sources);
             let order = self
                 .network_sources
                 .as_mut()
@@ -380,7 +402,7 @@ pub(in crate::state) fn execute_network_attempt(
         .transaction
         .as_mut()
         .ok_or("Network attempt is absent")?;
-    bind_source(transaction, input, execution_index, routing);
+    bind_source(transaction, input, execution_index, routing)?;
     let mut result = match admitted {
         Ok(_) if quarantine_overflow => Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted("quarantine overflow".into()),
@@ -612,7 +634,7 @@ fn complete_network_rejection<
         {
             let mut fee = OutputTransaction::new(state)?;
             let transaction = fee.transaction.as_mut().ok_or("fee attempt is absent")?;
-            bind_source(transaction, input, execution_index, routing);
+            bind_source(transaction, input, execution_index, routing)?;
             let charged = match settle(transaction, signed) {
                 Ok(charged) => Ok(charged),
                 Err(crate::executor::ExecutionFeeSettlementError::Owner(error)) => {
@@ -677,7 +699,7 @@ fn settle_rejection_penalties(
         .transaction
         .as_mut()
         .ok_or("penalty attempt is absent")?;
-    bind_source(transaction, input, execution_index, routing);
+    bind_source(transaction, input, execution_index, routing)?;
     let applied = StateBlock::stage_rejected_governance_ballot_penalties_v1(transaction, penalties);
     if transaction.fastpq_source_quota.intrinsic_rejected()? {
         return Err("rejection penalty exceeded its admitted complete source tail".into());
@@ -710,7 +732,7 @@ fn bind_source(
     input: &TransactionEntrypoint,
     index: u64,
     route: RoutingDecision,
-) {
+) -> Result<(), String> {
     transaction.current_entrypoint_index = Some(index);
     transaction.current_network_entrypoint_hash = Some(input.hash());
     transaction.tx_call_hash = Some(Hash::from(input.execution_call_hash()));
@@ -718,6 +740,11 @@ fn bind_source(
     transaction.current_lane_id = Some(route.lane_id);
     transaction.current_dataspace_id = Some(route.dataspace_id);
     transaction.world.current_dataspace_id = Some(route.dataspace_id);
+    transaction.bind_original_fastpq_invocation_source(OwnedExecutionSource::new(
+        Hash::from(input.execution_call_hash()),
+        Some(route.lane_id),
+        route.dataspace_id,
+    ))
 }
 
 fn require_source(
@@ -736,7 +763,11 @@ fn require_source(
     {
         return Err("Network execution changed its source or frozen route owner".into());
     }
-    Ok(())
+    transaction.require_original_fastpq_invocation_source(OwnedExecutionSource::new(
+        Hash::from(input.execution_call_hash()),
+        Some(route.lane_id),
+        route.dataspace_id,
+    ))
 }
 
 fn require_rejection_fragment(

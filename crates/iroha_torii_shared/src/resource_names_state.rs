@@ -228,15 +228,19 @@ impl<T: norito::json::JsonSerialize> norito::json::JsonSerialize for SequenceRef
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, value) in self.0.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, value) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                value.json_serialize_to(out)?;
             }
-            value.json_serialize_to(out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -285,15 +289,19 @@ impl norito::json::JsonSerialize for KeySequenceRef<'_> {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, value) in self.0.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, value) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                value.json_serialize_to(out)?;
             }
-            value.json_serialize_to(out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -301,3 +309,42 @@ impl norito::json::JsonSerialize for KeySequenceRef<'_> {
 #[cfg(test)]
 #[path = "resource_names_state/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod service_depth_tests {
+    //! Owning checked service writers keep the caller depth on exact refusals.
+    use super::*;
+    use crate::service_checked_writer_test_support::{RefusingLeaf, audit, byte_refusal, error};
+    use norito::json::{BoundedJsonError, JsonSerialize};
+
+    #[test]
+    fn original_resource_sequence_keeps_non_fast_manual_leaf_and_refusal_depth() {
+        let values = [1_u64, 7];
+        let source = SequenceRef(&values);
+        audit("[1,7]", |sink| source.json_serialize_to(sink));
+        assert_eq!(source.0.as_ptr(), values.as_ptr());
+        let values = [RefusingLeaf {
+            visits: std::cell::Cell::new(0),
+        }];
+        let source = SequenceRef(&values);
+        byte_refusal(|sink| source.json_serialize_to(sink));
+        assert_eq!(values[0].visits.get(), 0);
+        error(BoundedJsonError::Unsupported, |sink| {
+            source.json_serialize_to(sink)
+        });
+        assert_eq!(values[0].visits.get(), 1);
+    }
+    #[test]
+    fn original_resource_key_sequence_keeps_actual_state_paths_and_refusal_depth() {
+        let keys = [
+            "sns/records/4099/is2".parse::<StatePath>().unwrap(),
+            "private/customer-name".parse().unwrap(),
+        ];
+        let refs = [&keys[0], &keys[1]];
+        let source = KeySequenceRef(&refs);
+        let mut expected = String::new();
+        source.json_serialize(&mut expected);
+        audit(&expected, |sink| source.json_serialize_to(sink));
+        assert!(std::ptr::eq(source.0[0], &keys[0]));
+    }
+}

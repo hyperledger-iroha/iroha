@@ -644,8 +644,12 @@ impl<T: 'static> norito::json::JsonSerialize for CompoundPredicate<T> {
             return norito::json::write_validated_json_to(json.as_str(), out);
         }
         out.begin_container()?;
-        out.push_str("{}")?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{}")?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1886,3 +1890,15 @@ pub mod prelude {
 
 #[cfg(test)]
 mod captured_dsl_fast_schema_tests;
+
+#[cfg(test)]
+mod checked_container_cleanup_tests {
+    //! Original owning writer refusal and nested-depth controls.
+    use super::*;
+    use crate::checked_container_refusal_controls::audit;
+
+    #[test]
+    fn original_empty_compound_predicate_checked_container_retains_bytes_errors_and_depth() {
+        audit(&CompoundPredicate::<crate::account::Account>::PASS);
+    }
+}

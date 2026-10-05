@@ -2469,6 +2469,8 @@ async fn pre_signalled_shutdown_returns_without_detaching_work() {
 // Component runtime control: TestLedger/TestIngress remain explicit non-native test owners.
 #[tokio::test]
 async fn dedicated_completion_key_drives_full_runtime_without_using_owner_to_sign() {
+    use iroha_data_model::transaction::Executable;
+
     let mut row = fixture_row(0xE4);
     row.provider_owner = Some(account(9));
     row.completion_authority.as_mut().unwrap().provider_owner = account(9);

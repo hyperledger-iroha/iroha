@@ -206,6 +206,8 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         tx.current_tx_hash = None;
         tx.current_entrypoint_index = None;
         let root_dataspace = capture_internal_root_dataspace(tx)?;
+        let original_source = OwnedExecutionSource::new(call, None, root_dataspace);
+        tx.bind_original_fastpq_invocation_source(original_source)?;
         // Event routing is authenticated event data, not authority to route the
         // callback's writes. The immutable root owns this invocation's namespace.
         let generation = tx.world.triggers.registration_generation(id);
@@ -254,6 +256,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         {
             return Err("internal callback changed its execution owner".into());
         }
+        tx.require_original_fastpq_invocation_source(original_source)?;
         let work = CompletedOutputWork::capture(tx);
         if let Err((reason, root)) = execution {
             // Refused/incomplete journal custody is a local carrier failure, even
@@ -266,6 +269,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             work.account(self.state);
             invocation.apply_failure_policy(self.state, height, now)?;
             append_completions(&mut self.state.world.external_event_buf, call, &row)?;
+            self.retain_completed_internal_source(original_source)?;
             self.rows.push(row);
             return Ok(InternalOutputDisposition::Rejected);
         }
@@ -315,6 +319,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             append_completions(&mut self.state.world.external_event_buf, call, &row)?;
         }
         work.account(self.state);
+        self.retain_completed_internal_source(original_source)?;
         self.rows.push(row);
         Ok(if apply {
             InternalOutputDisposition::Applied

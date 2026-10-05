@@ -6,15 +6,30 @@ import zlib
 public enum IrohaPeerWireProfileV1: UInt16, CaseIterable, Sendable {
     /// Reserved on the wire so a zero-filled or omitted profile is never accepted.
     case reject = 0
-    /// KAGEMUSHA V1 aggregate-balance handoffs.
-    case kagemushaV1 = 1
+    /// KAGEMUSHA wallet V1 peer messages: each canonical payload is one complete
+    /// `KagemushaWalletEnvelopeV1` frame (`specs/kagemusha_wallet_wire_v1.md` §§2, 3.4).
+    case kagemushaWalletV1 = 1
 }
 
-/// Wire-stable transfer phases carried by an `IPM1` peer message.
+/// Wire-stable message kinds carried by an `IPM1` peer message.
+///
+/// Each raw value equals the KAGEMUSHA wallet V1 envelope message tag
+/// (`KagemushaWalletMessageKindV1`) of the frame the message carries.
 public enum IrohaPeerWireKindV1: UInt8, CaseIterable, Sendable {
-    case request = 1
-    case payment = 2
-    case acknowledgement = 3
+    /// Payer session hint.
+    case offer = 1
+    /// Receiver setup quote.
+    case request = 2
+    /// Complete committed Payment.
+    case payment = 3
+    /// Receiver delivery evidence.
+    case credited = 4
+    /// Nonmonetary session control.
+    case sessionControl = 5
+    /// Nonmonetary policy data.
+    case policyData = 6
+    /// Ω of the payer's folded head, sent only after an authenticated Offer.
+    case lineage = 7
 }
 
 /// Canonical cross-SDK spellings shared with the upstream Iroha SDK.
@@ -26,43 +41,28 @@ public extension IrohaPeerWireProfileV1 {
     var requiredSchemaVersion: UInt16 {
         switch self {
         case .reject: return 0
-        case .kagemushaV1: return 1
+        case .kagemushaWalletV1: return KagemushaWalletWireV1.version
         }
     }
 }
 
 public extension IrohaPeerWireKindV1 {
-    /// Exact KAGEMUSHA V1 schema admitted for this peer-message kind.
-    var requiredKagemushaCanonicalSchema: String {
+    /// KAGEMUSHA wallet V1 envelope message kind carried under this IPM1 kind.
+    var walletMessageKind: KagemushaWalletMessageKindV1 {
         switch self {
-        case .request:
-            return "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1"
-        case .payment:
-            return "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1"
-        case .acknowledgement:
-            return "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1"
+        case .offer: return .offer
+        case .request: return .request
+        case .payment: return .payment
+        case .credited: return .credited
+        case .sessionControl: return .sessionControl
+        case .policyData: return .policyData
+        case .lineage: return .lineage
         }
     }
 
-    /// Exact payload alignment used by the authoritative Norito model.
-    var requiredKagemushaPayloadAlignment: Int {
-        switch self {
-        case .request: return 16
-        case .payment: return 16
-        case .acknowledgement: return 2
-        }
-    }
-
-    /// Exact per-message raw cap from the authoritative KAGEMUSHA V1 model.
-    var maximumKagemushaCanonicalBytes: Int {
-        switch self {
-        case .request:
-            return KagemushaWireV1.maximumPaymentRequestBytes
-        case .payment:
-            return KagemushaWireV1.maximumPaymentBytes
-        case .acknowledgement:
-            return KagemushaWireV1.maximumAcknowledgementBytes
-        }
+    /// Exact complete-frame cap of a wallet envelope of this kind, header and padding included.
+    var maximumWalletFrameBytes: Int {
+        walletMessageKind.maximumFrameBytes
     }
 }
 
@@ -82,43 +82,42 @@ public enum IrohaPeerWireCompressionPolicyV1: Sendable {
 
 /// Allocation limits applied before an untrusted body is decompressed.
 public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
-    /// Maximum single KAGEMUSHA V1 peer message carried by IPM1.
-    public static let maximumKagemushaProfileBytes =
-        KagemushaWireV1.maximumPaymentBytes
+    /// Largest complete KAGEMUSHA wallet V1 envelope frame carried by IPM1.
+    public static let maximumWalletProfileBytes = KagemushaWalletWireV1.messageMaximumBytes
 
     public let maximumCanonicalBytes: Int
-    public let maximumKagemushaEncodedBytes: Int
+    public let maximumWalletEncodedBytes: Int
 
     public init(
-        maximumCanonicalBytes: Int = Self.maximumKagemushaProfileBytes,
-        maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes
+        maximumCanonicalBytes: Int = Self.maximumWalletProfileBytes,
+        maximumWalletEncodedBytes: Int = Self.maximumWalletProfileBytes
     ) {
         precondition(
             Self.areValid(
                 maximumCanonicalBytes: maximumCanonicalBytes,
-                maximumKagemushaEncodedBytes: maximumKagemushaEncodedBytes
+                maximumWalletEncodedBytes: maximumWalletEncodedBytes
             )
         )
         self.maximumCanonicalBytes = maximumCanonicalBytes
-        self.maximumKagemushaEncodedBytes = maximumKagemushaEncodedBytes
+        self.maximumWalletEncodedBytes = maximumWalletEncodedBytes
     }
 
     public static let peerV1 = IrohaPeerWireLimitsV1()
 
     static func areValid(
         maximumCanonicalBytes: Int,
-        maximumKagemushaEncodedBytes: Int
+        maximumWalletEncodedBytes: Int
     ) -> Bool {
-        (1...maximumKagemushaProfileBytes).contains(maximumCanonicalBytes) &&
-            (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes)
+        (1...maximumWalletProfileBytes).contains(maximumCanonicalBytes) &&
+            (1...maximumWalletProfileBytes).contains(maximumWalletEncodedBytes)
     }
 
     public func maximumEncodedBytes(for profile: IrohaPeerWireProfileV1) throws -> Int {
         switch profile {
         case .reject:
             throw IrohaPeerWireMessageErrorV1.invalidProfile(profile.rawValue)
-        case .kagemushaV1:
-            return maximumKagemushaEncodedBytes
+        case .kagemushaWalletV1:
+            return maximumWalletEncodedBytes
         }
     }
 }
@@ -434,23 +433,19 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         return Self(header: header, canonicalPayload: canonicalPayload, encodedBody: encodedBody)
     }
 
+    /// A wallet-profile payload must be one complete canonical `KagemushaWalletEnvelopeV1`
+    /// frame within its kind's bound whose message tag is this IPM1 kind. The check is
+    /// structural (`KagemushaWalletWireV1.inspectEnvelope`): the wallet still decodes, validates
+    /// and verifies the message, and decides its scheme, before acting on it.
     private static func validateCanonicalPayload(
         profile: IrohaPeerWireProfileV1,
         kind: IrohaPeerWireKindV1,
         canonicalPayload: Data
     ) throws {
-        guard profile == .kagemushaV1 else { return }
-        guard canonicalPayload.count <= kind.maximumKagemushaCanonicalBytes,
-              let decoded = noritoDecodeFrame(canonicalPayload),
-              decoded.header.compression == .none,
-              decoded.header.flags == NoritoHeader.compactLen,
-              decoded.header.schema == noritoSchemaHash(
-                forTypeName: kind.requiredKagemushaCanonicalSchema
-              ),
-              decoded.paddingLength == noritoHeaderPaddingLength(
-                payloadAlignment: kind.requiredKagemushaPayloadAlignment
-              ),
-              !decoded.payload.isEmpty else {
+        guard profile == .kagemushaWalletV1 else { return }
+        guard canonicalPayload.count <= kind.maximumWalletFrameBytes,
+              let envelope = try? KagemushaWalletWireV1.inspectEnvelope(canonicalPayload),
+              envelope.kind == kind.walletMessageKind else {
             throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(
                 profile: profile,
                 kind: kind

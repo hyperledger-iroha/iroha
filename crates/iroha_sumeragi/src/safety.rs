@@ -376,7 +376,6 @@ pub fn check_recommit<'a>(
     let valid = qc.kind == VoteKind::Commit
         && Some(qc.height) == tip_height.checked_add(1)
         && epoch_next.contains(qc.height)
-        && (qc.height != epoch_next.last_height || qc.attest)
         && (cfg!(sumeragi_mutation = "MS32a")
             || crate::crypto::Verifier::new(
                 crypto,

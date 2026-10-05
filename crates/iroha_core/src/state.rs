@@ -14029,6 +14029,8 @@ pub struct StateTransaction<'block, 'state> {
     pub current_lane_id: Option<LaneId>,
     /// Dataspace context for the current transaction (used by dataspace-restricted asset buckets).
     pub current_dataspace_id: Option<DataSpaceId>,
+    /// Immutable original invocation route; temporary fee storage does not replace it.
+    original_fastpq_invocation_source: Option<output_capacity::OwnedExecutionSource>,
     /// Gas used by the last executed transaction (IVM path). Set by executor.
     pub last_tx_gas_used: u64,
     /// Actual admitted direct-body fee basis, owned independently from rollbackable business effects.
@@ -27333,7 +27335,7 @@ impl State {
         }
     }
     #[must_use]
-    #[inline]
+    #[inline(never)]
     #[allow(clippy::too_many_lines)]
     fn new_inner(
         execution_budget: AllocationBudget,
@@ -36791,10 +36793,10 @@ impl<'state> StateBlock<'state> {
         self.validate_da_commitment_uniqueness(bundle)?;
         self.da_receipt_cursors
             .read()
-            .validate_bundle(height, &bundle.commitments)
+            .validate_bundle(height, bundle.commitments())
             .map_err(BlockValidationError::DaReceiptCursor)?;
         if let Err(err) =
-            cursors.record_records(&self.nexus.lane_config, &bundle.commitments, height)
+            cursors.record_records(&self.nexus.lane_config, bundle.commitments(), height)
         {
             self.record_da_shard_cursor_bundle_error(&err);
             return Err(BlockValidationError::DaShardCursor(err));
@@ -36806,7 +36808,7 @@ impl<'state> StateBlock<'state> {
         bundle: &iroha_data_model::da::commitment::DaCommitmentBundle,
     ) -> Result<(), BlockValidationError> {
         let commitments = self.da_commitments.read();
-        for record in &bundle.commitments {
+        for record in bundle.commitments() {
             let key = iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
             if commitments.get_committed_by_key(&key).is_some() {
                 return Err(BlockValidationError::DaCommitmentBundle(
@@ -37525,6 +37527,7 @@ impl<'state> StateBlock<'state> {
             implicit_account_creations_in_block: &mut fields.implicit_account_creations_in_block,
             current_lane_id: None,
             current_dataspace_id: None,
+            original_fastpq_invocation_source: None,
             last_tx_gas_used: 0,
             execution_fee_meter: None,
             execution_effects: crate::executor::ExecutionEffects::default(),
@@ -43631,8 +43634,10 @@ impl SnapshotNexusRuntime {
     /// Current first-release persisted-State layout generation.
     ///
     /// The mandatory MV current/undo envelope is part of this layout. Retired
-    /// record-only runtime snapshots are rejected, never upgraded implicitly.
-    pub(crate) const VERSION: u8 = 5;
+    /// record-only runtime snapshots and unwrapped present undo values are
+    /// rejected, never upgraded implicitly. A present-null original is distinct
+    /// from absence; this layout generation includes that explicit value frame.
+    pub(crate) const VERSION: u8 = 6;
     /// Capture the stateful Nexus fields from a consistent state view.
     #[cfg(test)]
     pub(crate) fn from_nexus(

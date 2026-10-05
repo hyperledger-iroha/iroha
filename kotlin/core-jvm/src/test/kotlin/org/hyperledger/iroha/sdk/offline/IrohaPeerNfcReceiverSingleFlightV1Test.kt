@@ -7,14 +7,22 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.hyperledger.iroha.sdk.norito.CRC64
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.norito.Varint
 
 class IrohaPeerNfcReceiverSingleFlightV1Test {
     @Test
     fun `two pending commits cannot stage twice and a late failure cannot erase the ack`() {
         val fixture = fixture()
-        val request = message(fixture, "payment_request", IrohaPeerPayloadKind.REQUEST)
-        val payment = message(fixture, "payment", IrohaPeerPayloadKind.PAYMENT)
-        val acknowledgement = message(fixture, "acknowledgement", IrohaPeerPayloadKind.ACKNOWLEDGEMENT)
+        val request = message(fixture, "Request", IrohaPeerPayloadKind.REQUEST)
+        val payment = message(fixture, "Payment", IrohaPeerPayloadKind.PAYMENT)
+        val acknowledgement = message(fixture, "Credited::Receive", IrohaPeerPayloadKind.CREDITED)
         val receiver = receiver(request)
         writePayment(receiver, payment)
 
@@ -34,9 +42,9 @@ class IrohaPeerNfcReceiverSingleFlightV1Test {
     @Test
     fun `deactivation permits exact retry while stale context cannot reject it`() {
         val fixture = fixture()
-        val request = message(fixture, "payment_request", IrohaPeerPayloadKind.REQUEST)
-        val payment = message(fixture, "payment", IrohaPeerPayloadKind.PAYMENT)
-        val acknowledgement = message(fixture, "acknowledgement", IrohaPeerPayloadKind.ACKNOWLEDGEMENT)
+        val request = message(fixture, "Request", IrohaPeerPayloadKind.REQUEST)
+        val payment = message(fixture, "Payment", IrohaPeerPayloadKind.PAYMENT)
+        val acknowledgement = message(fixture, "Credited::Receive", IrohaPeerPayloadKind.CREDITED)
         val receiver = receiver(request)
         writePayment(receiver, payment)
         val old = (receiver.handle(IrohaPeerNfcCommandV1.COMMIT_PAYMENT)
@@ -74,7 +82,7 @@ class IrohaPeerNfcReceiverSingleFlightV1Test {
     private fun receiver(request: ByteArray) = IrohaPeerNfcReceiverSessionV1(
         request,
         ByteArray(IrohaPeerNfcV1.SESSION_ID_BYTES) { 1 },
-        IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.KAGEMUSHA_V1),
+        IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1),
     )
 
     private fun writePayment(receiver: IrohaPeerNfcReceiverSessionV1, payment: ByteArray) {
@@ -84,29 +92,87 @@ class IrohaPeerNfcReceiverSingleFlightV1Test {
         receiver.handle(IrohaPeerNfcCommandV1.writePayment(0, payment))
     }
 
-    private fun message(fixture: String, section: String, kind: IrohaPeerPayloadKind): ByteArray {
-        val match = Regex(
-            "\\\"${Regex.escape(section)}\\\"\\s*:\\s*\\{.*?\\\"norito_hex\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"",
-            RegexOption.DOT_MATCHES_ALL,
-        ).find(fixture) ?: error("fixture section $section was not found")
-        val bytes = match.groupValues[1].chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    private fun message(fixture: JsonObject, variant: String, kind: IrohaPeerPayloadKind): ByteArray {
+        val vector = fixture.getValue("envelopes").jsonArray.map { it.jsonObject }
+            .firstOrNull { it.getValue("variant").jsonPrimitive.content == variant }
+            ?: error("wallet envelope vector $variant was not found")
+        val hex = vector.getValue("canonical_hex").jsonPrimitive.content
+        val bytes = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         return IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.KAGEMUSHA_V1,
+            IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1,
             kind,
-            IrohaPeerPayloadProfile.KAGEMUSHA_V1.requiredSchemaVersion,
+            IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1.requiredSchemaVersion,
             bytes,
         )).encode()
     }
 
-    private fun fixture(): String {
+    @Test
+    fun `a payment for another request and a foreign credited acknowledgement are refused`() {
+        val fixture = fixture()
+        val request = message(fixture, "Request", IrohaPeerPayloadKind.REQUEST)
+        val payment = message(fixture, "Payment", IrohaPeerPayloadKind.PAYMENT)
+        val credited = message(fixture, "Credited::Receive", IrohaPeerPayloadKind.CREDITED)
+
+        // A structurally valid Request (other signature bytes) that the Payment does not carry.
+        val otherRequest = rewrap(request, IrohaPeerPayloadKind.REQUEST, field = 4)
+        val foreign = receiver(otherRequest)
+        writePayment(foreign, payment)
+        assertFailsWith<IllegalArgumentException> { foreign.handle(IrohaPeerNfcCommandV1.COMMIT_PAYMENT) }
+        assertEquals(IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING, foreign.status().phase)
+
+        // A structurally valid Credited under another scheme (its `scheme_id` field) cannot complete.
+        val receiver = receiver(request)
+        writePayment(receiver, payment)
+        val context = (receiver.handle(IrohaPeerNfcCommandV1.COMMIT_PAYMENT)
+            as IrohaPeerNfcPaymentAdmissionDispositionV1.Persist).context
+        val otherCredited = rewrap(credited, IrohaPeerPayloadKind.CREDITED, field = 1)
+        assertFailsWith<IllegalArgumentException> {
+            receiver.completePayment(context, IrohaPeerNfcDurablePaymentAdmissionV1(context, otherCredited))
+        }
+        assertEquals(IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING, receiver.status().phase)
+        receiver.completePayment(context, IrohaPeerNfcDurablePaymentAdmissionV1(context, credited))
+        assertEquals(IrohaPeerNfcPhaseV1.ACKNOWLEDGEMENT_READY, receiver.status().phase)
+    }
+
+    /**
+     * Re-wrap an IPM1 wallet message after flipping the last byte of top-level message field
+     * [field]; the envelope CRC64 is refreshed so the frame stays structurally valid.
+     */
+    private fun rewrap(encoded: ByteArray, kind: IrohaPeerPayloadKind, field: Int): ByteArray {
+        val frame = IrohaPeerWireMessageV1.decode(encoded).canonicalPayload.bytes
+        val payloadOffset = NoritoHeader.HEADER_LENGTH + KagemushaWalletWireV1.ENVELOPE_PADDING_BYTES
+        var cursor = Varint.decode(frame, payloadOffset).nextOffset + 2
+        cursor = Varint.decode(frame, cursor).nextOffset + 4
+        cursor = Varint.decode(frame, cursor).nextOffset
+        var end = cursor
+        for (index in 0..field) {
+            val length = Varint.decode(frame, cursor)
+            end = length.nextOffset + length.value.toInt()
+            if (index < field) cursor = end
+        }
+        frame[end - 1] = (frame[end - 1].toInt() xor 1).toByte()
+        val crc = CRC64.compute(frame.copyOfRange(payloadOffset, frame.size))
+        for (index in 0 until 8) frame[31 + index] = (crc ushr (8 * index)).toByte()
+        assertEquals(kind.walletMessageKind, KagemushaWalletWireV1.inspectEnvelope(frame).kind)
+        return IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
+            IrohaPeerPayloadProfile.KAGEMUSHA_WALLET_V1,
+            kind,
+            1,
+            frame,
+        )).encode()
+    }
+
+    private fun fixture(): JsonObject {
         var current = Paths.get("").toAbsolutePath().normalize()
         while (current != null) {
-            val candidate = current.resolve("fixtures/offline/kagemusha_v1.json")
+            val candidate = current.resolve("fixtures/kagemusha/wallet_v1_vectors.json")
             if (Files.isRegularFile(candidate)) {
-                return String(Files.readAllBytes(candidate), StandardCharsets.UTF_8)
+                return Json.parseToJsonElement(
+                    String(Files.readAllBytes(candidate), StandardCharsets.UTF_8),
+                ).jsonObject
             }
             current = current.parent
         }
-        error("fixtures/offline/kagemusha_v1.json was not found")
+        error("fixtures/kagemusha/wallet_v1_vectors.json was not found")
     }
 }

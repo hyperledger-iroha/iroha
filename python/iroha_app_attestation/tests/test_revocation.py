@@ -119,7 +119,8 @@ class RevocationTests(unittest.TestCase):
 
     def test_http_protocol_failures_outside_oserror_are_unavailable(self) -> None:
         # http.client raises these outside OSError; they must not escape the
-        # check (an unclassified exception would end the issuer worker).
+        # check (an unclassified exception would bypass the caller's retryable
+        # unavailability handling).
         self.assertFalse(issubclass(http.client.HTTPException, OSError))
 
         class TruncatedResponse(FakeResponse):

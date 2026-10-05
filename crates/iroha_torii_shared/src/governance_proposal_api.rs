@@ -30,10 +30,14 @@ mod one_instruction {
         out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        value[0].json_serialize_to(out)?;
-        out.push(']')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            value[0].json_serialize_to(out)?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 
@@ -292,5 +296,26 @@ mod captured_frame_identity_tests {
         >(
             "iroha_torii_shared::governance_proposal_api::SccpRouteGovernanceProposalDraftResponseV1",
         );
+    }
+}
+
+#[cfg(test)]
+mod service_depth_tests {
+    //! Owning checked service writers keep the caller depth on exact refusals.
+    use super::*;
+    use crate::service_checked_writer_test_support::audit;
+
+    #[test]
+    fn original_one_instruction_adapter_keeps_exact_fixed_array_and_refusal_depth() {
+        let values = [GovernanceProposalInstructionDraftV1 {
+            wire_id: "example::Instruction".into(),
+            payload_hex: "00".into(),
+        }];
+        let mut expected = String::new();
+        one_instruction::serialize(&values, &mut expected);
+        audit(&expected, |sink| {
+            one_instruction::serialize_bounded(&values, sink)
+        });
+        assert_eq!(values.len(), 1);
     }
 }

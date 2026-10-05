@@ -60,7 +60,7 @@ fn complete_signed_block_prepared_signatures_preserve_canonical_nominal_frame_an
             PreparedDecodeWorkspace::allocation_layouts()
                 .iter()
                 .map(std::alloc::Layout::size)
-                .sum()
+                .sum::<usize>()
         );
         let admitted = decoder
             .decode(
@@ -612,3 +612,11 @@ fn prepared_certificate_inner_cause_keeps_original_enclosing_reader_through_oute
 
 #[path = "tests/da_policy_tests.rs"]
 mod da_policy_tests;
+
+#[path = "tests/da_commitment_tests.rs"]
+mod da_commitment_tests;
+
+#[path = "tests/pulse_inline_tests.rs"]
+mod pulse_inline_tests;
+
+mod header_inline_tests;

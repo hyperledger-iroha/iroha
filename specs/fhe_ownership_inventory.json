@@ -12380,7 +12380,7 @@
    "files": [
     {"path": "fixtures/sorafs/source_contracts/open_work.tsv", "patterns": ["mkhe"], "test_only": true},
     {"path": "scripts/panic_recovery_boundaries.inventory", "patterns": ["bfv", "ram_lfe", "rns"]},
-    {"path": "specs/agents/env_var_inventory.json", "patterns": ["bfv", "fhe", "mkhe", "rns"]},
+    {"path": "specs/agents/env_var_inventory.json", "patterns": ["bfv", "fhe", "mkhe", "ram_lfe", "rns"]},
     {
      "path": "specs/agents/env_var_inventory.md",
      "patterns": [],

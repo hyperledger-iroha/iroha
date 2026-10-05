@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "iroha-app-attestation"
 version = "0.1.0"
-description = "Server verification and governed issuance for app-owned Iroha hardware keys."
+description = "Server-side verification of Apple App Attest, Android KeyMint and Play Integrity evidence for app-owned Iroha keys."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}

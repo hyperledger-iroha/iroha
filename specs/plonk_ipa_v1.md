@@ -458,7 +458,7 @@ The thread count changes no draw and no output byte.
 - the OS CSPRNG;
 - a hedged derivation over fresh entropy, the witness digest and the statement. It protects
   against a weak or repeating OS generator that still returns bytes; a failing one is an error;
-- a recovery seed such as `KagemushaRecoverySeedV1`. The prover computes
+- a caller-held secret recovery seed, such as a wallet's. The prover computes
   `context = BLAKE2b(32, "PIPA-v1-Recovery", statement || witness)`, draws 32 bytes `r` from the
   stream the caller's derivation returns for `context`, and proves with
   `ChaCha20(BLAKE2b(32, "PIPA-v1-RecovKey", r || context))`. The binding happens inside the

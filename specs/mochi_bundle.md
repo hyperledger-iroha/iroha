@@ -40,6 +40,9 @@ missing file or absent Taira entry before building or replacing a bundle. The ap
 artifact and its production checkpoint publisher remain release-owner prerequisites; the
 packager generates no authority. Developers using an installed official bundle supply no file.
 Debug/development bundles may omit profiles or use explicit fixture installation input.
+The same xtask selection owner gates the CLI-only `kagami-bundle` release path, which
+installs the identical original preset beside Kagami and the daemon and records its
+public provenance in that bundle's manifest. Neither packager accepts a release override.
 
 `--stage` is intended for CI pipelines where each build agent uploads its
 artefacts to a shared location. The helper recreates the bundle directory and

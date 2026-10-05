@@ -93,6 +93,7 @@ struct ExecutionOutputProducer<'owner, 'state, 'source> {
     network_sources: Option<network::FrozenNetworkSources<'source>>,
     source_entries: Vec<OwnedExecutionSource>,
     source_routes: Vec<crate::queue::RoutingDecision>,
+    internal_dataspace: Option<iroha_model_base::topology::DataSpaceId>,
     pipeline_started: bool,
     time_started: bool,
     failed: bool,
@@ -221,6 +222,7 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
             network_sources: None,
             source_entries: Vec::new(),
             source_routes: Vec::new(),
+            internal_dataspace: None,
             pipeline_started: false,
             time_started: false,
             failed: false,
@@ -608,64 +610,63 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         if usize::try_from(count).ok() != Some(self.rows.len()) {
             return Err("retained output count differs from its resolved budget".into());
         }
-        let sources =
-            if self.network_sources.is_some() && self.pipeline_started && self.time_started {
-                for index in 0..self.source.network_entrypoint_count() {
-                    let route = self
-                        .network_route(index)
-                        .ok_or("retained source lost its frozen route")?;
-                    self.source_routes.push(route);
-                }
-                for row in &self.rows {
-                    let (call, lane, dataspace) = match row {
-                        ExecutionOutputV1::Network(output) => {
-                            let index = usize::try_from(output.input_index)
-                                .map_err(|_| "source index exceeds host width")?;
-                            let entry = self
-                                .source
-                                .network_entrypoint_at(index)
-                                .ok_or("retained Network source is absent")?;
-                            let route = self
-                                .source_routes
-                                .get(index)
-                                .ok_or("retained Network route is absent")?;
-                            (
-                                Hash::from(entry.execution_call_hash()),
-                                Some(route.lane_id),
-                                route.dataspace_id,
-                            )
+        let sources = if self.network_sources.is_some()
+            && self.pipeline_started
+            && self.time_started
+        {
+            if self.source_entries.len() != self.rows.len()
+                || self.source_routes.len() != self.source.network_entrypoint_count()
+            {
+                return Err("retained source records differ from completed output rows".into());
+            }
+            for (row, original) in self.rows.iter().zip(&self.source_entries) {
+                let call = match row {
+                    ExecutionOutputV1::Network(output) => {
+                        let index = usize::try_from(output.input_index)
+                            .map_err(|_| "source index exceeds host width")?;
+                        let input = self
+                            .source
+                            .network_entrypoint_at(index)
+                            .ok_or("retained Network source is absent")?;
+                        let route = self
+                            .source_routes
+                            .get(index)
+                            .ok_or("retained Network route is absent")?;
+                        if original.lane() != Some(route.lane_id)
+                            || original.dataspace() != route.dataspace_id
+                        {
+                            return Err(
+                                "retained Network record differs from its frozen route".into()
+                            );
                         }
-                        ExecutionOutputV1::Pipeline(output) => (
-                            output.invocation.execution_call_hash(self.source.hash())?,
-                            None,
-                            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                        ),
-                        ExecutionOutputV1::Time(output) => (
-                            output.invocation.execution_call_hash(self.source.hash())?,
-                            None,
-                            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                        ),
-                    };
-                    self.source_entries.push(OwnedExecutionSource {
-                        call,
-                        lane,
-                        dataspace,
-                    });
+                        Hash::from(input.execution_call_hash())
+                    }
+                    ExecutionOutputV1::Pipeline(output) => {
+                        output.invocation.execution_call_hash(self.source.hash())?
+                    }
+                    ExecutionOutputV1::Time(output) => {
+                        output.invocation.execution_call_hash(self.source.hash())?
+                    }
+                };
+                if original.call() != call {
+                    return Err("retained output row differs from its original invocation".into());
                 }
-                Some(OwnedExecutionSources {
-                    proposal: self.source.hash(),
-                    source_context: iroha_data_model::fastpq::FastpqSourceStatementContextV1 {
-                        network_id: self.state.network_id,
-                        height: self.state._curr_block.height().get(),
-                    },
-                    entries: core::mem::take(&mut self.source_entries),
-                    network_routes: core::mem::take(&mut self.source_routes),
-                })
-            } else {
-                // The closure-only controls exercise pre-apply fitting, not a complete
-                // actual phase driver. Their rows cannot enter the consuming seal.
-                None
-            };
+            }
+            Some(OwnedExecutionSources {
+                proposal: self.source.hash(),
+                source_context: iroha_data_model::fastpq::FastpqSourceStatementContextV1 {
+                    network_id: self.state.network_id,
+                    height: self.state._curr_block.height().get(),
+                },
+                entries: core::mem::take(&mut self.source_entries),
+                network_routes: core::mem::take(&mut self.source_routes),
+                internal_dataspace: self.internal_dataspace,
+            })
+        } else {
+            // The closure-only controls exercise pre-apply fitting, not a complete
+            // actual phase driver. Their rows cannot enter the consuming seal.
+            None
+        };
         if let Some(sources) = &sources {
             self.state
                 .fastpq_source_quota
@@ -705,3 +706,27 @@ impl Drop for ExecutionOutputProducer<'_, '_, '_> {
 #[cfg(test)]
 #[path = "output_producer_tests.rs"]
 mod tests;
+
+impl ExecutionOutputProducer<'_, '_, '_> {
+    /// Append once beside the completed terminal row in the existing bounded source vector.
+    /// Rejected roots retain their invocation even though business quantity effects roll back.
+    fn retain_completed_internal_source(
+        &mut self,
+        original: OwnedExecutionSource,
+    ) -> Result<(), String> {
+        // Incomplete fitting continuations cannot construct a complete source
+        // owner at finish. A later Network start refuses these existing records.
+        if original.lane().is_some()
+            || (self.network_sources.is_some() && self.source_entries.len() != self.rows.len())
+            || self.source_entries.len() >= self.source_entries.capacity()
+            || self
+                .internal_dataspace
+                .is_some_and(|actual| actual != original.dataspace())
+        {
+            return Err("internal source differs from its original completed root".into());
+        }
+        self.internal_dataspace = Some(original.dataspace());
+        self.source_entries.push(original);
+        Ok(())
+    }
+}

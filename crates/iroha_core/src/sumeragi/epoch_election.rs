@@ -27,11 +27,11 @@ impl From<&str> for Attempt<BoundaryCaptureError> {
 
 use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::Algorithm;
+use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1};
 use iroha_data_model::{
     NetworkId,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
     consensus::{ConsensusKeyRecord, ConsensusKeyRole, GlobalThresholdBeaconChainAnchorV1},
-    isi::kagemusha_v1::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1},
     nexus::{PublicLaneValidatorRecord, ValidatorElectionPolicyV1},
     sumeragi::epoch::{MAX_VALIDATORS, ValidatorEpochContextV1, validator_seat_rank},
 };

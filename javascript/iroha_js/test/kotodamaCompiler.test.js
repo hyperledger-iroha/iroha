@@ -11,6 +11,7 @@ import {
   compileKotodamaProgram as compileKotodamaInBrowser,
 } from "../src/kotodamaCompiler/browser.js";
 import { compileKotodamaWithNativeBinding } from "../src/kotodamaCompiler/nativeBridge.js";
+import { validateEmbeddedCallables } from "../src/kotodamaCompiler/embeddedCallSchema.js";
 import { normalizeCompilerResult } from "../src/kotodamaCompiler/normalize.js";
 import { blake2b256 } from "../src/blake2b.js";
 import {
@@ -278,14 +279,16 @@ function callableFixture({
   entryPc = 0,
   frameBytes = 0,
   argumentNodes = [],
-  resultNodes = [u32Le(6)],
+  resultNodes = [Uint8Array.of(6)],
+  argumentSchemaBytes,
+  resultSchemaBytes,
 } = {}) {
-  const schema = (items) => field(concatBytes(u64Le(items.length), ...items.map(field)));
+  const schema = (items) => concatBytes(Uint8Array.of(0x43, 0x53, 0x31, 0), u64Le(items.length), ...items);
   return concatBytes(
     field(u64Le(entryPc)),
     field(u32Le(frameBytes)),
-    field(schema(argumentNodes)),
-    field(schema(resultNodes)),
+    field(argumentSchemaBytes ?? schema(argumentNodes)),
+    field(resultSchemaBytes ?? schema(resultNodes)),
   );
 }
 
@@ -1308,9 +1311,9 @@ test("compiler manifest dynamic hints resolve declared StateMaps per list", asyn
 });
 
 test("compiler artifact boundary requires bounded canonical V1 callable descriptors", async () => {
-  const pointer = (kind, id) => concatBytes(u32Le(kind), field(Uint8Array.from([id, 0])));
-  const leaf = (kind) => concatBytes(u32Le(5), field(u32Le(kind)));
-  const tuple = (arity) => concatBytes(u32Le(1), field(u32Le(arity)));
+  const pointer = (kind, id) => Uint8Array.of(kind, id, 0);
+  const leaf = (kind) => Uint8Array.of(5, kind);
+  const tuple = (arity) => concatBytes(Uint8Array.of(1), u32Le(arity));
   const cases = [
     ["retired interface layout", { omitCallables: true }],
     ["missing callable root", { callables: [] }],
@@ -1321,7 +1324,7 @@ test("compiler artifact boundary requires bounded canonical V1 callable descript
     ["oversized frame", { callables: [callableFixture({ frameBytes: 4 * 1024 * 1024 + 16 })] }],
     ["empty result", { callables: [callableFixture({ resultNodes: [] })] }],
     ["oversized arguments", { callables: [callableFixture({ argumentNodes: Array.from({ length: 8193 }, () => leaf(3)) })] }],
-    ["unknown node", { callables: [callableFixture({ resultNodes: [u32Le(12)] })] }],
+    ["unknown node", { callables: [callableFixture({ resultNodes: [Uint8Array.of(12)] })] }],
     ["unknown pointer type", { callables: [callableFixture({ resultNodes: [pointer(10, 0x14)] })] }],
     ["private role without ZK", { callables: [callableFixture({ argumentNodes: [pointer(11, 0x11)] })] }],
     ["trailing descriptor fields", { callables: [concatBytes(callableFixture(), field(u32Le(0)))] }],
@@ -1341,7 +1344,7 @@ test("compiler artifact boundary requires bounded canonical V1 callable descript
     callables: [callableFixture(), callableFixture({
       entryPc: 4,
       frameBytes: 16,
-      argumentNodes: [u32Le(6), leaf(0), leaf(3), pointer(10, 0x0d), u32Le(9), concatBytes(u32Le(8), field(u32Le(3))), pointer(11, 0x12)],
+      argumentNodes: [Uint8Array.of(6), leaf(0), leaf(3), pointer(10, 0x0d), Uint8Array.of(9), Uint8Array.of(8, 3), pointer(11, 0x12)],
       resultNodes: [tuple(8192), ...Array.from({ length: 8192 }, () => leaf(3))],
     })],
   });
@@ -2822,4 +2825,55 @@ test("shared compiler Unicode validation accepts scalar pairs and rejects lone s
     await assert.rejects(client.compile(source), { name: "TypeError", message: "Kotodama source must contain valid Unicode scalar values" });
   }
   assert.equal(calls.length, 1);
+});
+
+test("compact callable tape preserves complete nominal roles and every scalar kind", () => {
+  const leaf = (kind) => Uint8Array.of(5, kind);
+  const nominal = (name, names) => concatBytes(Uint8Array.of(0), stringField(name), u64Le(names.length), ...names.map((name) => field(stringField(name))));
+  const descriptor = { identity: "Demo::Failure", variants: [{ name: "Low", code: 3 }, { name: "High", code: 9 }] };
+  const encodedError = concatBytes(field(stringField(descriptor.identity)), field(concatBytes(u64Le(2), ...descriptor.variants.map((variant) => field(concatBytes(field(stringField(variant.name)), field(u32Le(variant.code))))))));
+  const argumentNodes = [
+    nominal("Point", ["text", "bytes"]), leaf(4), leaf(13),
+    Uint8Array.of(2, 3, 4, 64), leaf(2), concatBytes(Uint8Array.of(7), field(encodedError)),
+    nominal("Empty", []), Uint8Array.of(6), Uint8Array.of(9),
+    ...Array.from({ length: 14 }, (_, kind) => leaf(kind)),
+    ...Array.from({ length: 14 }, (_, kind) => kind).filter((kind) => kind !== 5).map((kind) => Uint8Array.of(8, kind)),
+    ...[0x0b, 0x0d, 0x0e, 0x0f, 0x13].map((id) => Uint8Array.of(10, id, 0)),
+    ...[0x10, 0x11, 0x12].map((id) => Uint8Array.of(11, id, 0)),
+  ];
+  // The node count counts semantic nodes, not concatenated fixture chunks.
+  const flat = argumentNodes.flatMap((bytes, index) => index === 3 ? [bytes.subarray(0, 1), bytes.subarray(1, 2), bytes.subarray(2)] : [bytes]);
+  const vector = concatBytes(u64Le(1), field(callableFixture({ argumentNodes: flat })));
+  assert.equal(validateEmbeddedCallables(vector, 1, 1, "callables", [descriptor]), 0n);
+  const mismatched = [{ ...descriptor, variants: [{ name: "Low", code: 3 }, { name: "High", code: 10 }] }];
+  assert.throws(() => validateEmbeddedCallables(vector, 1, 1, "callables", mismatched), /nominal error catalog/u);
+  assert.throws(() => validateEmbeddedCallables(vector, 0, 1, "callables", [descriptor]), /private numeric/u);
+});
+
+test("compact callable tape rejects retired bodies, truncation, forged shapes and impossible counts", () => {
+  const compact = (count, bytes) => concatBytes(Uint8Array.of(0x43, 0x53, 0x31, 0), u64Le(count), bytes);
+  const unit = compact(1, Uint8Array.of(6));
+  const nominal = (name, names) => concatBytes(Uint8Array.of(0), stringField(name), u64Le(names.length), ...names.map((name) => field(stringField(name))));
+  const invalid = [
+    ["retired generic vector body", field(concatBytes(u64Le(1), field(u32Le(6))))],
+    ["missing magic", concatBytes(Uint8Array.of(0, 0, 0, 0), unit.subarray(4))],
+    ["unknown node", compact(1, Uint8Array.of(12))],
+    ["unknown scalar", compact(1, Uint8Array.of(5, 14))],
+    ["unknown cursor", compact(1, Uint8Array.of(8, 5))],
+    ["missing child", compact(1, Uint8Array.of(2))],
+    ["List capacity", compact(2, Uint8Array.of(4, 65, 6))],
+    ["affine List", compact(2, Uint8Array.of(4, 1, 9))],
+    ["duplicate fields", compact(3, concatBytes(nominal("Point", ["x", "x"]), Uint8Array.of(6, 6)))],
+    ["reserved substitution", compact(3, concatBytes(nominal("AccountView", ["id", "metadata"]), Uint8Array.of(5, 13, 5, 5)))],
+    ["count underflow", compact(0, Uint8Array.of(6))],
+    ["count overflow", compact(2, Uint8Array.of(6))],
+    ["node limit", compact(250_001, Uint8Array.of(6))],
+    ["u64 count overflow", concatBytes(Uint8Array.of(0x43, 0x53, 0x31, 0), new Uint8Array(8).fill(255), Uint8Array.of(6))],
+    ["trailing node", concatBytes(unit, Uint8Array.of(6))],
+    ...Array.from({ length: unit.length }, (_, length) => [`truncated ${length}`, unit.subarray(0, length)]),
+  ];
+  for (const [name, resultSchemaBytes] of invalid) {
+    const vector = concatBytes(u64Le(1), field(callableFixture({ resultSchemaBytes })));
+    assert.throws(() => validateEmbeddedCallables(vector, 1, 1, "callables", []), /callable|nominal|List|query|cursor|scalar/u, name);
+  }
 });

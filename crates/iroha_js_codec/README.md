@@ -23,8 +23,8 @@ these operations never mutate the process-wide network selector. Native typed
 helper consumers must similarly enter their explicitly selected network scope.
 
 The instruction JSON catalog supports every browser transaction allowlist family:
-smart-contract deployment, game, NFT market and Kagemusha top-up. Typed native
-owners validate payloads; unsupported envelopes do not fall back to generic JSON.
+smart-contract deployment, game and NFT market. Typed native owners validate
+payloads; unsupported envelopes do not fall back to generic JSON.
 
 Contract artifact instructions require an explicit `artifact_id` containing an
 exact decimal-string `dataspace_id` and canonical `code_hash`. All six artifact

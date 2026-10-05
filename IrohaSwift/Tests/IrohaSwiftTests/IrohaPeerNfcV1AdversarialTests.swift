@@ -39,7 +39,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
     func testHashCorrectWrongPhaseHeaderAndExtremeOffsetsLeaveReceiverUnchanged() throws {
         let request = try message(kind: .request, byte: 0x41, count: 180)
         let payment = try message(kind: .payment, byte: 0x42, count: 300)
-        let acknowledgement = try message(kind: .acknowledgement, byte: 0x43, count: 120)
+        let acknowledgement = try message(kind: .credited, byte: 0x43, count: 120)
         var receiver = try IrohaPeerNfcReceiverSessionV1(
             sessionID: sessionID,
             receiveRequest: request.encoded,
@@ -184,7 +184,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .sameProfile(.kagemushaV1),
+                profilePolicy: .sameProfile(.kagemushaWalletV1),
                 limits: local,
                 transceive: { command in
                     observed.append(command)
@@ -223,7 +223,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
         let observed = LockedCommands()
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .sameProfile(.kagemushaV1),
+                profilePolicy: .sameProfile(.kagemushaWalletV1),
                 transceive: { command in
                     observed.append(command)
                     return IrohaPeerNfcAPDUResponseV1(
@@ -260,7 +260,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
         let observed = LockedCommands()
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .sameProfile(.kagemushaV1),
+                profilePolicy: .sameProfile(.kagemushaWalletV1),
                 transceive: { command in
                     observed.append(command)
                     switch command {
@@ -296,10 +296,10 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
         count: Int
     ) throws -> IrohaPeerWireMessageV1 {
         try IrohaPeerWireMessageV1(
-            profile: .kagemushaV1,
+            profile: .kagemushaWalletV1,
             kind: kind,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
+            canonicalPayload: irohaPeerWalletStructuralEnvelopeV1(
                 kind: kind,
                 payload: Data(repeating: byte, count: count)
             )

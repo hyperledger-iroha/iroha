@@ -17,6 +17,19 @@ All notable changes to `IrohaSwift` are documented in this file.
   `KagemushaWalletAppleEnrollmentAttestationErrorV1` and
   `KagemushaWalletAppleAppAttestStageV1` for failures. The slot, profile,
   unavailable-reason, status and configuration-error types are public.
+- Removed the aggregate-balance KAGEMUSHA wallet and its consumers, superseded by
+  the KAGEMUSHA wallet V1 design (`KagemushaWalletWireV1` and
+  `KagemushaWalletApplePlatformV1`): the wire codec and models (`KagemushaNoritoV1`,
+  `KagemushaWireV1`, `KagemushaModelsV1`), `KagemushaWalletV1` orchestration, the
+  hardware-provider, device-lifecycle and Core coordinator bridges, the App Attest
+  ordinary enrollment and approval providers, reserve finality, top-up and
+  redemption. `ToriiClient` no longer exposes `getKagemushaCapability`,
+  `submitKagemushaTopUp`, `submitKagemushaRedemption`, `getKagemushaOperation`,
+  `ToriiKagemushaStatus`, the `ToriiKagemushaOperation*` types or
+  `ToriiTopUpOwnershipV1`; `TxBuilder.buildSignedKagemushaTopUp` and
+  `KagemushaTopUpTransactionInputError` are gone. `ParticipantEnrollmentHttpCodecV1`,
+  `AndroidProvisionedProof` and the `IrohaSwiftTransferUI` KAGEMUSHA flow views
+  (`IrohaKagemushaFlowView` and its widgets) were removed with them.
 - Removed the signature-only KAGEMUSHA wallet suite (`Sources/IrohaSwift/KagemushaAttested/`):
   `KagemushaAmount`, `KagemushaConfig`, `KagemushaAccountProof`,
   `KagemushaLedgerPort`, `KagemushaPlatform`, `KagemushaStatus`,
@@ -135,13 +148,6 @@ All notable changes to `IrohaSwift` are documented in this file.
   contract activity/event reads plus the generic event SSE feed now use the
   client's default canonical request signer when configured, while remaining
   anonymous for public dataspaces.
-- Added the aggregate-balance KAGEMUSHA wire codec (`KagemushaNoritoV1`), `kgm1:`
-  text transport, device-lifecycle surface, and fail-closed wallet orchestration.
-  The wallet supports concurrent head-independent requests, durable idempotent
-  staging and acknowledgements, unbounded inbox-prefix folding, immediately
-  usable send successors,
-  byte-identical retries, partial/full redemption, and KAGEMUSHA epoch-local counter
-  rollover without a software fallback.
 - Replaced the governance mutation boundary with closed public-only request
   types. Deploy proposals no longer expose ignored limits and now use typed
   manifest provenance; ZK public inputs are exact and shared across legacy,

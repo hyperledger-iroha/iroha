@@ -31,13 +31,13 @@ use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain, msm::MemoryBudget};
 
 use super::{
     DescriptorBinding, KeyError, check_shape,
-    pk::{CosetCachePolicy, ProvingKey},
+    pk::{CosetCachePolicy, KeyConstraintSystem, ProvingKey},
     vk::VerifyingKey,
 };
 use crate::{
     cs::{
-        CircuitDescriptorV1, ConstraintSystem, DescriptorConfig, FinalizedConstraintSystem,
-        InstanceModeV1, PermutationAssembly, ProofSuffixV1, TranscriptV1,
+        CircuitDescriptorV1, ConstraintSystem, DescriptorConfig, InstanceModeV1,
+        PermutationAssembly, ProofSuffixV1, TranscriptV1,
     },
     frontend::{Circuit, synthesize},
     pcs::{
@@ -131,7 +131,7 @@ pub fn permutation_values<F: PastaField>(
 /// Everything both keys are built from.
 struct Prepared<F: PastaField> {
     binding: DescriptorBinding,
-    finalized: FinalizedConstraintSystem<F>,
+    constraint_system: KeyConstraintSystem<F>,
     fixed: Vec<Vec<F>>,
     sigma: Vec<Vec<F>>,
     copy_digest: [u8; 32],
@@ -204,7 +204,7 @@ fn prepare<C: PastaCurve>(
     let usable_rows = cs.usable_rows(k)?;
     check_usable_rows(usable_rows, &fixed, &selectors, permutation)?;
 
-    let mut finalized = cs.finalize(&selectors, config.compress_selectors)?;
+    let finalized = cs.finalize(&selectors, config.compress_selectors)?;
     let descriptor = CircuitDescriptorV1::from_constraint_system(
         &finalized,
         DescriptorConfig {
@@ -217,9 +217,10 @@ fn prepare<C: PastaCurve>(
     )?;
     let binding = DescriptorBinding::new(descriptor)?;
     // The selector columns move into the fixed columns: the key keeps one
-    // copy.
+    // copy, and keeps the constraint system without them.
+    let (constraint_system, selector_columns) = KeyConstraintSystem::split(finalized);
     let mut fixed = fixed;
-    fixed.extend(finalized.take_selector_columns());
+    fixed.extend(selector_columns);
     let sigma = permutation_values(permutation, domain.omega())?;
     let copy_digest = permutation.mapping_digest();
     let vk_selectors = if config.compress_selectors {
@@ -229,7 +230,7 @@ fn prepare<C: PastaCurve>(
     };
     Ok(Prepared {
         binding,
-        finalized,
+        constraint_system,
         fixed,
         sigma,
         copy_digest,
@@ -296,7 +297,7 @@ pub fn keygen_from_tables<C: PastaCurve>(
     ProvingKey::new(
         vk,
         prepared.binding,
-        prepared.finalized,
+        prepared.constraint_system,
         prepared.fixed,
         prepared.sigma,
         prepared.copy_digest,

@@ -2,9 +2,9 @@
 //!
 //! # Semantics
 //!
-//! Bit for bit the native sponge of [`iroha_pasta::poseidon`] (snark-verifier
-//! `NativeLoader` semantics, the backend of
-//! `iroha_core_zk::kagemusha_v1_poseidon`):
+//! Bit for bit the native sponge of [`iroha_pasta::poseidon`] (the vendored
+//! snark-verifier `NativeLoader` semantics recorded in
+//! `fixtures/native_prover/kats_v1.json`):
 //!
 //! - the state starts at `[2^64, 0, 0]`;
 //! - the buffered input is absorbed two words per permutation into words 1
@@ -14,9 +14,9 @@
 //! - the output is word 1.
 //!
 //! [`SpongeChip::hash_raw`] is [`iroha_pasta::poseidon::hash`];
-//! [`SpongeChip::hash`] is [`iroha_pasta::poseidon::hash_with_domain`] (and
-//! `kagemusha_v1_poseidon::hash`): the preimage is prefixed by the domain
-//! word and the input arity. Padding words, the domain and the arity are
+//! [`SpongeChip::hash`] is [`iroha_pasta::poseidon::hash_with_domain`] (the
+//! KAGEMUSHA domain hash): the preimage is prefixed by the domain word and
+//! the input arity. Padding words, the domain and the arity are
 //! constants pinned through the constants column; inputs are copied into
 //! the lane.
 //!

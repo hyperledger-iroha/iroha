@@ -401,10 +401,10 @@ create a separate approval condition for integration or production use.
 Starting points, not evidence that this protocol has passed:
 
 - Android: `kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/probe/AndroidKeyMintSingleUseProbeV1.kt`; `AndroidKeyMintOneUseSelectionCandidateV1.kt` and `KeyMintRestartDiagnosticV1.kt` in the same directory. Generate and inspect keys even when feature flags are negative.
-- Apple: `examples/ios/KagemushaAppAttestProbe/`.
+- Apple: `IrohaSwift/Sources/IrohaSwift/KagemushaWalletApplePlatformV1.swift` and `KagemushaWalletAppleAppAttestV1.swift` in the same directory (Secure Enclave payment key and App Attest enrollment evidence of step E5). The old `examples/ios/KagemushaAppAttestProbe/` app of the retired protocol was deleted.
 - Attestation: `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/attestation/` and `python/iroha_app_attestation/src/iroha_app_attestation/`.
-- Formal work: `formal/kagemusha_v1/`; check its assumed hardware contract before reusing results.
-- Evidence records: `specs/kagemusha_v1_physical_evidence.md` and `scripts/verify_kagemusha_v1_physical_device.py`; adapt their provider assumptions explicitly.
+- Formal work: none at HEAD. The old `formal/kagemusha_v1/` model of the retired protocol was deleted; write a new model from the proposal.
+- Evidence records: `specs/kagemusha_v1_physical_evidence.md`; adapt its provider assumptions explicitly. Its physical-device verifier script was deleted with the old release-evidence tooling.
 - [Pinned AOSP characteristics](https://android.googlesource.com/platform/system/keymint/+/fda4e68d32f8dfc103e0283b4bfc41503ecfb19f/common/src/tag.rs), [operations](https://android.googlesource.com/platform/system/keymint/+/fda4e68d32f8dfc103e0283b4bfc41503ecfb19f/ta/src/operation.rs) and [upgrades](https://android.googlesource.com/platform/system/keymint/+/fda4e68d32f8dfc103e0283b4bfc41503ecfb19f/ta/src/keys.rs): reference behavior, not vendor-firmware evidence.
 - [Android attestation](https://developer.android.com/privacy-and-security/security-key-attestation), [Apple validation](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server) and [Apple fraud-risk guidance](https://developer.apple.com/documentation/devicecheck/assessing-fraud-risk): capture the exact statements and their limits in each evidence record.
 

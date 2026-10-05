@@ -44,6 +44,7 @@ pub mod alias;
 pub mod alias_setup;
 /// Asset definitions, instances, and utilities.
 pub mod asset;
+mod inline_fields;
 pub use asset::{AssetDefinitionId, AssetId};
 /// Block-level data structures and helpers.
 pub mod block;
@@ -389,3 +390,9 @@ mod manual_schema_identity;
 
 #[cfg(test)]
 mod registration_identity_tests;
+
+#[cfg(test)]
+mod checked_snapshot_leaf_cleanup_tests;
+
+#[cfg(test)]
+mod checked_container_refusal_controls;

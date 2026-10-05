@@ -7,6 +7,7 @@ resets).
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import importlib.util
 import random
@@ -303,6 +304,104 @@ class ProxyTests(unittest.TestCase):
             self.assertEqual(data, b"")
         finally:
             client.close()
+
+
+class PumpBackpressureTests(unittest.IsolatedAsyncioTestCase):
+    """Delayed forwarding retains bounded data and releases its two tasks."""
+
+    class Reader:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        async def read(self, size: int) -> bytes:
+            if self.reads == 64:
+                return b""
+            self.reads += 1
+            return bytes([self.reads - 1]) * size
+
+    class Writer:
+        def __init__(self) -> None:
+            self.waiting = asyncio.Event()
+            self.resume = asyncio.Event()
+            self.data: list[bytes] = []
+            self.eof = False
+
+        def write(self, data: bytes) -> None:
+            self.data.append(data)
+
+        async def drain(self) -> None:
+            self.waiting.set()
+            await self.resume.wait()
+
+        def is_closing(self) -> bool:
+            return False
+
+        def write_eof(self) -> None:
+            self.eof = True
+
+    async def exercise_stalled_pump(self, operation: str) -> None:
+        proxy = faults.ProxyNetwork([], faults.ConditionBox(), seed=1)
+        reader = self.Reader()
+        writer = self.Writer()
+        pump = asyncio.create_task(proxy._pump(reader, writer, (writer, writer)))
+        try:
+            await asyncio.wait_for(writer.waiting.wait(), timeout=5)
+            # Finish callbacks already ready when delivery entered its drain wait.
+            boundary = asyncio.get_running_loop().create_future()
+            asyncio.get_running_loop().call_soon(boundary.set_result, None)
+            await boundary
+            self.assertLessEqual(
+                reader.reads,
+                18,
+                "delayed forwarding must retain at most 16 queued and two owned chunks",
+            )
+            if operation == "stop":
+                self.assertEqual(reader.reads, 18)
+                pump.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(pump, timeout=5)
+            elif operation == "failure":
+                self.assertEqual(reader.reads, 18)
+
+                def fail(_data: bytes) -> None:
+                    raise RuntimeError("original delivery failure")
+
+                writer.write = fail
+                writer.resume.set()
+                with self.assertRaisesRegex(RuntimeError, "^original delivery failure$"):
+                    await asyncio.wait_for(pump, timeout=5)
+            else:
+                writer.resume.set()
+                await asyncio.wait_for(pump, timeout=5)
+                self.assertEqual(reader.reads, 64)
+                self.assertEqual(
+                    writer.data,
+                    [bytes([index]) * faults.CHUNK_BYTES for index in range(64)],
+                )
+                self.assertTrue(writer.eof)
+                self.assertEqual(proxy.stats.to_json()["bytes"], 64 * faults.CHUNK_BYTES)
+        finally:
+            if not pump.done():
+                writer.resume.set()
+                await asyncio.wait_for(pump, timeout=5)
+        self.assertEqual(
+            [
+                task
+                for task in asyncio.all_tasks()
+                if task is not asyncio.current_task() and not task.done()
+            ],
+            [],
+            "stopped forwarding must not retain a reader or delivery task",
+        )
+
+    async def test_delayed_pump_backpressures_and_preserves_all_original_bytes(self) -> None:
+        await self.exercise_stalled_pump("deliver")
+
+    async def test_stopping_full_delayed_queue_reaps_reader_and_delivery(self) -> None:
+        await self.exercise_stalled_pump("stop")
+
+    async def test_delivery_failure_reaps_reader_and_preserves_original_error(self) -> None:
+        await self.exercise_stalled_pump("failure")
 
 
 if __name__ == "__main__":

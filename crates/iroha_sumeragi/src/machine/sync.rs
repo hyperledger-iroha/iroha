@@ -336,8 +336,7 @@ impl Core {
             let linked = cfg!(sumeragi_mutation = "MS22")
                 || (header.parent_hash == self.tip.block_hash
                     && header.parent_result == self.tip.result
-                    && header.epoch == self.cfg.epoch.id
-                    && (header.height != self.cfg.epoch.last_height || header.attest));
+                    && header.epoch == self.cfg.epoch.id);
             #[cfg(not(sumeragi_mutation = "MS15"))]
             let committee = &self.cfg.committee;
             #[cfg(sumeragi_mutation = "MS15")]

@@ -12,7 +12,7 @@ use super::{
         FrameCountOverflowInfo, FrameLengthMismatch, chunk_commitments, derive_nonce_salt,
         merkle_root,
     },
-    json, norito_core, saturating_usize_to_u32, saturating_usize_to_u64,
+    json, saturating_usize_to_u32, saturating_usize_to_u64,
 };
 use crate as norito;
 use norito_derive::{NoritoDeserialize, NoritoSerialize};

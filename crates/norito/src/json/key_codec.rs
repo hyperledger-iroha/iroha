@@ -2,12 +2,18 @@
 //!
 //! The serialization owner supplies the key contract independently of any map engine.
 
-use crate::json;
+use crate::json::{self, BoundedJsonError, JsonWriteSink};
 
 /// Helper trait for converting storage keys to and from their JSON string representation.
 pub trait JsonKeyCodec: Sized {
     /// Write the canonical JSON string representation of this key to `out`.
     fn encode_json_key(&self, out: &mut String);
+    /// Write this same canonical quoted key through a checked sink.
+    ///
+    /// Unmigrated key codecs refuse before formatting or allocating any scratch.
+    fn encode_json_key_to(&self, _out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        Err(BoundedJsonError::Unsupported)
+    }
     /// Parse a key from a JSON string representation.
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error>;
 }
@@ -53,6 +59,9 @@ impl JsonKeyCodec for String {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(self, out);
     }
+    fn encode_json_key_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        json::write_json_string_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         Ok(encoded.to_owned())
     }
@@ -60,6 +69,9 @@ impl JsonKeyCodec for String {
 impl JsonKeyCodec for u64 {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
+    }
+    fn encode_json_key_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        json::write_json_display_to(self, out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
@@ -72,6 +84,9 @@ impl<const N: usize> JsonKeyCodec for [u8; N] {
         let mut buf = String::new();
         append_hex_upper(self, &mut buf);
         json::write_json_string(&buf, out);
+    }
+    fn encode_json_key_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        json::write_upper_hex_json_string_to(self, out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         decode_hex_array(encoded)
@@ -90,6 +105,15 @@ impl<K: JsonKeyCodec> JsonKeyCodec for (K, u64, u64) {
             self.1, self.2
         );
         json::write_json_string(&joined, out);
+    }
+    fn encode_json_key_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        out.push('"')?;
+        self.0.encode_json_key_to(&mut EscapedKeySink(out))?;
+        write_key_separator(out)?;
+        json::visit_json_display_text(&self.1, |text| out.push_str(text))?;
+        write_key_separator(out)?;
+        json::visit_json_display_text(&self.2, |text| out.push_str(text))?;
+        out.push('"')
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parts = encoded.rsplitn(3, TUPLE_KEY_SEPARATOR);
@@ -114,6 +138,13 @@ impl JsonKeyCodec for (String, String) {
         buf.push_str(&self.1);
         json::write_json_string(&buf, out);
     }
+    fn encode_json_key_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        out.push('"')?;
+        write_key_content(&self.0, out)?;
+        write_key_separator(out)?;
+        write_key_content(&self.1, out)?;
+        out.push('"')
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .split_once(TUPLE_KEY_SEPARATOR)
@@ -132,6 +163,15 @@ impl JsonKeyCodec for (String, String, String) {
         buf.push(TUPLE_KEY_SEPARATOR);
         buf.push_str(&self.2);
         json::write_json_string(&buf, out);
+    }
+    fn encode_json_key_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        out.push('"')?;
+        write_key_content(&self.0, out)?;
+        write_key_separator(out)?;
+        write_key_content(&self.1, out)?;
+        write_key_separator(out)?;
+        write_key_content(&self.2, out)?;
+        out.push('"')
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parts = encoded.splitn(3, TUPLE_KEY_SEPARATOR);
@@ -155,6 +195,13 @@ impl JsonKeyCodec for (String, u32) {
         buf.push_str(&self.1.to_string());
         json::write_json_string(&buf, out);
     }
+    fn encode_json_key_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        out.push('"')?;
+        write_key_content(&self.0, out)?;
+        write_key_separator(out)?;
+        json::visit_json_display_text(&self.1, |text| out.push_str(text))?;
+        out.push('"')
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let (left, right) = encoded.split_once(TUPLE_KEY_SEPARATOR).ok_or_else(|| {
             json::Error::Message("expected circuit tuple key to contain unit separator".into())
@@ -174,6 +221,15 @@ impl JsonKeyCodec for (String, String, u16) {
         buf.push(TUPLE_KEY_SEPARATOR);
         buf.push_str(&self.2.to_string());
         json::write_json_string(&buf, out);
+    }
+    fn encode_json_key_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+        out.push('"')?;
+        write_key_content(&self.0, out)?;
+        write_key_separator(out)?;
+        write_key_content(&self.1, out)?;
+        write_key_separator(out)?;
+        json::visit_json_display_text(&self.2, |text| out.push_str(text))?;
+        out.push('"')
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parts = encoded.splitn(3, TUPLE_KEY_SEPARATOR);
@@ -196,6 +252,25 @@ impl JsonKeyCodec for (String, String, u16) {
             json::Error::Message(format!("invalid inrou replica slot `{third}`: {err}"))
         })?;
         Ok((first.to_owned(), second.to_owned(), replica_slot))
+    }
+}
+
+// Use the sole string-content walker for each borrowed chunk. No quoted key text
+// or composite tuple buffer is materialized during counting or filling.
+fn write_key_content(text: &str, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+    super::bounded::write_json_string_content_to(text, out)
+}
+fn write_key_separator(out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+    write_key_content("\u{1f}", out)
+}
+struct EscapedKeySink<'a>(&'a mut dyn JsonWriteSink);
+impl JsonWriteSink for EscapedKeySink<'_> {
+    fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
+        let mut encoded = [0; 4];
+        write_key_content(value.encode_utf8(&mut encoded), self.0)
+    }
+    fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
+        write_key_content(value, self.0)
     }
 }
 

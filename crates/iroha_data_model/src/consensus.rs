@@ -902,6 +902,7 @@ pub struct GlobalThresholdBeaconKeySessionV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconChainAnchorV1 {
     /// Finalized block height authenticated by the pulse.
     pub height: u64,
@@ -928,6 +929,7 @@ pub struct GlobalThresholdBeaconChainAnchorV1 {
 )]
 #[norito_schema(name = "iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1")]
 #[norito(deny_unknown_fields)]
+#[norito(decode_fields)]
 pub struct GlobalThresholdBeaconPulseContextV1 {
     /// Exact native consensus instance derived from signed genesis and the configured chain.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -986,7 +988,7 @@ impl GlobalThresholdBeaconPulseContextV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-
+#[norito(decode_fields)]
 pub struct FinalizedGlobalThresholdBeaconPulseV1 {
     /// Fixed protocol version; must equal [`GLOBAL_THRESHOLD_BEACON_VERSION_V1`].
     pub version: u16,
@@ -1029,6 +1031,8 @@ impl norito::NoritoSchema for FinalizedGlobalThresholdBeaconPulseV1 {
         Some("iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1")
     }
 }
+
+mod pulse_inline;
 
 #[cfg(test)]
 mod tests {

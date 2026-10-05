@@ -9,13 +9,14 @@ use crate::{
     block::BlockHeader,
     consensus::GlobalThresholdBeaconPartialSignatureV1,
     isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityPairedPossessionProofV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityPairedPossessionProofV1,
         KagemushaMintFinalitySeatReadinessContextV1, KagemushaMintFinalityValidatorKeysV1,
     },
     parameter::{CustomParameter, CustomParameterId, system::SumeragiNposParameters},
-    sumeragi::epoch::{ValidatorCommitteeMemberV1, validate_committee},
+    sumeragi::epoch::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorCommitteeMemberV1,
+        ValidatorEpochAuthorizationV1, ValidatorEpochDecisionV1, validate_committee,
+    },
 };
 use iroha_crypto::{Hash, HashOf, SignatureOf};
 use iroha_primitives::{
@@ -323,7 +324,7 @@ impl ValidatorCommitteePreparationV1 {
     /// Rejects epoch/height gaps, changed generation, or a different predecessor authorization.
     pub fn validate_against_preparing_authorization(
         &self,
-        preparing: &KagemushaMintFinalityEpochAuthorizationV1,
+        preparing: &ValidatorEpochAuthorizationV1,
     ) -> Result<(), String> {
         self.validate()?;
         preparing.validate().map_err(|error| error.to_string())?;
@@ -438,7 +439,7 @@ pub struct ValidatorCommitteeTransitionV1 {
     pub readiness: Vec<ValidatorCommitteeSeatReadinessV1>,
     /// Authorization body whose boundary certificate activated or cancelled this attempt.
     /// This body alone is never accepted as proof of finality.
-    pub outcome: Option<KagemushaMintFinalityEpochAuthorizationV1>,
+    pub outcome: Option<ValidatorEpochAuthorizationV1>,
 }
 
 /// Install one complete public credential set for an already frozen attempt.
@@ -655,7 +656,7 @@ impl ValidatorCommitteeTransitionV1 {
                 return Err(invalid());
             }
             match outcome.decision {
-                KagemushaMintFinalityEpochDecisionV1::Activate => {
+                ValidatorEpochDecisionV1::Activate => {
                     let credentials = self.credentials.as_ref().ok_or_else(invalid)?;
                     if self.readiness.len() != preparation.committee.len()
                         || outcome.beacon != BeaconEpochBindingV1::Installed(credentials.beacon)
@@ -666,7 +667,7 @@ impl ValidatorCommitteeTransitionV1 {
                         return Err(invalid());
                     }
                 }
-                KagemushaMintFinalityEpochDecisionV1::RetainAndCancel => {
+                ValidatorEpochDecisionV1::RetainAndCancel => {
                     if outcome.authority_generation.checked_add(1)
                         != Some(preparation.authority_generation)
                     {
@@ -713,9 +714,9 @@ mod tests {
         }
     }
 
-    fn preparing() -> KagemushaMintFinalityEpochAuthorizationV1 {
+    fn preparing() -> ValidatorEpochAuthorizationV1 {
         let authority = authority(0);
-        KagemushaMintFinalityEpochAuthorizationV1 {
+        ValidatorEpochAuthorizationV1 {
             version: 1,
             network_id: authority.network_id,
             epoch: 1,
@@ -729,7 +730,7 @@ mod tests {
             }),
             previous_authorization_id: [9; 32],
             transition_id: [0; 32],
-            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+            decision: ValidatorEpochDecisionV1::Retain,
         }
     }
 
@@ -982,7 +983,7 @@ mod tests {
     fn committee_activation_requires_every_distinct_target_seat() {
         let mut transition = transition();
         let credentials = transition.credentials.as_ref().unwrap();
-        transition.outcome = Some(KagemushaMintFinalityEpochAuthorizationV1 {
+        transition.outcome = Some(ValidatorEpochAuthorizationV1 {
             epoch: 2,
             first_height: 21,
             last_height: 30,
@@ -991,7 +992,7 @@ mod tests {
             beacon: BeaconEpochBindingV1::Installed(credentials.beacon),
             previous_authorization_id: preparing().authorization_id().unwrap(),
             transition_id: transition.preparation.transition_id().unwrap(),
-            decision: KagemushaMintFinalityEpochDecisionV1::Activate,
+            decision: ValidatorEpochDecisionV1::Activate,
             ..preparing()
         });
         transition.validate().unwrap();
@@ -1024,13 +1025,13 @@ mod tests {
             outcome: None,
         };
         let current = preparing();
-        transition.outcome = Some(KagemushaMintFinalityEpochAuthorizationV1 {
+        transition.outcome = Some(ValidatorEpochAuthorizationV1 {
             epoch: 2,
             first_height: 21,
             last_height: 30,
             previous_authorization_id: current.authorization_id().unwrap(),
             transition_id: transition.preparation.transition_id().unwrap(),
-            decision: KagemushaMintFinalityEpochDecisionV1::RetainAndCancel,
+            decision: ValidatorEpochDecisionV1::RetainAndCancel,
             ..current
         });
         transition.validate().unwrap();

@@ -11,9 +11,9 @@ Chips for the Iroha-native PIPA-v1 PLONKish engine (`iroha_plonk`,
   sponge output squeezed by the last round's gate. Six round-constant columns,
   shareable between lanes (blocks start at multiples of 37 rows).
 - `poseidon::sponge`: the KAGEMUSHA sponge, bit for bit
-  `iroha_pasta::poseidon::{hash, hash_with_domain}` and
-  `kagemusha_v1_poseidon::hash` (domain and arity prefix, `[x, 1]` and `[1, 0]`
-  padding, output word 1). A configured `(domain, arity)` prefix starts from
+  `iroha_pasta::poseidon::{hash, hash_with_domain}` and the
+  `kagemusha_v1_poseidon` vectors of `fixtures/native_prover/kats_v1.json`
+  (domain and arity prefix, `[x, 1]` and `[1, 0]` padding, output word 1). A configured `(domain, arity)` prefix starts from
   its constant post-prefix state and saves one permutation.
 - `range::running_sum`: range checks of 1 to 252 bits with `b`-bit limbs
   against a `2^b`-row table, with a shifted top-limb row (10 rows for 128 bits
@@ -23,14 +23,19 @@ Chips for the Iroha-native PIPA-v1 PLONKish engine (`iroha_plonk`,
   satisfying assignment.
 - `arith`: the glue gate `q_m a b + q_a a + q_b b + q_c c + q_d d + q_k` with
   boolean, select and is-zero gates.
-- `statement`: **prototype** only. The 25-field step statement encoding of
-  the split-lineage step relations (owner approval pending; not wired into any
-  protocol path): relation identity, scheme, asset, credential, successor
-  lifecycle and sequence, both state commitments, the enabled-controls mask,
-  the lineage inputs of a Send and the effect. Also the canonical
-  cross-field limb encoding of spec S6 (`lo < 2^128`, `hi < 2^127`,
-  `lo + 2^128 hi < modulus`) and the decomposition of an own-field word into
-  those canonical limbs.
+- `statement`: the G1 step statement encoding of the split-lineage step
+  relations: 28 elements under `kgwstmt1`, in the order of the G1
+  `KagemushaWalletStatementV1::field_items` (wire record section 3.2; not yet
+  wired into a protocol path): version, the scheme-level relation identity
+  (two limbs, witness cells bound by the public digest), scheme, asset,
+  credential, successor lifecycle, sequence and `next_load`, the
+  enabled-controls mask, the lineage inputs of a Send, both state
+  commitments, the effect tag and a 10-element effect union (`credit_id` is
+  one element). Its tests reproduce the G1 statement vectors of
+  `fixtures/kagemusha/wallet_v1_vectors.json` natively and in circuit. Also
+  the canonical cross-field limb encoding of spec S6 (`lo < 2^128`,
+  `hi < 2^127`, `lo + 2^128 hi < modulus`) and the decomposition of an
+  own-field word into those canonical limbs.
 - `cells`: typed cells (`Word`, `Bit`, `Uint`) and row cursors; `tamper`: the
   per-cell tamper harness.
 

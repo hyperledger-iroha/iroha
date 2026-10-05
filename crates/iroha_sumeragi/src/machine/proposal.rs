@@ -173,7 +173,6 @@ impl Core {
             &self.topo,
             bh,
             |defect| match defect {
-                Defect::BoundaryAttestation => !cfg!(sumeragi_mutation = "MS45"),
                 Defect::ParentHash | Defect::ParentResult => !cfg!(sumeragi_mutation = "MS19"),
                 Defect::EmptyPayload => !cfg!(sumeragi_mutation = "MA8"),
                 Defect::TcRule => !NO_TC_RULE,

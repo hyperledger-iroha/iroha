@@ -21,12 +21,12 @@ use crate::{
     state::{NativeExecutionTip, StateReadOnly, WorldReadOnly},
     sumeragi::schedule,
 };
+use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1};
 use iroha_data_model::{
     consensus::{
         FinalizedGlobalThresholdBeaconPulseV1 as Pulse, GlobalThresholdBeaconChainAnchorV1,
         GlobalThresholdBeaconPulseContextV1,
     },
-    isi::kagemusha_v1::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1},
     parameter::system::ConsensusMode,
     sumeragi::epoch::ValidatorEpochContextV1,
 };

@@ -1227,3 +1227,163 @@ fn native_amx_caught_completed_failure_cannot_publish_partial_world_effects() {
             .is_none()
     );
 }
+
+// The original signed-root AMX fixture retains the exact shared State graph.
+struct NativeCheckedJsonSink {
+    output: String,
+    limit: usize,
+    depth: usize,
+    depth_ceiling: Option<usize>,
+}
+impl NativeCheckedJsonSink {
+    fn new(limit: usize) -> Self {
+        Self {
+            output: String::new(),
+            limit,
+            depth: 5,
+            depth_ceiling: None,
+        }
+    }
+}
+impl norito::json::JsonWriteSink for NativeCheckedJsonSink {
+    fn push(&mut self, value: char) -> Result<(), norito::json::BoundedJsonError> {
+        <Self as norito::json::JsonWriteSink>::push_str(self, value.encode_utf8(&mut [0; 4]))
+    }
+    fn push_str(&mut self, value: &str) -> Result<(), norito::json::BoundedJsonError> {
+        if self
+            .output
+            .len()
+            .checked_add(value.len())
+            .is_none_or(|n| n > self.limit)
+        {
+            return Err(norito::json::BoundedJsonError::BodyTooLarge);
+        }
+        self.output.push_str(value);
+        Ok(())
+    }
+    fn begin_container(&mut self) -> Result<(), norito::json::BoundedJsonError> {
+        let next = self
+            .depth
+            .checked_add(1)
+            .ok_or(norito::json::BoundedJsonError::Unsupported)?;
+        if self.depth_ceiling.is_some_and(|ceiling| next > ceiling) {
+            return Err(norito::json::BoundedJsonError::Unsupported);
+        }
+        self.depth = next;
+        Ok(())
+    }
+    fn end_container(&mut self) {
+        assert!(
+            self.depth > 5,
+            "native AMX writer cannot release caller depth"
+        );
+        self.depth -= 1;
+    }
+}
+#[test]
+fn original_empty_native_amx_checked_refusal_preserves_inherited_depth() {
+    use norito::json::{BoundedJsonError, JsonSerialize as _};
+    let owner = RetainedNativeAmx::default();
+    let mut sink = NativeCheckedJsonSink::new(0);
+    assert_eq!(
+        owner.json_serialize_to(&mut sink),
+        Err(BoundedJsonError::BodyTooLarge)
+    );
+    assert_eq!(
+        sink.depth, 5,
+        "empty native AMX refusal preserves original caller depth"
+    );
+    assert!(owner.canonical().is_none());
+    assert!(!owner.is_authenticated());
+    assert!(sink.output.is_empty());
+    let mut sink = NativeCheckedJsonSink::new(usize::MAX);
+    assert_eq!(owner.json_serialize_to(&mut sink), Ok(()));
+    assert_eq!(sink.depth, 5);
+    assert_eq!(sink.output, "{\"value\":null}");
+}
+#[test]
+fn original_authenticated_native_amx_checked_refusals_keep_graph_pool_and_depth() {
+    use norito::json::{BoundedJsonError, JsonSerialize as _};
+    let roots = Roots::new();
+    let view = roots.participants[0].state().view();
+    let original = view.world().sumeragi_amx_participant();
+    let owner = original.clone();
+    let pointer = std::ptr::from_ref(owner.canonical().unwrap());
+    assert_eq!(pointer, std::ptr::from_ref(original.canonical().unwrap()));
+    assert!(owner.is_authenticated());
+    let budget = roots.participants[0].state().ivm_execution_budget();
+    let retained_bytes = budget.reserved_bytes();
+    assert!(owner.belongs_to(&budget));
+    let ordinary = norito::json::to_json(&owner).unwrap();
+    for limit in [0, 1, 7, ordinary.len() - 1] {
+        let mut sink = NativeCheckedJsonSink::new(limit);
+        assert_eq!(
+            owner.json_serialize_to(&mut sink),
+            Err(BoundedJsonError::BodyTooLarge)
+        );
+        assert_eq!(
+            sink.depth, 5,
+            "native AMX returned error restores caller depth"
+        );
+        assert!(ordinary.starts_with(&sink.output));
+        assert_eq!(std::ptr::from_ref(owner.canonical().unwrap()), pointer);
+        assert!(owner.belongs_to(&budget));
+        assert!(owner.is_authenticated());
+        assert_eq!(budget.reserved_bytes(), retained_bytes);
+    }
+    let mut sink = NativeCheckedJsonSink::new(usize::MAX);
+    sink.depth_ceiling = Some(6);
+    assert_eq!(
+        owner.json_serialize_to(&mut sink),
+        Err(BoundedJsonError::Unsupported)
+    );
+    assert_eq!(sink.depth, 5);
+    assert_eq!(sink.output, "{\"value\":");
+    assert_eq!(std::ptr::from_ref(owner.canonical().unwrap()), pointer);
+    assert_eq!(budget.reserved_bytes(), retained_bytes);
+    let mut sink = NativeCheckedJsonSink::new(ordinary.len());
+    assert_eq!(owner.json_serialize_to(&mut sink), Ok(()));
+    assert_eq!(sink.output, ordinary);
+    assert_eq!(sink.depth, 5);
+    assert_eq!(std::ptr::from_ref(owner.canonical().unwrap()), pointer);
+    assert_eq!(budget.reserved_bytes(), retained_bytes);
+}
+#[test]
+fn original_authenticated_native_amx_mv_cell_refusal_keeps_original_cut_graph_and_pool() {
+    use norito::json::{BoundedJsonError, JsonSerialize as _};
+    let roots = Roots::new();
+    let view = roots.participants[0].state().view();
+    let slot = &view.world().sumeragi_amx_participant;
+    let original = view.world().sumeragi_amx_participant();
+    let pointer = std::ptr::from_ref(original.canonical().unwrap());
+    let budget = roots.participants[0].state().ivm_execution_budget();
+    let retained_bytes = budget.reserved_bytes();
+    let ordinary = norito::json::to_json(slot).unwrap();
+    let original_leaf_start = ordinary.find("\"blocks\":").unwrap() + "\"blocks\":".len();
+    for limit in [
+        original_leaf_start,
+        original_leaf_start + 1,
+        ordinary.len() - 1,
+    ] {
+        let mut sink = NativeCheckedJsonSink::new(limit);
+        assert_eq!(
+            slot.json_serialize_to(&mut sink),
+            Err(BoundedJsonError::BodyTooLarge)
+        );
+        assert_eq!(
+            sink.depth, 5,
+            "an original native AMX MV leaf cannot strand caller depth"
+        );
+        assert!(ordinary.starts_with(&sink.output));
+        assert_eq!(std::ptr::from_ref(original.canonical().unwrap()), pointer);
+        assert!(original.belongs_to(&budget));
+        assert!(original.is_authenticated());
+        assert_eq!(budget.reserved_bytes(), retained_bytes);
+    }
+    let mut sink = NativeCheckedJsonSink::new(ordinary.len());
+    assert_eq!(slot.json_serialize_to(&mut sink), Ok(()));
+    assert_eq!(sink.output, ordinary);
+    assert_eq!(sink.depth, 5);
+    assert_eq!(std::ptr::from_ref(original.canonical().unwrap()), pointer);
+    assert_eq!(budget.reserved_bytes(), retained_bytes);
+}

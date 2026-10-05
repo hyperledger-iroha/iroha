@@ -128,6 +128,10 @@ state_test! { sync snapshot_global_lane_state_preserves_opening_and_closure_pred
         assert_eq!(restored.world.sumeragi_lanes.view().get(), &current);
         assert_eq!(restored.world.sumeragi_lanes.predecessor_view().get(), &Some(previous.clone()));
         for bad in [norito::json::Value::Null, norito::json::to_value(&current).unwrap()] {
+            let bad = match bad {
+                norito::json::Value::Null => norito::json::Value::Null,
+                value => norito::json::to_value(&mv::json::SnapshotUndoValue { value }).unwrap(),
+            };
             let mut changed = snapshot.clone();
             changed.as_object_mut().unwrap().get_mut("world").unwrap().as_object_mut().unwrap()
                 .get_mut("sumeragi_lanes").unwrap().as_object_mut().unwrap().insert("revert".into(), bad);
@@ -162,10 +166,15 @@ state_test! { sync snapshot_global_lane_state_rejects_invalid_current_and_predec
                 1 => value.lanes[0].merged.block_hash[0] ^= 1,
                 _ => value.lanes[0].created_at = 3,
             }
+            let encoded = if cut == "revert" {
+                norito::json::to_value(&mv::json::SnapshotUndoValue { value: &value }).unwrap()
+            } else {
+                norito::json::to_value(&value).unwrap()
+            };
             let mut changed = snapshot.clone();
             changed.as_object_mut().unwrap().get_mut("world").unwrap().as_object_mut().unwrap()
                 .get_mut("sumeragi_lanes").unwrap().as_object_mut().unwrap()
-                .insert(cut.into(), norito::json::to_value(&value).unwrap());
+                .insert(cut.into(), encoded);
             let error = validated_lane_snapshot_projection(&changed, chain.state())
                 .err().expect("each actual lane cut must validate its own source credentials");
             assert!(error.to_string().contains(&format!("world.sumeragi_lanes.{cut}")), "{error}");
@@ -180,7 +189,7 @@ state_test! { sync snapshot_global_lane_state_height_zero_rejects_any_undo
     let mut invalid = snapshot;
     invalid.as_object_mut().unwrap().get_mut("world").unwrap().as_object_mut().unwrap()
         .get_mut("sumeragi_lanes").unwrap().as_object_mut().unwrap().insert("revert".into(),
-            norito::json::to_value(state.world.sumeragi_lanes.view().get()).unwrap());
+            norito::json::to_value(&mv::json::SnapshotUndoValue { value: state.world.sumeragi_lanes.view().get() }).unwrap());
     let error = deserialize_state_snapshot_value_with_kura(invalid, Arc::clone(&state.kura))
         .err().expect("height zero has no predecessor even for empty lane state");
     assert!(error.to_string().contains("height-zero lane state"), "{error}");

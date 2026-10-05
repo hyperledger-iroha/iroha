@@ -42,21 +42,24 @@ pub mod json_helpers {
         out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        let mut first = true;
-        for (id, parameter) in parameters {
-            if first {
-                first = false;
-            } else {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            let mut first = true;
+            for (id, parameter) in parameters {
+                if first {
+                    first = false;
+                } else {
+                    out.push(',')?;
+                }
+                id.json_serialize_to(out)?;
+                out.push(':')?;
+                parameter.json_serialize_to(out)?;
             }
-            id.json_serialize_to(out)?;
-            out.push(':')?;
-            parameter.json_serialize_to(out)?;
-        }
-        out.push('}')?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
     /// Deserialize a `CustomParameters` map from a JSON stream.
     ///
@@ -215,13 +218,16 @@ impl JsonSerialize for CustomParameter {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"id\":")?;
-        self.id.json_serialize_to(out)?;
-        out.push_str(",\"payload\":")?;
-        self.payload.json_serialize_to(out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"id\":")?;
+            self.id.json_serialize_to(out)?;
+            out.push_str(",\"payload\":")?;
+            self.payload.json_serialize_to(out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 }
 

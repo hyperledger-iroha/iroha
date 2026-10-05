@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Verify current native bridge ABI/header parity and reject retired C/JNI exports.
+# Requires Python 3, a C11 compiler (CC) and a C++17 compiler (CXX); reads only repository sources.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,73 +11,21 @@ HEADER="${ROOT_DIR}/crates/connect_norito_bridge/include/connect_norito_bridge.h
 UMBRELLA="${ROOT_DIR}/crates/connect_norito_bridge/include/NoritoBridge.h"
 PRIVACY_MODEL="${ROOT_DIR}/crates/iroha_data_model/src/privacy/protocol.rs"
 RETAIL_MODEL="${ROOT_DIR}/crates/iroha_data_model/src/validation_fee/retail.rs"
-RESERVE_FINALITY_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_reserve_finality_v1.rs"
-TESTNET_OBSERVATION_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_observation_v1.rs"
-TESTNET_VALUE_LEDGER_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_native_value_ledger_v1.rs"
-TESTNET_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_native_startup_v1.rs"
-ORDINARY_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_native_startup.rs"
-ORDINARY_CURRENT_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_current_control.rs"
-ORDINARY_OUTGOING_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_outgoing_driver.rs"
-ORDINARY_INCOMING_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_incoming_driver.rs"
-ORDINARY_INTEGRITY_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_integrity_refresh.rs"
-ORDINARY_MINT_FUNDING_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_mint_funding_driver.rs"
+PLATFORM_JNI_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/platform_jni.rs"
 MODE="${1:-}"
 
 SELF_TESTS=(
+  --self-test-retired-kagemusha-header-symbol
+  --self-test-retired-kagemusha-rust-symbol
+  --self-test-retired-kagemusha-jni-symbol
+  --self-test-retired-kagemusha-jni-module-symbol
+  --self-test-retired-offline-cash-header-symbol
+  --self-test-retired-offline-cash-rust-symbol
+  --self-test-retired-pixel6-jni-symbol
   --self-test-missing-domain-header-symbol
   --self-test-missing-domain-rust-symbol
   --self-test-bad-domain-length-width
-  --self-test-missing-top-up-binding-header
-  --self-test-missing-top-up-binding-rust
-  --self-test-bad-top-up-binding-width
-  --self-test-missing-top-up-binding-request
   --self-test-bad-abi
-  --self-test-missing-reserve-finality-header-symbol
-  --self-test-missing-reserve-finality-rust-symbol
-  --self-test-bad-reserve-finality-checkpoint-signature
-  --self-test-missing-reserve-finality-request-binding
-  --self-test-missing-ordinary-startup-header-symbol
-  --self-test-missing-ordinary-startup-rust-symbol
-  --self-test-bad-ordinary-startup-signature
-  --self-test-missing-ordinary-current-header-symbol
-  --self-test-missing-ordinary-current-rust-symbol
-  --self-test-bad-ordinary-current-signature
-  --self-test-missing-ordinary-outgoing-header-symbol
-  --self-test-missing-ordinary-outgoing-rust-symbol
-  --self-test-bad-ordinary-outgoing-signature
-  --self-test-missing-kagemusha-header-symbol
-  --self-test-missing-kagemusha-close-header-symbol
-  --self-test-missing-kagemusha-install-header-symbol
-  --self-test-missing-kagemusha-install-rust-symbol
-  --self-test-bad-kagemusha-install-signature
-  --self-test-missing-kagemusha-testnet-observation-header-symbol
-  --self-test-missing-kagemusha-rust-symbol
-  --self-test-missing-ordinary-incoming-header-symbol
-  --self-test-missing-ordinary-incoming-rust-symbol
-  --self-test-bad-ordinary-incoming-signature
-  --self-test-missing-ordinary-integrity-header-symbol
-  --self-test-missing-ordinary-integrity-rust-symbol
-  --self-test-bad-ordinary-integrity-signature
-  --self-test-missing-ordinary-mint-funding-header-symbol
-  --self-test-missing-ordinary-mint-funding-rust-symbol
-  --self-test-bad-ordinary-mint-funding-signature
-  --self-test-bad-kagemusha-signature
-  --self-test-missing-kagemusha-command-binding
-  --self-test-bad-kagemusha-error-code
-  --self-test-missing-kagemusha-mint-stage-header-symbol
-  --self-test-bad-kagemusha-mint-stage-signature
-  --self-test-missing-finalized-mint-header-symbol
-  --self-test-missing-finalized-mint-rust-symbol
-  --self-test-missing-testnet-value-header-symbol
-  --self-test-missing-testnet-value-rust-symbol
-  --self-test-missing-testnet-credit-header-symbol
-  --self-test-missing-testnet-credit-rust-symbol
-  --self-test-missing-testnet-startup-contract-header-symbol
-  --self-test-missing-testnet-startup-contract-rust-symbol
-  --self-test-missing-testnet-startup-activate-header-symbol
-  --self-test-missing-testnet-startup-activate-rust-symbol
-  --self-test-bad-testnet-startup-contract-signature
-  --self-test-bad-testnet-startup-activate-signature
   --self-test-missing-privacy-header-symbol
   --self-test-bad-privacy-signature
   --self-test-missing-privacy-rust-symbol
@@ -117,16 +67,7 @@ run_contract_check() {
   local parliament_rust="$5"
   local retail_model="$6"
   local private_settlement_rust="$7"
-  local reserve_finality_rust="$8"
-  local testnet_observation_rust="$9"
-  local testnet_value_ledger_rust="${10}"
-  local testnet_startup_rust="${11}"
-  local ordinary_startup_rust="${12}"
-  local ordinary_current_rust="${13}"
-  local ordinary_outgoing_rust="${14}"
-  local ordinary_incoming_rust="${15}"
-  local ordinary_integrity_rust="${16}"
-  local ordinary_mint_funding_rust="${17}"
+  local platform_jni_rust="$8"
 
   python3 - \
     "${rust_lib}" \
@@ -136,16 +77,7 @@ run_contract_check() {
     "${parliament_rust}" \
     "${retail_model}" \
     "${private_settlement_rust}" \
-    "${reserve_finality_rust}" \
-    "${testnet_observation_rust}" \
-    "${testnet_value_ledger_rust}" \
-    "${testnet_startup_rust}" \
-    "${ordinary_startup_rust}" \
-    "${ordinary_current_rust}" \
-    "${ordinary_outgoing_rust}" \
-    "${ordinary_incoming_rust}" \
-    "${ordinary_integrity_rust}" \
-    "${ordinary_mint_funding_rust}" <<'PY'
+    "${platform_jni_rust}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -157,16 +89,11 @@ privacy = Path(sys.argv[4]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[5]).read_text(encoding="utf-8")
 retail_model = Path(sys.argv[6]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[7]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[8]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[9]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[10]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[11]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[12]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[13]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[14]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[15]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[16]).read_text(encoding="utf-8")
-rust += "\n" + Path(sys.argv[17]).read_text(encoding="utf-8")
+jni_path = Path(sys.argv[8])
+native_sources = [jni_path, *sorted(
+    source for source in jni_path.parent.rglob("*.rs") if source != jni_path
+)]
+native_rust = "\n".join(source.read_text(encoding="utf-8") for source in native_sources)
 
 
 def require(pattern: str, text: str, label: str) -> None:
@@ -174,50 +101,6 @@ def require(pattern: str, text: str, label: str) -> None:
         raise SystemExit(f"[connect-norito-header] missing or invalid {label}")
 
 
-KAGEMUSHA_EXPORTS = {
-    "connect_norito_kagemusha_v1_payment_request_validate",
-    "connect_norito_kagemusha_v1_payment_validate",
-    "connect_norito_kagemusha_v1_acknowledgement_validate",
-    "connect_norito_kagemusha_v1_complete_exchange_validate",
-    "connect_norito_kagemusha_v1_mint_authorization_validate",
-    "connect_norito_kagemusha_v1_mint_credit_validate",
-    "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
-    "connect_norito_kagemusha_v1_redemption_voucher_validate",
-    "connect_norito_kagemusha_v1_payment_request_text_validate",
-    "connect_norito_kagemusha_v1_payment_text_validate",
-    "connect_norito_kagemusha_v1_acknowledgement_text_validate",
-    "connect_norito_kagemusha_v1_complete_exchange_text_validate",
-    "connect_norito_kagemusha_v1_mint_authorization_text_validate",
-    "connect_norito_kagemusha_v1_mint_credit_text_validate",
-    "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
-    "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
-    "connect_norito_kagemusha_contract_vector_v1",
-    "connect_norito_kagemusha_core_coordinator_contract_v1",
-    "connect_norito_kagemusha_core_coordinator_install_v1",
-    "connect_norito_kagemusha_core_coordinator_open_v1",
-    "connect_norito_kagemusha_core_coordinator_invoke_v1",
-    "connect_norito_kagemusha_core_coordinator_close_v1",
-    "connect_norito_kagemusha_testnet_state_proof_observe_v1",
-    "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
-    "connect_norito_kagemusha_testnet_value_admit_v1",
-    "connect_norito_kagemusha_testnet_value_credit_v1",
-    "connect_norito_kagemusha_testnet_native_startup_contract_v1",
-    "connect_norito_kagemusha_testnet_native_startup_activate_v1",
-    "connect_norito_kagemusha_ordinary_runtime_startup_v1",
-    "connect_norito_kagemusha_ordinary_current_control_v1",
-    "connect_norito_kagemusha_ordinary_outgoing_v1",
-    "connect_norito_kagemusha_ordinary_incoming_v1",
-    "connect_norito_kagemusha_ordinary_integrity_refresh_v1",
-    "connect_norito_kagemusha_ordinary_mint_funding_v1",
-    "connect_norito_kagemusha_device_capabilities_v1",
-    "connect_norito_kagemusha_device_execute_v1",
-    "connect_norito_kagemusha_device_command_response_v1_verify",
-    "connect_norito_kagemusha_reserve_finality_hint_v1",
-    "connect_norito_kagemusha_reserve_finality_verify_v1",
-    "connect_norito_kagemusha_top_up_signed_request_validate_v1",
-    "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
-    "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
-}
 PRIVACY_EXPORTS = {
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
@@ -498,8 +381,33 @@ def c_parameter_names(name: str) -> list[str]:
     return parameter_names(match.group(1), False)
 
 
-exact("Rust KAGEMUSHA", KAGEMUSHA_EXPORTS, rust_exports("connect_norito_kagemusha_"))
-exact("C KAGEMUSHA", KAGEMUSHA_EXPORTS, header_exports("connect_norito_kagemusha_"))
+# Removed implementations have no bridge ABI in the first release.
+native_c_exports = set(re.findall(
+    r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(',
+    native_rust,
+))
+exact("retired Rust KAGEMUSHA", set(), {
+    name for name in native_c_exports if name.startswith("connect_norito_kagemusha_")
+})
+exact("retired C KAGEMUSHA", set(), header_exports("connect_norito_kagemusha_"))
+exact("retired Rust offline cash", set(), {
+    name for name in native_c_exports if name.startswith("connect_norito_offline_cash_")
+})
+exact("retired C offline cash", set(), header_exports("connect_norito_offline_cash_"))
+retired_jni_prefixes = (
+    "Java_org_hyperledger_iroha_sdk_offline_Kagemusha",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_Kagemusha",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_Kagemusha",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_",
+)
+exact(
+    "retired JNI KAGEMUSHA",
+    set(),
+    {
+        name for name in re.findall(r"\b(Java_[A-Za-z0-9_]*)\s*\(", native_rust)
+        if "kagemusha" in name.lower() or name.startswith(retired_jni_prefixes)
+    },
+)
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
 exact("C privacy", PRIVACY_EXPORTS, header_exports("iroha_privacy_"))
 exact(
@@ -562,8 +470,7 @@ for name in sorted(rust_transaction_signers):
         raise SystemExit(f"C signer {name} fee/private-key argument ordering drift")
 
 require_signature_parity(
-    KAGEMUSHA_EXPORTS
-    | PRIVACY_EXPORTS
+    PRIVACY_EXPORTS
     | SORAFS_REFERENCE_EXPORTS
     | DETACHED_EXPORTS
     | PARLIAMENT_EXPORTS
@@ -581,12 +488,6 @@ require(
     "bridge ABI binding",
 )
 for rust_name, value, header_name in (
-    ("ERR_KAGEMUSHA_V1", "-311", "CONNECT_NORITO_ERR_KAGEMUSHA_V1"),
-    (
-        "ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1",
-        "-312",
-        "CONNECT_NORITO_ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1",
-    ),
     ("ERR_PARLIAMENT_TIMED_OVN", "-505", "CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN"),
     (
         "ERR_RETAIL_FEE_ASSESSMENT",
@@ -664,7 +565,7 @@ if umbrella_contract(umbrella) != [
 
 print(
     "[connect-norito-header] ABI 25 synchronized: "
-    f"{len(KAGEMUSHA_EXPORTS)} KAGEMUSHA, {len(PRIVACY_EXPORTS)} privacy, "
+    f"{len(PRIVACY_EXPORTS)} privacy, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS, {len(DETACHED_EXPORTS)} detached, "
     f"{len(PARLIAMENT_EXPORTS)} Parliament, {len(RETAIL_EXPORTS)} retail-fee, "
     f"{len(PRIVATE_SETTLEMENT_EXPORTS)} private-settlement, and "
@@ -738,16 +639,8 @@ make_negative_workspace() {
   cp "${RUST_LIB}" "${tmp}/lib.rs"
   cp "${PARLIAMENT_RUST}" "${tmp}/parliament_timed_ovn_ffi.rs"
   cp "${PRIVATE_SETTLEMENT_RUST}" "${tmp}/private_settlement_ffi.rs"
-  cp "${RESERVE_FINALITY_RUST}" "${tmp}/kagemusha_reserve_finality_v1.rs"
-  cp "${TESTNET_OBSERVATION_RUST}" "${tmp}/kagemusha_testnet_observation_v1.rs"
-  cp "${TESTNET_VALUE_LEDGER_RUST}" "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs"
-  cp "${TESTNET_STARTUP_RUST}" "${tmp}/kagemusha_testnet_native_startup_v1.rs"
-  cp "${ORDINARY_STARTUP_RUST}" "${tmp}/ordinary_native_startup.rs"
-  cp "${ORDINARY_CURRENT_RUST}" "${tmp}/ordinary_current_control.rs"
-  cp "${ORDINARY_OUTGOING_RUST}" "${tmp}/ordinary_outgoing_driver.rs"
-  cp "${ORDINARY_INCOMING_RUST}" "${tmp}/ordinary_incoming_driver.rs"
-  cp "${ORDINARY_INTEGRITY_RUST}" "${tmp}/ordinary_integrity_refresh.rs"
-  cp "${ORDINARY_MINT_FUNDING_RUST}" "${tmp}/ordinary_mint_funding_driver.rs"
+  cp "${PLATFORM_JNI_RUST}" "${tmp}/platform_jni.rs"
+  cp -R "${PLATFORM_JNI_RUST%.rs}" "${tmp}/platform_jni"
   cp "${PRIVACY_MODEL}" "${tmp}/privacy.rs"
   cp "${RETAIL_MODEL}" "${tmp}/retail_fee_model.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
@@ -767,16 +660,7 @@ expect_contract_rejection() {
       "${tmp}/parliament_timed_ovn_ffi.rs" \
       "${tmp}/retail_fee_model.rs" \
       "${tmp}/private_settlement_ffi.rs" \
-      "${tmp}/kagemusha_reserve_finality_v1.rs" \
-      "${tmp}/kagemusha_testnet_observation_v1.rs" \
-      "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
-      "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
-      "${tmp}/ordinary_native_startup.rs" \
-      "${tmp}/ordinary_current_control.rs" \
-      "${tmp}/ordinary_outgoing_driver.rs" \
-      "${tmp}/ordinary_incoming_driver.rs" \
-      "${tmp}/ordinary_integrity_refresh.rs" \
-      "${tmp}/ordinary_mint_funding_driver.rs" 2>&1)"; then
+      "${tmp}/platform_jni.rs" 2>&1)"; then
     echo "[connect-norito-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -807,16 +691,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${PARLIAMENT_RUST}" \
     "${RETAIL_MODEL}" \
     "${PRIVATE_SETTLEMENT_RUST}" \
-    "${RESERVE_FINALITY_RUST}" \
-    "${TESTNET_OBSERVATION_RUST}" \
-    "${TESTNET_VALUE_LEDGER_RUST}" \
-    "${TESTNET_STARTUP_RUST}" \
-    "${ORDINARY_STARTUP_RUST}" \
-    "${ORDINARY_CURRENT_RUST}" \
-    "${ORDINARY_OUTGOING_RUST}" \
-    "${ORDINARY_INCOMING_RUST}" \
-    "${ORDINARY_INTEGRITY_RUST}" \
-    "${ORDINARY_MINT_FUNDING_RUST}" >/dev/null
+    "${PLATFORM_JNI_RUST}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
@@ -825,6 +700,34 @@ if [[ "${MODE}" == --self-test-* ]]; then
   expected_diagnostic=""
 
   case "${MODE}" in
+    --self-test-retired-kagemusha-header-symbol)
+      printf '\nint32_t connect_norito_kagemusha_retired_v1(void);\n' >> "${tmp_header}"
+      expected_diagnostic="retired C KAGEMUSHA inventory mismatch"
+      ;;
+    --self-test-retired-kagemusha-rust-symbol)
+      printf '\npub unsafe extern "C" fn connect_norito_kagemusha_retired_v1() -> c_int { 0 }\n' >> "${tmp_rust}"
+      expected_diagnostic="retired Rust KAGEMUSHA inventory mismatch"
+      ;;
+    --self-test-retired-kagemusha-jni-symbol)
+      printf '\npub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_RetiredBridge_nativeRetired() -> jint { 0 }\n' >> "${tmp}/platform_jni.rs"
+      expected_diagnostic="retired JNI KAGEMUSHA inventory mismatch"
+      ;;
+    --self-test-retired-kagemusha-jni-module-symbol)
+      printf '\npub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_RetiredBridge_nativeRetired() -> jint { 0 }\n' >> "${tmp}/platform_jni/private_settlement.rs"
+      expected_diagnostic="retired JNI KAGEMUSHA inventory mismatch"
+      ;;
+    --self-test-retired-offline-cash-header-symbol)
+      printf '\nint32_t connect_norito_offline_cash_retired_v1(void);\n' >> "${tmp_header}"
+      expected_diagnostic="retired C offline cash inventory mismatch"
+      ;;
+    --self-test-retired-offline-cash-rust-symbol)
+      printf '\npub unsafe extern "C" fn connect_norito_offline_cash_retired_v1() -> c_int { 0 }\n' >> "${tmp}/private_settlement_ffi.rs"
+      expected_diagnostic="retired Rust offline cash inventory mismatch"
+      ;;
+    --self-test-retired-pixel6-jni-symbol)
+      printf '\npub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeRetired() -> jint { 0 }\n' >> "${tmp}/platform_jni/private_settlement.rs"
+      expected_diagnostic="retired JNI KAGEMUSHA inventory mismatch"
+      ;;
     --self-test-missing-domain-header-symbol)
       replace_once "${tmp_header}" \
         "connect_norito_domain_id_validate_v1" "removed_domain_id_validate_v1"
@@ -863,275 +766,10 @@ if [[ "${MODE}" == --self-test-* ]]; then
         '#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1 '
       expected_diagnostic="missing or invalid C Parliament page summary width"
       ;;
-    --self-test-missing-reserve-finality-header-symbol)
-      replace_once "${tmp_header}" \
-        'connect_norito_kagemusha_reserve_finality_hint_v1' \
-        'removed_reserve_finality_hint_v1'
-      ;;
-    --self-test-missing-reserve-finality-rust-symbol)
-      replace_once "${tmp}/kagemusha_reserve_finality_v1.rs" \
-        'connect_norito_kagemusha_reserve_finality_verify_v1' \
-        'removed_reserve_finality_verify_v1'
-      ;;
-    --self-test-bad-reserve-finality-checkpoint-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_reserve_finality_verify_v1\s*\([^;]*?)unsigned long trusted_checkpoint_len' \
-        '\g<1>uint32_t trusted_checkpoint_len'
-      ;;
-    --self-test-missing-reserve-finality-request-binding)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_reserve_finality_verify_v1\s*\([^;]*?)const uint8_t\* expected_request,\s*unsigned long expected_request_len,\s*' \
-        '\g<1>'
-      ;;
-    --self-test-missing-top-up-binding-header)
-      replace_once "${tmp_header}" 'connect_norito_kagemusha_top_up_signed_request_validate_v1' 'removed_top_up_binding_v1'
-      ;;
-    --self-test-missing-top-up-binding-rust)
-      replace_once "${tmp}/kagemusha_reserve_finality_v1.rs" 'connect_norito_kagemusha_top_up_signed_request_validate_v1' 'removed_top_up_binding_v1'
-      ;;
-    --self-test-bad-top-up-binding-width)
-      replace_regex_once "${tmp_header}" '(connect_norito_kagemusha_top_up_signed_request_validate_v1\s*\([^;]*?)unsigned long signed_transaction_len' '\g<1>uint32_t signed_transaction_len'
-      ;;
-    --self-test-missing-top-up-binding-request)
-      replace_regex_once "${tmp_header}" '(connect_norito_kagemusha_top_up_signed_request_validate_v1\s*\([^;]*?),\s*const uint8_t \*expected_request_ptr, unsigned long expected_request_len' '\g<1>'
-      ;;
     --self-test-bad-abi)
       replace_once "${tmp_header}" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 25" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22"
-      ;;
-    --self-test-missing-ordinary-startup-header-symbol)
-      replace_once "${tmp_header}" \
-        'connect_norito_kagemusha_ordinary_runtime_startup_v1' \
-        'removed_ordinary_startup_v1'
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_runtime_startup_v1']"
-      ;;
-    --self-test-missing-ordinary-startup-rust-symbol)
-      replace_once "${tmp}/ordinary_native_startup.rs" \
-        'pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_runtime_startup_v1' \
-        'pub unsafe extern "C" fn removed_ordinary_startup_v1'
-      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_runtime_startup_v1']"
-      ;;
-    --self-test-bad-ordinary-startup-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_ordinary_runtime_startup_v1\s*\([^;]*?)uint64_t id' \
-        '\g<1>uint32_t id'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_runtime_startup_v1"
-      ;;
-    --self-test-missing-ordinary-current-header-symbol)
-      replace_once "${tmp_header}" \
-        'connect_norito_kagemusha_ordinary_current_control_v1' \
-        'removed_ordinary_current_v1'
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_current_control_v1']"
-      ;;
-    --self-test-missing-ordinary-current-rust-symbol)
-      replace_once "${tmp}/ordinary_current_control.rs" \
-        'pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_current_control_v1' \
-        'pub unsafe extern "C" fn removed_ordinary_current_v1'
-      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_current_control_v1']"
-      ;;
-    --self-test-bad-ordinary-current-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_ordinary_current_control_v1\s*\([^;]*?)uint64_t core_handle' \
-        '\g<1>uint32_t core_handle'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_current_control_v1"
-      ;;
-    --self-test-missing-ordinary-outgoing-header-symbol)
-      replace_once "${tmp_header}" \
-        'connect_norito_kagemusha_ordinary_outgoing_v1' \
-        'removed_ordinary_outgoing_v1'
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_outgoing_v1']"
-      ;;
-    --self-test-missing-ordinary-outgoing-rust-symbol)
-      replace_once "${tmp}/ordinary_outgoing_driver.rs" \
-        'pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_outgoing_v1' \
-        'pub unsafe extern "C" fn removed_ordinary_outgoing_v1'
-      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_outgoing_v1']"
-      ;;
-    --self-test-bad-ordinary-outgoing-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_ordinary_outgoing_v1\s*\([^;]*?)size_t input_len' \
-        '\g<1>uint32_t input_len'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_outgoing_v1"
-      ;;
-    --self-test-missing-kagemusha-header-symbol)
-      replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_v1_payment_validate" \
-        "removed_kagemusha_v1_payment_validate"
-      ;;
-    --self-test-missing-kagemusha-install-header-symbol)
-      replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_core_coordinator_install_v1" \
-        "removed_kagemusha_core_coordinator_install_v1"
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_core_coordinator_install_v1']"
-      ;;
-    --self-test-missing-kagemusha-install-rust-symbol)
-      replace_once "${tmp_rust}" \
-        'pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_install_v1' \
-        'pub unsafe extern "C" fn removed_kagemusha_core_coordinator_install_v1'
-      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_core_coordinator_install_v1']"
-      ;;
-    --self-test-bad-kagemusha-install-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_core_coordinator_install_v1\s*\([^;]*?)size_t storage_path_length' \
-        '\g<1>uint32_t storage_path_length'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_core_coordinator_install_v1"
-      ;;
-    --self-test-missing-kagemusha-close-header-symbol)
-      replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_core_coordinator_close_v1" \
-        "removed_kagemusha_core_coordinator_close_v1"
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_core_coordinator_close_v1']"
-      ;;
-    --self-test-missing-kagemusha-testnet-observation-header-symbol)
-      replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_testnet_state_proof_observe_v1" \
-        "removed_kagemusha_testnet_state_proof_observe_v1"
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_testnet_state_proof_observe_v1']"
-      ;;
-    --self-test-missing-ordinary-incoming-header-symbol)
-      replace_once "${tmp_header}" "connect_norito_kagemusha_ordinary_incoming_v1" "removed_connect_norito_kagemusha_ordinary_incoming_v1"
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_incoming_v1']"
-      ;;
-    --self-test-missing-ordinary-incoming-rust-symbol)
-      replace_regex_once "${tmp}/ordinary_incoming_driver.rs" \
-        '(pub unsafe extern "C" fn\s+)connect_norito_kagemusha_ordinary_incoming_v1\b' \
-        '\g<1>removed_connect_norito_kagemusha_ordinary_incoming_v1'
-      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_incoming_v1']"
-      ;;
-    --self-test-bad-ordinary-incoming-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_ordinary_incoming_v1\s*\([^;]*?)size_t input_len' \
-        '\g<1>uint32_t input_len'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_incoming_v1"
-      ;;
-    --self-test-missing-ordinary-integrity-header-symbol)
-      replace_once "${tmp_header}" "connect_norito_kagemusha_ordinary_integrity_refresh_v1" "removed_connect_norito_kagemusha_ordinary_integrity_refresh_v1"
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_integrity_refresh_v1']"
-      ;;
-    --self-test-missing-ordinary-integrity-rust-symbol)
-      replace_regex_once "${tmp}/ordinary_integrity_refresh.rs" \
-        '(pub unsafe extern "C" fn\s+)connect_norito_kagemusha_ordinary_integrity_refresh_v1\b' \
-        '\g<1>removed_connect_norito_kagemusha_ordinary_integrity_refresh_v1'
-      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_integrity_refresh_v1']"
-      ;;
-    --self-test-bad-ordinary-integrity-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_ordinary_integrity_refresh_v1\s*\([^;]*?)size_t original_len' \
-        '\g<1>uint32_t original_len'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_integrity_refresh_v1"
-      ;;
-    --self-test-missing-ordinary-mint-funding-header-symbol)
-      replace_once "${tmp_header}" "connect_norito_kagemusha_ordinary_mint_funding_v1" "removed_connect_norito_kagemusha_ordinary_mint_funding_v1"
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_mint_funding_v1']"
-      ;;
-    --self-test-missing-ordinary-mint-funding-rust-symbol)
-      replace_regex_once "${tmp}/ordinary_mint_funding_driver.rs" \
-        '(pub unsafe extern "C" fn\s+)connect_norito_kagemusha_ordinary_mint_funding_v1\b' \
-        '\g<1>removed_connect_norito_kagemusha_ordinary_mint_funding_v1'
-      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_mint_funding_v1']"
-      ;;
-    --self-test-bad-ordinary-mint-funding-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_ordinary_mint_funding_v1\s*\([^;]*?)size_t input_len' \
-        '\g<1>uint32_t input_len'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_mint_funding_v1"
-      ;;
-    --self-test-missing-kagemusha-rust-symbol)
-      replace_once "${tmp_rust}" \
-        "connect_norito_kagemusha_v1_payment_validate" \
-        "removed_kagemusha_v1_payment_validate"
-      ;;
-    --self-test-bad-kagemusha-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_v1_payment_validate\s*\([^;]*?)unsigned long payment_len' \
-        '\g<1>uint32_t payment_len'
-      ;;
-    --self-test-missing-kagemusha-command-binding)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_device_command_response_v1_verify\s*\([^;]*?)const uint8_t\* canonical_command,\s*size_t canonical_command_len,\s*' \
-        '\g<1>'
-      ;;
-    --self-test-bad-kagemusha-error-code)
-      replace_once "${tmp_header}" \
-        "#define CONNECT_NORITO_ERR_KAGEMUSHA_V1 -311" \
-        "#define CONNECT_NORITO_ERR_KAGEMUSHA_V1 -310"
-      ;;
-    --self-test-missing-kagemusha-mint-stage-header-symbol)
-      replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_device_mint_stage_command_v1_validate" \
-        "removed_kagemusha_device_mint_stage_command_v1_validate"
-      ;;
-    --self-test-bad-kagemusha-mint-stage-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_device_mint_stage_result_v1_validate\s*\([^;]*?)unsigned long result_len' \
-        '\g<1>uint32_t result_len'
-      ;;
-    --self-test-missing-finalized-mint-header-symbol)
-      replace_once "${tmp_header}" \
-        'connect_norito_kagemusha_testnet_finalized_mint_observe_v1' \
-        'removed_testnet_finalized_mint_observe_v1'
-      ;;
-    --self-test-missing-finalized-mint-rust-symbol)
-      replace_regex_once "${tmp}/kagemusha_testnet_observation_v1.rs" \
-        '(pub unsafe extern "C" fn )connect_norito_kagemusha_testnet_finalized_mint_observe_v1' \
-        '\g<1>removed_testnet_finalized_mint_observe_v1'
-      ;;
-    --self-test-missing-testnet-value-header-symbol)
-      replace_once "${tmp_header}" \
-        'connect_norito_kagemusha_testnet_value_admit_v1' \
-        'removed_testnet_value_admit_v1'
-      ;;
-    --self-test-missing-testnet-value-rust-symbol)
-      replace_regex_once "${tmp}/kagemusha_testnet_observation_v1.rs" \
-        '(pub unsafe extern "C" fn )connect_norito_kagemusha_testnet_value_admit_v1' \
-        '\g<1>removed_testnet_value_admit_v1'
-      ;;
-    --self-test-missing-testnet-credit-header-symbol)
-      replace_once "${tmp_header}" \
-        'connect_norito_kagemusha_testnet_value_credit_v1' \
-        'removed_testnet_value_credit_v1'
-      ;;
-    --self-test-missing-testnet-credit-rust-symbol)
-      replace_regex_once "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
-        '(pub unsafe extern "C" fn )connect_norito_kagemusha_testnet_value_credit_v1' \
-        '\g<1>removed_testnet_value_credit_v1'
-      ;;
-    --self-test-missing-testnet-startup-contract-header-symbol)
-      replace_once "${tmp_header}" \
-        'connect_norito_kagemusha_testnet_native_startup_contract_v1' \
-        'removed_testnet_native_startup_contract_v1'
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_testnet_native_startup_contract_v1']"
-      ;;
-    --self-test-missing-testnet-startup-contract-rust-symbol)
-      replace_regex_once "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
-        '(pub unsafe extern "C" fn )connect_norito_kagemusha_testnet_native_startup_contract_v1' \
-        '\g<1>removed_testnet_native_startup_contract_v1'
-      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_testnet_native_startup_contract_v1']"
-      ;;
-    --self-test-missing-testnet-startup-activate-header-symbol)
-      replace_once "${tmp_header}" \
-        'connect_norito_kagemusha_testnet_native_startup_activate_v1' \
-        'removed_testnet_native_startup_activate_v1'
-      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_testnet_native_startup_activate_v1']"
-      ;;
-    --self-test-missing-testnet-startup-activate-rust-symbol)
-      replace_regex_once "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
-        '(pub unsafe extern "C" fn )connect_norito_kagemusha_testnet_native_startup_activate_v1' \
-        '\g<1>removed_testnet_native_startup_activate_v1'
-      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_testnet_native_startup_activate_v1']"
-      ;;
-    --self-test-bad-testnet-startup-contract-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_testnet_native_startup_contract_v1\s*\(\s*)uint32_t\* output' \
-        '\g<1>uint64_t* output'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_testnet_native_startup_contract_v1"
-      ;;
-    --self-test-bad-testnet-startup-activate-signature)
-      replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_testnet_native_startup_activate_v1\s*\([^;]*?)size_t signed_bootstrap_length' \
-        '\g<1>uint32_t signed_bootstrap_length'
-      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_testnet_native_startup_activate_v1"
       ;;
     --self-test-missing-privacy-header-symbol)
       replace_once "${tmp_header}" \
@@ -1243,16 +881,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "${tmp_rust}" "${tmp_header}" "${tmp_umbrella}" \
         "${tmp}/privacy.rs" "${tmp}/parliament_timed_ovn_ffi.rs" \
         "${tmp}/retail_fee_model.rs" "${tmp}/private_settlement_ffi.rs" \
-        "${tmp}/kagemusha_reserve_finality_v1.rs" \
-        "${tmp}/kagemusha_testnet_observation_v1.rs" \
-        "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
-        "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
-        "${tmp}/ordinary_native_startup.rs" \
-        "${tmp}/ordinary_current_control.rs" \
-        "${tmp}/ordinary_outgoing_driver.rs" \
-        "${tmp}/ordinary_incoming_driver.rs" \
-        "${tmp}/ordinary_integrity_refresh.rs" \
-        "${tmp}/ordinary_mint_funding_driver.rs"
+        "${tmp}/platform_jni.rs"
       echo "[connect-norito-header] positive control preserved canonical umbrella: ${MODE}"
       exit 0
       ;;
@@ -1284,14 +913,5 @@ run_contract_check \
   "${PARLIAMENT_RUST}" \
   "${RETAIL_MODEL}" \
   "${PRIVATE_SETTLEMENT_RUST}" \
-  "${RESERVE_FINALITY_RUST}" \
-  "${TESTNET_OBSERVATION_RUST}" \
-  "${TESTNET_VALUE_LEDGER_RUST}" \
-  "${TESTNET_STARTUP_RUST}" \
-  "${ORDINARY_STARTUP_RUST}" \
-  "${ORDINARY_CURRENT_RUST}" \
-  "${ORDINARY_OUTGOING_RUST}" \
-  "${ORDINARY_INCOMING_RUST}" \
-  "${ORDINARY_INTEGRITY_RUST}" \
-  "${ORDINARY_MINT_FUNDING_RUST}"
+  "${PLATFORM_JNI_RUST}"
 compile_header
