@@ -107,7 +107,10 @@ fn validate_runtime_entries_for_owner(
     Ok(())
 }
 
-fn start_was_prepared(admitted: &HostAdmission, validator: &ValidatorV1) -> Result<bool> {
+pub(super) fn start_was_prepared(
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+) -> Result<bool> {
     let path = start_intent_path(admitted)?;
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -356,5 +359,212 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    fn native_runtime_quarantine_fixture(state: &Path) -> u32 {
+        let owner = state.metadata().unwrap().uid();
+        for name in RUNTIME_ENTRIES {
+            let path = state.join(name);
+            if name == "sumeragi-installation.log" {
+                fs::write(&path, b"retained native installation history").unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            } else {
+                fs::create_dir(&path).unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        owner
+    }
+
+    fn verify_native_runtime_quarantine_fixture(state: &Path, owner: u32) -> Result<()> {
+        let mut entries = fs::read_dir(state)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<BTreeSet<_>>>()?;
+        validate_runtime_entries_for_owner(state, &mut entries, owner)?;
+        if !entries.is_empty() {
+            return Err(eyre!("unit fixture retains an unknown quarantine entry"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn post_start_rollback_preserves_native_history_without_rearming() {
+        let fixture = tempfile::tempdir().unwrap();
+        let state = fixture.path().join("state");
+        fs::create_dir(&state).unwrap();
+        let owner = native_runtime_quarantine_fixture(&state);
+        let intent = fixture.path().join("original-start.intent.json");
+        fs::write(&intent, b"unit-only original prepared Start slot").unwrap();
+        // The former rollback path reaches this one-use guard after Reset's
+        // namespace check; neither a prepared intent nor history can rearm.
+        assert!(require_armable_state(&state, &intent).is_err());
+        assert!(super::super::require_reconcilable_fresh_state_entries(&state).is_err());
+        let log = state.join("sumeragi-installation.log");
+        let original_inode = log.metadata().unwrap().ino();
+        let original_bytes = fs::read(&log).unwrap();
+        let events = std::cell::RefCell::new(Vec::new());
+        super::super::reconcile_fresh_state_for_quarantine_with(
+            true,
+            || {
+                events.borrow_mut().push("structure");
+                require_armable_state(&state, &intent)?;
+                fs::write(state.join(TOKEN), b"")?;
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("verify");
+                verify_native_runtime_quarantine_fixture(&state, owner)
+            },
+        )
+        .unwrap();
+        assert_eq!(*events.borrow(), vec!["verify"]);
+        assert!(!state.join(TOKEN).exists());
+        assert!(!state.join(TOKEN_STAGING).exists());
+        assert_eq!(log.metadata().unwrap().ino(), original_inode);
+        assert_eq!(fs::read(log).unwrap(), original_bytes);
+        assert_eq!(
+            fs::read(intent).unwrap(),
+            b"unit-only original prepared Start slot"
+        );
+    }
+
+    #[test]
+    fn pre_start_rollback_recovers_structure_without_publishing_a_key() {
+        let fixture = tempfile::tempdir().unwrap();
+        let state = fixture.path();
+        let marker = state.join("..public-reset-generated-v1.json.next");
+        fs::write(&marker, b"unit-only partial marker").unwrap();
+        let marker_inode = marker.metadata().unwrap().ino();
+        let events = std::cell::RefCell::new(Vec::new());
+        super::super::reconcile_fresh_state_for_quarantine_with(
+            false,
+            || {
+                events.borrow_mut().push("structure");
+                super::super::require_reconcilable_fresh_state_entries(state)?;
+                fs::rename(&marker, state.join(".public-reset-generated-v1.json"))?;
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("verify");
+                if !state.join(".public-reset-generated-v1.json").is_file()
+                    || state.join(TOKEN).exists()
+                    || state.join(TOKEN_STAGING).exists()
+                {
+                    return Err(eyre!(
+                        "unit fixture did not retain the structural successor"
+                    ));
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(*events.borrow(), vec!["structure", "verify"]);
+        assert_eq!(
+            state
+                .join(".public-reset-generated-v1.json")
+                .metadata()
+                .unwrap()
+                .ino(),
+            marker_inode
+        );
+        assert_eq!(
+            fs::read(state.join(".public-reset-generated-v1.json")).unwrap(),
+            b"unit-only partial marker"
+        );
+        assert!(!state.join(TOKEN).exists());
+    }
+
+    #[test]
+    fn post_start_rollback_rejects_unknown_and_unsafe_runtime_entries_without_repair() {
+        for fault in ["unknown", "mode", "symlink", "hardlink", "owner"] {
+            let fixture = tempfile::tempdir().unwrap();
+            let state = fixture.path().join("state");
+            fs::create_dir(&state).unwrap();
+            let owner = native_runtime_quarantine_fixture(&state);
+            let log = state.join("sumeragi-installation.log");
+            let sentinel = fixture.path().join("retained-original");
+            fs::write(&sentinel, b"retained original").unwrap();
+            match fault {
+                "unknown" => fs::write(state.join("foreign"), b"preserve me").unwrap(),
+                "mode" => fs::set_permissions(&log, fs::Permissions::from_mode(0o666)).unwrap(),
+                "symlink" => {
+                    fs::remove_file(&log).unwrap();
+                    symlink(&sentinel, &log).unwrap();
+                }
+                "hardlink" => fs::hard_link(&log, fixture.path().join("second-link")).unwrap(),
+                "owner" => {}
+                _ => unreachable!(),
+            }
+            let selected_owner = if fault == "owner" {
+                owner.wrapping_add(1)
+            } else {
+                owner
+            };
+            let before_inode = fs::symlink_metadata(&log).unwrap().ino();
+            let before_bytes = fs::read(&log).unwrap();
+            assert!(
+                super::super::reconcile_fresh_state_for_quarantine_with(
+                    true,
+                    || panic!(
+                        "invalid post-Start state must never fall back to Reset reconciliation"
+                    ),
+                    || verify_native_runtime_quarantine_fixture(&state, selected_owner),
+                )
+                .is_err()
+            );
+            assert_eq!(fs::symlink_metadata(&log).unwrap().ino(), before_inode);
+            assert_eq!(fs::read(&log).unwrap(), before_bytes);
+            assert_eq!(fs::read(&sentinel).unwrap(), b"retained original");
+            if fault == "unknown" {
+                assert_eq!(fs::read(state.join("foreign")).unwrap(), b"preserve me");
+            }
+            assert!(!state.join(TOKEN).exists());
+        }
+    }
+
+    #[test]
+    fn quarantine_marker_or_structural_failure_cannot_fall_back_or_arm() {
+        let fixture = tempfile::tempdir().unwrap();
+        let state = fixture.path();
+        let original = state.join("original-marker");
+        fs::write(&original, b"preserve rejected original marker").unwrap();
+        let inode = original.metadata().unwrap().ino();
+        let error = super::super::reconcile_fresh_state_for_quarantine_with(
+            true,
+            || panic!("a post-Start marker failure must not invoke structural repair"),
+            || {
+                Err(eyre!(
+                    "unit boundary: original authorization marker rejected"
+                ))
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("original authorization marker rejected")
+        );
+        let error = super::super::reconcile_fresh_state_for_quarantine_with(
+            false,
+            || {
+                Err(eyre!(
+                    "unit boundary: interrupted structural publication failed"
+                ))
+            },
+            || panic!("a failed structural publication must not admit quarantine"),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("interrupted structural publication failed")
+        );
+        assert_eq!(original.metadata().unwrap().ino(), inode);
+        assert_eq!(
+            fs::read(original).unwrap(),
+            b"preserve rejected original marker"
+        );
+        assert!(!state.join(TOKEN).exists());
+        assert!(!state.join(TOKEN_STAGING).exists());
     }
 }

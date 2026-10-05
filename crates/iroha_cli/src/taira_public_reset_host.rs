@@ -7406,6 +7406,11 @@ fn require_state_identity(state: &Path, intent: &StateMoveIntentV1) -> Result<()
 }
 
 fn reconcile_fresh_state(state: &Path, admitted: &HostAdmission) -> Result<()> {
+    reconcile_fresh_state_structure(state, admitted)?;
+    first_boot::arm_fresh_state(state, admitted)
+}
+
+fn reconcile_fresh_state_structure(state: &Path, admitted: &HostAdmission) -> Result<()> {
     if !state.exists() {
         ensure_root_directory_with_mode(state, 0o700)?;
     }
@@ -7416,7 +7421,33 @@ fn reconcile_fresh_state(state: &Path, admitted: &HostAdmission) -> Result<()> {
         let path = state.join(name);
         ensure_generated_directory(&path, admitted, "fresh_state_entry", 0o700)?;
     }
-    first_boot::arm_fresh_state(state, admitted)
+    Ok(())
+}
+
+fn reconcile_fresh_state_for_quarantine(
+    state: &Path,
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+) -> Result<()> {
+    let start_prepared = first_boot::start_was_prepared(admitted, validator)?;
+    reconcile_fresh_state_for_quarantine_with(
+        start_prepared,
+        || reconcile_fresh_state_structure(state, admitted),
+        || verify_populated_fresh_state_for_quarantine(state, admitted),
+    )
+}
+
+/// Rollback cannot arm or rearm a key. A prepared Start already required the
+/// complete Reset closure; only its existing populated state may be admitted.
+fn reconcile_fresh_state_for_quarantine_with(
+    start_prepared: bool,
+    reconcile_structure: impl FnOnce() -> Result<()>,
+    verify_populated: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if !start_prepared {
+        reconcile_structure()?;
+    }
+    verify_populated()
 }
 
 fn require_reconcilable_fresh_state_entries(state: &Path) -> Result<()> {
@@ -9263,13 +9294,12 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
                 require_state_identity(&previous, &intent)?;
                 let state = Path::new(&validator.state_root);
                 if state.exists() {
-                    // A crash may leave the exact post-move fresh-state
-                    // closure before its final marker publication. The
-                    // retained prior inode proves this path is the reset
-                    // destination; reconcile only the closed generated
-                    // layout before quarantining it.
-                    reconcile_fresh_state(state, admitted)?;
-                    verify_populated_fresh_state_for_quarantine(state, admitted)?;
+                    // Before Start, an interrupted Reset may still need its
+                    // exact structural publication recovered. After a prepared
+                    // Start, native runtime history is legitimate and key arming
+                    // is forbidden. Validate that complete populated closure;
+                    // never run the pre-Start key publisher during rollback.
+                    reconcile_fresh_state_for_quarantine(state, admitted, validator)?;
                     if fresh_trash.exists() {
                         verify_generated_marker(&fresh_trash, admitted, "fresh_state")?;
                         return Err(eyre!(
