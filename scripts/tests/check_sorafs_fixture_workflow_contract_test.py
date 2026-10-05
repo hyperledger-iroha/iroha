@@ -961,6 +961,16 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
     assert "tests/sorafs_reference_validation_test.py" in runner
     assert "tests/sorafs_replication_instruction_test.py" in runner
     assert "../iroha_torii_client/tests/orderbook_submission_test.py" in runner
+    for suite in ("account_identity_native_v1_test.py", "requests_deadline_test.py",
+                  "staking_preparation_test.py", "validator_staking_test.py"):
+        assert f"tests/{suite}" in runner
+    assert runner.index('SOURCE_BEFORE_PIN=') < runner.index('-m maturin build')
+    assert runner.index('SOURCE_BEFORE_ARTIFACT=') < runner.index('-m maturin build')
+    assert 'IROHA_PYTHON_SKIP_RUNTIME_LINK=1' in runner
+    assert 'SOURCE_RECEIPT_SEAL=' in runner
+    assert 'env -u IROHA_PYTHON_TEST_INSTALLED_PACKAGE' in runner
+    assert 'PYTHONPYCACHEPREFIX="${SDK_SESSION}/source-bytecode"' in runner
+    assert runner.count('verify_source_delivery') >= 4
     assert '--junitxml "${JUNIT_REPORT}"' in runner
     assert 'skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)' in runner
     assert "SoraFS native Python SDK parity may not contain skipped tests" in runner
@@ -1012,6 +1022,10 @@ def test_python_native_lane_requires_installed_packages_in_pytest_child(
             "tests/sorafs_reference_validation_test.py",
             "tests/sorafs_replication_instruction_test.py",
             "../iroha_torii_client/tests/orderbook_submission_test.py",
+            "tests/account_identity_native_v1_test.py",
+            "tests/requests_deadline_test.py",
+            "tests/staking_preparation_test.py",
+            "tests/validator_staking_test.py",
         ]
 
 

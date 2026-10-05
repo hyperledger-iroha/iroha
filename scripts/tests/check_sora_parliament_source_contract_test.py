@@ -1880,3 +1880,69 @@ def test_beacon_finalization_uses_complete_original_frozen_roster(old: str, new:
     assert source.count(old) == 1
     with pytest.raises(RuntimeError, match=re.escape(path)):
         guard.require_beacon_finalization_roster(source.replace(old, new, 1))
+
+@pytest.mark.parametrize("original,replacement", (
+    ("epoch: **epoch,", "epoch: EpochConfig::default(),"),
+    ("params: *params,", "params: ChainParams::default(),"),
+    ("committee_digest: committee_digest(committee),", "committee_digest: Hash::new([]),"),
+    ("instance: source.instance(),", "instance: [0; 32],"),
+    ("height: source.height(),", "height: 1,"),
+    ("block_hash: source.block_hash(),", "block_hash: [0; 32],"),
+    ("writer.write_all(iroha_sumeragi::preimage::TAG_COMMITTEE)?;", ""),
+    ("&u32::try_from(committee.n())", "&u32::try_from(1_usize)"),
+    ("for key in committee.members() {", "for key in committee.members().take(1) {"),
+    ("&u16::try_from(bytes.len())", "&u16::try_from(1_usize)"),
+    ("writer.write_all(bytes)?;", "writer.write_all(&[])?;"),
+))
+def test_completed_replay_compact_source_rejects_every_identity_substitution(
+    original: str, replacement: str,
+) -> None:
+    """Graph retirement cannot omit configuration or any canonical committee byte."""
+    source = guard.read("crates/iroha_core/src/sumeragi/executor/replay.rs")
+    guard.require_completed_replay_source(source)
+    assert source.count(original) == 1
+    with pytest.raises(RuntimeError, match="complete"):
+        guard.require_completed_replay_source(source.replace(original, replacement, 1))
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("if let PublicationError::RecoveryRequired(reason) = &error {", "if let reason = &error {"),
+    ("            return Err(error);", "            return Err(PublicationError::Retryable(error.to_string()));"),
+    ("source: ReplaySource::capture(&live.source),", "source: ReplaySource::capture(block.source()),"),
+))
+def test_replay_retirement_preserves_typed_original_refusal_and_published_source(
+    original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retirement pressure stays typed; only its actual published owner supplies the receipt."""
+    path = "crates/iroha_core/src/sumeragi/executor/replay.rs"
+    state = guard.read(STATE_PATH)
+    guard.require_parliament_commit_publication(state)
+    source = guard.read(path)
+    assert source.count(original) == 1
+    changed = source.replace(original, replacement, 1)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda target:
+                        changed if target == path else original_read(target))
+    with pytest.raises(RuntimeError, match=path):
+        guard.require_parliament_commit_publication(state)
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("_da_rewind_releases: da_rewind_releases,", "_da_rewind_releases: replacement_releases,"),
+    ("_read_releases: StateViewReleases::new(self),", "_read_releases: StateViewReleases::new(other),"),
+))
+def test_start_construction_keeps_original_da_and_state_reader_release_owners(
+    original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outlined construction retains both original release owners before the armed handoff."""
+    path = CONSTRUCTION_PATH
+    state = guard.read(STATE_PATH)
+    guard.require_block_start_construction(state)
+    source = guard.read(path)
+    assert source.count(original) == 1
+    changed = source.replace(original, replacement, 1)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda target:
+                        changed if target == path else original_read(target))
+    with pytest.raises(RuntimeError, match="original writers"):
+        guard.require_block_start_construction(state)

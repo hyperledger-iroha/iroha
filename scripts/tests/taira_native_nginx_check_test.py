@@ -95,6 +95,7 @@ if (root / "reject").exists(): sys.exit(7)
 if (root / "replace-main").exists(): (root / "nginx.conf").write_text("http {}\\n")
 if (root / "mutate-candidate").exists(): candidate.write_text(candidate.read_text() + "# changed\\n")
 if (root / "mutate-validation-main").exists(): config.write_text(body + "# changed\\n")
+if (root / "mutate-lock-mode").exists(): (root / ".taira-native-nginx-check.lock").chmod(0o666)
 (root / "native-completed").touch()
 ''')
         native.chmod(0o700)
@@ -237,3 +238,66 @@ def test_closed_plan_preserves_large_native_identities_as_exact_decimal_text(nat
         changed["native"]["main"]["identity"]["ctime_ns"] = value
         with pytest.raises(MODULE.CheckError):
             MODULE.validate_plan(changed)
+
+
+def test_retained_lock_refuses_same_inode_permission_drift(native_request):
+    request, directory, _ = native_request
+    (directory / "mutate-lock-mode").touch()
+    result = MODULE.remote_check(request)
+    assert result["exit_code"] == 1 and result["error_code"] == "check_lock_identity_changed"
+    assert result["validation_files_removed"] is True
+    assert stat.S_IMODE((directory / ".taira-native-nginx-check.lock").stat().st_mode) == 0o666
+    assert not list(directory.glob(".taira-nginx-check-*"))
+
+
+def test_declared_public_reader_is_bounded_and_refuses_links_and_unsafe_ancestors(native_request):
+    _, directory, _ = native_request
+    public = directory / "declared-public.conf"
+    body = b"upstream public { server 127.0.0.1:18480; }\n"
+    public.write_bytes(body)
+    public.chmod(0o600)
+    digest = hashlib.sha256(body).hexdigest()
+    assert MODULE.read_declared_public_file(str(public), digest, limit=len(body)) == body
+    with pytest.raises(MODULE.CheckError, match="unsafe_public_input"):
+        MODULE.read_declared_public_file(str(public), digest, limit=len(body)-1)
+    with pytest.raises(MODULE.CheckError, match="public_input_digest_changed"):
+        MODULE.read_declared_public_file(str(public), "0" * 64)
+    linked = directory / "linked-public.conf"
+    os.link(public, linked)
+    with pytest.raises(MODULE.CheckError, match="unsafe_public_input"):
+        MODULE.read_declared_public_file(str(public), digest)
+    linked.unlink()
+    linked.symlink_to(public)
+    with pytest.raises(OSError):
+        MODULE.read_declared_public_file(str(linked), digest)
+    linked.unlink()
+    unsafe = directory / "unsafe"
+    unsafe.mkdir(mode=0o777)
+    unsafe.chmod(0o777)
+    nested = unsafe / "public.conf"
+    nested.write_bytes(body)
+    with pytest.raises(MODULE.CheckError, match="unsafe_public_ancestor"):
+        MODULE.read_declared_public_file(str(nested), digest)
+
+
+@pytest.mark.parametrize("substitute", [False, True])
+def test_declared_public_reader_refuses_inode_or_in_place_drift(native_request, monkeypatch, substitute):
+    _, directory, _ = native_request
+    public = directory / "declared-public.conf"
+    body = b"public input\n"
+    public.write_bytes(body)
+    public.chmod(0o600)
+    native_pread = os.pread
+    def changing_read(fd, count, offset):
+        result = native_pread(fd, count, offset)
+        if substitute:
+            foreign = directory / "foreign.conf"
+            foreign.write_bytes(body)
+            foreign.chmod(0o600)
+            os.replace(foreign, public)
+        else:
+            public.chmod(0o644)
+        return result
+    monkeypatch.setattr(MODULE.os, "pread", changing_read)
+    with pytest.raises(MODULE.CheckError, match="public_input_changed"):
+        MODULE.read_declared_public_file(str(public), hashlib.sha256(body).hexdigest())

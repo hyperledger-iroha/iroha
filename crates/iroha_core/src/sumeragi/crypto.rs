@@ -181,7 +181,7 @@ impl BlsCrypto {
     }
 
     fn matches_admission(key: &BlsNormalPopVerifiedKey, pop: &[u8]) -> bool {
-        key.proof_of_possession_matches(pop) || cfg!(all(test, sumeragi_core_mutation = "HC119"))
+        key.proof_of_possession_matches(pop) || cfg!(all(test, sumeragi_core_mutation = "HC126"))
     }
 
     /// Whether `key` was admitted.

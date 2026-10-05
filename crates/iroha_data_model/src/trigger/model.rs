@@ -911,16 +911,20 @@ pub mod action {
             out: &mut dyn json::JsonWriteSink,
         ) -> Result<(), json::BoundedJsonError> {
             out.begin_container()?;
-            out.push('{')?;
-            match self {
-                Repeats::Indefinitely => out.push_str("\"Indefinitely\":null")?,
-                Repeats::Exactly(count) => {
-                    out.push_str("\"Exactly\":")?;
-                    json::JsonSerialize::json_serialize_to(count, out)?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push('{')?;
+                match self {
+                    Repeats::Indefinitely => out.push_str("\"Indefinitely\":null")?,
+                    Repeats::Exactly(count) => {
+                        out.push_str("\"Exactly\":")?;
+                        json::JsonSerialize::json_serialize_to(count, out)?;
+                    }
                 }
-            }
-            out.push('}')?;
+                out.push('}')?;
+                Ok(())
+            })();
             out.end_container();
+            result?;
             Ok(())
         }
     }

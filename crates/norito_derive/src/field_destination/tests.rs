@@ -46,8 +46,8 @@ fn generated_owned_record_calls_one_destination_walk_with_exact_positional_types
 fn destination_walk_rejects_unimplemented_whole_value_or_shape_contracts() {
     let cases: [(DeriveInput, &str); 5] = [
         (
-            syn::parse_quote! { #[norito(decode_fields)] struct Tuple(u8); },
-            "closed named record",
+            syn::parse_quote! { #[norito(decode_fields)] struct Unit; },
+            "closed positional record",
         ),
         (
             syn::parse_quote! { #[norito(decode_fields)] struct Generic<T>{value:T} },
@@ -94,4 +94,24 @@ fn destination_flag_rejects_duplicate_and_valued_spellings() {
             expected
         );
     }
+}
+
+#[test]
+fn generated_tuple_uses_sole_positional_walk_and_original_archived_slice_contract() {
+    let output = expansion(
+        syn::parse_quote! { #[norito(decode_fields,decode_from_slice)] struct Tuple(u32,[u8;4],u64); },
+    );
+    let file: syn::File = syn::parse2(output.clone()).expect("complete tuple implementations");
+    assert_eq!(file.items.len(), 3);
+    let text = output.to_string();
+    assert_eq!(text.matches("fn decode_fields").count(), 1);
+    assert_eq!(text.matches("framed_field :: <").count(), 2);
+    assert_eq!(text.matches("framed_byte_array_field").count(), 1);
+    assert!(text.contains("DecodeField < 0usize , u32 >"));
+    assert!(text.contains("DecodeField < 1usize , [u8 ; 4] >"));
+    assert!(text.contains("DecodeField < 2usize , u64 >"));
+    assert!(text.contains("Self (__field_0 , __field_1 , __field_2 ,)"));
+    assert!(text.contains("Ok ((value , __logical_len))"));
+    assert!(!text.contains("decode_context_field_canonical"));
+    assert!(!text.contains("decode_prepared_slice_prefix"));
 }

@@ -143,6 +143,15 @@ impl<D: SharedDomain> ByteSequence<SharedBytes<D>> {
             }
         }
     }
+    /// Borrow the original immutable charged input for a prepared canonical child decoder.
+    /// No mutable backing, replacement owner or uncharged byte allocation escapes.
+    /// Returns `None` for untrusted storage or another original operation pool.
+    pub fn charged_source(&self, budget: &AllocationBudget) -> Option<&ChargedBuffer<u8>> {
+        match &self.storage.owner {
+            Owner::Admitted(bytes) if bytes.belongs_to(budget) => Some(bytes),
+            _ => None,
+        }
+    }
     /// Whether both original backing and shared control belong to this exact pool.
     pub fn admitted_to(&self, budget: &AllocationBudget) -> bool {
         match &self.storage.owner {
@@ -187,5 +196,31 @@ impl<D: SharedDomain> ByteStorage for SharedBytes<D> {
                 .map_or_else(|| source.as_slice(), |bytes| bytes.as_slice()),
             Owner::Admitted(bytes) => bytes.as_slice(),
         }
+    }
+}
+
+#[cfg(test)]
+mod original_source_tests {
+    use super::*;
+    use crate::message::ResultWitness;
+    #[test]
+    fn charged_source_accessor_preserves_original_backing_and_rejects_foreign_or_untrusted() {
+        let pool = AllocationBudget::new(4096);
+        let foreign = AllocationBudget::new(4096);
+        let mut value = ResultWitness::from_untrusted(vec![7; 64]).unwrap();
+        assert!(value.charged_source(&pool).is_none());
+        value.admit(&pool).unwrap();
+        let source = value.charged_source(&pool).unwrap();
+        let pointer = source.as_slice().as_ptr();
+        assert!(source.belongs_to(&pool));
+        assert!(value.charged_source(&foreign).is_none());
+        let retained = value.clone();
+        drop(value);
+        assert_eq!(
+            retained.charged_source(&pool).unwrap().as_slice().as_ptr(),
+            pointer
+        );
+        drop(retained);
+        assert_eq!(pool.reserved_bytes(), 0);
     }
 }

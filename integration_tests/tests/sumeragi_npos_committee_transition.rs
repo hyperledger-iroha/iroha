@@ -973,7 +973,7 @@ fn finality_chain_from_proofs(
     )
     .map_err(|error| eyre!(error))?;
     let blocks = with_verified_native_journal(
-        &journal,
+        (&journal).into(),
         chain_id,
         &network_id,
         limits,

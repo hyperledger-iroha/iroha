@@ -1,8 +1,7 @@
 //! Caller-owned BN254 destinations with charged native staging and qualification.
 
 use super::policy::{Kernel, public_workload_task_id};
-use iroha_accel::{HostOutput, PtxArtifact, cuda::CudaFailure};
-use std::ffi::CStr;
+use iroha_accel::{HostOutput, cuda::CudaFailure};
 
 #[path = "bn254_launch.rs"]
 mod launch;
@@ -10,14 +9,13 @@ mod launch;
 #[path = "bn254_cost.rs"]
 mod cost;
 
-static ARTIFACT: PtxArtifact = PtxArtifact::new(
-    match CStr::from_bytes_with_nul(
-        concat!(include_str!(concat!(env!("OUT_DIR"), "/bn254.ptx")), "\0").as_bytes(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => panic!("embedded BN254 PTX must have exactly one terminal NUL"),
-    },
-);
+fn kernel(operation: crate::bn254_vec::BatchOperation) -> Kernel {
+    match operation {
+        crate::bn254_vec::BatchOperation::Add => Kernel::BnAdd,
+        crate::bn254_vec::BatchOperation::Sub => Kernel::BnSub,
+        crate::bn254_vec::BatchOperation::Mul => Kernel::BnMul,
+    }
+}
 
 fn failure_quarantines(error: CudaFailure) -> bool {
     match error {
@@ -34,10 +32,11 @@ fn stage(
     left: &[[u64; 4]],
     right: &[[u64; 4]],
 ) -> Result<HostOutput<[u64; 4]>, CudaFailure> {
-    let result = crate::cuda_dispatch::with_selected(kernel, ARTIFACT, |device| {
+    let artifact = crate::cuda_artifact::artifact(kernel)?;
+    let result = crate::cuda_dispatch::with_selected(kernel, artifact, |device| {
         // SAFETY: this adapter fixes the embedded qualified artifact and the
         // launch module fixes its exact typed BN254 symbols and geometry.
-        unsafe { launch::output(device, ARTIFACT, kernel, left, right) }
+        unsafe { launch::output(device, artifact, kernel, left, right) }
     });
     match result {
         Ok(output) => {
@@ -109,7 +108,10 @@ fn golden_output(
 
 /// Qualify the exact device/kernel/artifact with actual native arithmetic only.
 pub(super) fn admit(kernel: Kernel) -> bool {
-    crate::cuda_dispatch::admit_kernel(kernel, ARTIFACT, || {
+    let Ok(artifact) = crate::cuda_artifact::artifact(kernel) else {
+        return false;
+    };
+    crate::cuda_dispatch::admit_kernel(kernel, artifact, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
             return Err(CudaFailure::Busy);
         };
@@ -138,14 +140,15 @@ fn complete_current(
     destination: &mut [[u64; 4]],
     still_selected: impl FnOnce() -> bool,
 ) -> Result<(), CudaFailure> {
+    let artifact = crate::cuda_artifact::artifact(kernel)?;
     if !super::imp::cuda_policy_allows_attempt()
-        || !crate::cuda_dispatch::current_is_admitted(kernel, ARTIFACT)
+        || !crate::cuda_dispatch::current_is_admitted(kernel, artifact)
     {
         return Err(CudaFailure::Unavailable);
     }
     let output = stage(kernel, left, right)?;
     if !super::imp::cuda_policy_allows_attempt()
-        || !crate::cuda_dispatch::current_is_admitted(kernel, ARTIFACT)
+        || !crate::cuda_dispatch::current_is_admitted(kernel, artifact)
         || !still_selected()
     {
         return Err(CudaFailure::Unavailable);
@@ -154,7 +157,7 @@ fn complete_current(
         crate::cuda_dispatch::quarantine_current_kernel();
         return Err(CudaFailure::Quarantined);
     }
-    super::imp::record_completed_cuda_dispatch(kernel, ARTIFACT);
+    super::imp::record_completed_cuda_dispatch(kernel, artifact);
     Ok(())
 }
 
@@ -169,10 +172,13 @@ pub(crate) fn bn254_batch_auto_into(
     {
         return false;
     }
-    let kernel = crate::cuda_dispatch::bn254::kernel(operation);
-    let Some(selected) = crate::cuda_dispatch::bn254::select(
-        operation,
-        ARTIFACT,
+    let kernel = kernel(operation);
+    let Ok(artifact) = crate::cuda_artifact::artifact(kernel) else {
+        return false;
+    };
+    let Some(selected) = crate::cuda_dispatch::measured::select(
+        kernel,
+        artifact,
         left.len(),
         cpu,
         || super::imp::ensure_cuda_kernel(kernel),
@@ -262,6 +268,13 @@ pub fn bn254_mul_cuda(left: [u64; 4], right: [u64; 4]) -> Option<[u64; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn batch_operation_maps_to_its_exact_measured_kernel() {
+        use crate::bn254_vec::BatchOperation;
+        assert_eq!(kernel(BatchOperation::Add), Kernel::BnAdd);
+        assert_eq!(kernel(BatchOperation::Sub), Kernel::BnSub);
+        assert_eq!(kernel(BatchOperation::Mul), Kernel::BnMul);
+    }
 
     #[test]
     fn backend_failure_quarantines_but_local_pressure_only_refuses() {

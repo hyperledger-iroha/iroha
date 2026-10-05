@@ -196,15 +196,19 @@ impl norito::json::FastJsonWrite for ConfidentialSpentnessPathV1 {
         output: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         output.begin_container()?;
-        output.push('[')?;
-        for (index, sibling) in self.0.iter().enumerate() {
-            if index != 0 {
-                output.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push('[')?;
+            for (index, sibling) in self.0.iter().enumerate() {
+                if index != 0 {
+                    output.push(',')?;
+                }
+                norito::json::FastJsonWrite::write_json_to(sibling, output)?;
             }
-            norito::json::FastJsonWrite::write_json_to(sibling, output)?;
-        }
-        output.push(']')?;
+            output.push(']')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }

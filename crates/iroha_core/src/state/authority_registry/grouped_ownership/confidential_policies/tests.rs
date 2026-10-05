@@ -57,7 +57,7 @@ fn fixture() -> Box<World> {
 fn validate(world: &World, max_work: u64) -> Result<(), GroupedOwnershipError> {
     let definitions = world.asset_definitions.try_committed_view_nonblocking()?;
     let policies = RetainedConfidentialPolicies::retain(world)?;
-    let outcome = policies.validate(&definitions, &mut Work(max_work));
+    let outcome = policies.validate(&definitions, &mut AssetDefinitionWork::bounded(max_work));
     // Mirror the enclosing checked capture: identity changes take precedence
     // even when validation found malformed data or exhausted its local work.
     let sources_current = definitions.try_matches_current(&world.asset_definitions)?;
@@ -109,7 +109,7 @@ fn consumed_moved_and_redundant_transitions_keep_both_original_images() {
     world
         .rebuild_confidential_policy_transition_index()
         .unwrap();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, 16_777_216), Ok(()));
     let rows = world
         .asset_definitions
         .try_committed_view_nonblocking()
@@ -130,7 +130,7 @@ fn consumed_moved_and_redundant_transitions_keep_both_original_images() {
     assert!(policies.matches_current().unwrap());
     drop((rows, policies));
     world.block_and_revert().commit();
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, 16_777_216), Ok(()));
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn both_legal_directions_and_absent_transitions_need_no_zk_asset_row() {
         .rebuild_confidential_policy_transition_index()
         .unwrap();
     assert!(world.zk_assets.view().iter().next().is_none());
-    assert_eq!(check(&world, 1024), Ok(()));
+    assert_eq!(check(&world, 16_777_216), Ok(()));
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn invalid_pending_shape_rejects_before_index_inspection_in_either_image() {
                 block.commit();
             }
             assert_eq!(
-                check(&world, 1024),
+                check(&world, 16_777_216),
                 Err(GroupedOwnershipError::Source {
                     table: "world.asset_definitions",
                     image: image(previous),
@@ -216,7 +216,7 @@ fn missing_wrong_extra_and_foreign_transition_rows_reject_in_either_image() {
                 block.commit();
             }
             assert_eq!(
-                check(&world, 1024),
+                check(&world, 16_777_216),
                 Err(corrupt(
                     TRANSITIONS,
                     previous,
@@ -261,7 +261,7 @@ fn missing_zero_under_over_and_foreign_counts_reject_in_either_image() {
                 block.commit();
             }
             assert_eq!(
-                check(&world, 1024),
+                check(&world, 16_777_216),
                 Err(corrupt(
                     COUNTS,
                     previous,
@@ -279,7 +279,8 @@ fn missing_zero_under_over_and_foreign_counts_reject_in_either_image() {
 #[test]
 fn physical_masked_rows_and_tombstones_consume_work_before_filtering() {
     let world = fixture();
-    let required = (1..100).find(|work| check(&world, *work).is_ok()).unwrap();
+    let required = super::super::asset_definitions::test_support::world_policy_work(&world);
+    assert_eq!(required, 1710);
     assert_eq!(
         check(&world, required - 1),
         Err(GroupedOwnershipError::WorkLimit)
@@ -293,30 +294,42 @@ fn physical_masked_rows_and_tombstones_consume_work_before_filtering() {
     // The predecessor definition pass and per-height source count each see
     // both the masked old row and its redundant/tombstone undo rows.
     assert_eq!(
-        check(&world, required + 3),
+        super::super::asset_definitions::test_support::world_policy_work(&world),
+        required + 808
+    );
+    assert_eq!(
+        check(&world, required + 808 - 1),
         Err(GroupedOwnershipError::WorkLimit)
     );
-    assert_eq!(check(&world, required + 4), Ok(()));
+    assert_eq!(check(&world, required + 808), Ok(()));
     {
         let mut block = world.confidential_policy_transition_index.block();
         block.remove((99, id(99)));
         block.commit();
     }
     assert_eq!(
-        check(&world, required + 4),
+        super::super::asset_definitions::test_support::world_policy_work(&world),
+        required + 808 + 300
+    );
+    assert_eq!(
+        check(&world, required + 808),
         Err(GroupedOwnershipError::WorkLimit)
     );
-    assert_eq!(check(&world, required + 5), Ok(()));
+    assert_eq!(check(&world, required + 808 + 300), Ok(()));
     {
         let mut block = world.confidential_policy_transition_counts.block();
         block.remove(99);
         block.commit();
     }
     assert_eq!(
-        check(&world, required + 5),
+        super::super::asset_definitions::test_support::world_policy_work(&world),
+        required + 808 + 300 + 57
+    );
+    assert_eq!(
+        check(&world, required + 808 + 300),
         Err(GroupedOwnershipError::WorkLimit)
     );
-    assert_eq!(check(&world, required + 6), Ok(()));
+    assert_eq!(check(&world, required + 808 + 300 + 57), Ok(()));
 }
 
 #[test]
@@ -334,7 +347,13 @@ fn dense_valid_heights_defer_locally_then_retry_with_more_work() {
         check(&world, 128 * 128),
         Err(GroupedOwnershipError::WorkLimit)
     );
-    assert_eq!(check(&world, 128 * 512), Ok(()));
+    let required = super::super::asset_definitions::test_support::world_policy_work(&world);
+    assert_eq!(required, 5_575_936);
+    assert_eq!(
+        check(&world, required - 1),
+        Err(GroupedOwnershipError::WorkLimit)
+    );
+    assert_eq!(check(&world, required), Ok(()));
 }
 
 #[test]
@@ -346,7 +365,9 @@ fn every_original_definition_and_policy_index_identity_is_observed() {
             .try_committed_view_nonblocking()
             .unwrap();
         let policies = RetainedConfidentialPolicies::retain(&world).unwrap();
-        policies.validate(&definitions, &mut Work(1024)).unwrap();
+        policies
+            .validate(&definitions, &mut AssetDefinitionWork::bounded(16_777_216))
+            .unwrap();
         match changed {
             0 => world.asset_definitions.block().commit(),
             1 => world.confidential_policy_transition_index.block().commit(),

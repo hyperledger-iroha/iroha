@@ -544,7 +544,7 @@ pub fn enforce_committed_proof_policy(
 ) -> Result<(), DaProofPolicyError> {
     validate_committed_proof_policy_bundle(bundle)?;
     let policy = bundle
-        .policies
+        .policies()
         .iter()
         .find(|policy| policy.lane_id == record.lane_id)
         .ok_or(DaProofPolicyError::UnknownLane {
@@ -561,16 +561,16 @@ pub fn enforce_committed_proof_policy(
 pub fn validate_committed_proof_policy_bundle(
     bundle: &DaProofPolicyBundle,
 ) -> Result<(), DaProofPolicyError> {
-    if bundle.version != DaProofPolicyBundle::VERSION_V1 {
+    if bundle.version() != DaProofPolicyBundle::VERSION_V1 {
         return Err(DaProofPolicyError::UnsupportedPolicyBundleVersion {
-            version: bundle.version,
+            version: bundle.version(),
         });
     }
-    if DaProofPolicyBundle::new(bundle.policies.clone()).policy_hash != bundle.policy_hash {
+    if DaProofPolicyBundle::new(bundle.policies().to_vec()).policy_hash() != bundle.policy_hash() {
         return Err(DaProofPolicyError::PolicyBundleHashMismatch);
     }
     let mut lanes = BTreeSet::new();
-    for policy in &bundle.policies {
+    for policy in bundle.policies() {
         if !lanes.insert(policy.lane_id) {
             return Err(DaProofPolicyError::DuplicateLanePolicy {
                 lane: policy.lane_id,
@@ -2394,11 +2394,11 @@ mod tests {
             "test must seed derived geometry for the removed lane"
         );
         let bundle = active_proof_policy_bundle(&nexus);
-        assert_eq!(bundle.policies.len(), 1);
-        assert_eq!(bundle.policies[0].lane_id, LaneId::SINGLE);
+        assert_eq!(bundle.policies().len(), 1);
+        assert_eq!(bundle.policies()[0].lane_id, LaneId::SINGLE);
         assert!(
             bundle
-                .policies
+                .policies()
                 .iter()
                 .all(|policy| policy.lane_id != stale_lane),
             "stale geometry-only lane must not appear in active DA policy bundle"
@@ -2479,7 +2479,7 @@ mod tests {
         let bundle = active_proof_policy_bundle(&nexus);
         assert!(
             bundle
-                .policies
+                .policies()
                 .iter()
                 .all(|policy| policy.lane_id != inactive_lane),
             "lanes whose dataspace is absent from the active catalog must not advertise DA policy"
@@ -2574,7 +2574,7 @@ mod tests {
         let bundle = active_proof_policy_bundle(&nexus);
         assert!(
             bundle
-                .policies
+                .policies()
                 .iter()
                 .all(|policy| policy.lane_id != drifted_lane),
             "catalog/geometry drift must fail closed instead of advertising stale DA policy"
@@ -2613,9 +2613,9 @@ mod tests {
         let hash = proof_policy_bundle_hash(&config);
         let expected_hash = HashOf::new(&bundle);
         assert_eq!(hash, expected_hash);
-        assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
-        let encoded = to_bytes(&bundle.policies).expect("encode policies");
-        assert_eq!(bundle.policy_hash, Hash::new(encoded));
+        assert_eq!(bundle.version(), DaProofPolicyBundle::VERSION_V1);
+        let encoded = to_bytes(&bundle.policies().to_vec()).expect("encode policies");
+        assert_eq!(bundle.policy_hash(), Hash::new(encoded));
     }
     #[test]
     fn allows_merkle_lane_commitment() {
@@ -2868,9 +2868,9 @@ mod tests {
         ];
         let config = lane_config_with(lanes);
         let bundle = proof_policy_bundle(&config);
-        assert_eq!(bundle.policies.len(), 2);
-        assert_ne!(bundle.policy_hash, Hash::prehashed([0; 32]));
-        assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
+        assert_eq!(bundle.policies().len(), 2);
+        assert_ne!(bundle.policy_hash(), Hash::prehashed([0; 32]));
+        assert_eq!(bundle.version(), DaProofPolicyBundle::VERSION_V1);
     }
     #[test]
     fn committed_policy_bundle_rejects_duplicate_lanes_globally() {

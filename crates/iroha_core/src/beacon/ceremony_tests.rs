@@ -326,7 +326,7 @@ fn deals_require_one_owning_signer_per_seat() {
         ))
     ));
     // The seat owner itself refuses a transcript it did not help finalize.
-    let mut seat = PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
+    let seat = PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
         *plan.dkg_session(),
         plan.roster(),
         1,
@@ -337,7 +337,7 @@ fn deals_require_one_owning_signer_per_seat() {
     .generate(&keys[0])
     .expect("fresh seat");
     assert!(matches!(
-        seat.finalize_private_share(&validated(&dealt.record)),
+        seat.aggregate_private_share(&validated(&dealt.record)),
         Err(super::super::LocalGlobalThresholdBeaconDkgErrorV1::Invalid(
             GlobalThresholdBeaconError::DkgTerminal
         ))

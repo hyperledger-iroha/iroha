@@ -67,8 +67,11 @@ pub mod output_budget;
 pub(crate) mod output_test_support;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
+mod prepared_signatures;
 mod proposal;
 mod shared;
+/// Canonical ordered block signatures and original-pool preparation.
+pub mod signatures;
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
@@ -81,7 +84,9 @@ pub use execution_context::{
 };
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
+pub use prepared_signatures::{PreparedSignatureBlockError, PreparedSignedBlockSignaturesDecode};
 pub use shared::{ReservedSharedSignedBlock, SharedBlockAdmissionError, SharedSignedBlock};
+pub use signatures::{BlockSignatureCustodyError, BlockSignatures, PreparedBlockSignatures};
 #[model]
 mod model {
     use super::*;
@@ -99,12 +104,12 @@ mod model {
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
     )]
-    #[norito(decode_from_slice)]
+    #[norito(decode_fields, decode_from_slice)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::block::model::SignedBlock")]
     pub struct SignedBlock {
         /// Signatures of validators who approved this block.
-        pub(super) signatures: BTreeSet<BlockSignature>,
+        pub(super) signatures: BlockSignatures,
         /// Block payload to be signed.
         pub(super) payload: BlockPayload,
         /// Secondary block state resulting from execution.
@@ -166,7 +171,7 @@ impl<T: norito::core::SerializePayload> norito::core::SerializePayload for Outpu
 /// No raw source constructor or alternate accepted decoder is exposed.
 #[derive(Encode)]
 struct SignedBlockOutputCandidate<'a> {
-    signatures: OutputFieldRef<'a, BTreeSet<BlockSignature>>,
+    signatures: OutputFieldRef<'a, BlockSignatures>,
     payload: OutputFieldRef<'a, BlockPayload>,
     result: Option<OutputFieldRef<'a, BlockResult>>,
     /// Always `None`: the executed wire never covers a commit certificate.
@@ -205,7 +210,8 @@ impl SignedBlock {
             .map(TransactionEntrypoint::from)
             .collect();
         SignedBlock {
-            signatures: [signature].into_iter().collect(),
+            signatures: BlockSignatures::try_from_iter([signature])
+                .expect("single block signature"),
             payload: BlockPayload {
                 header,
                 external_entrypoints,
@@ -237,7 +243,8 @@ impl SignedBlock {
             .map(TransactionEntrypoint::from)
             .collect();
         SignedBlock {
-            signatures: [signature].into_iter().collect(),
+            signatures: BlockSignatures::try_from_iter([signature])
+                .expect("single block signature"),
             payload: BlockPayload {
                 header,
                 external_entrypoints,
@@ -260,7 +267,7 @@ impl SignedBlock {
         payload.da_commitments = payload.da_commitments.filter(|bundle| !bundle.is_empty());
         payload.da_pin_intents = payload.da_pin_intents.filter(|bundle| !bundle.is_empty());
         SignedBlock {
-            signatures: BTreeSet::new(),
+            signatures: BlockSignatures::default(),
             payload,
             result: None,
             commit_certificate: None,
@@ -275,7 +282,8 @@ impl SignedBlock {
         payload.da_commitments = payload.da_commitments.filter(|bundle| !bundle.is_empty());
         payload.da_pin_intents = payload.da_pin_intents.filter(|bundle| !bundle.is_empty());
         SignedBlock {
-            signatures: [signature].into_iter().collect(),
+            signatures: BlockSignatures::try_from_iter([signature])
+                .expect("single block signature"),
             payload,
             result: None,
             commit_certificate: None,
@@ -827,6 +835,16 @@ impl SignedBlock {
     ) -> impl ExactSizeIterator<Item = &BlockSignature> + DoubleEndedIterator {
         self.signatures.iter()
     }
+    /// Whether the canonical ordered signatures retain this exact original finite pool.
+    /// This proves physical collection/leaf custody only, never finality or full graph funding.
+    pub fn signatures_admitted_to(&self, budget: &iroha_allocation::AllocationBudget) -> bool {
+        self.signatures.admitted_to(budget)
+    }
+    /// Whether the two blocks retain one identical prepared signature collection owner.
+    /// This identity establishes no execution, availability or finality authorization.
+    pub fn same_signature_custody(&self, other: &Self) -> bool {
+        BlockSignatures::ptr_eq(&self.signatures, &other.signatures)
+    }
     /// Calculate block hash
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
@@ -844,10 +862,10 @@ impl SignedBlock {
         private_key: &iroha_crypto::PrivateKey,
         signatory: usize,
     ) -> Result<(), iroha_crypto::Error> {
-        self.signatures.insert(BlockSignature::new(
+        self.signatures.try_insert(BlockSignature::new(
             signatory as u64,
             SignatureOf::try_from_hash(private_key, self.payload.header.hash())?,
-        ));
+        ))?;
         Ok(())
     }
     /// Add additional signature to this block.
@@ -868,7 +886,7 @@ impl SignedBlock {
                 "Duplicate signature".to_owned(),
             ));
         }
-        self.signatures.insert(signature);
+        self.signatures.try_insert(signature)?;
         Ok(())
     }
     /// Replace signatures without verification
@@ -879,8 +897,8 @@ impl SignedBlock {
     #[cfg(feature = "transparent_api")]
     pub fn replace_signatures(
         &mut self,
-        signatures: BTreeSet<BlockSignature>,
-    ) -> Result<BTreeSet<BlockSignature>, iroha_crypto::Error> {
+        signatures: BlockSignatures,
+    ) -> Result<BlockSignatures, iroha_crypto::Error> {
         if signatures.is_empty() {
             return Err(iroha_crypto::Error::Signing("Signatures empty".to_owned()));
         }
@@ -895,6 +913,11 @@ impl SignedBlock {
                 Ok(acc)
             },
         )?;
+        if !self.signatures.permits_replacement(&signatures) {
+            return Err(iroha_crypto::Error::Signing(
+                "block signature replacement changed original custody".into(),
+            ));
+        }
         Ok(core::mem::replace(&mut self.signatures, signatures))
     }
     /// Creates a canonical resultless genesis proposal signed with the genesis private key.
@@ -1013,7 +1036,8 @@ impl SignedBlock {
             global_beacon_pulse: None,
         };
         Ok(SignedBlock {
-            signatures: [signature].into_iter().collect(),
+            signatures: BlockSignatures::try_from_iter([signature])
+                .map_err(|error| iroha_crypto::Error::Signing(error.to_string()))?,
             payload,
             result: None,
             commit_certificate: None,

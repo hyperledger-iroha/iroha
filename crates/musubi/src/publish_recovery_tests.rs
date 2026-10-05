@@ -47,7 +47,7 @@ fn retry_and_receipt_substitution_never_advance_the_journal() {
         .expect("persist detached operation");
     let journal_bytes = fs::read(
         temp.path()
-            .join(JOURNAL_DIRECTORY)
+            .join(publication_client_journal::DIRECTORY_NAME)
             .join(format!("{operation_id}.{JOURNAL_EXTENSION}")),
     )
     .expect("read journal");

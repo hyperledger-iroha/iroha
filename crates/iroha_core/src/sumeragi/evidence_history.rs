@@ -180,7 +180,7 @@ pub(crate) fn verify_from_state(
     let crypto = BlsCrypto::new();
     // A genuine enclosing JSON refusal leaves original history authentication unfinished.
     // Missing or malformed metadata still supplies no root authority.
-    let scope = if cfg!(all(test, sumeragi_core_mutation = "HC106")) {
+    let scope = if cfg!(all(test, sumeragi_core_mutation = "HC120")) {
         super::lanes::routing::committed_root_scope(state.world())
     } else {
         super::lanes::routing::read_routing_root_scope(state.world()).map_err(|reason| {

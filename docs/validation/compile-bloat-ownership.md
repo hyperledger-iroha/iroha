@@ -8,6 +8,8 @@ use their actual owners directly.
 | Boundary | Current design |
 | --- | --- |
 | VM and compiler | IVM and artifact admission use the compiler-independent ABI/surface. `kotodama_lang` owns compilation; `kotodama_toolchain` owns compiler tools. Core uses the compiler only for tests. Torii's contract-source API and JavaScript's `compileKotodama` API directly consume the compiler, so compiler edits can rebuild the daemon and JS host graphs. |
+| Public call codec | `ivm_abi::arguments` owns schema-bound JSON-to-record conversion; `ivm_abi::numeric_tlv` and `pointer_abi` own static envelope encoding. Deploy, CLI, Core, Torii, JS and compiler-tool callers import the ABI owner directly. IVM retains byte decoding, gas metering, allocation and authenticated memory custody. Canonical wire bytes and fixture assertions are preserved. The ABI default-library suite passes; strict and direct IVM/SDK consumer validation remain pending. |
+| Operation evidence | `iroha_operation_journal` owns the shared immutable request/prepared/applied bytes, original markers and private-directory locking. Wallet, SCCP, Musubi services and the daemon import the storage owner directly; Deploy tests use it directly. Signing, authorization, finality and replay checks remain in consumers. The old Wallet module is removed; native qualification remains pending. |
 | Privacy verification | `iroha_core_privacy` owns state-free engines, profiles, proof records and verification. Core retains committed-state admission and authenticated authority construction. Fixtures and negative source controls follow the moved implementation. |
 | Timed OVN | `iroha_core_timed_ovn` owns public evidence, archive/casting data and TLE verification. Core retains state reads, authenticated constructors, opaque authorizations and signing. Public data construction does not grant authority. |
 | Executable metadata | Thin `irohad` and `iroha_cli` packages provide compiled metadata to `irohad_lib` and `iroha_cli_lib`, whose extern crate names remain `irohad` and `iroha_cli`. Source revision build scripts belong to executables; the daemon library only selects test-only mutations. Version, source and wire identity diagnostics use the injected metadata. The CLI library always includes Core/node, crypto/consensus and Norito/node-codec; `cli` and `dev-tools` select binary targets. |
@@ -29,10 +31,16 @@ invocation and selected managed inputs. Subsequent dependency edits require fres
 validation. The `dev-tools` fee target has a recorded build and two passing
 ordinary tests. Canonical Wallet custody schemas and frame controls preserve
 the original assertions; the Selection schema expectation now names its actual
-owner. The expanded prospective registry contains 107 ordinary tests, including
-15 direct custody controls, with no ignores. Its latest build passes, but
-concurrent SDK source and generated-input changes refused registry and runtime
-admission. The earlier 78-test pass qualifies only its original source cut.
+owner. The historical 107-test Wallet registry includes 15 custody controls.
+Its recorded build passes, but SDK source and generated-input changes refused
+registry and runtime admission. The applied Journal extraction preserves the
+whole storage implementation and all ten tests. The current finite macOS source
+inventory contains 191 Wallet tests and ten Journal tests, with one additional
+Windows-only Wallet control and all 15 custody controls retained. Fresh native
+listing and runtime validation remain required. The new owner has explicit
+Foundation CI routing and all 88 selection controls pass. Native qualification
+remains pending.
+The earlier 78-test pass qualifies only its original source cut.
 The authenticated two-build executable metadata check passes on its recorded
 source cut, with the four library owners fresh and all five executable targets
 rebuilt; it does not qualify later source changes.
@@ -57,19 +65,32 @@ retired-codec pattern check. SDK Native custody and genuine production proving a
 mandatory even with SDK defaults disabled; assembly tools remain explicit
 `dev-tools` targets. FASTPQ is selected by the existing STARK feature. The retained
 Halo2-only Native graph observation fell from 418 to 403 packages; it does not
-establish a current frontend result or build speedup. Current owner-boundary checks
-admit the exact CoreZK/Halo2 profiles and SDK paths for default/TLS selections and
-the fixed Musubi, SCCP wallet and storage-client consumers, retaining their runtime,
-P2P, compiler and test-feature denials. Feature hygiene passes all 65 controls
-and its guard command. All 21 configured dependency boundaries pass locked
-offline Cargo resolution with all 120 manifest inputs and the lock unchanged.
-The current source budget passes with exact reviewed normal, optional and
-test-owner declaration costs, preserving ownership denials without growth
-headroom. All 230 pure dependency-guard tests and both actual Cargo boundary
-regressions pass. The compiler source guard seals 308 fixture includes and
-616 test names; all 43 Python source-reader controls pass, including the
-ordinary duplicate-fixture regression. Surface/toolchain workspace lint
-inheritance and Surface public Rustdoc still require correction.
+establish a current frontend result or build speedup. Recorded owner-boundary
+checks retain exact CoreZK/Halo2 and SDK default/TLS profiles, fixed Musubi,
+SCCP wallet and storage-client consumers, and their runtime, P2P, compiler and
+test-feature denials. Feature hygiene passes all 65 tests and its guard command;
+that source-only rerun does not establish full captured-input equality. All 21
+configured boundaries pass locked offline resolution on the current post-Journal
+cut: 119 manifests, 113 workspace members and all 141 protected inputs unchanged.
+Reviewed exact source costs preserve all 21 ownership policies without unused
+allowance. The five post-Journal source guards pass with 464 protected inputs
+unchanged, and all 72 dependency metrics equal their reviewed limits.
+All 232 dependency controls, including two synthetic Cargo feature/lock
+resolution regressions, pass with 466 protected inputs unchanged.
+The compiler source
+guard seals 308 fixture includes and 616 test names; all 43 Python source-reader
+controls pass with 323 captured inputs unchanged. Surface/toolchain workspace
+lint inheritance and Surface public Rustdoc are implemented. The reviewed
+97-file ABI extraction is applied; canonical codec callers use the existing ABI
+owner and VM metering/decoding/custody remain intact.
+On its recorded coherent source cut, the full default-library run passed
+4,841 Model, 210 ABI and 33 Surface
+tests with 24,823 captured source inputs unchanged, retaining the 135 original
+Model ignores and no filtering. The new distinct-supply Mint/Burn byte oracle
+passes. All 13 strict style findings have source repairs; fresh strict checks
+and direct IVM/SDK consumer validation remain pending.
+A subsequent AssetId JSON serializer source change requires fresh Model and
+dependent native validation.
 The normal production-feature
 Core ZK frontend and both test-feature harnesses
 have recorded builds, limited by concurrent source changes. Component journal
@@ -117,14 +138,15 @@ The derive library, strict JSON and UI regressions pass, preserving diagnostics.
 Eight focused parameter tests pass with the scoped inline-policy annotation,
 resolving the observed enum-size compilation frontier in that harness.
 Concurrent policy edits limit current-source qualification. A later workspace
-check passes on its recorded source cut. The last strict workspace result
-identified 135 Core ZK diagnostics and two sample-owner diagnostics; the reviewed
-repairs require fresh strict validation. The current merge has no unmerged
-entries and remains uncommitted; its separate owner handles the merge. Current
-workspace checks, applicable strict lint, Privacy regressions and observational
-warm timings remain open. Each earlier component pass retains its own source
-and feature scope; ongoing SDK and proof changes require fresh input guards.
-Exact commands, exit codes and logs belong in PR Testing or CI artifacts.
+check passes on its recorded source cut. The recorded strict workspace result
+identified 135 Core ZK diagnostics and two sample-owner diagnostics. A later
+focused default strict attempt stopped before Core ZK with nine dependency
+diagnostics; source repairs require fresh current strict validation. The merge
+is closed. Current Core ZK/toolchain native checks, Wallet runtime, Privacy
+regressions, workspace validation and observational warm timings remain open.
+Each earlier component pass retains its source and feature scope; ongoing SDK
+and proof changes require fresh input guards. Exact commands, exit codes and
+logs belong in PR Testing or CI artifacts.
 
 Two additional numeric controls reconstruct canonical frame, CRC and SHA inputs
 in both Pasta fields. They exercise a test-only reference after the current

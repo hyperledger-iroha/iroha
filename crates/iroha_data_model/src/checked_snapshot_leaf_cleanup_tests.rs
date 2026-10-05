@@ -102,7 +102,7 @@ fn audit(value: &impl JsonSerialize) {
     assert_eq!(std::ptr::from_ref(value), pointer);
 }
 fn custom() -> CustomParameter {
-    CustomParameter::new("nested_limit".parse().unwrap(), Json::new([1_u64, 2]))
+    CustomParameter::new("nested_limit".parse().unwrap(), Json::new(vec![1_u64, 2]))
 }
 fn grant_owner() -> AccountId {
     let key = KeyPair::from_seed(vec![0x73; 32], Algorithm::Ed25519);

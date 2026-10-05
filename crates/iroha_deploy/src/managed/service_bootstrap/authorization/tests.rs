@@ -30,12 +30,14 @@ fn epochs_are_actual_finite_new_starts_with_one_exact_unsigned_replacement_claim
         .authorize_generated_startup(deadline, Arc::clone(&cancelled))
         .unwrap()
         .unwrap();
-    assert_eq!(first.epoch.ordinal, 1);
+    assert_eq!(first.lease.epoch.ordinal, 1);
     let original = first
+        .lease
         .directory
         .read("original.nrt", super::super::MAX_ORIGINAL_BYTES)
         .unwrap();
     let first_epoch = first
+        .lease
         .directory
         .open_child("epochs")
         .unwrap()
@@ -89,12 +91,16 @@ fn epochs_are_actual_finite_new_starts_with_one_exact_unsigned_replacement_claim
         .authorize_generated_startup(deadline, Arc::clone(&cancelled))
         .unwrap()
         .unwrap();
-    assert_eq!(second.epoch.ordinal, 2);
-    assert_eq!(second.epoch.previous, Some(digest(&first.epoch).unwrap()));
+    assert_eq!(second.lease.epoch.ordinal, 2);
+    assert_eq!(
+        second.lease.epoch.previous,
+        Some(digest(&first.lease.epoch).unwrap())
+    );
     assert!(first.check(deadline).is_err());
     second.check(deadline).unwrap();
     assert_eq!(
         second
+            .lease
             .directory
             .read("original.nrt", super::super::MAX_ORIGINAL_BYTES)
             .unwrap(),
@@ -102,6 +108,7 @@ fn epochs_are_actual_finite_new_starts_with_one_exact_unsigned_replacement_claim
     );
     assert_eq!(
         second
+            .lease
             .directory
             .open_child("epochs")
             .unwrap()
@@ -110,6 +117,7 @@ fn epochs_are_actual_finite_new_starts_with_one_exact_unsigned_replacement_claim
         first_epoch
     );
     let inventory = second
+        .lease
         .directory
         .open_child("epochs")
         .unwrap()
@@ -129,6 +137,7 @@ fn epochs_are_actual_finite_new_starts_with_one_exact_unsigned_replacement_claim
     );
     assert_eq!(
         second
+            .lease
             .directory
             .open_child("epochs")
             .unwrap()
@@ -151,7 +160,7 @@ fn epoch_gap_trailing_foreign_and_overbound_material_refuse_before_new_authoriza
         .authorize_generated_startup(deadline, Arc::clone(&cancelled))
         .unwrap()
         .unwrap();
-    let root = first.directory.open_child("epochs").unwrap();
+    let root = first.lease.directory.open_child("epochs").unwrap();
     let bytes = root.read("0001.nrt", attempts::MAX_RECORD_BYTES).unwrap();
     let mut peers = UnavailablePeers::start(&prepared);
     for changed in [
@@ -174,7 +183,7 @@ fn epoch_gap_trailing_foreign_and_overbound_material_refuse_before_new_authoriza
         root.write_atomic("0001.nrt", &bytes, iroha_fs::PublishMode::Replace)
             .unwrap();
     }
-    let mut foreign = first.epoch.clone();
+    let mut foreign = first.lease.epoch.clone();
     foreign.parent_intent[0] ^= 1;
     root.write_atomic(
         "0001.nrt",
@@ -220,21 +229,27 @@ fn actual_epoch_history_has_a_finite_limit_and_never_rewrites_older_epochs() {
         .authorize_generated_startup(deadline, Arc::clone(&cancelled))
         .unwrap()
         .unwrap();
-    let root = first.directory.open_child("epochs").unwrap();
+    let root = first.lease.directory.open_child("epochs").unwrap();
     let first_bytes = root.read("0001.nrt", attempts::MAX_RECORD_BYTES).unwrap();
     for ordinal in 2..=MAX_EPOCHS {
+        // Each epoch models a distinct worker startup, with its own finite I/O budget.
+        // Retained epoch terms remain immutable; no deadline is renewed within a startup.
+        let deadline = Instant::now() + Duration::from_secs(600);
         assert_eq!(
             usize::from(
                 owner
                     .authorize_generated_startup(deadline, Arc::clone(&cancelled))
                     .unwrap()
                     .unwrap()
+                    .lease
                     .epoch
                     .ordinal
             ),
             ordinal
         );
     }
+    // The next independently budgeted startup must fail on the durable history cap.
+    let deadline = Instant::now() + Duration::from_secs(600);
     assert!(matches!(
         owner.authorize_generated_startup(deadline, cancelled),
         Err(crate::managed::Error::Bootstrap(

@@ -294,8 +294,13 @@ impl<'a> CheckedElectionView<'a> {
         {
             return Err("selection target differs from its frozen policy interval".into());
         }
+        let preparation_delay = if cfg!(all(test, sumeragi_core_mutation = "HC100")) {
+            1
+        } else {
+            2
+        };
         let target_epoch = selection_epoch
-            .checked_add(2)
+            .checked_add(preparation_delay)
             .ok_or("target epoch overflows")?;
         let mut selected = SelectedCommittee::empty();
         for seat in self.primary.as_slice() {

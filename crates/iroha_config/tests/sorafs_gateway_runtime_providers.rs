@@ -193,12 +193,13 @@ fn enabled_compliance_allows_explicit_empty_feeds_without_relaxing_authority_or_
 [[sorafs.gateway.compliance.feeds]]
 feed_id = "configured"
 url = "https://feed.example/catalog"
+required = true
 hosts = []
 "#;
+    let host_error = parse_overlay(&malformed_feed).unwrap_err();
     assert!(
-        parse_overlay(&malformed_feed)
-            .unwrap_err()
-            .contains("requires at least one HTTPS host")
+        host_error.contains("requires at least one HTTPS host"),
+        "configured feed must reach the host validator: {host_error}"
     );
     let configured_feed = malformed_feed.replace(
         "hosts = []",

@@ -560,7 +560,7 @@ fn prepare_fresh(
         };
         custody::write(&path, rendered.as_bytes())?;
     }
-    write_client_config(&root, ports.base_api, &hosts, &chain, None, &owner)?;
+    write_client_config(&root, ports.base_api, &hosts, &chain, None, &owner, None)?;
     let client_path = root.join("client.toml");
     let client = iroha_fs::read_private(&client_path, 1024 * 1024)?;
     let mut table = crate::secret_toml::Table::new(crate::secret_toml::parse_table(
@@ -960,6 +960,14 @@ mod tests {
         let spec = spec();
         let prepared = prepare_private_root("private", &directory, &ports, &spec).unwrap();
         assert_eq!(prepared.context.dataspace_id, spec.dataspace_id.as_u64());
+        assert_eq!(
+            prepared.build_cache_root(),
+            directory
+                .canonicalize()
+                .unwrap()
+                .join("runtime/build-cache")
+        );
+        assert!(!prepared.build_cache_root().exists());
         assert_eq!(prepared.peers.len(), 4);
         verify_retained(&directory.canonicalize().unwrap(), &prepared, &spec).unwrap();
         let registration = prepared.load_private_registration().unwrap();
@@ -1114,6 +1122,8 @@ mod tests {
         }
         let repeated = prepare_private_root("private", &directory, &ports, &spec).unwrap();
         assert_eq!(repeated, prepared);
+        assert_eq!(repeated.build_cache_root(), prepared.build_cache_root());
+        assert!(!repeated.build_cache_root().exists());
         assert_eq!(repeated.load_private_registration().unwrap(), registration);
         let original_manifest = iroha_fs::read_private(
             &directory.join("genesis.json"),

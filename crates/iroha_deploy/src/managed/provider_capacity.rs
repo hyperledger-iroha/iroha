@@ -221,6 +221,7 @@ impl ManagedProviderCapacity {
             &directory,
             purpose,
             original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
             authorization,
             deadline,
             None,
@@ -411,6 +412,7 @@ impl ManagedProviderCapacity {
             &directory,
             Purpose::FundingCapacity(original.selection.provider_id),
             original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
         )?;
         history.require_fees(fees)?;
         if original.partition != *partition

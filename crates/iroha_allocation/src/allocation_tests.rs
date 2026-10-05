@@ -995,3 +995,62 @@ fn pool_identity_requires_same_owner_and_never_admits_credit() {
     assert_eq!(original.reserved_bytes(), 0);
     assert_eq!(independent.reserved_bytes(), 0);
 }
+
+#[test]
+fn prepaid_shared_exact_charge_retains_refused_original_and_last_reader() {
+    use crate::test_support::refusing_allocation;
+    let layout = ChargedShared::<[u8; 33]>::allocation_layout();
+    let budget = AllocationBudget::new(layout.size());
+    let mut reservation = budget.try_reserve(layout).unwrap();
+    let charge = reservation.try_split(layout).unwrap();
+    let (charge, error) = refusing_allocation(layout, || {
+        ChargedShared::<[u8; 33]>::reserve_from_charge(charge)
+    })
+    .err()
+    .unwrap();
+    assert_eq!(error, SharedFromChargeError::Allocator { layout });
+    assert!(charge.belongs_to(&budget));
+    assert_eq!(charge.layout(), layout);
+    assert_eq!(budget.reserved_bytes(), layout.size());
+    budget.set_limit_bytes(0);
+    let shell = ChargedShared::<[u8; 33]>::reserve_from_charge(charge)
+        .unwrap_or_else(|_| panic!("unchanged charge retry"));
+    assert!(shell.belongs_to(&budget));
+    let owner = without_allocations(|| shell.initialize([7; 33]));
+    let reader = without_allocations(|| owner.clone());
+    without_allocations(|| drop(owner));
+    assert_eq!(budget.reserved_bytes(), layout.size());
+    assert_eq!(*reader, [7; 33]);
+    without_allocations(|| drop(reader));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+#[test]
+fn prepaid_shared_charge_rejects_wrong_size_and_alignment_before_allocation() {
+    #[repr(align(64))]
+    struct Aligned;
+    let exact = ChargedShared::<Aligned>::allocation_layout();
+    for wrong in [
+        Layout::from_size_align(exact.size() + 1, exact.align()).unwrap(),
+        Layout::from_size_align(exact.size(), 1).unwrap(),
+    ] {
+        let budget = AllocationBudget::new(wrong.size());
+        let mut reservation = budget.try_reserve(wrong).unwrap();
+        let charge = reservation.try_split(wrong).unwrap();
+        let (charge, error) =
+            without_allocations(|| ChargedShared::<Aligned>::reserve_from_charge(charge))
+                .err()
+                .unwrap();
+        assert_eq!(
+            error,
+            SharedFromChargeError::LayoutMismatch {
+                expected: exact,
+                actual: wrong
+            }
+        );
+        assert!(charge.belongs_to(&budget));
+        assert_eq!(charge.layout(), wrong);
+        assert_eq!(budget.reserved_bytes(), wrong.size());
+        drop(charge);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}

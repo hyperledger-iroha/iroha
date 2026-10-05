@@ -831,8 +831,12 @@ fn original_local_custody_invariant_halts_worker_without_fee_result_or_quarantin
         let Some(super::super::ExecOutcome::Failed(message)) = outcome else {
             panic!("an original local custody invariant cannot become a validity verdict")
         };
-        assert!(message.contains(&reason.to_string()), "{message}");
-        assert_eq!(worker.recovery.as_deref(), Some(message.as_str()));
+        let recovery_reason = reason.to_string();
+        assert_eq!(
+            message,
+            PublicationError::RecoveryRequired(recovery_reason.clone()).to_string()
+        );
+        assert_eq!(worker.recovery.as_deref(), Some(recovery_reason.as_str()));
         assert!(worker.quarantine_context.is_none());
         assert!(worker.results.get(&hash).is_none());
         assert!(worker.live.is_none() && worker.finishing.is_none());

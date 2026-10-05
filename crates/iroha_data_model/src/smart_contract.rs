@@ -1578,16 +1578,20 @@ pub mod manifest {
             out: &mut dyn json::JsonWriteSink,
         ) -> Result<(), json::BoundedJsonError> {
             out.begin_container()?;
-            out.push_str("{\"read_keys\":")?;
-            self.read_keys.json_serialize_to(out)?;
-            out.push_str(",\"write_keys\":")?;
-            self.write_keys.json_serialize_to(out)?;
-            out.push_str(",\"dynamic_reads\":")?;
-            self.dynamic_reads.json_serialize_to(out)?;
-            out.push_str(",\"dynamic_writes\":")?;
-            self.dynamic_writes.json_serialize_to(out)?;
-            out.push('}')?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push_str("{\"read_keys\":")?;
+                self.read_keys.json_serialize_to(out)?;
+                out.push_str(",\"write_keys\":")?;
+                self.write_keys.json_serialize_to(out)?;
+                out.push_str(",\"dynamic_reads\":")?;
+                self.dynamic_reads.json_serialize_to(out)?;
+                out.push_str(",\"dynamic_writes\":")?;
+                self.dynamic_writes.json_serialize_to(out)?;
+                out.push('}')?;
+                Ok(())
+            })();
             out.end_container();
+            result?;
             Ok(())
         }
     }

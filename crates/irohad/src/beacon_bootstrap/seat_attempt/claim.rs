@@ -311,6 +311,15 @@ impl PreparedAttemptClaim {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(super) fn stop_before_sync(&mut self) -> Result<(), ClaimError> {
+        self.create()?;
+        self.pin()
+    }
+    /// Original native expiry may only shorten this held claim deadline.
+    pub(super) fn tighten_deadline(&mut self, deadline: Instant) {
+        self.deadline = self.deadline.min(deadline);
+    }
     /// Resume creation/pinning/fsync through the same held root and exact attempt name.
     pub(super) fn make_durable(&mut self) -> Result<(), ClaimError> {
         if self.terminal {
@@ -340,6 +349,88 @@ impl PreparedAttemptClaim {
         }
         result
     }
+    pub(super) fn existing(&self) -> Result<bool, ClaimError> {
+        Self::revalidate(self.root.get())?;
+        match rustix::fs::statat(
+            &self.root.get().file,
+            self.name.as_str(),
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => Ok(true),
+            Err(rustix::io::Errno::NOENT) => Ok(false),
+            Err(e) => Err(ClaimError::Io(e.into())),
+        }
+    }
+    /// Pin an existing name for authenticated read only; never claim it or publish into it yet.
+    pub(super) fn open_existing(&mut self) -> Result<(), ClaimError> {
+        if self.mkdir_completed {
+            return Err(ClaimError::Phase);
+        }
+        if let Some(child) = self.child.as_ref() {
+            Self::revalidate(child.get())?;
+            return Ok(());
+        }
+        Self::revalidate(self.root.get())?;
+        let named = rustix::fs::statat(
+            &self.root.get().file,
+            self.name.as_str(),
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(|e| ClaimError::Io(e.into()))?;
+        self.created = Some(CreatedIdentity {
+            device: device_identity_from_raw(named.st_dev),
+            inode: named.st_ino,
+        });
+        self.pin()?;
+        Self::revalidate(self.child.as_ref().ok_or(ClaimError::Phase)?.get())?;
+        Ok(())
+    }
+    pub(super) fn read_directory(&self) -> Option<&Directory> {
+        self.child.as_ref().map(RetainedPayload::get)
+    }
+    pub(super) fn identity(&self) -> Result<([u64; 4], [u8; 32]), ClaimError> {
+        let root = self.root.get().file.metadata().map_err(ClaimError::Io)?;
+        let child = self.child.as_ref().ok_or(ClaimError::Phase)?.get();
+        Self::revalidate(self.root.get())?;
+        Self::revalidate(child)?;
+        let metadata = child.file.metadata().map_err(ClaimError::Io)?;
+        Ok((
+            [root.dev(), root.ino(), metadata.dev(), metadata.ino()],
+            iroha_crypto::Hash::new(child.path.as_os_str().as_bytes()).into(),
+        ))
+    }
+    /// Authenticate the original AEAD-bound inode/path after private record verification.
+    pub(super) fn authenticate_restored(
+        &mut self,
+        identity: [u64; 4],
+        path_hash: [u8; 32],
+        deadline: Instant,
+    ) -> Result<(), ClaimError> {
+        if self.identity()? != (identity, path_hash) {
+            self.terminal = true;
+            return Err(ClaimError::Custody);
+        }
+        self.deadline = self.deadline.min(deadline);
+        if Instant::now() >= self.deadline {
+            return Err(ClaimError::Deadline);
+        }
+        // The original mkdir can be visible after a crash before its directory
+        // barriers. Re-sync the held child/root before adopting publication rights.
+        let child = self.child.as_ref().ok_or(ClaimError::Phase)?.get();
+        child.file.sync_all().map_err(ClaimError::Io)?;
+        self.root.get().file.sync_all().map_err(ClaimError::Io)?;
+        if self.identity()? != (identity, path_hash) {
+            self.terminal = true;
+            return Err(ClaimError::Custody);
+        }
+        if Instant::now() >= self.deadline {
+            return Err(ClaimError::Deadline);
+        }
+        self.mkdir_completed = true;
+        self.durable = true;
+        Ok(())
+    }
+
     pub(super) fn directory(&self) -> Option<&Directory> {
         self.durable
             .then(|| self.child.as_ref().expect("durable original child").get())

@@ -120,7 +120,7 @@ class MusubiReleaseMetadataV1(
     @JvmField val repository: MusubiDocumentRefV1? = null,
     keywords: List<MusubiKeywordV1> = emptyList(),
 ) : MusubiWireValueV1() {
-    @JvmField val keywords: List<MusubiKeywordV1> = keywords.toList()
+    @JvmField val keywords: List<MusubiKeywordV1> = MusubiValidationV1.immutableList(keywords)
 
     init {
         require(this.keywords.size <= 32) { "Musubi metadata exceeds 32 keywords" }
@@ -359,7 +359,7 @@ class MusubiVersionV1(
     @JvmField val patch: BigInteger,
     prerelease: List<MusubiPrereleaseIdentifierV1> = emptyList(),
 ) : MusubiWireValueV1(), Comparable<MusubiVersionV1> {
-    @JvmField val prerelease: List<MusubiPrereleaseIdentifierV1> = prerelease.toList()
+    @JvmField val prerelease: List<MusubiPrereleaseIdentifierV1> = MusubiValidationV1.immutableList(prerelease)
 
     init {
         MusubiValidationV1.requireU64(major, "version.major")
@@ -470,7 +470,7 @@ class MusubiVersionReqV1 private constructor(
 ) : MusubiWireValueV1(), Comparable<MusubiVersionReqV1> {
     enum class Kind { ANY, CARET, TILDE, MAJOR_WILDCARD, MINOR_WILDCARD, EXACT, COMPARATORS }
 
-    @JvmField val comparators: List<MusubiVersionComparatorV1> = comparators.toList()
+    @JvmField val comparators: List<MusubiVersionComparatorV1> = MusubiValidationV1.immutableList(comparators)
 
     init {
         require(this.comparators.size <= 16) { "Musubi requirement has too many comparators" }
@@ -805,7 +805,7 @@ class MusubiVerificationNodeV1(
     @JvmField val abi: MusubiAbiBindingV1,
     dependencies: List<MusubiExactDependencyEdgeV1> = emptyList(),
 ) : MusubiWireValueV1(), Comparable<MusubiVerificationNodeV1> {
-    @JvmField val dependencies: List<MusubiExactDependencyEdgeV1> = dependencies.toList()
+    @JvmField val dependencies: List<MusubiExactDependencyEdgeV1> = MusubiValidationV1.immutableList(dependencies)
 
     init {
         listOf(releaseDigest, archiveId, sourceDigest, interfaceDigest).forEach {
@@ -853,8 +853,8 @@ class MusubiVerificationLockV1(
     @JvmField val schema: String = SCHEMA
     /** Closed V1 verification-lock version. */
     @JvmField val version: Int = 1
-    @JvmField val rootDependencies: List<MusubiExactDependencyEdgeV1> = rootDependencies.toList()
-    @JvmField val nodes: List<MusubiVerificationNodeV1> = nodes.toList()
+    @JvmField val rootDependencies: List<MusubiExactDependencyEdgeV1> = MusubiValidationV1.immutableList(rootDependencies)
+    @JvmField val nodes: List<MusubiVerificationNodeV1> = MusubiValidationV1.immutableList(nodes)
 
     init {
         require(this.rootDependencies.size <= 256 &&
@@ -940,8 +940,8 @@ class MusubiReleaseManifestV1(
     @JvmField val archiveId: MusubiDigest32V1,
     @JvmField val verificationLockDigest: MusubiDigest32V1,
 ) : MusubiWireValueV1() {
-    @JvmField val dependencies: List<MusubiDependencyReqV1> = dependencies.toList()
-    @JvmField val exports: List<String> = exports.toList()
+    @JvmField val dependencies: List<MusubiDependencyReqV1> = MusubiValidationV1.immutableList(dependencies)
+    @JvmField val exports: List<String> = MusubiValidationV1.immutableList(exports)
 
     init {
         require(this.dependencies.size <= 256 &&
@@ -1072,7 +1072,7 @@ class MusubiNamespaceDelegationV1(
     @JvmField val payload: MusubiNamespaceDelegationPayloadV1,
     approvals: List<MusubiNamespaceDelegationApprovalV1>,
 ) : MusubiWireValueV1() {
-    @JvmField val approvals: List<MusubiNamespaceDelegationApprovalV1> = approvals.toList()
+    @JvmField val approvals: List<MusubiNamespaceDelegationApprovalV1> = MusubiValidationV1.immutableList(approvals)
 
     init {
         require(this.approvals.size in 1..64) {
@@ -1376,7 +1376,7 @@ class MusubiArchiveRetentionQueryV1(
     archiveIds: List<MusubiDigest32V1>,
     @JvmField val expectedSnapshot: MusubiRegistrySnapshotV1? = null,
 ) : MusubiWireValueV1() {
-    @JvmField val archiveIds: List<MusubiDigest32V1> = archiveIds.toList()
+    @JvmField val archiveIds: List<MusubiDigest32V1> = MusubiValidationV1.immutableList(archiveIds)
 
     init {
         require(this.archiveIds.isNotEmpty() && this.archiveIds.size <= 100 &&
@@ -1561,8 +1561,8 @@ class MusubiPackageRecordV1(
     @JvmField val claimedAtHeight: BigInteger,
     @JvmField val revisions: MusubiPackageRevisionsV1,
 ) : MusubiWireValueV1() {
-    @JvmField val owners: List<String> = owners.toList()
-    @JvmField val memberAccounts: List<String> = memberAccounts.toList()
+    @JvmField val owners: List<String> = MusubiValidationV1.immutableList(owners)
+    @JvmField val memberAccounts: List<String> = MusubiValidationV1.immutableList(memberAccounts)
 
     init {
         require(this.owners.isNotEmpty()) { "Musubi package must retain at least one owner" }
@@ -1742,7 +1742,7 @@ class MusubiArchiveLocationV1 internal constructor(
     @JvmField val stateKind: String,
     raw: Map<String, Any?>,
 ) : MusubiWireValueV1() {
-    @JvmField val providers: List<String> = providers.toList()
+    @JvmField val providers: List<String> = MusubiValidationV1.immutableList(providers)
     private val rawValue = MusubiJsonV1.immutableObject(raw)
 
     init {
@@ -1958,7 +1958,7 @@ class MusubiSeedIngressReceiptV1(
     @JvmField val payload: MusubiSeedIngressReceiptPayloadV1,
     approvals: List<MusubiSeedIngressReceiptApprovalV1>,
 ) : MusubiWireValueV1() {
-    @JvmField val approvals: List<MusubiSeedIngressReceiptApprovalV1> = approvals.toList()
+    @JvmField val approvals: List<MusubiSeedIngressReceiptApprovalV1> = MusubiValidationV1.immutableList(approvals)
 
     init {
         require(this.approvals.isNotEmpty() && this.approvals.size <= 64) {
@@ -2171,7 +2171,7 @@ class MusubiProviderBundleVerificationAttestationV1(
     @JvmField val payload: MusubiProviderBundleVerificationPayloadV1,
     approvals: List<MusubiProviderBundleVerificationApprovalV1>,
 ) : MusubiWireValueV1() {
-    @JvmField val approvals: List<MusubiProviderBundleVerificationApprovalV1> = approvals.toList()
+    @JvmField val approvals: List<MusubiProviderBundleVerificationApprovalV1> = MusubiValidationV1.immutableList(approvals)
 
     init {
         require(this.approvals.size in 1..64) {
@@ -2292,7 +2292,7 @@ class MusubiArchiveRecordV1 internal constructor(
     @JvmField val locationRevision: BigInteger,
     locationIds: List<MusubiDigest32V1>,
 ) : MusubiWireValueV1() {
-    @JvmField val locationIds: List<MusubiDigest32V1> = locationIds.toList()
+    @JvmField val locationIds: List<MusubiDigest32V1> = MusubiValidationV1.immutableList(locationIds)
 
     init {
         require(stagingReceipt.payload.binding.archiveId == archiveId) {
@@ -2384,7 +2384,7 @@ class MusubiRegistryPolicyV1(
 ) : MusubiWireValueV1() {
     /** Closed registry-policy schema version. */
     @JvmField val version: Int = 1
-    @JvmField val allowlistedDataspaces: List<BigInteger> = allowlistedDataspaces.toList()
+    @JvmField val allowlistedDataspaces: List<BigInteger> = MusubiValidationV1.immutableList(allowlistedDataspaces)
 
     init {
         MusubiValidationV1.requireU64(revision, "registryPolicy.revision")
@@ -2519,7 +2519,7 @@ class MusubiPageV1<T : MusubiWireValueV1> internal constructor(
     @JvmField val nextCursor: MusubiFinalizedCursorV1?,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
-    @JvmField val items: List<T> = items.toList()
+    @JvmField val items: List<T> = MusubiValidationV1.immutableList(items)
 
     init {
         require(this.items.size <= 100) { "Musubi response page exceeds 100 items" }
@@ -2609,7 +2609,7 @@ class MusubiResolverIndexPageV1 internal constructor(
     @JvmField val nextCursor: MusubiFinalizedCursorV1?,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
-    @JvmField val items: List<MusubiResolverReleaseRowV1> = items.toList()
+    @JvmField val items: List<MusubiResolverReleaseRowV1> = MusubiValidationV1.immutableList(items)
 
     init {
         require(this.items.size <= 100 &&
@@ -2662,7 +2662,7 @@ class MusubiArchiveLocationPageV1 internal constructor(
     @JvmField val nextCursor: MusubiFinalizedCursorV1?,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
-    @JvmField val items: List<MusubiArchiveLocationV1> = items.toList()
+    @JvmField val items: List<MusubiArchiveLocationV1> = MusubiValidationV1.immutableList(items)
 
     init {
         require(archive.stagingReceipt.payload.binding.networkId == networkId) {
@@ -2716,7 +2716,7 @@ class MusubiArchiveRetentionPageV1 internal constructor(
     @JvmField val finalizedTimeMs: BigInteger,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
-    @JvmField val items: List<MusubiArchiveRetentionDecisionV1> = items.toList()
+    @JvmField val items: List<MusubiArchiveRetentionDecisionV1> = MusubiValidationV1.immutableList(items)
 
     init {
         MusubiValidationV1.requireU64(finalizedTimeMs, "archiveRetention.finalizedTimeMs")
@@ -2767,7 +2767,7 @@ class MusubiOrderedPrefixPageV1 internal constructor(
     @JvmField val nextCursor: MusubiFinalizedCursorV1?,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
-    @JvmField val items: List<MusubiOrderedPackageEntryV1> = items.toList()
+    @JvmField val items: List<MusubiOrderedPackageEntryV1> = MusubiValidationV1.immutableList(items)
 
     init {
         require(this.items.size <= 100) { "Musubi ordered-prefix page exceeds 100 items" }
@@ -2833,7 +2833,7 @@ class MusubiSearchHitV1(
     keywords: List<String>,
     @JvmField val metadataRevision: BigInteger,
 ) : MusubiWireValueV1() {
-    @JvmField val keywords: List<String> = keywords.toList()
+    @JvmField val keywords: List<String> = MusubiValidationV1.immutableList(keywords)
 
     init {
         description?.let {
@@ -2872,7 +2872,7 @@ class MusubiSearchPageV1 internal constructor(
     @JvmField val nextCursor: MusubiSearchCursorV1?,
     @JvmField val snapshot: MusubiSearchSnapshotV1,
 ) : MusubiWireValueV1() {
-    @JvmField val items: List<MusubiSearchHitV1> = items.toList()
+    @JvmField val items: List<MusubiSearchHitV1> = MusubiValidationV1.immutableList(items)
 
     init {
         require(this.items.size <= 100) { "Musubi search page exceeds 100 items" }
@@ -2914,6 +2914,10 @@ class MusubiSearchPageV1 internal constructor(
 }
 
 internal object MusubiValidationV1 {
+    /** Copy caller values and expose one immutable JVM list so validated snapshots stay fixed. */
+    fun <T> immutableList(values: List<T>): List<T> =
+        Collections.unmodifiableList(values.toList())
+
     val U64_MAX: BigInteger = BigInteger("18446744073709551615")
 
     fun requireU64(value: BigInteger, field: String) {

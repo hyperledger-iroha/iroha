@@ -413,14 +413,18 @@ where
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"source\":")?;
-        JsonSerialize::json_serialize_to(&self.source, out)?;
-        out.push_str(",\"object\":")?;
-        JsonSerialize::json_serialize_to(&self.object, out)?;
-        out.push_str(",\"destination\":")?;
-        JsonSerialize::json_serialize_to(&self.destination, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"source\":")?;
+            JsonSerialize::json_serialize_to(&self.source, out)?;
+            out.push_str(",\"object\":")?;
+            JsonSerialize::json_serialize_to(&self.object, out)?;
+            out.push_str(",\"destination\":")?;
+            JsonSerialize::json_serialize_to(&self.destination, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -446,18 +450,22 @@ impl FastJsonWrite for TransferAssetBatchEntry {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"leg_id\":")?;
-        JsonSerialize::json_serialize_to(&self.leg_id, out)?;
-        out.push_str(",\"from\":")?;
-        JsonSerialize::json_serialize_to(&self.from, out)?;
-        out.push_str(",\"to\":")?;
-        JsonSerialize::json_serialize_to(&self.to, out)?;
-        out.push_str(",\"asset_definition\":")?;
-        JsonSerialize::json_serialize_to(&self.asset_definition, out)?;
-        out.push_str(",\"amount\":")?;
-        JsonSerialize::json_serialize_to(&self.amount, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"leg_id\":")?;
+            JsonSerialize::json_serialize_to(&self.leg_id, out)?;
+            out.push_str(",\"from\":")?;
+            JsonSerialize::json_serialize_to(&self.from, out)?;
+            out.push_str(",\"to\":")?;
+            JsonSerialize::json_serialize_to(&self.to, out)?;
+            out.push_str(",\"asset_definition\":")?;
+            JsonSerialize::json_serialize_to(&self.asset_definition, out)?;
+            out.push_str(",\"amount\":")?;
+            JsonSerialize::json_serialize_to(&self.amount, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -477,12 +485,16 @@ impl FastJsonWrite for TransferAssetBatch {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"mode\":")?;
-        JsonSerialize::json_serialize_to(&self.mode, out)?;
-        out.push_str(",\"entries\":")?;
-        JsonSerialize::json_serialize_to(&self.entries, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"mode\":")?;
+            JsonSerialize::json_serialize_to(&self.mode, out)?;
+            out.push_str(",\"entries\":")?;
+            JsonSerialize::json_serialize_to(&self.entries, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }

@@ -288,7 +288,7 @@ impl norito::json::FastJsonWrite for DomainId {
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::write_json_string_to(&self.to_string(), out)
+        norito::json::write_json_display_to(self, out)
     }
 }
 

@@ -523,12 +523,12 @@ mod data_dir_tests {
 /// Non-secret private Musubi publication custody and TLS listener settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiPublication {
+    /// Complete explicit runtime selection; absence installs no publication service.
+    pub installation: Option<MusubiPublicationInstallation>,
     /// Parent directory for the separately locked journal, seed and clock owners.
     pub custody_root: PathBuf,
     /// Private TLS bind address; no certificate or key material is stored here.
     pub private_tls_bind: std::net::SocketAddr,
-    /// Exact path prefix stripped before dispatching the three closed service routes.
-    pub private_mount_prefix: String,
     /// Maximum simultaneously admitted private TLS requests.
     pub max_inflight_requests: u16,
     /// Lifetime operation capacity of the durable publication journal.
@@ -553,6 +553,45 @@ pub struct MusubiPublication {
     pub pin_retention_horizon_secs: u64,
     /// Public identity expected to sign and pay for the pin transaction.
     pub pin_transaction_authority: MusubiPinTransactionAuthority,
+}
+/// Complete public identity and bounded authorization for an explicitly installed publisher.
+///
+/// Parsing this intent provides no native authority or initialization permission. Runtime must
+/// open the already initialized original custody and independently verify keys, TLS and State.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusubiPublicationInstallation {
+    /// Exact original genesis-derived network.
+    pub network_id: iroha_data_model::NetworkId,
+    /// Admitted provider whose owner signs seed receipts.
+    pub seed_provider: ProviderId,
+    /// Exact provider owner; never inferred from the daemon validator key.
+    pub ingress_broker: AccountId,
+    /// Original nonzero authority-wide pin session, retained across every restart.
+    pub pin_session: [u8; 32],
+    /// Native private credential for the exact ingress broker.
+    pub broker_key_file: PathBuf,
+    /// Native private credential for the independently configured paid-pin account.
+    pub pin_key_file: PathBuf,
+    /// Exact original DNS name checked by the TLS identity owner.
+    pub tls_server_name: String,
+    /// Original server certificate in bounded DER form.
+    pub tls_certificate_file: PathBuf,
+    /// Original certificate's private key in bounded DER form.
+    pub tls_private_key_file: PathBuf,
+    /// Original private trust root, used without modifying global trust stores.
+    pub tls_root_certificate_file: PathBuf,
+    /// Finite budget for each fresh native provider discovery, independent of pin authorization.
+    pub readback_request_timeout_ms: u64,
+    /// Maximum authorization interval of a new operation, also capped by its signed caller expiry.
+    pub pin_authorization_window_ms: u64,
+    /// Maximum fresh native Checks under one immutable operation authorization.
+    pub pin_max_check_rounds: u16,
+    /// Exact Nexus fee asset for the original per-operation spending authorization.
+    pub pin_fee_asset: AssetDefinitionId,
+    /// Per-transaction Nexus ceiling; public pin principal remains native-priced separately.
+    pub pin_per_transaction_fee_limit: Quantity,
+    /// Aggregate Nexus ceiling across every retained pin/control payload in that operation.
+    pub pin_total_fee_limit: Quantity,
 }
 /// First-release selection of the public account expected to sign and fund a Musubi paid pin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -589,9 +628,9 @@ impl MusubiPublication {
 }
 impl_default!(MusubiPublication => {
     Self {
+        installation: None,
         custody_root: PathBuf::from(defaults::musubi_publication::CUSTODY_ROOT),
         private_tls_bind: defaults::musubi_publication::private_tls_bind(),
-        private_mount_prefix: defaults::musubi_publication::PRIVATE_MOUNT_PREFIX.to_owned(),
         max_inflight_requests: defaults::musubi_publication::MAX_INFLIGHT_REQUESTS,
         journal_max_operations: defaults::musubi_publication::JOURNAL_MAX_OPERATIONS,
         journal_max_authorizations: defaults::musubi_publication::JOURNAL_MAX_AUTHORIZATIONS,

@@ -1421,7 +1421,10 @@ fn sample_block_with_result(
             .expect("sign result-bearing sample block"),
     );
     block
-        .replace_signatures(std::collections::BTreeSet::from([final_signature]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([final_signature])
+                .expect("single finalized block signature"),
+        )
         .expect("replace result-bearing sample-block signature");
     {
         let mut final_signatures = block.signatures();

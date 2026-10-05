@@ -25,7 +25,6 @@ daemon = ["irohad_lib/daemon", "telemetry", "schema-endpoint", "gost", "sm", "da
 external-software-signer-bin = ["daemon"]
 dev-tools = ["daemon", "zk-stark", "irohad_lib/dev-tools"]
 accel-metal = ["fastpq-gpu", "irohad_lib/accel-metal"]
-ivm-cuda = ["irohad_lib/ivm-cuda"]
 accel-cuda = ["fastpq-gpu", "irohad_lib/accel-cuda"]
 test-network-private-settlement-route-control = ["irohad_lib/test-network-private-settlement-route-control"]
 test-network-parliament-signers = ["irohad_lib/test-network-parliament-signers"]

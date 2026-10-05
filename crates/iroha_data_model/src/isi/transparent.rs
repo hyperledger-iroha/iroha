@@ -1184,14 +1184,18 @@ where
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"object\":")?;
-        JsonSerialize::json_serialize_to(&self.object, out)?;
-        out.push_str(",\"key\":")?;
-        JsonSerialize::json_serialize_to(&self.key, out)?;
-        out.push_str(",\"value\":")?;
-        JsonSerialize::json_serialize_to(&self.value, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"object\":")?;
+            JsonSerialize::json_serialize_to(&self.object, out)?;
+            out.push_str(",\"key\":")?;
+            JsonSerialize::json_serialize_to(&self.key, out)?;
+            out.push_str(",\"value\":")?;
+            JsonSerialize::json_serialize_to(&self.value, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1212,14 +1216,18 @@ impl FastJsonWrite for SetAssetKeyValue {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"asset\":")?;
-        JsonSerialize::json_serialize_to(&self.asset, out)?;
-        out.push_str(",\"key\":")?;
-        JsonSerialize::json_serialize_to(&self.key, out)?;
-        out.push_str(",\"value\":")?;
-        JsonSerialize::json_serialize_to(&self.value, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"asset\":")?;
+            JsonSerialize::json_serialize_to(&self.asset, out)?;
+            out.push_str(",\"key\":")?;
+            JsonSerialize::json_serialize_to(&self.key, out)?;
+            out.push_str(",\"value\":")?;
+            JsonSerialize::json_serialize_to(&self.value, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1242,12 +1250,16 @@ where
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"object\":")?;
-        JsonSerialize::json_serialize_to(&self.object, out)?;
-        out.push_str(",\"key\":")?;
-        JsonSerialize::json_serialize_to(&self.key, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"object\":")?;
+            JsonSerialize::json_serialize_to(&self.object, out)?;
+            out.push_str(",\"key\":")?;
+            JsonSerialize::json_serialize_to(&self.key, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1266,12 +1278,16 @@ impl FastJsonWrite for RemoveAssetKeyValue {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"asset\":")?;
-        JsonSerialize::json_serialize_to(&self.asset, out)?;
-        out.push_str(",\"key\":")?;
-        JsonSerialize::json_serialize_to(&self.key, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"asset\":")?;
+            JsonSerialize::json_serialize_to(&self.asset, out)?;
+            out.push_str(",\"key\":")?;
+            JsonSerialize::json_serialize_to(&self.key, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1295,12 +1311,16 @@ where
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"object\":")?;
-        JsonSerialize::json_serialize_to(&self.object, out)?;
-        out.push_str(",\"destination\":")?;
-        JsonSerialize::json_serialize_to(&self.destination, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"object\":")?;
+            JsonSerialize::json_serialize_to(&self.object, out)?;
+            out.push_str(",\"destination\":")?;
+            JsonSerialize::json_serialize_to(&self.destination, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1324,12 +1344,16 @@ where
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"object\":")?;
-        JsonSerialize::json_serialize_to(&self.object, out)?;
-        out.push_str(",\"destination\":")?;
-        JsonSerialize::json_serialize_to(&self.destination, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"object\":")?;
+            JsonSerialize::json_serialize_to(&self.object, out)?;
+            out.push_str(",\"destination\":")?;
+            JsonSerialize::json_serialize_to(&self.destination, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1348,12 +1372,16 @@ impl FastJsonWrite for ExecuteTrigger {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"trigger\":")?;
-        JsonSerialize::json_serialize_to(&self.trigger, out)?;
-        out.push_str(",\"args\":")?;
-        JsonSerialize::json_serialize_to(&self.args, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"trigger\":")?;
+            JsonSerialize::json_serialize_to(&self.trigger, out)?;
+            out.push_str(",\"args\":")?;
+            JsonSerialize::json_serialize_to(&self.args, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1372,12 +1400,16 @@ impl FastJsonWrite for Log {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"level\":")?;
-        JsonSerialize::json_serialize_to(&self.level, out)?;
-        out.push_str(",\"msg\":")?;
-        JsonSerialize::json_serialize_to(&self.msg, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"level\":")?;
+            JsonSerialize::json_serialize_to(&self.level, out)?;
+            out.push_str(",\"msg\":")?;
+            JsonSerialize::json_serialize_to(&self.msg, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -1944,7 +1976,7 @@ mod checked_container_cleanup_tests {
         audit(&SetKeyValue::account(
             account(61),
             "nested".parse().unwrap(),
-            iroha_primitives::json::Json::new([1_u64, 2]),
+            iroha_primitives::json::Json::new(vec![1_u64, 2]),
         ));
     }
 
@@ -1953,7 +1985,7 @@ mod checked_container_cleanup_tests {
         audit(&SetAssetKeyValue::new(
             asset(),
             "nested".parse().unwrap(),
-            iroha_primitives::json::Json::new([1_u64, 2]),
+            iroha_primitives::json::Json::new(vec![1_u64, 2]),
         ));
     }
 
@@ -1991,7 +2023,7 @@ mod checked_container_cleanup_tests {
 
     #[test]
     fn original_execute_trigger_checked_container_retains_bytes_errors_and_depth() {
-        audit(&ExecuteTrigger::new("original_trigger".parse().unwrap()).with_args([1_u64, 2]));
+        audit(&ExecuteTrigger::new("original_trigger".parse().unwrap()).with_args(vec![1_u64, 2]));
     }
 
     #[test]

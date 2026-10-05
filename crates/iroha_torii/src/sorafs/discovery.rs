@@ -1194,6 +1194,23 @@ impl ProviderAdvertCache {
             .get(provider_id)
             .and_then(|fp| self.records.get(fp))
     }
+    /// Borrow an unverified candidate for an independent complete native proof.
+    ///
+    /// Replay-store poisoning still refuses. This deliberately performs no admission/history
+    /// lookup and may return expired or revoked material. The caller must authenticate the
+    /// complete candidate and current admission under its own same-cut native verifier before
+    /// using any endpoint, key or provider claim; this accessor grants no authority.
+    #[must_use]
+    pub fn unverified_record_for_native_proof(
+        &self,
+        provider_id: &[u8; 32],
+    ) -> Option<&AdvertRecord> {
+        if self.replay_checkpoint_poisoned {
+            return None;
+        }
+        self.record_by_provider(provider_id)
+    }
+
     /// Return an advert only while its retained council admission and signed payload are valid.
     ///
     /// A cache hit alone is insufficient after expiry or an admission-record replacement. The

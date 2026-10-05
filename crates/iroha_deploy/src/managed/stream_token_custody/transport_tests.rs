@@ -200,6 +200,16 @@ fn selected_custody_recovery_distinguishes_absent_empty_and_dirty_without_http()
         );
         if dirty == 2 {
             assert!(configure.is_err() && enroll.is_err());
+        } else if dirty == 1 {
+            assert!(configure.unwrap().is_none());
+            // Enroll publishes its root with the original selection and anchor atomically.
+            // An existing empty root is custody loss, never a fresh preflight directory.
+            assert!(matches!(
+                enroll,
+                Err(crate::managed::Error::Bootstrap(
+                    ManagedBootstrapFailure::RetainedMaterial
+                ))
+            ));
         } else {
             assert!(configure.unwrap().is_none() && enroll.unwrap().is_none());
         }

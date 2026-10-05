@@ -1,73 +1,45 @@
-//! One finite authorization minted by a newly started managed worker, never by recovery.
-//!
-//! Files bind original intent and unsigned replacement custody. Only the non-decodable live
-//! value carries the original process-local clock; stored epochs cannot renew signing permission.
-
+//! Startup-only scope around the sole generated authorization epoch and live-clock owner.
 use super::Original;
+use crate::managed::native_operation::now_ms;
 use crate::managed::{
     ManagedBootstrapFailure, PreparedLocalnet, Result,
     native_operation::{
         Terms,
-        attempts::{self, Origin, Purpose},
-        encode, invalid, now_ms, require_deadline,
+        attempts::Purpose,
+        authorization::{self, DispatchAuthorization, Lease, Scope},
+        encode, invalid,
     },
     service_authority::ServiceAuthority,
     service_policies::GeneratedServicePolicies,
 };
-use iroha_crypto::Hash;
+pub(super) use authorization::require_active;
 use iroha_data_model::sorafs::capacity::ProviderId;
 use iroha_fs::PrivateDirectory;
 use std::{
-    ffi::OsString,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::AtomicBool},
     time::Instant,
 };
+#[cfg(test)]
+use {
+    crate::managed::native_operation::attempts,
+    authorization::{MAX_EPOCHS, digest},
+    std::sync::atomic::Ordering,
+};
 
-const MAX_EPOCHS: usize = 64;
-
-#[derive(Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_deploy::managed::service_bootstrap::authorization::Epoch")]
-struct Epoch {
-    ordinal: u8,
-    previous: Option<[u8; 32]>,
-    parent_intent: [u8; 32],
-    issued_at_unix_ms: u64,
-    terms: Terms,
-}
-#[derive(Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_deploy::managed::service_bootstrap::authorization::Replacement")]
-struct Replacement {
-    epoch: [u8; 32],
-    purpose: Purpose,
-    previous_attempt: [u8; 32],
-}
-
-/// Exact retained epoch plus original live clock. No Clone, decoder or caller constructor.
+/// Initial worker authorization only. A renewal issuer cannot be constructed through this type.
 pub(in crate::managed) struct GeneratedBootstrapAuthorization {
     prepared: PreparedLocalnet,
     original: Original,
-    original_digest: [u8; 32],
-    directory: PrivateDirectory,
-    epoch: Epoch,
-    deadline: Instant,
-    cancelled: Arc<AtomicBool>,
+    lease: Lease,
 }
-
-/// A concrete owner must match its exact generated policy and native semantic selection as well
-/// as this scope. This value is not a proof of current permission or finalized execution.
 pub(in crate::managed) struct BootstrapChildAuthorization<'a> {
     parent: &'a GeneratedBootstrapAuthorization,
     purpose: Purpose,
 }
-
 pub(in crate::managed) struct FundingAuthorization<'a> {
     parent: &'a GeneratedBootstrapAuthorization,
     provider: ProviderId,
 }
-
 impl GeneratedBootstrapAuthorization {
     #[cfg(test)]
     pub(in crate::managed) fn test_child(
@@ -78,13 +50,12 @@ impl GeneratedBootstrapAuthorization {
     }
     #[cfg(test)]
     pub(in crate::managed) fn test_terms(&self) -> &Terms {
-        &self.epoch.terms
+        &self.lease.epoch.terms
     }
     #[cfg(test)]
     pub(in crate::managed) fn test_ordinal(&self) -> u8 {
-        self.epoch.ordinal
+        self.lease.epoch.ordinal
     }
-
     pub(super) fn issue(
         authority: &ServiceAuthority,
         original: Original,
@@ -92,61 +63,23 @@ impl GeneratedBootstrapAuthorization {
         cancelled: Arc<AtomicBool>,
     ) -> Result<Self> {
         require_active(&cancelled)?;
-        require_deadline(deadline)?;
         authority.validate_profile()?;
         original.validate(authority)?;
-        let original_digest = original.digest()?;
-        let directory = authority.directory.open_child("initial")?;
-        let epoch = {
-            let expires = profile_expiry(authority, &original)?;
-            let issued_at_unix_ms = now_ms()?;
-            let remaining = u64::try_from(
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis(),
-            )
-            .map_err(|_| invalid("bootstrap startup interval exceeds bound"))?;
-            let requested = issued_at_unix_ms
-                .checked_add(remaining)
-                .ok_or_else(|| invalid("bootstrap authorization UTC overflow"))?
-                .min(expires.saturating_sub(1));
-            if requested <= issued_at_unix_ms {
-                return Err(ManagedBootstrapFailure::ProfileExpired.into());
-            }
-            let terms = Terms::new(requested, &original.fees.options(deadline))?;
-            require_active(&cancelled)?;
-            let root = directory.ensure_child("epochs")?;
-            let retained = read_epochs(&root, &original)?;
-            if retained.len() >= MAX_EPOCHS {
-                return Err(ManagedBootstrapFailure::EpochLimit.into());
-            }
-            let epoch = Epoch {
-                ordinal: u8::try_from(retained.len() + 1)
-                    .map_err(|_| invalid("bootstrap ordinal overflow"))?,
-                previous: retained.last().map(digest).transpose()?,
-                parent_intent: original_digest,
-                issued_at_unix_ms,
-                terms,
-            };
-            require_active(&cancelled)?;
-            attempts::write_record(&root, &format!("{:04}.nrt", epoch.ordinal), &epoch)?;
-            let after = read_epochs(&root, &original)?;
-            if after.last() != Some(&epoch) || after.len() != retained.len() + 1 {
-                return Err(invalid("new bootstrap epoch changed during publication"));
-            }
-            epoch
-        };
+        let lease = Lease::issue(
+            authority.directory.open_child("initial")?,
+            encode(&original, super::MAX_ORIGINAL_BYTES)?,
+            &original.fees,
+            scope(&original),
+            profile_expiry(authority, &original)?,
+            deadline,
+            cancelled,
+        )?;
         Ok(Self {
             prepared: authority.prepared.clone(),
             original,
-            original_digest,
-            directory,
-            epoch,
-            deadline,
-            cancelled,
+            lease,
         })
     }
-
     pub(super) fn validate(
         &self,
         authority: &ServiceAuthority,
@@ -161,39 +94,10 @@ impl GeneratedBootstrapAuthorization {
         self.check(deadline)
     }
     fn check(&self, deadline: Instant) -> Result<Instant> {
-        require_active(&self.cancelled)?;
-        let deadline = deadline.min(self.deadline);
-        if deadline <= Instant::now() {
-            return Err(ManagedBootstrapFailure::AuthorizationExpired.into());
-        }
-        self.directory.revalidate()?;
-        let current = self
-            .directory
-            .read("original.nrt", super::MAX_ORIGINAL_BYTES)?;
-        if *Hash::new(current.as_slice()).as_ref() != self.original_digest
-            || current.as_slice() != encode(&self.original, super::MAX_ORIGINAL_BYTES)?.as_slice()
-        {
-            return Err(invalid(
-                "bootstrap original intent changed after authorization",
-            ));
-        }
-        let epoch = &self.epoch;
-        if now_ms()? >= epoch.terms.signing_deadline_unix_ms {
-            return Err(ManagedBootstrapFailure::AuthorizationExpired.into());
-        }
-        let retained = read_epochs(&self.directory.open_child("epochs")?, &self.original)?;
-        if retained.last() != Some(epoch) {
-            return Err(invalid(
-                "bootstrap capability no longer selects the current retained epoch",
-            ));
-        }
-        epoch
-            .terms
-            .signing_deadline(deadline)
-            .map_err(|_| ManagedBootstrapFailure::AuthorizationExpired.into())
+        self.lease.check(deadline)
     }
     pub(super) fn child(&self, purpose: Purpose) -> Result<BootstrapChildAuthorization<'_>> {
-        validate_purpose(&self.original, purpose)?;
+        scope(&self.original).check(purpose)?;
         Ok(BootstrapChildAuthorization {
             parent: self,
             purpose,
@@ -207,24 +111,26 @@ impl GeneratedBootstrapAuthorization {
         })
     }
 }
-
+impl DispatchAuthorization for BootstrapChildAuthorization<'_> {
+    fn lease(&self) -> &Lease {
+        &self.parent.lease
+    }
+    fn purpose(&self) -> Purpose {
+        self.purpose
+    }
+}
 impl BootstrapChildAuthorization<'_> {
     pub(in crate::managed) fn bind_account(
         &self,
         account: iroha_wallet::operations::AccountService,
     ) -> Result<iroha_wallet::operations::AccountService> {
-        account
-            .with_cancellation(Arc::clone(&self.parent.cancelled))
-            .map_err(|_| invalid("bootstrap wallet cancellation binding changed"))
+        DispatchAuthorization::bind_account(self, account)
     }
     pub(in crate::managed) fn fees(&self) -> &crate::managed::native_operation::Fees {
-        &self.parent.original.fees
+        DispatchAuthorization::fees(self)
     }
     pub(in crate::managed) fn check(&self, purpose: Purpose, deadline: Instant) -> Result<Instant> {
-        if purpose != self.purpose {
-            return Err(invalid("bootstrap dispatch changed its authorized purpose"));
-        }
-        self.parent.check(deadline)
+        DispatchAuthorization::check(self, purpose, deadline)
     }
     pub(in crate::managed) fn validate(
         &self,
@@ -251,7 +157,7 @@ impl BootstrapChildAuthorization<'_> {
             }
             _ => {}
         }
-        self.parent.check(deadline)
+        self.check(expected, deadline)
     }
     pub(in crate::managed) fn policies(&self) -> &GeneratedServicePolicies {
         &self.parent.original.policies
@@ -261,59 +167,15 @@ impl BootstrapChildAuthorization<'_> {
         deadline: Instant,
         exclusive_ceiling: Option<u64>,
     ) -> Result<Terms> {
-        self.parent.check(deadline)?;
-        let mut terms = self.parent.epoch.terms.clone();
-        if let Some(ceiling) = exclusive_ceiling {
-            let end = ceiling
-                .checked_sub(1)
-                .ok_or(ManagedBootstrapFailure::EnrollmentExpired)?;
-            terms.requested_deadline_unix_ms = terms.requested_deadline_unix_ms.min(end);
-            terms.signing_deadline_unix_ms = terms.signing_deadline_unix_ms.min(end);
-        }
-        terms.validate()?;
-        if now_ms()? >= terms.signing_deadline_unix_ms {
-            return Err(ManagedBootstrapFailure::AuthorizationExpired.into());
-        }
-        Ok(terms)
+        DispatchAuthorization::terms(self, deadline, exclusive_ceiling)
     }
-    pub(in crate::managed) fn origin(&self) -> Result<Origin> {
-        let epoch = &self.parent.epoch;
-        Ok(Origin::Generated {
-            ordinal: epoch.ordinal,
-            epoch: digest(epoch)?,
-            parent_intent: self.parent.original_digest,
-        })
-    }
-    /// One aggregate replacement claim, durably retained before retiring any wallet request.
+    #[cfg(test)]
     pub(in crate::managed) fn claim_replacement(
         &self,
         previous_attempt: [u8; 32],
         deadline: Instant,
     ) -> Result<()> {
-        self.parent.check(deadline)?;
-        if previous_attempt == [0; 32] {
-            return Err(invalid(
-                "unsigned replacement lacks its exact original attempt",
-            ));
-        }
-        let epoch = &self.parent.epoch;
-        let root = self.parent.directory.open_child("epochs")?;
-        let name = format!("{:04}-replacement.nrt", epoch.ordinal);
-        let selected = Replacement {
-            epoch: digest(epoch)?,
-            purpose: self.purpose,
-            previous_attempt,
-        };
-        if let Some(old) = attempts::read_record::<Replacement>(&root, &name)? {
-            if old != selected {
-                return Err(ManagedBootstrapFailure::ReplacementLimit.into());
-            }
-        } else {
-            self.parent.check(deadline)?;
-            attempts::write_record(&root, &name, &selected)?;
-        }
-        self.parent.check(deadline)?;
-        Ok(())
+        DispatchAuthorization::claim_replacement(self, previous_attempt, deadline)
     }
 }
 impl FundingAuthorization<'_> {
@@ -346,14 +208,14 @@ impl FundingAuthorization<'_> {
                 "funding authorization cannot grant another native purpose",
             ));
         }
-        Ok(BootstrapChildAuthorization {
-            parent: self.parent,
-            purpose,
-        })
+        self.parent.child(purpose)
     }
 }
-
-/// Validate all retained epoch records even when complete native history needs no new capability.
+fn scope(original: &Original) -> Scope {
+    Scope::Bootstrap(std::array::from_fn(|index| {
+        original.policies.providers[index].provider_id
+    }))
+}
 pub(super) fn validate_inventory(directory: &PrivateDirectory, original: &Original) -> Result<()> {
     let names = directory.entries(2)?;
     if names
@@ -364,68 +226,12 @@ pub(super) fn validate_inventory(directory: &PrivateDirectory, original: &Origin
             "bootstrap intent contains unknown retained material",
         ));
     }
-    match directory.open_child("epochs") {
-        Ok(root) => {
-            read_epochs(&root, original)?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    directory.revalidate()?;
-    Ok(())
-}
-
-fn read_epochs(root: &PrivateDirectory, original: &Original) -> Result<Vec<Epoch>> {
-    let names = root.entries(MAX_EPOCHS * 2)?;
-    let mut expected = Vec::<OsString>::new();
-    let mut epochs: Vec<Epoch> = Vec::new();
-    let parent_intent = original.digest()?;
-    for index in 1..=MAX_EPOCHS {
-        let name = format!("{index:04}.nrt");
-        let Some(epoch): Option<Epoch> = attempts::read_record(root, &name)? else {
-            break;
-        };
-        epoch.terms.validate()?;
-        if usize::from(epoch.ordinal) != index
-            || epoch.parent_intent != parent_intent
-            || epoch.terms.fees != original.fees
-            || epoch.issued_at_unix_ms == 0
-            || epoch.issued_at_unix_ms >= epoch.terms.signing_deadline_unix_ms
-            || epoch.previous != epochs.last().map(digest).transpose()?
-        {
-            return Err(invalid(
-                "bootstrap epoch changed original intent, fee terms or lineage",
-            ));
-        }
-        expected.push(name.into());
-        let claim_name = format!("{index:04}-replacement.nrt");
-        if let Some(claim) = attempts::read_record::<Replacement>(root, &claim_name)? {
-            validate_purpose(original, claim.purpose)?;
-            if claim.epoch != digest(&epoch)? || claim.previous_attempt == [0; 32] {
-                return Err(invalid("bootstrap unsigned replacement claim changed"));
-            }
-            expected.push(claim_name.into());
-        }
-        epochs.push(epoch);
-    }
-    expected.sort();
-    if names != expected || root.entries(MAX_EPOCHS * 2)? != names {
-        return Err(invalid(
-            "bootstrap epoch inventory changed or contains gaps or unknown material",
-        ));
-    }
-    Ok(epochs)
-}
-fn validate_purpose(original: &Original, purpose: Purpose) -> Result<()> {
-    if matches!(purpose, Purpose::CustodyRenewal { .. }) {
-        return Err(invalid(
-            "initial bootstrap cannot authorize custody renewal",
-        ));
-    }
-    if let Some(provider) = provider(purpose) {
-        original.policies.provider(provider)?;
-    }
-    Ok(())
+    authorization::validate_retained(
+        directory,
+        original.digest()?,
+        &original.fees,
+        scope(original),
+    )
 }
 fn provider(purpose: Purpose) -> Option<ProviderId> {
     match purpose {
@@ -484,18 +290,6 @@ fn profile_expiry(authority: &ServiceAuthority, original: &Original) -> Result<u
         end = end.min(provider_end);
     }
     Ok(end)
-}
-fn digest<T: norito::NoritoSerialize>(value: &T) -> Result<[u8; 32]> {
-    attempts::semantic_digest(value, attempts::MAX_RECORD_BYTES)
-}
-
-/// Cancellation is only a refusal signal, never a source of epoch or native authority.
-pub(super) fn require_active(cancelled: &AtomicBool) -> Result<()> {
-    if cancelled.load(Ordering::Acquire) {
-        Err(ManagedBootstrapFailure::Cancelled.into())
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

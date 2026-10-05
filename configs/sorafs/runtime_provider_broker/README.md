@@ -62,6 +62,24 @@ pre-existing entry fails startup without being removed.
 
 ## Consensus threshold-signer credentials
 
+The standalone software-signer broker requires `credential_max_memory_bytes`
+to match the positive bound exported in its canonical catalog. A mismatch fails
+startup before credential input or backend assembly. Credential imports and
+serving retain the same initially loaded catalog; executable assembly does not
+reopen it. Accepted startup creates one original pool from the parsed policy and
+passes it through both platform threshold handoffs; currently admitted transcript
+owners retain its charges. Parliament TLE imports reserve the decoded handle,
+nested session buffers, charge ledger and prepared decoder controls before their
+physical allocation. The private backend retains decoded-graph charges through
+its final reader; clones share those charges. Public inventory hashing borrows
+the original graph and transcript validation uses bounded inline scratch.
+TODO: fund supervisor input buffers, outer `std::Arc` controls and Core custody-map
+nodes with exact original owners before full memory qualification can pass.
+These remaining allocations are not covered by the decoded-graph reservation.
+A zero catalog bound is valid only for an inventory without either threshold
+slot, and grants no threshold custody. This is a local operational admission
+policy; it does not change transaction validity or gas accounting.
+
 Global-beacon and Parliament timed-release credentials bind their public
 `policy_digest` to the complete provisioned signer inventory. The digest uses
 one consensus-threshold inventory domain and covers the exact role slot,

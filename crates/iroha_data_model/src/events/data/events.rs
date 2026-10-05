@@ -164,14 +164,18 @@ where
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"target\":")?;
-        <Id as JsonSerialize>::json_serialize_to(&self.target, out)?;
-        out.push_str(",\"key\":")?;
-        <Name as JsonSerialize>::json_serialize_to(&self.key, out)?;
-        out.push_str(",\"value\":")?;
-        <Json as JsonSerialize>::json_serialize_to(&self.value, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"target\":")?;
+            <Id as JsonSerialize>::json_serialize_to(&self.target, out)?;
+            out.push_str(",\"key\":")?;
+            <Name as JsonSerialize>::json_serialize_to(&self.key, out)?;
+            out.push_str(",\"value\":")?;
+            <Json as JsonSerialize>::json_serialize_to(&self.value, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -2853,7 +2857,7 @@ mod checked_container_cleanup_tests {
         audit(&MetadataChanged {
             target: account(61),
             key: "original".parse().unwrap(),
-            value: iroha_primitives::json::Json::new([1_u64, 2]),
+            value: iroha_primitives::json::Json::new(vec![1_u64, 2]),
         });
     }
 }

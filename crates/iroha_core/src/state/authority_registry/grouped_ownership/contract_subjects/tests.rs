@@ -324,3 +324,90 @@ fn masked_rows_and_absent_undo_entries_consume_work_before_filtering() {
         "an absent undo entry is funded before it is skipped"
     );
 }
+
+#[test]
+fn each_original_publication_precedes_success_work_and_semantic_outcomes() {
+    for field in 0..4 {
+        for result in [
+            Ok(()),
+            Err(GroupedOwnershipError::WorkLimit),
+            Err(GroupedOwnershipError::Source {
+                image: GroupImage::Predecessor,
+                table: "world.contract_subject_bindings",
+                reason: "latent source failure",
+            }),
+        ] {
+            let world = world();
+            let checked = CheckedContractSubjects::capture(&world, 100_000).unwrap();
+            match field {
+                0 => world.contract_subject_bindings.block().commit(),
+                1 => world.contract_subject_addresses.block().commit(),
+                2 => world.accounts.block().commit(),
+                3 => world.contract_instances.block().commit(),
+                _ => unreachable!(),
+            }
+            let mut error = None;
+            assert_eq!(
+                allocations_during(|| error = checked.finish_validation(result).err()),
+                0
+            );
+            assert_eq!(
+                error,
+                Some(GroupedOwnershipError::Publication(
+                    PublicationPreparationError::Changed
+                ))
+            );
+        }
+    }
+}
+
+#[test]
+fn original_busy_refusal_keeps_precedence_over_later_changed_sources_and_work() {
+    let world = world();
+    let checked = CheckedContractSubjects::capture(&world, 100_000).unwrap();
+    world.contract_subject_addresses.block().commit();
+    world.accounts.block().commit();
+    world.contract_instances.block().commit();
+    let detached = world
+        .contract_subject_bindings
+        .block()
+        .try_detach(|_| Ok::<_, ()>(()))
+        .unwrap();
+    let prepared = detached
+        .try_prepare_publication(&world.contract_subject_bindings, |_, _| Ok::<_, ()>(()))
+        .unwrap_or_else(|(_, error, _)| panic!("original preparation: {error:?}"));
+    let original = checked
+        .rows
+        .try_matches_current(&world.contract_subject_bindings)
+        .unwrap_err();
+    assert!(matches!(original, PublicationPreparationError::Busy(_)));
+    let mut error = None;
+    assert_eq!(
+        allocations_during(|| error = checked
+            .finish_validation(Err(GroupedOwnershipError::WorkLimit))
+            .err()),
+        0
+    );
+    assert_eq!(error, Some(GroupedOwnershipError::Publication(original)));
+    drop(prepared);
+    assert_eq!(check(&world, 100_000), Ok(()));
+}
+
+#[test]
+fn predecessor_source_failure_wins_before_current_inverse_failure() {
+    let mut world = world();
+    let mut bad = binding();
+    bad.lifecycle.revision = 0;
+    malformed(&mut world, bad, true);
+    world
+        .contract_subject_addresses
+        .insert(BOB_ID.clone(), address());
+    assert!(matches!(
+        check(&world, 100_000),
+        Err(GroupedOwnershipError::Source {
+            image: GroupImage::Predecessor,
+            reason: "contract lifecycle revision must be non-zero",
+            ..
+        })
+    ));
+}

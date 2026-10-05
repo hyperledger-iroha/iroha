@@ -44,7 +44,8 @@ fn fixed_instruction_windows_capture_actual_depth_and_keep_inactive_slots_empty(
     let budget = budget();
     let mut parent = parent(&budget);
     let output =
-        NativeInvocation::run_unit_root(unit(), "main", 10_000, &mut parent, &budget).unwrap();
+        NativeInvocation::run_public_leaf_root(unit(), "main", 10_000, &mut parent, &budget)
+            .unwrap();
     let mut active = 0;
     let mut previous = None;
     for window in 0..INSTRUCTION_WINDOWS {
@@ -95,7 +96,8 @@ fn actual_compiled_root_captures_staged_gas_store_initialization_return_and_padd
     let budget = budget();
     let mut parent = parent(&budget);
     let output =
-        NativeInvocation::run_unit_root(contract, "main", 10_000, &mut parent, &budget).unwrap();
+        NativeInvocation::run_public_leaf_root(contract, "main", 10_000, &mut parent, &budget)
+            .unwrap();
     assert_eq!(output.remaining_gas(), ordinary.remaining_gas());
     assert_eq!(output.cycles(), ordinary.get_cycle_count());
     assert_eq!(output.cycles(), 64);
@@ -193,7 +195,7 @@ fn actual_compiled_root_captures_staged_gas_store_initialization_return_and_padd
 }
 
 #[test]
-fn private_selector_arguments_nonunit_and_nonzk_profiles_are_closed_before_execution() {
+fn private_selector_arguments_unsupported_results_and_nonzk_profiles_are_closed_before_execution() {
     let budget = budget();
     for (contract, selector) in [
         (unit(), "missing"),
@@ -206,14 +208,22 @@ fn private_selector_arguments_nonunit_and_nonzk_profiles_are_closed_before_execu
             "main",
         ),
         (
-            contract("seiyaku S { view fn main() -> bool { true } }", 64),
+            // Bool is now an authentic public leaf. Pointer-backed Int remains
+            // outside this component even though its table is also one word.
+            contract("seiyaku S { view fn main() -> int { 1 } }", 64),
             "main",
         ),
         (contract("seiyaku S { view fn main() { } }", 65), "main"),
     ] {
         let mut parent = parent(&budget);
         assert!(matches!(
-            NativeInvocation::run_unit_root(contract, selector, 10_000, &mut parent, &budget),
+            NativeInvocation::run_public_leaf_root(
+                contract,
+                selector,
+                10_000,
+                &mut parent,
+                &budget
+            ),
             Err(CaptureError::Unsupported)
         ));
         assert_eq!(
@@ -230,7 +240,7 @@ fn private_selector_arguments_nonunit_and_nonzk_profiles_are_closed_before_execu
         .unwrap();
     let mut parent = parent(&budget);
     assert!(matches!(
-        NativeInvocation::run_unit_root(
+        NativeInvocation::run_public_leaf_root(
             crate::prepare_contract(std::sync::Arc::<[u8]>::from(bytes)).unwrap(),
             "main",
             10_000,
@@ -254,7 +264,7 @@ fn child_calls_are_local_component_refusal_and_do_not_change_ordinary_validity()
     let budget = budget();
     let mut parent = parent(&budget);
     assert!(matches!(
-        NativeInvocation::run_unit_root(contract, "main", 10_000, &mut parent, &budget),
+        NativeInvocation::run_public_leaf_root(contract, "main", 10_000, &mut parent, &budget),
         Err(CaptureError::Unsupported)
     ));
     assert_eq!(budget.reserved_bytes(), 0);
@@ -265,7 +275,7 @@ fn short_credit_wrong_pool_and_native_faults_never_publish_partial_owners() {
     let budget = budget();
     let mut short = ExecutionMemoryLease::reserve(&budget, ExecutionMemoryPlan::default()).unwrap();
     assert!(matches!(
-        NativeInvocation::run_unit_root(unit(), "main", 10_000, &mut short, &budget),
+        NativeInvocation::run_public_leaf_root(unit(), "main", 10_000, &mut short, &budget),
         Err(CaptureError::Reservation(InsufficientReservation { requested_bytes, remaining_bytes: 0 }))
             if requested_bytes == NativeInvocation::allocation_plan().unwrap().requested_bytes()
     ));
@@ -273,7 +283,7 @@ fn short_credit_wrong_pool_and_native_faults_never_publish_partial_owners() {
     let foreign = AllocationBudget::new(128 * 1024 * 1024);
     let mut parent = parent(&foreign);
     assert!(matches!(
-        NativeInvocation::run_unit_root(unit(), "main", 10_000, &mut parent, &budget),
+        NativeInvocation::run_public_leaf_root(unit(), "main", 10_000, &mut parent, &budget),
         Err(CaptureError::PoolMismatch)
     ));
     assert_eq!(
@@ -293,7 +303,7 @@ fn short_credit_wrong_pool_and_native_faults_never_publish_partial_owners() {
     ] {
         let mut parent = super::tests::parent(&budget);
         assert!(
-            matches!(NativeInvocation::run_unit_root(contract,"main",gas,&mut parent,&budget),Err(CaptureError::Execution(error)) if error == expected)
+            matches!(NativeInvocation::run_public_leaf_root(contract,"main",gas,&mut parent,&budget),Err(CaptureError::Execution(error)) if error == expected)
         );
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -307,7 +317,13 @@ fn native_unwind_discards_the_only_packet_owner_and_refunds_original_credit() {
     PANIC_NEXT_COMMIT.with(|flag| flag.set(true));
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
-            let _ = NativeInvocation::run_unit_root(contract, "main", 10_000, &mut parent, &budget);
+            let _ = NativeInvocation::run_public_leaf_root(
+                contract,
+                "main",
+                10_000,
+                &mut parent,
+                &budget,
+            );
         }))
         .is_err()
     );
@@ -341,4 +357,57 @@ fn packet_clear_scrubs_the_same_fields_used_by_drop() {
     assert_eq!(packet.after(), &[0; 16]);
     assert_eq!(packet.before_private(), 0);
     assert_eq!(packet.after_private(), 0);
+}
+
+#[test]
+fn compiled_public_bool_leaves_use_the_same_original_capture_and_geometry() {
+    for (expression, expected) in [("false", 0), ("true", 1)] {
+        let artifact = contract(
+            &format!("seiyaku PublicLeaf {{ view fn main() -> bool {{ {expression} }} }}"),
+            64,
+        );
+        let mut ordinary = IVM::new(10_000);
+        ordinary.load_prepared(&artifact).unwrap();
+        ordinary.select_entrypoint("main").unwrap();
+        ordinary.run().unwrap();
+        assert_eq!(ordinary.public_call_result_word(0), Ok(expected));
+        let budget = budget();
+        let mut parent = parent(&budget);
+        let native =
+            NativeInvocation::run_public_leaf_root(artifact, "main", 10_000, &mut parent, &budget)
+                .unwrap();
+        assert_eq!(native.remaining_gas(), ordinary.remaining_gas());
+        assert_eq!(native.cycles(), ordinary.get_cycle_count());
+        assert_eq!(native.cycles(), 64);
+        assert_eq!(native.packets().len(), PACKET_SLOTS);
+        let memory = &native.packets()[schedule::RETURN_FIRST + 24];
+        assert_eq!(memory.space(), Some(PacketSpace::Memory));
+        assert_eq!(memory.index(), (crate::Memory::HEAP_START / 16) as u32);
+        assert_eq!(word(memory.before()), expected);
+        assert_eq!(memory.before(), memory.after());
+        assert_eq!(&memory.before()[8..], &[0; 8]);
+        assert_eq!((memory.before_private(), memory.after_private()), (0, 0));
+        assert!(!memory.is_write());
+        for (offset, expected_cost) in [(22, crate::call_gas::NODE), (23, crate::call_gas::WORD)] {
+            let gas = &native.packets()[schedule::RETURN_FIRST + offset];
+            assert_eq!(word(gas.before()) - word(gas.after()), expected_cost);
+        }
+        let scan = schedule::RETURN_FIRST + schedule::SCAN_OFFSET;
+        assert_eq!(word(native.packets()[scan].before()), 255);
+        for offset in 0..RETURN_CELLS {
+            assert!(!native.packets()[scan + 2 * offset + 1].enabled());
+            if offset != 0 {
+                assert!(!native.packets()[scan + 2 * offset].enabled());
+            }
+        }
+        assert_eq!(parent.remaining_bytes(), 0);
+        assert_eq!(
+            budget.reserved_bytes(),
+            NativeInvocation::allocation_plan()
+                .unwrap()
+                .requested_bytes()
+        );
+        drop(native);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 }

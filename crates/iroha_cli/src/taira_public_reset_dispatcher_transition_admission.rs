@@ -101,10 +101,22 @@ pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
     need(plan.schema == SCHEMA, "exact transition schema required")?;
     validate_lower_hex("operation ID", &plan.operation_id, 32)?;
     require_lower_sha256(&plan.host_identity_sha256, "host identity")?;
+    plan.hosts.validate()?;
+    need(
+        plan.host_identity_sha256 == plan.hosts.validator_guest.endpoint.host_identity_sha256,
+        "transition must execute on the independently admitted validator guest",
+    )?;
     let p = &plan.predecessor;
     require_lower_sha256(&p.inventory_sha256, "predecessor inventory")?;
     require_lower_sha256(&p.authorization_sha256, "predecessor authorization")?;
     super::super::super::validate_nonce(&p.authorization_nonce)?;
+    p.native_edge_capture.verify(
+        &plan.hosts,
+        &p.inventory_sha256,
+        &p.authorization_sha256,
+        &p.authorization_nonce,
+        &p.native_edge_capture.claims.next_genesis_hash,
+    )?;
     need(
         p.completed_next_step > 0
             && p.completed_next_step <= 256
@@ -131,11 +143,11 @@ pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
         "predecessor control paths differ",
     )?;
     need(
-        p.guards.len() == 5 && p.occupied.len() == 5,
-        "five exact role closures required",
+        p.guards.len() == SLUGS.len() && p.occupied.len() == SLUGS.len(),
+        "four exact guest role closures and independently captured native edge required",
     )?;
     for ((guard, role), slug) in p.guards.iter().zip(&p.occupied).zip(SLUGS) {
-        let directory = if slug == "taira-edge" { "edge" } else { slug };
+        let directory = slug;
         need(
             guard.path == format!("{CONTROL}/{slug}/guard.json")
                 && guard.mode == 0o600
@@ -158,18 +170,7 @@ pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
         )?;
         let paths: BTreeSet<&str> = role.files.iter().map(|p| p.path.as_str()).collect();
         need(paths.len() == role.files.len(), "duplicate protected path")?;
-        if slug == "taira-edge" {
-            let expected = [
-                format!("{}/bin/iroha", role.selector.target),
-                format!("{}/taira.conf", role.selector.target),
-                "/etc/nginx/conf.d/taira.conf".into(),
-                "/etc/systemd/system/nginx.service".into(),
-            ];
-            need(
-                paths == expected.iter().map(String::as_str).collect(),
-                "edge protected closure differs",
-            )?;
-        } else {
+        {
             need(
                 role.files.len() == 5,
                 "validator protected closure incomplete",
@@ -300,15 +301,22 @@ pub(super) fn validate_rolled_back_records(
         .iter()
         .map(|slug| (*slug).to_owned())
         .collect::<Vec<_>>();
-    let mut rolled_back = touched.iter().rev().cloned().collect::<Vec<_>>();
+    let rolled_back = touched.iter().rev().cloned().collect::<Vec<_>>();
     let edge_touched = terminal
         .get("edge_touched")
         .and_then(Value::as_bool)
         .ok_or_else(|| eyre!("rolled-back edge touch flag missing"))?;
-    let mut expected_touched = touched.clone();
+    let expected_touched = touched.clone();
+    // Native edge rollback is checked through its independently signed capture;
+    // it cannot appear in the guest's physical progress/rollback roster.
     if edge_touched {
-        expected_touched.push(SLUGS[4].to_owned());
-        rolled_back.insert(0, SLUGS[4].to_owned());
+        need(
+            terminal
+                .get("edge_rollback_complete")
+                .and_then(Value::as_bool)
+                == Some(true),
+            "native edge rollback has not completed at the global predecessor boundary",
+        )?;
     }
     need(
         progress.schema == HOST_PROGRESS_SCHEMA_V1
@@ -401,7 +409,7 @@ pub(super) fn validate_sealed_records(
             .map(String::as_str)
             .collect::<BTreeSet<_>>()
             == SLUGS.into_iter().collect()
-            && progress.touched_hosts.len() == 5,
+            && progress.touched_hosts.len() == SLUGS.len(),
         "sealed session role closure differs",
     )?;
     need(
@@ -495,7 +503,7 @@ fn protected(plan: &Plan) -> Result<()> {
     )?;
     for role in &plan.predecessor.occupied {
         let state = Path::new(&role.state.path);
-        require_root_directory(state, role.slug != "taira-edge", "protected stopped state")?;
+        require_root_directory(state, true, "protected stopped state")?;
         let meta = fs::symlink_metadata(state)?;
         need(
             meta.dev() == role.state.device && meta.ino() == role.state.inode,
@@ -515,11 +523,8 @@ fn protected(plan: &Plan) -> Result<()> {
         for value in &role.files {
             pin(value, MAX_BINARY)?;
         }
-        let (unit, active, substate) = if role.slug == "taira-edge" {
-            ("nginx.service".into(), "active", "running")
-        } else {
-            (format!("iroha3d-{}.service", role.slug), "inactive", "dead")
-        };
+        let (unit, active, substate) =
+            (format!("iroha3d-{}.service", role.slug), "inactive", "dead");
         let bytes = run_host_command(
             SYSTEMCTL,
             &[
@@ -540,14 +545,7 @@ fn protected(plan: &Plan) -> Result<()> {
             .remove("MainPID")
             .ok_or_else(|| eyre!("missing MainPID"))?
             .parse::<u32>()?;
-        need(
-            if role.slug == "taira-edge" {
-                main_pid > 0
-            } else {
-                main_pid == 0
-            },
-            "protected MainPID changed",
-        )?;
+        need(main_pid == 0, "protected MainPID changed")?;
         let fragment = format!("/etc/systemd/system/{unit}");
         let expected = BTreeMap::from([
             ("LoadState", "loaded"),
@@ -565,6 +563,57 @@ fn protected(plan: &Plan) -> Result<()> {
 }
 
 pub(super) fn admit(plan: &Plan) -> Result<Held> {
+    let candidate = &plan.candidate;
+    super::super::super::validate_revision(&candidate.revision)?;
+    super::super::super::validate_source_closure(&candidate.revision)?;
+    need(
+        candidate.revision.commit == candidate.commit
+            && candidate.revision.tree == candidate.tree
+            && candidate.revision.source_root
+                == Path::new(&candidate.source_transfer.path)
+                    .parent()
+                    .ok_or_else(|| eyre!("native source transfer has no parent"))?
+                    .join("source")
+                    .to_string_lossy(),
+        "candidate revision differs from the exact authenticated native source import",
+    )?;
+    let trusted: super::super::super::TrustedKeyV1 =
+        json::from_slice(&read(&plan.trusted_public_key)?)?;
+    candidate.native_edge_candidate.verify(
+        &plan.hosts,
+        &candidate.commit,
+        &candidate.tree,
+        &candidate.revision.cargo_lock_sha256,
+        &candidate.revision.source_closure_sha256,
+        &trusted,
+    )?;
+    need(
+        candidate.native_edge_candidate.claims.native_guard
+            == plan.predecessor.native_edge_capture.claims.native_guard
+            && candidate
+                .native_edge_candidate
+                .claims
+                .helper_source_closure_sha256
+                == plan
+                    .predecessor
+                    .native_edge_capture
+                    .claims
+                    .helper_source_closure_sha256,
+        "native candidate guard differs from the independently captured prepared Mac custodian",
+    )?;
+    let native_cli = &candidate.native_edge_candidate.claims.iroha_cli;
+    let native_cli_pin = Pin {
+        path: native_cli.local_path.clone(),
+        sha256: native_cli.sha256.clone(),
+        size: native_cli.size,
+        mode: u32::from(native_cli.mode),
+    };
+    let native_source_pin = Pin {
+        path: candidate.revision.source_manifest_path.clone(),
+        sha256: candidate.revision.source_manifest_sha256.clone(),
+        size: fs::symlink_metadata(&candidate.revision.source_manifest_path)?.len(),
+        mode: fs::symlink_metadata(&candidate.revision.source_manifest_path)?.mode() & 0o7777,
+    };
     let binaries = qualification::admit(&plan.candidate)?;
     sealed(plan)?;
     protected(plan)?;
@@ -585,6 +634,8 @@ pub(super) fn admit(plan: &Plan) -> Result<Held> {
         &c.transfer_request,
         &c.transfer_completed,
         &c.executable,
+        &native_cli_pin,
+        &native_source_pin,
     ]
     .into_iter()
     .chain(p.occupied.iter().flat_map(|r| r.files.iter()))
@@ -604,6 +655,7 @@ pub(super) fn revalidate(plan: &Plan, held: &Held) -> Result<()> {
             snapshot,
         )?;
     }
+    super::super::super::validate_source_closure(&plan.candidate.revision)?;
     sealed(plan)?;
     protected(plan)
 }
@@ -628,7 +680,7 @@ pub(super) fn new_guards(plan: &Plan, root: &Path) -> Result<Vec<Vec<u8>>> {
 
 pub(super) fn derive_guard(plan: &Plan, index: usize, bytes: &[u8]) -> Result<Vec<u8>> {
     let slug = &SLUGS[index];
-    let directory = if *slug == "taira-edge" { "edge" } else { *slug };
+    let directory = *slug;
     need(
         sha256_hex(bytes) == plan.predecessor.guards[index].sha256,
         "old guard bytes differ",

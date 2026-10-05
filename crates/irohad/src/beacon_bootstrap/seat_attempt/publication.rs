@@ -12,22 +12,37 @@ use iroha_crypto::Hash;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PhaseFile {
-    Journal,
+    GenerationIntent,
     Publication,
     Deliveries,
     Acceptances,
+    CommitmentsInput,
+    DeliveriesInput,
+    SessionInput,
+    CommitmentsProof,
+    DeliveriesProof,
+    SessionProof,
 }
 impl PhaseFile {
     fn name(self) -> &'static str {
         match self {
-            Self::Journal => "attempt-journal.json",
+            Self::GenerationIntent => "producer-1-intent.norito",
             Self::Publication => "publication.norito",
             Self::Deliveries => "deliveries.norito",
             Self::Acceptances => "acceptances.norito",
+            Self::CommitmentsInput => "input-commitments.norito",
+            Self::DeliveriesInput => "input-deliveries.norito",
+            Self::SessionInput => "input-final-session.norito",
+            Self::CommitmentsProof => "proof-commitments.norito",
+            Self::DeliveriesProof => "proof-deliveries.norito",
+            Self::SessionProof => "proof-final-session.norito",
         }
     }
     fn private(self) -> bool {
-        self == Self::Journal
+        !matches!(
+            self,
+            Self::Publication | Self::Deliveries | Self::Acceptances
+        )
     }
 }
 
@@ -101,6 +116,49 @@ impl PhasePublication {
             self.terminal_custody_failure = true;
         }
         result
+    }
+    /// Bind the authenticated original source and resume its held durability barrier.
+    pub(super) fn restore_complete(
+        &mut self,
+        directory: &Directory,
+        bytes: &[u8],
+    ) -> Result<(), ExportError> {
+        if self.terminal_custody_failure {
+            return Err(ExportError::Custody);
+        }
+        if bytes.is_empty() {
+            return Err(ExportError::Phase);
+        }
+        if let Some(source) = &self.source {
+            if !source.matches(bytes) {
+                self.terminal_custody_failure = true;
+                return Err(ExportError::Custody);
+            }
+        } else {
+            self.source = Some(Source::new(bytes));
+        }
+        let result = super::super::seat_export::restore_published_file(
+            directory,
+            self.phase.name(),
+            self.phase.private(),
+            bytes,
+            &mut self.progress,
+        );
+        if matches!(result, Err(ExportError::Custody)) {
+            self.terminal_custody_failure = true;
+        }
+        result
+    }
+    /// Hash only the source whose original file/directory barrier completed.
+    /// This records custody, not proof or protocol authorization by itself.
+    pub(super) fn complete_hash(&self) -> Result<[u8; 32], ExportError> {
+        if self.terminal_custody_failure || !self.progress.complete() {
+            return Err(ExportError::Phase);
+        }
+        self.source
+            .as_ref()
+            .map(|source| source.digest.into())
+            .ok_or(ExportError::Phase)
     }
     pub(super) fn complete(&self) -> bool {
         self.progress.complete()

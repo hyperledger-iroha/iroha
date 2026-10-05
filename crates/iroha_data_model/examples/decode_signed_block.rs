@@ -9,7 +9,7 @@ use iroha_data_model::{
     transaction::{ExecutableBatchItem, executable::Executable, signed::TransactionResult},
 };
 use nonzero_ext::nonzero;
-use std::{collections::BTreeSet, convert::TryFrom, env, error::Error, fs};
+use std::{convert::TryFrom, env, error::Error, fs};
 fn reference_signer() -> Result<KeyPair, iroha_crypto::Error> {
     KeyPair::try_random()
 }
@@ -38,7 +38,7 @@ fn read_varint(bytes: &[u8], mut pos: usize) -> Result<(u64, usize), Box<dyn Err
         }
     }
 }
-fn extract_first_btreeset_element(payload: &[u8]) -> Result<&[u8], Box<dyn Error>> {
+fn extract_first_signature_element(payload: &[u8]) -> Result<&[u8], Box<dyn Error>> {
     let (len, mut pos) = read_varint(payload, 0)?;
     if len == 0 {
         return Err("empty set".into());
@@ -66,12 +66,11 @@ fn dump_reference_encoding() -> Result<(), Box<dyn Error>> {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let sig = SignatureOf::<BlockHeader>::from_hash(kp.private_key(), header.hash());
     let block_sig = BlockSignature::new(0, sig);
-    let mut set = BTreeSet::new();
-    set.insert(block_sig);
+    let set = iroha_data_model::block::BlockSignatures::try_from_iter([block_sig])?;
     let mut buf = Vec::new();
     norito::core::serialize_to_buffer(&set, &mut buf).unwrap();
     println!(
-        "reference BTreeSet bytes len={} head={}",
+        "reference ordered signature bytes len={} head={}",
         buf.len(),
         buf.iter()
             .take(32)
@@ -114,7 +113,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .join(" ")
     );
     norito::core::reset_decode_state();
-    match norito::core::decode_field_canonical::<BTreeSet<BlockSignature>>(payload) {
+    match norito::core::decode_field_canonical::<iroha_data_model::block::BlockSignatures>(payload)
+    {
         Ok((signatures, used)) => {
             println!(
                 "decoded signatures set: {} entries (bytes consumed: {used})",
@@ -125,7 +125,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("failed to decode signatures set: {err}");
         }
     }
-    match extract_first_btreeset_element(payload) {
+    match extract_first_signature_element(payload) {
         Ok(element) => {
             println!(
                 "element bytes len={} head={}",

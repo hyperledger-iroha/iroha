@@ -59,6 +59,9 @@ pub enum PayloadError {
     /// The payload bytes are not a canonical block proposal.
     #[error("payload is not a canonical block proposal: {0}")]
     NotCanonical(String),
+    /// Original source/control custody failed independently of authenticated payload bytes.
+    #[error("payload signature custody invariant failed: {0}")]
+    SignatureCustodyInvariant(String),
 }
 
 fn staking_preparation_error(error: eyre::Report) -> PayloadError {
@@ -327,6 +330,62 @@ pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
         }
     })?;
+    require_proposal(block)
+}
+
+/// Decode the original funded payload using the canonical walk and retained signature/certificate owners.
+/// Other transaction/result children remain an explicit preparation obligation.
+pub(crate) fn decode_prepared(
+    payload: &iroha_allocation::ChargedBuffer<u8>,
+    decoder: &mut iroha_data_model::block::PreparedSignedBlockSignaturesDecode,
+) -> Result<SignedBlock, PayloadError> {
+    use iroha_data_model::block::{
+        BlockSignatureCustodyError, PreparedSignatureBlockError,
+        commit_certificate::CertificateCustodyError,
+    };
+    use iroha_data_model::da::commitment::DaProofPolicyCustodyError;
+    use norito::core::{PreparedDecodeError, SequenceSpan};
+    let block = decoder
+        .decode(
+            payload,
+            SequenceSpan {
+                start: 0,
+                end: payload.as_slice().len(),
+            },
+            norito::canonical_decode_limits(payload.as_slice().len()),
+        )
+        .map_err(|error| {
+            // Only actual canonical byte failures can become deterministic proposal rejection.
+            let canonical = matches!(
+                &error,
+                PreparedSignatureBlockError::Frame(_)
+                    | PreparedSignatureBlockError::Certificate(CertificateCustodyError::Decode(_))
+                    | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Decode(_))
+                    | PreparedSignatureBlockError::Decode(PreparedDecodeError::Codec(_))
+                    | PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
+                        BlockSignatureCustodyError::Decode(_)
+                    ))
+            );
+            match crate::execution_attempt::prepared_signature_block_attempt_error(
+                error,
+                |reason| {
+                    if canonical {
+                        PayloadError::NotCanonical(reason)
+                    } else {
+                        PayloadError::SignatureCustodyInvariant(reason)
+                    }
+                },
+            ) {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                    PayloadError::DecodeResource(original)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            }
+        })?;
+    require_proposal(block)
+}
+
+fn require_proposal(block: SignedBlock) -> Result<SignedBlock, PayloadError> {
     if !has_work(&block) {
         return Err(PayloadError::EmptyBlock);
     }
@@ -342,7 +401,7 @@ pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
     }
     // The framed decoder already authenticated every canonical byte in place.
     // Re-encoding here would allocate another unfunded full payload and frame.
-    // TODO: fund the decoder's nested object graph from the original State pool.
+    // TODO: fund all remaining transaction/result children from the original State pool.
     Ok(block)
 }
 
@@ -421,7 +480,7 @@ pub fn select(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::BTreeSet, num::NonZeroU64};
+    use std::num::NonZeroU64;
 
     use iroha_data_model::{
         block::{BlockHeader, builder::BlockBuilder as WireBlockBuilder},
@@ -513,7 +572,7 @@ mod tests {
         let mut builder = WireBlockBuilder::new(source.header());
         builder.push_transaction(input);
         builder.set_execution_context(Some(context));
-        let malformed = builder.build(BTreeSet::new());
+        let malformed = builder.build(iroha_data_model::block::BlockSignatures::default());
         assert!(matches!(encode(&malformed), Err(PayloadError::Encode(_))));
     }
 
@@ -535,7 +594,7 @@ mod tests {
             1,
             0,
         ))
-        .build(BTreeSet::new());
+        .build(iroha_data_model::block::BlockSignatures::default());
         let bytes = block.encode_wire().expect("canonical empty proposal");
         assert!(
             !bytes.is_empty(),
@@ -559,7 +618,7 @@ mod tests {
             1,
             0,
         ))
-        .build(BTreeSet::new());
+        .build(iroha_data_model::block::BlockSignatures::default());
         assert!(matches!(
             assemble(
                 &state,
@@ -596,7 +655,7 @@ mod tests {
         .with_instructions([Log::new(Level::INFO, "payload transaction".to_owned())])
         .sign(ALICE_KEYPAIR.private_key());
         builder.push_transaction(transaction);
-        let block = builder.build(BTreeSet::new());
+        let block = builder.build(iroha_data_model::block::BlockSignatures::default());
         let bytes = encode(&block).expect("nonempty proposal");
         assert_eq!(bytes, block.encode_wire().unwrap());
         let decoded = decode(&bytes).expect("canonical nonempty proposal");

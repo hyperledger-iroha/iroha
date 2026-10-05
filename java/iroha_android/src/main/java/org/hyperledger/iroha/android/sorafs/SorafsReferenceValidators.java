@@ -2,10 +2,18 @@ package org.hyperledger.iroha.android.sorafs;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** Thin JVM/JNI wrapper around the SoraFS reference validators in {@code connect_norito_bridge}. */
+/**
+ * Java view of the SoraFS reference validators in {@code connect_norito_bridge}.
+ *
+ * <p>The bridge exports its JNI entry points only for the Kotlin SDK class {@link
+ * org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators}; the duplicate {@code
+ * org.hyperledger.iroha.android} exports are retired. This class keeps the Java argument checks
+ * and exceptions, then delegates every native call to the Kotlin owner.
+ */
 public final class SorafsReferenceValidators {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 25;
@@ -21,13 +29,13 @@ public final class SorafsReferenceValidators {
   public static final int REFERENCE_MAX_LABEL_BYTES_V1 = 1_024;
   /** Maximum payload count accepted by one fixture-bundle call. */
   public static final int FIXTURE_BUNDLE_MAX_PAYLOADS_V1 = 64;
-  private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private SorafsReferenceValidators() {}
 
   /** Returns true when the exact first-release native bridge is present. */
   public static boolean isNativeAvailable() {
-    return NATIVE_AVAILABLE;
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .isNativeAvailable();
   }
 
   static boolean isBridgeAbiSupported(final int abiVersion) {
@@ -72,15 +80,11 @@ public final class SorafsReferenceValidators {
     requireGeneratedAt(generatedAtUnix);
     final SorafsOrderbookPayloadKind selected = requireKind(kind, "kind");
     final byte[] payload = requirePayload(noritoBytes, "noritoBytes");
-    final byte[] labelPayload = labelBytes(label, selected.defaultLabel());
+    labelBytes(label, selected.defaultLabel());
     requireNative();
-    return requireJsonOutput(
-        nativeValidateOrderbookPayloadJson(
-            selected.bridgeCode(),
-            payload,
-            labelPayload,
-            generatedAtUnix),
-        "SoraFS orderbook validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validateOrderbookPayloadJson(
+            kotlin(selected), payload, label, generatedAtUnix);
   }
 
   public static String validatePopPayloadJson(
@@ -101,15 +105,11 @@ public final class SorafsReferenceValidators {
     requireGeneratedAt(generatedAtUnix);
     final SorafsPopPayloadKind selected = requireKind(kind, "kind");
     final byte[] payload = requirePayload(noritoBytes, "noritoBytes");
-    final byte[] labelPayload = labelBytes(label, selected.defaultLabel());
+    labelBytes(label, selected.defaultLabel());
     requireNative();
-    return requireJsonOutput(
-        nativeValidatePopPayloadJson(
-            selected.bridgeCode(),
-            payload,
-            labelPayload,
-            generatedAtUnix),
-        "SoraFS PoP validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validatePopPayloadJson(
+            kotlin(selected), payload, label, generatedAtUnix);
   }
 
   public static String validateHedgingPayloadJson(
@@ -130,15 +130,11 @@ public final class SorafsReferenceValidators {
     requireGeneratedAt(generatedAtUnix);
     final SorafsHedgingPayloadKind selected = requireKind(kind, "kind");
     final byte[] payload = requirePayload(noritoBytes, "noritoBytes");
-    final byte[] labelPayload = labelBytes(label, selected.defaultLabel());
+    labelBytes(label, selected.defaultLabel());
     requireNative();
-    return requireJsonOutput(
-        nativeValidateHedgingPayloadJson(
-            selected.bridgeCode(),
-            payload,
-            labelPayload,
-            generatedAtUnix),
-        "SoraFS hedging validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validateHedgingPayloadJson(
+            kotlin(selected), payload, label, generatedAtUnix);
   }
 
   /** Validates one canonical appeal-finance {@code CancelAssetLock} V1 payload. */
@@ -167,12 +163,9 @@ public final class SorafsReferenceValidators {
     final byte[] labelPayload = labelBytes(label, "cancel_asset_lock_v1.to");
     requireAggregateReferenceBytes(payload.length, labelPayload.length);
     requireNative();
-    return requireJsonOutput(
-        nativeValidateAppealFinanceCancelAssetLockJson(
-            payload,
-            labelPayload,
-            generatedAtUnix),
-        "SoraFS appeal-finance CancelAssetLock validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validateAppealFinanceCancelAssetLockJson(
+            payload, label, generatedAtUnix);
   }
 
   /** Validate a bounded heterogeneous fixture bundle and canonical cross-links. */
@@ -195,32 +188,33 @@ public final class SorafsReferenceValidators {
     }
     requireGeneratedAt(nowUnix);
     requireGeneratedAt(generatedAtUnix);
-    final byte[] kinds = new byte[payloads.size()];
-    final byte[][] nativePayloads = new byte[payloads.size()][];
-    final byte[][] labels = new byte[payloads.size()][];
+    final List<org.hyperledger.iroha.sdk.sorafs.SorafsFixtureBundlePayloadInput> inputs =
+        new ArrayList<>(payloads.size());
     long aggregateBytes = 0;
     for (int index = 0; index < payloads.size(); index++) {
       final SorafsFixtureBundlePayloadInput input = payloads.get(index);
       if (input == null) {
         throw new IllegalArgumentException("payloads[" + index + "] must be provided");
       }
-      kinds[index] = (byte) input.kind().bridgeCode();
-      nativePayloads[index] =
+      final byte[] payload =
           requireReferencePayload(input.noritoBytes(), "payloads[" + index + "].noritoBytes");
-      labels[index] = labelBytes(input.label(), input.kind().defaultLabel());
-      aggregateBytes += (long) nativePayloads[index].length + labels[index].length;
+      final byte[] label = labelBytes(input.label(), input.kind().defaultLabel());
+      aggregateBytes += (long) payload.length + label.length;
       if (aggregateBytes > REFERENCE_MAX_INPUT_BYTES_V1) {
         throw new IllegalArgumentException(
             "fixture-bundle inputs exceed "
                 + REFERENCE_MAX_INPUT_BYTES_V1
                 + " aggregate bytes");
       }
+      inputs.add(
+          new org.hyperledger.iroha.sdk.sorafs.SorafsFixtureBundlePayloadInput(
+              kotlin(input.kind()),
+              payload,
+              input.label()));
     }
     requireNative();
-    return requireJsonOutput(
-        nativeValidateFixtureBundleJson(
-            kinds, nativePayloads, labels, nowUnix, generatedAtUnix),
-        "SoraFS fixture-bundle validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validateFixtureBundleJson(inputs, nowUnix, generatedAtUnix);
   }
 
   /** Validates one canonical signed {@code GovernanceLogNodeV1} against its expected node CID. */
@@ -249,10 +243,9 @@ public final class SorafsReferenceValidators {
     final byte[] expectedCid = expectedNodeCid.clone();
     requireAggregateReferenceBytes(payload.length, labelPayload.length, expectedCid.length);
     requireNative();
-    return requireJsonOutput(
-        nativeValidateGovernanceLogNodeJson(
-            payload, labelPayload, expectedCid, generatedAtUnix),
-        "SoraFS governance log node validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validateGovernanceLogNodeJson(
+            payload, label, expectedCid, generatedAtUnix);
   }
 
   /**
@@ -288,10 +281,9 @@ public final class SorafsReferenceValidators {
     }
     requireAggregateReferenceBytes(payload.length, labelPayload.length, expectedCid.length);
     requireNative();
-    return requireJsonOutput(
-        nativeValidateGovernanceDagBlockJson(
-            payload, labelPayload, expectedCid, generatedAtUnix),
-        "SoraFS governance DAG block validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validateGovernanceDagBlockJson(
+            payload, label, expectedBlockCid == null ? null : expectedCid, generatedAtUnix);
   }
 
   /**
@@ -349,14 +341,13 @@ public final class SorafsReferenceValidators {
       }
     }
     requireNative();
-    return requireJsonOutput(
-        nativeValidateGovernanceDagHeadChainJson(
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validateGovernanceDagHeadChainJson(
             headPayload,
-            headLabelPayload,
-            blockPayloads,
-            blockLabelPayloads,
-            generatedAtUnix),
-        "SoraFS governance DAG head-chain validation");
+            Arrays.asList(blockPayloads),
+            headLabel,
+            blockLabels == null ? null : Arrays.asList(blockLabels),
+            generatedAtUnix);
   }
 
   public static byte[] signOrderbookPayload(
@@ -366,9 +357,9 @@ public final class SorafsReferenceValidators {
     final byte[] key = requirePrivateKey(privateKey);
     try {
       requireNative();
-      return requireBytesOutput(
-          nativeSignOrderbookPayload(selected.bridgeCode(), payload, key),
-          "SoraFS orderbook signing");
+      return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+          .signOrderbookPayload(
+              kotlin(selected), payload, key);
     } finally {
       Arrays.fill(key, (byte) 0);
     }
@@ -379,10 +370,8 @@ public final class SorafsReferenceValidators {
     final byte[] ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount");
     requirePositive(nonce, "nonce");
     requireNative();
-    final byte[] orderId =
-        requireBytesOutput(
-            nativeDeriveOrderbookOrderId(ownerBytes, nonce),
-            "SoraFS orderbook order id derivation");
+    final byte[] orderId = org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .deriveOrderbookOrderId(ownerBytes, nonce);
     if (orderId.length != 32) {
       throw new IllegalStateException(
           "SoraFS orderbook order id derivation returned a non-32-byte identifier");
@@ -492,12 +481,11 @@ public final class SorafsReferenceValidators {
     final byte[] orderIdBytes = requireFixed32(orderId, "orderId");
     final SorafsOrderbookSide selectedSide = requireKind(side, "side");
     final SorafsOrderbookTier selectedTier = requireKind(tier, "tier");
-    final byte[] priceBytes =
-        xorQuantityBytes(pricePerGib, "pricePerGib", true);
+    xorQuantityBytes(pricePerGib, "pricePerGib", true);
     requirePositive(quantityGib, "quantityGib");
     requirePositive(remainingGib, "remainingGib");
     final byte[] ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount");
-    final byte[] providerBytes = requireProviderId(selectedSide, providerId);
+    requireProviderId(selectedSide, providerId);
     requirePositive(expiryUnix, "expiryUnix");
     requirePositive(nonce, "nonce");
     final byte[] canonicalOrderId = deriveOrderbookOrderId(ownerBytes, nonce);
@@ -510,22 +498,21 @@ public final class SorafsReferenceValidators {
     final byte[] key = requirePrivateKey(privateKey);
     try {
       requireNative();
-      return requireBytesOutput(
-          nativeBuildSignedOrderbookOrderRequest(
+      return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+          .buildSignedOrderbookOrderRequest(
               orderIdBytes,
-              selectedSide.bridgeCode(),
-              selectedTier.bridgeCode(),
-              priceBytes,
+              kotlin(selectedSide),
+              kotlin(selectedTier),
+              pricePerGib,
               quantityGib,
-              remainingGib,
               ownerBytes,
-              providerBytes,
+              providerId,
               expiryUnix,
               nonce,
               makerFee,
               takerFee,
-              key),
-          "SoraFS orderbook order request builder");
+              key,
+              remainingGib);
     } finally {
       Arrays.fill(key, (byte) 0);
     }
@@ -544,10 +531,13 @@ public final class SorafsReferenceValidators {
     final byte[] key = requirePrivateKey(privateKey);
     try {
       requireNative();
-      return requireBytesOutput(
-          nativeBuildSignedOrderbookOrderCancel(
-              orderIdBytes, ownerBytes, selectedReason.bridgeCode(), nonce, key),
-          "SoraFS orderbook cancel builder");
+      return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+          .buildSignedOrderbookOrderCancel(
+              orderIdBytes,
+              ownerBytes,
+              kotlin(selectedReason),
+              nonce,
+              key);
     } finally {
       Arrays.fill(key, (byte) 0);
     }
@@ -573,16 +563,15 @@ public final class SorafsReferenceValidators {
     requirePositive(rangeEnd, "rangeEnd");
     final byte[] chunkHashBytes = requireFixed32(chunkHash, "chunkHash");
     requirePositive(bytesDelivered, "bytesDelivered");
-    final byte[] debitBytes = xorQuantityBytes(xorDebited, "xorDebited", true);
-    final byte[] creditBytes =
-        xorQuantityBytes(providerCredit, "providerCredit", false);
-    final byte[] feeBytes = xorQuantityBytes(feeAmount, "feeAmount", false);
+    xorQuantityBytes(xorDebited, "xorDebited", true);
+    xorQuantityBytes(providerCredit, "providerCredit", false);
+    xorQuantityBytes(feeAmount, "feeAmount", false);
     requirePositive(issuedAtUnix, "issuedAtUnix");
     final byte[] key = requirePrivateKey(privateKey);
     try {
       requireNative();
-      return requireBytesOutput(
-          nativeBuildSignedOrderbookSettlementReceipt(
+      return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+          .buildSignedOrderbookSettlementReceipt(
               receiptIdBytes,
               channelIdBytes,
               tradeIdBytes,
@@ -590,12 +579,11 @@ public final class SorafsReferenceValidators {
               rangeEnd,
               chunkHashBytes,
               bytesDelivered,
-              debitBytes,
-              creditBytes,
-              feeBytes,
+              xorDebited,
+              providerCredit,
+              feeAmount,
               issuedAtUnix,
-              key),
-          "SoraFS orderbook settlement receipt builder");
+              key);
     } finally {
       Arrays.fill(key, (byte) 0);
     }
@@ -619,15 +607,11 @@ public final class SorafsReferenceValidators {
     requireGeneratedAt(generatedAtUnix);
     final SorafsPdpPayloadKind selected = requireKind(kind, "kind");
     final byte[] payload = requirePayload(noritoBytes, "noritoBytes");
-    final byte[] labelPayload = labelBytes(label, selected.defaultLabel());
+    labelBytes(label, selected.defaultLabel());
     requireNative();
-    return requireJsonOutput(
-        nativeValidatePdpPayloadJson(
-            selected.bridgeCode(),
-            payload,
-            labelPayload,
-            generatedAtUnix),
-        "SoraFS PDP validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validatePdpPayloadJson(
+            kotlin(selected), payload, label, generatedAtUnix);
   }
 
   public static String validatePdpCommitmentChallengeJson(
@@ -644,20 +628,13 @@ public final class SorafsReferenceValidators {
       final long generatedAtUnix) {
     requireGeneratedAt(generatedAtUnix);
     final byte[] commitmentPayload = requirePayload(commitment, "commitment");
-    final byte[] commitmentLabelPayload =
-        labelBytes(commitmentLabel, SorafsPdpPayloadKind.COMMITMENT.defaultLabel());
+    labelBytes(commitmentLabel, SorafsPdpPayloadKind.COMMITMENT.defaultLabel());
     final byte[] challengePayload = requirePayload(challenge, "challenge");
-    final byte[] challengeLabelPayload =
-        labelBytes(challengeLabel, SorafsPdpPayloadKind.CHALLENGE.defaultLabel());
+    labelBytes(challengeLabel, SorafsPdpPayloadKind.CHALLENGE.defaultLabel());
     requireNative();
-    return requireJsonOutput(
-        nativeValidatePdpCommitmentChallengeJson(
-            commitmentPayload,
-            commitmentLabelPayload,
-            challengePayload,
-            challengeLabelPayload,
-            generatedAtUnix),
-        "SoraFS PDP commitment/challenge validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validatePdpCommitmentChallengeJson(
+            commitmentPayload, challengePayload, commitmentLabel, challengeLabel, generatedAtUnix);
   }
 
   public static String validatePdpChallengeProofJson(
@@ -673,20 +650,13 @@ public final class SorafsReferenceValidators {
       final long generatedAtUnix) {
     requireGeneratedAt(generatedAtUnix);
     final byte[] challengePayload = requirePayload(challenge, "challenge");
-    final byte[] challengeLabelPayload =
-        labelBytes(challengeLabel, SorafsPdpPayloadKind.CHALLENGE.defaultLabel());
+    labelBytes(challengeLabel, SorafsPdpPayloadKind.CHALLENGE.defaultLabel());
     final byte[] proofPayload = requirePayload(proof, "proof");
-    final byte[] proofLabelPayload =
-        labelBytes(proofLabel, SorafsPdpPayloadKind.PROOF.defaultLabel());
+    labelBytes(proofLabel, SorafsPdpPayloadKind.PROOF.defaultLabel());
     requireNative();
-    return requireJsonOutput(
-        nativeValidatePdpChallengeProofJson(
-            challengePayload,
-            challengeLabelPayload,
-            proofPayload,
-            proofLabelPayload,
-            generatedAtUnix),
-        "SoraFS PDP challenge/proof validation");
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validatePdpChallengeProofJson(
+            challengePayload, proofPayload, challengeLabel, proofLabel, generatedAtUnix);
   }
 
   public static String validatePdpBundleJson(
@@ -705,25 +675,21 @@ public final class SorafsReferenceValidators {
       final long generatedAtUnix) {
     requireGeneratedAt(generatedAtUnix);
     final byte[] commitmentPayload = requirePayload(commitment, "commitment");
-    final byte[] commitmentLabelPayload =
-        labelBytes(commitmentLabel, SorafsPdpPayloadKind.COMMITMENT.defaultLabel());
+    labelBytes(commitmentLabel, SorafsPdpPayloadKind.COMMITMENT.defaultLabel());
     final byte[] challengePayload = requirePayload(challenge, "challenge");
-    final byte[] challengeLabelPayload =
-        labelBytes(challengeLabel, SorafsPdpPayloadKind.CHALLENGE.defaultLabel());
+    labelBytes(challengeLabel, SorafsPdpPayloadKind.CHALLENGE.defaultLabel());
     final byte[] proofPayload = requirePayload(proof, "proof");
-    final byte[] proofLabelPayload =
-        labelBytes(proofLabel, SorafsPdpPayloadKind.PROOF.defaultLabel());
+    labelBytes(proofLabel, SorafsPdpPayloadKind.PROOF.defaultLabel());
     requireNative();
-    return requireJsonOutput(
-        nativeValidatePdpBundleJson(
+    return org.hyperledger.iroha.sdk.sorafs.SorafsReferenceValidators
+        .validatePdpBundleJson(
             commitmentPayload,
-            commitmentLabelPayload,
             challengePayload,
-            challengeLabelPayload,
             proofPayload,
-            proofLabelPayload,
-            generatedAtUnix),
-        "SoraFS PDP bundle validation");
+            commitmentLabel,
+            challengeLabel,
+            proofLabel,
+            generatedAtUnix);
   }
 
   private static long currentEpochSeconds() {
@@ -737,7 +703,7 @@ public final class SorafsReferenceValidators {
   }
 
   private static void requireNative() {
-    if (!NATIVE_AVAILABLE) {
+    if (!isNativeAvailable()) {
       throw new IllegalStateException(LIBRARY_NAME + " is not available in this runtime");
     }
   }
@@ -945,143 +911,44 @@ public final class SorafsReferenceValidators {
     return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
   }
 
-  private static String requireJsonOutput(final byte[] output, final String context) {
-    if (output == null) {
-      throw new IllegalStateException(context + " returned no outcome JSON");
-    }
-    if (output.length == 0) {
-      throw new IllegalStateException(context + " returned empty outcome JSON");
-    }
-    final String json = new String(output, StandardCharsets.UTF_8);
-    if (!json.trim().startsWith("{")) {
-      throw new IllegalStateException(context + " returned malformed outcome JSON");
-    }
-    return json;
+  // The same-named Kotlin enum constants; both SDKs declare identical SoraFS enums.
+  private static org.hyperledger.iroha.sdk.sorafs.SorafsOrderbookPayloadKind kotlin(
+      final SorafsOrderbookPayloadKind value) {
+    return org.hyperledger.iroha.sdk.sorafs.SorafsOrderbookPayloadKind.valueOf(value.name());
   }
 
-  private static byte[] requireBytesOutput(final byte[] output, final String context) {
-    if (output == null) {
-      throw new IllegalStateException(context + " returned no bytes");
-    }
-    if (output.length == 0) {
-      throw new IllegalStateException(context + " returned empty bytes");
-    }
-    return output.clone();
+  private static org.hyperledger.iroha.sdk.sorafs.SorafsPopPayloadKind kotlin(
+      final SorafsPopPayloadKind value) {
+    return org.hyperledger.iroha.sdk.sorafs.SorafsPopPayloadKind.valueOf(value.name());
   }
 
-  private static boolean loadLibrary() {
-    try {
-      System.loadLibrary(LIBRARY_NAME);
-      final int abiVersion = nativeBridgeAbiVersion();
-      return isGovernanceDagBridgeSupported(abiVersion, nativeHasGovernanceDagSymbols())
-          && isFixtureBundleBridgeSupported(abiVersion, nativeHasFixtureBundleSymbols())
-          && isGovernanceLogNodeBridgeSupported(
-              abiVersion, nativeHasGovernanceLogNodeSymbols())
-          && isAppealFinanceBridgeSupported(
-              abiVersion, nativeHasAppealFinanceSymbols());
-    } catch (final UnsatisfiedLinkError | SecurityException error) {
-      return false;
-    }
+  private static org.hyperledger.iroha.sdk.sorafs.SorafsHedgingPayloadKind kotlin(
+      final SorafsHedgingPayloadKind value) {
+    return org.hyperledger.iroha.sdk.sorafs.SorafsHedgingPayloadKind.valueOf(value.name());
   }
 
-  private static native int nativeBridgeAbiVersion();
+  private static org.hyperledger.iroha.sdk.sorafs.SorafsPdpPayloadKind kotlin(
+      final SorafsPdpPayloadKind value) {
+    return org.hyperledger.iroha.sdk.sorafs.SorafsPdpPayloadKind.valueOf(value.name());
+  }
 
-  private static native boolean nativeHasGovernanceDagSymbols();
+  private static org.hyperledger.iroha.sdk.sorafs.SorafsFixtureBundlePayloadKind kotlin(
+      final SorafsFixtureBundlePayloadKind value) {
+    return org.hyperledger.iroha.sdk.sorafs.SorafsFixtureBundlePayloadKind.valueOf(value.name());
+  }
 
-  private static native boolean nativeHasFixtureBundleSymbols();
+  private static org.hyperledger.iroha.sdk.sorafs.SorafsOrderbookSide kotlin(
+      final SorafsOrderbookSide value) {
+    return org.hyperledger.iroha.sdk.sorafs.SorafsOrderbookSide.valueOf(value.name());
+  }
 
-  private static native boolean nativeHasGovernanceLogNodeSymbols();
+  private static org.hyperledger.iroha.sdk.sorafs.SorafsOrderbookTier kotlin(
+      final SorafsOrderbookTier value) {
+    return org.hyperledger.iroha.sdk.sorafs.SorafsOrderbookTier.valueOf(value.name());
+  }
 
-  private static native boolean nativeHasAppealFinanceSymbols();
-
-  private static native byte[] nativeValidateOrderbookPayloadJson(
-      int kind, byte[] payload, byte[] label, long generatedAtUnix);
-
-  private static native byte[] nativeValidatePopPayloadJson(
-      int kind, byte[] payload, byte[] label, long generatedAtUnix);
-
-  private static native byte[] nativeValidateHedgingPayloadJson(
-      int kind, byte[] payload, byte[] label, long generatedAtUnix);
-
-  private static native byte[] nativeValidateAppealFinanceCancelAssetLockJson(
-      byte[] payload, byte[] label, long generatedAtUnix);
-
-  private static native byte[] nativeValidateFixtureBundleJson(
-      byte[] kinds,
-      byte[][] payloads,
-      byte[][] labels,
-      long nowUnix,
-      long generatedAtUnix);
-
-  private static native byte[] nativeValidateGovernanceLogNodeJson(
-      byte[] payload, byte[] label, byte[] expectedNodeCid, long generatedAtUnix);
-
-  private static native byte[] nativeValidateGovernanceDagBlockJson(
-      byte[] payload, byte[] label, byte[] expectedBlockCid, long generatedAtUnix);
-
-  private static native byte[] nativeValidateGovernanceDagHeadChainJson(
-      byte[] head,
-      byte[] headLabel,
-      byte[][] blocks,
-      byte[][] blockLabels,
-      long generatedAtUnix);
-
-  private static native byte[] nativeSignOrderbookPayload(
-      int kind, byte[] payload, byte[] privateKey);
-
-  private static native byte[] nativeDeriveOrderbookOrderId(byte[] ownerAccount, long nonce);
-
-  private static native byte[] nativeBuildSignedOrderbookOrderRequest(
-      byte[] orderId,
-      int side,
-      int tier,
-      byte[] pricePerGib,
-      long quantityGib,
-      long remainingGib,
-      byte[] ownerAccount,
-      byte[] providerId,
-      long expiryUnix,
-      long nonce,
-      int makerFeeBps,
-      int takerFeeBps,
-      byte[] privateKey);
-
-  private static native byte[] nativeBuildSignedOrderbookOrderCancel(
-      byte[] orderId, byte[] ownerAccount, int reason, long nonce, byte[] privateKey);
-
-  private static native byte[] nativeBuildSignedOrderbookSettlementReceipt(
-      byte[] receiptId,
-      byte[] channelId,
-      byte[] tradeId,
-      long rangeStart,
-      long rangeEnd,
-      byte[] chunkHash,
-      long bytesDelivered,
-      byte[] xorDebited,
-      byte[] providerCredit,
-      byte[] feeAmount,
-      long issuedAtUnix,
-      byte[] privateKey);
-
-  private static native byte[] nativeValidatePdpPayloadJson(
-      int kind, byte[] payload, byte[] label, long generatedAtUnix);
-
-  private static native byte[] nativeValidatePdpCommitmentChallengeJson(
-      byte[] commitment,
-      byte[] commitmentLabel,
-      byte[] challenge,
-      byte[] challengeLabel,
-      long generatedAtUnix);
-
-  private static native byte[] nativeValidatePdpChallengeProofJson(
-      byte[] challenge, byte[] challengeLabel, byte[] proof, byte[] proofLabel, long generatedAtUnix);
-
-  private static native byte[] nativeValidatePdpBundleJson(
-      byte[] commitment,
-      byte[] commitmentLabel,
-      byte[] challenge,
-      byte[] challengeLabel,
-      byte[] proof,
-      byte[] proofLabel,
-      long generatedAtUnix);
+  private static org.hyperledger.iroha.sdk.sorafs.SorafsOrderbookCancelReason kotlin(
+      final SorafsOrderbookCancelReason value) {
+    return org.hyperledger.iroha.sdk.sorafs.SorafsOrderbookCancelReason.valueOf(value.name());
+  }
 }

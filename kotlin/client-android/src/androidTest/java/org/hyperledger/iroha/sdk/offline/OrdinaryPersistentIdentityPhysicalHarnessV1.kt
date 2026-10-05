@@ -5,6 +5,7 @@ package org.hyperledger.iroha.sdk.offline
 import android.content.Context
 import java.security.KeyStore
 import java.security.MessageDigest
+import java.security.PrivateKey
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppSignaturePurposeV1
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidHardwareAppKeyStoreV1
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidPlayIntegrityTokenOriginalV1
@@ -160,7 +161,8 @@ internal object OrdinaryPersistentIdentityPhysicalHarnessV1 {
     /** Existence/full-chain corroboration only; server policy and future key usability stay separate. */
     private fun requireKeystoreOriginal(expected: CollectedObservation) {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        check(store.containsAlias(expected.keyReference()) && store.isKeyEntry(expected.keyReference())) {
+        // keystore2 getKey: null is a definitive absence; a Keystore error throws instead.
+        check(store.getKey(expected.keyReference(), null) is PrivateKey) {
             "Original Android Keystore entry is missing; authenticated recovery, rotation or retirement is required"
         }
         val chain = checkNotNull(store.getCertificateChain(expected.keyReference())) {

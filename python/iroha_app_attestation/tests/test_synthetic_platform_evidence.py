@@ -20,7 +20,7 @@ from iroha_app_attestation.attestation import (
     encode_android_chain,
     der_one,
     primitive,
-    require_android_patch_floor,
+    android_patch_policy_met,
     verify_android_raw,
     verify_android_persistent_app_key_raw,
     verify_apple_raw,
@@ -441,7 +441,7 @@ class SyntheticPlatformTests(unittest.TestCase):
                                     allowed_security_levels=frozenset({1, 2}),
                                 )
 
-    def test_signed_hardware_patch_levels_feed_the_enrollment_floor(self) -> None:
+    def test_signed_hardware_patch_levels_feed_the_patch_policy_fact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = SignedEnvelope(Path(temporary), self.openssl)
             original = selection(fixture.point)
@@ -464,19 +464,16 @@ class SyntheticPlatformTests(unittest.TestCase):
             levels = verified(os_version=150000, os_patch_level=202609,
                               vendor_patch_level=20260905, boot_patch_level=20260901)
             self.assertEqual(levels, AndroidPatchLevels(300, 150000, 202609, 20260905, 20260901))
-            require_android_patch_floor(levels, 202609)
-            with self.assertRaisesRegex(AttestationRejected, "below the enrollment floor"):
-                require_android_patch_floor(levels, 202610)
+            self.assertIs(android_patch_policy_met(levels, 202609), True)
+            self.assertIs(android_patch_policy_met(levels, 202610), False)
             stale_boot = verified(os_patch_level=202609, vendor_patch_level=20260905,
                                   boot_patch_level=20250101)
-            with self.assertRaisesRegex(AttestationRejected, "boot patch level is below"):
-                require_android_patch_floor(stale_boot, 202609)
+            self.assertIs(android_patch_policy_met(stale_boot, 202609), False)
             # A software-enforced OS patch level never stands in for the
             # hardware-enforced value.
             software_only = verified(software_os_patch_level=202609)
             self.assertEqual(software_only, AndroidPatchLevels(300, None, None, 20260805, None))
-            with self.assertRaisesRegex(AttestationRejected, "OS patch level absent"):
-                require_android_patch_floor(software_only, 202601)
+            self.assertIs(android_patch_policy_met(software_only, 202601), False)
 
     def test_ordinary_persistent_legacy_preserves_signed_identity_and_hardware_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

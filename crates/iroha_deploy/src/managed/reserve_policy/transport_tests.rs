@@ -8,8 +8,7 @@ use crate::managed::native_operation::test_support::{
 use crate::managed::{
     PreparedLocalnet,
     native_operation::{
-        MAX_CHECKPOINT_BYTES, Terms, now_ms, read_optional, require_empty,
-        test_support::UnavailablePeers,
+        MAX_CHECKPOINT_BYTES, now_ms, read_optional, require_empty, test_support::UnavailablePeers,
     },
 };
 use iroha_data_model::transaction::{FeePaymentIntent, SignedTransaction};

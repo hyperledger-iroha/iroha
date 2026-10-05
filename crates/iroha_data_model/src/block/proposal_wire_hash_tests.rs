@@ -12,7 +12,8 @@ fn plain_signed_block() -> SignedBlock {
         SignatureOf::try_from_hash(key.private_key(), header.hash()).unwrap(),
     );
     SignedBlock {
-        signatures: BTreeSet::from([signature]),
+        signatures: crate::block::BlockSignatures::try_from_iter([signature])
+            .expect("at most 31 block signatures"),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -99,10 +100,13 @@ fn borrowed_proposal_hash_includes_changed_signatures() {
     let mut proposal = plain_signed_block();
     let before = proposal.canonical_proposal_wire_hash().unwrap();
     let key = KeyPair::try_from_seed(vec![0x4a; 32], Algorithm::Ed25519).unwrap();
-    proposal.signatures.insert(BlockSignature::new(
-        1,
-        SignatureOf::try_from_hash(key.private_key(), proposal.hash()).unwrap(),
-    ));
+    proposal
+        .signatures
+        .try_insert(BlockSignature::new(
+            1,
+            SignatureOf::try_from_hash(key.private_key(), proposal.hash()).unwrap(),
+        ))
+        .unwrap();
     assert_exact_borrowed_proposal_wire(&proposal);
     assert_ne!(proposal.canonical_proposal_wire_hash().unwrap(), before);
 
@@ -285,7 +289,9 @@ fn checked_resultless_comparison_binds_signatures_and_all_seven_payload_fields()
     type ProposalMutation = (&'static str, fn(&mut SignedBlock));
     let proposal = complete_comparison_proposal();
     let edits: [ProposalMutation; 8] = [
-        ("signatures", |block| block.signatures.clear()),
+        ("signatures", |block| {
+            block.signatures = crate::block::BlockSignatures::default()
+        }),
         ("header", |block| {
             block.payload.header =
                 BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, 1_000, 0);
@@ -301,9 +307,14 @@ fn checked_resultless_comparison_binds_signatures_and_all_seven_payload_fields()
             block.payload.da_commitments.as_mut().unwrap().commitments[0].sequence += 1;
         }),
         ("DA proof policies", |block| {
-            block.payload.da_proof_policies.as_mut().unwrap().policies[0]
-                .alias
-                .push('x');
+            let original = block.payload.da_proof_policies.as_ref().unwrap();
+            let mut policies = original.policies().to_vec();
+            policies[0].alias.push('x');
+            block.payload.da_proof_policies = Some(DaProofPolicyBundle::from_untrusted_parts(
+                original.version(),
+                original.policy_hash(),
+                policies,
+            ));
         }),
         ("DA pin intents", |block| {
             block.payload.da_pin_intents.as_mut().unwrap().intents[0].alias =
@@ -392,10 +403,13 @@ fn checked_resultless_comparison_rejects_archive_cap_in_isolated_process() {
     let small = plain_signed_block();
     let mut larger = small.clone();
     let key = KeyPair::try_from_seed(vec![0x4e; 32], Algorithm::Ed25519).unwrap();
-    larger.signatures.insert(BlockSignature::new(
-        1,
-        SignatureOf::try_from_hash(key.private_key(), larger.hash()).unwrap(),
-    ));
+    larger
+        .signatures
+        .try_insert(BlockSignature::new(
+            1,
+            SignatureOf::try_from_hash(key.private_key(), larger.hash()).unwrap(),
+        ))
+        .unwrap();
     let small_len = small.checked_raw_resultless_payload_len().unwrap();
     let larger_len = larger.checked_raw_resultless_payload_len().unwrap();
     assert!(larger_len > small_len && small_len > 1);
@@ -902,7 +916,7 @@ fn merged_projection_preserves_signatures_merge_authority_and_all_original_input
     for mutation in 0..8 {
         let mut changed = expanded.clone();
         match mutation {
-            0 => changed.signatures.clear(),
+            0 => changed.signatures = crate::block::BlockSignatures::default(),
             1 => changed.payload.da_commitments = None,
             2 => changed.payload.da_proof_policies = None,
             3 => changed.payload.da_pin_intents = None,

@@ -572,6 +572,41 @@ impl From<iroha_primitives::numeric_abi::NumericAbiError> for VMError {
 }
 
 #[cfg(test)]
+mod numeric_abi_error_tests {
+    use super::{PointerAbiFaultV1, VMError};
+    use iroha_primitives::numeric_abi::NumericAbiError;
+
+    #[test]
+    fn every_numeric_frame_error_maps_to_its_stable_pointer_fault() {
+        use NumericAbiError::*;
+        use PointerAbiFaultV1::{MalformedFrame, NonCanonical, OversizedLength};
+
+        let cases = [
+            (FrameTooShort, MalformedFrame),
+            (FrameTooLarge, OversizedLength),
+            (InvalidHeader, MalformedFrame),
+            (SchemaMismatch, PointerAbiFaultV1::SchemaMismatch),
+            (CompressionNotAllowed, MalformedFrame),
+            (LayoutFlagsNotAllowed, MalformedFrame),
+            (LengthMismatch, MalformedFrame),
+            (MantissaOverflow, NonCanonical),
+            (NonCanonicalMantissa, NonCanonical),
+            (InvalidScale, NonCanonical),
+            (NonCanonicalDecimal, NonCanonical),
+            (NegativeQuantity, NonCanonical),
+            (Norito("invalid checksum".into()), MalformedFrame),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(
+                VMError::from(error.clone()),
+                VMError::PointerAbiFault(expected),
+                "numeric frame error {error:?} changed its pointer fault"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod execution_deferral_tests {
     use super::{ExecutionDeferral, VMError, preserve_execution_deferral};
 

@@ -239,6 +239,13 @@ rotation. Apple wallet startup requires a qualified native owner that supplies
 that entire contract through `KagemushaHardwareProviderV1`. Missing ownership
 or custody evidence fails startup; KAGEMUSHA has no disabled product mode.
 
+`KagemushaWalletApplePlatformV1` is the iPhone platform adapter of the Rust wallet
+Advance provider (Secure Enclave payment key, passcode-bound keychain rollback anchor,
+protected-data canary and custody root). Construct it with the app's App ID prefix,
+which names its own keychain access group. Its only app-facing operation is
+`attestEnrollment(slot:paymentPublicKey:challengeDigest:)`, the App Attest evidence of
+enrollment step E5; key use and the anchor are reached only through the Rust provider.
+
 The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
 `listDaPinIntents`, `proveDaPinIntent`, and `verifyDaPinIntent`. Manifest and

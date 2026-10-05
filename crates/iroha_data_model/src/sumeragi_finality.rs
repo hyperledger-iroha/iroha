@@ -137,10 +137,10 @@ pub fn consensus_configuration_fingerprint(
             return Err("native configuration requires explicit signed instructions".into());
         };
         for instruction in instructions {
-            if let Some(set) = instruction.as_any().downcast_ref::<SetParameter>() {
-                if let Parameter::Sumeragi(parameter) = set.inner() {
-                    parameters.insert(*parameter)?;
-                }
+            if let Some(set) = instruction.as_any().downcast_ref::<SetParameter>()
+                && let Parameter::Sumeragi(parameter) = set.inner()
+            {
+                parameters.insert(*parameter)?;
             }
         }
     }
@@ -1362,7 +1362,10 @@ mod configuration_fingerprint_tests {
             SignatureOf::new(foreign.private_key(), &tampered.header()),
         );
         tampered
-            .replace_signatures(std::collections::BTreeSet::from([signature]))
+            .replace_signatures(
+                crate::block::BlockSignatures::try_from_iter([signature])
+                    .expect("at most 31 block signatures"),
+            )
             .unwrap();
         assert!(consensus_configuration_fingerprint(&tampered).is_err());
     }

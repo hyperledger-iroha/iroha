@@ -30,8 +30,8 @@ impl FinalizedRegistrationCheckedStorageBackendV1 {
     }
 }
 
-impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageBackendV1 {
-    fn verify_current_registration(
+impl FinalizedRegistrationCheckedStorageBackendV1 {
+    fn verify_archive(
         &self,
         request: &MusubiStorageCoordinationRequestV1,
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
@@ -64,6 +64,15 @@ impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageB
         }
         Ok(())
     }
+}
+impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageBackendV1 {
+    fn verify_current_registration(
+        &self,
+        request: &MusubiStorageCoordinationRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        self.verify_archive(request)?;
+        self.delegate.verify_current_registration(request)
+    }
 
     fn coordinate_storage(
         &mut self,
@@ -72,7 +81,7 @@ impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageB
         if std::time::Instant::now() >= request.deadline() {
             return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
         }
-        self.verify_current_registration(request.request())?;
+        self.verify_archive(request.request())?;
         if std::time::Instant::now() >= request.deadline() {
             return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
         }

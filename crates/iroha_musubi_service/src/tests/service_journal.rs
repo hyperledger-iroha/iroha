@@ -8,10 +8,10 @@ use iroha_data_model::{
     musubi::{
         ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArtifactDescriptorV1,
         MusubiContentDigestV1, MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1,
-        MusubiProviderBundleVerificationApprovalV1, MusubiProviderBundleVerificationBindingV1,
-        MusubiProviderBundleVerificationPayloadV1, MusubiReleaseIdV1, MusubiReleaseMetadataV1,
-        MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
-        musubi_provider_bundle_attestation_set_digest_v1,
+        MusubiProviderBundleVerificationApprovalV1, MusubiProviderBundleVerificationAttestationV1,
+        MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
+        MusubiReleaseIdV1, MusubiReleaseMetadataV1, MusubiSemanticReleaseManifestV1,
+        MusubiVerificationLockV1, musubi_provider_bundle_attestation_set_digest_v1,
     },
     sorafs::pin_registry::{
         ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionAuthorityV1,

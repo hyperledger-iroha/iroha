@@ -26,6 +26,40 @@ pub(super) struct BoundaryInputs<'a> {
     pub(super) after_next_params: crate::sumeragi::schedule::ChainParamsRecord,
 }
 
+/// Every frozen seat needs both its signed credential readiness and original XOR custody.
+/// The caller verifies the genuine attempt and every supplied proof before this check;
+/// a target quorum never substitutes for the complete immutable target roster.
+pub(super) fn prepared_committee_ready(
+    source: &CheckedElectionView<'_>,
+    transition: &iroha_data_model::nexus::ValidatorCommitteeTransitionV1,
+) -> bool {
+    let preparation = &transition.preparation;
+    let complete_readiness = if cfg!(all(test, sumeragi_core_mutation = "HC102")) {
+        transition.readiness.len()
+            >= preparation.committee.len() - (preparation.committee.len() - 1) / 3
+    } else {
+        transition.readiness.len() == preparation.committee.len()
+    };
+    if transition.credentials.is_none() || !complete_readiness {
+        return false;
+    }
+    let has_custody = |seat: &iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1| {
+        source
+            .ready_under(
+                &preparation.eligibility,
+                &seat.validator,
+                preparation.first_height,
+                preparation.last_height,
+            )
+            .is_some()
+    };
+    #[cfg(all(test, sumeragi_core_mutation = "HC101"))]
+    let complete_custody = preparation.committee.iter().any(has_custody);
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC101")))]
+    let complete_custody = preparation.committee.iter().all(has_custody);
+    complete_custody
+}
+
 /// Read all boundary decisions from B−1 once; later B transactions cannot change this result.
 /// No credential renewal is needed to retain the current generation. Invalid public proof or
 /// custody-ledger corruption refuses the source, while incomplete legitimate target readiness
@@ -109,18 +143,7 @@ pub(super) fn boundary_inputs<'a>(
                 .validate_against_preparing_authorization(&current.authorization)?;
             crate::state::validator_committee::verify_progress(world, transition)?;
             let preparation = &transition.preparation;
-            let ready = transition.credentials.is_some()
-                && transition.readiness.len() == preparation.committee.len()
-                && preparation.committee.iter().all(|seat| {
-                    source
-                        .ready_under(
-                            &preparation.eligibility,
-                            &seat.validator,
-                            preparation.first_height,
-                            preparation.last_height,
-                        )
-                        .is_some()
-                });
+            let ready = prepared_committee_ready(&source, transition);
             let id = preparation.transition_id()?;
             if ready {
                 let credentials = transition
@@ -165,6 +188,18 @@ pub(super) fn boundary_inputs<'a>(
             )
         };
     if decision != KagemushaMintFinalityEpochDecisionV1::Activate {
+        #[cfg(all(test, sumeragi_core_mutation = "HC103"))]
+        if current.committee.iter().any(|seat| {
+            selection_pop(
+                source.keys.as_slice(),
+                &seat.validator,
+                next_first,
+                last_height,
+            )
+            .map_or(true, |proof| proof.is_none())
+        }) {
+            return Err("retained authority requires fresh incumbent key publications".into());
+        }
         let incumbent = world
             .global_beacon_key_sessions()
             .get(&entropy.beacon.session_id)

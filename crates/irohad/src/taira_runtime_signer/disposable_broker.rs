@@ -14,6 +14,21 @@ const THRESHOLD_SLOTS: &[IrohaRuntimeProviderSlotV1] = &[
     IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
 ];
 
+fn threshold_import_error(
+    error: RuntimeConsensusThresholdSignerCredentialErrorV1,
+) -> IrohaRuntimeProviderRegistryErrorV1 {
+    match error {
+        RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable
+        | RuntimeConsensusThresholdSignerCredentialErrorV1::Session(_)
+        | RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(_)
+        | RuntimeConsensusThresholdSignerCredentialErrorV1::Output(_)
+        | RuntimeConsensusThresholdSignerCredentialErrorV1::ParliamentFunding(_) => {
+            IrohaRuntimeProviderRegistryErrorV1::Unavailable
+        }
+        _ => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
+    }
+}
+
 pub(super) struct DisposableRuntimeProviderBrokerV1 {
     catalog: IrohaRuntimeProviderBindingsV1,
     thresholds: IrohaRuntimeProviderBindingsV1,
@@ -39,12 +54,14 @@ impl RuntimeProviderBrokerBackendRegistryV1 for DisposableRuntimeProviderBrokerV
 
 pub(super) fn load_with_signer(
     catalog: &IrohaRuntimeProviderBindingsV1,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     reader: &mut impl std::io::Read,
     load_signer: impl FnOnce() -> Result<
         Arc<dyn SoracloudRuntimeMutationSignerV1>,
         TairaRuntimeSignerErrorV1,
     >,
 ) -> Result<DisposableRuntimeProviderBrokerV1, IrohaRuntimeProviderRegistryErrorV1> {
+    catalog.validate_credential_memory_policy_v1(policy)?;
     let mut requested_signer = None;
     for binding in catalog.iter() {
         if binding.slot() == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner {
@@ -55,7 +72,8 @@ pub(super) fn load_with_signer(
             return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
         }
     }
-    let credential_budget = catalog.new_credential_registry_budget_v1();
+    let credential_budget =
+        iroha_allocation::AllocationBudget::new(policy.credential_max_memory_bytes.get());
     let thresholds = catalog.select_slots(THRESHOLD_SLOTS);
     let threshold_backends =
         RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
@@ -63,15 +81,7 @@ pub(super) fn load_with_signer(
             reader,
             &credential_budget,
         )
-        .map_err(|error| match error {
-            RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable
-            | RuntimeConsensusThresholdSignerCredentialErrorV1::Session(_)
-            | RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(_)
-            | RuntimeConsensusThresholdSignerCredentialErrorV1::Output(_) => {
-                IrohaRuntimeProviderRegistryErrorV1::Unavailable
-            }
-            _ => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
-        })?;
+        .map_err(threshold_import_error)?;
     let signer = requested_signer
         .map(|binding| {
             let exact = binding
@@ -103,20 +113,51 @@ pub(super) fn load_with_signer(
 /// Standard input carries the canonical threshold bundle, including an explicit
 /// empty bundle when no threshold slot is requested. FD198 is consumed only for
 /// the configured Soracloud signer, using the shipping Taira credential loader.
-/// The stock broker independently qualifies every returned backend before readiness.
+/// The parsed local policy must match the catalog before reading either handoff;
+/// both platform threshold handoffs receive the one original policy pool. The
+/// stock broker independently qualifies every returned backend before readiness.
+/// TODO: Fund supervisor input, outer shared controls and Core custody-map nodes
+/// before full memory qualification; decoded Parliament graph backing is prepaid.
 ///
 /// # Errors
 ///
-/// Rejects unsupported slots, missing or substituted credentials, and any mismatch
-/// between the exact catalog and the loaded public provider qualifications.
+/// Rejects differing local memory policy, unsupported slots, missing or
+/// substituted credentials, and any mismatch between the exact catalog and the
+/// loaded public provider qualifications.
 #[cfg(feature = "test-network-disposable-broker")]
 pub fn load_disposable_runtime_provider_broker_v1(
     catalog: &IrohaRuntimeProviderBindingsV1,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     reader: &mut impl std::io::Read,
 ) -> Result<Box<dyn RuntimeProviderBrokerBackendRegistryV1>, IrohaRuntimeProviderRegistryErrorV1> {
-    let registry = load_with_signer(catalog, reader, || {
+    let registry = load_with_signer(catalog, policy, reader, || {
         let signer = taira_runtime_signer(load_inherited_key_pair()?)?;
         Ok(Arc::new(signer))
     })?;
     Ok(Box::new(registry))
+}
+
+#[cfg(test)]
+mod threshold_import_error_tests {
+    use super::*;
+
+    #[test]
+    fn actual_parliament_backing_refusal_is_unavailable_and_bad_credentials_stay_mismatched() {
+        let pool = iroha_allocation::AllocationBudget::new(1);
+        let original = pool
+            .try_reserve(std::alloc::Layout::array::<u8>(2).unwrap())
+            .err()
+            .unwrap();
+        assert_eq!(threshold_import_error(
+            RuntimeConsensusThresholdSignerCredentialErrorV1::ParliamentFunding(
+                crate::external_software_signer::RuntimeParliamentTleCredentialFundingErrorV1::Storage(
+                    iroha_allocation::ChargedBufferError::Admission(original),
+                ),
+            ),
+        ), IrohaRuntimeProviderRegistryErrorV1::Unavailable);
+        assert_eq!(
+            threshold_import_error(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected),
+            IrohaRuntimeProviderRegistryErrorV1::BindingMismatch
+        );
+    }
 }

@@ -3,7 +3,7 @@
 #[norito_schema(name = "iroha_core::block::valid::tests::MutableGenesisBlockWire")]
 #[derive(norito::codec::Decode, norito::codec::Encode)]
 struct MutableGenesisBlockWire {
-    signatures: std::collections::BTreeSet<BlockSignature>,
+    signatures: iroha_data_model::block::BlockSignatures,
     payload: BlockPayload,
     result: Option<BlockResult>,
     commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
@@ -408,7 +408,10 @@ fn check_genesis_block_rejects_height_above_one() {
         checked_block_signature(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), block.hash()),
     );
     block
-        .replace_signatures([signature].into_iter().collect())
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([signature])
+                .expect("at most 31 block signatures"),
+        )
         .expect("replace signature after changing test header");
     assert_eq!(
         check_genesis_block(&block, &genesis_account),

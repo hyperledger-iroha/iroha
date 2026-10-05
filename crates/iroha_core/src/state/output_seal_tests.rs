@@ -11,7 +11,7 @@ use iroha_data_model::events::{
 #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
 #[norito_schema(name = "iroha_core::state::output_seal_tests::AlteredProposal")]
 struct AlteredProposal {
-    signatures: std::collections::BTreeSet<iroha_data_model::block::BlockSignature>,
+    signatures: iroha_data_model::block::BlockSignatures,
     payload: iroha_data_model::block::BlockPayload,
     result: Option<iroha_data_model::block::BlockResult>,
     commit_certificate: Option<iroha_data_model::block::CommitCertificate>,

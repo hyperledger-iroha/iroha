@@ -109,24 +109,14 @@ impl ManagedStreamTokenCustody {
         observed_at_unix_ms: u64,
         deadline: Instant,
     ) -> Result<RetainedCustodyEnrollment> {
-        require_deadline(deadline)?;
-        self.authority.validate_profile()?;
-        self.validate_policy(policy)?;
-        if minimum_height < 2 || minimum_block_hash == [0; 32] {
-            return Err(invalid("original runtime carrier floor is invalid"));
-        }
-        let sequence = current
-            .current()
-            .and_then(|value| value.control().active_head)
-            .map(|head| head.sequence)
-            .filter(|sequence| (1..=64).contains(sequence))
-            .ok_or_else(|| invalid("current generated custody head is absent or outside bound"))?;
-        let retained = if sequence == 1 {
-            self.retained_initial_enrollment(policy, initial_interval, deadline)?
-        } else {
-            self.retained_renewed_enrollment(sequence, policy, deadline)?
-        };
-        // Floor may precede a renewed enrollment, but never its selected successful carrier.
+        let retained = self.retained_head_material_at(
+            policy,
+            initial_interval,
+            minimum_height,
+            minimum_block_hash,
+            current,
+            deadline,
+        )?;
         let (height, hash) = if retained.finalized().height > minimum_height {
             (
                 retained.finalized().height,
@@ -144,6 +134,50 @@ impl ManagedStreamTokenCustody {
             observed_at_unix_ms,
             deadline,
         )?;
+        Ok(retained)
+    }
+
+    /// Historical material join only. Expired bytes can be a renewal predecessor, never a launch.
+    pub(super) fn retained_head_material_at(
+        &self,
+        policy: &SignerCustodyPolicyV1,
+        initial_interval: ManagedCustodyEnrollmentInterval,
+        minimum_height: u64,
+        minimum_block_hash: [u8; 32],
+        current: &VerifiedStreamTokenCustodyStateV1,
+        deadline: Instant,
+    ) -> Result<RetainedCustodyEnrollment> {
+        require_deadline(deadline)?;
+        self.authority.validate_profile()?;
+        self.validate_policy(policy)?;
+        if minimum_height < 2 || minimum_block_hash == [0; 32] {
+            return Err(invalid("original runtime carrier floor is invalid"));
+        }
+        let sequence = current
+            .current()
+            .and_then(|value| value.control().active_head)
+            .map(|head| head.sequence)
+            .filter(|sequence| (1..=64).contains(sequence))
+            .ok_or_else(|| invalid("current generated custody head is absent or outside bound"))?;
+        let retained = if sequence == 1 {
+            crate::managed::native_operation::require_retained_material(
+                self.retained_initial_enrollment(policy, initial_interval, deadline),
+            )?
+        } else {
+            crate::managed::native_operation::require_retained_material(
+                self.retained_renewed_enrollment(sequence, policy, deadline),
+            )?
+        };
+        // Floor may precede a renewed enrollment, but never its selected successful carrier.
+        let (height, hash) = if retained.finalized().height > minimum_height {
+            (
+                retained.finalized().height,
+                *retained.finalized().block_hash.as_ref(),
+            )
+        } else {
+            (minimum_height, minimum_block_hash)
+        };
+        self.match_current_enrollment_material(&retained, policy, height, hash, current)?;
         Ok(retained)
     }
 
@@ -241,29 +275,18 @@ impl ManagedStreamTokenCustody {
         use sorafs_manifest::signer::custody::{
             SignerCustodyUseContextV1, verify_signer_custody_use_v1,
         };
-        self.validate_policy(policy)?;
+        self.match_current_enrollment_material(
+            enrollment,
+            policy,
+            minimum_height,
+            minimum_block_hash,
+            current,
+        )?;
         let selected = current
             .current()
             .ok_or_else(|| invalid("renewed runtime custody is absent"))?;
         let control = selected.control();
         let anchor = selected.anchor();
-        if minimum_height < enrollment.finalized().height
-            || minimum_block_hash == [0; 32]
-            || current.height() < minimum_height
-            || current.height() == minimum_height && anchor.block_hash != minimum_block_hash
-            || current.network_id() != self.authority.config.network_id
-            || current.provider_id() != self.authority.provider_id()?
-            || current.owner()
-                != self
-                    .authority
-                    .provider_role(StreamTokenAuthorityRole::IssuerOperator)?
-            || control.policy != *policy
-            || selected.record().active_enrollment.as_deref() != Some(enrollment.bytes())
-        {
-            return Err(invalid(
-                "renewed runtime custody differs from its native head or floor",
-            ));
-        }
         let verified = verify_signer_custody_use_v1(
             enrollment.bytes(),
             &policy.binding,
@@ -288,6 +311,52 @@ impl ManagedStreamTokenCustody {
         Ok(())
     }
 
+    fn match_current_enrollment_material(
+        &self,
+        enrollment: &RetainedCustodyEnrollment,
+        policy: &SignerCustodyPolicyV1,
+        minimum_height: u64,
+        minimum_block_hash: [u8; 32],
+        current: &VerifiedStreamTokenCustodyStateV1,
+    ) -> Result<()> {
+        self.validate_policy(policy)?;
+        let selected = current
+            .current()
+            .ok_or_else(|| invalid("renewed runtime custody is absent"))?;
+        let control = selected.control();
+        let anchor = selected.anchor();
+        if minimum_height < enrollment.finalized().height
+            || minimum_block_hash == [0; 32]
+            || current.height() < minimum_height
+            || current.height() == minimum_height && anchor.block_hash != minimum_block_hash
+            || current.network_id() != self.authority.config.network_id
+            || current.provider_id() != self.authority.provider_id()?
+            || current.owner()
+                != self
+                    .authority
+                    .provider_role(StreamTokenAuthorityRole::IssuerOperator)?
+            || control.policy != *policy
+            || selected.record().active_enrollment.as_deref() != Some(enrollment.bytes())
+        {
+            return Err(invalid(
+                "renewed runtime custody differs from its native head or floor",
+            ));
+        }
+        let head = control
+            .active_head
+            .ok_or_else(|| invalid("retained native enrollment head absent"))?;
+        if head.sequence != enrollment.statement().sequence
+            || head.record_digest != enrollment.record_digest()
+            || control.signer_revoked
+            || control.attester_revoked
+        {
+            return Err(invalid(
+                "retained enrollment differs from unrevoked native head",
+            ));
+        }
+        Ok(())
+    }
+
     fn retained_enrollment(
         &self,
         purpose: CustodyPurpose,
@@ -302,11 +371,7 @@ impl ManagedStreamTokenCustody {
         if configured_policy != *policy {
             return Err(invalid("retained enrollment policy differs"));
         }
-        let operation = self
-            .authority
-            .directory
-            .open_child(&purpose.directory_name()?)?;
-        let original = journal::required_original(&operation)?;
+        let original = self.required_enrollment(purpose)?;
         let directory = original.directory();
         self.validate_original(&original, purpose)?;
         let Action::Enroll { enrollment, .. } = &original.action else {
@@ -357,7 +422,7 @@ impl ManagedStreamTokenCustody {
         })
     }
 
-    /// Read the exact first body selection and its selected dispatch deadline without creating
+    /// Read the exact selected initial body and its selected dispatch deadline without creating
     /// custody or querying current state. Full native inclusion is checked by retained enrollment.
     pub(in crate::managed) fn inspect_local_initial_interval(
         &self,
@@ -366,34 +431,19 @@ impl ManagedStreamTokenCustody {
         self.inspect_local_initial_interval_if_present(policy)?
             .ok_or_else(|| invalid("original initial enrollment dispatch is not selected"))
     }
+    /// Inspect an optional local selection for the managed runtime without creating a dispatch.
     pub(in crate::managed) fn inspect_local_initial_interval_if_present(
         &self,
         policy: &SignerCustodyPolicyV1,
     ) -> Result<Option<ManagedCustodyEnrollmentInterval>> {
         self.authority.validate_profile()?;
         self.validate_policy(policy)?;
-        let operation = match self.authority.directory.open_child("enroll") {
-            Ok(directory) => directory,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-        let Some(intent) = journal::read_intent(&operation)? else {
+        let Some(history) = body_history::BodyHistory::open(self, CustodyPurpose::InitialEnroll)?
+        else {
             return Ok(None);
         };
-        self.validate_original(&intent, CustodyPurpose::InitialEnroll)?;
-        intent.matches_enrollment_policy(policy)?;
-        let history =
-            attempts::History::read(&operation, intent.dispatch_purpose()?, intent.digest()?)?;
-        let account = self.wallet()?;
-        // Canonical inspection compares immutable request bytes only. This options field is
-        // deliberately not a new dispatch deadline and is never used for I/O or signing.
-        let deadline = Instant::now();
-        history.verify_wallets(|attempt| {
-            intent
-                .request(attempt.terms(), attempt.observation()?, deadline)?
-                .inspect(&account, &attempt.wallet_path())
-        })?;
-        let original = match Selected::from_history(intent, history) {
+        history.matches_policy(policy)?;
+        let original = match history.into_selected() {
             Ok(original) => original,
             Err(super::super::Error::Bootstrap(ManagedBootstrapFailure::TransitionPending)) => {
                 return Ok(None);
@@ -425,17 +475,28 @@ impl ManagedStreamTokenCustody {
         Ok((policy.clone(), finalized))
     }
 
-    pub(super) fn enrollment_original(
+    pub(super) fn unsigned_enrollment(
         &self,
         policy: &SignerCustodyPolicyV1,
         current: &VerifiedStreamTokenCustodyStateV1,
         verifier: &FinalityVerifier,
         interval: ManagedCustodyEnrollmentInterval,
         observed: u64,
-    ) -> Result<Original> {
+    ) -> Result<body_history::UnsignedEnrollment> {
         let selected = current
             .current()
             .ok_or_else(|| invalid("custody policy absent"))?;
+        let tip = verifier
+            .verified_tip()
+            .map_err(|_| invalid("unsigned enrollment cut invalid"))?;
+        if current.height() != verifier.checkpoint().height()
+            || current.context_id() != tip.context_id()
+            || selected.control().policy != *policy
+        {
+            return Err(invalid(
+                "unsigned enrollment differs from selected native cut",
+            ));
+        }
         let checkpoint = checkpoint_bytes(verifier)?;
         let selection = self.selection(&policy.binding, current)?;
         let statement = SignerCustodyStatementV1 {
@@ -451,31 +512,15 @@ impl ManagedStreamTokenCustody {
             evidence_digest: self.evidence_digest(policy, &selection, &checkpoint)?,
             revoked: false,
         };
-        let key = self.attester()?;
-        let payload = statement
+        statement
             .signing_payload()
             .map_err(|_| invalid("invalid enrollment statement"))?;
-        let signature = Signature::try_new(key.private_key(), &payload)
-            .map_err(|_| invalid("cannot attest original custody enrollment"))?;
-        let enrollment = SignerCustodyRecordV1 {
-            statement,
-            attestation: signature
-                .payload()
-                .try_into()
-                .map_err(|_| invalid("invalid attester signature"))?,
-        };
-        let original = Original {
+        Ok(body_history::UnsignedEnrollment {
             selection,
-            action: Action::Enroll {
-                anchor: selected.anchor(),
-                selected_at_unix_ms: observed,
-                validity: journal::EnrollmentValidity::from_interval(interval),
-                enrollment: encode(&enrollment, 16 * 1024)?,
-            },
+            statement,
+            selected_at_unix_ms: observed,
             checkpoint,
-        };
-        original.validate()?;
-        Ok(original)
+        })
     }
 }
 
@@ -488,4 +533,68 @@ pub(super) fn decode_enrollment(bytes: &[u8]) -> Result<SignerCustodyRecordV1> {
         norito::DecodeLimits::new(4096, 16 * 1024, 16 * 1024, 1024 * 1024, 32),
     )
     .map_err(|_| invalid("invalid retained enrollment statement"))
+}
+
+#[cfg(test)]
+mod local_inspection_tests {
+    //! Optional inspection preserves absence and refuses changed retained material.
+
+    use super::*;
+
+    #[test]
+    fn optional_initial_inspection_preserves_absence_and_rejects_changed_material() {
+        let _guard = crate::managed::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let ports = crate::managed::LocalnetPorts::reserve().unwrap();
+        let prepared = crate::localnet::prepare_localnet_at(
+            "custody-local-inspection",
+            &temporary.path().join("generation"),
+            &ports,
+            crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities,
+            None,
+        )
+        .unwrap();
+        let owner = ManagedStreamTokenCustody::open(
+            &prepared,
+            crate::managed::native_operation::test_support::provider_id(&prepared, 0),
+        )
+        .unwrap();
+        let policy = super::super::transport_tests::policy(&owner);
+        let entries = owner.authority.directory.entries(32).unwrap();
+        assert_eq!(
+            owner
+                .inspect_local_initial_interval_if_present(&policy)
+                .unwrap(),
+            None
+        );
+        assert!(owner.inspect_local_initial_interval(&policy).is_err());
+        assert_eq!(owner.authority.directory.entries(32).unwrap(), entries);
+        let mut changed = policy.clone();
+        changed.binding.network_id = [0x55; 32];
+        assert!(
+            owner
+                .inspect_local_initial_interval_if_present(&changed)
+                .is_err()
+        );
+        let enrollment = owner.authority.directory.ensure_child("enroll").unwrap();
+        assert!(matches!(
+            owner.inspect_local_initial_interval_if_present(&policy),
+            Err(crate::managed::Error::Bootstrap(
+                ManagedBootstrapFailure::RetainedMaterial
+            ))
+        ));
+        assert!(enrollment.entries(3).unwrap().is_empty());
+        enrollment
+            .write_atomic("original.nrt", &[0xff], PublishMode::CreateNew)
+            .unwrap();
+        assert!(
+            owner
+                .inspect_local_initial_interval_if_present(&policy)
+                .is_err()
+        );
+        assert_eq!(
+            enrollment.read("original.nrt", 1).unwrap().as_slice(),
+            &[0xff]
+        );
+    }
 }

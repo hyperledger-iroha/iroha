@@ -15,7 +15,7 @@ use norito::codec::DecodeAll as _;
 #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
 #[norito_schema(name = "iroha_core::state::block_proof_tests::MutableSignedBlockWire")]
 struct MutableSignedBlockWire {
-    signatures: BTreeSet<BlockSignature>,
+    signatures: iroha_data_model::block::BlockSignatures,
     payload: BlockPayload,
     result: Option<BlockResult>,
     commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
@@ -634,7 +634,8 @@ fn executed_block_wire_returns_exact_finalized_bytes_and_enforces_admission() {
                     ..proof_limits()
                 }
             )
-            .unwrap(),
+            .unwrap()
+            .as_slice(),
         expected
     );
     assert_eq!(

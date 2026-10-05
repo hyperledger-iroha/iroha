@@ -322,3 +322,11 @@ stream-token revision selects the dedicated completion-key approval, local durab
 inventory only after original ingest setup has finalized. Restart opens retained history and never
 repairs a missing journal; the local inventory is not proof of registry inclusion or three-provider
 cold-package readiness.
+
+The generated publication plan commits one explicit host/provider (slot zero), its existing owner
+receipt signer, a separate ordinary-funded `MusubiPin` account and immutable pin session. It retains
+the original provider TLS identity on a separate reserved port and provisions the sole native seed,
+replay-journal, clock and pin-session owners before generation publication. Missing custody is never
+an initialization signal on restart. Its typed installation projection remains inactive in original
+peer configs; the concrete backend, publisher-side manager handoff and complete three-provider
+publication/cold-install qualification remain separate activation requirements.

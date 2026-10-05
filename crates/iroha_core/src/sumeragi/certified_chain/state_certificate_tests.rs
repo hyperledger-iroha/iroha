@@ -234,7 +234,7 @@ fn pinned_frame_reader_charges_raw_buffer_once_and_retains_cumulative_scope() {
             .unwrap()
             .unwrap();
         let length = source.wire_len();
-        let bytes = source.read(length).map_err(|_| ())?.ok_or(())?;
+        let bytes = source.read(length, &budget).map_err(|_| ())?.ok_or(())?;
         iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|_| ())
     };
     let accepts = |limit| {

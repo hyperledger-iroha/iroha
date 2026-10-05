@@ -206,6 +206,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "zk-verify-batch": ("dep:iroha_zkp_halo2", "app_api"),
     },
     "irohad_lib": {"default": ("daemon", "iroha_core/simd"),
+ "mutation-testing": (),
  "daemon": ("telemetry",
             "schema-endpoint",
             "gost",
@@ -222,7 +223,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
                "iroha_core/telemetry",
                "iroha_torii/telemetry"),
  "expensive-telemetry": ("telemetry", "iroha_core/expensive-telemetry"),
- "ivm-cuda": ("ivm/cuda",),
  "gost": ("iroha_core/gost",
           "iroha_crypto/gost",
           "iroha_data_model/gost",
@@ -291,6 +291,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "ivm": {
         "default": ("metal",),
+        "cuda": ("dep:cust", "iroha_accel/cuda"),
         "metal": (
             "dep:objc2-metal",
             "dep:objc2",
@@ -343,7 +344,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "external-software-signer-bin": ("daemon",),
  "dev-tools": ("daemon", "zk-stark", "irohad_lib/dev-tools"),
  "accel-metal": ("fastpq-gpu", "irohad_lib/accel-metal"),
- "ivm-cuda": ("irohad_lib/ivm-cuda",),
  "accel-cuda": ("fastpq-gpu", "irohad_lib/accel-cuda"),
  "test-network-private-settlement-route-control": ("irohad_lib/test-network-private-settlement-route-control",),
  "test-network-parliament-signers": ("irohad_lib/test-network-parliament-signers",),
@@ -391,18 +391,18 @@ CONTEXTUAL_SHIPPING_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_core": ("expensive-telemetry",),
     "iroha_core_zk": (),
     "iroha_torii": (),
-    "irohad_lib": ("ivm-cuda",),
+    "irohad_lib": (),
     "iroha_cli_lib": (),
     "iroha": (),
     "iroha_config": (),
     "iroha_genesis": (),
     "iroha_telemetry": ("event-exporter", "metric-instrumentation", "sm"),
-    "ivm": (),
+    "ivm": ("cuda",),
     "iroha_primitives": (),
     "iroha_kagami": (),
     "iroha_zkp_halo2": (),
 
-    "irohad": ("ivm-cuda",),
+    "irohad": (),
     "iroha_cli": (),
     "iroha_core_privacy": (),
     "iroha_core_timed_ovn": (),
@@ -514,7 +514,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     "ivm": (
         "beep",
         "bench",
-        "cuda",
         "cuda-hardware-tests",
         "dev-tools",
         "ivm_vrf_tests",
@@ -884,6 +883,18 @@ def _check_mandatory_native_dependency(document: dict[str, Any], manifest_path: 
     return []
 
 
+def _check_mandatory_daemon_cuda(document: dict[str, Any], manifest_path: Path) -> list[str]:
+    """Keep daemon CUDA on the single mandatory Linux/Windows dependency row."""
+    scope = 'cfg(any(target_os = "linux", target_os = "windows"))'
+    targets = document.get("target", {})
+    if (document.get("dependencies", {}).get("ivm") != {"workspace": True}
+            or targets.get(scope, {}).get("dependencies", {}).get("ivm") != {"workspace": True, "features": ["cuda"]}
+            or any("ivm" in value.get("dependencies", {}) for key, value in targets.items() if key != scope)
+            or "ivm-cuda" in document.get("features", {})):
+        return [f"{manifest_path}: mandatory daemon CUDA requires the exact Linux/Windows target dependency"]
+    return []
+
+
 def _check_expected_features(
     document: dict[str, Any], manifest_path: Path
 ) -> list[str]:
@@ -894,6 +905,8 @@ def _check_expected_features(
         return []
 
     errors: list[str] = []
+    if package_name == "irohad_lib":
+        errors.extend(_check_mandatory_daemon_cuda(document, manifest_path))
     if package_name == "iroha":
         errors.extend(_check_mandatory_native_dependency(document, manifest_path))
     if package_name == "iroha_data_model":

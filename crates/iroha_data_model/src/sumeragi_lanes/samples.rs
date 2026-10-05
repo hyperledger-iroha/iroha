@@ -270,15 +270,19 @@ impl json::JsonSerialize for SumeragiLaneSamples {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, value) in self.as_slice().iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, value) in self.as_slice().iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                value.json_serialize_to(out)?;
             }
-            value.json_serialize_to(out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }

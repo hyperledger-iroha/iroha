@@ -127,8 +127,8 @@ fn reassignment_breaks_lineage_and_deduplicates_all_historical_occurrences() {
     // and can recur, while only CARPENTER is in the active, retired suffix.
     world.account_aliases = Storage::new();
     world.rebuild_account_rekey_records().unwrap();
-    assert_eq!(check(&world, 4096), Ok(()));
-    let checked = CheckedAccountRekeys::capture(&world, 4096).unwrap();
+    assert_eq!(check(&world, test_support::world_work(&world)), Ok(()));
+    let checked = CheckedAccountRekeys::capture(&world, test_support::world_work(&world)).unwrap();
     assert_eq!(
         checked.rows().current().get(&alias("wallet")),
         Some(&history)
@@ -149,7 +149,7 @@ fn same_retired_predecessor_can_support_multiple_aliases_for_one_active_account(
         world.account_rekey_records.insert(alias(name), record);
     }
     world.rebuild_account_rekey_records().unwrap();
-    assert_eq!(check(&world, 4096), Ok(()));
+    assert_eq!(check(&world, test_support::world_work(&world)), Ok(()));
 }
 
 #[test]
@@ -174,7 +174,10 @@ fn source_label_account_and_provenance_failures_reject_in_either_image() {
                 _ => unreachable!(),
             };
             malformed(&mut world, bad.clone(), previous);
-            assert_eq!(check(&world, 4096), Err(source(image(previous), reason)));
+            assert_eq!(
+                check(&world, test_support::world_work(&world)),
+                Err(source(image(previous), reason))
+            );
             let rows = world
                 .account_rekey_records
                 .try_committed_view_nonblocking()
@@ -203,7 +206,7 @@ fn phone_like_labels_reject_without_allocating_or_repairing_either_image() {
         }
         reindex(&mut world);
         assert_eq!(
-            check(&world, 4096),
+            check(&world, test_support::world_work(&world)),
             Err(source(image(previous), "record label looks like raw PII"))
         );
     }
@@ -229,7 +232,10 @@ fn active_suffix_requires_retirement_and_no_repeated_predecessors() {
                 "active rekey predecessor remains live"
             };
             malformed(&mut world, bad, previous);
-            assert_eq!(check(&world, 4096), Err(source(image(previous), reason)));
+            assert_eq!(
+                check(&world, test_support::world_work(&world)),
+                Err(source(image(previous), reason))
+            );
         }
     }
 }
@@ -269,7 +275,7 @@ fn cross_record_cycles_and_ambiguous_retired_targets_reject_at_both_cuts() {
             }
             reindex(&mut world);
             assert_eq!(
-                check(&world, 4096),
+                check(&world, test_support::world_work(&world)),
                 Err(source(
                     image(previous),
                     if cycle {
@@ -313,7 +319,10 @@ fn alias_bindings_require_live_matching_continuity_in_either_image() {
                 block.insert(alias("wallet"), BOB_ID.clone());
                 block.commit();
             }
-            assert_eq!(check(&world, 4096), Err(source(image(previous), reason)));
+            assert_eq!(
+                check(&world, test_support::world_work(&world)),
+                Err(source(image(previous), reason))
+            );
         }
     }
 }
@@ -354,7 +363,10 @@ fn omitted_empty_and_foreign_occurrence_buckets_reject_at_both_cuts() {
                 block.remove(CARPENTER_ID.clone());
                 block.commit();
             }
-            assert_eq!(check(&world, 4096), Err(corrupt(image(previous), mismatch)));
+            assert_eq!(
+                check(&world, test_support::world_work(&world)),
+                Err(corrupt(image(previous), mismatch))
+            );
         }
     }
 }
@@ -374,8 +386,8 @@ fn record_rename_deletion_and_insertion_keep_exact_original_predecessor() {
         block.commit();
     }
     reindex(&mut world);
-    assert_eq!(check(&world, 4096), Ok(()));
-    let checked = CheckedAccountRekeys::capture(&world, 4096).unwrap();
+    assert_eq!(check(&world, test_support::world_work(&world)), Ok(()));
+    let checked = CheckedAccountRekeys::capture(&world, test_support::world_work(&world)).unwrap();
     assert_eq!(
         get_at(checked.rows(), GroupImage::Predecessor, &alias("wallet")),
         Some(&record())
@@ -389,7 +401,8 @@ fn record_rename_deletion_and_insertion_keep_exact_original_predecessor() {
 fn every_original_native_reader_participates_in_the_final_identity_check() {
     for owner in 0..4 {
         let world = fixture();
-        let checked = CheckedAccountRekeys::capture(&world, 4096).unwrap();
+        let checked =
+            CheckedAccountRekeys::capture(&world, test_support::world_work(&world)).unwrap();
         match owner {
             0 => world.account_rekey_records.block().commit(),
             1 => world.accounts.block().commit(),
@@ -404,16 +417,16 @@ fn every_original_native_reader_participates_in_the_final_identity_check() {
 #[test]
 fn exact_work_limit_charges_masked_rows_and_absent_undo_before_filtering() {
     let world = fixture();
-    assert_eq!(check(&world, 71), Err(GroupedOwnershipError::WorkLimit));
-    assert_eq!(check(&world, 72), Ok(()));
+    assert_eq!(check(&world, 2451), Err(GroupedOwnershipError::WorkLimit));
+    assert_eq!(check(&world, 2452), Ok(()));
     {
         let mut block = world.account_rekey_records.block();
         block.insert(alias("wallet"), record());
         block.remove(alias("absent"));
         block.commit();
     }
-    assert_eq!(check(&world, 73), Err(GroupedOwnershipError::WorkLimit));
-    assert_eq!(check(&world, 74), Ok(()));
+    assert_eq!(check(&world, 2847), Err(GroupedOwnershipError::WorkLimit));
+    assert_eq!(check(&world, 2848), Ok(()));
 }
 
 #[test]
@@ -421,29 +434,41 @@ fn history_searches_are_funded_before_inspection_even_on_invalid_records() {
     let mut bad = record();
     bad.transition_provenance = vec![Provenance::AccountIdRekey; 4096];
     assert_eq!(
-        funded_predecessors(&bad, GroupImage::Current, &mut Work(4096)),
+        funded_predecessors(&bad, GroupImage::Current, &mut RekeyWork(20495)),
         Err(GroupedOwnershipError::WorkLimit)
     );
     assert_eq!(
-        funded_predecessors(&bad, GroupImage::Current, &mut Work(4097)),
+        funded_predecessors(&bad, GroupImage::Current, &mut RekeyWork(20496)),
         Err(source(
             GroupImage::Current,
             "transition provenance length differs from account history"
         ))
     );
     let world = fixture();
-    let checked = CheckedAccountRekeys::capture(&world, 4096).unwrap();
+    let checked = CheckedAccountRekeys::capture(&world, test_support::world_work(&world)).unwrap();
     let record = checked.rows().current().get(&alias("wallet")).unwrap();
     assert_eq!(
-        contains_account(record.previous_account_ids.iter(), &ALICE_ID, &mut Work(0)),
+        contains_account(
+            record.previous_account_ids.iter(),
+            &ALICE_ID,
+            &mut RekeyWork(0)
+        ),
         Err(GroupedOwnershipError::WorkLimit)
     );
     assert_eq!(
-        contains_account(record.previous_account_ids.iter(), &ALICE_ID, &mut Work(1)),
+        contains_account(
+            record.previous_account_ids.iter(),
+            &ALICE_ID,
+            &mut RekeyWork(69)
+        ),
         Ok(true)
     );
     assert_eq!(
-        contains_account(record.previous_account_ids.iter(), &BOB_ID, &mut Work(1)),
+        contains_account(
+            record.previous_account_ids.iter(),
+            &BOB_ID,
+            &mut RekeyWork(69)
+        ),
         Ok(false)
     );
 }
@@ -466,7 +491,9 @@ fn dense_reassignment_history_defers_locally_then_retries_without_source_mutatio
     state
         .ivm_execution_budget()
         .set_limit_bytes(16 * 1024 * 1024);
-    let checked = CheckedAccountRekeys::capture(&state.world, 4096).unwrap();
+    let checked =
+        CheckedAccountRekeys::capture(&state.world, test_support::world_work(&state.world))
+            .unwrap();
     let mut limits = LeafLimits {
         max_tables: 1,
         max_rows: 1,

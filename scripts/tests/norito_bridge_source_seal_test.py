@@ -278,6 +278,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "crates/norito_derive/tests/ui/fail/json_required_option_misuse.stderr",
             "crates/norito_derive/tests/ui/fail/prepared_record_generic.stderr",
             "crates/norito_derive/tests/ui/fail/prepared_record_tuple.stderr",
+            "crates/norito_derive/tests/ui/fail/prepared_record_unit.stderr",
             "crates/norito_derive/tests/ui/fail/prepared_record_validation.stderr",
             "crates/norito_derive/tests/ui/fail/schema_identity_duplicate.stderr",
             "crates/norito_derive/tests/ui/fail/schema_identity_generic_frame.stderr",

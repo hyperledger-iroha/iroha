@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sorafs_javascript_archive as archive
 import sorafs_javascript_package_source as package
-from sorafs_javascript_package_fixtures import CHECKSUM, expected_files, source_inputs
+from sorafs_javascript_package_fixtures import CHECKSUM, PROJECTED_MEMBERS, expected_files, source_inputs
 
 
 @pytest.fixture(scope="module")
@@ -37,7 +37,7 @@ def test_source_capacity_exact_then_one_under_before_content_parse(captured, mon
     sources, lock = captured
     maximum = observed(sources)
     monkeypatch.setattr(package, limit, maximum)
-    assert len(project(sources, lock).members) == 237
+    assert len(project(sources, lock).members) == PROJECTED_MEMBERS
     monkeypatch.setattr(package, limit, maximum - 1)
     def forbidden(*args, **kwargs):
         raise AssertionError("source input not admitted before metadata parsing")
@@ -49,7 +49,7 @@ def test_source_capacity_exact_then_one_under_before_content_parse(captured, mon
 def test_checksum_capacity_exact_then_one_under(captured, monkeypatch):
     sources, lock = captured
     monkeypatch.setattr(package, "MAX_CHECKSUM_BYTES", len(CHECKSUM))
-    assert len(project(sources, lock).members) == 237
+    assert len(project(sources, lock).members) == PROJECTED_MEMBERS
     monkeypatch.setattr(package, "MAX_CHECKSUM_BYTES", len(CHECKSUM) - 1)
     with pytest.raises(package.ArchiveError, match="JSON byte bound"):
         project(sources, lock)
@@ -63,7 +63,7 @@ def test_projection_uses_archive_owner_exact_namespace_capacity(captured, monkey
     value = {"MAX_MEMBERS": len(names), "MAX_PATH_NODES": len(nodes),
              "MAX_PATH_BYTES": sum(len(name.encode()) for name in nodes)}[limit]
     monkeypatch.setattr(archive, limit, value)
-    assert len(project(sources, lock).members) == 237
+    assert len(project(sources, lock).members) == PROJECTED_MEMBERS
     monkeypatch.setattr(archive, limit, value - 1)
     with pytest.raises(package.ArchiveError, match="count bound|ownership count or byte bound"):
         project(sources, lock)

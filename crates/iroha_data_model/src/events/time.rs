@@ -279,11 +279,15 @@ impl norito::json::FastJsonWrite for TimeEvent {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        write_key_to(out, "interval")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.interval, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            write_key_to(out, "interval")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.interval, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -357,10 +361,14 @@ impl norito::json::FastJsonWrite for ExecutionTime {
             ExecutionTime::PreCommit => norito::json::write_json_string_to("PreCommit", out),
             ExecutionTime::Schedule(schedule) => {
                 out.begin_container()?;
-                out.push_str("{\"Schedule\":")?;
-                norito::json::JsonSerialize::json_serialize_to(schedule, out)?;
-                out.push('}')?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    out.push_str("{\"Schedule\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(schedule, out)?;
+                    out.push('}')?;
+                    Ok(())
+                })();
                 out.end_container();
+                result?;
                 Ok(())
             }
         }
@@ -428,14 +436,18 @@ impl norito::json::FastJsonWrite for Schedule {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        write_key_to(out, "start_ms")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.start_ms, out)?;
-        out.push(',')?;
-        write_key_to(out, "period_ms")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.period_ms, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            write_key_to(out, "start_ms")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.start_ms, out)?;
+            out.push(',')?;
+            write_key_to(out, "period_ms")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.period_ms, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -498,14 +510,18 @@ impl norito::json::FastJsonWrite for TimeInterval {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        write_key_to(out, "since_ms")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.since_ms, out)?;
-        out.push(',')?;
-        write_key_to(out, "length_ms")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.length_ms, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            write_key_to(out, "since_ms")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.since_ms, out)?;
+            out.push(',')?;
+            write_key_to(out, "length_ms")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.length_ms, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }

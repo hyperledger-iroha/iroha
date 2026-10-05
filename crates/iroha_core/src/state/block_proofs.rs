@@ -115,7 +115,14 @@ fn read_finalized_body(
     expected_hash: HashOf<BlockHeader>,
     limits: BlockProofLimits,
     wire_response: bool,
-) -> Result<(iroha_data_model::block::SharedSignedBlock, Vec<u8>, Hash), BlockProofError> {
+) -> Result<
+    (
+        iroha_data_model::block::SharedSignedBlock,
+        crate::kura::NativeFrameBytes,
+        Hash,
+    ),
+    BlockProofError,
+> {
     let kura = source.kura;
     let height = usize::try_from(block_height.get())
         .ok()
@@ -265,7 +272,7 @@ pub(super) fn executed_block_wire_from_kura(
     block_height: NonZeroU64,
     expected_hash: HashOf<BlockHeader>,
     limits: BlockProofLimits,
-) -> Result<Vec<u8>, BlockProofError> {
+) -> Result<crate::kura::NativeFrameBytes, BlockProofError> {
     read_finalized_body(source, block_height, expected_hash, limits, true).map(|(_, wire, _)| wire)
 }
 
@@ -423,14 +430,19 @@ mod native_proof_reader_tests {
             "the transport certificate cannot replace R's executed identity"
         );
         assert_eq!(
-            chain.state().executed_block_wire(height, limits()).unwrap(),
+            chain
+                .state()
+                .executed_block_wire(height, limits())
+                .unwrap()
+                .as_slice(),
             target.block().encode_wire().unwrap()
         );
         assert_eq!(
             chain
                 .state()
                 .executed_block_wire(NonZeroU64::new(1).unwrap(), limits())
-                .unwrap(),
+                .unwrap()
+                .as_slice(),
             chain.committed(1).block().encode_wire().unwrap()
         );
     }

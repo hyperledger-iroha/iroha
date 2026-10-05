@@ -23,7 +23,6 @@ use std::{format, str::FromStr, string::String, vec::Vec};
 #[derive(
     Debug,
     Clone,
-    Display,
     PartialEq,
     Eq,
     PartialOrd,
@@ -35,7 +34,6 @@ use std::{format, str::FromStr, string::String, vec::Vec};
     Encode,
     IntoSchema,
 )]
-#[display("{hash}${domain}")]
 #[getset(get = "pub")]
 #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::rwa::RwaId")]
@@ -44,6 +42,16 @@ pub struct RwaId {
     pub domain: DomainId,
     /// Canonical generated hash for the lot.
     pub hash: Hash,
+}
+impl std::fmt::Display for RwaId {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Hash Display owns a temporary hex String. This native identifier
+        // formatter visits the fixed-width hash and borrowed domain directly.
+        for byte in self.hash.as_ref() {
+            write!(out, "{byte:02x}")?;
+        }
+        write!(out, "${}", self.domain)
+    }
 }
 /// Quantitative provenance edge from a parent lot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
@@ -338,6 +346,35 @@ impl IntoKeyValue for Rwa {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rwa_id_text_stream_preserves_hash_domain_and_stops_at_checked_boundary() {
+        let hash = iroha_crypto::Hash::prehashed([0x31; iroha_crypto::Hash::LENGTH]);
+        let id = super::RwaId::generated(
+            super::DomainId::try_new("vault", "universal").unwrap(),
+            hash,
+        );
+        let expected = format!("{}$vault.universal", hex::encode(hash.as_ref()));
+        assert_eq!(id.to_string(), expected);
+        let mut text = String::new();
+        norito::json::visit_json_display_text(&id, |chunk| {
+            text.push_str(chunk);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(text, expected);
+        let mut visited = 0;
+        assert_eq!(
+            norito::json::visit_json_display_text(&id, |_chunk| {
+                visited += 1;
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            }),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+        assert_eq!(
+            visited, 1,
+            "the formatter must stop at the first refused native chunk"
+        );
+    }
     use super::*;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};

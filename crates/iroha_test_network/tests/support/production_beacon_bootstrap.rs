@@ -1321,7 +1321,7 @@ fn read_exact_finality(
     .map_err(|error| eyre!(error))?;
     ensure!(
         cursor
-            .advance(&journal)
+            .advance((&journal).into())
             .map_err(|error| eyre!(error))?
             .height()
             == height,
@@ -1406,7 +1406,7 @@ fn verify_pulse(
         )
         .map_err(|error| eyre!(error))?;
         let certified = with_verified_native_journal(
-            &journal,
+            (&journal).into(),
             &native.common.chain,
             &record.session.network_id,
             native_finality_limits(),

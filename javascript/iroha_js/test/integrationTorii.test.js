@@ -5289,7 +5289,7 @@ function assertEvidenceRecord(entry) {
   if (entry.penalty_status.status === "pending") {
     assert.equal(entry.penalty_status.details, null);
   } else {
-    assert.ok(["applied", "cancelled"].includes(entry.penalty_status.status));
+    assert.equal(entry.penalty_status.status, "applied");
     assert.deepEqual(Object.keys(entry.penalty_status.details), ["height"]);
     assertEvidenceU64(
       entry.penalty_status.details.height,

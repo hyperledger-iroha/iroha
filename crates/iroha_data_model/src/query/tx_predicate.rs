@@ -1185,16 +1185,24 @@ fn write_predicate_expression_to(
     write_arguments: impl FnOnce(&mut dyn json::JsonWriteSink) -> Result<(), json::BoundedJsonError>,
 ) -> Result<(), json::BoundedJsonError> {
     out.begin_container()?;
-    out.push_str("{\"args\":")?;
-    out.begin_container()?;
-    out.push('[')?;
-    write_arguments(out)?;
-    out.push(']')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        out.push_str("{\"args\":")?;
+        out.begin_container()?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            write_arguments(out)?;
+            out.push(']')?;
+            Ok(())
+        })();
+        out.end_container();
+        result?;
+        out.push_str(",\"op\":")?;
+        json::write_json_string_to(operation, out)?;
+        out.push('}')?;
+        Ok(())
+    })();
     out.end_container();
-    out.push_str(",\"op\":")?;
-    json::write_json_string_to(operation, out)?;
-    out.push('}')?;
-    out.end_container();
+    result?;
     Ok(())
 }
 
@@ -1244,15 +1252,19 @@ fn write_json_slice_to<T: JsonSerialize>(
     out: &mut dyn json::JsonWriteSink,
 ) -> Result<(), json::BoundedJsonError> {
     out.begin_container()?;
-    out.push('[')?;
-    for (index, value) in values.iter().enumerate() {
-        if index != 0 {
-            out.push(',')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        out.push('[')?;
+        for (index, value) in values.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            value.json_serialize_to(out)?;
         }
-        value.json_serialize_to(out)?;
-    }
-    out.push(']')?;
+        out.push(']')?;
+        Ok(())
+    })();
     out.end_container();
+    result?;
     Ok(())
 }
 
@@ -1261,15 +1273,19 @@ fn write_json_display_slice_to<T: core::fmt::Display>(
     out: &mut dyn json::JsonWriteSink,
 ) -> Result<(), json::BoundedJsonError> {
     out.begin_container()?;
-    out.push('[')?;
-    for (index, value) in values.iter().enumerate() {
-        if index != 0 {
-            out.push(',')?;
+    let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+        out.push('[')?;
+        for (index, value) in values.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            json::write_json_display_to(value, out)?;
         }
-        json::write_json_display_to(value, out)?;
-    }
-    out.push(']')?;
+        out.push(']')?;
+        Ok(())
+    })();
     out.end_container();
+    result?;
     Ok(())
 }
 

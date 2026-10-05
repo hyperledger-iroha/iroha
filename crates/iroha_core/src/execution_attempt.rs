@@ -166,6 +166,80 @@ impl<E: core::fmt::Display + core::fmt::Debug + 'static> std::error::Error
 {
 }
 
+/// Preserve original signature/certificate child allocation and canonical refusal provenance.
+/// Source/control invariants are contextual failures; callers must not turn them
+/// into a protocol verdict. No integer quota is treated as physical custody.
+pub(crate) fn prepared_signature_block_attempt_error<E>(
+    error: iroha_data_model::block::PreparedSignatureBlockError,
+    rejected: impl FnOnce(String) -> E,
+) -> ExecutionAttemptError<E> {
+    use iroha_allocation::{
+        ChargedBufferError, ChargedBufferFromChargeError, PrepaidSharedError, SharedFromChargeError,
+    };
+    use iroha_data_model::block::commit_certificate::CertificateCustodyError;
+    use iroha_data_model::block::{BlockSignatureCustodyError, PreparedSignatureBlockError};
+    use iroha_data_model::da::commitment::DaProofPolicyCustodyError;
+    use norito::core::{PreparedDecodeError, PreparedDecodeScopeError};
+    fn buffer(error: ChargedBufferError) -> ExecutionDeferred {
+        match error {
+            ChargedBufferError::Admission(original) => original.into(),
+            ChargedBufferError::Allocator { .. } => ExecutionDeferral::AllocationUnavailable.into(),
+        }
+    }
+    fn control(error: PrepaidSharedError) -> ExecutionDeferred {
+        match error {
+            PrepaidSharedError::Allocator { .. } => ExecutionDeferral::AllocationUnavailable.into(),
+            PrepaidSharedError::Reservation(_) => ExecutionDeferral::ActiveMemoryCapacity.into(),
+        }
+    }
+    match error {
+        PreparedSignatureBlockError::Storage(original) => {
+            ExecutionAttemptError::Deferred(buffer(original))
+        }
+        PreparedSignatureBlockError::Frame(original)
+        | PreparedSignatureBlockError::Certificate(CertificateCustodyError::Decode(original))
+        | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Decode(original))
+        | PreparedSignatureBlockError::Decode(PreparedDecodeError::Codec(original))
+        | PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
+            BlockSignatureCustodyError::Decode(original),
+        )) => canonical_decode_attempt_error(original, |error| rejected(error.to_string())),
+        PreparedSignatureBlockError::Certificate(CertificateCustodyError::Admission(original))
+        | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Admission(original)) => {
+            ExecutionAttemptError::Deferred(original.into())
+        }
+        PreparedSignatureBlockError::Certificate(CertificateCustodyError::Buffer(
+            ChargedBufferFromChargeError::Allocator { .. },
+        ))
+        | PreparedSignatureBlockError::Certificate(CertificateCustodyError::Control(
+            SharedFromChargeError::Allocator { .. },
+        ))
+        | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Buffer(
+            ChargedBufferFromChargeError::Allocator { .. },
+        ))
+        | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Control(
+            SharedFromChargeError::Allocator { .. },
+        )) => ExecutionAttemptError::Deferred(ExecutionDeferral::AllocationUnavailable.into()),
+        PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
+            BlockSignatureCustodyError::Buffer(original),
+        )) => ExecutionAttemptError::Deferred(buffer(original)),
+        PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
+            BlockSignatureCustodyError::ControlAdmission(original),
+        )) => ExecutionAttemptError::Deferred(original.into()),
+        PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
+            BlockSignatureCustodyError::ControlAllocation(original),
+        )) => ExecutionAttemptError::Deferred(control(original)),
+        PreparedSignatureBlockError::Scope(PreparedDecodeScopeError::Allocation(original))
+        | PreparedSignatureBlockError::Decode(PreparedDecodeError::Scope(
+            PreparedDecodeScopeError::Allocation(original),
+        )) => ExecutionAttemptError::Deferred(control(original)),
+        PreparedSignatureBlockError::Scope(PreparedDecodeScopeError::Reservation(_))
+        | PreparedSignatureBlockError::Decode(PreparedDecodeError::Scope(
+            PreparedDecodeScopeError::Reservation(_),
+        )) => ExecutionAttemptError::Deferred(ExecutionDeferral::ActiveMemoryCapacity.into()),
+        invariant => ExecutionAttemptError::Rejected(rejected(invariant.to_string())),
+    }
+}
+
 /// Preserve a local Norito refusal before a caller constructs a deterministic rejection.
 ///
 /// Matching surviving field, element and allocation ceilings belong to the current attempt. An
@@ -365,7 +439,198 @@ impl crate::state::StateTransaction<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExecutionAttemptError, ExecutionDeferral, ExecutionDeferred};
+    #[test]
+    fn prepared_signature_attempt_keeps_original_pool_refusal_and_source_invariants() {
+        use iroha_data_model::block::{BlockSignatureCustodyError, PreparedSignatureBlockError};
+        use norito::core::PreparedDecodeError;
+        let pool = iroha_allocation::AllocationBudget::new(8);
+        let occupied = pool.try_reserve_bytes(8).unwrap();
+        let original = pool.try_reserve_bytes(1).unwrap_err();
+        let error = PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
+            BlockSignatureCustodyError::ControlAdmission(original.clone()),
+        ));
+        let ExecutionAttemptError::<String>::Deferred(retained) =
+            prepared_signature_block_attempt_error(error, |_| {
+                panic!("original allocation cannot become rejection")
+            })
+        else {
+            panic!("original local custody refusal");
+        };
+        assert_eq!(retained.allocation_refusal(), Some(&original));
+        assert!(matches!(
+            prepared_signature_block_attempt_error(
+                PreparedSignatureBlockError::SourceChanged,
+                |reason| reason
+            ),
+            ExecutionAttemptError::Rejected(_)
+        ));
+        let error =
+            PreparedSignatureBlockError::Storage(iroha_allocation::ChargedBufferError::Allocator {
+                requested_bytes: 64,
+            });
+        assert!(
+            matches!(prepared_signature_block_attempt_error(error, |_| panic!("physical allocator refusal")), ExecutionAttemptError::<()>::Deferred(reason) if reason.reason() == ExecutionDeferral::AllocationUnavailable)
+        );
+        drop(occupied);
+    }
+
+    #[test]
+    fn prepared_certificate_attempt_preserves_original_pool_refusal_and_physical_causes() {
+        use iroha_allocation::{
+            AllocationBudget, ChargedBufferFromChargeError, SharedFromChargeError,
+        };
+        use iroha_data_model::block::{
+            PreparedSignatureBlockError, commit_certificate::CertificateCustodyError,
+        };
+        let pool = AllocationBudget::new(8);
+        let occupied = pool.try_reserve_bytes(8).unwrap();
+        let original = pool.try_reserve_bytes(1).unwrap_err();
+        let retained = prepared_signature_block_attempt_error(
+            PreparedSignatureBlockError::Certificate(CertificateCustodyError::Admission(
+                original.clone(),
+            )),
+            |_| panic!("original certificate refusal must defer"),
+        );
+        let ExecutionAttemptError::<String>::Deferred(retained) = retained else {
+            panic!("original retained certificate capacity owner");
+        };
+        assert_eq!(retained.allocation_refusal(), Some(&original));
+        assert_eq!(retained.reason(), ExecutionDeferral::ActiveMemoryCapacity);
+        let layout = std::alloc::Layout::array::<u8>(31).unwrap();
+        for cause in [
+            CertificateCustodyError::Buffer(ChargedBufferFromChargeError::Allocator { layout }),
+            CertificateCustodyError::Control(SharedFromChargeError::Allocator { layout }),
+        ] {
+            let retained = prepared_signature_block_attempt_error(
+                PreparedSignatureBlockError::Certificate(cause),
+                |_| panic!("original physical allocator refusal must defer"),
+            );
+            assert!(
+                matches!(retained, ExecutionAttemptError::<String>::Deferred(ref original)
+                if original.reason() == ExecutionDeferral::AllocationUnavailable && original.allocation_refusal().is_none())
+            );
+        }
+        for invariant in [
+            CertificateCustodyError::ForeignPool,
+            CertificateCustodyError::SourceChanged,
+            CertificateCustodyError::LayoutChanged,
+            CertificateCustodyError::Incomplete,
+        ] {
+            let retained = prepared_signature_block_attempt_error(
+                PreparedSignatureBlockError::Certificate(invariant),
+                |reason| reason,
+            );
+            assert!(matches!(retained, ExecutionAttemptError::Rejected(_)));
+        }
+        drop(occupied);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn prepared_policy_attempt_keeps_real_pool_physical_and_enclosing_refusal_owners() {
+        use iroha_allocation::{
+            AllocationBudget, ChargedBufferFromChargeError, SharedFromChargeError,
+        };
+        use iroha_data_model::{
+            block::PreparedSignatureBlockError, da::commitment::DaProofPolicyCustodyError,
+        };
+        let pool = AllocationBudget::new(8);
+        let occupied = pool.try_reserve_bytes(8).unwrap();
+        let original = pool.try_reserve_bytes(1).unwrap_err();
+        let retained = prepared_signature_block_attempt_error(
+            PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Admission(
+                original.clone(),
+            )),
+            |_| panic!("actual policy pool refusal must defer"),
+        );
+        let ExecutionAttemptError::<String>::Deferred(retained) = retained else {
+            panic!("original policy capacity owner");
+        };
+        assert_eq!(retained.allocation_refusal(), Some(&original));
+        assert_eq!(retained.reason(), ExecutionDeferral::ActiveMemoryCapacity);
+        let layout = std::alloc::Layout::array::<u8>(31).unwrap();
+        for cause in [
+            DaProofPolicyCustodyError::Buffer(ChargedBufferFromChargeError::Allocator { layout }),
+            DaProofPolicyCustodyError::Control(SharedFromChargeError::Allocator { layout }),
+        ] {
+            assert!(
+                matches!(prepared_signature_block_attempt_error(PreparedSignatureBlockError::Policy(cause),|_|panic!("original physical policy refusal")),ExecutionAttemptError::<String>::Deferred(reason) if reason.reason()==ExecutionDeferral::AllocationUnavailable)
+            );
+        }
+        let protocol = norito::core::DecodeLimits::new(4096, 4096, 4096, 4096, 64);
+        let narrow = norito::core::DecodeLimits::new(4096, 4096, 4096, 1, 64);
+        let mut bytes = Vec::new();
+        norito::core::SerializePayload::serialize(
+            &"original UTF-8".to_owned(),
+            &mut norito::core::Encoder::for_buffer(&mut bytes),
+        )
+        .unwrap();
+        let cause = norito::core::with_decode_limits_scope(narrow, || {
+            norito::core::classify_decode_attempt(|| {
+                norito::core::with_decode_limits_scope(protocol, || {
+                    norito::core::borrow_canonical_string(&bytes).map(|_| ())
+                })
+            })
+        })
+        .unwrap_err();
+        assert_eq!(
+            cause.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        assert!(
+            matches!(prepared_signature_block_attempt_error(PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Decode(cause)),|_|panic!("original caller refusal cannot become invalid policy")),ExecutionAttemptError::<String>::Deferred(reason) if reason.reason()==ExecutionDeferral::ActiveMemoryCapacity)
+        );
+        drop(occupied);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn prepared_certificate_attempt_keeps_original_enclosing_decode_cause_after_scope_retirement() {
+        use iroha_data_model::block::{
+            PreparedSignatureBlockError, commit_certificate::CertificateCustodyError,
+        };
+        use norito::core::{
+            DecodeAttemptErrorKind, DecodeFromSlice, DecodeLimits, Encoder, SerializePayload,
+            classify_decode_attempt, decode_field_canonical, with_decode_limits_scope,
+        };
+        let mut bytes = Vec::new();
+        vec![23_u8; 23]
+            .serialize(&mut Encoder::for_buffer(&mut bytes))
+            .unwrap();
+        let protocol = DecodeLimits::new(4096, 4096, 4096, 4096, 64);
+        let narrow = DecodeLimits::new(4096, 4096, 4096, 1, 64);
+        let original = with_decode_limits_scope(narrow, || {
+            classify_decode_attempt(|| {
+                with_decode_limits_scope(protocol, || {
+                    decode_field_canonical::<Vec<u8>>(&bytes).map(|_| ())
+                })
+            })
+        })
+        .unwrap_err();
+        assert_eq!(original.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+        let retained = prepared_signature_block_attempt_error(
+            PreparedSignatureBlockError::Certificate(CertificateCustodyError::Decode(original)),
+            |_| panic!("original caller refusal cannot become rejection"),
+        );
+        assert!(
+            matches!(retained, ExecutionAttemptError::<String>::Deferred(ref original)
+            if original.reason() == ExecutionDeferral::ActiveMemoryCapacity && original.allocation_refusal().is_none())
+        );
+        let invalid =
+            classify_decode_attempt(|| bool::decode_from_slice(&[2]).map(|_| ())).unwrap_err();
+        assert_eq!(invalid.kind(), DecodeAttemptErrorKind::Invalid);
+        let original_message = invalid.to_string();
+        let rejected = prepared_signature_block_attempt_error(
+            PreparedSignatureBlockError::Certificate(CertificateCustodyError::Decode(invalid)),
+            |reason| reason,
+        );
+        assert_eq!(rejected, ExecutionAttemptError::Rejected(original_message));
+    }
+
+    use super::{
+        ExecutionAttemptError, ExecutionDeferral, ExecutionDeferred,
+        prepared_signature_block_attempt_error,
+    };
 
     #[test]
     fn norito_global_archive_cap_is_terminal_inside_an_outer_decode_scope() {

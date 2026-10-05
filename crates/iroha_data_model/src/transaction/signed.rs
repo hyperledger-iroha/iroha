@@ -2040,23 +2040,27 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        match self {
-            TransactionEntrypoint::External(tx) => {
-                out.push_str("\"External\":")?;
-                norito::json::JsonSerialize::json_serialize_to(tx, out)?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            match self {
+                TransactionEntrypoint::External(tx) => {
+                    out.push_str("\"External\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(tx, out)?;
+                }
+                TransactionEntrypoint::SealedCommitment(commitment) => {
+                    out.push_str("\"SealedCommitment\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(commitment, out)?;
+                }
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    out.push_str("\"SealedReveal\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(reveal, out)?;
+                }
             }
-            TransactionEntrypoint::SealedCommitment(commitment) => {
-                out.push_str("\"SealedCommitment\":")?;
-                norito::json::JsonSerialize::json_serialize_to(commitment, out)?;
-            }
-            TransactionEntrypoint::SealedReveal(reveal) => {
-                out.push_str("\"SealedReveal\":")?;
-                norito::json::JsonSerialize::json_serialize_to(reveal, out)?;
-            }
-        }
-        out.push('}')?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -2123,23 +2127,27 @@ impl norito::json::JsonSerialize for TransactionResult {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        match &self.0 {
-            Ok(sequence) => {
-                out.push_str("\"Ok\":")?;
-                norito::json::JsonSerialize::json_serialize_to(sequence, out)?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            match &self.0 {
+                Ok(sequence) => {
+                    out.push_str("\"Ok\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(sequence, out)?;
+                }
+                Err(reason) => {
+                    out.push_str("\"Err\":")?;
+                    norito::json::JsonSerialize::json_serialize_to(reason, out)?;
+                }
             }
-            Err(reason) => {
-                out.push_str("\"Err\":")?;
-                norito::json::JsonSerialize::json_serialize_to(reason, out)?;
-            }
-        }
-        out.push_str(",\"batch_transfer_outcomes\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.1, out)?;
-        out.push_str(",\"nexus_fee_receipt\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.2, out)?;
-        out.push('}')?;
+            out.push_str(",\"batch_transfer_outcomes\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.1, out)?;
+            out.push_str(",\"nexus_fee_receipt\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.2, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }

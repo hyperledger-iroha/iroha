@@ -5,7 +5,72 @@ use crate::managed::native_operation::test_support::native_fixture::{
 };
 use std::sync::Arc;
 
+/// Supplies an actual State proof at the exact retained native checkpoint.
+pub(super) struct NativeEnrollmentReads<'a>(pub(super) &'a NativeFixture);
+impl body_history::EnrollmentReads for NativeEnrollmentReads<'_> {
+    fn historical(
+        &self,
+        owner: &ManagedStreamTokenCustody,
+        policy: &SignerCustodyPolicyV1,
+        checkpoint: &FinalityVerifier,
+        deadline: Instant,
+    ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+        require_deadline(deadline)?;
+        assert_eq!(checkpoint.checkpoint().height(), self.0.chain.height());
+        Ok(self
+            .0
+            .bootstrap_custody(&owner.authority, policy, checkpoint))
+    }
+}
+
 impl ManagedStreamTokenCustody {
+    pub(super) fn bootstrap_native_body(
+        &self,
+        native: &NativeFixture,
+        purpose: CustodyPurpose,
+        unsigned: body_history::UnsignedEnrollment,
+        utc: u64,
+        options: &BoundedTransactionOptions,
+    ) -> BodyHistory {
+        // TODO: Remove static phase diagnostics after the ordinary-stack failure is localized.
+        eprintln!("custody-body phase: helper-enter");
+        let terms = Terms::new(utc, options).unwrap();
+        let turn = SigningTurn::Explicit(&terms);
+        let checkpoint = self
+            .authority
+            .decode_checkpoint(&unsigned.checkpoint)
+            .unwrap();
+        let policy = body_history::selected_policy(&unsigned.selection).unwrap();
+        eprintln!("custody-body phase: selection-decoded native-current-start");
+        let current = native.bootstrap_custody(&self.authority, &policy, &checkpoint);
+        eprintln!("custody-body phase: native-current-complete initialize-start");
+        let history = BodyHistory::initialize(
+            self,
+            purpose,
+            unsigned,
+            &terms.fees,
+            &turn,
+            options.deadline,
+        )
+        .unwrap();
+        eprintln!("custody-body phase: initialize-complete prefix-assertions-start");
+        assert!(history.has_pending());
+        assert!(history.original().unwrap().is_none());
+        assert!(history.dispatch().is_err());
+        eprintln!("custody-body phase: prefix-assertions-complete finish-start");
+        let history = history
+            .finish_pending_with_reads(
+                self,
+                &current,
+                &turn,
+                options.deadline,
+                &NativeEnrollmentReads(native),
+            )
+            .unwrap();
+        eprintln!("custody-body phase: finish-complete");
+        history
+    }
+
     pub(in crate::managed) fn bootstrap_native_configure(
         &mut self,
         native: &mut NativeFixture,
@@ -40,6 +105,19 @@ impl ManagedStreamTokenCustody {
         interval: ManagedCustodyEnrollmentInterval,
         options: &BoundedTransactionOptions,
     ) -> ManagedCustodyProgress {
+        self.bootstrap_native_enroll_with_interval(native, policy, |_| interval, options)
+            .1
+    }
+
+    // Select a test's original short interval only after authenticating all prerequisites.
+    // The interval is then immutable and every ordinary signing/expiry check still applies.
+    pub(super) fn bootstrap_native_enroll_with_interval(
+        &mut self,
+        native: &mut NativeFixture,
+        policy: &SignerCustodyPolicyV1,
+        select_interval: impl FnOnce(u64) -> ManagedCustodyEnrollmentInterval,
+        options: &BoundedTransactionOptions,
+    ) -> (ManagedCustodyEnrollmentInterval, ManagedCustodyProgress) {
         self.authority.validate_profile().unwrap();
         self.validate_policy(policy).unwrap();
         let configured = self.authority.directory.open_child("configure").unwrap();
@@ -62,24 +140,34 @@ impl ManagedStreamTokenCustody {
         assert!(!state.control().signer_revoked && !state.control().attester_revoked);
         assert!(state.control().active_head.is_none());
         let now = now_ms().unwrap();
+        let interval = select_interval(now);
         validate_interval(interval, now).unwrap();
-        let original = self
-            .enrollment_original(policy, &current, &verifier, interval, now)
+        let unsigned = self
+            .unsigned_enrollment(policy, &current, &verifier, interval, now)
             .unwrap();
-        self.bootstrap_native_original(
+        let body = self.bootstrap_native_body(
             native,
             CustodyPurpose::InitialEnroll,
-            &original,
+            unsigned,
             interval.deadline_unix_ms,
             options,
         );
-        self.recover_enroll_selected_if_present(
-            policy,
-            &Fees::from_options(options).unwrap(),
-            options.deadline,
-        )
-        .unwrap()
-        .unwrap()
+        self.bootstrap_native_enrollment_original(
+            native,
+            CustodyPurpose::InitialEnroll,
+            &body,
+            interval.deadline_unix_ms,
+            options,
+        );
+        let progress = self
+            .recover_enroll_selected_if_present(
+                policy,
+                &Fees::from_options(options).unwrap(),
+                options.deadline,
+            )
+            .unwrap()
+            .unwrap();
+        (interval, progress)
     }
 
     pub(super) fn bootstrap_native_original(
@@ -98,8 +186,42 @@ impl ManagedStreamTokenCustody {
             .unwrap();
         journal::publish_intent(&directory, original).unwrap();
         let account = AccountService::new(self.authority.config.clone()).unwrap();
-        journal::explicit(&directory, original, utc, options, &account).unwrap();
+        journal::explicit(
+            &directory,
+            original,
+            utc,
+            options,
+            &account,
+            &HistoryScope::FixedBody,
+        )
+        .unwrap();
         let original = journal::required_original(&directory).unwrap();
+        self.bootstrap_native_selected(native, &original, &account, options);
+    }
+
+    fn bootstrap_native_enrollment_original(
+        &self,
+        native: &mut NativeFixture,
+        purpose: CustodyPurpose,
+        history: &BodyHistory,
+        utc: u64,
+        options: &BoundedTransactionOptions,
+    ) {
+        let (directory, original, scope) = history.dispatch().unwrap();
+        self.validate_original(original, purpose).unwrap();
+        let account = AccountService::new(self.authority.config.clone()).unwrap();
+        journal::explicit(directory, original, utc, options, &account, scope).unwrap();
+        let selected = self.required_enrollment(purpose).unwrap();
+        self.bootstrap_native_selected(native, &selected, &account, options);
+    }
+
+    fn bootstrap_native_selected(
+        &self,
+        native: &mut NativeFixture,
+        original: &Selected<Original>,
+        account: &AccountService,
+        options: &BoundedTransactionOptions,
+    ) {
         let directory = original.directory();
         let mut http =
             NativeReadHttp::start_config(&self.authority.config, Arc::clone(native.chain.state()));
@@ -117,7 +239,7 @@ impl ManagedStreamTokenCustody {
         }
         .unwrap();
         let signed = self
-            .verify_wallet(directory, &original, options.deadline)
+            .verify_wallet(directory, original, options.deadline)
             .unwrap();
         http.finish();
         assert!(!path.join("submission.json").exists());
@@ -154,20 +276,28 @@ impl ManagedStreamTokenCustody {
     ) -> RetainedCustodyEnrollment {
         let verifier = native.observe(&self.authority);
         let current = native.bootstrap_custody(&self.authority, policy, &verifier);
-        let original = self
-            .select_renewal_original(
+        let terms = Terms::new(utc, options).unwrap();
+        let unsigned = self
+            .select_renewal_unsigned(
                 sequence,
                 policy,
                 &current,
                 &verifier,
-                Terms::new(utc, options).unwrap(),
+                &terms,
                 options.deadline,
             )
             .unwrap();
-        self.bootstrap_native_original(
+        let body = self.bootstrap_native_body(
             native,
             CustodyPurpose::Renewal(sequence),
-            &original,
+            unsigned,
+            utc,
+            options,
+        );
+        self.bootstrap_native_enrollment_original(
+            native,
+            CustodyPurpose::Renewal(sequence),
+            &body,
             utc,
             options,
         );

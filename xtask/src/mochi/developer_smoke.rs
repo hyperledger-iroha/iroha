@@ -17,6 +17,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod context_smoke;
+mod publication_smoke;
+
+const LOCAL_CLEANUP: [&str; 3] = ["localnet", "down", "local"];
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_OUTPUT: u64 = 1024 * 1024;
 const SOURCE: &str = "seiyaku BundleSmoke { view fn quote(int cups) -> int { return cups * 10; } }";
@@ -71,7 +75,7 @@ pub(super) fn run(kagami: &Path) -> Result<(), Box<dyn Error>> {
     // Cleanup is itself a required observation. On uncertainty retain custody and logs instead
     // of deleting a directory which an owned worker or validator could still be using.
     let stopped = harness
-        .command(&["localnet", "down"])
+        .command(&LOCAL_CLEANUP)
         .and_then(|value| require_zero_owned_resources(&value));
     match (result, stopped) {
         (Ok(()), Ok(())) => Ok(()),
@@ -127,53 +131,19 @@ impl Harness {
         })
     }
 
-    /// Observe the installed CLI directly; public samples retain only a closed failure code.
+    /// Observe the installed CLI directly; latency samples retain only a closed failure code.
     pub(super) fn observe_command(&mut self, args: &[&str]) -> super::latency::CommandObservation {
         use super::latency::{CommandObservation, Outcome};
-        self.sequence += 1;
-        let stdout = self.root.path().join(format!("{}.stdout", self.sequence));
-        let stderr = self.root.path().join(format!("{}.stderr", self.sequence));
         let started = Instant::now();
-        let result = (|| -> Result<Value, Outcome> {
-            let mut child = Command::new(&self.kagami)
-                .args(args)
-                .arg("--state")
-                .arg(&self.state)
-                .arg("--json")
-                .current_dir(&self.workspace)
-                .env("PATH", &self.empty_path)
-                .stdin(Stdio::null())
-                .stdout(File::create(&stdout).map_err(|_| Outcome::ControllerIo)?)
-                .stderr(File::create(&stderr).map_err(|_| Outcome::ControllerIo)?)
-                .spawn()
-                .map_err(|_| Outcome::SpawnFailed)?;
-            let status = loop {
-                if let Some(status) = child.try_wait().map_err(|_| Outcome::ControllerIo)? {
-                    break status;
+        let result = self
+            .command_document(args, started + COMMAND_TIMEOUT, false)
+            .and_then(|document| {
+                if document.exit_code == Some(0) {
+                    Ok(document.value)
+                } else {
+                    Err(Outcome::CommandFailed)
                 }
-                if started.elapsed() >= COMMAND_TIMEOUT {
-                    // This unreaped handle belongs to the smoke invocation. The managed worker is
-                    // stopped separately through its authenticated API, never through a stored PID.
-                    child.kill().map_err(|_| Outcome::ControllerIo)?;
-                    child.wait().map_err(|_| Outcome::ControllerIo)?;
-                    return Err(Outcome::TimedOut);
-                }
-                thread::sleep(Duration::from_millis(50));
-            };
-            if !status.success() {
-                return Err(Outcome::CommandFailed);
-            }
-            let mut bytes = Vec::new();
-            File::open(stdout)
-                .map_err(|_| Outcome::ControllerIo)?
-                .take(MAX_OUTPUT + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| Outcome::ControllerIo)?;
-            if bytes.len() as u64 > MAX_OUTPUT {
-                return Err(Outcome::OutputRejected);
-            }
-            json::from_slice(&bytes).map_err(|_| Outcome::OutputRejected)
-        })();
+            });
         CommandObservation {
             elapsed_ns: u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
             outcome: result
@@ -181,6 +151,96 @@ impl Harness {
                 .map_or_else(|error| *error, |_| Outcome::Succeeded),
             value: result.ok(),
         }
+    }
+
+    /// List installed public presets through the same bounded child and output owner.
+    /// This command creates no managed state and accepts no --state option.
+    pub(super) fn network_names(&mut self) -> Result<Value, Box<dyn Error>> {
+        let document = self
+            .command_document_with_store(
+                &["dataspace", "networks"],
+                Instant::now() + COMMAND_TIMEOUT,
+                false,
+                false,
+            )
+            .map_err(|error| format!("installed network listing failed: {}", error.as_str()))?;
+        Ok(document.value)
+    }
+
+    // Publication needs the canonical error document as well as its process status. Every command
+    // still uses this one child/timeout/log owner; ordinary smoke and latency reject nonzero exits.
+    fn command_document(
+        &mut self,
+        args: &[&str],
+        deadline: Instant,
+        include_failure: bool,
+    ) -> Result<CommandDocument, super::latency::Outcome> {
+        self.command_document_with_store(args, deadline, include_failure, true)
+    }
+
+    fn command_document_with_store(
+        &mut self,
+        args: &[&str],
+        deadline: Instant,
+        include_failure: bool,
+        include_state: bool,
+    ) -> Result<CommandDocument, super::latency::Outcome> {
+        use super::latency::Outcome;
+        let started = Instant::now();
+        let deadline = deadline.min(started + COMMAND_TIMEOUT);
+        if started >= deadline {
+            return Err(Outcome::TimedOut);
+        }
+        self.sequence += 1;
+        let stdout = self.root.path().join(format!("{}.stdout", self.sequence));
+        let stderr = self.root.path().join(format!("{}.stderr", self.sequence));
+        let mut child = self
+            .command_builder(args, include_state)
+            .stdout(File::create(&stdout).map_err(|_| Outcome::ControllerIo)?)
+            .stderr(File::create(&stderr).map_err(|_| Outcome::ControllerIo)?)
+            .spawn()
+            .map_err(|_| Outcome::SpawnFailed)?;
+        let status = loop {
+            if let Some(status) = child.try_wait().map_err(|_| Outcome::ControllerIo)? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                // Only this unreaped command child is terminated. The managed worker and its
+                // validators are stopped separately through the authenticated localnet owner.
+                child.kill().map_err(|_| Outcome::ControllerIo)?;
+                child.wait().map_err(|_| Outcome::ControllerIo)?;
+                return Err(Outcome::TimedOut);
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        if !status.success() && !include_failure {
+            return Err(Outcome::CommandFailed);
+        }
+        let mut bytes = Vec::new();
+        File::open(stdout)
+            .map_err(|_| Outcome::ControllerIo)?
+            .take(MAX_OUTPUT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| Outcome::ControllerIo)?;
+        let value = parse_command_output(&bytes)?;
+        Ok(CommandDocument {
+            exit_code: status.code(),
+            value,
+        })
+    }
+
+    fn command_builder(&self, args: &[&str], include_state: bool) -> Command {
+        let mut command = Command::new(&self.kagami);
+        command.args(args);
+        if include_state {
+            command.arg("--state").arg(&self.state);
+        }
+        command
+            .arg("--json")
+            .current_dir(&self.workspace)
+            .env("PATH", &self.empty_path)
+            .stdin(Stdio::null());
+        command
     }
 
     pub(super) fn retain(self) {
@@ -192,7 +252,7 @@ impl Harness {
     }
 
     pub(super) fn stop(&mut self) -> bool {
-        self.command(&["localnet", "down"])
+        self.command(&LOCAL_CLEANUP)
             .and_then(|value| require_zero_owned_resources(&value))
             .is_ok()
     }
@@ -256,7 +316,8 @@ impl Harness {
         ] {
             self.execute_on_every_peer(deployment, expected)?;
         }
-        Ok(())
+        publication_smoke::run(self)?;
+        context_smoke::run(self, &initial, &first)
     }
 
     pub(super) fn execute_on_every_peer(
@@ -264,8 +325,18 @@ impl Harness {
         deployment: &Value,
         expected_result: &str,
     ) -> Result<(), Box<dyn Error>> {
+        self.execute_on_every_peer_in_context(deployment, expected_result, None, None)
+    }
+
+    fn execute_on_every_peer_in_context(
+        &self,
+        deployment: &Value,
+        expected_result: &str,
+        requested_context: Option<&str>,
+        operation_deadline: Option<Instant>,
+    ) -> Result<(), Box<dyn Error>> {
         let store = ManagedStore::open(&self.state)?;
-        let context = store.context(None)?;
+        let context = store.context(requested_context)?;
         let prepared = store.prepared(&context.name)?;
         if prepared.peers.len() != 4 {
             return Err(
@@ -288,7 +359,13 @@ impl Harness {
         for (index, peer) in prepared.peers.iter().enumerate() {
             let mut selected = config.clone();
             selected.torii_api_url = peer.torii_url.parse()?;
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let per_peer_deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = operation_deadline.map_or(per_peer_deadline, |original| {
+                original.min(per_peer_deadline)
+            });
+            if Instant::now() >= deadline {
+                return Err("installed execution observation deadline elapsed".into());
+            }
             let client = Client::builder(selected)
                 .build()?
                 .with_request_deadline(deadline);
@@ -323,6 +400,18 @@ impl Harness {
         }
         Ok(())
     }
+}
+
+// These are presentation observations, never native finality or a publication capability.
+struct CommandDocument {
+    exit_code: Option<i32>,
+    value: Value,
+}
+fn parse_command_output(bytes: &[u8]) -> Result<Value, super::latency::Outcome> {
+    if bytes.len() as u64 > MAX_OUTPUT {
+        return Err(super::latency::Outcome::OutputRejected);
+    }
+    json::from_slice(bytes).map_err(|_| super::latency::Outcome::OutputRejected)
 }
 
 fn receipt_artifact(
@@ -474,6 +563,54 @@ fn require_same_deployment(before: &Value, after: &Value) -> Result<(), Box<dyn 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_listing_uses_bounded_child_without_managed_state_or_path_lookup() {
+        let root = tempfile::tempdir().unwrap();
+        let mut harness = Harness {
+            kagami: root.path().join("absent-kagami"),
+            workspace: root.path().join("workspace"),
+            state: root.path().join("state"),
+            empty_path: root.path().join("empty-path"),
+            sequence: 0,
+            root,
+        };
+        let command = harness.command_builder(&["dataspace", "networks"], false);
+        assert_eq!(command.get_program(), harness.kagami.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["dataspace", "networks", "--json"]
+        );
+        assert_eq!(command.get_current_dir(), Some(harness.workspace.as_path()));
+        assert!(
+            command.get_envs().any(
+                |(name, value)| name == "PATH" && value == Some(harness.empty_path.as_os_str())
+            )
+        );
+        let ordinary = harness.command_builder(&["localnet", "status"], true);
+        assert_eq!(
+            ordinary.get_args().collect::<Vec<_>>(),
+            [
+                std::ffi::OsStr::new("localnet"),
+                std::ffi::OsStr::new("status"),
+                std::ffi::OsStr::new("--state"),
+                harness.state.as_os_str(),
+                std::ffi::OsStr::new("--json"),
+            ]
+        );
+        assert!(matches!(
+            harness.command_document_with_store(
+                &["dataspace", "networks"],
+                Instant::now() - Duration::from_millis(1),
+                false,
+                false,
+            ),
+            Err(super::super::latency::Outcome::TimedOut)
+        ));
+        assert_eq!(harness.sequence, 0);
+        assert_eq!(fs::read_dir(harness.root.path()).unwrap().count(), 0);
+        assert!(!harness.state.exists());
+    }
 
     #[test]
     fn live_execution_evidence_rejects_other_network_scope_artifact_or_return_value() {

@@ -121,7 +121,8 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
             for role in NETWORK_ROLES {
                 let entry = manifest.network.authority(role).unwrap();
                 let permissions = match role {
-                    NetworkServiceAuthorityRole::ReserveOperations => BTreeSet::new(),
+                    NetworkServiceAuthorityRole::ReserveOperations
+                    | NetworkServiceAuthorityRole::MusubiPin => BTreeSet::new(),
                     NetworkServiceAuthorityRole::ReputationRecorder => {
                         BTreeSet::from([Permission::from(CanRecordSorafsReputationJournal)])
                     }
@@ -137,6 +138,10 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
                                 provider_id: provider.provider_id,
                             }),
                             Permission::from(CanDeclareSorafsCapacity),
+                            // Native provider establishment also grants repair authority to its owner.
+                            Permission::from(CanOperateSorafsRepair {
+                                provider_id: provider.provider_id,
+                            }),
                         ]),
                     ),
                     (

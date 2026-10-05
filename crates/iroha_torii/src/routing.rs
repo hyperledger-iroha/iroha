@@ -309,13 +309,19 @@ impl DataspaceReadVisibility {
             Some(iroha_data_model::block::consensus::SumeragiRootScope::Global) => {}
             None => return false,
         }
+        // The committed directory is maintained with primary labels, UAID
+        // bindings and aliases. Read it in place; rebuilding its hierarchy
+        // would clone an arbitrarily large World-owned graph for each candidate.
         world
-            .account_dataspaces(account_id)
-            .is_ok_and(|dataspaces| {
-                !dataspaces.is_empty()
-                    && dataspaces
-                        .into_iter()
-                        .all(|dataspace| self.allows_dataspace(dataspace))
+            .account_scope_directory()
+            .get(account_id)
+            .is_some_and(|entry| {
+                !entry.is_empty()
+                    && entry.iter().all(|(dataspace, domains)| {
+                        self.allows_dataspace(*dataspace)
+                            && (domains.is_empty()
+                                || world.dataspace_catalog().by_id(*dataspace).is_some())
+                    })
             })
     }
 
@@ -8931,11 +8937,6 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
             let mut details = json::Map::new();
             details.insert("height".into(), Value::from(height));
             ("applied", Value::Object(details))
-        }
-        EvidencePenaltyStatus::Cancelled { height } => {
-            let mut details = json::Map::new();
-            details.insert("height".into(), Value::from(height));
-            ("cancelled", Value::Object(details))
         }
     };
     let mut lifecycle = json::Map::new();
@@ -36462,6 +36463,9 @@ mod explorer_lookup_tests {
         );
         state.gov.voting_asset_id = definition_id.clone();
         state.gov.bond_escrow_account = escrow_id.clone();
+        let (borrowed_definition, borrowed_escrow) = state.governance_voting_asset_and_bond_escrow();
+        assert!(std::ptr::eq(borrowed_definition, &state.gov.voting_asset_id));
+        assert!(std::ptr::eq(borrowed_escrow, &state.gov.bond_escrow_account));
         let state = Arc::new(state);
         bind_account_alias_for_test(&state, &escrow_id, "escrow@restricted");
         (state, public_dataspace, definition_id)
@@ -52945,6 +52949,55 @@ mod asset_definitions_query_tests {
         }
     }
 }
+/// Run a producer and encoder against one cumulative phase of its retained query owner.
+fn with_explorer_response_byte_budget<T>(
+    byte_budget: usize,
+    work: impl FnOnce() -> Result<T, Error>,
+) -> Result<T, Error> {
+    if byte_budget == 0 { return Err(explorer_response_capacity_error()); }
+    norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(byte_budget, byte_budget, byte_budget, byte_budget, norito::core::MAX_VALUE_NESTING_DEPTH),
+        work,
+    )
+}
+/// Count the borrowed canonical payload before allocating its one exact response body.
+/// Call inside `with_explorer_response_byte_budget` while selected references still exist.
+fn bounded_explorer_json_response<T: norito::json::JsonSerialize + ?Sized>(
+    payload: &T,
+    byte_budget: usize,
+) -> Result<AxResponse, Error> {
+    let encoded = norito::json::to_json_bounded_boxed(payload, byte_budget)
+        .map_err(|_| explorer_response_capacity_error())?;
+    Ok(([(header::CONTENT_TYPE, "application/json")], axum::body::Bytes::from(encoded.into_vec())).into_response())
+}
+fn explorer_response_capacity_error() -> Error {
+    Error::AppServiceUnavailable {
+        code: "explorer_response_capacity_exceeded",
+        message: "Explorer response exceeded the retained query byte capacity".to_owned(),
+    }
+}
+#[cfg(test)]
+mod explorer_response_byte_budget_tests {
+    use super::*;
+    #[tokio::test]
+    async fn selected_records_and_exact_response_share_one_phase() {
+        let payload=[1_u32,2,3,4];
+        let encoded=norito::json::to_json(&payload).unwrap();
+        let retained=core::mem::size_of_val(&payload);
+        let exact=retained+encoded.len();
+        let response=with_explorer_response_byte_budget(exact, || {
+            norito::core::reserve_decode_allocation(retained).map_err(|_| explorer_response_capacity_error())?;
+            bounded_explorer_json_response(&payload,exact)
+        }).unwrap();
+        assert_eq!(response.headers()[header::CONTENT_TYPE],"application/json");
+        let body=axum::body::to_bytes(response.into_body(),exact).await.unwrap();
+        assert_eq!(body.as_ref(),encoded.as_bytes());
+        assert!(with_explorer_response_byte_budget(exact-1, || {
+            norito::core::reserve_decode_allocation(retained).map_err(|_| explorer_response_capacity_error())?;
+            bounded_explorer_json_response(&payload,exact)
+        }).is_err(),"selection and output must not each spend an independent phase budget");
+    }
+}
 pub(crate) async fn handle_v1_explorer_accounts_admitted(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -52953,8 +53006,9 @@ pub(crate) async fn handle_v1_explorer_accounts_admitted(
     definition: Option<AssetDefinitionId>,
     admission: crate::QueryAdmissionPermit,
 ) -> Result<AxResponse, Error> {
+    let byte_budget = admission.response_body_budget()?;
     run_admitted_blocking(admission, "Explorer account collection worker failed", move || {
-        handle_v1_explorer_accounts_sync(state, visibility, pagination, domain, definition)
+        handle_v1_explorer_accounts_sync(state, visibility, pagination, domain, definition, byte_budget)
     })
     .await
 }
@@ -52964,7 +53018,9 @@ fn handle_v1_explorer_accounts_sync(
     pagination: crate::explorer::ExplorerCursorQuery,
     domain: Option<DomainId>,
     definition: Option<AssetDefinitionId>,
+    byte_budget: usize,
 ) -> Result<AxResponse, Error> {
+    with_explorer_response_byte_budget(byte_budget, || {
     let world = state.world_view();
     let page = crate::explorer::accounts_page_for_filters(
         &world,
@@ -52972,9 +53028,12 @@ fn handle_v1_explorer_accounts_sync(
         definition.as_ref(),
         &visibility,
         &pagination,
+        byte_budget,
     )
     .map_err(explorer_world_cursor_error)?;
-    Ok(JsonBody(page).into_response())
+    bounded_explorer_json_response(&page, byte_budget)
+
+    })
 }
 pub(crate) async fn handle_v1_explorer_domains_admitted(
     state: Arc<CoreState>,
@@ -52983,8 +53042,9 @@ pub(crate) async fn handle_v1_explorer_domains_admitted(
     owned_by: Option<AccountId>,
     admission: crate::QueryAdmissionPermit,
 ) -> Result<AxResponse, Error> {
+    let byte_budget = admission.response_body_budget()?;
     run_admitted_blocking(admission, "Explorer domain collection worker failed", move || {
-        handle_v1_explorer_domains_sync(state, visibility, pagination, owned_by)
+        handle_v1_explorer_domains_sync(state, visibility, pagination, owned_by, byte_budget)
     })
     .await
 }
@@ -52993,16 +53053,21 @@ fn handle_v1_explorer_domains_sync(
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
+    byte_budget: usize,
 ) -> Result<AxResponse, Error> {
+    with_explorer_response_byte_budget(byte_budget, || {
     let world = state.world_view();
     let page = crate::explorer::domains_page_for_filters(
         &world,
         owned_by.as_ref(),
         &visibility,
         &pagination,
+        byte_budget,
     )
     .map_err(explorer_world_cursor_error)?;
-    Ok(JsonBody(page).into_response())
+    bounded_explorer_json_response(&page, byte_budget)
+
+    })
 }
 fn explorer_circulating_quantity(
     total: &iroha_primitives::numeric::Quantity,
@@ -53022,7 +53087,10 @@ pub async fn handle_v1_explorer_asset_definitions(
     domain: Option<DomainId>,
     owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
-    handle_v1_explorer_asset_definitions_sync(state, visibility, pagination, domain, owned_by)
+    let byte_budget = crate::QueryFanoutMemoryEnvelope::for_body_admission(
+        usize::try_from(iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES.0).expect("fixture working set fits"),
+    ).expect("canonical fixture envelope").route_body_bytes;
+    handle_v1_explorer_asset_definitions_sync(state, visibility, pagination, domain, owned_by, byte_budget)
 }
 pub(crate) async fn handle_v1_explorer_asset_definitions_admitted(
     state: Arc<CoreState>,
@@ -53032,13 +53100,13 @@ pub(crate) async fn handle_v1_explorer_asset_definitions_admitted(
     owned_by: Option<AccountId>,
     admission: crate::QueryAdmissionPermit,
 ) -> Result<AxResponse, Error> {
+    let byte_budget = admission.response_body_budget()?;
     run_admitted_blocking(
         admission,
         "Explorer asset-definition collection worker failed",
         move || {
             handle_v1_explorer_asset_definitions_sync(
-                state, visibility, pagination, domain, owned_by,
-            )
+                state, visibility, pagination, domain, owned_by, byte_budget)
         },
     )
     .await
@@ -53049,47 +53117,43 @@ fn handle_v1_explorer_asset_definitions_sync(
     pagination: crate::explorer::ExplorerCursorQuery,
     domain: Option<DomainId>,
     owned_by: Option<AccountId>,
+    byte_budget: usize,
 ) -> Result<AxResponse, Error> {
+    with_explorer_response_byte_budget(byte_budget, || {
     let world = state.world_view();
-    let governance = state.governance_snapshot();
+    let (voting_asset_id, bond_escrow_account) = state.governance_voting_asset_and_bond_escrow();
     let mut page = crate::explorer::asset_definitions_page_for_filters(
         &world,
         domain.as_ref(),
         owned_by.as_ref(),
         &visibility,
         &pagination,
+        byte_budget,
     )
     .map_err(explorer_world_cursor_error)?;
     // Enrich the governance voting asset definition with locked/circulating supply figures.
     // (Other assets default to null for these fields.)
-    let voting_asset_id = governance.voting_asset_id.clone();
-    let voting_asset_id_str = voting_asset_id.to_string();
-    if page.items.iter().any(|item| item.id == voting_asset_id_str) {
+    if page.items.iter().any(|item| item.id == voting_asset_id) {
         use iroha_primitives::numeric::Quantity;
-        let escrow_asset_id = AssetId::new(
-            voting_asset_id.clone(),
-            governance.bond_escrow_account.clone(),
-        );
-        if visibility.allows_asset(&world, &escrow_asset_id) {
-            let locked = match world.asset(&escrow_asset_id) {
-                Ok(entry) => entry.value().as_ref().clone(),
-                Err(_) => Quantity::zero(),
-            };
-            let total = world
-                .asset_definition(&voting_asset_id)
-                .map(|def| def.total_quantity().clone())
-                .unwrap_or_else(|_| Quantity::zero());
-            let circulating = explorer_circulating_quantity(&total, &locked)?;
+        // Borrow the committed key instead of cloning the escrow controller to build a lookup ID.
+        let escrow_asset_id = world.assets_by_account().get(bond_escrow_account)
+            .and_then(|assets| assets.iter().find(|asset| asset.definition() == voting_asset_id
+                && matches!(asset.scope(), dm::asset::AssetBalanceScope::Global)));
+        if visibility.can_read_all || escrow_asset_id.is_some_and(|id| visibility.allows_asset(&world, id)) {
+            let locked = escrow_asset_id.and_then(|id| world.assets().get(id))
+                .map_or_else(Quantity::zero, |value| *value.as_ref());
             for item in &mut page.items {
-                if item.id == voting_asset_id_str {
+                if item.id == voting_asset_id {
                     item.locked_quantity = Some(locked);
-                    item.circulating_quantity = Some(circulating);
+                    item.circulating_quantity = Some(explorer_circulating_quantity(item.total_quantity, &locked)?);
                     break;
                 }
             }
         }
     }
-    Ok(JsonBody(page).into_response())
+    bounded_explorer_json_response(&page, byte_budget)
+
+    })
 }
 pub(crate) async fn handle_v1_explorer_assets_admitted(
     state: Arc<CoreState>,
@@ -53100,6 +53164,7 @@ pub(crate) async fn handle_v1_explorer_assets_admitted(
     asset_id: Option<AssetId>,
     admission: crate::QueryAdmissionPermit,
 ) -> Result<AxResponse, Error> {
+    let byte_budget = admission.response_body_budget()?;
     run_admitted_blocking(admission, "Explorer asset collection worker failed", move || {
         handle_v1_explorer_assets_sync(
             state,
@@ -53107,8 +53172,7 @@ pub(crate) async fn handle_v1_explorer_assets_admitted(
             pagination,
             owned_by,
             definition,
-            asset_id,
-        )
+            asset_id, byte_budget)
     })
     .await
 }
@@ -53119,7 +53183,9 @@ fn handle_v1_explorer_assets_sync(
     owned_by: Option<AccountId>,
     definition: Option<AssetDefinitionId>,
     asset_id: Option<AssetId>,
+    byte_budget: usize,
 ) -> Result<AxResponse, Error> {
+    with_explorer_response_byte_budget(byte_budget, || {
     let world = state.world_view();
     let page = crate::explorer::assets_page_for_filters(
         &world,
@@ -53128,9 +53194,12 @@ fn handle_v1_explorer_assets_sync(
         asset_id.as_ref(),
         &visibility,
         &pagination,
+        byte_budget,
     )
     .map_err(explorer_world_cursor_error)?;
-    Ok(JsonBody(page).into_response())
+    bounded_explorer_json_response(&page, byte_budget)
+
+    })
 }
 pub(crate) async fn handle_v1_explorer_nfts_admitted(
     state: Arc<CoreState>,
@@ -53140,8 +53209,9 @@ pub(crate) async fn handle_v1_explorer_nfts_admitted(
     domain: Option<DomainId>,
     admission: crate::QueryAdmissionPermit,
 ) -> Result<AxResponse, Error> {
+    let byte_budget = admission.response_body_budget()?;
     run_admitted_blocking(admission, "Explorer NFT collection worker failed", move || {
-        handle_v1_explorer_nfts_sync(state, visibility, pagination, owned_by, domain)
+        handle_v1_explorer_nfts_sync(state, visibility, pagination, owned_by, domain, byte_budget)
     })
     .await
 }
@@ -53151,7 +53221,9 @@ fn handle_v1_explorer_nfts_sync(
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     domain: Option<DomainId>,
+    byte_budget: usize,
 ) -> Result<AxResponse, Error> {
+    with_explorer_response_byte_budget(byte_budget, || {
     let world = state.world_view();
     let page = crate::explorer::nfts_page_for_filters(
         &world,
@@ -53159,9 +53231,12 @@ fn handle_v1_explorer_nfts_sync(
         domain.as_ref(),
         &visibility,
         &pagination,
+        byte_budget,
     )
     .map_err(explorer_world_cursor_error)?;
-    Ok(JsonBody(page).into_response())
+    bounded_explorer_json_response(&page, byte_budget)
+
+    })
 }
 pub(crate) async fn handle_v1_explorer_rwas_admitted(
     state: Arc<CoreState>,
@@ -53171,8 +53246,9 @@ pub(crate) async fn handle_v1_explorer_rwas_admitted(
     domain: Option<DomainId>,
     admission: crate::QueryAdmissionPermit,
 ) -> Result<AxResponse, Error> {
+    let byte_budget = admission.response_body_budget()?;
     run_admitted_blocking(admission, "Explorer RWA collection worker failed", move || {
-        handle_v1_explorer_rwas_sync(state, visibility, pagination, owned_by, domain)
+        handle_v1_explorer_rwas_sync(state, visibility, pagination, owned_by, domain, byte_budget)
     })
     .await
 }
@@ -53182,7 +53258,9 @@ fn handle_v1_explorer_rwas_sync(
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     domain: Option<DomainId>,
+    byte_budget: usize,
 ) -> Result<AxResponse, Error> {
+    with_explorer_response_byte_budget(byte_budget, || {
     let world = state.world_view();
     let page = crate::explorer::rwas_page_for_filters(
         &world,
@@ -53190,9 +53268,12 @@ fn handle_v1_explorer_rwas_sync(
         domain.as_ref(),
         &visibility,
         &pagination,
+        byte_budget,
     )
     .map_err(explorer_world_cursor_error)?;
-    Ok(JsonBody(page).into_response())
+    bounded_explorer_json_response(&page, byte_budget)
+
+    })
 }
 #[cfg(test)]
 pub async fn handle_v1_explorer_blocks(
@@ -53621,6 +53702,7 @@ fn explorer_history_cursor_error(error: crate::explorer::ExplorerCursorError) ->
 fn explorer_world_cursor_error(error: crate::explorer::ExplorerCursorError) -> Error {
     match error {
         crate::explorer::ExplorerCursorError::ScanLimitExceeded => explorer_scan_capacity_error(),
+        crate::explorer::ExplorerCursorError::ByteLimitExceeded => explorer_response_capacity_error(),
         _ => conversion_error(format!("invalid Explorer cursor request: {error}")),
     }
 }

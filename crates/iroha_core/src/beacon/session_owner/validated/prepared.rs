@@ -56,6 +56,19 @@ impl PreparedGlobalThresholdBeaconSessionVerificationV1 {
         })
     }
 
+    /// Exact original scratch backing retired only after successful session sealing.
+    #[cfg(test)]
+    pub(in crate::beacon) fn retired_scratch_layouts(&self) -> [Layout; 2] {
+        [
+            Layout::array::<u8>(self.workspace.preimage.capacity())
+                .expect("the original preimage backing has a valid layout"),
+            Layout::array::<ValidatedDealerCommitment<BeaconPurpose>>(
+                self.workspace.dealers.capacity(),
+            )
+            .expect("the original dealer scratch backing has a valid layout"),
+        ]
+    }
+
     /// Whether this prepared verifier's exact original pool is the supplied pool.
     pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
         self.workspace.preimage.belongs_to(budget) && self.workspace.dealers.belongs_to(budget)

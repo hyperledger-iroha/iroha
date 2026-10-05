@@ -15,7 +15,6 @@ build = "build.rs"
 iroha_allocation = { workspace = true }
 iroha_accel = { workspace = true }
 iroha_model_base = { workspace = true }
-poseidon-primitives = "0.2.0"
 sha2 = { version = "0.10.9" }
 sha3_hash = { package = "sha3", version = "0.10.8", default-features = false, features = ["std"] }
 ff = { version = "0.13.1", features = ["derive"] }
@@ -72,8 +71,10 @@ dispatch2 = { version = "0.3.1", optional = true }
 
 
 [dev-dependencies]
+# Pinned original fixed-parameter generator is a test oracle only.
+poseidon-primitives = "0.2.0"
 # Driverless admission tests use the real failure type and runtime-loaded owner.
-# This does not enable IVM's CUDA/PTX build path.
+# This does not itself enable IVM's optional authenticated CUDA build path.
 iroha_accel = { workspace = true, features = ["cuda"] }
 criterion = { workspace = true }
 kotodama_lang = { path = "../kotodama_lang" }
@@ -83,15 +84,16 @@ hex-literal = "1.1.0"
 
 [build-dependencies]
 # Reuse the production Rust crypto libraries in the build-script context.
-# Ordinary builds do not perform CUDA verification or load CUDA tooling.
+# CUDA builds authenticate retained material or admit genuine absence.
+# No ordinary build invokes CUDA tooling or loads a driver.
 ed25519-dalek = "2.2.0"
 sha2 = "0.10.9"
 
 [features]
 # Ordinary builds include Metal on macOS; its dependencies are target-scoped and
 # the same feature is inert on other targets. CPU SIMD is always compiled and
-# selected by hardware capability. CUDA enters the ordinary build only after
-# its complete bundled PTX inventory and signed provenance are qualified.
+# selected by hardware capability. Linux/Windows daemon dependencies include
+# CUDA; absent source-approved artifacts preserve CPU builds and startup.
 default = ["metal"]
 dev-tools = []
 # Expose benchmark-only backend selection hooks. Production builds must leave
@@ -287,6 +289,11 @@ name = "ivm_group_10"
 path = "tests/grouped/group_10.rs"
 
 [[test]]
+name = "cuda_bundle_absence"
+path = "tests/cuda_bundle_absence.rs"
+required-features = ["cuda"]
+
+[[test]]
 name = "cuda_hardware"
 path = "tests/cuda_hardware.rs"
 required-features = ["cuda-hardware-tests"]
@@ -294,3 +301,7 @@ required-features = ["cuda-hardware-tests"]
 [[test]]
 name = "shared_owner_custody"
 path = "tests/shared_owner_custody.rs"
+
+[[test]]
+name = "poseidon_parameter_custody"
+path = "tests/poseidon_parameter_custody.rs"

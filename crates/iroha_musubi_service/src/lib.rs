@@ -18,8 +18,7 @@ use iroha_data_model::{
         MUSUBI_MAX_SEED_INGRESS_RECEIPT_LIFETIME_MS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
         MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArchiveLocationStateV1,
         MusubiArchiveLocationV1, MusubiArchiveRecordV1, MusubiArchiveRegistrationProjectionV1,
-        MusubiContentDigestV1, MusubiProviderBundleVerificationAttestationV1,
-        MusubiRegistrySnapshotV1, MusubiSeedIngressReceiptApprovalV1,
+        MusubiContentDigestV1, MusubiRegistrySnapshotV1, MusubiSeedIngressReceiptApprovalV1,
         MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptPayloadV1,
         MusubiSeedIngressReceiptV1, MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
         validate_musubi_account_id_v1, validate_musubi_portable_path_set_v1,
@@ -38,8 +37,11 @@ use reqwest::{
     StatusCode, blocking::Client as HttpClient, header::HeaderValue,
     redirect::Policy as RedirectPolicy,
 };
+/// Canonical original publication transport intent; this does not grant native service authority.
+pub use sorafs_car::gateway::GeneratedLocalPublicationTransportV1;
 use sorafs_car::{
     CarBuildPlan, CarChunk, FilePlan,
+    gateway::GeneratedLocalPublicationHttpClientV1,
     musubi::{
         MusubiBundleIntegritySurfaceV1, MusubiBundleVerifierV1,
         plan::{
@@ -68,6 +70,7 @@ use std::{
 use url::Url;
 mod native_pin_session;
 pub use native_pin_session::NativeMusubiPinSessionV1;
+pub mod publication_client_journal;
 mod publication_clock;
 mod publication_journal;
 mod seed_staging;
@@ -1457,7 +1460,7 @@ pub struct MusubiPublicationServiceErrorResponseV1 {
 pub struct MusubiPublicationPrivateHttpRequestV1<'a> {
     /// Exact uppercase HTTP method; V1 accepts only `POST`.
     pub method: &'a str,
-    /// Exact path after the deployment's private mount prefix is removed.
+    /// Exact one of the three `/v1/musubi/publication/...` paths, without a mount prefix.
     pub path: &'a str,
     /// Exact `Content-Type` header value.
     pub content_type: &'a str,
@@ -1621,6 +1624,7 @@ impl fmt::Display for MusubiPublicationServiceBackendErrorV1 {
     }
 }
 impl std::error::Error for MusubiPublicationServiceBackendErrorV1 {}
+
 /// Admitted backend that durably stages an already verified exact CAR.
 pub trait MusubiSeedIngressBackendV1: Send {
     /// Return the exact admitted provider served by this backend instance.
@@ -3758,7 +3762,12 @@ pub struct AuthenticatedMusubiPublicationRuntimeClientV1 {
     publisher: AccountId,
     authorization_signer: Arc<dyn MusubiPublicationRuntimeAuthorizationSigningProviderV1>,
     publication_clock_floor_ms: Arc<AtomicU64>,
-    http: HttpClient,
+    http: PublicationHttpTransport,
+}
+#[derive(Clone)]
+enum PublicationHttpTransport {
+    Remote(HttpClient),
+    Generated(GeneratedLocalPublicationHttpClientV1),
 }
 impl fmt::Debug for AuthenticatedMusubiPublicationRuntimeClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -3803,21 +3812,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         authorization_signer: Arc<dyn MusubiPublicationRuntimeAuthorizationSigningProviderV1>,
         timeout: Duration,
     ) -> Result<Self, MusubiPublicationRuntimeTransportErrorV1> {
-        if timeout == Duration::ZERO || timeout > Duration::from_secs(60) {
-            return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
-                "MUSUBI_RUNTIME_TIMEOUT_INVALID",
-            ));
-        }
-        if authorization_signer.publisher() != &publisher {
-            return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
-                "MUSUBI_RUNTIME_SIGNER_MISMATCH",
-            ));
-        }
-        if !controller_fits_publication_approval_bound(&publisher) {
-            return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
-                "MUSUBI_RUNTIME_AUTHORIZATION_CONTROLLER_UNSUPPORTED",
-            ));
-        }
+        Self::validate_configuration(&publisher, &authorization_signer, timeout)?;
         let http = HttpClient::builder()
             .https_only(true)
             .no_proxy()
@@ -3835,8 +3830,130 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             publisher,
             authorization_signer,
             publication_clock_floor_ms: Arc::new(AtomicU64::new(0)),
-            http,
+            http: PublicationHttpTransport::Remote(http),
         })
+    }
+    /// Construct a generated private-publication client from a platform account signer.
+    ///
+    /// The supplied opaque selection binds only transport intent. Native service admission and
+    /// authorization remain unchanged; Torii headers and Basic Auth are never copied.
+    /// # Errors
+    /// Refuses a different original network/chain, signer, timeout or TLS selection.
+    pub fn from_generated_local_iroha_client(
+        client: &Client,
+        selection: GeneratedLocalPublicationTransportV1,
+        timeout: Duration,
+    ) -> Result<Self, MusubiPublicationRuntimeTransportErrorV1> {
+        if client.chain().to_string() != selection.chain_id() {
+            return Err(Self::generated_transport_invalid());
+        }
+        let signer = SoftwareMusubiPublicationRuntimeAuthorizationSignerV1::new(
+            client.account().clone(),
+            client.key_pair().clone(),
+        )?;
+        Self::from_generated_local_authorization_signer(
+            *client.network_id(),
+            client.account().clone(),
+            Arc::new(signer),
+            selection,
+            timeout,
+        )
+    }
+    /// Construct with an original generated listener and a deployment-owned account signer.
+    ///
+    /// No arbitrary HTTP client, certificate bypass or account-read capability is accepted.
+    /// The publisher may differ from the original provider owner supplying the TLS identity.
+    /// # Errors
+    /// Refuses a different original network, invalid signer/timeout or TLS construction failure.
+    pub fn from_generated_local_authorization_signer(
+        network_id: NetworkId,
+        publisher: AccountId,
+        authorization_signer: Arc<dyn MusubiPublicationRuntimeAuthorizationSigningProviderV1>,
+        selection: GeneratedLocalPublicationTransportV1,
+        timeout: Duration,
+    ) -> Result<Self, MusubiPublicationRuntimeTransportErrorV1> {
+        Self::validate_configuration(&publisher, &authorization_signer, timeout)?;
+        if network_id != selection.network_id() {
+            return Err(Self::generated_transport_invalid());
+        }
+        let http = selection
+            .blocking_client(timeout)
+            .map_err(|_| Self::generated_transport_invalid())?;
+        Ok(Self {
+            network_id,
+            publisher,
+            authorization_signer,
+            publication_clock_floor_ms: Arc::new(AtomicU64::new(0)),
+            http: PublicationHttpTransport::Generated(http),
+        })
+    }
+    /// Exact generated publication root, when this client has an original local selection.
+    #[must_use]
+    pub fn generated_local_base_url(&self) -> Option<&Url> {
+        match &self.http {
+            PublicationHttpTransport::Remote(_) => None,
+            PublicationHttpTransport::Generated(http) => Some(http.selection().base_url()),
+        }
+    }
+    fn validate_configuration(
+        publisher: &AccountId,
+        authorization_signer: &Arc<dyn MusubiPublicationRuntimeAuthorizationSigningProviderV1>,
+        timeout: Duration,
+    ) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
+        if timeout == Duration::ZERO || timeout > Duration::from_secs(60) {
+            return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_RUNTIME_TIMEOUT_INVALID",
+            ));
+        }
+        if authorization_signer.publisher() != publisher {
+            return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_RUNTIME_SIGNER_MISMATCH",
+            ));
+        }
+        if !controller_fits_publication_approval_bound(publisher) {
+            return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_RUNTIME_AUTHORIZATION_CONTROLLER_UNSUPPORTED",
+            ));
+        }
+        Ok(())
+    }
+    fn generated_transport_invalid() -> MusubiPublicationRuntimeTransportErrorV1 {
+        MusubiPublicationRuntimeTransportErrorV1::permanent(
+            "MUSUBI_RUNTIME_GENERATED_TRANSPORT_INVALID",
+        )
+    }
+    fn validate_base_url(
+        &self,
+        base: &Url,
+    ) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
+        validate_publication_service_base_url(base)?;
+        if let PublicationHttpTransport::Generated(http) = &self.http {
+            http.selection()
+                .validate_base_url(base)
+                .map_err(|_| Self::generated_transport_invalid())?;
+        }
+        Ok(())
+    }
+    fn validate_endpoint(
+        &self,
+        endpoint: &Url,
+    ) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
+        if let PublicationHttpTransport::Generated(http) = &self.http {
+            http.selection()
+                .validate_endpoint(endpoint)
+                .map_err(|_| Self::generated_transport_invalid())?;
+            if ![
+                SEED_INGRESS_ROUTE,
+                STORAGE_COORDINATION_ROUTE,
+                PROVIDER_READBACK_ROUTE,
+            ]
+            .iter()
+            .any(|route| endpoint.path().strip_prefix('/') == Some(*route))
+            {
+                return Err(Self::generated_transport_invalid());
+            }
+        }
+        Ok(())
     }
     /// Return the exact configured deployment identity.
     #[must_use]
@@ -3851,7 +3968,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
     /// Prepare one bounded, authenticated seed-ingress request entirely in memory.
     ///
     /// The returned value owns a short-lived signed authorization and must be submitted promptly
-    /// to the intended private service. It contains no key material, but callers must not persist,
+    /// to the supplied private service root, checked before signing. It contains no key material, but callers must not persist,
     /// serialize, or log it or its headers.
     ///
     /// # Errors
@@ -3860,10 +3977,12 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
     /// clock sampling, or bounded envelope construction fails.
     pub fn prepare_seed_ingress_request(
         &self,
+        base_url: &Url,
         request: &MusubiSeedIngressStageRequestV1,
         plan: &CarBuildPlan,
         car: &mut dyn Read,
     ) -> Result<MusubiPreparedSeedIngressRequestV1, MusubiPublicationRuntimeTransportErrorV1> {
+        self.validate_base_url(base_url)?;
         request.validate()?;
         self.ensure_request_identity(&request.binding.network_id, &request.binding.publisher)?;
         let witness = MusubiSeedIngressCarPlanV1::from_car_build_plan(plan, &request.commitment)?;
@@ -3948,9 +4067,9 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         plan: &CarBuildPlan,
         car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, MusubiPublicationRuntimeTransportErrorV1> {
-        validate_publication_service_base_url(base_url)?;
+        self.validate_base_url(base_url)?;
         let endpoint = publication_route(base_url, SEED_INGRESS_ROUTE)?;
-        let prepared = self.prepare_seed_ingress_request(request, plan, car)?;
+        let prepared = self.prepare_seed_ingress_request(base_url, request, plan, car)?;
         let expected_binding = prepared.binding().clone();
         let response = self.send_prepared_seed_ingress(endpoint, prepared)?;
         let receipt: MusubiSeedIngressReceiptV1 = decode_response(&response)?;
@@ -4025,15 +4144,16 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         operation_id: [u8; 32],
         body: &[u8],
     ) -> Result<Vec<u8>, MusubiPublicationRuntimeTransportErrorV1> {
-        validate_publication_service_base_url(base_url)?;
+        self.validate_base_url(base_url)?;
         if body.is_empty() || body.len() > MAX_CONTROL_REQUEST_BYTES {
             return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
                 "MUSUBI_RUNTIME_REQUEST_TOO_LARGE",
             ));
         }
+        let endpoint = publication_route(base_url, route)?;
+        self.validate_endpoint(&endpoint)?;
         let authorization =
             self.authorization(operation, operation_id, request_digest(operation, body)?)?;
-        let endpoint = publication_route(base_url, route)?;
         self.send(
             endpoint,
             APPLICATION_NORITO,
@@ -4191,29 +4311,39 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             )
         })?;
         metadata.set_sensitive(true);
-        let request = self
-            .http
-            .post(endpoint)
-            .header("Content-Type", APPLICATION_MUSUBI_SEED_ENVELOPE)
-            .header("Accept", APPLICATION_NORITO)
-            .header(AUTHORIZATION_HEADER, authorization)
-            .header(SEED_INGRESS_METADATA_HEADER, metadata)
-            .body(body)
-            .build()
-            .map_err(|_| {
-                MusubiPublicationRuntimeTransportErrorV1::permanent(
-                    "MUSUBI_RUNTIME_REQUEST_INVALID",
-                )
-            })?;
+        self.validate_endpoint(&endpoint)?;
+        let mut request = reqwest::blocking::Request::new(reqwest::Method::POST, endpoint);
+        let headers = request.headers_mut();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static(APPLICATION_MUSUBI_SEED_ENVELOPE),
+        );
+        headers.insert(
+            reqwest::header::ACCEPT,
+            HeaderValue::from_static(APPLICATION_NORITO),
+        );
+        headers.insert(AUTHORIZATION_HEADER, authorization);
+        headers.insert(SEED_INGRESS_METADATA_HEADER, metadata);
+        *request.body_mut() = Some(body.into());
         self.execute_request(request)
     }
     fn execute_request(
         &self,
         request: reqwest::blocking::Request,
     ) -> Result<Vec<u8>, MusubiPublicationRuntimeTransportErrorV1> {
-        let mut response = self.http.execute(request).map_err(|_| {
-            MusubiPublicationRuntimeTransportErrorV1::retryable("MUSUBI_RUNTIME_TRANSPORT_FAILED")
-        })?;
+        self.validate_endpoint(request.url())?;
+        let mut response = match &self.http {
+            PublicationHttpTransport::Remote(http) => http.execute(request).map_err(|_| {
+                MusubiPublicationRuntimeTransportErrorV1::retryable(
+                    "MUSUBI_RUNTIME_TRANSPORT_FAILED",
+                )
+            })?,
+            PublicationHttpTransport::Generated(http) => http.execute(request).map_err(|_| {
+                MusubiPublicationRuntimeTransportErrorV1::retryable(
+                    "MUSUBI_RUNTIME_TRANSPORT_FAILED",
+                )
+            })?,
+        };
         let status = response.status();
         if response
             .content_length()
@@ -4263,12 +4393,18 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             )
         })?;
         authorization.set_sensitive(true);
-        let mut request = self
-            .http
-            .post(endpoint)
-            .header("Content-Type", content_type)
-            .header("Accept", APPLICATION_NORITO)
-            .header(AUTHORIZATION_HEADER, authorization);
+        self.validate_endpoint(&endpoint)?;
+        let mut request = reqwest::blocking::Request::new(reqwest::Method::POST, endpoint);
+        let headers = request.headers_mut();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static(content_type),
+        );
+        headers.insert(
+            reqwest::header::ACCEPT,
+            HeaderValue::from_static(APPLICATION_NORITO),
+        );
+        headers.insert(AUTHORIZATION_HEADER, authorization);
         if let Some(metadata) = seed_ingress_metadata {
             if metadata.is_empty() || metadata.len() > MAX_SEED_INGRESS_METADATA_BYTES {
                 return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
@@ -4282,11 +4418,12 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
                 )
             })?;
             metadata.set_sensitive(true);
-            request = request.header(SEED_INGRESS_METADATA_HEADER, metadata);
+            request
+                .headers_mut()
+                .insert(SEED_INGRESS_METADATA_HEADER, metadata);
         }
-        request.body(body).build().map_err(|_| {
-            MusubiPublicationRuntimeTransportErrorV1::permanent("MUSUBI_RUNTIME_REQUEST_INVALID")
-        })
+        *request.body_mut() = Some(body.into());
+        Ok(request)
     }
 }
 /// Validate a credential-free HTTPS base used only by the private publication routes.
@@ -4450,5 +4587,6 @@ mod tests {
     mod storage_authorization {
         include!("tests/storage_authorization.rs");
     }
+    mod generated_transport;
     pub mod wire_fixtures;
 }

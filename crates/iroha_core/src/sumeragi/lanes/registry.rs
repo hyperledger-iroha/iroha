@@ -224,7 +224,7 @@ impl LaneStores {
             None => unreachable!("opening observed while the same map lock is held"),
         };
         let historical =
-            historical || (!runtime_owner && !cfg!(all(test, sumeragi_core_mutation = "HC117")));
+            historical || (!runtime_owner && !cfg!(all(test, sumeragi_core_mutation = "HC124")));
         Self::complete_store_opening(stores, key, opening, historical)
     }
 
@@ -291,7 +291,7 @@ impl LaneStores {
                 StoreSlot::Ready(store) => {
                     Arc::strong_count(store) > 1
                         || store.retains_pending_work()
-                        || cfg!(all(test, sumeragi_core_mutation = "HC115"))
+                        || cfg!(all(test, sumeragi_core_mutation = "HC122"))
                 }
             }
         });
@@ -301,7 +301,7 @@ impl LaneStores {
 impl LaneBlockSource for LaneStores {
     fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> Result<Option<u64>, Attempt<io::Error>> {
         self.store(lane, incarnation).and_then(|store| {
-            if cfg!(all(test, sumeragi_core_mutation = "HC118")) {
+            if cfg!(all(test, sumeragi_core_mutation = "HC125")) {
                 // Mutation: report a cached durable tip despite an unfinished original read.
                 return Ok(Some(store.height()));
             }

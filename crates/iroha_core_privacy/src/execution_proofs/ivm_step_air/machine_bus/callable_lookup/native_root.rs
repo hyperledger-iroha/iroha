@@ -5,10 +5,10 @@ use super::*;
 impl SelectedCallable {
     /// This establishes the narrow component's public root shape only. Signed
     /// intent, execution-statement and finalized-State authority remain separate.
-    pub(in super::super) fn native_unit_root(
+    pub(in super::super) fn native_public_leaf_root(
         native: &ivm::execution_packets::NativeInvocation,
     ) -> Option<Self> {
-        use ivm_abi::call::CallTypeNodeV1;
+        use ivm_abi::{call::CallTypeNodeV1, entrypoint::EntrypointValueKindV1};
         let artifact = native.artifact();
         let interface = artifact.contract_interface();
         let public = interface.entrypoints.get(native.entrypoint_index())?;
@@ -18,7 +18,10 @@ impl SelectedCallable {
             .find(|callable| callable.entry_pc == public.entry_pc)?;
         if public.argument_schema.is_some()
             || !callable.arguments.nodes.is_empty()
-            || callable.results.nodes.as_slice() != [CallTypeNodeV1::Unit]
+            || !matches!(
+                callable.results.nodes.as_slice(),
+                [CallTypeNodeV1::Unit] | [CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)]
+            )
         {
             return None;
         }

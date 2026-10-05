@@ -352,7 +352,7 @@ fn three_and_six_gas_operations_still_retire_exactly_one_cycle() {
         let mut parent =
             ExecutionMemoryLease::reserve(&budget, NativeInvocation::allocation_plan().unwrap())
                 .unwrap();
-        let result = NativeInvocation::run_unit_root(
+        let result = NativeInvocation::run_public_leaf_root(
             artifact_with_literals(&body, 0, &[i64::MIN as u64, u64::MAX]),
             "main",
             gas,

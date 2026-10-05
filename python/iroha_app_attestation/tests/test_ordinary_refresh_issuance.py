@@ -8,6 +8,7 @@ import hashlib
 import json
 import sqlite3
 import unittest
+import urllib.error
 from contextlib import closing
 from dataclasses import replace
 from unittest.mock import patch
@@ -123,6 +124,28 @@ class OrdinaryRefreshIssuanceTests(unittest.TestCase):
         return {'schema':SCHEMA,'operation':r.operation,'operation_id':r.operation_id.hex(),
             'signed_refresh_challenge_base64':encode(r.signed_refresh_challenge),
             'signature_der_base64':encode(r.signature_der),'play_integrity_token':r.play_integrity_token}
+
+    def test_google_outage_is_retryable_and_the_same_refresh_then_leases(self):
+        body=json.dumps(self.body()).encode()
+        context=object();service=OrdinaryCredentialService(issuer=self.f.issuer,refresh_issuer=self.issuer,
+            authorize_core_call=lambda offered:offered is context)
+        url=enrollment_fixture.Response.url
+        handle=lambda:service.handle(method='POST',path=PATH,body=body,content_type='application/json',
+            transport_context=context)
+        with patch('iroha_app_attestation.play_integrity.urllib.request.build_opener') as google, \
+                patch('iroha_app_attestation.ordinary_issuance.encode_refresh_with_iroha',side_effect=self.encode) as signing:
+            google.return_value.open.return_value=enrollment_fixture.Response(self.google_body)
+            for failure in (urllib.error.HTTPError(url,503,'unavailable',{},None),urllib.error.URLError('offline')):
+                google.return_value.open.side_effect=failure
+                with self.subTest(failure=type(failure).__name__):
+                    self.assertEqual(handle(),(503,b'{"error":"issuer_unavailable"}'))
+            google.return_value.open.side_effect=urllib.error.HTTPError(url,400,'INVALID_ARGUMENT',{},None)
+            self.assertEqual(handle(),(409,b'{"error":"refresh_rejected"}'))
+            signing.assert_not_called()
+            google.return_value.open.side_effect=None
+            status,result=handle()
+        self.assertEqual(status,200);self.assertEqual(set(json.loads(result)),{'lease_base64','lease_sha256_hex'})
+        self.assertEqual(signing.call_count,1)
 
     def test_closed_six_field_service_requires_actual_parent_and_preserves_two_original_fields(self):
         value=self.body();body=json.dumps(value).encode()

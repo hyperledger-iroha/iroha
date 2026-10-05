@@ -4,6 +4,7 @@
 //! without rebuilding live State. TODO: consume every source check through the
 //! complete State/Kura publication owner before granting finalized authority.
 
+use super::{borrowed_controller_work::prepay_account_id, original_images::RawStorageImages};
 use crate::state::{World, account_label_is_pii};
 use iroha_data_model::account::{AccountAlias, AccountId, AccountValue};
 #[cfg(test)]
@@ -62,57 +63,115 @@ impl From<PublicationPreparationError<Infallible>> for AliasOwnershipError {
     }
 }
 
-struct Work(u64);
+/// Local full-geometry reference for one Single Ed25519 account, one 255-byte
+/// primary label with a 255-byte alias-domain segment, and its reverse member.
+/// Both images cost 2 * (1364 + 1433 + 1110) without undo. Wider controllers,
+/// extra implicit accounts and quadratic physical cuts may require more local
+/// work; this is never a name, controller, row, gas or ledger validity limit.
+pub(super) const ACCOUNT_ALIAS_WORK_PER_ROW: u64 = 2 * (1364 + 1433 + 1110);
 
+struct Work(u64);
 impl Work {
-    fn charge(&mut self) -> Result<(), AliasOwnershipError> {
+    fn prepay(&mut self, amount: usize) -> Result<(), AliasOwnershipError> {
+        let amount = u64::try_from(amount).map_err(|_| AliasOwnershipError::WorkLimit)?;
         self.0 = self
             .0
-            .checked_sub(1)
+            .checked_sub(amount)
             .ok_or(AliasOwnershipError::WorkLimit)?;
         Ok(())
     }
 }
-
 fn corrupt(image: AliasImage, mismatch: AliasMismatch) -> AliasOwnershipError {
     AliasOwnershipError::Corrupt { image, mismatch }
 }
-
-fn get_at<'a, K: mv::Key, V: mv::Value>(
-    rows: &'a CommittedStorageView<'_, K, V>,
-    image: AliasImage,
-    key: &K,
-) -> Option<&'a V> {
-    if image == AliasImage::Predecessor
-        && let Some(prior) = rows.undo().get(key)
-    {
-        return prior.as_ref();
-    }
-    rows.current().get(key)
+trait WorkKey: mv::Key {
+    fn prepay(&self, work: &mut Work) -> Result<(), AliasOwnershipError>;
 }
-
-fn visit<K: mv::Key, V: mv::Value>(
-    rows: &CommittedStorageView<'_, K, V>,
+impl WorkKey for AccountId {
+    fn prepay(&self, work: &mut Work) -> Result<(), AliasOwnershipError> {
+        prepay_account_id(self, |amount| work.prepay(amount))
+    }
+}
+impl WorkKey for AccountAlias {
+    fn prepay(&self, work: &mut Work) -> Result<(), AliasOwnershipError> {
+        work.prepay(self.label.as_ref().len())?;
+        work.prepay(1)?;
+        if let Some(domain) = &self.domain {
+            work.prepay(domain.name().as_ref().len())?;
+        }
+        work.prepay(8)
+    }
+}
+fn equal<K: WorkKey>(left: &K, right: &K, work: &mut Work) -> Result<bool, AliasOwnershipError> {
+    left.prepay(work)?;
+    right.prepay(work)?;
+    Ok(left == right)
+}
+fn next_physical<I: ExactSizeIterator>(
+    rows: &mut I,
+    work: &mut Work,
+) -> Result<Option<I::Item>, AliasOwnershipError> {
+    if rows.len() == 0 {
+        return Ok(None);
+    }
+    work.prepay(1)?;
+    Ok(rows.next())
+}
+fn visit_original<'a, K: WorkKey, V: mv::Value>(
+    rows: &'a impl RawStorageImages<K, V>,
     image: AliasImage,
     work: &mut Work,
-    mut inspect: impl FnMut(&K, &V, &mut Work) -> Result<(), AliasOwnershipError>,
+    mut inspect: impl FnMut(&'a K, &'a V, &mut Work) -> Result<(), AliasOwnershipError>,
 ) -> Result<(), AliasOwnershipError> {
-    for (key, value) in rows.current().iter() {
-        work.charge()?;
-        if image == AliasImage::Current || !rows.undo().contains_key(key) {
+    let mut current = rows.current_entries();
+    while let Some((key, value)) = next_physical(&mut current, work)? {
+        let mut masked = false;
+        if image == AliasImage::Predecessor {
+            let mut undo = rows.undo_entries();
+            while let Some((prior_key, _)) = next_physical(&mut undo, work)? {
+                masked |= equal(key, prior_key, work)?;
+            }
+        }
+        if !masked {
             inspect(key, value, work)?;
         }
     }
     if image == AliasImage::Predecessor {
-        for (key, prior) in rows.undo().iter() {
-            // Absent preimages and redundant touches also consume work.
-            work.charge()?;
+        let mut undo = rows.undo_entries();
+        while let Some((key, prior)) = next_physical(&mut undo, work)? {
             if let Some(value) = prior {
                 inspect(key, value, work)?;
             }
         }
     }
     Ok(())
+}
+fn lookup_original<'a, K: WorkKey, V: mv::Value>(
+    rows: &'a impl RawStorageImages<K, V>,
+    image: AliasImage,
+    key: &K,
+    work: &mut Work,
+) -> Result<Option<&'a V>, AliasOwnershipError> {
+    let mut found = None;
+    visit_original(rows, image, work, |candidate, value, work| {
+        if equal(candidate, key, work)? {
+            found = Some(value);
+        }
+        Ok(())
+    })?;
+    Ok(found)
+}
+fn contains_original(
+    members: &BTreeSet<AccountAlias>,
+    label: &AccountAlias,
+    work: &mut Work,
+) -> Result<bool, AliasOwnershipError> {
+    let mut found = false;
+    let mut members = members.iter();
+    while let Some(member) = next_physical(&mut members, work)? {
+        found |= equal(member, label, work)?;
+    }
+    Ok(found)
 }
 
 /// Original canonical reader retained with all sources used to check its index.
@@ -137,12 +196,24 @@ impl<'world> CheckedAccountAliases<'world> {
                 .account_aliases_by_account
                 .try_committed_view_nonblocking()?,
         };
-        let result = checked.validate(&mut Work(max_work));
-        if !checked.matches_current()? {
+        let result = validate_original_account_aliases(
+            &checked.accounts,
+            &checked.aliases,
+            &checked.reverse,
+            max_work,
+        );
+        checked.finish_validation(result)
+    }
+
+    fn finish_validation(
+        self,
+        result: Result<(), AliasOwnershipError>,
+    ) -> Result<Self, AliasOwnershipError> {
+        if !self.matches_current()? {
             return Err(PublicationPreparationError::Changed.into());
         }
         result?;
-        Ok(checked)
+        Ok(self)
     }
 
     /// Borrow the exact alias rows whose dependencies passed validation.
@@ -152,58 +223,107 @@ impl<'world> CheckedAccountAliases<'world> {
 
     /// Detect any publication, including an equal-value replacement of a source.
     pub(super) fn matches_current(&self) -> Result<bool, AliasOwnershipError> {
-        Ok(self.accounts.try_matches_current(&self.world.accounts)?
-            && self
-                .aliases
-                .try_matches_current(&self.world.account_aliases)?
-            && self
-                .reverse
-                .try_matches_current(&self.world.account_aliases_by_account)?)
+        let accounts = self.accounts.try_matches_current(&self.world.accounts);
+        let aliases = self
+            .aliases
+            .try_matches_current(&self.world.account_aliases);
+        let reverse = self
+            .reverse
+            .try_matches_current(&self.world.account_aliases_by_account);
+        let accounts = accounts?;
+        let aliases = aliases?;
+        let reverse = reverse?;
+        Ok(accounts && aliases && reverse)
     }
+}
 
-    fn validate(&self, work: &mut Work) -> Result<(), AliasOwnershipError> {
-        for image in [AliasImage::Current, AliasImage::Predecessor] {
-            visit(&self.accounts, image, work, |account, value, _| {
-                if let Some(label) = value.as_ref().label() {
-                    if account_label_is_pii(label) {
-                        return Err(corrupt(image, AliasMismatch::PrivateLabel));
-                    }
-                    if get_at(&self.aliases, image, label) != Some(account) {
-                        return Err(corrupt(image, AliasMismatch::PrimaryLabel));
-                    }
-                }
-                Ok(())
-            })?;
-            visit(&self.aliases, image, work, |label, account, _| {
+/// Validate both exact alias images on only the closed original native maps.
+///
+/// Preserve Current accounts/aliases/reverse then Predecessor pass ordering and
+/// all existing PII, primary-label, account and reverse-bucket predicates. Every
+/// physical advance, full key comparison and PII scan is prepaid. No name or
+/// controller is parsed, cloned or given a new validity/authority predicate.
+pub(in crate::state) fn validate_original_account_aliases(
+    accounts: &impl RawStorageImages<AccountId, AccountValue>,
+    aliases: &impl RawStorageImages<AccountAlias, AccountId>,
+    reverse: &impl RawStorageImages<AccountId, BTreeSet<AccountAlias>>,
+    max_work: u64,
+) -> Result<(), AliasOwnershipError> {
+    let mut work = Work(max_work);
+    for image in [AliasImage::Current, AliasImage::Predecessor] {
+        visit_original(accounts, image, &mut work, |account, value, work| {
+            work.prepay(1)?;
+            if let Some(label) = value.as_ref().label() {
+                work.prepay(label.label.as_ref().len())?;
                 if account_label_is_pii(label) {
                     return Err(corrupt(image, AliasMismatch::PrivateLabel));
                 }
-                if get_at(&self.accounts, image, account).is_none() {
-                    return Err(corrupt(image, AliasMismatch::MissingAccount));
+                let Some(bound) = lookup_original(aliases, image, label, work)? else {
+                    return Err(corrupt(image, AliasMismatch::PrimaryLabel));
+                };
+                if !equal(bound, account, work)? {
+                    return Err(corrupt(image, AliasMismatch::PrimaryLabel));
                 }
-                if !get_at(&self.reverse, image, account)
-                    .is_some_and(|members| members.contains(label))
-                {
-                    return Err(corrupt(image, AliasMismatch::MissingAlias));
+            }
+            Ok(())
+        })?;
+        visit_original(aliases, image, &mut work, |label, account, work| {
+            work.prepay(label.label.as_ref().len())?;
+            if account_label_is_pii(label) {
+                return Err(corrupt(image, AliasMismatch::PrivateLabel));
+            }
+            if lookup_original(accounts, image, account, work)?.is_none() {
+                return Err(corrupt(image, AliasMismatch::MissingAccount));
+            }
+            let Some(members) = lookup_original(reverse, image, account, work)? else {
+                return Err(corrupt(image, AliasMismatch::MissingAlias));
+            };
+            if !contains_original(members, label, work)? {
+                return Err(corrupt(image, AliasMismatch::MissingAlias));
+            }
+            Ok(())
+        })?;
+        visit_original(reverse, image, &mut work, |account, members, work| {
+            work.prepay(1)?;
+            if members.is_empty() {
+                return Err(corrupt(image, AliasMismatch::EmptyBucket));
+            }
+            let mut members = members.iter();
+            while let Some(label) = next_physical(&mut members, work)? {
+                let Some(bound) = lookup_original(aliases, image, label, work)? else {
+                    return Err(corrupt(image, AliasMismatch::ForeignAlias));
+                };
+                if !equal(bound, account, work)? {
+                    return Err(corrupt(image, AliasMismatch::ForeignAlias));
                 }
-                Ok(())
-            })?;
-            visit(&self.reverse, image, work, |account, members, work| {
-                if members.is_empty() {
-                    return Err(corrupt(image, AliasMismatch::EmptyBucket));
-                }
-                for label in members {
-                    work.charge()?;
-                    if get_at(&self.aliases, image, label) != Some(account) {
-                        return Err(corrupt(image, AliasMismatch::ForeignAlias));
-                    }
-                }
-                Ok(())
-            })?;
-        }
-        Ok(())
+            }
+            Ok(())
+        })?;
     }
+    Ok(())
 }
+
+#[cfg(test)]
+fn get_at<'a, K: mv::Key, V: mv::Value>(
+    rows: &'a CommittedStorageView<'_, K, V>,
+    image: AliasImage,
+    key: &K,
+) -> Option<&'a V> {
+    if image == AliasImage::Predecessor
+        && let Some(prior) = rows.undo().get(key)
+    {
+        return prior.as_ref();
+    }
+    rows.current().get(key)
+}
+
+#[cfg(test)]
+#[path = "account_alias_ownership/test_support.rs"]
+pub(in crate::state) mod test_support;
+
+#[cfg(test)]
+#[path = "account_alias_ownership/work_tests.rs"]
+mod work_tests;
 
 #[cfg(test)]
 #[path = "account_alias_ownership/tests.rs"]

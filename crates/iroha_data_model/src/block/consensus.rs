@@ -707,16 +707,11 @@ pub struct EvidenceAttribution {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::EvidencePenaltyStatus")]
 pub enum EvidencePenaltyStatus {
-    /// The deterministic penalty delay has not elapsed or no action has run yet.
+    /// The immutable consensus penalty delay has not elapsed.
     Pending,
     /// Consensus applied the penalty at the stated canonical block height.
     Applied {
         /// Canonical height that applied the penalty.
-        height: Height,
-    },
-    /// Governance cancelled the penalty at the stated canonical block height.
-    Cancelled {
-        /// Canonical height that cancelled the penalty.
         height: Height,
     },
 }
@@ -732,8 +727,8 @@ impl EvidencePenaltyStatus {
 /// Every record has already been admitted by a committed block. Node-local
 /// pending observations use no data-model representation and never enter WSV.
 /// Shortened records are rejected instead of receiving implicit penalty state.
-/// Penalty state is a closed sum type so impossible combinations such as an
-/// applied-and-cancelled record cannot enter WSV or its binary representation.
+/// Penalty state admits only pending and finality-applied records. Governance cannot
+/// cancel mandatory consensus penalties; unsupported states fail canonical decoding.
 /// Endpoint JSON still uses a purpose-built audit projection; this closed JSON
 /// layout is reserved for canonical state snapshots.
 #[derive(
@@ -753,7 +748,7 @@ pub struct EvidenceRecord {
     pub recorded_at_view: View,
     /// Block creation timestamp in milliseconds since UNIX epoch.
     pub recorded_at_ms: u64,
-    /// Exact pending, applied, or cancelled penalty state.
+    /// Exact pending or applied penalty state.
     pub penalty_status: EvidencePenaltyStatus,
 }
 /// Deterministic settlement receipt emitted for audit and reconciliation.

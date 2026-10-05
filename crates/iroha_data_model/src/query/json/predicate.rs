@@ -410,85 +410,109 @@ impl JsonSerialize for PredicateJson {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        let mut wrote_section = if self.equals.is_empty() {
-            false
-        } else {
-            out.push_str("\"equals\":[")?;
-            out.begin_container()?;
-            let mut previous = None;
-            let mut wrote = false;
-            while let Some(index) =
-                next_sorted_index_by(&self.equals, previous, |item| item.field.as_str())
-            {
-                if wrote {
-                    out.push(',')?;
-                }
-                let condition = &self.equals[index];
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            let mut wrote_section = if self.equals.is_empty() {
+                false
+            } else {
+                out.push_str("\"equals\":[")?;
                 out.begin_container()?;
-                out.push_str("{\"field\":")?;
-                condition.field.json_serialize_to(out)?;
-                out.push_str(",\"value\":")?;
-                condition.value.json_serialize_to(out)?;
-                out.push('}')?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    let mut previous = None;
+                    let mut wrote = false;
+                    while let Some(index) =
+                        next_sorted_index_by(&self.equals, previous, |item| item.field.as_str())
+                    {
+                        if wrote {
+                            out.push(',')?;
+                        }
+                        let condition = &self.equals[index];
+                        out.begin_container()?;
+                        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                            out.push_str("{\"field\":")?;
+                            condition.field.json_serialize_to(out)?;
+                            out.push_str(",\"value\":")?;
+                            condition.value.json_serialize_to(out)?;
+                            out.push('}')?;
+                            Ok(())
+                        })();
+                        out.end_container();
+                        result?;
+                        wrote = true;
+                        previous = Some(index);
+                    }
+                    out.push(']')?;
+                    Ok(())
+                })();
                 out.end_container();
-                wrote = true;
-                previous = Some(index);
-            }
-            out.push(']')?;
-            out.end_container();
-            true
-        };
-        if !self.exists.is_empty() {
-            if wrote_section {
-                out.push(',')?;
-            }
-            out.push_str("\"exists\":[")?;
-            out.begin_container()?;
-            let mut previous = None;
-            let mut wrote = false;
-            while let Some(index) = next_sorted_index_by(&self.exists, previous, String::as_str) {
-                if wrote {
+                result?;
+                true
+            };
+            if !self.exists.is_empty() {
+                if wrote_section {
                     out.push(',')?;
                 }
-                self.exists[index].json_serialize_to(out)?;
-                wrote = true;
-                previous = Some(index);
-            }
-            out.push(']')?;
-            out.end_container();
-            wrote_section = true;
-        }
-        if !self.r#in.is_empty() {
-            if wrote_section {
-                out.push(',')?;
-            }
-            out.push_str("\"in\":[")?;
-            out.begin_container()?;
-            let mut previous = None;
-            let mut wrote = false;
-            while let Some(index) =
-                next_sorted_index_by(&self.r#in, previous, |item| item.field.as_str())
-            {
-                if wrote {
-                    out.push(',')?;
-                }
-                let condition = &self.r#in[index];
+                out.push_str("\"exists\":[")?;
                 out.begin_container()?;
-                out.push_str("{\"field\":")?;
-                condition.field.json_serialize_to(out)?;
-                out.push_str(",\"values\":")?;
-                condition.values.json_serialize_to(out)?;
-                out.push('}')?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    let mut previous = None;
+                    let mut wrote = false;
+                    while let Some(index) = next_sorted_index_by(&self.exists, previous, String::as_str) {
+                        if wrote {
+                            out.push(',')?;
+                        }
+                        self.exists[index].json_serialize_to(out)?;
+                        wrote = true;
+                        previous = Some(index);
+                    }
+                    out.push(']')?;
+                    Ok(())
+                })();
                 out.end_container();
-                wrote = true;
-                previous = Some(index);
+                result?;
+                wrote_section = true;
             }
-            out.push(']')?;
-            out.end_container();
-        }
-        out.push('}')?;
+            if !self.r#in.is_empty() {
+                if wrote_section {
+                    out.push(',')?;
+                }
+                out.push_str("\"in\":[")?;
+                out.begin_container()?;
+                let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                    let mut previous = None;
+                    let mut wrote = false;
+                    while let Some(index) =
+                        next_sorted_index_by(&self.r#in, previous, |item| item.field.as_str())
+                    {
+                        if wrote {
+                            out.push(',')?;
+                        }
+                        let condition = &self.r#in[index];
+                        out.begin_container()?;
+                        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                            out.push_str("{\"field\":")?;
+                            condition.field.json_serialize_to(out)?;
+                            out.push_str(",\"values\":")?;
+                            condition.values.json_serialize_to(out)?;
+                            out.push('}')?;
+                            Ok(())
+                        })();
+                        out.end_container();
+                        result?;
+                        wrote = true;
+                        previous = Some(index);
+                    }
+                    out.push(']')?;
+                    Ok(())
+                })();
+                out.end_container();
+                result?;
+            }
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }

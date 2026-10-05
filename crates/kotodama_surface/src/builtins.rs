@@ -6,10 +6,7 @@
 ///
 /// Only constructors whose enclosing [`Builtin`] has a source-visible surface
 /// are part of Kotodama V1; the remaining variants are host/compiler plumbing.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, strum::EnumIter, strum::IntoStaticStr,
-)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, strum::EnumIter)]
 pub enum PointerConstructor {
     /// Parse an account identity into an `AccountId` pointer.
     #[default]
@@ -33,7 +30,6 @@ pub enum PointerConstructor {
     /// Internal constructor for Norito-encoded bytes.
     NoritoBytes,
     /// Parse a dataspace identity into a `DataSpaceId` pointer.
-    #[strum(serialize = "dataspace_id")]
     DataSpaceId,
     /// Parse an atomic cross-dataspace transaction descriptor.
     AxtDescriptor,
@@ -303,8 +299,7 @@ pub struct BuiltinSpec {
 }
 /// Canonical Kotodama helper/builtin calls that are part of the current source
 /// surface and are worth classifying centrally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter, strum::IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter)]
 pub enum Builtin {
     /// Construct the selected typed pointer-ABI value from a string.
     PointerConstructor(PointerConstructor),
@@ -317,7 +312,6 @@ pub enum Builtin {
     /// Ensure a durable state map entry exists and return its value.
     Ensure,
     /// Remove a durable state map entry and return its previous optional value.
-    #[strum(serialize = "remove")]
     StateMapRemove,
     /// Internal bounded key scan of an integer-keyed state map.
     KeysTake2,
@@ -394,25 +388,18 @@ pub enum Builtin {
     /// Assert integer equality in a local test build.
     AssertEq,
     /// Invoke a runtime kotoage from a test using the current caller.
-    #[strum(serialize = "invoke_entrypoint")]
     TestInvokeEntrypoint,
     /// Invoke a runtime kotoage from a test as a fixture actor.
-    #[strum(serialize = "invoke_entrypoint_as")]
     TestInvokeEntrypointAs,
     /// Require a fixture-actor invocation to produce the expected rejection.
-    #[strum(serialize = "expect_reject_as")]
     TestExpectRejectAs,
     /// Require a fixture-actor invocation to reject.
-    #[strum(serialize = "expect_any_reject_as")]
     TestExpectAnyRejectAs,
     /// Read a fixture actor's canonical account identity.
-    #[strum(serialize = "actor_account")]
     TestActorAccount,
     /// Read a fixture actor's public key bytes.
-    #[strum(serialize = "actor_public_key")]
     TestActorPublicKey,
     /// Sign a payload with a fixture actor's test key.
-    #[strum(serialize = "actor_sign")]
     TestActorSign,
     /// Set one JSON metadata entry on an account.
     SetAccountDetail,
@@ -521,7 +508,6 @@ pub enum Builtin {
     /// Declare a dataspace touch and its manifest in an atomic transaction.
     AxtTouch,
     /// Stage a V1 anchored spend in an atomic cross-dataspace transaction.
-    #[strum(serialize = "axt_stage_anchored_spend")]
     StageAnchoredSpend,
     /// Internal verification of a dataspace proof.
     VerifyDsProof,
@@ -636,10 +622,8 @@ pub enum Builtin {
     /// Internal decoding of JSON from bytes.
     DecodeJson,
     /// Internal encoding of JSON according to a named schema.
-    #[strum(serialize = "encode_schema")]
     SchemaEncode,
     /// Internal decoding of bytes according to a named schema.
-    #[strum(serialize = "decode_schema")]
     SchemaDecode,
     /// Internal query of a named schema's JSON description.
     SchemaInfo,
@@ -726,7 +710,6 @@ pub enum Builtin {
     /// Commit secret numeric values in ZK mode.
     Valcom,
     /// Internal vector-length selection helper.
-    #[strum(serialize = "setvl")]
     SetVl,
     /// Read an optional integer field from JSON.
     GetInt,
@@ -2876,30 +2859,16 @@ mod tests {
         }
     }
     #[test]
-    fn const_names_preserve_derived_static_spellings() {
-        use strum::IntoEnumIterator as _;
-
-        const POINTER_NAME: &str = PointerConstructor::DataSpaceId.name();
-        const BUILTIN_NAME: &str = Builtin::StateMapRemove.name();
-        const CONSTRUCTOR_NAME: &str =
-            Builtin::PointerConstructor(PointerConstructor::DataSpaceId).name();
-        assert_eq!(POINTER_NAME, "dataspace_id");
-        assert_eq!(BUILTIN_NAME, "remove");
-        assert_eq!(CONSTRUCTOR_NAME, POINTER_NAME);
-
-        for constructor in PointerConstructor::iter() {
-            assert_eq!(constructor.name(), <&'static str>::from(constructor));
-            assert_eq!(constructor.name(), <&'static str>::from(&constructor));
-        }
-        for builtin in Builtin::iter() {
-            if matches!(builtin, Builtin::PointerConstructor(_)) {
-                assert_eq!(<&'static str>::from(builtin), "pointer_constructor");
-                assert_eq!(<&'static str>::from(&builtin), "pointer_constructor");
-            } else {
-                assert_eq!(builtin.name(), <&'static str>::from(builtin));
-                assert_eq!(builtin.name(), <&'static str>::from(&builtin));
-            }
-        }
+    fn canonical_names_support_constant_evaluation() {
+        const DATASPACE: &str = PointerConstructor::DataSpaceId.name();
+        const REMOVE: &str = Builtin::StateMapRemove.name();
+        const ANCHORED_SPEND: &str = Builtin::StageAnchoredSpend.name();
+        const POINTER: &str =
+            Builtin::PointerConstructor(PointerConstructor::AssetDefinition).name();
+        assert_eq!(DATASPACE, "dataspace_id");
+        assert_eq!(REMOVE, "remove");
+        assert_eq!(ANCHORED_SPEND, "axt_stage_anchored_spend");
+        assert_eq!(POINTER, "asset_definition");
     }
     #[test]
     fn registry_is_exhaustive_and_canonical_names_round_trip() {

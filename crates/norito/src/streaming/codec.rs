@@ -12,7 +12,7 @@ use super::{
         FrameCountOverflowInfo, FrameLengthMismatch, chunk_commitments, derive_nonce_salt,
         merkle_root,
     },
-    json, norito_core, saturating_usize_to_u32, saturating_usize_to_u64,
+    json, saturating_usize_to_u32, saturating_usize_to_u64,
 };
 use crate as norito;
 use norito_derive::{NoritoDeserialize, NoritoSerialize};
@@ -495,17 +495,11 @@ fn hash_bundle_tables(tables: &[SymbolTable; MAX_BUNDLE_WIDTH], precision_bits: 
     hash
 }
 fn verify_signed_tables(signed: &SignedRansTablesV1) -> Result<(), BundleTableError> {
-    let bytes = {
-        // Table checksums are part of signed TOML artefacts, so keep their
-        // hash input pinned to the legacy canonical Norito layout rather
-        // than whichever layout is the current encode default.
-        let _guard = norito_core::DecodeFlagsGuard::enter(0);
-        norito_core::to_bytes(&signed.payload.body)
-            .map_err(|_| BundleTableError::InvalidStructure("failed to encode table body"))?
-    };
-    let digest = Sha256::digest(bytes);
-    let mut checksum = [0u8; 32];
-    checksum.copy_from_slice(digest.as_ref());
+    let checksum = signed
+        .payload
+        .body
+        .checksum_sha256()
+        .map_err(|_| BundleTableError::InvalidStructure("failed to encode table body"))?;
     if checksum != signed.payload.checksum_sha256 {
         return Err(BundleTableError::ChecksumMismatch);
     }

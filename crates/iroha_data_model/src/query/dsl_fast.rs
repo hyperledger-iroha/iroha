@@ -644,8 +644,12 @@ impl<T: 'static> norito::json::JsonSerialize for CompoundPredicate<T> {
             return norito::json::write_validated_json_to(json.as_str(), out);
         }
         out.begin_container()?;
-        out.push_str("{}")?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{}")?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }

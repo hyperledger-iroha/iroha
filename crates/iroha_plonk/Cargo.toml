@@ -1,0 +1,43 @@
+[package]
+name = "iroha_plonk"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Iroha-native PIPA-v1 PLONKish/IPA proof system: constraint systems, circuit frontend, descriptors, keys, transcripts, the IPA and multiopen, the prover and the verifier"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories = ["cryptography"]
+# `build.rs` only declares the `iroha_plonk_oracle` cfg for check-cfg (spec
+# section 6.4); it generates nothing and reads no environment.
+build = "build.rs"
+
+[lints]
+workspace = true
+
+# Every entry below is already in the workspace lockfile; the crate adds no
+# external package.
+[dependencies]
+# Pasta fields, curves, MSM, fold, FFT, `ParamsIpa` and the RP57 sponge.
+iroha_pasta = { workspace = true }
+# `Field`/`PrimeField` traits shared with iroha_pasta.
+ff = "0.13.1"
+# `Group`/`Curve`/`GroupEncoding` traits of the iroha_pasta curve types.
+group = "0.13"
+# CircuitDescriptorV1 is a canonical Norito frame.
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
+# Personalised BLAKE2b: descriptor digest, `transcript_repr`, the Challenge255
+# transcript and the batch weights.
+blake2 = { workspace = true }
+# Prover randomness (`Field::random` consumes `RngCore` words; `OsRng` keys
+# the production streams).
+rand_core_06 = { workspace = true }
+# The prover's ChaCha20 streams (OS-keyed and hedged `ProverRandomness`).
+rand_chacha = "0.3.1"
+# The quotient, the grand products and the commitments run on the caller's
+# Rayon pool; outputs do not depend on its size.
+rayon = { workspace = true }
+# SHA-256 of params bytes against `PINNED_PARAMS_V1` (spec section 3).
+sha2 = "0.10.9"

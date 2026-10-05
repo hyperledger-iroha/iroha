@@ -36,7 +36,8 @@ fn source(artifact: PreparedContract, selector: &str, gas: u64) -> (Source, Allo
         ExecutionMemoryLease::reserve(&budget, NativeInvocation::allocation_plan().unwrap())
             .unwrap();
     let native =
-        NativeInvocation::run_unit_root(artifact, selector, gas, &mut parent, &budget).unwrap();
+        NativeInvocation::run_public_leaf_root(artifact, selector, gas, &mut parent, &budget)
+            .unwrap();
     let reserved = budget.reserved_bytes();
     let source = Source::new(native, &budget).unwrap();
     assert_eq!(
@@ -453,3 +454,6 @@ fn initializer_equations_have_degree_one_in_original_producer_columns() {
         1
     );
 }
+
+#[path = "tests/public_leaves.rs"]
+pub(super) mod public_leaves;

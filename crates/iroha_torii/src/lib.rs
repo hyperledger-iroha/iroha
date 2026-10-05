@@ -757,6 +757,7 @@ impl ValidatedToriiHttpTransport {
 }
 
 mod public_tls;
+pub use public_tls::native_https_server_identity_v1;
 
 async fn serve_torii_http_connection<S>(
     stream: S,
@@ -6559,6 +6560,20 @@ pub(crate) struct QueryAdmissionPermit {
     _fanout_memory: Option<QueryFanoutMemoryReservation>,
 }
 impl QueryAdmissionPermit {
+    /// Use the response phase granted by this worker's retained query owner.
+    /// Response custody alone cannot grant producer allocation authority.
+    pub(crate) fn response_body_budget(&self) -> Result<usize, Error> {
+        self._fanout_memory
+            .as_ref()
+            .and_then(|owner| owner.admission)
+            .map(|admission| admission.envelope.route_body_bytes)
+            .ok_or_else(|| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(
+                    "The query worker has no admitted response memory owner.".to_owned(),
+                ))
+            })
+    }
+
     #[cfg(test)]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         self._body = Some(permit);
@@ -33612,7 +33627,8 @@ async fn ledger_executed_block_wire_response(
         }
         Err(error) => return Err(map_block_proof_error(error)),
     };
-    let mut response = Response::new(Body::from(wire));
+    // HTTP retirement owns the original charged frame; no response byte copy or early refund.
+    let mut response = Response::new(Body::from(Bytes::from_owner(wire)));
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static(utils::NORITO_MIME_TYPE),

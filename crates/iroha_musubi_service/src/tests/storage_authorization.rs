@@ -176,3 +176,27 @@ fn changed_request_and_exact_expiry_cannot_mint_storage_dispatch() {
     );
     assert!(calls.lock().unwrap().is_empty());
 }
+
+#[test]
+fn closed_backend_errors_preserve_class_and_expose_no_payload() {
+    for (error, text) in [
+        (
+            MusubiPublicationServiceBackendErrorV1::Retryable,
+            "Musubi publication backend is temporarily unavailable",
+        ),
+        (
+            MusubiPublicationServiceBackendErrorV1::Permanent,
+            "Musubi publication backend requires configuration or state changes",
+        ),
+    ] {
+        assert_eq!(error.to_string(), text);
+        let erased: &dyn std::error::Error = &error;
+        assert!(erased.source().is_none());
+        let reported = eyre::Report::new(error);
+        assert_eq!(reported.to_string(), text);
+        assert_eq!(
+            reported.downcast_ref::<MusubiPublicationServiceBackendErrorV1>(),
+            Some(&error)
+        );
+    }
+}

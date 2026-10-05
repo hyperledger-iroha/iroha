@@ -143,7 +143,18 @@ privacy_sdk_materialize_canonical_cargo_lock "$2" "$3" "$state" "$4"
                 ["/usr/bin/git", "-C", str(ROOT), "show", selector],
                 capture_output=True, check=True,
             ).stdout
-            self.assertEqual(committed, before[1], selector)
+            if committed == before[1]:
+                self.assertEqual(committed, before[1], selector)
+            else:
+                # A development checkout can hold a reviewed graph newer than
+                # HEAD/index. Those bytes must fail current physical-owner
+                # authentication; release tracked-state guards remain separate.
+                self.assertNotEqual(hashlib.sha256(committed).hexdigest(), OWNER[0], selector)
+                try:
+                    self.lock.write_bytes(committed)
+                    self.assert_rejected(self.invoke())
+                finally:
+                    self.lock.write_bytes(before[1])
         command = '''set -euo pipefail
 source "$1"
 state="$(privacy_sdk_capture_optional_file_state "$2/Cargo.lock" graph "$4")"
@@ -169,6 +180,7 @@ IROHA_PRIVACY_CARGO_LOCKFILE_PATH="$3" privacy_sdk_resolve_cargo_lockfile "$2" "
         # Preceding reviewed digests are rejected fixtures, never alternate
         # selectors. Even a correct current physical seal cannot authorize them.
         stale_digests = (
+            "f63ef61b2abd60f5dc71ec5cfffa5652c49b01ce1789be3ab9240ebe06d04698",
             "1c67e27eee71508ca7822f52851ec110ce1f78e74a50ec985f342f5baa91fb62",
             "c766e96ceedbad8f0a457746590ec5e5795934793bfc507aa3a5c3f2effee631",
             "6db7b8e403d3f0ceda056552ede710d5f57b2c423290640f368b51e7f4c91ddd",

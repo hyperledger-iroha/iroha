@@ -6125,15 +6125,9 @@ export interface SumeragiEvidenceAppliedPenaltyStatus {
   details: { height: ToriiU64 };
 }
 
-export interface SumeragiEvidenceCancelledPenaltyStatus {
-  status: "cancelled";
-  details: { height: ToriiU64 };
-}
-
 export type SumeragiEvidencePenaltyStatus =
   | SumeragiEvidencePendingPenaltyStatus
-  | SumeragiEvidenceAppliedPenaltyStatus
-  | SumeragiEvidenceCancelledPenaltyStatus;
+  | SumeragiEvidenceAppliedPenaltyStatus;
 
 export interface SumeragiEvidenceOffender {
   signer: number;

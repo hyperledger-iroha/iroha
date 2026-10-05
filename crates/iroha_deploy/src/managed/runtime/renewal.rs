@@ -201,6 +201,71 @@ impl Turn {
     }
 }
 
+/// Both a Catalog startup and a withdrawn-Ready renewal use this one bounded custody owner.
+/// The caller holds the actual child guard. This function never creates a readiness Receipt.
+pub(super) fn reconcile(
+    prepared: &PreparedLocalnet,
+    budget: &Budget,
+    live: &mut OwnedGateway,
+    minimum: ManagedTransactionFinality,
+    expected_sequence: Option<u64>,
+) -> std::result::Result<(), Failure> {
+    use crate::managed::{
+        native_operation::Fees,
+        stream_token_custody::renewal::{GeneratedRenewalTurn, Reconciliation},
+    };
+    budget.check()?;
+    validate_live(prepared, live, budget)?;
+    let provider = live.provider();
+    let policies = budget.call(|_| ManagedServiceBootstrap::open(prepared)?.selected_policies())?;
+    let mut custody = budget.call(|_| ManagedStreamTokenCustody::open(prepared, provider))?;
+    let options = BoundedTransactionOptions {
+        fee_payment: policies.network.runtime_fee_payment.clone(),
+        max_total_fees: BTreeMap::from([(
+            policies.network.reserve.asset_definition.clone(),
+            iroha_primitives::numeric::Quantity::from(1_u64),
+        )]),
+        deadline: budget.deadline()?,
+    };
+    let mut turn = budget.call(|deadline| {
+        GeneratedRenewalTurn::begin(
+            &custody,
+            &policies.provider(provider)?.custody,
+            Fees::from_options(&options)?,
+            minimum,
+            deadline,
+            Arc::clone(&budget.cancelled),
+        )
+    })?;
+    loop {
+        budget.check()?;
+        validate_live(prepared, live, budget)?;
+        let result = custody.reconcile_generated_renewal(&mut turn, budget.deadline()?);
+        budget.check()?;
+        validate_live(prepared, live, budget)?;
+        match result {
+            Ok(Reconciliation::Current(enrollment)) => {
+                if expected_sequence
+                    .is_some_and(|expected| expected != enrollment.statement().sequence)
+                {
+                    return Err(budget.progress.unconfirmed());
+                }
+                return Ok(());
+            }
+            Ok(Reconciliation::Pending(progress)) => {
+                // Only independent inclusion plus a following fresh native head can finish.
+                // Public Applied/Expired statuses are not replacement permission.
+                let _ = progress;
+            }
+            Err(crate::managed::Error::Bootstrap(reason)) => {
+                return Err(Failure::Bootstrap(reason));
+            }
+            Err(_) => {}
+        }
+        budget.wait()?;
+    }
+}
+
 /// Called only after the main process owner has durably left Ready. An exhausted original fails
 /// closed; neither a retry nor a later worker silently renews its retained transaction authority.
 pub(super) fn advance(
@@ -222,48 +287,13 @@ pub(super) fn advance(
         }
         Ok(())
     })?;
-    let policies = budget.call(|_| ManagedServiceBootstrap::open(prepared)?.selected_policies())?;
-    let mut custody = budget.call(|_| ManagedStreamTokenCustody::open(prepared, turn.provider))?;
-    loop {
-        budget.check()?;
-        validate_live(prepared, &mut live, budget)?;
-        let deadline = budget.deadline()?;
-        let attempt = (|| -> Result<_> {
-            match custody.recover_renewal(turn.sequence, deadline)? {
-                Some(current) if current.finalized.is_some() => Ok(current),
-                Some(_) => custody.advance_renewal(turn.sequence, deadline),
-                None => {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    let utc = now_ms()?
-                        .checked_add(
-                            u64::try_from(remaining.as_millis())
-                                .map_err(|_| invalid("renewal authorization interval overflow"))?,
-                        )
-                        .ok_or_else(|| invalid("renewal authorization deadline overflow"))?;
-                    let options = BoundedTransactionOptions {
-                        fee_payment: policies.network.runtime_fee_payment.clone(),
-                        max_total_fees: BTreeMap::from([(
-                            policies.network.reserve.asset_definition.clone(),
-                            iroha_primitives::numeric::Quantity::from(1_u64),
-                        )]),
-                        deadline,
-                    };
-                    custody.renew(turn.sequence, utc, &options)
-                }
-            }
-        })();
-        budget.check()?;
-        validate_live(prepared, &mut live, budget)?;
-        if attempt.is_ok_and(|value| value.finalized.is_some()) {
-            break;
-        }
-        // TODO: explicit unsigned-request authorization epochs must be provided by the sole
-        // wallet/outer journal owners; an expired retained renewal is never replaced here.
-        // A failed POST is never resent. The sole wallet owner recovers its original marker,
-        // payload and successful carrier; this loop has no independent dispatch permission.
-        budget.wait()?;
-    }
-    drop(custody);
+    reconcile(
+        prepared,
+        budget,
+        &mut live,
+        turn.previous_terminal,
+        Some(turn.sequence),
+    )?;
     let (owner, revision) =
         budget.call(|deadline| live.prepare_successor(turn.sequence, deadline))?;
     budget.call(|_| activation::require_carriers(&revision))?;

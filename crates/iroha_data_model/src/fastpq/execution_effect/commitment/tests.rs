@@ -207,3 +207,48 @@ fn borrowed_effect_retains_the_original_static_nominal_and_frame_identity() {
     assert_eq!(Effect::nominal_name(), nominal);
     assert_eq!(Effect::frame_name(), frame);
 }
+
+#[test]
+fn borrowed_supply_payload_and_both_tags_preserve_the_owned_bytes() {
+    let tape = frames();
+    let FastpqExecutionEffectKindV1::Mint(mut supply) = tape.effects[1].kind.clone() else {
+        unreachable!()
+    };
+    // Distinct original values expose an accidental before/after field swap.
+    supply.balance_before = 29u32.into();
+    supply.balance_after = 31u32.into();
+    supply.supply_before = 103u32.into();
+    supply.supply_after = 107u32.into();
+    for flags in [0, norito::core::default_encode_flags()] {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+        let borrowed = SupplyChange::from(FastpqExecutionSupplyChangeRefV1 {
+            balance: (&supply.balance).into(),
+            amount: &supply.amount,
+            balance_before: &supply.balance_before,
+            balance_after: &supply.balance_after,
+            supply_before: &supply.supply_before,
+            supply_after: &supply.supply_after,
+        });
+        let payload = norito::codec::Encode::encode(&borrowed);
+        assert_eq!(payload, norito::codec::Encode::encode(&supply));
+        let mut swapped = supply.clone();
+        std::mem::swap(&mut swapped.supply_before, &mut swapped.supply_after);
+        assert_ne!(payload, norito::codec::Encode::encode(&swapped));
+        for kind in [
+            FastpqExecutionEffectKindV1::Mint(supply.clone()),
+            FastpqExecutionEffectKindV1::Burn(supply.clone()),
+        ] {
+            let effect = FastpqExecutionEffectV1 {
+                ordinal: 0,
+                authority_digest: tape.effects[1].authority_digest,
+                authorization_context: tape.effects[1].authorization_context,
+                kind,
+            };
+            let projected = Effect::from(FastpqExecutionEffectRefV1::from(&effect));
+            assert_eq!(
+                norito::encode_canonical(&projected).unwrap(),
+                norito::encode_canonical(&effect).unwrap()
+            );
+        }
+    }
+}

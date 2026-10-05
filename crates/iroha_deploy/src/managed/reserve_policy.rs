@@ -190,6 +190,7 @@ impl ManagedInitialReservePolicy {
             &directory,
             Purpose::ReservePolicy,
             original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
             authorization,
             deadline,
             None,
@@ -284,8 +285,12 @@ impl ManagedInitialReservePolicy {
         };
         self.validate_original(&original)?;
         original.matches_policy(policy)?;
-        let history =
-            attempts::History::read(&directory, Purpose::ReservePolicy, original.digest()?)?;
+        let history = attempts::History::read(
+            &directory,
+            Purpose::ReservePolicy,
+            original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
+        )?;
         history.require_fees(fees)?;
         self.advance_original(deadline, mode, false).map(Some)
     }

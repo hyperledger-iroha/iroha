@@ -91,8 +91,6 @@ fn proposed_rows(source: &str) -> BTreeMap<String, Value> {
 fn current_constructors() -> BTreeMap<String, Value> {
     let mut values = missing_record_values();
     values.extend(sorafs_values());
-    values.extend(sorafs_values::completion_authority_values());
-    values.push(super::super::musubi::generated_identity_values::provider_attestation_value());
     values.extend(kaigi_records::current_values());
     unique_rows(values)
 }

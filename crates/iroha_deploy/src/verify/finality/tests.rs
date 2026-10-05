@@ -327,7 +327,7 @@ impl Chain {
                     )])
                     .sign(authority.private_key()),
                 );
-                builder.build(BTreeSet::new())
+                builder.build(iroha_data_model::block::BlockSignatures::default())
             };
             NativeFinalityFixture::install_network_results(&mut b, vec![Ok(Vec::default())]);
             let context = chain.epochs[index].context.clone();

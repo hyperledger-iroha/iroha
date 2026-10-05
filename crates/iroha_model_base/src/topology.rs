@@ -27,7 +27,7 @@ use thiserror::Error;
     IntoSchema,
 )]
 #[repr(transparent)]
-#[norito(decode_from_slice)]
+#[norito(decode_from_slice, decode_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::LaneId")]
 pub struct LaneId(u32);
@@ -196,7 +196,7 @@ impl norito::json::JsonDeserialize for ShardId {
     Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
 )]
 #[repr(transparent)]
-#[norito(decode_from_slice)]
+#[norito(decode_from_slice, decode_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::DataSpaceId")]
 pub struct DataSpaceId(u64);

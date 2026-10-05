@@ -276,10 +276,14 @@ where
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"object\":")?;
-        JsonSerialize::json_serialize_to(&self.object, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"object\":")?;
+            JsonSerialize::json_serialize_to(&self.object, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -300,10 +304,14 @@ where
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"object\":")?;
-        JsonSerialize::json_serialize_to(&self.object, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"object\":")?;
+            JsonSerialize::json_serialize_to(&self.object, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }

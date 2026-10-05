@@ -42,17 +42,15 @@ iroha_data_model = { workspace = true, default-features = false, features = ["ap
 iroha_fs = { workspace = true }
 iroha_model_base = { workspace = true, optional = true }
 iroha_telemetry = { workspace = true }
-iroha_wallet = { workspace = true }
+iroha_operation_journal = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 reqwest = { workspace = true, features = ["blocking"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
 url = { workspace = true }
 
 [dev-dependencies]
+rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "ring"] }
 tempfile = { workspace = true }
 iroha_model_base = { workspace = true }
 iroha_service_model = { workspace = true }
 sorafs_manifest = { workspace = true }
-
-[target.'cfg(unix)'.dev-dependencies]
-rustix = { version = "1.1.4", features = ["fs"] }

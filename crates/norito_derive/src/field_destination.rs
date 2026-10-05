@@ -9,14 +9,14 @@ pub(super) fn derive(
     attributes: &[Attribute],
     attrs: &ContainerAttr,
 ) -> TokenStream2 {
-    let Fields::Named(named) = fields else {
-        return syn::Error::new_spanned(ident, "decode_fields requires a closed named record")
+    if matches!(fields, Fields::Unit) {
+        return syn::Error::new_spanned(ident, "decode_fields requires a closed positional record")
             .to_compile_error();
-    };
+    }
     if !generics.params.is_empty() || generics.where_clause.is_some() {
         return syn::Error::new_spanned(
             generics,
-            "decode_fields requires a closed named record without generic parameters",
+            "decode_fields requires a closed positional record without generic parameters",
         )
         .to_compile_error();
     }
@@ -44,11 +44,17 @@ pub(super) fn derive(
         .iter()
         .map(|index| format_ident!("__field_{index}"))
         .collect();
-    let names: Vec<_> = named
-        .named
-        .iter()
-        .map(|field| field.ident.as_ref().expect("named fields"))
-        .collect();
+    let reconstruct = match fields {
+        Fields::Named(named) => {
+            let names = named
+                .named
+                .iter()
+                .map(|field| field.ident.as_ref().expect("named fields"));
+            quote! { Self { #(#names:#bindings,)* } }
+        }
+        Fields::Unnamed(_) => quote! { Self(#(#bindings,)*) },
+        Fields::Unit => unreachable!("unit records were rejected above"),
+    };
     let reads: Vec<_> = parsed.iter().map(|field| {
         let ty=&field.field.ty;
         if let Some(length)=u8_array_len(ty) {
@@ -59,7 +65,18 @@ pub(super) fn derive(
             quote! { norito::core::framed_field::<#ty>(__bytes, &mut __offset)? }
         }
     }).collect();
-    let slice = slice_decode::derive(ident, &bounds, attributes, slice_decode::DecodeBody::Prefix);
+    // Tuple slice decoding keeps its original archived whole-input contract;
+    // named records retain their existing prefix decoder. Both ordinary paths
+    // reconstruct through this same positional kernel and keep original framing.
+    let slice_body = if matches!(fields, Fields::Unnamed(_)) {
+        slice_decode::DecodeBody::Archived(quote! {
+            let value = <Self as norito::core::DeserializePayload>::try_deserialize(__archived)?;
+            Ok((value,__logical_len))
+        })
+    } else {
+        slice_decode::DecodeBody::Prefix
+    };
+    let slice = slice_decode::derive(ident, &bounds, attributes, slice_body);
     quote! {
         impl<__Destination> norito::core::DecodeRecordFields<__Destination> for #ident
         where
@@ -86,7 +103,7 @@ pub(super) fn derive(
                     <Self as norito::core::DecodeRecordFields<norito::core::OwnedFields>>::decode_fields(__bytes,&mut norito::core::OwnedFields)
                         .map_err(norito::core::DecodeIntoError::into_codec)
                 })??;
-                Ok(Self { #(#names:#bindings,)* })
+                Ok(#reconstruct)
             }
         }
         #slice

@@ -19,10 +19,7 @@ COPY . /app/
 
 ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
-ARG FEATURES="external-software-signer-bin,irohad/ivm-cuda"
-ARG IVM_CUDA_TRUSTED_KEY_SHA256
-ENV IVM_CUDA_TRUSTED_KEY_SHA256=${IVM_CUDA_TRUSTED_KEY_SHA256}
-ENV IVM_CUDA_PTX_MODE=bundled
+ARG FEATURES="external-software-signer-bin"
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
 ARG BINARIES="iroha3d iroha3d_taira sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
@@ -43,9 +40,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             cp "/app/dist/docker-bin/${bin}" "/outbin/${bin}"; \
         done; \
     else \
-        case ",${FEATURES}," in *,irohad/ivm-cuda,*) ;; *) echo 'Shipping daemon requires irohad/ivm-cuda' >&2; exit 1 ;; esac; \
-        test "${#IVM_CUDA_TRUSTED_KEY_SHA256}" -eq 64; \
-        case "${IVM_CUDA_TRUSTED_KEY_SHA256}" in *[!0-9a-f]*|0000000000000000000000000000000000000000000000000000000000000000) exit 1 ;; esac; \
+        for input in aes.ptx bitonic_sort.ptx bn254.ptx poseidon.ptx sha256.ptx sha256_leaves.ptx sha256_pairs_reduce.ptx sha3.ptx signature.ptx vector.ptx provenance.v1 provenance.v1.pub provenance.v1.sig; do \
+            test -f "crates/ivm/cuda/${input}" && test ! -L "crates/ivm/cuda/${input}" || exit 1; \
+        done; \
         regular_bins=""; \
         build_kagami=0; \
         for bin in ${BINARIES}; do \

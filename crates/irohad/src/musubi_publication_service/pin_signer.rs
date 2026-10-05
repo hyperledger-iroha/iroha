@@ -777,6 +777,28 @@ mod tests {
     }
 
     #[test]
+    fn native_control_fee_report_preserves_typed_rejection_and_deferred_attempt() {
+        use iroha_core::{
+            execution_attempt::ExecutionAttemptError, executor::NexusFeeAdmissionError,
+        };
+        for original in [
+            ExecutionAttemptError::Rejected(NexusFeeAdmissionError::ConfigInvalid(
+                "exact fee configuration refusal".to_owned(),
+            )),
+            ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+            ),
+        ] {
+            let expected = original.clone();
+            let report = eyre::Report::new(original);
+            assert_eq!(
+                report.downcast_ref::<ExecutionAttemptError<NexusFeeAdmissionError>>(),
+                Some(&expected)
+            );
+        }
+    }
+
+    #[test]
     fn canonical_manifest_resource_refusal_preserves_local_deferral() {
         let (archive, policy, _) = fixture();
         let manifest = build_exact_pin_manifest(

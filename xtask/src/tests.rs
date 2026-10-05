@@ -42,10 +42,26 @@ fn mochi_bundle_rejects_local_release_profile_during_argument_parsing() {
 fn mochi_bundle_profiles_require_one_explicit_installer_artifact() {
     let input = std::env::temp_dir().join("installer-profile.nrt");
     let path = input.to_string_lossy();
+    assert!(
+        parse_command(
+            ["xtask", "mochi-bundle", "--network-profiles", path.as_ref()]
+                .into_iter()
+                .map(String::from)
+        )
+        .is_err(),
+        "release authority cannot come from a caller override"
+    );
     let command = parse_command(
-        ["xtask", "mochi-bundle", "--network-profiles", path.as_ref()]
-            .into_iter()
-            .map(String::from),
+        [
+            "xtask",
+            "mochi-bundle",
+            "--profile",
+            "debug",
+            "--network-profiles",
+            path.as_ref(),
+        ]
+        .into_iter()
+        .map(String::from),
     )
     .unwrap();
     assert!(

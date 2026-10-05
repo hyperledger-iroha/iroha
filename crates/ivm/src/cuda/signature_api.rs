@@ -2,34 +2,21 @@
 
 use super::policy::{Kernel, public_workload_task_id};
 use crate::signature::{BatchInput, Ed25519BatchItem};
-use iroha_accel::{HostOutput, PtxArtifact, cuda::CudaFailure};
-use std::ffi::CStr;
+use iroha_accel::{HostOutput, cuda::CudaFailure};
 
 #[path = "signature_launch.rs"]
 mod launch;
 
-static ARTIFACT: PtxArtifact = PtxArtifact::new(
-    match CStr::from_bytes_with_nul(
-        concat!(
-            include_str!(concat!(env!("OUT_DIR"), "/signature.ptx")),
-            "\0"
-        )
-        .as_bytes(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => panic!("signature artifact must have one terminal NUL"),
-    },
-);
-
 fn stage(input: BatchInput<'_, '_>) -> Result<HostOutput<u8>, CudaFailure> {
     let count = input.checked_len().ok_or(CudaFailure::InvalidRequest)?;
-    match crate::cuda_dispatch::with_selected(Kernel::Ed25519, ARTIFACT, |device| {
+    let artifact = crate::cuda_artifact::artifact(Kernel::Ed25519)?;
+    match crate::cuda_dispatch::with_selected(Kernel::Ed25519, artifact, |device| {
         // SAFETY: exact embedded artifact and fixed-width input generators own
         // the kernel ABI. All original inputs remain borrowed through completion.
         unsafe {
             launch::signature_output(
                 device,
-                ARTIFACT,
+                artifact,
                 count,
                 |i| input.signature(i),
                 |i| input.public_key(i),
@@ -38,7 +25,7 @@ fn stage(input: BatchInput<'_, '_>) -> Result<HostOutput<u8>, CudaFailure> {
         }
     }) {
         Ok(output) if output.len() == count && output.iter().all(|&byte| byte <= 1) => {
-            super::imp::record_completed_cuda_dispatch(Kernel::Ed25519, ARTIFACT);
+            super::imp::record_completed_cuda_dispatch(Kernel::Ed25519, artifact);
             Ok(output)
         }
         Ok(_) => {
@@ -58,7 +45,10 @@ fn stage(input: BatchInput<'_, '_>) -> Result<HostOutput<u8>, CudaFailure> {
 }
 
 pub(super) fn admit() -> bool {
-    crate::cuda_dispatch::admit_kernel(Kernel::Ed25519, ARTIFACT, || {
+    let Ok(artifact) = crate::cuda_artifact::artifact(Kernel::Ed25519) else {
+        return false;
+    };
+    crate::cuda_dispatch::admit_kernel(Kernel::Ed25519, artifact, || {
         use ed25519_dalek::{Signer, SigningKey};
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
             return Err(CudaFailure::Busy);

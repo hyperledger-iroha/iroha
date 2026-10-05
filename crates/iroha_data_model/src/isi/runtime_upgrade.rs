@@ -104,10 +104,14 @@ impl FastJsonWrite for ProposeRuntimeUpgrade {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"manifest_bytes\":")?;
-        JsonSerialize::json_serialize_to(&self.manifest_bytes, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"manifest_bytes\":")?;
+            JsonSerialize::json_serialize_to(&self.manifest_bytes, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -124,10 +128,14 @@ impl FastJsonWrite for ActivateRuntimeUpgrade {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"id\":")?;
-        JsonSerialize::json_serialize_to(&self.id, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"id\":")?;
+            JsonSerialize::json_serialize_to(&self.id, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -144,10 +152,14 @@ impl FastJsonWrite for CancelRuntimeUpgrade {
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"id\":")?;
-        JsonSerialize::json_serialize_to(&self.id, out)?;
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"id\":")?;
+            JsonSerialize::json_serialize_to(&self.id, out)?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
 }

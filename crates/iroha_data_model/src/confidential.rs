@@ -375,18 +375,22 @@ impl norito::json::FastJsonWrite for ConfidentialMemoRecipientSlotsV1 {
         output: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         output.begin_container()?;
-        output.push('{')?;
-        for (index, (key, slot)) in MEMO_SLOT_KEYS.iter().zip(&self.slots).enumerate() {
-            if index != 0 {
-                output.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            output.push('{')?;
+            for (index, (key, slot)) in MEMO_SLOT_KEYS.iter().zip(&self.slots).enumerate() {
+                if index != 0 {
+                    output.push(',')?;
+                }
+                output.push('"')?;
+                output.push_str(key)?;
+                output.push_str("\":")?;
+                slot.write_json_to(output)?;
             }
-            output.push('"')?;
-            output.push_str(key)?;
-            output.push_str("\":")?;
-            slot.write_json_to(output)?;
-        }
-        output.push('}')?;
+            output.push('}')?;
+            Ok(())
+        })();
         output.end_container();
+        result?;
         Ok(())
     }
 }

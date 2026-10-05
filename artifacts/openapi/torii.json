@@ -52397,34 +52397,6 @@
               "details"
             ],
             "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "details": {
-                "additionalProperties": false,
-                "properties": {
-                  "height": {
-                    "format": "uint64",
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "height"
-                ],
-                "type": "object"
-              },
-              "status": {
-                "const": "cancelled",
-                "type": "string"
-              }
-            },
-            "required": [
-              "status",
-              "details"
-            ],
-            "type": "object"
           }
         ]
       },

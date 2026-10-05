@@ -117,36 +117,40 @@ pub mod multisig {
             out: &mut dyn json::JsonWriteSink,
         ) -> Result<(), json::BoundedJsonError> {
             out.begin_container()?;
-            out.push('{')?;
-            match self {
-                Self::Register(value) => {
-                    json::write_json_string_to("Register", out)?;
-                    out.push(':')?;
-                    value.json_serialize_to(out)?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push('{')?;
+                match self {
+                    Self::Register(value) => {
+                        json::write_json_string_to("Register", out)?;
+                        out.push(':')?;
+                        value.json_serialize_to(out)?;
+                    }
+                    Self::Propose(value) => {
+                        json::write_json_string_to("Propose", out)?;
+                        out.push(':')?;
+                        value.json_serialize_to(out)?;
+                    }
+                    Self::Approve(value) => {
+                        json::write_json_string_to("Approve", out)?;
+                        out.push(':')?;
+                        value.json_serialize_to(out)?;
+                    }
+                    Self::Cancel(value) => {
+                        json::write_json_string_to("Cancel", out)?;
+                        out.push(':')?;
+                        value.json_serialize_to(out)?;
+                    }
+                    Self::InvalidateOutstanding(value) => {
+                        json::write_json_string_to("InvalidateOutstanding", out)?;
+                        out.push(':')?;
+                        value.json_serialize_to(out)?;
+                    }
                 }
-                Self::Propose(value) => {
-                    json::write_json_string_to("Propose", out)?;
-                    out.push(':')?;
-                    value.json_serialize_to(out)?;
-                }
-                Self::Approve(value) => {
-                    json::write_json_string_to("Approve", out)?;
-                    out.push(':')?;
-                    value.json_serialize_to(out)?;
-                }
-                Self::Cancel(value) => {
-                    json::write_json_string_to("Cancel", out)?;
-                    out.push(':')?;
-                    value.json_serialize_to(out)?;
-                }
-                Self::InvalidateOutstanding(value) => {
-                    json::write_json_string_to("InvalidateOutstanding", out)?;
-                    out.push(':')?;
-                    value.json_serialize_to(out)?;
-                }
-            }
-            out.push('}')?;
+                out.push('}')?;
+                Ok(())
+            })();
             out.end_container();
+            result?;
             Ok(())
         }
     }
@@ -715,20 +719,24 @@ pub mod multisig {
             out: &mut dyn json::JsonWriteSink,
         ) -> Result<(), json::BoundedJsonError> {
             out.begin_container()?;
-            out.push('{')?;
-            json::write_json_string_to("signatories", out)?;
-            out.push(':')?;
-            self.signatories.json_serialize_to(out)?;
-            out.push(',')?;
-            json::write_json_string_to("quorum", out)?;
-            out.push(':')?;
-            self.quorum.json_serialize_to(out)?;
-            out.push(',')?;
-            json::write_json_string_to("transaction_ttl_ms", out)?;
-            out.push(':')?;
-            self.transaction_ttl_ms.json_serialize_to(out)?;
-            out.push('}')?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push('{')?;
+                json::write_json_string_to("signatories", out)?;
+                out.push(':')?;
+                self.signatories.json_serialize_to(out)?;
+                out.push(',')?;
+                json::write_json_string_to("quorum", out)?;
+                out.push(':')?;
+                self.quorum.json_serialize_to(out)?;
+                out.push(',')?;
+                json::write_json_string_to("transaction_ttl_ms", out)?;
+                out.push(':')?;
+                self.transaction_ttl_ms.json_serialize_to(out)?;
+                out.push('}')?;
+                Ok(())
+            })();
             out.end_container();
+            result?;
             Ok(())
         }
     }
@@ -820,28 +828,32 @@ pub mod multisig {
             out: &mut dyn json::JsonWriteSink,
         ) -> Result<(), json::BoundedJsonError> {
             out.begin_container()?;
-            out.push('{')?;
-            json::write_json_string_to("instructions", out)?;
-            out.push(':')?;
-            self.instructions.json_serialize_to(out)?;
-            out.push(',')?;
-            json::write_json_string_to("proposed_at_ms", out)?;
-            out.push(':')?;
-            self.proposed_at_ms.json_serialize_to(out)?;
-            out.push(',')?;
-            json::write_json_string_to("expires_at_ms", out)?;
-            out.push(':')?;
-            self.expires_at_ms.json_serialize_to(out)?;
-            out.push(',')?;
-            json::write_json_string_to("approvals", out)?;
-            out.push(':')?;
-            self.approvals.json_serialize_to(out)?;
-            out.push(',')?;
-            json::write_json_string_to("is_relayed", out)?;
-            out.push(':')?;
-            self.is_relayed.json_serialize_to(out)?;
-            out.push('}')?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push('{')?;
+                json::write_json_string_to("instructions", out)?;
+                out.push(':')?;
+                self.instructions.json_serialize_to(out)?;
+                out.push(',')?;
+                json::write_json_string_to("proposed_at_ms", out)?;
+                out.push(':')?;
+                self.proposed_at_ms.json_serialize_to(out)?;
+                out.push(',')?;
+                json::write_json_string_to("expires_at_ms", out)?;
+                out.push(':')?;
+                self.expires_at_ms.json_serialize_to(out)?;
+                out.push(',')?;
+                json::write_json_string_to("approvals", out)?;
+                out.push(':')?;
+                self.approvals.json_serialize_to(out)?;
+                out.push(',')?;
+                json::write_json_string_to("is_relayed", out)?;
+                out.push(':')?;
+                self.is_relayed.json_serialize_to(out)?;
+                out.push('}')?;
+                Ok(())
+            })();
             out.end_container();
+            result?;
             Ok(())
         }
     }

@@ -24,7 +24,7 @@ use iroha_data_model::{
 use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::codec::{DecodeAll, Encode};
-use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
+use std::{num::NonZeroU64, time::Duration};
 
 fn limits() -> ExecutionOutputLimits {
     ExecutionOutputLimits {
@@ -152,7 +152,7 @@ fn fixture() -> SignedBlock {
 #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
 #[norito_schema(name = "iroha_core::state::replay_outputs::tests::MutableReplayBlock")]
 struct MutableReplayBlock {
-    signatures: BTreeSet<BlockSignature>,
+    signatures: iroha_data_model::block::BlockSignatures,
     payload: BlockPayload,
     result: Option<BlockResult>,
     commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
@@ -432,11 +432,17 @@ fn parity_refuses_different_headers_and_signatures_even_with_equal_output_rows()
     );
     let mut wrong_signatures = original.clone();
     wrong_signatures
-        .replace_signatures(BTreeSet::from([BlockSignature::new(
-            1,
-            iroha_crypto::SignatureOf::try_from_hash(ALICE_KEYPAIR.private_key(), original.hash())
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([BlockSignature::new(
+                1,
+                iroha_crypto::SignatureOf::try_from_hash(
+                    ALICE_KEYPAIR.private_key(),
+                    original.hash(),
+                )
                 .unwrap(),
-        )]))
+            )])
+            .expect("at most 31 block signatures"),
+        )
         .unwrap();
     assert!(
         ensure_replayed_results_match_committed(2, &original, &wrong_signatures)

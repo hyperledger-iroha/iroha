@@ -504,27 +504,35 @@ impl norito::json::JsonSerialize for SoraInrouManifestV1 {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        out.push_str("{\"schema_version\":")?;
-        self.schema_version.json_serialize_to(out)?;
-        out.push_str(",\"guest_images\":")?;
-        out.begin_container()?;
-        out.push('{')?;
-        let mut guest_images = self.guest_images.iter();
-        if let Some((guest_isa, image)) = guest_images.next() {
-            json::write_json_string_to(guest_isa.as_str(), out)?;
-            out.push(':')?;
-            image.json_serialize_to(out)?;
-            for (guest_isa, image) in guest_images {
-                out.push(',')?;
-                json::write_json_string_to(guest_isa.as_str(), out)?;
-                out.push(':')?;
-                image.json_serialize_to(out)?;
-            }
-        }
-        out.push('}')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push_str("{\"schema_version\":")?;
+            self.schema_version.json_serialize_to(out)?;
+            out.push_str(",\"guest_images\":")?;
+            out.begin_container()?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push('{')?;
+                let mut guest_images = self.guest_images.iter();
+                if let Some((guest_isa, image)) = guest_images.next() {
+                    json::write_json_string_to(guest_isa.as_str(), out)?;
+                    out.push(':')?;
+                    image.json_serialize_to(out)?;
+                    for (guest_isa, image) in guest_images {
+                        out.push(',')?;
+                        json::write_json_string_to(guest_isa.as_str(), out)?;
+                        out.push(':')?;
+                        image.json_serialize_to(out)?;
+                    }
+                }
+                out.push('}')?;
+                Ok(())
+            })();
+            out.end_container();
+            result?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
-        out.push('}')?;
-        out.end_container();
+        result?;
         Ok(())
     }
 }
@@ -3466,8 +3474,22 @@ mod checked_container_cleanup_tests {
 
     #[test]
     fn original_inrou_manifest_checked_container_retains_nested_guest_graph_and_depth() {
-        let image = SoraInrouGuestImageV1 { kernel_image_path: "kernel".into(), rootfs_image_path: "rootfs".into(), initrd_image_path: Some("initrd".into()), published_artifact: SoraPublishedInrouGuestImageArtifactV1 { manifest_digest_hex: "7".repeat(64), content_cid: encode_lowercase_multibase_base32(&sorafs_manifest::canonical_manifest_root_cid([7;32])) } };
-        let value = SoraInrouManifestV1 { schema_version: SORA_INROU_MANIFEST_VERSION_V1, guest_images: [(SoraInrouGuestIsaV1::Aarch64, image)].into() };
+        let image = SoraInrouGuestImageV1 {
+            kernel_image_path: "/inrou/aarch64/vmlinux".into(),
+            rootfs_image_path: "/inrou/aarch64/rootfs.ext4".into(),
+            initrd_image_path: Some("/inrou/aarch64/initrd.img".into()),
+            published_artifact: SoraPublishedInrouGuestImageArtifactV1 {
+                manifest_digest_hex: "07".repeat(32),
+                content_cid: encode_lowercase_multibase_base32(
+                    &sorafs_manifest::canonical_manifest_root_cid([7; 32]),
+                ),
+            },
+        };
+        let value = SoraInrouManifestV1 {
+            schema_version: SORA_INROU_MANIFEST_VERSION_V1,
+            guest_images: [(SoraInrouGuestIsaV1::Aarch64, image)].into(),
+        };
+        value.validate().expect("original canonical Inrou image profile");
         audit(&value);
     }
 }

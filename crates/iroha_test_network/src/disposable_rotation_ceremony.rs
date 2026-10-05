@@ -273,7 +273,7 @@ fn verify_input(
         "rotation DKG misses the preparation cutoff"
     );
     verifier
-        .advance(&evidence.finality_journal)
+        .advance((&evidence.finality_journal).into())
         .map_err(|error| eyre!(error))?;
     Ok((
         GlobalThresholdBeaconDkgSessionV1 {
@@ -392,7 +392,7 @@ fn advance_native_phase(
     );
     ensure!(
         cursor
-            .advance(journal)
+            .advance(journal.into())
             .map_err(|error| eyre!(error))?
             .height()
             == height,

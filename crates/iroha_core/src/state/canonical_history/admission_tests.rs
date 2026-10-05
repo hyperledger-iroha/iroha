@@ -172,6 +172,60 @@ fn admitted_source_preserves_its_own_state_shell_refusal_before_body_io() {
 }
 
 #[test]
+fn admitted_source_frame_refusal_retains_the_original_state_pool_before_body_io() {
+    let _retirement_pin = crossbeam_epoch::pin();
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    let view = chain.state().view();
+    let source = view.canonical_history();
+    let budget = chain.state().ivm_execution_budget();
+    assert!(source.budget.same_pool(&budget));
+    let expected = source.block(NonZeroUsize::MIN).unwrap();
+    let wire_length = expected.encode_wire().unwrap().len();
+    let expected_hash = expected.hash();
+    drop(expected);
+    let baseline = budget.reserved_bytes();
+    let original_limit = budget.limit_bytes();
+    let shell_bytes = SharedSignedBlock::allocation_layout().size();
+    let refused_limit = baseline + shell_bytes + wire_length - 1;
+    budget.set_limit_bytes(refused_limit);
+    let before = chain.kura().canonical_body_bytes_read_for_test();
+    let mut calls = 0;
+    let error = source
+        .block_with_admission(NonZeroUsize::MIN, |frames, bytes| {
+            calls += 1;
+            assert_eq!((frames, bytes), (1, wire_length as u64));
+            Ok(())
+        })
+        .unwrap_err();
+    let ExecutionAttemptError::Deferred(local) = error else {
+        panic!("original frame admission became a rejected query: {error:?}");
+    };
+    let Some(AllocationRefusal::Capacity {
+        requested_bytes,
+        reserved_bytes,
+        limit_bytes,
+        ..
+    }) = local.allocation_refusal()
+    else {
+        panic!("original frame backing refusal was not retained");
+    };
+    assert_eq!(*requested_bytes, wire_length);
+    assert_eq!(*reserved_bytes, baseline + shell_bytes);
+    assert_eq!(*limit_bytes, refused_limit);
+    assert_eq!(calls, 1);
+    assert_eq!(chain.kura().canonical_body_bytes_read_for_test(), before);
+    assert_eq!(budget.reserved_bytes(), baseline);
+    budget.set_limit_bytes(original_limit);
+    let block = source
+        .block_with_admission(NonZeroUsize::MIN, |_, _| Ok(()))
+        .unwrap();
+    assert!(block.belongs_to(&budget));
+    assert_eq!(block.hash(), expected_hash);
+    drop(block);
+    assert_eq!(budget.reserved_bytes(), baseline);
+}
+
+#[test]
 fn authenticated_receipt_visitors_keep_semantic_and_original_local_outcomes() {
     // Separate each receipt-shell refund from deferred reclamation of older State generations.
     let _retirement_pin = crossbeam_epoch::pin();

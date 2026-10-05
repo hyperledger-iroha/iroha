@@ -10,6 +10,8 @@ use rayon::prelude::*;
 use sha2::{Digest as _, Sha256};
 use std::{collections::VecDeque, format, num::NonZeroU64, string::String, vec, vec::Vec};
 use thiserror::Error;
+#[cfg(test)]
+mod borrowed_serialization_tests;
 mod proof_siblings;
 const COMPACT_MERKLE_PROOF_MAX_DEPTH: u8 = 32;
 /// Maximum number of leaves addressable by the canonical `u32` proof index.
@@ -282,19 +284,41 @@ merkle_schema_identity! {
     CompactMerkleProof => "iroha_crypto::merkle::CompactMerkleProof",
 }
 
+/// Exact immutable leaf references after complete cache validation.
+/// The existing sequence codec owns count/framing and checks iterator cardinality.
+struct BorrowedMerkleLeaves<'a, T>(&'a [Option<HashOf<T>>]);
+impl<T> BorrowedMerkleLeaves<'_, T> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = &HashOf<T>> {
+        self.0.iter().map(|leaf| {
+            leaf.as_ref()
+                .expect("validated canonical Merkle leaves are present")
+        })
+    }
+}
+impl<T> norito::core::SerializePayload for BorrowedMerkleLeaves<'_, T> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        norito::core::write_element_sequence::<HashOf<T>, _>(writer, self.iter())
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::sequence_encoded_len_hint(self.iter())
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::sequence_encoded_len_exact(self.iter())
+    }
+}
 impl<T> norito::core::SerializePayload for MerkleTree<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let (hash_scheme, leaves) = self
-            .serialized_parts()
+            .serialized_view()
             .map_err(|error| norito::core::Error::Message(error.to_string()))?;
         norito::core::SerializePayload::serialize(&(hash_scheme, leaves), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        let (hash_scheme, leaves) = self.serialized_parts().ok()?;
+        let (hash_scheme, leaves) = self.serialized_view().ok()?;
         norito::core::SerializePayload::encoded_len_hint(&(hash_scheme, leaves))
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        let (hash_scheme, leaves) = self.serialized_parts().ok()?;
+        let (hash_scheme, leaves) = self.serialized_view().ok()?;
         norito::core::SerializePayload::encoded_len_exact(&(hash_scheme, leaves))
     }
 }
@@ -393,7 +417,7 @@ impl<'de, T> norito::core::DecodeFromSlice<'de> for MerkleTree<T> {
 #[cfg(feature = "json")]
 impl<T> JsonSerialize for MerkleTree<T> {
     fn json_serialize(&self, out: &mut String) {
-        let Ok((hash_scheme, leaves)) = self.serialized_parts() else {
+        let Ok((hash_scheme, leaves)) = self.serialized_view() else {
             // `JsonSerialize` is infallible. Emit an explicitly invalid scheme
             // rather than publishing attacker-controlled cached nodes as a
             // canonical tree; the decoder will reject this value.
@@ -407,7 +431,14 @@ impl<T> JsonSerialize for MerkleTree<T> {
         out.push(',');
         json::write_json_string("leaves", out);
         out.push(':');
-        leaves.json_serialize(out);
+        out.push('[');
+        for (index, leaf) in leaves.iter().enumerate() {
+            if index != 0 {
+                out.push(',');
+            }
+            leaf.json_serialize(out);
+        }
+        out.push(']');
         out.push('}');
     }
     fn json_serialize_to(
@@ -439,7 +470,7 @@ impl<T> JsonSerialize for MerkleTree<T> {
             out.begin_container()?;
             let result = (|| -> Result<(), json::BoundedJsonError> {
                 out.push('[')?;
-                for (index, leaf) in leaves.enumerate() {
+                for (index, leaf) in leaves.iter().enumerate() {
                     if index != 0 {
                         out.push(',')?;
                     }
@@ -834,6 +865,14 @@ impl<T> MerkleTree<T> {
         F: Fn(Option<&HashOf<T>>, Option<&HashOf<T>>) -> Option<HashOf<T>>,
     {
         let mut queue = leaves.into_iter().map(Some).collect::<VecDeque<_>>();
+        if queue.is_empty() {
+            // No leaf or cached parent exists: preserve the selected scheme
+            // without manufacturing and then discarding allocated padding.
+            return Self {
+                hash_scheme,
+                nodes: Vec::new(),
+            };
+        }
         let height = Self::height_from_n_leaves(queue.len());
         let n_complement = (1 << height) - queue.len();
         for _ in 0..n_complement {
@@ -878,6 +917,9 @@ impl<T> MerkleTree<T> {
             MerkleHashScheme::Sha256V1 => Ok(Self::from_sha256_leaf_nodes(leaves)),
         }
     }
+    // Original materialized cache reconstruction exists only as an independent
+    // test oracle. Production serialization uses the same immutable source.
+    #[cfg(test)]
     fn serialized_parts(&self) -> Result<(u8, Vec<HashOf<T>>), MerkleError> {
         Self::validate_nodes(&self.nodes)?;
         let leaf_count = self.leaf_count();
@@ -897,16 +939,19 @@ impl<T> MerkleTree<T> {
         }
         Ok((self.hash_scheme.wire_id(), leaves))
     }
-    /// Validate the retained cache and expose its canonical leaves without
-    /// cloning the response-sized leaf set.
-    #[cfg(feature = "json")]
-    fn serialized_view(&self) -> Result<(u8, LeafHashIterator<'_, T>), MerkleError> {
+    /// Validate every original cached parent and borrow the exact canonical
+    /// leaves. No leaf vector, queue or replacement graph is constructed.
+    fn serialized_view(&self) -> Result<(u8, BorrowedMerkleLeaves<'_, T>), MerkleError> {
         Self::validate_nodes(&self.nodes)?;
         let leaf_count = self.leaf_count();
         Self::ensure_serialized_leaf_count(leaf_count)?;
-        if !self.nodes.is_empty() {
+        let offset = if self.nodes.is_empty() {
+            0
+        } else {
             let height = (usize::BITS - self.nodes.len().leading_zeros()).saturating_sub(1);
-            let offset = (1usize << height) - 1;
+            (1usize << height) - 1
+        };
+        if !self.nodes.is_empty() {
             for index in (0..offset).rev() {
                 let left = self.nodes.get((index << 1) + 1).and_then(Option::as_ref);
                 let right = self.nodes.get((index << 1) + 2).and_then(Option::as_ref);
@@ -916,7 +961,10 @@ impl<T> MerkleTree<T> {
                 }
             }
         }
-        Ok((self.hash_scheme.wire_id(), self.leaves()))
+        Ok((
+            self.hash_scheme.wire_id(),
+            BorrowedMerkleLeaves(&self.nodes[offset..]),
+        ))
     }
     fn validate_nodes(nodes: &[Option<HashOf<T>>]) -> Result<(), MerkleError> {
         if nodes.is_empty() {
@@ -1540,6 +1588,9 @@ impl CompactMerkleProof<[u8; 32]> {
 // maintain the Hash invariants (LSB set) while preserving the SHA-256 layout.
 impl MerkleTree<[u8; 32]> {
     fn repeated_sha256_node_capacity(leaf_count: usize) -> Result<usize, MerkleError> {
+        if leaf_count == 0 {
+            return Ok(0);
+        }
         leaf_count
             .max(1)
             .checked_next_power_of_two()
@@ -1682,6 +1733,12 @@ impl MerkleTree<[u8; 32]> {
     pub fn from_hashed_leaves_sha256_parallel(leaves: Vec<[u8; 32]>) -> Self {
         use crate::Hash;
         let n = leaves.len();
+        if n == 0 {
+            return Self {
+                hash_scheme: MerkleHashScheme::Sha256V1,
+                nodes: Vec::new(),
+            };
+        }
         let height = Self::height_from_n_leaves(n);
         let pow2 = 1usize << height;
         let capacity = (1usize << (height + 1)) - 1;
@@ -1991,6 +2048,116 @@ impl<'a, T> LeafHashIterator<'a, T> {
 mod tests {
     use super::*;
     use crate::Hash;
+    #[test]
+    fn empty_tree_builders_preserve_the_original_scheme_without_allocated_padding() {
+        use crate::test_allocations::without_allocations;
+        let application =
+            without_allocations(|| std::iter::empty::<HashOf<()>>().collect::<MerkleTree<()>>());
+        assert_eq!(application, MerkleTree::default());
+        assert_eq!(application.allocated_bytes(), 0);
+        let sha = without_allocations(|| MerkleTree::from_hashed_leaves_sha256([]));
+        let fixed = without_allocations(|| MerkleTree::try_from_hashed_leaves_sha256(&[]).unwrap());
+        let repeated = without_allocations(|| {
+            MerkleTree::try_from_repeated_hashed_leaf_sha256(0, [0x53; 32]).unwrap()
+        });
+        for tree in [&sha, &fixed, &repeated] {
+            assert_eq!(tree.hash_scheme, MerkleHashScheme::Sha256V1);
+            assert!(tree.nodes.is_empty());
+            assert_eq!(tree.allocated_bytes(), 0);
+            assert_eq!(tree.root(), None);
+            assert_eq!(tree.commitment(), None);
+        }
+        assert_eq!(
+            MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(0),
+            Ok(0)
+        );
+        without_allocations(|| {
+            assert_eq!(application.serialized_parts().unwrap(), (1, Vec::new()));
+            assert_eq!(sha.serialized_parts().unwrap(), (2, Vec::new()));
+        });
+        #[cfg(feature = "rayon")]
+        {
+            let parallel =
+                without_allocations(|| MerkleTree::from_hashed_leaves_sha256_parallel(Vec::new()));
+            assert_eq!(parallel, sha);
+            assert_eq!(parallel.allocated_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn empty_and_nonempty_builder_wire_matches_the_original_padding_algorithm() {
+        use crate::test_allocations::allocations_during;
+        // Independent original constructor is a test oracle only. Production
+        // owns one algorithm; canonical scheme/leaves and every cache stay exact.
+        fn original<T>(scheme: MerkleHashScheme, leaves: Vec<HashOf<T>>) -> MerkleTree<T> {
+            let mut queue = leaves.into_iter().map(Some).collect::<VecDeque<_>>();
+            let height = MerkleTree::<T>::height_from_n_leaves(queue.len());
+            let complement = (1 << height) - queue.len();
+            for _ in 0..complement {
+                queue.push_back(None);
+            }
+            let mut nodes = Vec::with_capacity(1 << (height + 1));
+            while let Some(right) = queue.pop_back() {
+                if let Some(left) = queue.pop_back() {
+                    let parent = match scheme {
+                        MerkleHashScheme::ApplicationV1 => {
+                            MerkleTree::pair_hash(left.as_ref(), right.as_ref())
+                        }
+                        MerkleHashScheme::Sha256V1 => {
+                            MerkleTree::pair_hash_sha256(left.as_ref(), right.as_ref())
+                        }
+                    };
+                    queue.push_front(parent);
+                    nodes.push(right);
+                    nodes.push(left);
+                } else {
+                    nodes.push(right);
+                    break;
+                }
+            }
+            nodes.reverse();
+            for _ in 0..complement {
+                nodes.pop();
+            }
+            MerkleTree {
+                hash_scheme: scheme,
+                nodes,
+            }
+        }
+        let (_, retired_allocations) =
+            allocations_during(|| original::<()>(MerkleHashScheme::ApplicationV1, Vec::new()));
+        assert!(
+            retired_allocations >= 2,
+            "real original padding allocated both queue and cache"
+        );
+        for count in [0, 1, 2, 3, 7, 31, 127] {
+            let leaves = test_hashes(count);
+            for scheme in [MerkleHashScheme::ApplicationV1, MerkleHashScheme::Sha256V1] {
+                let expected = original(scheme, leaves.clone());
+                let actual = match scheme {
+                    MerkleHashScheme::ApplicationV1 => {
+                        MerkleTree::from_application_leaf_nodes(leaves.iter().copied())
+                    }
+                    MerkleHashScheme::Sha256V1 => {
+                        MerkleTree::from_sha256_leaf_nodes(leaves.iter().copied())
+                    }
+                };
+                assert_eq!(actual, expected);
+                assert_eq!(actual.root(), expected.root());
+                assert_eq!(actual.commitment(), expected.commitment());
+                assert_eq!(
+                    norito::encode_canonical(&actual).unwrap(),
+                    norito::encode_canonical(&expected).unwrap()
+                );
+                for index in 0..u32::from(count) {
+                    assert_eq!(actual.get_proof(index), expected.get_proof(index));
+                }
+                if count != 0 {
+                    assert_eq!(actual.allocated_bytes(), expected.allocated_bytes());
+                }
+            }
+        }
+    }
     #[test]
     fn byte_chunks_fixed_allocation_preserves_empty_ragged_roots_and_proofs() {
         for chunk in [1, 7, 17, 32] {

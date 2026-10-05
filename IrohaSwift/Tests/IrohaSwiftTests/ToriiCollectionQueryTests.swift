@@ -1335,11 +1335,11 @@ final class ToriiEventStreamPolicyTests: XCTestCase {
     }
 
     func testExplorerTransferHelperPreservesCallerFilter() async throws {
-        let query = ToriiListQuery(filter: ToriiField("metadata.note") == .object(["tag": .string("a+b")]), limit: 3)
+        let query = ToriiListQuery(filter: ToriiField("metadata.note") == ToriiFilterValue.object(["tag": .string("a+b")]), limit: 3)
         let baseURL = CollectionQueryStubProtocol.register { request in
             let body = try JSONSerialization.jsonObject(with: XCTUnwrap(toriiClientTestBodyData(from: request))) as! [String: Any]
             let filterData = try JSONSerialization.data(withJSONObject: XCTUnwrap(body["filter"]))
-            let expected = (ToriiField("metadata.note") == .object(["tag": .string("a+b")])).and(ToriiField("kind") == "Transfer")
+            let expected = (ToriiField("metadata.note") == ToriiFilterValue.object(["tag": .string("a+b")])).and(ToriiField("kind") == "Transfer")
             XCTAssertEqual(try ToriiFilter(jsonData: filterData), expected)
             XCTAssertEqual(body["limit"] as? Int, 3)
             return jsonResponse(request, #"{"items":[],"next_cursor":null}"#)

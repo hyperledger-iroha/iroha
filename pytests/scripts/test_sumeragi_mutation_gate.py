@@ -232,6 +232,47 @@ def test_registered_core_rules_have_real_hooks_and_named_core_regressions():
         assert all(name.rsplit("::", 1)[-1] in functions for name in mutation.tests)
 
 
+def test_mutation_ids_select_one_rule_across_all_implementation_owners():
+    mutations = [*gate.MUTATIONS, *gate.CORE_MUTATIONS, *gate.DAEMON_MUTATIONS]
+    assert len(gate.index_mutations(mutations)) == len(mutations)
+    core_and_daemon = gate.index_mutations([*gate.CORE_MUTATIONS, *gate.DAEMON_MUTATIONS])
+    rows = re.findall(
+        r"^\| (HC\d+) \| (.+)$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE
+    )
+    identifiers = [identifier for identifier, _ in rows]
+    assert len(identifiers) == len(set(identifiers))
+    assert set(identifiers) == set(core_and_daemon)
+    for identifier, row in rows:
+        for name in core_and_daemon[identifier].tests:
+            assert name.rsplit("::", 1)[-1] in row, (identifier, name)
+
+
+def test_core_custody_mutations_have_distinct_source_owners():
+    expected = {
+        "HC120": {"sumeragi/evidence_history.rs"},
+        "HC121": {"state/output_capacity.rs"},
+        "HC122": {"sumeragi/lanes/registry.rs"},
+        "HC123": {"sumeragi/lanes/store.rs"},
+        "HC124": {"sumeragi/lanes/registry.rs"},
+        "HC125": {"sumeragi/lanes/registry.rs"},
+        "HC126": {"sumeragi/crypto.rs"},
+        "HC127": {"snapshot.rs"},
+    }
+    registered = gate.index_mutations(gate.CORE_MUTATIONS)
+    source = gate.REPO / "crates/iroha_core/src"
+    owners = {identifier: set() for identifier in expected}
+    for path in source.rglob("*.rs"):
+        for identifier in re.findall(r'sumeragi_core_mutation\s*=\s*"([^"]+)"', path.read_text()):
+            if identifier in owners:
+                owners[identifier].add(path.relative_to(source).as_posix())
+    assert owners == expected
+    for identifier in expected:
+        assert registered[identifier].tests
+        assert not registered[identifier].scenarios
+        assert not gate.has_switch(identifier)
+        assert not gate.has_switch(identifier, daemon=True)
+
+
 @pytest.mark.parametrize("test_build,mutation_feature,accepted", [
     (False, False, True), (True, False, True),
     (True, True, True), (False, True, False),
@@ -1585,3 +1626,39 @@ def test_mutation_command_keeps_explicit_unbounded_diagnostic_wait(
         SimpleNamespace(), tmp_path, None, [], None, 0, tmp_path / "unbounded.log"
     )
     assert (code, retained, elapsed) == (0, "retained original output", 9900.0)
+
+
+def test_nightly_runs_every_actual_daemon_mutation_and_retains_its_report():
+    workflow = (ROOT / ".github/workflows/nightly_sumeragi.yml").read_text()
+    match = re.search(r"(?ms)^  daemon_mutation_gate:\n(.*?)(?=^  [a-z_]+:|\Z)", workflow)
+    assert match is not None, "daemon rules need their own maintained nightly owner"
+    job = match.group(1)
+    command = "python3 scripts/sumeragi_mutation_gate.py --daemon --jobs 1 --strict --fast"
+    assert f"run: {command}\n" in job
+    assert "--only" not in job, "nightly qualification must cover the complete owner table"
+    assert "if: always()" in job
+    assert "target/sumeragi-daemon-mutants/report.json" in job
+    assert "target/sumeragi-daemon-mutants/logs" in job
+    assert "sumeragi-daemon-mutation-gate-${{ github.run_id }}" in job
+
+
+def test_committee_boundary_mutations_use_their_exact_production_source_owners():
+    registered = gate.index_mutations(gate.CORE_MUTATIONS)
+    expected = {
+        "HC100": "genuine_candidate_pools_choose_largest_equal_vote_committee",
+        "HC101": "prepared_boundary_readiness_requires_every_frozen_seat_custody",
+        "HC102": "prepared_boundary_readiness_requires_every_frozen_seat_custody",
+        "HC103": "frozen_boundary_refusal_returns_original_pool_and_does_not_need_fresh_incumbent_keys",
+    }
+    for identifier, test in expected.items():
+        rule = registered[identifier]
+        assert rule.tests == (f"sumeragi::epoch_election::tests::{test}",)
+        assert not rule.scenarios
+        assert gate.has_switch(identifier, core=True)
+        assert not gate.has_switch(identifier)
+        assert not gate.has_switch(identifier, daemon=True)
+    plan = (gate.REPO / "crates/iroha_core/src/sumeragi/epoch_election/plan.rs").read_text()
+    assert "let ready = prepared_committee_ready(&source, transition);" in plan
+    assert 'cfg!(all(test, sumeragi_core_mutation = "HC102"))' in plan
+    assert '#[cfg(all(test, sumeragi_core_mutation = "HC101"))]' in plan
+    assert '#[cfg(all(test, sumeragi_core_mutation = "HC103"))]' in plan

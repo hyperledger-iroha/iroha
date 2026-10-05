@@ -227,10 +227,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             defaults::musubi_publication::private_tls_bind()
         );
         assert_eq!(
-            default.private_mount_prefix,
-            defaults::musubi_publication::PRIVATE_MOUNT_PREFIX
-        );
-        assert_eq!(
             default.max_inflight_requests,
             defaults::musubi_publication::MAX_INFLIGHT_REQUESTS
         );
@@ -240,25 +236,16 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "private_tls_bind".into(),
             Value::String("127.0.0.1:18496".to_owned()),
         );
-        publication.insert(
-            "private_mount_prefix".into(),
-            Value::String("/operator".to_owned()),
-        );
         publication.insert("max_inflight_requests".into(), Value::Integer(3));
         table.insert("musubi_publication".into(), Value::Table(publication));
         let configured = load_root(table).musubi_publication;
         assert_eq!(configured.private_tls_bind.to_string(), "127.0.0.1:18496");
-        assert_eq!(configured.private_mount_prefix, "/operator");
         assert_eq!(configured.max_inflight_requests, 3);
     }
     #[test]
     fn musubi_private_tls_listener_rejects_invalid_public_geometry() {
         for (field, value) in [
             ("private_tls_bind", Value::String("not-a-socket".to_owned())),
-            (
-                "private_mount_prefix",
-                Value::String("/private/".to_owned()),
-            ),
             ("max_inflight_requests", Value::Integer(5)),
         ] {
             let mut table = base_table();
@@ -266,6 +253,22 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             publication.insert(field.into(), value);
             table.insert("musubi_publication".into(), Value::Table(publication));
             assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+        }
+    }
+    #[test]
+    fn musubi_private_tls_listener_rejects_retired_mount_configuration() {
+        for prefix in ["/private", "/operator", "/"] {
+            let mut table = base_table();
+            let mut publication = Table::new();
+            publication.insert("private_mount_prefix".into(), Value::String(prefix.into()));
+            table.insert("musubi_publication".into(), Value::Table(publication));
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("the dedicated listener has only fixed routes");
+            let report = format!("{error:?}");
+            assert!(
+                report.contains("unknown parameter: `musubi_publication.private_mount_prefix`"),
+                "{report}"
+            );
         }
     }
     #[test]

@@ -134,6 +134,7 @@ impl Fixture {
         coordinator
             .prepare_operation(
                 [0xA9; 32],
+                [0x51; 32],
                 &source,
                 NativePinAuthorizationV1 {
                     deadline_unix_ms: now() + 600_000,
@@ -408,6 +409,7 @@ fn native_predecessor_allows_only_the_exact_one_pending_signed_inventory() {
     f.coordinator
         .prepare_operation(
             [0xBA; 32],
+            [0x52; 32],
             &f.original.source().unwrap(),
             f.original.authorization.clone(),
         )
@@ -763,7 +765,7 @@ fn cancellation_after_queue_exposure_preserves_paid_original_and_never_restarts_
     changed.deadline_unix_ms += 1;
     assert!(
         reopened
-            .prepare_operation(f.original.id, &source, changed)
+            .prepare_operation(f.original.id, f.original.context_digest, &source, changed)
             .is_err(),
         "reopen does not authorize a new expiry"
     );
@@ -1002,4 +1004,99 @@ fn actual_native_check_expiry_after_marker_or_admission_never_replays_queue_hand
         assert!(!slot.record_exposure().unwrap());
         assert_eq!(f.context.queue().queued_len(), 0);
     }
+}
+
+#[test]
+fn original_operation_binds_complete_caller_context_across_reopen_without_queue_effects() {
+    let mut f = Fixture::new();
+    let id = f.original.id;
+    let source = f.original.source().unwrap();
+    let original = f.coordinator.original_operation(id).unwrap().unwrap();
+    assert_eq!(original.context_digest, f.original.context_digest);
+    assert_eq!(original.source, source);
+    assert_eq!(original.authorization, f.original.authorization);
+    assert!(
+        f.coordinator
+            .prepare_operation(id, [0x99; 32], &source, f.original.authorization.clone())
+            .is_err()
+    );
+    assert_eq!(f.context.queue().queued_len(), 0);
+    assert_eq!(
+        f.coordinator
+            .original_operation(id)
+            .unwrap()
+            .unwrap()
+            .context_digest,
+        original.context_digest
+    );
+    drop(f.coordinator);
+    let coordinator = NativeMusubiPinCoordinatorV1::open(
+        &f.context,
+        &f.root.path().join("pins"),
+        [0xA8; 32],
+        policy(&f.key),
+        f.key.clone(),
+    );
+    let coordinator = coordinator.expect("reopen exact original native operation");
+    assert_eq!(
+        coordinator
+            .original_operation(id)
+            .unwrap()
+            .unwrap()
+            .authorization,
+        original.authorization
+    );
+    assert!(
+        coordinator
+            .original_operation([0x98; 32])
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(f.context.queue().queued_len(), 0);
+}
+
+#[test]
+fn caller_context_inspection_preserves_the_actual_held_native_check_round() {
+    let mut f = Fixture::new();
+    let operation = f.coordinator.store.operation(f.original.id).unwrap();
+    f.coordinator
+        .begin_round(operation, now(), Instant::now() + Duration::from_secs(30))
+        .unwrap();
+    let before = f.coordinator.round.as_ref().unwrap().deadline;
+    let original = f
+        .coordinator
+        .original_operation(f.original.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(original.context_digest, f.original.context_digest);
+    assert_eq!(original.authorization, f.original.authorization);
+    assert_eq!(f.coordinator.round.as_ref().unwrap().deadline, before);
+    assert!(f.coordinator.original_operation([0x98; 32]).is_err());
+    assert!(matches!(
+        f.coordinator.observe_operation(f.original.id).unwrap(),
+        NativeMusubiPinProgressV1::Pending(NativeMusubiPinPhaseV1::RetainedPin)
+    ));
+    assert_eq!(f.context.queue().queued_len(), 0);
+    assert!(
+        f.coordinator
+            .round
+            .as_ref()
+            .unwrap()
+            .slot
+            .as_ref()
+            .unwrap()
+            .signed()
+            .is_none()
+    );
+    let selected = f
+        .root
+        .path()
+        .join("pins")
+        .join(format!("op-{}", hex::encode(f.original.id)))
+        .join("check-01");
+    std::fs::remove_file(selected.join("preparation.json")).unwrap();
+    assert!(f.coordinator.original_operation(f.original.id).is_err());
+    assert!(f.coordinator.observe_operation(f.original.id).is_err());
+    assert_eq!(f.context.queue().queued_len(), 0);
+    assert_eq!(f.coordinator.round.as_ref().unwrap().deadline, before);
 }

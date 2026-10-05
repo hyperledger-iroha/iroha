@@ -14,6 +14,7 @@ struct TrackingAllocator;
 thread_local! {
     static TRACKING: Cell<bool> = const { Cell::new(false) };
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+    static REFUSE: Cell<Option<Layout>> = const { Cell::new(None) };
 }
 #[global_allocator]
 static ALLOCATOR: TrackingAllocator = TrackingAllocator;
@@ -27,6 +28,19 @@ fn record_allocation() {
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record_allocation();
+        if REFUSE
+            .try_with(|next| {
+                if next.get() == Some(layout) {
+                    next.set(None);
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false)
+        {
+            return std::ptr::null_mut();
+        }
         // SAFETY: the allocation request is delegated unchanged to `System`.
         unsafe { System.alloc(layout) }
     }
@@ -131,3 +145,9 @@ fn large_block_signature_streams_without_payload_scratch() {
     assert_preallocated_serialization_does_not_allocate(&signature);
     assert_preallocated_serialization_does_not_allocate(&wire);
 }
+
+#[path = "block_signature_serialization_allocations/certificate_custody.rs"]
+mod certificate_custody;
+
+#[path = "block_signature_serialization_allocations/da_policy_custody.rs"]
+mod da_policy_custody;

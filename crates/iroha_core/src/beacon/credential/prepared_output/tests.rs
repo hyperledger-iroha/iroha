@@ -85,10 +85,16 @@ fn prepared_credential_uses_exact_original_output_without_late_growth_at_four_an
             .unwrap();
         assert_eq!(
             allocations_during(|| {
-                encode_global_beacon_partial_signer_credential_v1(&mut prepared, &sources).unwrap();
+                encode_global_beacon_partial_signer_credential_v1(
+                    &mut prepared,
+                    sources
+                        .iter()
+                        .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+                )
+                .unwrap();
             }),
             0,
-            "canonical encoding and exact import primitive must not allocate after extraction"
+            "canonical encoding and exact component equation must not allocate after extraction"
         );
         assert_eq!(prepared.output.bytes.as_slice().as_ptr(), pointer);
         assert_eq!(prepared.output.bytes.as_slice().len(), capacity);
@@ -104,7 +110,9 @@ fn prepared_credential_uses_exact_original_output_without_late_growth_at_four_an
             sessions: vec![RuntimeGlobalBeaconShareCredentialWireV1 {
                 public_session: fixture.session.record().clone(),
                 signer_index: 1,
-                components: ConsensusThresholdSecretScalarTripleV1(sources[0].components.0),
+                components: ConsensusThresholdSecretScalarTripleV1 {
+                    components: sources[0].components.components,
+                },
             }],
         };
         assert!(
@@ -112,7 +120,12 @@ fn prepared_credential_uses_exact_original_output_without_late_growth_at_four_an
             "prepared credential must exactly match the canonical wire bytes"
         );
         assert!(matches!(
-            encode_global_beacon_partial_signer_credential_v1(&mut prepared, &sources),
+            encode_global_beacon_partial_signer_credential_v1(
+                &mut prepared,
+                sources
+                    .iter()
+                    .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+            ),
             Err(GlobalBeaconCredentialEncodeErrorV1::PlanChanged)
         ));
         let output = prepared.into_credential().ok().unwrap();
@@ -191,7 +204,12 @@ fn invalid_share_and_replaced_public_owner_leave_prepared_output_empty_for_exact
     let mut prepared = plan(&fixture, &budget).unwrap();
     let pointer = prepared.output.bytes.as_slice().as_ptr();
     assert!(matches!(
-        encode_global_beacon_partial_signer_credential_v1(&mut prepared, &invalid),
+        encode_global_beacon_partial_signer_credential_v1(
+            &mut prepared,
+            invalid
+                .iter()
+                .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source)
+        ),
         Err(GlobalBeaconCredentialEncodeErrorV1::Share(_))
     ));
     assert!(prepared.output.as_slice().is_empty());
@@ -204,14 +222,25 @@ fn invalid_share_and_replaced_public_owner_leave_prepared_output_empty_for_exact
     let replaced = [RuntimeGlobalBeaconShareProvisioningV1::new(
         resealed,
         1,
-        Zeroizing::new(valid[0].components.0),
+        Zeroizing::new(valid[0].components.components),
     )];
     assert!(matches!(
-        encode_global_beacon_partial_signer_credential_v1(&mut prepared, &replaced),
+        encode_global_beacon_partial_signer_credential_v1(
+            &mut prepared,
+            replaced
+                .iter()
+                .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source)
+        ),
         Err(GlobalBeaconCredentialEncodeErrorV1::PlanChanged)
     ));
     assert_eq!(prepared.output.bytes.as_slice().as_ptr(), pointer);
-    encode_global_beacon_partial_signer_credential_v1(&mut prepared, &valid).unwrap();
+    encode_global_beacon_partial_signer_credential_v1(
+        &mut prepared,
+        valid
+            .iter()
+            .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+    )
+    .unwrap();
     assert_eq!(prepared.output.bytes.as_slice().as_ptr(), pointer);
 }
 
@@ -256,7 +285,13 @@ fn secret_output_unwind_scrubs_initialized_bytes_before_original_refund() {
     let sources = [share(&fixture)];
     let floor = budget.reserved_bytes();
     let mut prepared = plan(&fixture, &budget).unwrap();
-    encode_global_beacon_partial_signer_credential_v1(&mut prepared, &sources).unwrap();
+    encode_global_beacon_partial_signer_credential_v1(
+        &mut prepared,
+        sources
+            .iter()
+            .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+    )
+    .unwrap();
     let output = prepared.into_credential().ok().unwrap();
     let bytes = output.as_slice().len();
     SCRUBBED.with(|slot| slot.set(Some((0, false))));
@@ -267,4 +302,168 @@ fn secret_output_unwind_scrubs_initialized_bytes_before_original_refund() {
     assert!(result.is_err());
     SCRUBBED.with(|slot| assert_eq!(slot.replace(None), Some((bytes, true))));
     assert_eq!(budget.reserved_bytes(), floor);
+}
+
+#[test]
+fn every_original_component_requires_its_exact_canonical_public_equation_before_credential_bytes() {
+    use iroha_crypto::threshold_bls::ThresholdBlsError;
+    let budget = fixture_budget();
+    let fixture = fixture(4, &budget);
+    let source = share(&fixture);
+    let original = source.components.components;
+    let mut prepared = plan(&fixture, &budget).unwrap();
+    let pointer = prepared.output.bytes.as_slice().as_ptr();
+    let capacity = prepared.output.bytes.capacity();
+    let retained = budget.reserved_bytes();
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - retained)
+        .unwrap();
+    for index in 0..3 {
+        // A noncanonical scalar must retain the original primitive cause, even
+        // when every other scalar, source and prepared output owner is exact.
+        let mut changed = original;
+        changed[index] = [0xff; 32];
+        let invalid = RuntimeGlobalBeaconShareProvisioningV1::new(
+            fixture.session.clone(),
+            1,
+            Zeroizing::new(changed),
+        );
+        let mut error = None;
+        assert_eq!(
+            allocations_during(|| {
+                error = Some(
+                    encode_global_beacon_partial_signer_credential_v1(
+                        &mut prepared,
+                        [invalid.credential_source()],
+                    )
+                    .err()
+                    .unwrap(),
+                );
+            }),
+            0
+        );
+        assert!(matches!(
+            error.unwrap(),
+            GlobalBeaconCredentialEncodeErrorV1::Share(GlobalThresholdBeaconError::ThresholdBls(
+                ThresholdBlsError::InvalidScalar
+            ))
+        ));
+        assert!(prepared.encoded().is_none());
+        assert!(prepared.output.as_slice().is_empty());
+        assert_eq!(prepared.output.bytes.as_slice().as_ptr(), pointer);
+        assert_eq!(prepared.output.bytes.capacity(), capacity);
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        assert_eq!(source.components.components, original);
+
+        // Independently alter this component to another canonical scalar. All
+        // three generators are validated and nonzero; the old public equation
+        // must reject the changed component, not just malformed scalar encoding.
+        let mut scalar = [0; 32];
+        scalar[31] = if original[index] == scalar { 1 } else { 0 };
+        assert_ne!(scalar, original[index]);
+        let mut changed = original;
+        changed[index] = scalar;
+        let invalid = RuntimeGlobalBeaconShareProvisioningV1::new(
+            fixture.session.clone(),
+            1,
+            Zeroizing::new(changed),
+        );
+        let mut error = None;
+        assert_eq!(
+            allocations_during(|| {
+                error = Some(
+                    encode_global_beacon_partial_signer_credential_v1(
+                        &mut prepared,
+                        [invalid.credential_source()],
+                    )
+                    .err()
+                    .unwrap(),
+                );
+            }),
+            0
+        );
+        assert!(matches!(
+            error.unwrap(),
+            GlobalBeaconCredentialEncodeErrorV1::Share(GlobalThresholdBeaconError::ThresholdBls(
+                ThresholdBlsError::SecretShareMismatch
+            ))
+        ));
+        assert!(prepared.output.as_slice().is_empty());
+        assert_eq!(prepared.output.bytes.as_slice().as_ptr(), pointer);
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    }
+    assert_eq!(
+        allocations_during(|| {
+            encode_global_beacon_partial_signer_credential_v1(
+                &mut prepared,
+                [source.credential_source()],
+            )
+            .unwrap();
+        }),
+        0
+    );
+    assert_eq!(prepared.output.bytes.as_slice().as_ptr(), pointer);
+    assert_eq!(prepared.output.bytes.as_slice().len(), capacity);
+    assert_eq!(source.components.components, original);
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    drop(prepared);
+    drop(blocker);
+    drop(source);
+    drop(fixture);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn borrowed_original_charged_scalar_leaf_stays_live_until_credential_and_source_retire_separately()
+{
+    use iroha_allocation::ChargedBuffer;
+    let budget = fixture_budget();
+    let fixture = fixture(4, &budget);
+    let source = share(&fixture);
+    let mut reservation = budget
+        .try_reserve_layouts([Layout::array::<Zeroizing<[[u8; 32]; 3]>>(1).unwrap()])
+        .unwrap();
+    let mut leaf = ChargedBuffer::from_reservation(1, &mut reservation).unwrap();
+    leaf.push_reserved(Zeroizing::new(source.components.components));
+    let pointer = leaf.as_slice()[0].as_ptr();
+    let leaf_bytes = Layout::array::<Zeroizing<[[u8; 32]; 3]>>(1).unwrap().size();
+    assert_eq!(leaf_bytes, 96);
+    let view = GlobalBeaconCredentialSourceV1::new(&fixture.session, 1, &leaf.as_slice()[0]);
+    assert!(view.authenticated_session().ptr_eq(&fixture.session));
+    assert_eq!(view.signer_index(), 1);
+    assert_eq!(view.components.as_ptr(), pointer);
+    let before_output = budget.reserved_bytes();
+    let mut prepared = plan(&fixture, &budget).unwrap();
+    let output_bytes = budget.reserved_bytes() - before_output;
+    let output_pointer = prepared.output.bytes.as_slice().as_ptr();
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    assert_eq!(
+        allocations_during(|| {
+            encode_global_beacon_partial_signer_credential_v1(&mut prepared, [view]).unwrap();
+        }),
+        0
+    );
+    assert_eq!(leaf.as_slice()[0].as_ptr(), pointer);
+    assert_eq!(leaf.as_slice()[0].as_ref(), &source.components.components);
+    assert!(leaf.belongs_to(&budget));
+    assert_eq!(prepared.output.bytes.as_slice().as_ptr(), output_pointer);
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    drop(prepared);
+    // The original scalar allocation and charge remain together after the
+    // unrelated credential output retires; there is no nominal credit owner.
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes() - output_bytes);
+    assert_eq!(leaf.as_slice()[0].as_ptr(), pointer);
+    assert_eq!(leaf.as_slice()[0].as_ref(), &source.components.components);
+    drop(leaf); // Zeroizing retires the real scalar leaf before its buffer refund.
+    assert_eq!(
+        budget.reserved_bytes(),
+        budget.limit_bytes() - output_bytes - leaf_bytes
+    );
+    drop(blocker);
+    drop(reservation);
+    drop(source);
+    drop(fixture);
+    assert_eq!(budget.reserved_bytes(), 0);
 }

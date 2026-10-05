@@ -216,13 +216,16 @@ pub mod fixed_pair {
         out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        values[0].json_serialize_to(out)?;
-        out.push(',')?;
-        values[1].json_serialize_to(out)?;
-        out.push(']')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            values[0].json_serialize_to(out)?;
+            out.push(',')?;
+            values[1].json_serialize_to(out)?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
 
     /// Parse exactly two typed values, rejecting missing or extra elements without staging a Vec.
@@ -254,16 +257,19 @@ pub mod fixed_bytes {
         out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
         out.begin_container()?;
-        out.push('[')?;
-        for (index, byte) in bytes.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('[')?;
+            for (index, byte) in bytes.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                byte.json_serialize_to(out)?;
             }
-            byte.json_serialize_to(out)?;
-        }
-        out.push(']')?;
+            out.push(']')?;
+            Ok(())
+        })();
         out.end_container();
-        Ok(())
+        result
     }
     pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u8; N], json::Error> {
         let values = Vec::<u8>::json_deserialize(parser)?;
@@ -315,16 +321,19 @@ pub mod fixed_bytes {
             out: &mut dyn JsonWriteSink,
         ) -> Result<(), BoundedJsonError> {
             out.begin_container()?;
-            out.push('[')?;
-            for (index, bytes) in value.iter().enumerate() {
-                if index != 0 {
-                    out.push(',')?;
+            let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+                out.push('[')?;
+                for (index, bytes) in value.iter().enumerate() {
+                    if index != 0 {
+                        out.push(',')?;
+                    }
+                    super::serialize_bounded(bytes, out)?;
                 }
-                super::serialize_bounded(bytes, out)?;
-            }
-            out.push(']')?;
+                out.push(']')?;
+                Ok(())
+            })();
             out.end_container();
-            Ok(())
+            result
         }
         pub fn deserialize<const N: usize>(
             parser: &mut Parser<'_>,
@@ -537,42 +546,46 @@ pub mod account_metadata_map {
         out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
         out.begin_container()?;
-        out.push('{')?;
-        // `AccountId::Ord` is not the JSON key order. Select one canonical
-        // key at a time so byte parity does not require cloning the full map.
-        let mut previous_key: Option<String> = None;
-        let mut wrote_entry = false;
-        loop {
-            let mut next: Option<(String, &Metadata)> = None;
-            for (account, metadata) in value {
-                let candidate = account
-                    .canonical_i105()
-                    .map_err(|_| BoundedJsonError::Unsupported)?;
-                if previous_key
-                    .as_ref()
-                    .is_some_and(|key| candidate.as_str() <= key.as_str())
-                    || next
+        let result = (|| -> Result<(), norito::json::BoundedJsonError> {
+            out.push('{')?;
+            // `AccountId::Ord` is not the JSON key order. Select one canonical
+            // key at a time so byte parity does not require cloning the full map.
+            let mut previous_key: Option<String> = None;
+            let mut wrote_entry = false;
+            loop {
+                let mut next: Option<(String, &Metadata)> = None;
+                for (account, metadata) in value {
+                    let candidate = account
+                        .canonical_i105()
+                        .map_err(|_| BoundedJsonError::Unsupported)?;
+                    if previous_key
                         .as_ref()
-                        .is_some_and(|(key, _)| candidate.as_str() >= key.as_str())
-                {
-                    continue;
+                        .is_some_and(|key| candidate.as_str() <= key.as_str())
+                        || next
+                            .as_ref()
+                            .is_some_and(|(key, _)| candidate.as_str() >= key.as_str())
+                    {
+                        continue;
+                    }
+                    next = Some((candidate, metadata));
                 }
-                next = Some((candidate, metadata));
+                let Some((key, metadata)) = next else {
+                    break;
+                };
+                if wrote_entry {
+                    out.push(',')?;
+                }
+                norito::json::write_json_string_to(&key, out)?;
+                out.push(':')?;
+                metadata.json_serialize_to(out)?;
+                previous_key = Some(key);
+                wrote_entry = true;
             }
-            let Some((key, metadata)) = next else {
-                break;
-            };
-            if wrote_entry {
-                out.push(',')?;
-            }
-            norito::json::write_json_string_to(&key, out)?;
-            out.push(':')?;
-            metadata.json_serialize_to(out)?;
-            previous_key = Some(key);
-            wrote_entry = true;
-        }
-        out.push('}')?;
+            out.push('}')?;
+            Ok(())
+        })();
         out.end_container();
+        result?;
         Ok(())
     }
     pub fn deserialize(

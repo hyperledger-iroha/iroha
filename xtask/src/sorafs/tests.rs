@@ -50,6 +50,10 @@ fn admission_fixtures_write_checked_public_key_artifacts() {
 }
 #[test]
 fn pin_registry_fixtures_use_checked_signatures() {
+    let completion = pin_fixture_completion_authority();
+    assert_eq!(completion.provider_owner, pin_fixture_alice());
+    assert_eq!(completion.completion_signer, pin_fixture_alice());
+    assert!(completion.is_valid());
     let council_keys = pin_fixture_council_keypair();
     let (manifest_digest, manifest_root_cid, _) =
         pin_fixture_default_manifest().expect("build canonical fixture manifest");

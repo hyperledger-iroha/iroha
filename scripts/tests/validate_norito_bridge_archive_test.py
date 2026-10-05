@@ -73,15 +73,54 @@ class NoritoBridgeArchiveTests(unittest.TestCase):
             self.root, self.archive, self.lockfile, install_directory=self.destination,
         )
 
-    def test_archive_limits_are_unchanged(self) -> None:
-        self.assertEqual(archive_owner.MAX_ARCHIVE_BYTES, 512 * 1024 * 1024)
-        self.assertEqual(archive_owner.MAX_ENTRY_BYTES, 256 * 1024 * 1024)
+    def test_archive_limits_remain_explicit_and_bounded(self) -> None:
+        self.assertEqual(archive_owner.MAX_ARCHIVE_BYTES, 1024 * 1024 * 1024)
+        self.assertEqual(archive_owner.MAX_ENTRY_BYTES, 512 * 1024 * 1024)
         self.assertEqual(archive_owner.MAX_TOTAL_UNCOMPRESSED_BYTES, 1024 * 1024 * 1024)
         self.assertEqual(archive_owner.MAX_ARCHIVE_ENTRIES, 4096)
         self.assertEqual(archive_owner.MAX_MANIFEST_BYTES, 64 * 1024)
 
     def test_valid_stored_archive_returns_original_bytes(self) -> None:
         self.assertEqual(self.bounded(), self.archive.read_bytes())
+
+    def test_archive_byte_budget_accepts_boundary_and_rejects_one_byte_over(self) -> None:
+        payload = self.archive.read_bytes()
+        with mock.patch.object(archive_owner, "MAX_ARCHIVE_BYTES", len(payload)):
+            self.assertEqual(self.bounded(), payload)
+        with mock.patch.object(archive_owner, "MAX_ARCHIVE_BYTES", len(payload) - 1):
+            with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "byte limit"):
+                self.bounded()
+
+    def test_entry_byte_budget_accepts_boundary_and_rejects_one_byte_over(self) -> None:
+        self.write_archive([("NoritoBridge.xcframework/member", b"x" * 64)])
+        payload = self.archive.read_bytes()
+        with mock.patch.object(archive_owner, "MAX_ENTRY_BYTES", 64):
+            self.assertEqual(self.bounded(), payload)
+        with mock.patch.object(archive_owner, "MAX_ENTRY_BYTES", 63):
+            with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "entry exceeds"):
+                self.bounded()
+
+    def test_expanded_byte_budget_accepts_boundary_and_rejects_one_byte_over(self) -> None:
+        self.write_archive([("NoritoBridge.xcframework/member", b"x" * 64)])
+        payload = self.archive.read_bytes()
+        with zipfile.ZipFile(self.archive) as bundle:
+            expanded_bytes = sum(entry.file_size for entry in bundle.infolist())
+        with mock.patch.object(archive_owner, "MAX_TOTAL_UNCOMPRESSED_BYTES", expanded_bytes):
+            self.assertEqual(self.bounded(), payload)
+        with mock.patch.object(archive_owner, "MAX_TOTAL_UNCOMPRESSED_BYTES", expanded_bytes - 1):
+            with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "uncompressed limit"):
+                self.bounded()
+
+    def test_actual_over_budget_archive_is_refused_before_payload_read(self) -> None:
+        # A sparse inert fixture checks the real cap without reading or allocating it.
+        with self.archive.open("r+b") as output:
+            output.truncate(archive_owner.MAX_ARCHIVE_BYTES + 1)
+        with mock.patch.object(archive_owner.os, "read") as read, \
+             mock.patch.object(archive_owner.zipfile, "ZipFile") as unpack:
+            with self.assertRaisesRegex(archive_owner.ArchiveValidationError, "byte limit"):
+                self.bounded()
+        read.assert_not_called()
+        unpack.assert_not_called()
 
     def test_version_is_exact_canonical_root_owned_semver(self) -> None:
         self.assertEqual(archive_owner.parse_version(self.root), "0.1.0")

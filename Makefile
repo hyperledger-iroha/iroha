@@ -151,14 +151,17 @@ docs-da-threat-model:
 check-docs:
 	@bash scripts/check_syscalls_doc.sh
 
-# Build NoritoBridge.xcframework and a reproducible zip + checksum for SPM
+# Build NoritoBridge.xcframework and a reproducible zip + checksum for SPM.
+# MOBILE_SDK_CARGO_LOCKFILE selects the owned canonical external read-only graph;
+# the builder authenticates it against the committed repository Cargo.lock.
 bridge-xcframework:
 	@test -n "$$SOURCE_DATE_EPOCH" || { echo "SOURCE_DATE_EPOCH is required" >&2; exit 1; }
 	@test -n "$$NORITO_BRIDGE_OUT_DIR" || { echo "NORITO_BRIDGE_OUT_DIR is required" >&2; exit 1; }
 	@test -n "$$NORITO_BRIDGE_BUILD_DIR" || { echo "NORITO_BRIDGE_BUILD_DIR is required" >&2; exit 1; }
 	@test -n "$$NORITO_BRIDGE_ARCHIVE_OUTPUT" || { echo "NORITO_BRIDGE_ARCHIVE_OUTPUT is required" >&2; exit 1; }
+	@test -n "$$MOBILE_SDK_CARGO_LOCKFILE" || { echo "MOBILE_SDK_CARGO_LOCKFILE is required" >&2; exit 1; }
 	@bash scripts/build_norito_xcframework.sh \
-		--lockfile-path "$(CURDIR)/Cargo.lock" \
+		--lockfile-path "$$MOBILE_SDK_CARGO_LOCKFILE" \
 		--archive-output "$$NORITO_BRIDGE_ARCHIVE_OUTPUT"
 	@$(MAKE) bridge-checksum
 

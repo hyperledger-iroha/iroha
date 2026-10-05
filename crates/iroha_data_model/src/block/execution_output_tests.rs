@@ -833,7 +833,7 @@ fn execution_inputs_borrow_slices_arrays_vectors_and_block_sources() {
         unreachable!()
     };
     builder.push_transaction(signed);
-    let block = builder.build(std::collections::BTreeSet::default());
+    let block = builder.build(crate::block::BlockSignatures::default());
     check(&block, block.network_entrypoint_at(0).unwrap());
 }
 

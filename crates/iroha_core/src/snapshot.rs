@@ -266,11 +266,11 @@ impl CapturedStateSnapshot {
     }
 }
 // This concrete Core producer must use the sole MV present-undo framing.
-// HC120 mutates this producer only; MV dependency writers are not mutated.
+// HC127 mutates this producer only; MV dependency writers are not mutated.
 fn serialize_runtime_predecessor(undo: &Option<SnapshotNexusRuntime>, out: &mut String) {
-    #[cfg(all(test, sumeragi_core_mutation = "HC120"))]
+    #[cfg(all(test, sumeragi_core_mutation = "HC127"))]
     json::JsonSerialize::json_serialize(undo, out);
-    #[cfg(not(all(test, sumeragi_core_mutation = "HC120")))]
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC127")))]
     mv::json::json_serialize_undo(undo, out);
 }
 

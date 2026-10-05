@@ -417,10 +417,10 @@ impl StateTransaction<'_, '_> {
                         entry_hash: batch_hash,
                     });
                 }
-                // SPEC: §13.4 HC114 — fee storage cannot replace invocation provenance.
-                #[cfg(all(test, sumeragi_core_mutation = "HC114"))]
+                // SPEC: §13.4 HC121 — fee storage cannot replace invocation provenance.
+                #[cfg(all(test, sumeragi_core_mutation = "HC121"))]
                 let dataspace = self.current_dataspace_id;
-                #[cfg(not(all(test, sumeragi_core_mutation = "HC114")))]
+                #[cfg(not(all(test, sumeragi_core_mutation = "HC121")))]
                 let dataspace = Some(original.dataspace());
                 (original.lane(), dataspace)
             }

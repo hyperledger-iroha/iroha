@@ -331,6 +331,11 @@ pub struct HybridKeyPair {
     secret: HybridSecretKey,
 }
 impl HybridKeyPair {
+    /// Move an already checked secret owner after authenticated checkpoint recovery.
+    pub(crate) fn from_checkpoint_secret(secret: HybridSecretKey) -> Self {
+        Self { secret }
+    }
+
     /// Fallibly generate a fresh key pair using the provided RNG.
     ///
     /// # Errors

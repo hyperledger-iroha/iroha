@@ -5459,15 +5459,19 @@ seiyaku ExactScanProvenance {{
 fn entrypoint_hints_distinguish_dynamic_and_literal_state_map_paths() {
     let src = include_str!("fixtures/v1/c141.ko");
     let compiler = Compiler::new();
-    let (_bytes, manifest) = compiler
+    let (bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
+    let embedded = ProgramMetadata::parse(&bytes)
+        .expect("parse exact embedded interface")
+        .contract_interface
+        .expect("embedded interface");
     let hints = manifest
         .access_set_hints
         .expect("expected access_set_hints");
     let literal_key = canonical_numeric_state_key("Foo", ir::DataRefKind::Int, "1");
-    assert!(hints.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
-    assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
+    assert_eq!(hints.read_keys, vec![STATE_WILDCARD_KEY.to_string()]);
+    assert_eq!(embedded.access_set_hints.as_ref(), Some(&hints));
     assert!(hints.write_keys.is_empty());
     let entrypoints = manifest.entrypoints.expect("entrypoints present");
     let read_dyn = entrypoints
@@ -5489,6 +5493,20 @@ fn entrypoint_hints_distinguish_dynamic_and_literal_state_map_paths() {
     assert!(read_lit.write_keys.is_empty());
     assert_eq!(read_lit.access_hints_complete, Some(true));
     assert!(read_lit.access_hints_skipped.is_empty());
+    for entrypoint in [read_dyn, read_lit] {
+        let actual = embedded
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == entrypoint.name)
+            .expect("the same public entrypoint is embedded");
+        assert_eq!(actual.read_keys, entrypoint.read_keys);
+        assert_eq!(actual.write_keys, entrypoint.write_keys);
+        assert_eq!(
+            actual.access_hints_complete,
+            entrypoint.access_hints_complete
+        );
+        assert_eq!(actual.access_hints_skipped, entrypoint.access_hints_skipped);
+    }
 }
 #[test]
 fn manifest_build_rejects_dynamic_state_iteration_bounds() {

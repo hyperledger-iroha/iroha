@@ -47,9 +47,9 @@ pub(super) struct LocalInputs {
     /// Four pre-rendered FD200 units using --config-file beacon.toml, in validator order.
     #[arg(long, value_name = "PATH", num_args = 4)]
     beacon_validator_unit: Vec<PathBuf>,
-    /// Exact local edge systemd unit.
+    /// Independently native-captured capability for the Mac edge owner.
     #[arg(long, value_name = "PATH")]
-    edge_unit: PathBuf,
+    native_edge_capability: PathBuf,
     /// Independently approved known-hosts; draft host pins must already match.
     #[arg(long, value_name = "PATH")]
     known_hosts: PathBuf,
@@ -366,7 +366,7 @@ fn sign_inventory(
 }
 
 #[cfg(unix)]
-fn inherited_signing_key(fd: u32, public_key: &PublicKey) -> Result<KeyPair> {
+pub(super) fn inherited_signing_key(fd: u32, public_key: &PublicKey) -> Result<KeyPair> {
     let bytes = crate::client_config::read_inherited_private_file(fd, 512, "owner signing key")?;
     let text =
         std::str::from_utf8(&bytes).map_err(|_| eyre!("invalid owner signing key encoding"))?;
@@ -377,7 +377,7 @@ fn inherited_signing_key(fd: u32, public_key: &PublicKey) -> Result<KeyPair> {
 }
 
 #[cfg(not(unix))]
-fn inherited_signing_key(_: u32, _: &PublicKey) -> Result<KeyPair> {
+pub(super) fn inherited_signing_key(_: u32, _: &PublicKey) -> Result<KeyPair> {
     Err(eyre!("owner signing requires Unix inherited descriptors"))
 }
 

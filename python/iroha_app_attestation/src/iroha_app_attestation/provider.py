@@ -48,9 +48,10 @@ APPLE_APP_ATTESTATION_ROOT_SHA256 = bytes.fromhex(
 APPLE_RECEIPT_ROOT_SHA256 = bytes.fromhex(
     "63343abfb89a6a03ebb57e9b3f5fa7be7c4f5c756f3017b3a8c488c3653e9179"
 )
-# Invented roots that exist in this repository for mocks and demos (for
-# example under certs/ and fixtures/android/attestation/). Some carry vendor
-# names, so none of them may be configured as an OEM attestation anchor.
+# Invented roots that exist in this repository for mocks and demos (under
+# certs/, fixtures/android/attestation/ and examples/android/). Some carry
+# vendor names, so none of them may be configured as an OEM attestation
+# anchor. tests/test_provider.py checks this set against those actual files.
 INVENTED_REPOSITORY_ROOT_SHA256 = frozenset(bytes.fromhex(value) for value in (
     "b01d535d9a470962a3ffc814fda8ea63fbc52a893d6bf39d865cb60a2c695a05",  # "Iroha HMS Safety Detect Root"
     "56be40cf19b693d4887cbf30d7265eae9fe267dd4698e1acf29530ffabf09e5e",  # "Iroha Play Integrity Root"

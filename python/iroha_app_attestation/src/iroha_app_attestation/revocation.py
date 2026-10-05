@@ -12,6 +12,7 @@ report a retryable unavailability rather than a rejection.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import ssl
@@ -20,7 +21,9 @@ import urllib.request
 from datetime import date
 from typing import Sequence
 
-from .attestation import AttestationRejected, children, der_one, positive_integer, require
+from .attestation import (
+    AttestationRejected, VerificationUnavailable, children, der_one, positive_integer, require,
+)
 
 
 GOOGLE_STATUS_URL = "https://android.googleapis.com/attestation/status"
@@ -33,12 +36,8 @@ _REASONS = frozenset({
 })
 
 
-class RevocationUnavailable(AttestationRejected):
-    """No current, well-formed Google status list could be obtained.
-
-    It remains an ``AttestationRejected`` so every generic handler fails
-    closed; issuer services report it as retryable unavailability.
-    """
+class RevocationUnavailable(VerificationUnavailable):
+    """No current, well-formed Google status list could be obtained."""
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -118,7 +117,9 @@ def fetch_google_revocation_status() -> frozenset[int]:
         raise
     except AttestationRejected as error:
         raise RevocationUnavailable(str(error)) from error
-    except (OSError, urllib.error.URLError) as error:
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
+        # ``http.client`` raises BadStatusLine, LineTooLong and IncompleteRead
+        # outside ``OSError``; they are transport failures too.
         raise RevocationUnavailable("Android revocation status unavailable") from error
 
 

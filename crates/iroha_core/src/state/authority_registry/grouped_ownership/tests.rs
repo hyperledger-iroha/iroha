@@ -1,5 +1,6 @@
 //! Exact grouped images, native ownership, work bounds and consumed State capture.
 
+use super::nft_rwa_test_support::*;
 use super::*;
 use crate::{
     kura::Kura,
@@ -13,70 +14,14 @@ use crate::{
     },
     test_allocations::allocations_during,
 };
-use iroha_crypto::Hash;
-use iroha_data_model::{
-    IntoKeyValue,
-    nft::Nft,
-    prelude::Registrable,
-    rwa::{Rwa, RwaControlPolicy},
-};
-use iroha_model_base::metadata::Metadata;
-use iroha_primitives::numeric::NumericSpec;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::Storage;
 use norito::codec::Encode;
 
-fn domain() -> DomainId {
-    DomainId::try_new("grouped", "universal").unwrap()
-}
-fn nft_id() -> NftId {
-    NftId::new(domain(), "lot".parse().unwrap())
-}
-fn rwa_id() -> RwaId {
-    RwaId::generated(domain(), Hash::new(b"grouped source"))
-}
-
-fn fixture() -> World {
-    let mut world = World::default();
-    let (id, value) = Nft::new(nft_id(), Metadata::default())
-        .build(&ALICE_ID)
-        .into_key_value();
-    world.nfts.insert(id, value);
-    let (id, value) = Rwa::new(
-        rwa_id(),
-        iroha_primitives::numeric::Quantity::from(5_u32),
-        NumericSpec::integer(),
-        "https://example.test/grouped".into(),
-        None,
-        Metadata::default(),
-        Vec::new(),
-        RwaControlPolicy {
-            freeze_enabled: true,
-            ..RwaControlPolicy::default()
-        },
-        ALICE_ID.clone(),
-    )
-    .into_key_value();
-    world.rwas.insert(id, value);
-    world.rebuild_nft_owner_index();
-    world.rebuild_rwa_indexes();
-    world
-}
-
-fn without_allocations<T>(run: impl FnOnce() -> T) -> T {
+pub(in crate::state) fn without_allocations<T>(run: impl FnOnce() -> T) -> T {
     let mut result = None;
     assert_eq!(allocations_during(|| result = Some(run())), 0);
     result.unwrap()
-}
-
-fn check(world: &World, rwa: bool) -> Result<(), GroupedOwnershipError> {
-    without_allocations(|| {
-        if rwa {
-            CheckedRwas::capture(world, 1024).map(|_| ())
-        } else {
-            CheckedNfts::capture(world, 1024).map(|_| ())
-        }
-    })
 }
 
 #[test]
@@ -98,8 +43,10 @@ fn native_current_predecessor_and_replacement_retain_all_five_groups() {
         tx.apply();
         block.commit();
     }
-    let nfts = without_allocations(|| CheckedNfts::capture(&world, 1024)).unwrap();
-    let rwas = without_allocations(|| CheckedRwas::capture(&world, 1024)).unwrap();
+    let nft_work = world_work(&world, false);
+    let nfts = without_allocations(|| CheckedNfts::capture(&world, nft_work)).unwrap();
+    let rwa_work = world_work(&world, true);
+    let rwas = without_allocations(|| CheckedRwas::capture(&world, rwa_work)).unwrap();
     assert_eq!(nfts.rows().get(&nft_id()).unwrap().owned_by, *BOB_ID);
     assert_eq!(
         get_at(nfts.rows(), GroupImage::Predecessor, &nft_id())
@@ -219,16 +166,16 @@ fn empty_groups_and_foreign_members_cannot_compensate_for_valid_members() {
 #[test]
 fn exact_work_charges_every_physical_row_and_absent_undo_entry() {
     let world = fixture();
-    // Two/three groups, each with one source, one bucket and one member in
-    // each image. Bounds depend on visited work, not a guessed current count.
-    assert!(CheckedNfts::capture(&world, 12).is_ok());
+    // Each singleton group pays physical scans, full two-operand typed comparisons
+    // and complete member tails in both original images.
+    assert!(CheckedNfts::capture(&world, 732).is_ok());
     assert!(matches!(
-        CheckedNfts::capture(&world, 11),
+        CheckedNfts::capture(&world, 731),
         Err(GroupedOwnershipError::WorkLimit)
     ));
-    assert!(CheckedRwas::capture(&world, 18).is_ok());
+    assert!(CheckedRwas::capture(&world, 1482).is_ok());
     assert!(matches!(
-        CheckedRwas::capture(&world, 17),
+        CheckedRwas::capture(&world, 1481),
         Err(GroupedOwnershipError::WorkLimit)
     ));
     {
@@ -236,20 +183,20 @@ fn exact_work_charges_every_physical_row_and_absent_undo_entry() {
         block.remove(NftId::new(domain(), "absent".parse().unwrap()));
         block.commit();
     }
-    // The absent preimage is visited once for each of the two exact groups.
+    // The Name6 absent preimage adds44 to each of four predecessor source visits.
     assert!(matches!(
-        CheckedNfts::capture(&world, 13),
+        CheckedNfts::capture(&world, 907),
         Err(GroupedOwnershipError::WorkLimit)
     ));
-    assert!(CheckedNfts::capture(&world, 14).is_ok());
+    assert!(CheckedNfts::capture(&world, 908).is_ok());
 }
 
 #[test]
 fn every_original_native_identity_is_checked_even_for_noop_publication() {
     for index in 0..7 {
         let world = fixture();
-        let nfts = CheckedNfts::capture(&world, 1024).unwrap();
-        let rwas = CheckedRwas::capture(&world, 1024).unwrap();
+        let nfts = CheckedNfts::capture(&world, world_work(&world, false)).unwrap();
+        let rwas = CheckedRwas::capture(&world, world_work(&world, true)).unwrap();
         match index {
             0 => world.nfts.block().commit(),
             1 => world.nfts_by_owner.block().commit(),

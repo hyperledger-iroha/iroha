@@ -113,7 +113,7 @@ fn literal_and_load_tariffs_reach_exact_zero_and_refund_failed_capture() {
         let mut lease =
             ExecutionMemoryLease::reserve(&budget, NativeInvocation::allocation_plan().unwrap())
                 .unwrap();
-        let result = NativeInvocation::run_unit_root(
+        let result = NativeInvocation::run_public_leaf_root(
             artifact_with_literals(&body, 16, &[u64::MAX]),
             "main",
             gas,

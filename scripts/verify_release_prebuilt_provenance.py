@@ -26,8 +26,10 @@ stable_read_relative = _CONTRACT.stable_read_relative
 release_acceleration_features = _CONTRACT.release_acceleration_features
 release_ivm_backend = _CONTRACT.release_ivm_backend
 validate_release_acceleration = _CONTRACT.validate_release_acceleration
+require_release_cuda_source_inputs = _CONTRACT.require_release_cuda_source_inputs
 
 
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_NAME = "release-prebuilt-provenance.json"
 SCHEMA = "iroha.release_prebuilt_provenance"
 SCHEMA_VERSION = 1
@@ -86,7 +88,6 @@ def verify_prebuilt_directory(
     target: str,
     cargo_profile: str,
     selected_features: tuple[str, ...],
-    trusted_cuda_key_sha256: str | None,
     binaries: dict[str, str],
     output_directory: Path,
 ) -> str:
@@ -161,18 +162,11 @@ def verify_prebuilt_directory(
         if manifest.get(key) != expected:
             _fail(f"prebuilt provenance manifest {key} does not match release input")
 
-    cuda_bundle_sha256 = None
-    if release_ivm_backend(target) == "cuda":
-        cuda_root = cargo_lock.parent / "crates/ivm/cuda"
-        bundle_info, _ = stable_read_relative(
-            cuda_root, "provenance.v1", max_size=16 * 1024, return_payload=False,
-        )
-        key_info, _ = stable_read_relative(
-            cuda_root, "provenance.v1.pub", max_size=32, return_payload=True,
-        )
-        if key_info.size != 32 or key_info.sha256 != trusted_cuda_key_sha256:
-            _fail("source CUDA public key differs from independently reviewed fingerprint")
-        cuda_bundle_sha256 = bundle_info.sha256
+    if cargo_lock.absolute() != SOURCE_ROOT / "Cargo.lock":
+        _fail("prebuilt Cargo.lock must belong to the executing reviewed source owner")
+    pins = require_release_cuda_source_inputs(SOURCE_ROOT, target)
+    trusted_cuda_key_sha256 = pins.public_key_sha256 if pins else None
+    cuda_bundle_sha256 = pins.manifest_sha256 if pins else None
     validate_release_acceleration(
         target, manifest["acceleration"],
         trusted_cuda_key_sha256=trusted_cuda_key_sha256,
@@ -236,7 +230,6 @@ def main() -> int:
     parser.add_argument("--target", required=True)
     parser.add_argument("--cargo-profile", required=True)
     parser.add_argument("--features", default="")
-    parser.add_argument("--trusted-cuda-key-sha256")
     parser.add_argument("--binary", action="append", default=[])
     parser.add_argument("--output-directory", required=True)
     args = parser.parse_args()
@@ -249,7 +242,6 @@ def main() -> int:
             target=args.target,
             cargo_profile=args.cargo_profile,
             selected_features=parse_features(args.features),
-            trusted_cuda_key_sha256=args.trusted_cuda_key_sha256,
             binaries=parse_binary_specs(args.binary),
             output_directory=Path(args.output_directory),
         )

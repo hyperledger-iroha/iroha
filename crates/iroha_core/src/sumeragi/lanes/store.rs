@@ -327,7 +327,7 @@ impl FileLaneBlockStore {
     /// Each mutex is probed separately without waiting or reversing the batch-to-state lock
     /// order. A busy owner conservatively remains retained for later reconciliation.
     pub(super) fn retains_pending_work(&self) -> bool {
-        if cfg!(all(test, sumeragi_core_mutation = "HC116")) {
+        if cfg!(all(test, sumeragi_core_mutation = "HC123")) {
             return self.batch_read.try_lock().is_none_or(|slot| slot.is_some());
         }
         let Some(state) = self.state.try_lock() else {

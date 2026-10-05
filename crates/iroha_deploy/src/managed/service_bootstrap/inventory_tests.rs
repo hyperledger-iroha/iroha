@@ -21,6 +21,8 @@ fn absent_parent_refuses_later_child_material_before_creating_initial_custody() 
         None,
     )
     .unwrap();
+    // Generation is complete; the mock peers now own the exact reserved HTTP endpoints.
+    drop(ports);
     let mut owner = ManagedServiceBootstrap::open(&prepared).unwrap();
     let provider = owner
         .authority
@@ -71,15 +73,20 @@ fn absent_parent_refuses_later_child_material_before_creating_initial_custody() 
     }
     // A clean preflight directory is harmless; it supplies no native authority.
     std::fs::remove_file(child.path().join("original.nrt")).unwrap();
-    assert!(
-        owner
-            .authorize_generated_startup(
-                Instant::now() + Duration::from_secs(60),
-                Arc::new(AtomicBool::new(false))
-            )
-            .unwrap()
-            .is_some()
-    );
+    let (authorization, authority_opens) =
+        crate::managed::service_authority::ServiceChildInventory::test_count_authority_opens(
+            || {
+                owner.authorize_generated_startup(
+                    Instant::now() + Duration::from_secs(60),
+                    Arc::new(AtomicBool::new(false)),
+                )
+            },
+        );
+    assert!(authorization.unwrap().is_some());
+    // The retained empty capacity purpose is reconstructed in each complete census (two opens).
+    // The ordinary first-child reserve-policy probe remains unchanged (one additional open).
+    // Every other exact absent census child uses the same authenticated parent.
+    assert_eq!(authority_opens, 3);
     assert!(peers.requests.lock().unwrap().is_empty());
     peers.finish();
 }

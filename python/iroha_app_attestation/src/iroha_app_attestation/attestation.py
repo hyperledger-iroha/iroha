@@ -73,6 +73,16 @@ class AttestationRejected(ValueError):
     """Raw evidence does not match the independently selected scope."""
 
 
+class VerificationUnavailable(AttestationRejected):
+    """A live verification dependency could not answer.
+
+    Raised when Google's revocation status, the Play Integrity decoder or its
+    OAuth token is unavailable. The evidence is not known to be bad. It stays
+    an ``AttestationRejected`` so every generic handler fails closed; issuer
+    routes report it as a retryable ``503 issuer_unavailable``.
+    """
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise AttestationRejected(message)
@@ -178,31 +188,50 @@ def patch_level_yyyymm(value: int) -> int | None:
     return None
 
 
-def require_android_patch_floor(levels: AndroidPatchLevels, floor_yyyymm: int) -> None:
-    """Apply an authenticated enrollment patch floor to verified patch levels.
+def validate_android_patch_floor(floor_yyyymm: int) -> int:
+    """Check a configured enrollment patch floor (YYYYMM) and return it.
 
-    The hardware-enforced OS patch level must be present. Every reported OS,
-    vendor or boot patch level must parse and be at least ``floor_yyyymm``;
-    a vendor or boot level of zero or an absent tag means "not reported".
-    ``levels`` must come from a ``RawPlatformProof`` whose chain verified.
-
-    TODO: carry the floor in the Native-selected Android policy (the Rust
-    hardware-profile owner and ``native_policy_projection.py``) and call this
-    from ``ordinary_provider.GovernedOrdinaryEvidenceProvider.prepare_raw``;
-    spec §2.2 requires an enrollment patch policy.
+    A malformed floor is a configuration fault, so this raises rather than
+    letting every device appear to miss the policy.
     """
-    require(type(levels) is AndroidPatchLevels, "verified Android patch levels absent")
     require(type(floor_yyyymm) is int and patch_level_yyyymm(floor_yyyymm) == floor_yyyymm,
             "invalid Android patch floor")
-    require(type(levels.os_patch_level) is int and levels.os_patch_level != 0,
-            "hardware-enforced Android OS patch level absent")
-    for name, level in (("OS", levels.os_patch_level), ("vendor", levels.vendor_patch_level),
-                        ("boot", levels.boot_patch_level)):
+    return floor_yyyymm
+
+
+def android_patch_policy_met(levels: AndroidPatchLevels, floor_yyyymm: int) -> bool:
+    """Whether verified patch levels meet an enrollment floor.
+
+    This is the evidence-record fact ``PATCH_POLICY_MET`` (fact bit 4,
+    ``specs/kagemusha_wallet_wire_v1.md`` §3.1). Android enrollment does not
+    require that bit, so an unmet policy is a recorded fact, not a rejection.
+    The policy is met when the hardware-enforced OS patch level is present and
+    every reported OS, vendor or boot level parses and is at least
+    ``floor_yyyymm``; a vendor or boot level of zero or an absent tag means
+    "not reported". ``levels`` must come from a ``RawPlatformProof`` whose
+    chain verified. Only an invalid floor or levels object raises.
+
+    TODO: carry the floor in the Native-selected Android policy (the Rust
+    hardware-profile owner and ``native_policy_projection.py``) and set the
+    ``PATCH_POLICY_MET`` fact from this predicate when
+    ``ordinary_provider.GovernedOrdinaryEvidenceProvider.prepare_raw`` builds
+    the enrollment evidence record (spec §2.2 "enrollment patch policy").
+    """
+    require(type(levels) is AndroidPatchLevels
+            and all(level is None or type(level) is int
+                    for level in (levels.os_patch_level, levels.vendor_patch_level,
+                                  levels.boot_patch_level)),
+            "verified Android patch levels absent")
+    floor = validate_android_patch_floor(floor_yyyymm)
+    if levels.os_patch_level is None or levels.os_patch_level == 0:
+        return False
+    for level in (levels.os_patch_level, levels.vendor_patch_level, levels.boot_patch_level):
         if level is None or level == 0:
             continue
         normalized = patch_level_yyyymm(level)
-        require(normalized is not None, f"unparsable Android {name} patch level")
-        require(normalized >= floor_yyyymm, f"Android {name} patch level is below the enrollment floor")
+        if normalized is None or normalized < floor:
+            return False
+    return True
 
 
 @dataclass(frozen=True)

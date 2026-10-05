@@ -5,6 +5,7 @@ The tests use a synthetic OEM chain, a simulated deployment policy holder,
 mocked Google TLS response and mocked encoder output. They do not establish a
 production Native policy, canonical certificate or physical qualification.
 """
+import base64
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import urllib.error
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
@@ -22,6 +24,7 @@ from unittest.mock import patch
 from iroha_app_attestation.attestation import AttestationRejected, encode_android_chain
 from iroha_app_attestation.ordinary_enrollment import CHALLENGE_BODY_BYTES, OrdinaryPlatformEvidenceChallenge
 from iroha_app_attestation.ordinary_issuance import CanonicalOrdinaryCredentialEncoder, CanonicalRawAppAdmissionEncoder, DurableOrdinaryCredentialIssuer
+from iroha_app_attestation.ordinary_service import PATH, SCHEMA, OrdinaryCredentialService
 from iroha_app_attestation.ordinary_provider import (GovernedOrdinaryEvidenceProvider,
     OrdinaryCredentialRequest, OrdinaryReleasePolicy)
 from iroha_app_attestation.play_integrity import GooglePlayIntegrityVerifier, PlayIntegrityPolicy, request_hash_text
@@ -362,6 +365,46 @@ class OrdinaryIssuanceTests(unittest.TestCase):
             with self.assertRaisesRegex(AttestationRejected,'expired'):
                 self.issuer.issue(self.request)
             self.assertEqual(self.rows(),[]);network.assert_not_called();encoder.assert_not_called()
+
+    def test_google_outage_after_reservation_is_retryable_and_the_same_attempt_then_issues(self):
+        outage=[OSError('synthetic OAuth outage')]
+        def access():
+            if outage:raise outage[0]
+            return 'synthetic-service-access-token'
+        provider=GovernedOrdinaryEvidenceProvider(policies=(self.policy,),
+            trusted_time_interval=lambda:NativeTimeInterval(self.now,self.now),recheck_native_policy=self.recheck,
+            openssl_path=self.openssl,play_integrity=GooglePlayIntegrityVerifier(access))
+        issuer=DurableOrdinaryCredentialIssuer(path=self.path,provider=provider,encoder=self.encoder,raw_encoder=self.raw_encoder)
+        owner=object();service=OrdinaryCredentialService(issuer=issuer,authorize_core_call=lambda offered:offered is owner)
+        r=self.request;encode=lambda value:base64.b64encode(value).decode()
+        body=json.dumps({'schema':SCHEMA,'operation':r.operation,'operation_id':r.operation_id.hex(),
+            'signed_preparation_base64':encode(r.signed_preparation),
+            'attested_public_key_sec1_base64':encode(r.attested_public_key_sec1),
+            'raw_attestation_base64':encode(r.raw_attestation),
+            'app_possession':{'platform':'android_keystore','signature_der_base64':encode(r.raw_possession)},
+            'play_integrity_token':r.play_integrity_token}).encode()
+        handle=lambda:service.handle(method='POST',path=PATH,body=body,content_type='application/json',transport_context=owner)
+        unavailable=(503,b'{"error":"issuer_unavailable"}')
+        with (patch('iroha_app_attestation.play_integrity.urllib.request.build_opener') as network,
+             patch('iroha_app_attestation.ordinary_issuance.encode_ordinary_with_iroha',return_value=b'mocked-result') as encoder):
+            network.return_value.open.return_value=Response(self.google_body)
+            self.assertEqual(handle(),unavailable)
+            network.return_value.open.assert_not_called()
+            outage.clear()
+            for failure in (urllib.error.HTTPError(Response.url,503,'unavailable',{},None),
+                            urllib.error.URLError('offline')):
+                network.return_value.open.side_effect=failure
+                with self.subTest(failure=type(failure).__name__):self.assertEqual(handle(),unavailable)
+            # Only Google's own refusal of the token is a rejected credential.
+            network.return_value.open.side_effect=urllib.error.HTTPError(Response.url,400,'INVALID_ARGUMENT',{},None)
+            self.assertEqual(handle(),(409,b'{"error":"credential_rejected"}'))
+            encoder.assert_not_called()
+            row=self.rows()[0];self.assertIsNone(row[1]);self.assertIsNone(row[3])
+            network.return_value.open.side_effect=None
+            status,result=handle()
+        self.assertEqual(status,200)
+        self.assertEqual(base64.b64decode(json.loads(result)['certificate_base64']),b'mocked-result')
+        self.assertEqual(self.rows()[0][1],self.google_body);self.assertEqual(encoder.call_count,1)
 
     def test_failed_verdict_reserves_attempt_but_never_publishes_signing_input(self):
         value=json.loads(self.google_body);value['tokenPayloadExternal']['accountDetails']['appLicensingVerdict']='UNLICENSED'

@@ -111,6 +111,46 @@ impl FrameInput {
         Ok(())
     }
 
+    pub(super) fn source_identity(&self) -> Result<[u64; 2], FrameReadError> {
+        self.validate_source()?;
+        Ok([self.identity.dev(), self.identity.ino()])
+    }
+    /// Original count of fully consumed frames; no partial read advances it.
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+    /// Refuse importing an empty cursor over any original partial/full frame.
+    pub(super) fn require_empty_cursor(&self) -> Result<(), FrameReadError> {
+        self.check_deadline()?;
+        self.validate_source()?;
+        if self.complete || self.header_read != 0 || self.body.is_some() || self.body_read != 0 {
+            return Err(FrameReadError::Phase);
+        }
+        Ok(())
+    }
+    /// Called only after the enclosing original durable head is authenticated.
+    /// Restore the exact recorded generation on the same inherited empty stream;
+    /// this cannot clear consumed bytes, reopen a FIFO or enlarge a partial frame.
+    pub(super) fn restore_empty_cursor(
+        &mut self,
+        generation: u64,
+        maximum: usize,
+        original_source: [u64; 2],
+    ) -> Result<(), FrameReadError> {
+        self.require_empty_cursor()?;
+        if self.source_identity()? != original_source
+            || (self.generation != 0 && self.generation != generation)
+        {
+            return Err(FrameReadError::Custody);
+        }
+        self.set_next_maximum(maximum)?;
+        self.generation = generation;
+        Ok(())
+    }
+    pub(super) fn tighten_deadline(&mut self, deadline: Instant) {
+        self.deadline = self.deadline.min(deadline);
+    }
+
     fn validate_source(&self) -> Result<(), FrameReadError> {
         let now = self.descriptor.metadata().map_err(FrameReadError::Io)?;
         let old = &self.identity;
@@ -239,12 +279,14 @@ impl FrameInput {
 
     /// Borrow only the complete original frame; decode errors cannot consume it.
     pub(super) fn frame(&self) -> Option<&[u8]> {
-        self.complete.then(|| {
-            self.body
-                .as_ref()
-                .expect("complete original frame")
-                .as_slice()
-        })
+        self.charged_frame().map(ChargedBuffer::as_slice)
+    }
+
+    /// Borrow the same actual source backing only after the original FIFO frame completes.
+    /// Its pool and immutable allocation identity remain available to native proof decoding.
+    pub(super) fn charged_frame(&self) -> Option<&ChargedBuffer<u8>> {
+        self.complete
+            .then(|| self.body.as_ref().expect("complete original frame"))
     }
 
     /// Select the next already authenticated geometry only between complete frames.

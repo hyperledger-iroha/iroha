@@ -26,6 +26,8 @@ mod account_alias_ownership;
 
 mod account_identity_ownership;
 
+pub(in crate::state) mod borrowed_controller_work;
+
 mod grouped_ownership;
 
 /// Fixed bare payload layout for a canonical V1 State leaf.

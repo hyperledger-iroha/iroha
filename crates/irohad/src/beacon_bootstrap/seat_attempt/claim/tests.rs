@@ -211,9 +211,14 @@ fn one_shot_attempt_directory_cannot_reroll_after_restart() {
         std::ffi::OsStr::new(Name::new(attempt.as_ref(), 1).unwrap().as_str())
     );
     let mut publication = super::super::publication::PhasePublication::new(
-        super::super::publication::PhaseFile::Journal,
+        super::super::publication::PhaseFile::GenerationIntent,
     );
-    publication.publish(directory, b"{}").unwrap();
+    publication
+        .publish(
+            directory,
+            b"original immutable producer-intent writer source",
+        )
+        .unwrap();
     assert!(publication.complete());
     drop(publication);
     drop(first);

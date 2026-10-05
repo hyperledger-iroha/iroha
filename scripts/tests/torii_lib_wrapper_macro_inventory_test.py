@@ -264,12 +264,15 @@ FAMILIES = {
 
 ROUTE_MACRO_DEFINITION_SHA256 = {
     "mount_subscription_mutation": "68947e4ed41a19abd272c78f0aa36e7155064773b2d22242651dcfaec36803ee",
-    "catalog_route_policy": "3c5d167f1473d8c6b72fd10bd5080253025ca44fcd6bcbffcd1b47733655048b",
+    "catalog_route_policy": "a91b9909b29552873bb09e4a0bb2a7f290b2f784dfe304cec9aa6440d9d59198",
+    "define_catalog_route_policies": "55fa267f78a7ea35cdb199bed4427fefb81830b115d96fe27cb113b894408ac8",
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_ROW_COUNT = 577
-ROUTE_TUPLE_SHA256 = "52f51134b9beed712bd266fae4a4b8b054a7bdb73b86a39a6bfad8fb370129cb"
+ROUTE_POLICY_DECLARATIONS_SHA256 = "c9cd5d54a3818e070e662a1406ee781198ed4ab41411acb583a8c475bdfae006"
+ROUTE_POLICY_NAMES = ('canonical_account_delete', 'canonical_account_get', 'canonical_account_proof_get', 'canonical_account_post', 'canonical_account_proof_post', 'canonical_signature_delete', 'canonical_signature_get', 'optional_canonical_signature_get', 'canonical_signature_post', 'canonical_signed_post', 'layered_canonical_account_post', 'layered_canonical_signature_get', 'layered_canonical_signature_post', 'layered_canonical_signed_post', 'layered_public_get', 'limited_canonical_account_get', 'limited_canonical_account_post', 'limited_canonical_signature_post', 'limited_optional_canonical_signature_post', 'limited_canonical_signed_post', 'limited_hardened_canonical_signature_get', 'limited_operator_get', 'limited_operator_post', 'limited_protocol_handshake_get', 'limited_protocol_handshake_post', 'limited_public_get', 'limited_unauthenticated_get', 'limited_public_post', 'private_root_owner_get', 'onboarding_get', 'onboarding_post', 'operator_credential_post', 'operator_delete', 'operator_get', 'operator_post', 'protocol_handshake_post', 'public_get', 'public_post', 'unauthenticated_any', 'unauthenticated_get')
+ROUTE_ROW_COUNT = 602
+ROUTE_TUPLE_SHA256 = "8f64058a1a4158f637d974fbb87247872d8014b7fd590f46c24df90c2131f5e7"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -367,10 +370,13 @@ _MACRO_SOURCE_TOKEN = re.compile(
 
 
 @lru_cache(maxsize=1)
-def _macro_definition_starts(source: str) -> tuple[tuple[str, int], ...]:
-    """Locate code declarations; cache one source while its families are checked."""
+def _macro_source_positions(
+    source: str,
+) -> tuple[tuple[tuple[str, int], ...], tuple[tuple[str, int, int, bool], ...]]:
+    """Locate code macro declarations and calls through one shared lexer."""
 
     declarations: list[tuple[str, int]] = []
+    invocations: list[tuple[str, int, int, bool]] = []
     previous: list[tuple[str, int]] = []
     cursor = 0
     while cursor < len(source):
@@ -387,7 +393,7 @@ def _macro_definition_starts(source: str) -> tuple[tuple[str, int], ...]:
                 opening = source.find("/*", cursor)
                 closing = source.find("*/", cursor)
                 if closing < 0:
-                    return ()
+                    return ((), ())
                 if 0 <= opening < closing:
                     depth += 1
                     cursor = opening + 2
@@ -399,7 +405,7 @@ def _macro_definition_starts(source: str) -> tuple[tuple[str, int], ...]:
             marker = '"' + match.group("raw_hashes")
             closing = source.find(marker, cursor)
             if closing < 0:
-                return ()
+                return ((), ())
             cursor = closing + len(marker)
             previous.clear()
             continue
@@ -408,16 +414,55 @@ def _macro_definition_starts(source: str) -> tuple[tuple[str, int], ...]:
         ):
             previous.clear()
             continue
+        if (
+            len(previous) >= 2
+            and previous[-1][0] == "!"
+            and token in "({["
+            and re.fullmatch(r"(?:r#)?[A-Za-z_][A-Za-z_0-9]*", previous[-2][0])
+        ):
+            qualified = len(previous) >= 3 and previous[-3][0] == ":"
+            invocations.append(
+                (previous[-2][0].removeprefix("r#"), previous[-2][1], position, qualified)
+            )
         identifier = token.removeprefix("r#")
         if (
-            len(previous) == 2
-            and previous[0][0] == "macro_rules"
-            and previous[1][0] == "!"
+            len(previous) >= 2
+            and previous[-2][0] == "macro_rules"
+            and previous[-1][0] == "!"
             and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", identifier)
         ):
-            declarations.append((identifier, previous[0][1]))
-        previous = (previous + [(token, position)])[-2:]
-    return tuple(declarations)
+            declarations.append((identifier, previous[-2][1]))
+        previous = (previous + [(token, position)])[-3:]
+    return tuple(declarations), tuple(invocations)
+
+
+def _macro_definition_starts(source: str) -> tuple[tuple[str, int], ...]:
+    """Return code declarations, including raw identifiers and nested-comment separators."""
+
+    return _macro_source_positions(source)[0]
+
+
+def _route_policy_declarations(source: str) -> str:
+    """Bind the sole real generator call and reject direct policy shadowing."""
+
+    declarations, invocations = _macro_source_positions(source)
+    calls = [(start, opening, qualified) for name, start, opening, qualified in invocations
+             if name == "define_catalog_route_policies"]
+    if len(calls) != 1:
+        raise GuardError("route policy generator must have exactly one invocation")
+    if any(name in ROUTE_POLICY_NAMES for name, _ in declarations):
+        raise GuardError("generated route policy has a shadowing direct definition")
+    start, opening, qualified = calls[0]
+    if qualified:
+        raise GuardError("route policy generator must use its connected unqualified namespace")
+    if source[opening] != "{":
+        raise GuardError("route policy generator invocation must use its declared body")
+    closing = _matching_delimiter(source, opening, "{", "}")
+    invocation = source[start:closing + 1]
+    canonical_invocation = invocation.removeprefix("r#")
+    if _sha256(_normalized_tokens(canonical_invocation)) != ROUTE_POLICY_DECLARATIONS_SHA256:
+        raise GuardError("route policy declarations, compilation guards, or bodies drifted")
+    return invocation
 
 
 def _unique_macro_start(source: str, name: str) -> int:
@@ -946,6 +991,7 @@ def _validate_route_tables(source: str) -> None:
         definition = _route_macro_definition(source, name)
         if _sha256(_normalized_tokens(definition)) != expected:
             raise GuardError(f"{name} definition drifted")
+    _route_policy_declarations(source)
     rows = _route_table_rows(source)
     if len(rows) != ROUTE_ROW_COUNT:
         raise GuardError("Torii route row count drifted")
@@ -1235,10 +1281,10 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
         self.assertEqual([row[2].rsplit("::", 1)[1] for row in rows], [
             "READINESS", "TOP_UP", "REDEEM", "OPERATION", "AUTHORITY_STATE",
             "RESOURCE_NAMES_STATE", "AUTHORITY_ORIGINALS", "ORDINARY_WALLET_CURRENT",
-            "ORDINARY_MINT_ISSUER_PURPOSE",
+            "ORDINARY_MINT_ISSUER_PURPOSE", "ORDINARY_MINT_FINALIZED", "ORDINARY_MINT_CREDIT",
         ])
         self.assertTrue(all(row[0] == "always" for row in rows))
-        self.assertEqual(rows[-2], (
+        self.assertEqual(rows[-4], (
             "always", "POST", "route_catalog::kagemusha::ORDINARY_WALLET_CURRENT",
             "ordinary_wallet_current::handler",
             "max(iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1)",
@@ -1271,7 +1317,7 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
         rows = _route_table_rows(self.source)
         self.assertEqual(rows.count(expected), 1)
         kagemusha = [row for row in rows if row[2].startswith("route_catalog::kagemusha::")]
-        self.assertEqual(kagemusha[-1], expected)
+        self.assertEqual(kagemusha[-3], expected)
         wallet = next(row for row in rows if row[2] == "route_catalog::kagemusha::ORDINARY_WALLET_CURRENT")
         self.assertEqual(rows.index(expected), rows.index(wallet) + 1)
         mount = "ORDINARY_MINT_ISSUER_PURPOSE => limited_canonical_signature_post(ordinary_mint_issuer_purpose::handler, iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1);"
@@ -1300,6 +1346,62 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
         self.assertNotEqual(reordered, self.source)
         with self.assertRaises(GuardError):
             validate_source(reordered)
+
+    def test_route_policy_generator_and_declared_bodies_stay_connected(self) -> None:
+        """Guard every actual policy body, its generator, and the connected dispatcher."""
+        invocation = _route_policy_declarations(self.source)
+        generator = _route_macro_definition(self.source, "define_catalog_route_policies")
+        dispatcher = _route_macro_definition(self.source, "catalog_route_policy")
+        for definition, old, new in (
+            (dispatcher, "$policy! $arguments", "public_get! $arguments"),
+            (generator, "$(#[$guard])*", ""),
+            (generator, "$pattern => $body", "$pattern => {}"),
+            (invocation, '#[cfg(feature = "app_api")]', '#[cfg(feature = "telemetry")]'),
+            (invocation, "catalog_get($handler).authenticated_operator($state.clone())",
+             "catalog_get($handler)"),
+            (invocation, "HandlerAuthentication::PrivateRootOwnerToken",
+             "HandlerAuthentication::OptionalCanonicalAccountSignature"),
+            (invocation, "DefaultBodyLimit::max($body_limit)", "DefaultBodyLimit::max(0)"),
+            (invocation, "canonical_account_proof_post ($handler:path, $state:ident, $proof_limit:expr)",
+             "canonical_account_proof_post ($handler:path, $state:ident, $proof_limit:tt)"),
+        ):
+            with self.subTest(old=old, new=new):
+                self.assertIn(old, definition)
+                changed = definition.replace(old, new, 1)
+                self.assertNotEqual(changed, definition)
+                with self.assertRaises(GuardError):
+                    validate_source(self.source.replace(definition, changed, 1))
+        for replacement in ("", invocation + "\n" + invocation):
+            with self.subTest(generator_invocation=replacement):
+                with self.assertRaisesRegex(GuardError, "exactly one invocation"):
+                    validate_source(self.source.replace(invocation, replacement, 1))
+        for prefix in (
+            "spoof::",
+            "::",
+            "spoof /* namespace */ : /* separator */ : ",
+            "spoof /* nested /* namespace */ comment */ :: /* call */ ",
+            "spoof::r#",
+            "r#spoof /* namespace */ : /* separator */ : r#",
+        ):
+            with self.subTest(generator_namespace=prefix):
+                changed = self.source.replace(invocation, prefix + invocation, 1)
+                self.assertNotEqual(changed, self.source)
+                with self.assertRaisesRegex(GuardError, "connected unqualified namespace"):
+                    validate_source(changed)
+        validate_source(self.source.replace(invocation, "r#" + invocation, 1))
+        for name in ROUTE_POLICY_NAMES:
+            for spelling in (name, "r#" + name):
+                with self.subTest(policy=spelling):
+                    shadow = f"macro_rules! {spelling} {{ ($($unused:tt)*) => {{}}; }}\n"
+                    with self.assertRaisesRegex(GuardError, "shadowing direct definition"):
+                        validate_source(self.source.replace(dispatcher, shadow + dispatcher, 1))
+        decoys = ('// define_catalog_route_policies! { decoy }\n'
+                  '/* outer /* define_catalog_route_policies! { decoy } */ tail */\n'
+                  'const DECOY: &str = r###"define_catalog_route_policies! { decoy }"###;\n'
+                  '// spoof::define_catalog_route_policies! { decoy }\n'
+                  '/* outer /* spoof::r#define_catalog_route_policies! { decoy } */ tail */\n'
+                  'const QUALIFIED_DECOY: &str = r###"spoof::define_catalog_route_policies! { decoy }"###;\n')
+        validate_source(decoys + self.source)
 
     def test_route_policy_inventory_and_cfg_mutations_fail(self) -> None:
         mutations = (

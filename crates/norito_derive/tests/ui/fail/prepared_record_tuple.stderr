@@ -1,5 +1,0 @@
-error: decode_fields requires a closed named record
- --> tests/ui/fail/prepared_record_tuple.rs:4:8
-  |
-4 | struct Tuple(u8);
-  |        ^^^^^

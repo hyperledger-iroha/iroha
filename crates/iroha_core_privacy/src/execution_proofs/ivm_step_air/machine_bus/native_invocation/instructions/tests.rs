@@ -51,7 +51,8 @@ pub(super) fn native(artifact: PreparedContract) -> (NativeInvocation, Allocatio
     )
     .unwrap();
     let native =
-        NativeInvocation::run_unit_root(artifact, "main", 10_000, &mut parent, &budget).unwrap();
+        NativeInvocation::run_public_leaf_root(artifact, "main", 10_000, &mut parent, &budget)
+            .unwrap();
     (native, budget)
 }
 pub(super) fn root(native: &NativeInvocation) -> root::Plan {

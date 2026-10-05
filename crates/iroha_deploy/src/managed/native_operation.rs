@@ -31,6 +31,9 @@ const MAX_REPLAY_SUCCESSORS: u64 = 16;
 #[path = "native_operation/attempts.rs"]
 pub(super) mod attempts;
 
+#[path = "native_operation/authorization.rs"]
+pub(super) mod authorization;
+
 /// Independent successful inclusion of the exact original signed wallet transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ManagedTransactionFinality {
@@ -274,6 +277,27 @@ impl ServiceAuthority {
             .and_then(|e| e.get("block_height"))
             .and_then(norito::json::Value::as_u64)
             .ok_or_else(|| invalid("Applied native operation observation has no carrier hint"))?;
+        self.advance_carrier_at(
+            directory,
+            original_checkpoint,
+            transaction,
+            height,
+            observed_height,
+            deadline,
+        )
+    }
+
+    /// An authenticated native row may supply the same non-authoritative carrier height hint.
+    /// Original wire, successful execution and the complete certified replay remain mandatory.
+    pub(super) fn advance_carrier_at(
+        &self,
+        directory: &PrivateDirectory,
+        original_checkpoint: &[u8],
+        transaction: &SignedTransaction,
+        height: u64,
+        observed_height: u64,
+        deadline: Instant,
+    ) -> Result<Option<ManagedTransactionFinality>> {
         let original_verifier = self.decode_checkpoint(original_checkpoint)?;
         if height <= original_verifier.checkpoint().height() {
             return Err(invalid(
@@ -290,27 +314,39 @@ impl ServiceAuthority {
             .transpose()?;
         let mut verifier = replay_start(original_verifier, progress, height)?;
         let source = self.source(verifier.checkpoint().height(), deadline)?;
-        let target = height.min(
-            verifier
-                .checkpoint()
-                .height()
-                .saturating_add(MAX_REPLAY_SUCCESSORS),
-        );
-        verifier
-            .catch_up(
-                &source,
-                NonZeroU64::new(target).ok_or_else(|| invalid("zero native operation carrier"))?,
-            )
-            .map_err(|_| invalid("original native operation carrier replay unavailable"))?;
-        let bytes = checkpoint_bytes(&verifier)?;
-        directory.write_atomic("replay.nrt", &bytes, PublishMode::Replace)?;
-        if verifier.checkpoint().height() != height {
-            return Ok(None);
-        }
-        let finalized = verify_carrier(&verifier, transaction)?;
-        directory.write_atomic("carrier.nrt", &bytes, PublishMode::CreateNew)?;
-        Ok(Some(finalized))
+        retain_carrier_progress(directory, transaction, &mut verifier, height, &source)
     }
+}
+
+/// Retain a bounded verified replay from the sole finality-source abstraction. Test sources
+/// execute the original generated native chain; no decoded report supplies successful inclusion.
+pub(crate) fn retain_carrier_progress(
+    directory: &PrivateDirectory,
+    transaction: &SignedTransaction,
+    verifier: &mut FinalityVerifier,
+    height: u64,
+    source: &impl FinalitySource,
+) -> Result<Option<ManagedTransactionFinality>> {
+    let target = height.min(
+        verifier
+            .checkpoint()
+            .height()
+            .saturating_add(MAX_REPLAY_SUCCESSORS),
+    );
+    verifier
+        .catch_up(
+            source,
+            NonZeroU64::new(target).ok_or_else(|| invalid("zero native operation carrier"))?,
+        )
+        .map_err(|_| invalid("original native operation carrier replay unavailable"))?;
+    let bytes = checkpoint_bytes(verifier)?;
+    directory.write_atomic("replay.nrt", &bytes, PublishMode::Replace)?;
+    if verifier.checkpoint().height() != height {
+        return Ok(None);
+    }
+    let finalized = verify_carrier(verifier, transaction)?;
+    directory.write_atomic("carrier.nrt", &bytes, PublishMode::CreateNew)?;
+    Ok(Some(finalized))
 }
 
 // Every candidate is checked by the supplied SDK operation against the same independently
@@ -485,6 +521,15 @@ pub(super) fn checkpoint_bytes(verifier: &FinalityVerifier) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+// Call only around local existing-only custody validation. Remote/source failures retain their
+// own classification; a decoder result never supplies current service authority.
+pub(in crate::managed) fn require_retained_material<T>(value: Result<T>) -> Result<T> {
+    value.map_err(|error| match error {
+        Error::Bootstrap(_) => error,
+        _ => super::ManagedBootstrapFailure::RetainedMaterial.into(),
+    })
+}
+
 pub(super) fn invalid(message: &'static str) -> Error {
     Error::Invalid(message.into())
 }

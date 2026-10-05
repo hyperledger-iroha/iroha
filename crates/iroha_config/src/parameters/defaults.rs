@@ -352,8 +352,6 @@ pub mod musubi_publication {
     pub const CUSTODY_ROOT: &str = "./storage/musubi-publication";
     /// Loopback-only listener until an operator injects a qualified private TLS deployment.
     pub const PRIVATE_TLS_BIND: &str = "127.0.0.1:18495";
-    /// Exact mount prefix stripped by the private TLS ingress.
-    pub const PRIVATE_MOUNT_PREFIX: &str = "/private";
     /// Bound on concurrent private TLS requests and their admitted body reservations.
     pub const MAX_INFLIGHT_REQUESTS: u16 = 2;
     /// Lifetime operation capacity of the durable publication journal.
@@ -378,6 +376,10 @@ pub mod musubi_publication {
     pub const PIN_RETENTION_HORIZON_SECS: u64 = 30 * 24 * 60 * 60;
     /// Operator ceiling for one paid-pin retention request.
     pub const MAX_PIN_RETENTION_HORIZON_SECS: u64 = 365 * 24 * 60 * 60;
+    /// Finite budget for each fresh native provider discovery during publication readback.
+    pub const READBACK_REQUEST_TIMEOUT_MS: u64 = 30_000;
+    /// Maximum independent native discovery budget, matching the account-read transport bound.
+    pub const MAX_READBACK_REQUEST_TIMEOUT_MS: u64 = 120_000;
     /// Resolve the exact paid-pin transaction account from the qualified ingress broker.
     pub const PIN_TRANSACTION_AUTHORITY: &str = "ingress_broker";
 
@@ -590,7 +592,7 @@ pub mod compute {
     }
     /// Maximum allowed requests per second (token-bucket rate limit).
     pub const fn max_requests_per_second() -> NonZeroU32 {
-        nonzero!(200_u32)
+        nonzero!(super::torii::DEFAULT_REQUEST_RATE_PER_SEC)
     }
     /// Target p50 latency budget in milliseconds for compute calls.
     pub const fn target_p50_latency_ms() -> NonZeroU64 {

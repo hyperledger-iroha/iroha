@@ -282,6 +282,28 @@ mod app_routed_read_http_admission_tests {
         .expect("completed worker returns its owner");
     }
 
+    #[tokio::test]
+    async fn producer_body_budget_requires_the_actual_query_owner() {
+        let app = mk_app_state_for_tests();
+        let owner = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let expected = owner.admitted_envelope(&app).unwrap().route_body_bytes;
+        let mut admission = COLLECTION_READ_MEMORY_RESERVATION
+            .scope(owner, acquire_query_admission(app.as_ref(), false))
+            .await
+            .unwrap();
+        assert_eq!(admission.response_body_budget().unwrap(), expected);
+
+        let response_only = tokio::sync::Semaphore::new(1);
+        let response_only = Arc::new(response_only).acquire_owned().await.unwrap();
+        admission._fanout_memory = Some(QueryFanoutMemoryReservation::new(response_only));
+        assert!(matches!(
+            admission.response_body_budget(),
+            Err(Error::Query(iroha_data_model::ValidationFail::InternalError(_)))
+        ));
+        admission._fanout_memory = None;
+        assert!(admission.response_body_budget().is_err());
+    }
+
     #[test]
     fn catalog_bounds_axum_url_parameter_topology() {
         let mut maximum = 0;

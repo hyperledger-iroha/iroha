@@ -9,6 +9,7 @@ use iroha_core::{
     },
     state::World,
 };
+use iroha_crypto::ExposedPrivateKey;
 use iroha_data_model::{
     NetworkId,
     isi::{
@@ -25,6 +26,7 @@ use iroha_fs::{PrivateDirectory, PublishMode};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
+use zeroize::Zeroizing;
 
 fn config(role: Role, seed: u8) -> (tempfile::TempDir, ConfiguredBinding) {
     let directory = tempfile::Builder::new()

@@ -416,7 +416,7 @@ mod tests {
         testing::native_finality::NativeFinalityFixture,
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
-    use std::{collections::BTreeSet, num::NonZeroU64};
+    use std::num::NonZeroU64;
 
     struct Fixture {
         native: NativeFinalityFixture,
@@ -443,7 +443,7 @@ mod tests {
             .sign(key.private_key());
             builder.push_transaction(tx);
         }
-        let mut block = builder.build(BTreeSet::new());
+        let mut block = builder.build(iroha_data_model::block::BlockSignatures::default());
         NativeFinalityFixture::install_network_results(&mut block, vec![Ok(Vec::new()); 2]);
         let entries: Vec<_> = block.network_input_hashes().collect();
         let block_proofs = block.network_execution_proof(&entries[0]).unwrap();

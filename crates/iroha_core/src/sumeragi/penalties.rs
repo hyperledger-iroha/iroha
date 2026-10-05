@@ -1013,11 +1013,6 @@ fn ensure_evidence_penalty_is_unresolved(
                 "consensus penalty action references already applied evidence"
             ));
         }
-        EvidencePenaltyStatus::Cancelled { .. } => {
-            return Err(eyre!(
-                "consensus penalty action references cancelled evidence"
-            ));
-        }
     }
     Ok(())
 }
@@ -3338,7 +3333,7 @@ mod tests {
         assert_eq!(record.penalty_status, EvidencePenaltyStatus::Pending);
     }
     #[test]
-    fn post_execution_evidence_cancellation_rejects_slash_and_mark_atomically() {
+    fn post_execution_evidence_terminalization_rejects_slash_and_mark_atomically() {
         let state = native_penalty_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
@@ -3365,8 +3360,8 @@ mod tests {
                 .consensus_evidence
                 .get(&evidence_key)
                 .cloned()
-                .expect("candidate cancellation target exists");
-            record.penalty_status = EvidencePenaltyStatus::Cancelled { height: 2 };
+                .expect("candidate terminalization target exists");
+            record.penalty_status = EvidencePenaltyStatus::Applied { height: 2 };
             transaction
                 .world
                 .consensus_evidence
@@ -3383,19 +3378,19 @@ mod tests {
             0,
             2_000,
         )
-        .expect_err("same-block cancellation must reject the candidate penalty bundle");
+        .expect_err("same-block terminalization must reject the candidate penalty bundle");
         assert!(
-            error.to_string().contains("cancelled evidence"),
+            error.to_string().contains("already applied evidence"),
             "unexpected rejection: {error}"
         );
         let evidence = state_block
             .world
             .consensus_evidence
             .get(&evidence_key)
-            .expect("candidate cancellation remains staged");
+            .expect("candidate terminalization remains staged");
         assert_eq!(
             evidence.penalty_status,
-            EvidencePenaltyStatus::Cancelled { height: 2 }
+            EvidencePenaltyStatus::Applied { height: 2 }
         );
         let validator_record = state_block
             .world

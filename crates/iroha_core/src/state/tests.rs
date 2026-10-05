@@ -7410,12 +7410,15 @@ fn finish_autoscale_fixture(
         .expect("empty autoscale fixture retains explicit result metadata");
     let keypair = crate::state::checked_keypair();
     block
-        .replace_signatures(BTreeSet::from([
-            iroha_data_model::block::BlockSignature::new(
-                0,
-                iroha_crypto::SignatureOf::from_hash(keypair.private_key(), block.hash()),
-            ),
-        ]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([
+                iroha_data_model::block::BlockSignature::new(
+                    0,
+                    iroha_crypto::SignatureOf::from_hash(keypair.private_key(), block.hash()),
+                ),
+            ])
+            .expect("at most 31 block signatures"),
+        )
         .expect("fixture signature covers the completed proposal");
     block.validate_proposal_commitments().unwrap();
     block.validate_execution_result_structure().unwrap();
@@ -26102,7 +26105,7 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
             .sign(ALICE_KEYPAIR.private_key());
         let mut source = iroha_data_model::block::builder::BlockBuilder::new(block.as_ref().header());
         source.push_transaction(signed);
-        let mut source = source.build(BTreeSet::new()).canonical_resultless_proposal().expect("valid fixture proposal projection");
+        let mut source = source.build(iroha_data_model::block::BlockSignatures::default()).canonical_resultless_proposal().expect("valid fixture proposal projection");
         let entrypoint_hash = source.external_entrypoints_cloned().next().unwrap().hash();
         source.set_execution_context(Some(iroha_data_model::block::BlockExecutionContextBundle::new(
             vec![iroha_data_model::block::ExternalExecutionContext::new(

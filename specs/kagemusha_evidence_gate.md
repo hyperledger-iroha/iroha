@@ -1,6 +1,7 @@
 # KAGEMUSHA verification checklist
 
-Status: working checklist, 2026-10-03. This document records useful checks for
+Status: working checklist, 2026-10-04, for proposal revision 2026-10-04 (split
+lineage). This document records useful checks for
 [the single protocol](kagemusha_single_design_proposal.md). It is not an
 approval process and does not block use, production integration or deployment.
 The filename is retained for existing links. No check below has been run for
@@ -12,18 +13,26 @@ payment valid or make an unimplemented security property an established fact.
 
 ## 1. What the evidence should distinguish
 
-A state package contains its transition proof `π` and provider receipt `τ`.
-The proof verifies the predecessor package and any incoming packages. After
-proving, the provider executes atomic, durable
-`Advance(expected_head, new_head, hash(π), operation_id, recovery_capsule)` and produces
-`τ`. The current receipt is checked natively; a successor proof verifies the
-predecessor receipt recursively. Tests should follow that order and bind the
-receipt to the exact proof and state transition.
+A state package contains its step proof `σ` and provider receipt `τ`. Send,
+Unload and Retiring commit only from a folded head and their packages also
+carry the lineage wrap `Ω` of that predecessor; Bootstrap, Load, Receive,
+ArchiveSent and RefreshPolicy may commit from an unfolded head and carry no
+`Ω`. The operation tag fixes the receipt's `proof_digest` domain. Before
+`Advance`, the wallet natively verifies the incoming packages, proves `σ` and
+natively verifies it. The provider then executes atomic, durable
+`Advance(expected_head, new_head, proof_digest, operation_id, recovery_capsule)`
+and produces `τ`, which it natively verifies before release. In the background
+the wallet proves the lineage proof `Λ` and its wrap `Ω` and natively verifies
+`Ω`; verifiers reject a Send, Unload or Retiring package, or a fee claim, that
+lacks its predecessor `Ω`. The current receipt is checked natively; the lineage
+proof covering a step verifies its own and incoming receipts recursively. Tests
+should follow that order and bind the receipt to the exact proof digest and
+state transition.
 
 A committed Send irreversibly debits `amount + fee`. Recovery delivers the
 same exact Payment bytes to the bound receiver, which credits them once.
 Timeout, interruption, rejection, missing delivery evidence or sender regret
-never restores the debit. The proof relation has no reversal operation.
+never restores the debit. No step or lineage relation has a reversal operation.
 
 The single target uses a software provider and marker in the released wallet
 on a stock vendor OS. The phone must be unrooted, not jailbroken and free of
@@ -42,12 +51,13 @@ The checklist follows the completed-payment properties in the proposal:
 
 | Property | What to check |
 |---|---|
-| P1 | Accepted value is durable and immediately spendable onward offline. |
+| P1a | Accepted value is durably owned at completion, subject only to the P4 exception. |
+| P1b | Once the receiver's local fold reaches its current head, which covers the crediting head, with no network, counterparty or approval, the value is spendable onward offline and can be unloaded. |
 | P2 | The payer cannot spend it again under the provider's stated security assumptions. |
 | P3 | Completion needs no later reconciliation, approval or settlement. |
-| P4 | Later discovery of payer misconduct does not revoke an honest recipient's accepted value. |
+| P4 | Later discovery of payer misconduct does not revoke an honest recipient's accepted value. The sole exception burns only an incoming Payment that passed native checks but fails in the receiver's lineage proof. |
 | P5 | Only an explicitly enabled regulatory control requires connectivity. |
-| PC | Processing needed for these properties finishes before the relevant endpoint reports completion. |
+| PC | Native verification, the receiver's step proof, the durable commit, recovery data and fold witnesses finish before the receiver reports completion; only the local lineage fold follows, and it changes ownership only by the P4 burn branch. |
 
 ## 2. Records and independently runnable work
 
@@ -57,9 +67,10 @@ actual result and limits of the conclusion. None of these labels grants or
 withholds permission to use or integrate the implementation.
 
 Identify the protocol revision, source commit, dependency lock, build hashes,
-proof relation, provider and firmware, attestation policy, device model, OS
-build, security patch and carrier. Keep the raw signed bytes, proofs, key
-hashes, logs, timings and fault traces alongside the reproducible procedure.
+step and lineage relations and wrap, provider and firmware, attestation policy,
+device model, OS build, security patch and carrier. Keep the raw signed bytes,
+proofs, key hashes, logs, timings and fault traces alongside the reproducible
+procedure.
 Where raw evidence contains identifying data, retain it in controlled storage
 and record its digest and access location. Pin external source code by commit;
 record vendor-document retrieval dates and content hashes.
@@ -108,7 +119,7 @@ must not be reported as guarantees of the software provider:
 
 ## 4. State machine, proof storage and crash recovery
 
-Check the written authority contract and the implemented transition relation
+Check the written authority contract and the implemented transition relations
 against the same fields: scheme, asset, predecessor, operation, counterparty,
 amounts, successor, proof digest and recovery capsule. Trace the durable
 linearization point before release of a usable Payment.
@@ -132,15 +143,46 @@ Expected invariants:
   cannot invalidate an already committed Payment.
 - Each Send consumes its send ordinal and debits `amount + fee` exactly once.
   After its commit, every timeout, crash, transport error, receiver decline and
-  lost delivery evidence leaves that debit unchanged. The proof relation has no
-  operation that restores it on those grounds; reject retired refund/refusal
-  monetary objects and attempts to recredit the sender through other operations.
-- Receive proves nonmembership of the exact `credit_id` in
-  `consumed_credit_root`, credits once and inserts the ID with its complete
-  Payment digest in the same committed transition. Entries are permanent.
-  Deliver a delayed Payment after unrelated receives and then replay it
-  repeatedly, including after restart and delivery
-  evidence cleanup: only the first valid Receive changes the balance.
+  lost delivery evidence leaves that debit unchanged. No step or lineage
+  relation has an operation that restores it on those grounds; reject retired
+  refund/refusal monetary objects and attempts to recredit the sender through
+  other operations.
+- Receive checks nonmembership of the exact `credit_id` against the
+  consumed-credit store authenticated by the head's `consumed_credit_root`,
+  inside the serialized `Advance` section, credits once and inserts
+  `credit_id → (amount, receive sequence)` in the same committed transition.
+  Its receipt binds the complete Payment digest, which no state commitment or
+  `σ_recv` statement contains; `Λ_recv` later proves the update and the digest
+  in-circuit and records the digest in the credit-digest root. Entries are
+  permanent. Deliver a delayed Payment after unrelated receives and then replay
+  it repeatedly, including after restart and delivery evidence cleanup: only
+  the first valid Receive changes the balance. Repeat with a restored stale
+  native store, which fails authentication against the head roots, and with
+  duplicate delivery on two carriers during a `σ_recv` re-prove, which credits
+  once. A `σ` whose successor root differs from the root recomputed from the
+  authenticated store is discarded before commit.
+- An incoming Payment that passes every native check but fails in `Λ_recv`,
+  including a duplicate `credit_id`, takes the burn branch: its `credit_id`
+  stays consumed, `Λ`'s `burned_total` grows by its amount, the credit-digest
+  root records it as burned, no accumulator of the burned Payment enters `Ω`,
+  the receiver's other value stays spendable and reserve accounting counts the
+  burned credit. Only that Payment is burned. Every later Send, Unload and
+  Retiring `σ` takes `burned_total` from `Ω(pred)`; a `σ` that uses the stale
+  core value is rejected natively and in `Λ`.
+- Send, Unload and Retiring packages carry their predecessor `Ω`; Send,
+  Unload, fee claims, retirement and device moves from an unfolded head are
+  rejected. A wallet's next Send waits until its current head is folded, also
+  after its own previous Send. Crash and restore between commit and fold
+  resume the fold from retained witnesses; loss of a fold witness or of a
+  native authenticated store without a recoverable copy is reported as custody
+  loss, never a silent wait.
+- A Payment whose Request names a different payer wallet than `Ω(pred)`, or
+  whose carried payment key or credential digest differs from `Ω(pred)`'s, is
+  rejected before mutation, and so is a payer credential from the Offer whose
+  digest differs.
+- With each regulatory control enabled, the receiver's verification of
+  `σ_send` rejects a Send that violates it, and a `σ_send` proved under the
+  verifying key for a different enabled-controls mask than `Ω(pred)`'s.
 - Each voucher and redemption is consumed at most once. Funding and retirement
   cannot recreate a previously consumed voucher or reverse a committed Send.
 - A nonzero fee is earned at Send. Its exact retained Payment authorizes one
@@ -150,12 +192,20 @@ Expected invariants:
   debit. Map leaves and immutable capsule bodies do not contain the very
   receipt or final package that authenticates them.
 - Optional Credited evidence is the committed Receive package or a read-only
-  `CreditStatus` proof of membership from the receiver's current state. Verify
-  the receiver's complete current package, its proof and provider receipt, and
-  the membership binding to the exact Payment digest, recipient and scope.
-  Another Payment, an unconsumed credit or an invalid current receipt fails.
-  `ArchiveSent` verifies this evidence inside its transition relation and removes
-  only the corresponding retained outbox entry, without a monetary effect.
+  `CreditStatus` {statement, `proof_digest`, receipt, `Ω`, opening} against a
+  folded receiver head. Verify the Receive package's step proof and provider
+  receipt, which binds the exact Payment digest, or decide the folded head's
+  `Ω`, check its receipt and the opening of `credit_id → (Payment digest,
+  burned flag)` in `Ω`'s credit-digest root, recipient and scope. Another
+  Payment, an unconsumed credit or an invalid receipt fails; a burned credit
+  reports **delivered, burned**. `ArchiveSent` verifies this evidence natively
+  before `Advance` and in `Λ_archive`, and removes only the corresponding
+  retained outbox entry, without a monetary effect. If the in-circuit check
+  fails, `Λ_archive` takes the no-op branch: the entry stays pending in `Ω`'s
+  pending-outgoing root, its Payment bytes are kept, and it can be archived
+  again after a later Send, Unload or Retiring. The payer deletes the delivered
+  Payment bytes only after a durable `Ω` covers the ArchiveSent step on its
+  archive branch.
   Evidence loss cannot change either balance or remove a permanent
   consumed-credit entry. The flow creates no acknowledgement chain,
   receiver pruning obligation or prerequisite for onward spending.
@@ -165,7 +215,9 @@ Expected invariants:
   Send, retain its complete Payment and deliver that Payment; it cannot select
   another successor, regenerate a different released Payment or restore value.
   Loss of every retained copy of released bytes reports delivery-data loss;
-  generating a new receipt or proof is not recovery.
+  generating a new receipt or proof is not recovery. Inject a faulty receipt
+  signature before first release: it fails native self-verification and is
+  signed again, and no failing receipt is released.
 - Phone replacement uses the ordinary payment path. Interruptions preserve
   its exact outcome; the old phone retains unresolved obligations, with no
   copied balance or separate migration authority.
@@ -184,8 +236,9 @@ Expected invariants:
   repeated, cyclic and branching histories and migrations, including growth
   of unresolved operations, rather than only a short acyclic payment chain.
 - An older wallet can verify and spend its admitted packages after another
-  wallet upgrades. Exercise the unchanged relation and verification interface
-  within the scheme without an unconfigured requirement to reconnect.
+  wallet upgrades. Exercise the unchanged step relations, lineage relation,
+  wrap, verifying-key allowlist and verification interface within the scheme
+  without an unconfigured requirement to reconnect.
 - Retirement: race load issuance with the atomic ledger instruction that closes
   new loads. Previously issued vouchers stay recoverable and new loads after
   closure debit nothing. Deliver an already committed Payment while the receiver
@@ -214,15 +267,16 @@ Expected invariants:
 Use a finite-state model for adversarial schedules and an inductive argument
 for unbounded executions. State the bounds of each model check; a bounded
 search does not prove unbounded-hop safety. Review the provider contract and
-proof relation together, identifying which component discharges each
+proof relations together, identifying which component discharges each
 obligation instead of having each assume the other enforces it.
 
 ## 5. Real proofs and protocol interoperability
 
-Generate real zero-state, load and recursive transition proofs for a complete
-load → A → B → C → unload lineage. Include split/change, delayed and duplicate
-delivery, receive-then-send, phone replacement and cyclic transfers. Retain
-witness fixtures, proofs, verification keys and component resource measurements.
+Generate real zero-state and load proofs, step proofs, lineage proofs and wraps
+for a complete load → A → B → C → unload lineage. Include split/change, delayed
+and duplicate delivery, receive-then-send, phone replacement and cyclic
+transfers. Retain witness fixtures, proofs, verification keys and component
+resource measurements, including lineage fold time, peak memory and energy.
 
 Try forked predecessors, changed amounts, duplicate and reordered credits,
 forged or substituted provider receipts, altered proof digests, missing
@@ -239,15 +293,27 @@ and recursive checks must reject altered bytes; they must not normalize an
 incoming Payment into a different digest or insert an alternate consumed entry.
 Signing normalizes before freezing the original canonical object.
 
-Compare native and recursive verification of the same package. Check that
-current receipts are verified before credit and that successor proofs bind
-those receipts to the exact predecessor and incoming packages. Check that
-an invalid package cannot become valid merely by wrapping it in another proof.
+Compare native and recursive verification of the same package. Native and
+in-circuit verifiers must accept exactly the same set for every object that
+`Λ` verifies after a native check: run differential and fuzz tests, in the
+relation owners' CI, over `Ω` including its deferred values, `σ`, `τ`, the
+Request, Credited evidence, load vouchers, fee schedules, certificates,
+credentials, and policy, list, time and credential updates. Exercise the
+poison-pill burn branch of `Λ_recv` and the no-op branch of `Λ_archive`; a
+tampered deferred value; a mixed history; a wrong relation identity; a `σ`
+under the wrong verifying key for its operation tag or enabled-controls mask;
+an `Ω` whose head, credential digest or payment key does not match the `σ`
+statement or `τ`; a `σ` whose `burned_total` or pending-outgoing input differs
+from `Ω(pred)`'s; and a receipt whose `proof_digest` omits or swaps `Ω`, or
+uses the domain of another operation tag. Check that current receipts are verified before credit and that
+successor lineage proofs bind those receipts to the exact predecessor and
+incoming packages. Check that an invalid package cannot become valid merely by
+wrapping it in another proof.
 
-The scheme keeps its fixed proof relation and verification interface for its
-lifetime. Test voluntary transfers to a different scheme separately; breaking
-changes cannot require old wallets to update or reconnect to keep using their
-existing value.
+The scheme keeps its fixed step relations, lineage relation, wrap,
+verifying-key allowlist and verification interface for its lifetime. Test
+voluntary transfers to a different scheme separately; breaking changes cannot
+require old wallets to update or reconnect to keep using their existing value.
 
 ## 6. Complete device exchanges
 
@@ -256,18 +322,22 @@ device and ordered sender/receiver/carrier combination. Label runs with
 padded proofs so their timings are not attributed to a real prover. Record
 untested combinations without claiming platform or vendor universality.
 
-- A pays B; immediately after B reports complete, B pays all received value
-  to C with radios off. Repeat after restart, temporary storage unavailability
-  and recoverable faults. Record total private-recovery-byte erasure as
-  custody loss, not successful recovery from a digest. Inspect both endpoints:
-  the payer reports its durable Send independently and reports delivery confirmed
-  only from valid receiver completion evidence.
+- A pays B; after B reports complete and its local fold reaches its current
+  head, B pays all received value to C with radios off. Before that fold, B
+  shows the completed credit as **spendable after local proof** with its fold
+  backlog, and Send and Unload wait for the fold. Repeat after restart, temporary
+  storage unavailability and recoverable faults. Record total
+  private-recovery-byte erasure as custody loss, not successful recovery from
+  a digest. Inspect both endpoints: the payer reports its durable Send
+  independently and reports **delivered** only from valid receiver completion
+  evidence.
 - After A commits Send, interrupt delivery before B receives it; also exercise
   a decline, capacity failure and a lost Credited message. A's amount and fee
   never return. B can receive other payments before the original exact Payment
   is retried, and can then credit that Payment once. Withhold optional Credited
-  evidence and confirm that B's accepted value stays onward-spendable. Recover
-  that evidence later through `CreditStatus` without changing B's state.
+  evidence and confirm that B's accepted value becomes onward-spendable after
+  its fold without that evidence. Recover that evidence later through
+  `CreditStatus` without changing B's state.
 - Cut power at authority, proof-store, journal and release boundaries,
   including inside `Advance` and after commit but before return. Distinguish
   forced restart from actual loss of power to storage. Test locked,
@@ -281,13 +351,28 @@ untested combinations without claiming platform or vendor universality.
 - With regulatory controls off, pay, recover and spend onward offline after
   reboots, clock changes and long idle periods. Run each enabled control
   separately. Record the longest tested interval and any network dependency.
+- On a device class that fails or has no published lineage budget,
+  activation, Load, Receive and RefreshPolicy refuse before commit, and the
+  voucher or Payment stays deliverable. On each passing class,
+  measure fold time, peak memory and energy per operation, including folds
+  interrupted by app suspension and resumed at the next app run. With a
+  receiver's Request-issuance policy (minimum amount, rate limit, maximum
+  unfolded backlog), new quotes stop at the configured limit and committed
+  Payments stay receivable.
 - Measure every package-carrying message against the **10,000-byte** bound,
-  and each Offer against **2,048 bytes**. Measure the **2-second p95** target
-  from payer confirmation after the Request to the receiver's durable,
-  onward-ready completion. Include intervening framing, retries, carrier
-  setup, both proofs and provider durability. Measure the payer's later
-  delivery confirmation separately. State sample counts and the percentile
-  estimator before measurement; retain raw samples, failures, cold/warm
+  including the Lineage message, the single-parity `Ω` inside Payment and a
+  CreditStatus, and each Offer with the payer credential against **2,048
+  bytes**. If `Ω` cannot keep Payment, or CreditStatus cannot keep Credited,
+  within 10,000 bytes, record a deviation; a fallback is a new owner decision.
+  Report schemes with enabled controls separately. Measure
+  the **2-second p95** target from payer confirmation after the Request to the
+  receiver's durable completion (P1a). Include intervening framing, retries,
+  carrier setup, the payer's remaining step-proof time, receiver verification,
+  the receiver step proof and both durable commits. Report separately, per
+  device class, the fold time until the value is ready to spend onward and
+  tap-to-done including setup and the confirmation dwell. Measure the payer's
+  later delivery confirmation separately. State sample counts and the
+  percentile estimator before measurement; retain raw samples, failures, cold/warm
   results, peak memory, energy and thermal effects. These are requirements
   and targets, not measured results.
 
@@ -307,9 +392,9 @@ replay indexes, finality and issuer/provider key separation. State the stock-OS
 assumption with the deployed software provider; do not describe its marker
 as hardware enforcement against an OS takeover.
 
-Re-run affected checks after changes to provider, firmware, OS, proof relation
-or storage behavior. Record what results still apply and how existing offline
-packages interoperate. Use the proposal's retirement map and actual caller
+Re-run affected checks after changes to provider, firmware, OS, step or
+lineage relations, wrap or storage behavior. Record what results still apply
+and how existing offline packages interoperate. Use the proposal's retirement map and actual caller
 inventory when consolidating implementations; verification work does not
 create a separate approval condition for integration or production use.
 
@@ -338,7 +423,7 @@ shared with other build jobs (timings ±25%). No phone, live network or payment 
 | In-circuit P-256 cost | measured | One full-width low-S verification: 1,466,624 advice cells = 23 advice + 4 lookup columns at k=16 in each Pasta field. A k=16 proof of that circuit alone: 10,112 B per parity; prove 12.5–13.0 s (20 threads), 20.7–24.2 s (4), 31.9–32.8 s (1); verify 0.26 s; peak RSS 0.79–0.95 GiB. |
 | IPA proof scaling | measured | Test-only harness `crates/iroha_core_zk/src/g3_proof_scaling_measurement_tests.rs` (ignored tests, release). k=16 proof bytes = 1,976 + 358·(advice columns); prove ≈ 7.2 s + 0.54 s per column at 20 threads; peak RSS ≈ 257 MiB + 27 MiB per column; proving key ≈ 25.5 MB + 9.1 MB per column. Narrow no-lookup proofs: bytes = 768 + 352·W + 64·k (k=18–20, W=1–3: 2,272–3,104 B), prove 21–80 s, verify 1.0–3.2 s. One thread is only 2.5–3.3× slower than 20. |
 | Recursive-verifier building blocks | measured | ≈ 2,170 advice cells per MSM source (`reciprocal_compact_batch_allocation_diagnostic_in_both_parities`: 1,008 sources = 34 advice + 6 lookup columns at k=16); dense rows for 1,008 sources: 131,046 rows in 9.3 s. |
-| R9 and 2 s p95 with the current construction | deviation (estimate from the measured models) | A Send transition needs ≥ 6 in-circuit P-256 verifications plus transcripts, maps and recursion (≈ 150–230 columns): ≈ 55–85 KB per parity at k=16, so Payment ≤ 10,000 B needs a narrow large-k outer layer, whose proving alone is ≈ 21–80 s per parity on this host. End-to-end 2 s p95 is not reachable on this path; architecture questions are with the owner. |
+| R9 and 2 s p95 with the current construction | deviation (estimate from the measured models) | A Send transition needs ≥ 6 in-circuit P-256 verifications plus transcripts, maps and recursion (≈ 150–230 columns): ≈ 55–85 KB per parity at k=16, so Payment ≤ 10,000 B needs a narrow large-k outer layer, whose proving alone is ≈ 21–80 s per parity on this host. End-to-end 2 s p95 is not reachable on this path; proposal revision 2026-10-04 moves recursion off the payment path (split lineage). |
 | Android Keystore absence semantics | source reading | AOSP `AndroidKeyStoreSpi` (android14-release): `containsAlias` returns false on any Keystore error, `aliases`/`size`/`getCertificate*` swallow errors, only `getKey` distinguishes `KEY_NOT_FOUND`; keystore2 `rebind_alias` replaces an existing alias on generation. Device confirmation: not run. |
 | Android lock-screen removal | source reading | keystore2 android12–14 `reset_user(.., keep_non_super_encrypted_keys=true)` deletes certificate-only and super-encrypted entries and keeps plain non-auth keys; Android 15 depends on build flag `fix_unlocked_device_required_keys_v2`. Device confirmation: not run. |
 | Android backup/restore | source reading | `BackupAgent` never backs up `getNoBackupFilesDir()`, but a full-data restore of an app without its own agent first clears all app data and its Keystore namespace (`FullRestoreEngine` → `clearApplicationUserDataLIF`, android14). The wallet's backup set must therefore be empty. Device confirmation: not run. |
