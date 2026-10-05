@@ -35,11 +35,16 @@ import org.junit.jupiter.api.Test
 
 /**
  * Consumes the Rust-written `fixtures/kagemusha/wallet_v1_vectors.json` (wire record
- * `specs/kagemusha_wallet_wire_v1.md` section 5): recomputes every digest, including both proof
- * digest domains over the stand-in Ω and σ bytes; checks every signature verdict with the raw
- * low-S check before JCA; validates every envelope header, scheme field and per-kind bound against
- * the Kotlin constants and round-trips the strict `kgm1:` text; re-encodes every object frame
- * byte-identically; and re-derives the σ-field element lists from their transcripts and frames.
+ * `specs/kagemusha_wallet_wire_v1.md` section 5): recomputes every SHA-256 role digest; checks
+ * every signature verdict with the raw low-S check before JCA; validates every envelope header,
+ * scheme field and per-kind bound against the Kotlin constants and round-trips the strict `kgm1:`
+ * text; re-encodes every object frame byte-identically; and re-derives the σ-field element lists
+ * of the statements, state, chains, map leaves, `credit_id`, the `P_bytes` packing of both
+ * `proof_digest` domains and the Payment digest, and the blacklist, quota-window, sparse-tree and
+ * verifying-key allowlist vectors from their transcripts and frames.
+ *
+ * Poseidon values are computed by the native Rust core, so this consumer checks them only as
+ * canonical opaque σ-field values and follows them across the objects that carry them.
  * Typed decoding of message bodies is TODO(G4).
  */
 class KagemushaWalletVectorsV1Test {
@@ -50,14 +55,19 @@ class KagemushaWalletVectorsV1Test {
             setOf(
                 "certificate_set_max",
                 "credential_max_bytes",
+                "credit_opening_siblings_max",
                 "fold_record_max_bytes",
                 "lineage_max_bytes",
                 "message_max_bytes",
                 "message_text_max_bytes",
+                "payment_fixed_bytes",
+                "payment_proof_budget_bytes",
                 "proof_caps",
                 "session_max_bytes",
                 "session_text_max_bytes",
                 "text_prefix",
+                "verifying_key_allowlist_max_bytes",
+                "verifying_key_entries_max",
                 "version",
             ),
             bounds.keys,
@@ -69,14 +79,31 @@ class KagemushaWalletVectorsV1Test {
         assertEquals(KagemushaWalletWireV1.SESSION_TEXT_MAX_BYTES, bounds.int("session_text_max_bytes"))
         assertEquals(KagemushaWalletWireV1.MESSAGE_TEXT_MAX_BYTES, bounds.int("message_text_max_bytes"))
         assertEquals(KagemushaWalletMessageKindV1.LINEAGE.maximumFrameBytes, bounds.int("lineage_max_bytes"))
-        // σ and Ω have no pinned byte caps until the artifact set fixes them (owner question Q6):
-        // the frame that carries them is their only bound, so there is no Kotlin proof cap.
-        assertTrue(bounds.text("proof_caps").startsWith("none pinned"), bounds.text("proof_caps"))
-        // The standalone credential and fold-record caps are the caps of their frame identities.
+        // σ and Ω caps are the exact lengths of the frozen verifying-key allowlist (owner answer
+        // Q6), jointly within the Payment budget (R9); until the artifacts freeze the carrying
+        // frame is their only bound, which is what the structural carrier check enforces.
+        assertTrue(bounds.text("proof_caps").contains("payment_proof_budget_bytes"), bounds.text("proof_caps"))
+        assertEquals(KagemushaWalletWireV1.PAYMENT_FIXED_BYTES, bounds.int("payment_fixed_bytes"))
+        assertEquals(KagemushaWalletWireV1.PAYMENT_PROOF_BUDGET_BYTES, bounds.int("payment_proof_budget_bytes"))
+        assertEquals(
+            KagemushaWalletWireV1.MESSAGE_MAX_BYTES,
+            KagemushaWalletWireV1.PAYMENT_FIXED_BYTES + KagemushaWalletWireV1.PAYMENT_PROOF_BUDGET_BYTES,
+        )
+        assertEquals(KagemushaWalletWireV1.VERIFYING_KEY_ENTRIES_MAX, bounds.int("verifying_key_entries_max"))
+        assertEquals(
+            KagemushaWalletWireV1.VERIFYING_KEY_ALLOWLIST_MAX_BYTES,
+            bounds.int("verifying_key_allowlist_max_bytes"),
+        )
+        assertEquals(KagemushaWalletWireV1.CREDIT_OPENING_SIBLINGS_MAX, bounds.int("credit_opening_siblings_max"))
+        // The standalone credential, fold-record and allowlist caps are the caps of their frames.
         val frameCaps = vectors.array("frames").map { it.jsonObject }
             .associate { it.text("type") to it.int("max_bytes") }
         assertEquals(frameCaps.getValue("KagemushaWalletCredentialV1"), bounds.int("credential_max_bytes"))
         assertEquals(frameCaps.getValue("KagemushaWalletFoldRecordV1"), bounds.int("fold_record_max_bytes"))
+        assertEquals(
+            frameCaps.getValue("KagemushaWalletVerifyingKeyAllowlistV1"),
+            bounds.int("verifying_key_allowlist_max_bytes"),
+        )
         assertEquals(KagemushaWalletWireV1.CERTIFICATE_SET_MAX, bounds.int("certificate_set_max"))
         assertEquals(KagemushaWalletWireV1.DIGEST_PREFIX, vectors.text("domain_prefix"))
         assertContentEquals(
@@ -148,10 +175,30 @@ class KagemushaWalletVectorsV1Test {
             assertContentEquals(sha256(preimage), KagemushaWalletWireV1.digest(role, body))
         }
         assertEquals(KagemushaWalletDigestRoleV1.entries.toSet(), seen)
-        // The superseded pre-split roles are gone, not aliased.
-        for (label in listOf("dependencies", "credit-status-statement")) {
+        // Exactly one vector per role, in the Rust declaration order.
+        assertEquals(
+            KagemushaWalletDigestRoleV1.entries.map { it.label },
+            vectors.array("digests").map { it.jsonObject.text("role") },
+        )
+        // Superseded roles are gone, not aliased: the pre-split roles, and the SHA-256 roles that
+        // owner answers Q1, Q2 and Q9 replaced with Poseidon values (credit_id, both proof_digest
+        // domains, the Payment digest, and the blacklist and quota-window trees).
+        val superseded = listOf(
+            "dependencies",
+            "credit-status-statement",
+            "credit",
+            "proof",
+            "step-proof",
+            "payment",
+            "blacklist-leaf",
+            "blacklist-node",
+            "quota-window",
+            "quota-node",
+        )
+        for (label in superseded) {
             assertNull(KagemushaWalletDigestRoleV1.fromLabel(label), label)
         }
+        assertEquals(55, KagemushaWalletDigestRoleV1.entries.size)
         assertEquals(
             KagemushaWalletDigestRoleV1.entries.size,
             KagemushaWalletDigestRoleV1.entries.map { it.label }.toSet().size,
@@ -160,20 +207,46 @@ class KagemushaWalletVectorsV1Test {
         assertNull(KagemushaWalletDigestRoleV1.fromLabel(""))
     }
 
-    @Test fun `proof digests bind the exact stand-in Ω and σ bytes in their two domains`() {
-        val proof = digestVector("proof")
-        val stepProof = digestVector("step-proof")
+    @Test fun `proof digests pack the exact stand-in Ω and σ bytes in their two Poseidon domains`() {
         val lineage = digestVector("lineage")
-        for (vector in listOf(proof, stepProof, lineage)) {
-            assertTrue(vector.bool("stand_in_proof"), vector.text("object"))
-        }
+        assertTrue(lineage.bool("stand_in_proof"), lineage.text("object"))
+        val digests = poseidon.array("proof_digests").map { it.jsonObject }
+        assertEquals(2, digests.size)
+        val (send, receive) = digests
+        assertEquals("kgwprf_1", send.text("domain"))
+        assertEquals("kgwstep1", receive.text("domain"))
 
-        // Send, Unload and Retiring: `LE32 len(Ω) || Ω || LE32 len(σ) || σ`, Ω being Ω(pred).
-        val (omega, sigma) = le32Parts(proof.hex("body_hex")).also { assertEquals(2, it.size) }
+        // Send, Unload and Retiring: `P_bytes(kgwprf_1, LE32 len(Ω) || Ω || LE32 len(σ) || σ)`,
+        // Ω being Ω(pred).
+        val (omega, sigma) = le32Parts(send.hex("body_hex")).also { assertEquals(2, it.size) }
         assertContentEquals(lineage.hex("body_hex"), omega)
         assertSigmaStandIn(sigma)
-        // Every other operation, the σ-only domain: `LE32 len(σ) || σ`.
-        assertSigmaStandIn(le32Parts(stepProof.hex("body_hex")).single())
+        // Every other operation, the σ-only domain: `P_bytes(kgwstep1, LE32 len(σ) || σ)`.
+        assertSigmaStandIn(le32Parts(receive.hex("body_hex")).single())
+        for (vector in digests) {
+            val label = vector.text("object")
+            assertEquals(packedElements(vector.hex("body_hex")).size, vector.int("elements"), label)
+            assertPoseidonValue(vector.hex("digest_hex"), label)
+        }
+        val sendProofDigest = send.hex("digest_hex")
+        val receiveProofDigest = receive.hex("digest_hex")
+
+        // Each receipt body binds its step's proof_digest; the Send package digest binds it too.
+        assertContentEquals(sendProofDigest, receiptField(receiptBody("Send receipt"), RECEIPT_PROOF_DIGEST))
+        assertContentEquals(
+            receiveProofDigest,
+            receiptField(receiptBody("Receive receipt binding the Payment digest"), RECEIPT_PROOF_DIGEST),
+        )
+        val packageBody = digestVector("package").hex("body_hex")
+        assertEquals(96, packageBody.size)
+        assertContentEquals(digestVector("statement").hex("digest_hex"), packageBody.copyOfRange(0, 32))
+        assertContentEquals(sendProofDigest, packageBody.copyOfRange(32, 64))
+        assertContentEquals(digestVector("receipt").hex("digest_hex"), packageBody.copyOfRange(64, 96))
+        // The receipt-free Receive output descriptor binds its proof and Payment digests.
+        val output = digestVector("output").hex("body_hex")
+        assertEquals(97, output.size)
+        assertContentEquals(receiveProofDigest, output.copyOfRange(33, 65))
+        assertContentEquals(poseidon.obj("payment_digest").hex("digest_hex"), output.copyOfRange(65, 97))
 
         // Ω bytes are the 320-byte public transcript followed by the transport proof.
         assertTrue(omega.size > LINEAGE_PUBLIC_BYTES)
@@ -183,16 +256,24 @@ class KagemushaWalletVectorsV1Test {
         assertEquals(KagemushaWalletWireV1.VERSION.toLong(), exposed.unsigned(2))
         assertContentEquals(digestVector("scheme").hex("digest_hex"), exposed.take(32))
         assertContentEquals(digestVector("relation").hex("digest_hex"), exposed.take(32))
-        assertCanonicalField(exposed.take(32), nonzero = true)
+        val head = exposed.take(32)
+        assertCanonicalField(head, nonzero = true)
         assertContentEquals(digestVector("wallet-id").hex("digest_hex"), exposed.take(32))
         assertContentEquals(digestVector("credential").hex("digest_hex"), exposed.take(32))
         assertContentEquals(key("payer_payment"), exposed.take(65))
         assertTrue(exposed.unsigned(1) in 1L..2L, "lifecycle Active or Retiring")
-        exposed.take(8 + 4 + 16) // LE64 policy_epoch, LE32 enabled_controls, LE128 burned_total
+        exposed.take(8 + 4) // LE64 policy_epoch, LE32 enabled_controls
+        val burned = exposed.take(16)
         val standIns = vectors.obj("stand_ins")
-        assertContentEquals(standIns.hex("lineage_pending_outgoing_root_hex"), exposed.take(32))
+        val pendingRoot = exposed.take(32)
+        assertContentEquals(standIns.hex("lineage_pending_outgoing_root_hex"), pendingRoot)
         assertContentEquals(standIns.hex("credit_digest_root_hex"), exposed.take(32))
         exposed.finish()
+
+        // The Send statement consumes this Ω(pred): its predecessor is Ω's head and its lineage
+        // fields are Ω's burned total and pending-outgoing root (consumer checks, section 3.2).
+        val statement = items(vectors.obj("field_encodings").obj("send_statement"), "items")
+        assertElements(listOf(integerElement(burned), pendingRoot, head), statement.subList(13, 16), "Ω(pred) lineage")
     }
 
     @Test fun `the Lineage envelope and the Payment carry the same Ω bytes`() {
@@ -695,9 +776,11 @@ class KagemushaWalletVectorsV1Test {
     @Test fun `σ-field element vectors follow the element rule`() {
         val encodings = vectors.obj("field_encodings")
         assertContentEquals(fieldBytes(FIELD_MODULUS), encodings.hex("modulus_le_hex"))
+        assertContentEquals(KagemushaWalletWireV1.fieldModulus(), encodings.hex("modulus_le_hex"))
         assertTrue(encodings.text("field").endsWith("0x" + FIELD_MODULUS.toString(16)), encodings.text("field"))
         val domains = encodings.array("domains").map { it.jsonObject }
         assertEquals(POSEIDON_DOMAINS, domains.associate { it.text("use") to it.text("ascii") })
+        assertEquals(POSEIDON_DOMAINS.values.toList(), domains.map { it.text("ascii") })
         for (domain in domains) {
             val ascii = domain.text("ascii").toByteArray(Charsets.US_ASCII)
             assertEquals(8, ascii.size)
@@ -717,16 +800,16 @@ class KagemushaWalletVectorsV1Test {
             "rest" to items(encodings.obj("receive_successor_state"), "rest_items"),
         )
         val counts = mapOf(
-            "consumed_credit_leaf" to 4,
-            "pending_outgoing_leaf" to 9,
-            "fee_claim_leaf" to 5,
-            "credit_digest_leaf" to 5,
-            "send_chain_append_from_empty" to 10,
-            "recv_chain_append" to 6,
-            "send_statement" to 29,
-            "receive_statement" to 29,
-            "core" to 29,
-            "rest" to 19,
+            "consumed_credit_leaf" to 3,
+            "pending_outgoing_leaf" to 8,
+            "fee_claim_leaf" to 4,
+            "credit_digest_leaf" to 3,
+            "send_chain_append_from_empty" to 9,
+            "recv_chain_append" to 5,
+            "send_statement" to 28,
+            "receive_statement" to 28,
+            "core" to 32,
+            "rest" to 13,
         )
         for ((name, list) in lists) {
             assertEquals(counts.getValue(name), list.size, name)
@@ -741,52 +824,80 @@ class KagemushaWalletVectorsV1Test {
         assertElements(lists.getValue("receive_statement"), statementElements(receiveTranscript), "receive statement")
 
         // Core and rest elements re-derive from the canonical state frame.
-        val (core, rest) = stateElements(encodings.obj("receive_successor_state").hex("state_hex"))
+        val successor = encodings.obj("receive_successor_state")
+        val (core, rest) = stateElements(successor.hex("state_hex"))
         assertElements(lists.getValue("core"), core, "core")
         assertElements(lists.getValue("rest"), rest, "rest")
 
-        // Digests and identifiers enter as two limbs; the shared values agree across lists.
+        // Poseidon values the native core computed over these lists are opaque canonical values.
+        val poseidonValues = mapOf(
+            "send statement digest" to encodings.obj("send_statement").hex("digest_hex"),
+            "receive statement digest" to encodings.obj("receive_statement").hex("digest_hex"),
+            "rest digest" to successor.hex("rest_digest_hex"),
+            "commitment" to successor.hex("commitment_hex"),
+            "send_chain append" to encodings.hex("send_chain_append_from_empty_hex"),
+            "recv_chain append" to encodings.hex("recv_chain_append_hex"),
+        )
+        for ((label, value) in poseidonValues) assertPoseidonValue(value, label)
+        assertEquals(poseidonValues.size, poseidonValues.values.map { hexText(it) }.toSet().size)
+
+        // SHA-256 digests and identifiers enter as two limbs, Poseidon values (credit_id, the
+        // Payment digest, commitments, chains and roots) as one element; shared values agree.
         val send = lists.getValue("send_statement")
         val receive = lists.getValue("receive_statement")
-        val creditId = limbs(digestVector("credit").hex("digest_hex"))
+        val creditId = listOf(poseidon.obj("credit_id").obj("poseidon").hex("digest_hex"))
         val pending = lists.getValue("pending_outgoing_leaf")
-        assertElements(creditId, send.subList(18, 20), "Send credit_id")
-        assertElements(send.subList(18, 27), pending, "pending-outgoing leaf is the Send descriptor")
-        assertElements(limbs(digestVector("request").hex("digest_hex")), pending.subList(7, 9), "request digest")
+        assertElements(creditId, send.subList(18, 19), "Send credit_id")
+        assertElements(send.subList(18, 26), pending, "pending-outgoing leaf is the Send descriptor")
+        assertElements(limbs(digestVector("request").hex("digest_hex")), pending.subList(6, 8), "request digest")
         val sendChain = lists.getValue("send_chain_append_from_empty")
         assertElements(listOf(ByteArray(32)), sendChain.subList(0, 1), "empty send_chain")
-        assertElements(pending, sendChain.subList(1, 10), "send_chain entry")
-        assertElements(receive.subList(18, 23), lists.getValue("recv_chain_append").subList(1, 6), "recv_chain entry")
+        assertElements(pending, sendChain.subList(1, 9), "send_chain entry")
+        val recvChain = lists.getValue("recv_chain_append")
+        assertStandInField(recvChain[0], 0x2c)
+        assertElements(receive.subList(18, 22), recvChain.subList(1, 5), "recv_chain entry")
+        assertElements(creditId, receive.subList(18, 19), "Receive credit_id")
         val consumed = lists.getValue("consumed_credit_leaf")
-        assertElements(receive.subList(18, 20), consumed.subList(0, 2), "consumed credit_id")
-        assertElements(receive.subList(22, 23), consumed.subList(2, 3), "consumed amount")
-        assertElements(receive.subList(10, 11), consumed.subList(3, 4), "receive sequence")
+        assertElements(creditId, consumed.subList(0, 1), "consumed credit_id")
+        assertElements(receive.subList(21, 22), consumed.subList(1, 2), "consumed amount")
+        assertElements(receive.subList(10, 11), consumed.subList(2, 3), "receive sequence")
         val creditDigest = lists.getValue("credit_digest_leaf")
-        assertElements(creditId, creditDigest.subList(0, 2), "credit-digest credit_id")
-        assertElements(limbs(digestVector("payment").hex("digest_hex")), creditDigest.subList(2, 4), "Payment digest")
-        assertTrue(unsignedElement(creditDigest[4]) in 0L..1L, "burned flag")
+        assertElements(creditId, creditDigest.subList(0, 1), "credit-digest credit_id")
+        assertElements(
+            listOf(poseidon.obj("payment_digest").hex("digest_hex")),
+            creditDigest.subList(1, 2),
+            "Payment digest",
+        )
+        assertTrue(unsignedElement(creditDigest[2]) in 0L..1L, "burned flag")
         val feeClaim = lists.getValue("fee_claim_leaf")
-        assertElements(creditId, feeClaim.subList(0, 2), "fee-claim credit_id")
-        assertElements(send.subList(24, 25), feeClaim.subList(2, 3), "fee")
-        assertElements(limbs(digestVector("fee-schedule").hex("digest_hex")), feeClaim.subList(3, 5), "fee schedule")
-        // The successor state agrees with its Receive statement.
-        assertElements(receive.subList(3, 7), rest.subList(0, 4), "scheme and asset")
-        assertElements(receive.subList(7, 9), core.subList(3, 5), "credential")
+        assertElements(creditId, feeClaim.subList(0, 1), "fee-claim credit_id")
+        assertElements(send.subList(23, 24), feeClaim.subList(1, 2), "fee")
+        assertElements(limbs(digestVector("fee-schedule").hex("digest_hex")), feeClaim.subList(2, 4), "fee schedule")
+
+        // The successor state agrees with its Receive statement; scheme and asset are core
+        // fields (owner answer Q4) and its commitment P(core, P(rest)) is the statement successor.
+        assertElements(receive.subList(3, 5), core.subList(1, 3), "scheme")
+        assertElements(receive.subList(5, 7), core.subList(3, 5), "asset")
+        assertElements(receive.subList(7, 9), core.subList(7, 9), "credential")
         assertElements(receive.subList(9, 10), core.subList(0, 1), "lifecycle")
-        assertElements(receive.subList(10, 11), core.subList(7, 8), "sequence")
-        assertElements(receive.subList(11, 12), core.subList(9, 10), "next_load")
+        assertElements(receive.subList(10, 11), core.subList(11, 12), "sequence")
+        assertElements(receive.subList(11, 12), core.subList(13, 14), "next_load")
+        assertElements(listOf(successor.hex("commitment_hex")), receive.subList(16, 17), "successor commitment")
+        assertElements(limbs(digestVector("scheme").hex("digest_hex")), core.subList(1, 3), "scheme_id")
+        // The five map roots and the state nonce are nonzero canonical values (one element each);
+        // the enabled controls are within the rest's permitted controls (owner answer Q5 moved the
+        // blacklist age bound into the core, beside the list's issue time).
+        for (index in listOf(17, 18, 19, 20, 21, 31)) assertCanonicalField(core[index], nonzero = true)
+        val enabled = unsignedElement(core[22])
+        assertEquals(0L, enabled and unsignedElement(rest[0]).inv(), "enabled controls within permitted")
 
         // Stand-in field values follow their labelled rule and are canonical.
         val standIns = vectors.obj("stand_ins")
-        val seeded = listOf(standIns.hex("credit_digest_root_hex"), standIns.hex("lineage_pending_outgoing_root_hex")) +
-            standIns.obj("empty_roots_hex").values.map { hexBytes(it.jsonPrimitive.content) }
-        for (value in seeded) {
-            val seed = value[0]
-            assertTrue((0 until 31).all { value[it] == seed }, "stand-in seed")
-            assertEquals((seed.toInt() and 0x3f).toByte(), value[31])
-            assertCanonicalField(value, nonzero = true)
-        }
+        assertFalse(standIns.containsKey("empty_roots_hex"), "empty map roots are computed, not stand-ins")
+        val seeded = listOf(standIns.hex("credit_digest_root_hex"), standIns.hex("lineage_pending_outgoing_root_hex"))
+        for (value in seeded) assertStandInField(value, unsigned(value[0]))
         assertFailsWith<AssertionError> { assertCanonicalField(encodings.hex("modulus_le_hex"), nonzero = false) }
+        assertFalse(KagemushaWalletWireV1.isCanonicalFieldValue(encodings.hex("modulus_le_hex")))
     }
 
     private fun assertVerdicts(

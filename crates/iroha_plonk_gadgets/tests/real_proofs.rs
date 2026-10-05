@@ -1,7 +1,7 @@
 //! Real PIPA-v1 proofs of chip circuits on both curves (Vesta proofs over
 //! `Fp` circuits, Pallas proofs over `Fq` circuits), with both transcripts:
 //! the KAGEMUSHA sponge, checked `u128` arithmetic, the glue gates and the
-//! prototype statement digest. Each proof verifies in full, a wrong public
+//! G1 step statement digest. Each proof verifies in full, a wrong public
 //! input and a corrupted proof are rejected, and a fixed recovery stream
 //! reproduces the proof bytes.
 
@@ -195,7 +195,7 @@ fn glue_proofs_on_both_curves() {
     assert_eq!(vesta, pallas);
 }
 
-/// The step statement digest over its 29 fields as witnesses (folded
+/// The step statement digest over its 28 fields as witnesses (folded
 /// prefix).
 fn statement<F: PoseidonField>(
     chips: &mut Chips<F>,

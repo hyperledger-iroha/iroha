@@ -6,8 +6,14 @@ import Foundation
 // The canonical objects, transcripts and vectors are owned by the Rust module
 // `iroha_data_model::kagemusha::kagemusha_wallet_v1`; this file consumes
 // `fixtures/kagemusha/wallet_v1_vectors.json` and mirrors only the parts an SDK needs before it
-// hands bytes to the typed decoder: domain digests, the raw low-S P-256 signature rule, the
-// envelope frame header and per-kind bounds, and the strict `kgm1:` text form.
+// hands bytes to the typed decoder: SHA-256 domain digests, the raw low-S P-256 signature rule,
+// the canonical σ-field encoding check, the envelope frame header and per-kind bounds, and the
+// strict `kgm1:` text form.
+//
+// Poseidon values (`credit_id`, `proof_digest`, the Payment digest, state commitments, chains,
+// map, blacklist, quota-window and credit-digest roots and openings) are computed only by the
+// native Rust core over the bridge. Swift carries them as opaque 32-byte σ-field values and
+// checks only that they are canonical (``KagemushaWalletWireV1/isCanonicalFieldElement(_:)``).
 //
 // TODO(G4): typed Swift decoding and `validate()` of the wallet message bodies (or the shared
 // Rust core over the native bridge) when the Swift wallet wire migrates; structural envelope
@@ -30,9 +36,11 @@ public enum KagemushaWalletWireErrorV1: Error, Equatable, Sendable {
 
 /// Exact role label of one domain-separated KAGEMUSHA wallet V1 digest `H(role, body)`.
 ///
-/// The cases and their order mirror the Rust `KagemushaWalletDigestRoleV1::ALL`. A `*-body`
+/// The 55 cases and their order mirror the Rust `KagemushaWalletDigestRoleV1::ALL`. A `*-body`
 /// role names the signed transcript of an object; the matching role without the suffix names
-/// that signed object's digest `H(role, e || signature)`.
+/// that signed object's digest `H(role, e || signature)`. `credit_id`, `proof_digest`, the
+/// Payment digest and the blacklist, quota-window and credit-digest trees are Poseidon σ-field
+/// values, not SHA roles (wire record §1).
 public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   /// Scheme identity.
   case scheme = "scheme"
@@ -74,18 +82,10 @@ public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   case blacklistBody = "blacklist-body"
   /// Blacklist digest.
   case blacklist = "blacklist"
-  /// Blacklist gap leaf.
-  case blacklistLeaf = "blacklist-leaf"
-  /// Blacklist tree node.
-  case blacklistNode = "blacklist-node"
   /// Signed quota share transcript.
   case quotaShareBody = "quota-share-body"
   /// Quota share digest.
   case quotaShare = "quota-share"
-  /// Quota window leaf.
-  case quotaWindow = "quota-window"
-  /// Quota window tree node.
-  case quotaNode = "quota-node"
   /// Signed time anchor transcript.
   case timeAnchorBody = "time-anchor-body"
   /// Time anchor digest.
@@ -98,14 +98,8 @@ public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   case requestBody = "request-body"
   /// Request digest.
   case request = "request"
-  /// Credit identity over the Request body transcript.
-  case credit = "credit"
   /// Transition statement.
   case statement = "statement"
-  /// The Ω‖σ `proof_digest` domain of Send, Unload and Retiring.
-  case proof = "proof"
-  /// The distinct σ-only `proof_digest` domain of every other operation.
-  case stepProof = "step-proof"
   /// Exact bytes of one lineage proof Ω with its public outputs.
   case lineage = "lineage"
   /// Provider commit receipt transcript.
@@ -114,8 +108,6 @@ public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   case receipt = "receipt"
   /// Complete state package.
   case `package` = "package"
-  /// Complete canonical compact Payment.
-  case payment = "payment"
   /// Compressed credit-digest opening carried by a CreditStatus.
   case creditOpening = "credit-opening"
   /// Read-only CreditStatus of a folded head.
@@ -152,6 +144,8 @@ public enum KagemushaWalletDigestRoleV1: String, CaseIterable, Sendable {
   case artifactManifestBody = "artifact-manifest-body"
   /// Artifact manifest digest.
   case artifactManifest = "artifact-manifest"
+  /// σ verifying-key allowlist; its digest is the manifest's `verifying_key_set_digest`.
+  case verifyingKeySet = "verifying-key-set"
   /// Signed load/unload charge quote transcript.
   case chargeQuoteBody = "charge-quote-body"
   /// Charge quote digest.
@@ -275,6 +269,16 @@ public enum KagemushaWalletWireV1 {
     0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42, 0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31, 0x92, 0xa8,
   ]
+  /// Bytes of one σ-field value: its canonical little-endian encoding.
+  public static let fieldElementBytes = 32
+  /// σ-field modulus `p` of Pasta `Fp` (the Vesta scalar field), little-endian:
+  /// `p = 0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001`.
+  ///
+  /// Mirrors the Rust `KAGEMUSHA_WALLET_FIELD_MODULUS_V1`.
+  public static let fieldModulus: [UInt8] = [
+    0x01, 0x00, 0x00, 0x00, 0xed, 0x30, 0x2d, 0x99, 0x1b, 0xf9, 0x4c, 0x09, 0xfc, 0x98, 0x46, 0x22,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40,
+  ]
 
   private static let base64URLAlphabet = Array(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".utf8)
@@ -359,6 +363,24 @@ public enum KagemushaWalletWireV1 {
     var body = Data(bodyDigest)
     body.append(signature)
     return digest(role: role, body: body)
+  }
+
+  // MARK: σ-field values
+
+  /// Whether `value` is a canonical σ-field encoding: 32 little-endian bytes below
+  /// ``fieldModulus``.
+  ///
+  /// This is a byte comparison from the most significant byte down, like the Rust
+  /// `kagemusha_wallet_is_canonical_field_v1`. It is the only check Swift applies to a Poseidon
+  /// value, which the native core computes; it never recomputes one.
+  public static func isCanonicalFieldElement(_ value: Data) -> Bool {
+    let bytes = [UInt8](value)
+    guard bytes.count == fieldElementBytes else { return false }
+    for index in stride(from: fieldElementBytes - 1, through: 0, by: -1)
+    where bytes[index] != fieldModulus[index] {
+      return bytes[index] < fieldModulus[index]
+    }
+    return false
   }
 
   // MARK: Signatures
