@@ -35,21 +35,29 @@ use std::{
 
 use eyre::WrapErr as _;
 use iroha_core::{
+    beacon::{
+        GlobalThresholdBeaconSessionBindingV1,
+        active_global_threshold_beacon_session_id_v1,
+        authenticated_global_threshold_beacon_roster_hash_iter_v1,
+    },
     executor::quote_nexus_fee_admission_draft,
     queue::Queue,
     smartcontracts::isi::sccp::{bridge_keys, store, subjects},
-    state::{State, WorldReadOnly},
+    state::{State, StateReadOnly as _, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::{
+    block::consensus::SumeragiRootScope,
     isi::{InstructionBox, sccp::SubmitSccpAttestationsV1},
+    sumeragi::epoch::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1},
     sccp::attestation::SccpAttestationSignatureV1,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_model_base::peer::PeerId;
 use iroha_sccp::v1::key_file::SccpBridgeKeyFileV1;
+use mv::storage::StorageReadOnly as _;
 use parking_lot::Mutex;
 
 use self::{key_store::KeyStore, plan::Duty};
@@ -135,6 +143,64 @@ fn wall_clock_ms() -> u64 {
         .map_or(0, |elapsed| {
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
         })
+}
+
+/// Automatic SCCP transactions wait for the original global native bootstrap.
+/// Local bridge-key custody may be prepared while the signed DKG owns its phase heights.
+/// Private roots keep their existing behavior and cannot acquire global beacon custody.
+fn automatic_submissions_ready(view: &iroha_core::state::StateView<'_>) -> eyre::Result<bool> {
+    let world = view.world();
+    let scope = iroha_core::sumeragi::lanes::routing::committed_root_scope(world)
+        .ok_or_else(|| eyre::eyre!("SCCP automatic submission requires immutable root scope"))?;
+    if !matches!(scope, SumeragiRootScope::Global) {
+        return Ok(true);
+    }
+    let committed = u64::try_from(view.height())?;
+    let next = committed
+        .checked_add(1)
+        .ok_or_else(|| eyre::eyre!("SCCP next submission height overflows"))?;
+    let schedule = world.consensus_schedule();
+    let current = &schedule
+        .ready(next)
+        .map_err(|error| eyre::eyre!("SCCP submission schedule: {error}"))?
+        .epoch;
+    current.validate().map_err(|error| eyre::eyre!("SCCP submission epoch: {error}"))?;
+    if current.network_id != *view.network_id() {
+        eyre::bail!("SCCP submission epoch belongs to another network");
+    }
+    let Some(id) = active_global_threshold_beacon_session_id_v1(world)? else {
+        return Ok(false);
+    };
+    let record = world
+        .global_beacon_key_sessions()
+        .get(&id)
+        .ok_or_else(|| eyre::eyre!("SCCP active beacon session is absent"))?;
+    // This is the original sealed World record, not a caller-provided public DTO.
+    record.validate()?;
+    let binding = InstalledBeaconEpochBindingV1 {
+        session_id: id,
+        transcript_hash: record.session.transcript_hash,
+    };
+    if record.session.network_id != current.network_id
+        || record.session.adaptive_dkg.finalized_at_height > committed
+        || record.session.adaptive_dkg.session.authority_generation != current.authority.generation
+        || !record.is_active_at(next)
+        || (current.authorization.beacon != BeaconEpochBindingV1::Bootstrap
+            && current.authorization.beacon != BeaconEpochBindingV1::Installed(binding))
+    {
+        return Ok(false);
+    }
+    let roster_hash = authenticated_global_threshold_beacon_roster_hash_iter_v1(
+        &record.session,
+        current.committee.iter().map(|seat| &seat.validator),
+    )?;
+    record.session.check_binding(&GlobalThresholdBeaconSessionBindingV1 {
+        network_id: current.network_id,
+        session_id: id,
+        roster_hash,
+        transcript_hash: record.session.transcript_hash,
+    })?;
+    Ok(true)
 }
 
 impl Attestor {
@@ -226,6 +292,12 @@ impl Attestor {
             iroha_logger::info!(path = %path.display(), "generated SCCP bridge key");
             keys.push(key);
             classified = plan::classify(&keys, &me, owner_of);
+        }
+        // A real pending bootstrap is not a successful submission: no registration or
+        // attestation bookkeeping changes until this original committed cut is usable.
+        // Shutdown drain calls this same tick and cannot bypass the boundary.
+        if !automatic_submissions_ready(&view)? {
+            return Ok(());
         }
         if self.config.auto_register && world.peers().iter().any(|peer| peer == &me) {
             self.register(&view, committed, &keys, &classified, &key_state)?;
@@ -570,5 +642,389 @@ impl Attestor {
             .push_with_lane_with_state(accepted, self.state.as_ref())
             .map(|_| ())
             .map_err(|failure| eyre::eyre!("enqueue SCCP transaction: {}", failure.err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{num::NonZeroU64, os::unix::fs::PermissionsExt as _};
+
+    use iroha_config_base::{ParameterOrigin, WithOrigin};
+    use iroha_core::{
+        beacon::{
+            FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+            complete_beacon_dkg_fixture_for_exact_session_v1,
+            complete_beacon_dkg_fixture_for_seat_v1,
+            global_threshold_beacon_roster_hash_v1,
+        },
+        state::{
+            THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1, World,
+            threshold_key_lifecycle_certificate_preimage_v1,
+        },
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    use iroha_crypto::{Hash, HashOf, Signature};
+    use iroha_data_model::{
+        NetworkId,
+        isi::{
+            consensus_keys::{
+                ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
+                ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
+            },
+            sccp::{InitializeSccpV1, SetSccpBridgeKeyV1},
+        },
+        parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+        },
+        sccp::params::SccpParametersV1,
+        transaction::Executable,
+    };
+
+    use super::*;
+
+    struct Fixture {
+        chain: CertifiedTestChain,
+        validator_keys: Vec<KeyPair>,
+        genesis_key: KeyPair,
+        key_dir: tempfile::TempDir,
+    }
+
+    fn original_config() -> (TestChainConfig, Vec<KeyPair>) {
+        // These original keys are the public all-edge DKG fixture's canonical roster.
+        // The signed genesis, not a World overlay, selects them and the NPoS policy.
+        let mut keys = (1_u8..=4)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+        let mut config = TestChainConfig::new(World::new(), wall_clock_ms().saturating_sub(1_000));
+        config.validator_keys = Some(keys.clone());
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        let policy = SumeragiNposParameters {
+            epoch_length_blocks: NonZeroU64::new(64).unwrap(),
+            max_validators: 4,
+            evidence_horizon_blocks: 128,
+            slashing_delay_blocks: 2,
+            ..SumeragiNposParameters::default()
+        };
+        policy.validate().unwrap();
+        config.genesis_parameters.extend([
+            Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+                policy.epoch_length_blocks,
+            )),
+            Parameter::Custom(policy.into_custom_parameter()),
+        ]);
+        config.genesis_instructions.push(
+            InitializeSccpV1 {
+                parameters: SccpParametersV1::taira_default(),
+                reset_nonce: [0x83; 32],
+            }
+            .into(),
+        );
+        (config, keys)
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let (config, validator_keys) = original_config();
+            let genesis_key = config.genesis_key.clone();
+            let chain = CertifiedTestChain::start(config).expect("original signed SCCP genesis");
+            assert_eq!(chain.height(), 1);
+            assert!(store::parameters::get(chain.state().view().world()).is_some());
+            Self {
+                chain,
+                validator_keys,
+                genesis_key,
+                key_dir: tempfile::tempdir().unwrap(),
+            }
+        }
+
+        async fn actor(&self) -> Arc<Attestor> {
+            let kura_dir = WithOrigin::new(
+                self.key_dir.path().to_path_buf(),
+                ParameterOrigin::custom("original SCCP actor test custody".into()),
+            );
+            let mut config =
+                iroha_config::parameters::actual::SccpAttestor::defaults_for_kura_store_dir(&kura_dir);
+            config.enabled = true;
+            config.auto_register = true;
+            // Disabled endpoint clients are original configuration, not a substitute submitter.
+            let keeper = keeper::Keeper::build(
+                iroha_config::parameters::actual::SccpLightClientKeeper {
+                    enabled: false,
+                    ..Default::default()
+                },
+            )
+            .await;
+            let (events, _receiver) = tokio::sync::broadcast::channel(64);
+            Arc::new(Attestor {
+                state: Arc::clone(self.chain.state()),
+                queue: Arc::new(Queue::from_config(Default::default(), events)),
+                peer_key_pair: self.validator_keys[0].clone(),
+                store: KeyStore::open(&config.key_dir_path()).unwrap(),
+                config,
+                memory: Mutex::new(Memory::default()),
+                keeper: Mutex::new(keeper),
+            })
+        }
+
+        fn advance_to(&mut self, height: u64) {
+            while self.chain.height() < height {
+                self.chain.commit(Vec::new());
+            }
+        }
+
+        fn original_beacon(&self) -> FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
+            let (session, _seat_custody) = complete_beacon_dkg_fixture_for_seat_v1(
+                self.chain.network_id(),
+                [0x84; 32],
+                4,
+                1,
+            );
+            FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
+                session,
+                &self.chain.state().ivm_execution_budget(),
+            )
+            .unwrap()
+        }
+
+        fn certificate(
+            &self,
+            record: &FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        ) -> ThresholdKeyLifecycleCertificateV1 {
+            let view = self.chain.state().view();
+            let roster = view
+                .world()
+                .consensus_schedule()
+                .ready(self.chain.height() + 1)
+                .unwrap()
+                .epoch
+                .committee
+                .iter()
+                .map(|seat| seat.validator.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                roster,
+                self.validator_keys
+                    .iter()
+                    .map(|key| PeerId::new(key.public_key().clone()))
+                    .collect::<Vec<_>>()
+            );
+            let mut certificate = ThresholdKeyLifecycleCertificateV1 {
+                version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
+                action: ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
+                expected_active_session_id: view.world().active_global_beacon_key_session(),
+                effective_height: self.chain.height() + 1,
+                network_id: self.chain.network_id(),
+                roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
+                committee_size: 4,
+                quorum: 3,
+                session_id: record.session.session_id,
+                transcript_hash: record.session.transcript_hash,
+                public_state: norito::encode_canonical(record).unwrap(),
+                signatures: Vec::new(),
+            };
+            self.sign_certificate(&mut certificate);
+            certificate
+        }
+
+        fn sign_certificate(&self, certificate: &mut ThresholdKeyLifecycleCertificateV1) {
+            let preimage = threshold_key_lifecycle_certificate_preimage_v1(certificate).unwrap();
+            certificate.signatures = self.validator_keys
+                .iter()
+                .take(3)
+                .enumerate()
+                .map(|(index, key)| ThresholdKeyLifecycleSignatureV1 {
+                    signer_index: u16::try_from(index).unwrap(),
+                    signature: Signature::try_new(key.private_key(), &preimage).unwrap(),
+                })
+                .collect();
+        }
+
+        fn commit_certificate(&mut self, certificate: ThresholdKeyLifecycleCertificateV1) -> bool {
+            let original_time = self.chain.committed(self.chain.height()).block_time_ms();
+            let signed = self.chain.sign(
+                &self.genesis_key,
+                [ApplyThresholdKeyLifecycleCertificateV1 { certificate }.into()],
+                original_time,
+            );
+            self.chain.commit(vec![signed])[0]
+        }
+    }
+
+    fn retained_key_address(actor: &Attestor) -> [u8; 20] {
+        let (keys, refusals) = actor.store.load().unwrap();
+        assert!(refusals.is_empty());
+        assert_eq!(keys.len(), 1);
+        assert_eq!(std::fs::metadata(actor.store.dir()).unwrap().permissions().mode() & 0o777, 0o700);
+        let leaves = std::fs::read_dir(actor.store.dir())
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(leaves[0].metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        keys[0].address().unwrap()
+    }
+
+    fn assert_deferred(actor: &Attestor) {
+        assert_eq!(actor.queue.queued_len(), 0);
+        let memory = actor.memory.lock();
+        assert!(memory.registration.is_none());
+        assert!(memory.scanned_through.is_none());
+        assert!(memory.open.is_empty());
+        assert!(memory.submitted.is_empty());
+        assert!(memory.last_batch.is_empty());
+    }
+
+    #[test]
+    fn uncommitted_signed_genesis_cannot_supply_an_inferred_root_scope() {
+        let (config, _) = original_config();
+        let prepared = CertifiedTestChain::prepare(config).unwrap();
+        let view = prepared.state.view();
+        assert_eq!(view.height(), 0);
+        assert!(automatic_submissions_ready(&view).is_err());
+    }
+
+    #[tokio::test]
+    async fn genesis_and_dkg_phase_heights_retain_keys_without_any_automatic_queue_work() {
+        let mut fixture = Fixture::new();
+        let actor = fixture.actor().await;
+        let mut original_address = None;
+        for height in 1..=4 {
+            fixture.advance_to(height);
+            assert!(!automatic_submissions_ready(&fixture.chain.state().view()).unwrap());
+            actor.tick().unwrap();
+            assert_deferred(&actor);
+            let address = retained_key_address(&actor);
+            assert_eq!(*original_address.get_or_insert(address), address);
+            assert!(fixture.chain.state().view().world().active_global_beacon_key_session().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_and_shutdown_drain_cannot_queue_a_bootstrap_registration() {
+        let fixture = Fixture::new();
+        let actor = fixture.actor().await;
+        actor.tick().unwrap();
+        let original_address = retained_key_address(&actor);
+        assert_deferred(&actor);
+        drop(actor);
+        let restarted = fixture.actor().await;
+        restarted.tick().unwrap();
+        assert_eq!(retained_key_address(&restarted), original_address);
+        restarted.drain().await;
+        assert_eq!(retained_key_address(&restarted), original_address);
+        assert_deferred(&restarted);
+    }
+
+    #[tokio::test]
+    async fn applied_original_beacon_lifecycle_releases_one_network_bound_registration() {
+        let mut fixture = Fixture::new();
+        let actor = fixture.actor().await;
+        actor.tick().unwrap();
+        let original_address = retained_key_address(&actor);
+        fixture.advance_to(4);
+        let record = fixture.original_beacon();
+        assert_eq!(record.session.adaptive_dkg.finalized_at_height, 4);
+        let certificate = fixture.certificate(&record);
+        assert!(fixture.commit_certificate(certificate));
+        assert_eq!(fixture.chain.height(), 5);
+        {
+            let view = fixture.chain.state().view();
+            let retained = view.world().global_beacon_key_sessions().get(&record.session.session_id).unwrap();
+            assert_eq!(retained.activated_at_height, Some(6));
+            assert!(automatic_submissions_ready(&view).unwrap());
+        }
+        actor.tick().unwrap();
+        actor.tick().unwrap();
+        assert_eq!(actor.queue.queued_len(), 1);
+        assert_eq!(retained_key_address(&actor), original_address);
+        let signed = {
+            let view = fixture.chain.state().view();
+            let pending = actor.queue.all_transactions(&view).collect::<Vec<_>>();
+            assert_eq!(pending.len(), 1);
+            let signed = pending[0].external().unwrap().clone();
+            let Executable::Instructions(instructions) = signed.instructions() else {
+                panic!("original automatic registration is an instruction transaction");
+            };
+            assert_eq!(instructions.len(), 1);
+            let registration = instructions[0].as_any().downcast_ref::<SetSccpBridgeKeyV1>().unwrap();
+            assert_eq!(registration.peer, actor.me());
+            registration.peer_signature.verify(
+                fixture.validator_keys[0].public_key(),
+                &registration.binding(fixture.chain.network_id()),
+            ).unwrap();
+            assert!(bridge_keys::check_binding(
+                view.world(),
+                &fixture.chain.network_id(),
+                6,
+                false,
+                registration,
+                signed.authority(),
+            ).unwrap().is_some());
+            let foreign_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign registration network")));
+            assert!(bridge_keys::check_binding(
+                view.world(), &foreign_network, 6, false, registration, signed.authority(),
+            ).is_err());
+            signed
+        };
+        assert_eq!(fixture.chain.commit(vec![signed]), [true]);
+        drop(actor);
+        let restarted = fixture.actor().await;
+        restarted.tick().unwrap();
+        assert_eq!(retained_key_address(&restarted), original_address);
+        assert_eq!(restarted.queue.queued_len(), 0);
+        assert!(restarted.memory.lock().registration.is_none());
+    }
+
+    #[tokio::test]
+    async fn malformed_foreign_retired_and_future_lifecycle_inputs_do_not_release_automatic_work() {
+        for refusal in ["malformed", "foreign", "retired", "future", "generation"] {
+            let mut fixture = Fixture::new();
+            let actor = fixture.actor().await;
+            actor.tick().unwrap();
+            let original_address = retained_key_address(&actor);
+            fixture.advance_to(4);
+            let mut record = fixture.original_beacon();
+            match refusal {
+                "malformed" => record.session.transcript_hash = [0; 32],
+                "foreign" => {
+                    let foreign_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign genuine DKG network")));
+                    let (session, _custody) = complete_beacon_dkg_fixture_for_seat_v1(foreign_network, [0x85; 32], 4, 1);
+                    record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session, &fixture.chain.state().ivm_execution_budget()).unwrap();
+                }
+                "retired" => {
+                    record.activated_at_height = Some(4);
+                    record.retired_at_height = Some(5);
+                }
+                "future" | "generation" => {
+                    let mut session = record.session.adaptive_dkg.session.clone();
+                    session.session_id = if refusal == "future" { [0x86; 32] } else { [0x87; 32] };
+                    session.attempt_id = session.session_id;
+                    if refusal == "future" {
+                        session.start_height = 100;
+                        session.commitments_end_height = 101;
+                        session.deliveries_end_height = 102;
+                        session.acceptances_end_height = 103;
+                    } else {
+                        session.authority_generation = 1;
+                    }
+                    let (session, _custody) = complete_beacon_dkg_fixture_for_exact_session_v1(session, 1);
+                    record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session, &fixture.chain.state().ivm_execution_budget()).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let certificate = fixture.certificate(&record);
+            assert!(!fixture.commit_certificate(certificate), "{refusal} must be natively rejected");
+            let view = fixture.chain.state().view();
+            assert!(view.world().active_global_beacon_key_session().is_none());
+            assert!(view.world().global_beacon_key_sessions().get(&record.session.session_id).is_none());
+            assert!(!automatic_submissions_ready(&view).unwrap());
+            drop(view);
+            actor.tick().unwrap();
+            actor.drain().await;
+            assert_eq!(retained_key_address(&actor), original_address);
+            assert_deferred(&actor);
+        }
     }
 }

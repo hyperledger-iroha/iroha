@@ -169,7 +169,7 @@ pub(crate) fn authenticated_global_threshold_beacon_roster_hash_v1(
 }
 
 /// Authenticate exact ordered borrowed validator identities without key/vector copies.
-pub(crate) fn authenticated_global_threshold_beacon_roster_hash_iter_v1<'a, I>(
+pub fn authenticated_global_threshold_beacon_roster_hash_iter_v1<'a, I>(
     session: &GlobalThresholdBeaconKeySessionV1,
     roster: I,
 ) -> Result<[u8; 32], GlobalThresholdBeaconError>

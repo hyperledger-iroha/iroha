@@ -110,7 +110,7 @@ trust the Parliament for what it enacts (§9.13).
 | Attestation transport | Self-authenticating `SubmitSccpAttestationsV1` instruction in ordinary transactions, auto-submitted by each validator node from its bridge key's own account. It is fee-exempt on success behind admission pre-verification and queue deduplication (§4.8) | Durable, peer-identical, state-derived bytes that any Torii serves. It needs no Sumeragi wire change, and a stalled signer cannot halt consensus. The digest is transport-independent, so a later move to Commit-vote extensions changes no contract (§12). P2P gossip is rejected because it is neither durable nor state-derived. |
 | Where the commitment root lives | Post-execution world state (`sccp_block_commitments[h]`), authenticated by the execution commitment of the block's commit certificate. The post-execution hook reads the consensus inputs of `h` from the Sumeragi core's schedule (§4.3.2). The block header carries no SCCP root | A proposal carries no execution result, so a header root authored before execution would break on any failed SCCP transaction (§4.5). |
 | Bridge-key registry | New map keyed by `PeerId`, set by `SetSccpBridgeKeyV1`. The instruction carries a consensus-key consent over a per-peer monotone binding nonce, plus a secp256k1 proof of possession. The key's own secp256k1 universal account is its attestor account and is registered implicitly. There is a permanent never-reused address index and a fault bar (§4.2) | The consensus-key registry is indexed by the peer's own BLS key and admin-gated, and staking registration is lane-scoped and refuses fresh global candidates. One key per role means no second key file. |
-| Validator setup | Zero-touch. A node running with role `validator` generates its bridge key on first start in an owner-only directory under its store, and submits `SetSccpBridgeKeyV1` itself, fee-exempt on success, as soon as its peer is registered. The attestor and the light-client keeper are enabled by default, with compiled default public RPC lists (§4.9, §4.13.4) | Validators join and leave freely; SCCP must not add a setup step or a funded account to that path. |
+| Validator setup | Zero-touch. A node running with role `validator` generates its bridge key on first start in an owner-only directory under its store, and submits `SetSccpBridgeKeyV1` itself, fee-exempt on success, once its peer is registered and the committed bootstrap condition in §4.9 is met. The attestor and the light-client keeper are enabled by default, with compiled default public RPC lists (§4.9, §4.13.4) | Validators join and leave freely; SCCP must not add a setup step or a funded account to that path. |
 | Attestation roster | Scheduled consensus committee (§4.3.2) mapped to active bridge addresses, sorted ascending by address (keyless slots as zero, first), `t = ⌊2n/3⌋+1`. Grouped into **generations**: a new one at every epoch boundary whose `(peer, address)` member list differs from the current generation, on forced rotation (key change, fault, too many unusable slots) and on the 1 d heartbeat, which fires at the first block past it and is block-start work (§4.3.2). The outgoing generation signs the boundary block; there is no seat-change batching and no handoff bond (§4.3) | Deterministic and publicly derivable. Validators come and go like on Ethereum; SCCP never delays an exit. Ascending order lets contracts enforce signer uniqueness in O(1) per signature. |
 | Fees and permissions | Attestations, fault evidence, keeper advances, recipient self-claims and bridge-key registration are fee-exempt on success (charged on failure) only under the authority, pre-verification, deduplication and per-block caps in §4.19. Everything else pays ordinary fees. The only SCCP permission token is `CanProposeSccpRouteGovernance`, which only allows proposing and is granted and revoked only in genesis | Signatures are the authority. A fee-exempt root is safe only when admission rejects invalid and duplicate payloads before the queue. |
 | Storage/pruning | Messages, control messages, inbound records, consumed sets, history leaves, rosters, subjects and SCCP governance revisions: permanent. Signatures: pruned after `attestation_retention_ms` (at least the outbound TTL plus 1 d), except rotation attestations, which are kept until the outgoing roster expires plus 1 d (§4.10). Light-client checkpoints: one permanent per stride, the rest pruned after 30 d unless Parliament-installed (§4.13.1) | Old messages remain provable through the history root under any newer attestation. Old burns remain provable through retained checkpoints. |
@@ -634,7 +634,8 @@ driver ticks until it if Taira is idle, §4.14.5).
   normal case (first start, a wiped store, a rotation).
 - **Revocation** (`public_key` absent): any authority; ordinary fee.
 - **Automatic registration.** A validator node registers its own key with no
-  operator action (§4.9). It never needs a funded account.
+  operator action after the committed bootstrap condition in §4.9 is met. It
+  never needs a funded account.
 
 ### 4.3 Bridge roster generations
 
@@ -749,8 +750,9 @@ withdrawal delay, no seat-change batching and no hook in staking;
 `FinalizePublicLaneUnbond` and every other staking instruction are
 untouched.
 
-- **Joining.** A node running with role `validator` registers its bridge key as
-  soon as its peer is registered (§4.9). The core schedules the validator into
+- **Joining.** A node running with role `validator` registers its bridge key
+  once its peer is registered and the committed bootstrap condition in §4.9
+  is met. The core schedules the validator into
   the committee two heights after the block that registers its peer (or at its
   consensus key's later activation height), at any height
   (`specs/sumeragi.md` §10.1), and SCCP picks it up at the next rotation
@@ -1026,6 +1028,13 @@ without SCCP.
   key whose address nobody owns is a registration candidate; only the newest
   one (by `created_at_ms`) is registered. A key owned by another peer is ignored with an error and
   the health gauge `sccp_attestor_foreign_key`.
+- **Committed bootstrap condition.** On a global root, automatic SCCP queue
+  writes wait until the retained active global threshold-beacon lifecycle is
+  authenticated for the actual next height, current network and scheduled
+  consensus authority and committee. The node generates and retains its local
+  bridge key while waiting. Registration, attestation and keeper writes all
+  share this condition, including during graceful shutdown. Private-root
+  behavior is unchanged.
 - **Automatic registration.** While `auto_register` is true (the default), the
   node's role is `validator`, SCCP exists, its peer is registered and not
   barred, and no active or pending key of its peer equals its newest local
@@ -1034,8 +1043,9 @@ without SCCP.
   `activation_epoch = current_epoch + 1` from committed state, signs the
   binding with the node's consensus key, the PoP and the transaction with the
   bridge key (authority `account_of(key)`), and pushes it into its local queue.
-  It retries once per epoch until the key is pending or active. This starts as
-  soon as the peer is registered, so the key is normally active by the first
+  It retries once per epoch until the key is pending or active. This starts
+  once the peer is registered and the committed bootstrap condition is met,
+  so the key is normally active by the first
   boundary generation that includes the peer (§4.3.3). It is fee-exempt on success (§4.2.3); a barred peer reports
   `sccp_attestor_barred` until the Parliament clears the fault.
 - **What it signs.** For each newly durably final height (§0), and for every
@@ -2346,7 +2356,8 @@ changed.
   Genesis carries no bridge keys.
 - **After a reset:**
   1. Each validator node generates its bridge key on first start and
-     registers it during epoch 0 (§4.9). Generation 1 is inert; the first
+     registers it during epoch 0 after global-beacon bootstrap (§4.9).
+     Generation 1 is inert; the first
      epoch boundary (3 600 blocks, reached with driver ticks if Taira is idle)
      creates the first attestable generation, published by any Torii.
   2. Anyone deploys fresh destination contracts pinned to that generation (or
@@ -3962,7 +3973,7 @@ Required tests:
 | D1 | **Governance is the SORA Parliament only**; validators and bridge keys take no part, and no governance statement is ever signed. Every SCCP decision (route registration and revisions with deployment and cap, activation including pause, resume and retirement, destination controls, parameters, stranded releases, fault clearing, light-client initialization, re-initialization, freezing and trusted checkpoints) goes through the pipeline `ProposeSccpRouteGovernance` → 8-body Parliament → due certificate → enactment, with its proposer rule, the `SccpGovernanceProposalV1` payload, and expected heads scoped per subject (route, route control, light-client lane, parameters, faulted peer). Genesis MUST seat the Parliament (§4.14.5) | §1.1, §1.2, §3.6, §4.1, §4.11, §4.13, §4.14.3–§4.14.5, §4.18, §4.19, §6, §7.4, §9.13 |
 | D2 | **Destination pause = Parliament pause.** No roster-controlled breaker or signed mint-control statement exists. An enacted `SetDestinationPaused` records a control leaf (`SCCP/CONTROL/V1`, §3.4) in the enacting block's commitment tree; the roster attests it like any block; anyone applies it with `applyControl` (`0x0ce970d6`; historical `0x935a913b`; TON `sccp_apply_control`) under a strictly increasing control nonce. Burns, rotations and voids stay open while paused | §3.4, §3.9, §4.4, §4.5, §4.14.6, §5.1.6, §5.2, §5.3, §5.4, §6, §7.1, §9.2, §9.10 |
 | D3 | **Validators come and go at any time.** No handoff bond, no staking change, no seat-change batching. A new generation starts at every boundary whose member set differs, plus forced rotation and the heartbeat; the outgoing generation signs the boundary block; the attestor prioritizes handoffs and signs them before a graceful shutdown. Defaults are a 1 d heartbeat and 14 d validity under the immutable 30 d maximum, all Parliament-settable | §1.2, §4.1, §4.3, §4.4, §4.9, §5.1.5, §5.4, §9.9, §9.10 |
-| D4 | **Zero-touch validator setup.** The node generates its bridge key on first start under its store directory (overridable, no environment variables), and registers it itself, fee-exempt on success, as soon as its peer is registered. The attestor account is the key's own secp256k1 account, registered implicitly. Attestor and keeper are on by default with compiled default public RPC lists. The Taira launcher passes nothing. The Parliament's beacon and TLE credentials must become node-generated the same way; until then the guarantee covers SCCP only | §1.2, §4.2, §4.9, §4.13.4, §4.14.5, §4.19, §8, §9.1, §9.5 |
+| D4 | **Zero-touch validator setup.** The node generates its bridge key on first start under its store directory (overridable, no environment variables), and registers it itself, fee-exempt on success, once its peer is registered and the committed bootstrap condition in §4.9 is met. The attestor account is the key's own secp256k1 account, registered implicitly. Attestor and keeper are on by default with compiled default public RPC lists. The Taira launcher passes nothing. The Parliament's beacon and TLE credentials must become node-generated the same way; until then the guarantee covers SCCP only | §1.2, §4.2, §4.9, §4.13.4, §4.14.5, §4.19, §8, §9.1, §9.5 |
 | D5 | **Approved:** fee exemption on success (charged on failure) for attestations, fault evidence, keeper advances, recipient self-claims and bridge-key registration; implicit recipient registration; the crates `iroha_sccp_rpc` and `iroha_sccp_wallet` (reqwest + rustls, TON ADNL crypto); colima for TRON TRE; default public RPC lists in `iroha_config` | §4.2.3, §4.8, §4.12, §4.19, §8, §12 |
 | D6 | **Deferred:** finalizer tips; a later payload version bump is acceptable | §12 |
 | D7 | **Networks:** the four mainnet profiles only; no testnets | preamble, §2 |
