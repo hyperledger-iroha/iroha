@@ -9374,6 +9374,7 @@ mod executor_model {
             claims.initial_state = EdgeInitialStateV1::Vacant;
             claims.owned_publication = None;
             claims.completion = host_pair::NativeEdgeCompletionProvenanceV1::Vacant;
+            claims.predecessor_authority = None;
             edge.native_capability.incumbent = host_pair::SignedNativeEdgeCaptureV1::sign(claims, &key).unwrap();
             edge.native_capability.incumbent_nginx_request = None;
             validate_edge(edge, &inventory.revision, &inventory.hosts).unwrap();

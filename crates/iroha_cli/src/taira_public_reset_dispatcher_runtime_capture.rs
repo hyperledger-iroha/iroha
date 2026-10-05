@@ -316,7 +316,7 @@ fn capture_native_edge(
             == command.expected_host_identity_sha256,
         "capture host pair differs from independently approved guest route",
     )?;
-    native_edge.verify(
+    native_edge.verify_retained_join(
         &hosts,
         &command.expected_retained_inventory_sha256,
         &command.expected_authorization_sha256,

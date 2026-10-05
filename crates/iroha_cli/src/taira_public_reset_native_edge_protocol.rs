@@ -55,8 +55,7 @@ impl NativeEdgeCapabilityV1 {
         let claims = &self.incumbent.claims;
         self.incumbent.verify(
             &self.captured_hosts,
-            &claims.retained_inventory_sha256,
-            &claims.authorization_sha256,
+            claims.predecessor_authority.as_ref(),
             &claims.authorization_nonce,
             &claims.next_genesis_hash,
         )?;

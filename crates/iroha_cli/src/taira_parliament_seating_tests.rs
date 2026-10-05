@@ -597,36 +597,94 @@ fn citizen_instructions_seat_every_citizen_and_the_census_counts_them() {
 }
 
 #[test]
-fn appended_genesis_transaction_is_instruction_only() {
+fn seating_preserves_eleven_genesis_batches_and_instruction_order() {
     let _chain = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
+    let original_instruction: InstructionBox = Register::account(Account::new(account(80))).into();
+    let mut document = json::to_value(&generated_genesis(vec![original_instruction])).unwrap();
+    loop {
+        let current: iroha_genesis::RawGenesisTransaction = json::from_value(document.clone()).unwrap();
+        let batches = current.normalize().unwrap().transactions.len();
+        if batches == 11 { break; }
+        assert!(batches < 11);
+        let transactions = document.get_mut("transactions").unwrap().as_array_mut().unwrap();
+        let prior: Vec<InstructionBox> = vec![Register::account(Account::new(account(
+            u8::try_from(80 + transactions.len()).unwrap(),
+        ))).into()];
+        transactions.push(norito::json!({
+            "instructions": (iroha_genesis::genesis_instructions_json::instructions_to_value(&prior)),
+            "ivm_triggers": [], "topology": []
+        }));
+    }
+    let before: iroha_genesis::RawGenesisTransaction = json::from_value(document).unwrap();
+    assert_eq!(before.clone().normalize().unwrap().transactions.len(), 11);
+    let original = json::to_value(&before).unwrap();
+    let tail = original["transactions"].as_array().unwrap().len() - 1;
     let asset = AssetDefinitionId::parse_address_literal(CANONICAL_XOR).unwrap();
-    let instructions = citizen_genesis_instructions(
-        &[account(1)],
-        &asset,
-        &Quantity::from(1_000_000_u32),
-        &Quantity::from(1_000_u32),
-        None,
-        None,
-    )
-    .unwrap();
-    let mut document = norito::json!({"chain": "x", "transactions": [{"instructions": []}]});
-    append_genesis_transaction(&mut document, &instructions).unwrap();
-    let transactions = document["transactions"].as_array().unwrap();
-    assert_eq!(transactions.len(), 2);
-    let appended = transactions[1].as_object().unwrap();
-    assert_eq!(
-        appended.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["instructions", "ivm_triggers", "topology"]
-    );
-    assert_eq!(
-        appended
-            .get("instructions")
-            .and_then(Value::as_array)
-            .unwrap()
-            .len(),
-        3
-    );
-    assert!(append_genesis_transaction(&mut norito::json!({}), &instructions).is_err());
+    let citizen_instructions = citizen_genesis_instructions(
+        &[account(1)], &asset, &Quantity::from(1_000_000_u32), &Quantity::from(1_000_u32),
+        Some(&account(2)), Some(&account(80)),
+    ).unwrap();
+    let nonce = [37_u8; 32];
+    let mut expected_tail = original["transactions"].as_array().unwrap()[tail]["instructions"]
+        .as_array().unwrap().clone();
+    let mut added = citizen_instructions.clone();
+    added.push(sccp_genesis_instruction(nonce).unwrap());
+    expected_tail.extend(iroha_genesis::genesis_instructions_json::instructions_to_value(&added)
+        .as_array().unwrap().iter().cloned());
+    let authored = append_seating_instructions(before, citizen_instructions, || Ok(nonce)).unwrap();
+    let after = json::to_value(&authored).unwrap();
+    let transactions = after["transactions"].as_array().unwrap();
+    assert_eq!(transactions.len(), tail + 1, "seating must not add raw boundaries");
+    assert_eq!(authored.clone().normalize().unwrap().transactions.len(), 11,
+        "seating must preserve all eleven fully injected signer batches");
+    assert_eq!(&transactions[..tail], &original["transactions"].as_array().unwrap()[..tail]);
+    assert_eq!(transactions[tail]["instructions"].as_array().unwrap(), &expected_tail);
+    let mut original_fields = original.as_object().unwrap().clone();
+    let mut authored_fields = after.as_object().unwrap().clone();
+    original_fields.remove("transactions");
+    authored_fields.remove("transactions");
+    assert_eq!(authored_fields, original_fields, "inherited genesis fields stay exact");
+    let initializations = authored.instructions().filter_map(|instruction|
+        instruction.as_any().downcast_ref::<InitializeSccpV1>()).collect::<Vec<_>>();
+    assert_eq!(initializations.len(), 1);
+    assert_eq!(initializations[0].reset_nonce, nonce);
+}
+
+#[test]
+fn seating_preserves_inherited_sccp_nonce_without_drawing_another() {
+    let _chain = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
+    let nonce = [41_u8; 32];
+    let original = generated_genesis(vec![Register::account(Account::new(account(80))).into(),
+        sccp_genesis_instruction(nonce).unwrap()]);
+    let before = json::to_value(&original).unwrap();
+    let addition: Vec<InstructionBox> = vec![Register::account(Account::new(account(1))).into()];
+    let authored = append_seating_instructions(original, addition, || {
+        panic!("inherited SCCP must not obtain another reset nonce")
+    }).unwrap();
+    assert_eq!(authored.transactions().len(), before["transactions"].as_array().unwrap().len());
+    let initializations = authored.instructions().filter_map(|instruction|
+        instruction.as_any().downcast_ref::<InitializeSccpV1>()).collect::<Vec<_>>();
+    assert_eq!(initializations.len(), 1);
+    assert_eq!(initializations[0].reset_nonce, nonce);
+}
+
+#[test]
+fn seating_refuses_parameter_and_empty_instruction_tails() {
+    let _chain = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
+    let original = generated_genesis(vec![Register::account(Account::new(account(80))).into()]);
+    let document = json::to_value(&original).unwrap();
+    let first = document["transactions"].as_array().unwrap()[0].clone();
+    assert!(first.as_object().unwrap().contains_key("parameters"));
+    let mut parameter_tail = document.clone();
+    parameter_tail.as_object_mut().unwrap().insert("transactions".into(), Value::Array(vec![first]));
+    let parameter_tail: iroha_genesis::RawGenesisTransaction = json::from_value(parameter_tail).unwrap();
+    let addition = || vec![Register::account(Account::new(account(1))).into()];
+    assert!(append_seating_instructions(parameter_tail, addition(), || Ok([43; 32])).is_err());
+    let mut empty_tail = document;
+    empty_tail.get_mut("transactions").unwrap().as_array_mut().unwrap().last_mut().unwrap()
+        .as_object_mut().unwrap().insert("instructions".into(), Value::Array(Vec::new()));
+    let empty_tail: iroha_genesis::RawGenesisTransaction = json::from_value(empty_tail).unwrap();
+    assert!(append_seating_instructions(empty_tail, addition(), || Ok([43; 32])).is_err());
 }
 
 #[test]
@@ -710,7 +768,8 @@ fn generated_genesis(instructions: Vec<InstructionBox>) -> iroha_genesis::RawGen
                         validators,
                     },
                 },
-            );
+            )
+            .next_transaction();
     for instruction in instructions {
         builder = builder.append_instruction(instruction);
     }
@@ -1025,6 +1084,61 @@ fn seat_parliament_refuses_unseatable_requests() {
         seat(16).run_with_writer(&mut Vec::new()).unwrap_err()
     );
     assert!(error.contains("owner-only"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn seat_parliament_refuses_incompatible_tail_before_private_outputs() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let _chain = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
+    let directory = tempfile::tempdir().unwrap();
+    for over_budget in [false, true] {
+        let localnet = directory.path().join(if over_budget { "over-budget" } else { "empty-tail" });
+        fs::create_dir(&localnet).unwrap();
+        fs::set_permissions(&localnet, fs::Permissions::from_mode(0o700)).unwrap();
+        let asset = AssetDefinitionId::parse_address_literal(CANONICAL_XOR).unwrap();
+        let original = generated_genesis(vec![Register::asset_definition(AssetDefinition::new(
+            asset, "XOR", NumericSpec::fractional(9), AssetBalancePolicy::Global, None,
+        )).into()]);
+        let mut manifest = json::to_value(&original).unwrap();
+        if over_budget {
+            loop {
+                let current: iroha_genesis::RawGenesisTransaction = json::from_value(manifest.clone()).unwrap();
+                let batches = current.normalize().unwrap().transactions.len();
+                if batches == 11 { break; }
+                assert!(batches < 11);
+                let transactions = manifest.get_mut("transactions").unwrap().as_array_mut().unwrap();
+                let prior: Vec<InstructionBox> = vec![Register::account(Account::new(account(
+                    u8::try_from(90 + transactions.len()).unwrap(),
+                ))).into()];
+                transactions.push(norito::json!({
+                    "instructions": (iroha_genesis::genesis_instructions_json::instructions_to_value(&prior)),
+                    "ivm_triggers": [], "topology": []
+                }));
+            }
+            let extra: Vec<InstructionBox> = vec![Register::account(Account::new(account(150))).into()];
+            manifest.get_mut("transactions").unwrap().as_array_mut().unwrap().push(norito::json!({
+                "instructions": (iroha_genesis::genesis_instructions_json::instructions_to_value(&extra)),
+                "ivm_triggers": [], "topology": []
+            }));
+        } else {
+            manifest.get_mut("transactions").unwrap().as_array_mut().unwrap().push(norito::json!({
+                "instructions": [], "ivm_triggers": [], "topology": []
+            }));
+        }
+        let genesis = json::to_json_pretty(&manifest).unwrap();
+        let config = format!("chain = \"{TAIRA_CHAIN_ID}\"\n[torii.faucet]\nenabled = true\namount = \"25000\"\nasset_definition_id = \"{CANONICAL_XOR}\"\n");
+        fs::write(localnet.join("genesis.json"), &genesis).unwrap();
+        fs::write(localnet.join("peer0.toml"), &config).unwrap();
+        let error = SeatParliament { localnet_dir: localnet.clone(), citizens: 16,
+            fee_float: Quantity::from(1_000_u32), sccp_proposer_public_key: None, citizen_dir: None }
+            .run_with_writer(&mut Vec::new()).unwrap_err().to_string();
+        assert!(error.contains(if over_budget { "native signing bounds" } else { "instruction-only genesis tail" }), "{error}");
+        assert!(!localnet.join(CITIZEN_DIRECTORY).exists());
+        assert!(!localnet.join("runtime").exists());
+        assert_eq!(fs::read_to_string(localnet.join("genesis.json")).unwrap(), genesis);
+        assert_eq!(fs::read_to_string(localnet.join("peer0.toml")).unwrap(), config);
+    }
 }
 
 #[derive(clap::Parser, Debug)]

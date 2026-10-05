@@ -8,7 +8,7 @@ use super::*;
 use host_pair::{
     NativeEdgeCandidateClaimsV1, NativeEdgeCaptureClaimsV1, NativeEdgeCompletionProvenanceV1,
     NativeFileIdentityV1, NativeNginxMasterV1, NativeObservedFileV1, NativeOwnedPublicationV1,
-    NativePublicFileV1, ResetHostPairV1, SignedNativeEdgeCandidateV1, SignedNativeEdgeCaptureV1,
+    NativePublicFileV1, NativeEdgeRetainedAuthorityV1, ResetHostPairV1, SignedNativeEdgeCandidateV1, SignedNativeEdgeCaptureV1,
 };
 use iroha_crypto::KeyPair;
 use iroha_fs::OwnerDirectory;
@@ -74,8 +74,8 @@ struct TerminalAuthorityV1 {
 struct PrepareRequestV1 {
     schema: String,
     hosts: ResetHostPairV1,
-    retained_inventory_sha256: String,
-    authorization_sha256: String,
+    #[norito(required)]
+    predecessor_authority: Option<NativeEdgeRetainedAuthorityV1>,
     authorization_nonce: String,
     next_genesis_hash: String,
     initial_state: EdgeInitialStateV1,
@@ -228,6 +228,17 @@ fn read_request(args: &PrepareNativeEdge) -> Result<(PrepareRequestV1, PinnedInp
 
 fn validate_selected_refs(request: &PrepareRequestV1) -> Result<()> {
     request.hosts.validate()?;
+    match (&request.completion, &request.predecessor_authority) {
+        (NativeEdgeCompletionProvenanceV1::Vacant, None)
+            if matches!(request.initial_state, EdgeInitialStateV1::Vacant)
+                && request.current_nginx_request.is_none()
+                && request.terminal_authority.is_none() => {},
+        (NativeEdgeCompletionProvenanceV1::PublicationOnly { .. }, Some(authority))
+        | (NativeEdgeCompletionProvenanceV1::ResetTerminal { .. }, Some(authority)) => {
+            authority.validate()?;
+        }
+        _ => return Err(eyre!("native request requires actual absent or retained predecessor authority")),
+    }
     let host = &request.hosts.native_edge;
     match &request.initial_state {
         EdgeInitialStateV1::Vacant if request.current_nginx_request.is_none() => {},
@@ -475,8 +486,7 @@ fn sign_records(
             owner_uid: native.owner_uid,
             owner_gid: native.owner_gid,
             custody_root: native.custody_root.clone(),
-            retained_inventory_sha256: request.retained_inventory_sha256.clone(),
-            authorization_sha256: request.authorization_sha256.clone(),
+            predecessor_authority: request.predecessor_authority.clone(),
             authorization_nonce: request.authorization_nonce.clone(),
             next_genesis_hash: request.next_genesis_hash.clone(),
             initial_state: request.initial_state.clone(),
@@ -498,8 +508,7 @@ fn sign_records(
     )?;
     capture.verify(
         &request.hosts,
-        &request.retained_inventory_sha256,
-        &request.authorization_sha256,
+        request.predecessor_authority.as_ref(),
         &request.authorization_nonce,
         &request.next_genesis_hash,
     )?;
@@ -577,12 +586,6 @@ fn prepare_native(args: &PrepareNativeEdge, writer: &mut impl Write) -> Result<(
         return Err(eyre!(
             "native prepare request names another physical software custodian"
         ));
-    }
-    for digest in [
-        &request.retained_inventory_sha256,
-        &request.authorization_sha256,
-    ] {
-        validate_lower_hex("native predecessor pin", digest, 64)?;
     }
     validate_nonce(&request.authorization_nonce)?;
     if Hash::from_str(&request.next_genesis_hash)?.to_string() != request.next_genesis_hash {
@@ -916,9 +919,11 @@ fn validate_completion(
                 request.hosts.native_edge.owner_uid,
                 MAX_JSON_BYTES,
             )?)?;
-            if authority.inventory.sha256 != request.retained_inventory_sha256
+            let predecessor = request.predecessor_authority.as_ref()
+                .ok_or_else(|| eyre!("native terminal requires actual retained authority"))?;
+            if authority.inventory.sha256 != predecessor.retained_inventory_sha256
                 || authorization_semantic_sha256(&authorization, trusted)?
-                    != request.authorization_sha256
+                    != predecessor.authorization_sha256
                 || inventory.authorization_nonce != request.authorization_nonce
                 || inventory.next_genesis_hash != request.next_genesis_hash
             {
@@ -931,7 +936,7 @@ fn validate_completion(
             // signed and is checked against every phase in the canonical proof owner.
             verify_execution_authorization(
                 &inventory,
-                &request.retained_inventory_sha256,
+                &predecessor.retained_inventory_sha256,
                 &authorization,
                 trusted,
                 authorization.claims.not_before_unix_ms,
@@ -940,8 +945,8 @@ fn validate_completion(
                 &request.completion,
                 owned_publication,
                 &inventory,
-                &request.retained_inventory_sha256,
-                &request.authorization_sha256,
+                &predecessor.retained_inventory_sha256,
+                &predecessor.authorization_sha256,
                 authorization.claims.execution_expires_at_unix_ms,
             )
         }
@@ -1010,8 +1015,7 @@ mod tests {
         let request = PrepareRequestV1 {
             schema: REQUEST_SCHEMA.into(),
             hosts,
-            retained_inventory_sha256: capture.claims.retained_inventory_sha256.clone(),
-            authorization_sha256: capture.claims.authorization_sha256.clone(),
+            predecessor_authority: capture.claims.predecessor_authority.clone(),
             authorization_nonce: capture.claims.authorization_nonce.clone(),
             next_genesis_hash: capture.claims.next_genesis_hash.clone(),
             initial_state: EdgeInitialStateV1::AdmittedRelease(incumbent),
@@ -1094,8 +1098,7 @@ mod tests {
             substituted
                 .verify(
                     &request.hosts,
-                    &request.retained_inventory_sha256,
-                    &request.authorization_sha256,
+                    request.predecessor_authority.as_ref(),
                     &request.authorization_nonce,
                     &request.next_genesis_hash
                 )
@@ -1157,6 +1160,7 @@ mod tests {
         request.initial_state = EdgeInitialStateV1::Vacant;
         request.current_nginx_request = None;
         request.completion = NativeEdgeCompletionProvenanceV1::Vacant;
+        request.predecessor_authority = None;
         observation.owned_publication = None;
         observation.phase = "vacant".into();
         validate_selected_refs(&request).unwrap();
@@ -1164,6 +1168,7 @@ mod tests {
             dispatcher, guard, &trusted, &native_key, &owner_key, 1_234).unwrap();
         assert!(matches!(&capture.claims.initial_state, EdgeInitialStateV1::Vacant));
         assert!(capture.claims.owned_publication.is_none());
+        assert!(capture.claims.predecessor_authority.is_none());
         assert!(capture.claims.admitted_release().is_err());
         assert!(capability.incumbent_nginx_request.is_none());
         capability.validate(&request.hosts).unwrap();
@@ -1171,7 +1176,7 @@ mod tests {
             &revision.cargo_lock_sha256, &revision.source_closure_sha256, &trusted).unwrap();
         let verify = |claims| {
             SignedNativeEdgeCaptureV1::sign(claims, &native_key).unwrap().verify(&request.hosts,
-                &request.retained_inventory_sha256, &request.authorization_sha256,
+                request.predecessor_authority.as_ref(),
                 &request.authorization_nonce, &request.next_genesis_hash)
         };
         let mut changed = capture.claims.clone();
@@ -1188,6 +1193,100 @@ mod tests {
         let mut retired = json::to_value(&capture.claims).unwrap();
         retired.as_object_mut().unwrap().insert("release".into(), json::to_value(&old_release).unwrap());
         assert!(json::from_value::<NativeEdgeCaptureClaimsV1>(retired).is_err());
+        let canonical = json::to_value(&capture.claims).unwrap();
+        assert_eq!(canonical.get("predecessor_authority"), Some(&Value::Null));
+        let mut missing = canonical.clone();
+        missing.as_object_mut().unwrap().remove("predecessor_authority");
+        assert!(json::from_value::<NativeEdgeCaptureClaimsV1>(missing).is_err());
+        for field in ["retained_inventory_sha256", "authorization_sha256"] {
+            let mut retired = canonical.clone();
+            retired.as_object_mut().unwrap().insert(field.into(), Value::String("d".repeat(64)));
+            assert!(json::from_value::<NativeEdgeCaptureClaimsV1>(retired).is_err());
+        }
+        let mut forged = capture.claims.clone();
+        forged.predecessor_authority = Some(NativeEdgeRetainedAuthorityV1 {
+            retained_inventory_sha256: "d".repeat(64), authorization_sha256: "e".repeat(64),
+        });
+        assert!(verify(forged).is_err());
+    }
+
+    #[test]
+    fn native_predecessor_authority_is_closed_required_and_completion_bound() {
+        let (request, ..) = signed_fixture();
+        validate_selected_refs(&request).unwrap();
+        let mut absent = request.clone();
+        absent.predecessor_authority = None;
+        assert!(validate_selected_refs(&absent).is_err());
+        for field in ["retained_inventory_sha256", "authorization_sha256"] {
+            let mut malformed = json::to_value(&request).unwrap();
+            malformed.get_mut("predecessor_authority").unwrap().as_object_mut().unwrap().remove(field);
+            assert!(json::from_value::<PrepareRequestV1>(malformed).is_err());
+            let mut retired = json::to_value(&request).unwrap();
+            retired.as_object_mut().unwrap().insert(field.into(), Value::String("d".repeat(64)));
+            assert!(json::from_value::<PrepareRequestV1>(retired).is_err());
+        }
+        let mut missing = json::to_value(&request).unwrap();
+        missing.as_object_mut().unwrap().remove("predecessor_authority");
+        assert!(json::from_value::<PrepareRequestV1>(missing).is_err());
+        for digest in [String::new(), "0".repeat(64)] {
+            let mut malformed = request.clone();
+            malformed.predecessor_authority.as_mut().unwrap().retained_inventory_sha256 = digest;
+            assert!(validate_selected_refs(&malformed).is_err());
+        }
+        let mut vacant = request.clone();
+        vacant.initial_state = EdgeInitialStateV1::Vacant;
+        vacant.current_nginx_request = None;
+        vacant.completion = NativeEdgeCompletionProvenanceV1::Vacant;
+        vacant.predecessor_authority = None;
+        validate_selected_refs(&vacant).unwrap();
+        let mut invented = vacant.clone();
+        invented.predecessor_authority = request.predecessor_authority.clone();
+        assert!(validate_selected_refs(&invented).is_err());
+        let mut invented = vacant.clone();
+        invented.terminal_authority = Some(TerminalAuthorityV1 {
+            inventory: request.source_manifest.clone(), authorization: request.trusted_public_key.clone(),
+        });
+        assert!(validate_selected_refs(&invented).is_err());
+        let mut invented = vacant;
+        invented.current_nginx_request = request.current_nginx_request.clone();
+        assert!(validate_selected_refs(&invented).is_err());
+    }
+
+    #[test]
+    fn native_retained_pair_joins_real_expected_authority_and_survives_vacant_rollback() {
+        let (request, _, _, _, _, _, native_key, _) = signed_fixture();
+        let release = match request.initial_state.clone() {
+            EdgeInitialStateV1::AdmittedRelease(release) => release,
+            _ => unreachable!(),
+        };
+        let authority = request.predecessor_authority.as_ref().unwrap();
+        let capture = host_pair::fixture_native_edge_capture(&request.hosts, release,
+            &authority.retained_inventory_sha256, &authority.authorization_sha256,
+            &request.authorization_nonce, &request.next_genesis_hash);
+        capture.verify_retained_join(&request.hosts, &authority.retained_inventory_sha256,
+            &authority.authorization_sha256, &request.authorization_nonce, &request.next_genesis_hash).unwrap();
+        assert!(capture.verify_retained_join(&request.hosts, &"f".repeat(64),
+            &authority.authorization_sha256, &request.authorization_nonce, &request.next_genesis_hash).is_err());
+        assert!(capture.verify_retained_join(&request.hosts, &authority.retained_inventory_sha256,
+            &"f".repeat(64), &request.authorization_nonce, &request.next_genesis_hash).is_err());
+        let mut claims = capture.claims;
+        claims.initial_state = EdgeInitialStateV1::Vacant;
+        claims.owned_publication = None;
+        let terminal_root = format!("{}/taira-edge/operations/{}",
+            request.hosts.native_edge.custody_root, authority.authorization_sha256);
+        let mut progress = claims.forwarding_plan.clone();
+        progress.file.path = format!("{terminal_root}/progress.json");
+        let mut receipt = progress.clone();
+        receipt.file.path = format!("{terminal_root}/completion.json");
+        claims.completion = NativeEdgeCompletionProvenanceV1::ResetTerminal {
+            status: "rolled_back".into(), progress, completion_receipt: receipt,
+            checkpoints: Vec::new(), global_proof: None, global_proof_predecessor: None,
+        };
+        SignedNativeEdgeCaptureV1::sign(claims.clone(), &native_key).unwrap()
+            .verify(&request.hosts, Some(authority), &request.authorization_nonce, &request.next_genesis_hash).unwrap();
+        claims.predecessor_authority = None;
+        assert!(SignedNativeEdgeCaptureV1::sign(claims, &native_key).unwrap()
+            .verify(&request.hosts, None, &request.authorization_nonce, &request.next_genesis_hash).is_err());
     }
 
     #[cfg(unix)]
@@ -1284,8 +1383,7 @@ mod tests {
         reread
             .verify(
                 &request.hosts,
-                &request.retained_inventory_sha256,
-                &request.authorization_sha256,
+                request.predecessor_authority.as_ref(),
                 &request.authorization_nonce,
                 &request.next_genesis_hash,
             )

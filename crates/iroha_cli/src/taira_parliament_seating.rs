@@ -1039,28 +1039,31 @@ pub(crate) fn fresh_sccp_reset_nonce() -> Result<[u8; 32]> {
     Ok(nonce)
 }
 
-/// Append one instruction-only transaction to a raw genesis manifest JSON document.
+/// Extend the maintained instruction-only genesis tail with citizen authoring.
+/// Existing transaction boundaries and instructions remain in their exact order.
+/// SCCP is initialized last only when it is absent; inherited initialization never
+/// requests or replaces its reset nonce.
 ///
 /// # Errors
-/// Returns an error when the document has no transaction array.
-pub(crate) fn append_genesis_transaction(
-    manifest: &mut Value,
-    instructions: &[InstructionBox],
-) -> Result<()> {
-    let transactions = manifest
-        .as_object_mut()
-        .and_then(|object| object.get_mut("transactions"))
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| eyre!("genesis manifest has no transaction array"))?;
-    let mut transaction = Map::new();
-    transaction.insert(
-        "instructions".into(),
-        iroha_genesis::genesis_instructions_json::instructions_to_value(instructions),
-    );
-    transaction.insert("ivm_triggers".into(), Value::Array(Vec::new()));
-    transaction.insert("topology".into(), Value::Array(Vec::new()));
-    transactions.push(Value::Object(transaction));
-    Ok(())
+/// Refuses a missing or incompatible tail through the native genesis authoring API,
+/// or a failure while obtaining a fresh nonzero SCCP reset nonce.
+pub(crate) fn append_seating_instructions(
+    manifest: iroha_genesis::RawGenesisTransaction,
+    mut instructions: Vec<InstructionBox>,
+    nonce: impl FnOnce() -> Result<[u8; 32]>,
+) -> Result<iroha_genesis::RawGenesisTransaction> {
+    if !manifest
+        .instructions()
+        .any(|instruction| instruction.as_any().is::<InitializeSccpV1>())
+    {
+        instructions.push(sccp_genesis_instruction(nonce()?)?);
+    }
+    let authored = manifest.append_instruction_only_tail(instructions)?;
+    // The signer bounds fully injected batches, not raw JSON transaction rows.
+    // Refuse an invalid or oversized seated manifest before any private output.
+    authored.clone().normalize()
+        .wrap_err("seated genesis violates native signing bounds")?;
+    Ok(authored)
 }
 
 /// Render a citizen's client configuration from the network's generated client config.
@@ -1377,18 +1380,8 @@ impl SeatParliament {
             Some(&escrow),
             sccp_proposer.as_ref(),
         )?;
-        let mut document: Value = json::from_slice(&genesis_bytes)?;
-        append_genesis_transaction(&mut document, &instructions)?;
-        if !manifest
-            .instructions()
-            .any(|instruction| instruction.as_any().is::<InitializeSccpV1>())
-        {
-            append_genesis_transaction(
-                &mut document,
-                &[sccp_genesis_instruction(fresh_sccp_reset_nonce()?)?],
-            )?;
-        }
-        let mut genesis_json = json::to_json_pretty(&document)?;
+        let authored = append_seating_instructions(manifest, instructions, fresh_sccp_reset_nonce)?;
+        let mut genesis_json = json::to_json_pretty(&authored)?;
         genesis_json.push('\n');
         let reparsed: iroha_genesis::RawGenesisTransaction = json::from_str(&genesis_json)
             .wrap_err("seated genesis manifest does not round-trip")?;

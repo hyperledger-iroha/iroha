@@ -634,9 +634,10 @@ fn admit_previous_terminal(
 ) -> Result<()> {
     let edge = &admitted.inventory.edge;
     let capture = &edge.native_capability.incumbent;
+    let predecessor = capture.claims.retained_authority()?;
     if lease.schema != LEASE_SCHEMA_V1
-        || capture.claims.retained_inventory_sha256 != lease.inventory_sha256
-        || capture.claims.authorization_sha256 != lease.authorization_semantic_sha256
+        || predecessor.retained_inventory_sha256 != lease.inventory_sha256
+        || predecessor.authorization_sha256 != lease.authorization_semantic_sha256
         || capture.claims.authorization_nonce != lease.authorization_nonce
     {
         return Err(eyre!("native host retains another unresolved lease"));

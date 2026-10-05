@@ -224,8 +224,7 @@ pub(super) fn validate_runtime(runtime: &CurrentRuntime) -> Result<()> {
     let claims = &runtime.native_edge.claims;
     runtime.native_edge.verify(
         &runtime.hosts,
-        &claims.retained_inventory_sha256,
-        &claims.authorization_sha256,
+        claims.predecessor_authority.as_ref(),
         &claims.authorization_nonce,
         &claims.next_genesis_hash,
     )
@@ -388,7 +387,7 @@ impl PrepareDispatcherTransition {
                 lease.inventory_sha256 == inventory.sha256,
                 "sealed lease does not bind selected retained inventory",
             )?;
-            runtime.native_edge.verify(
+            runtime.native_edge.verify_retained_join(
                 &runtime.hosts,
                 &inventory.sha256,
                 &lease.authorization_semantic_sha256,

@@ -530,6 +530,26 @@ pub(super) enum NativeEdgeCompletionProvenanceV1 {
     },
 }
 
+/// Actual retained native authority; a virgin edge has no predecessor pair.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(super) struct NativeEdgeRetainedAuthorityV1 {
+    pub(super) retained_inventory_sha256: String,
+    pub(super) authorization_sha256: String,
+}
+
+impl NativeEdgeRetainedAuthorityV1 {
+    pub(super) fn validate(&self) -> Result<()> {
+        for digest in [&self.retained_inventory_sha256, &self.authorization_sha256] {
+            validate_lower_hex("native predecessor authority", digest, 64)?;
+            if digest.bytes().all(|byte| byte == b'0') {
+                return Err(eyre!("native predecessor authority cannot use an invented zero digest"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Independently captured native edge; Linux runtime capture never supplies these fields.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -540,8 +560,8 @@ pub(super) struct NativeEdgeCaptureClaimsV1 {
     pub(super) owner_uid: u32,
     pub(super) owner_gid: u32,
     pub(super) custody_root: String,
-    pub(super) retained_inventory_sha256: String,
-    pub(super) authorization_sha256: String,
+    #[norito(required)]
+    pub(super) predecessor_authority: Option<NativeEdgeRetainedAuthorityV1>,
     pub(super) authorization_nonce: String,
     pub(super) next_genesis_hash: String,
     pub(super) initial_state: EdgeInitialStateV1,
@@ -562,6 +582,24 @@ pub(super) struct NativeEdgeCaptureClaimsV1 {
 }
 
 impl NativeEdgeCaptureClaimsV1 {
+    pub(super) fn retained_authority(&self) -> Result<&NativeEdgeRetainedAuthorityV1> {
+        self.predecessor_authority.as_ref()
+            .ok_or_else(|| eyre!("vacant first publication has no retained native authority"))
+    }
+
+    pub(super) fn validate_predecessor_authority(&self) -> Result<()> {
+        match (&self.completion, &self.predecessor_authority) {
+            (NativeEdgeCompletionProvenanceV1::Vacant, None)
+                if matches!(self.initial_state, EdgeInitialStateV1::Vacant)
+                    && self.owned_publication.is_none() => Ok(()),
+            (NativeEdgeCompletionProvenanceV1::PublicationOnly { .. }, Some(authority))
+            | (NativeEdgeCompletionProvenanceV1::ResetTerminal { .. }, Some(authority)) => {
+                authority.validate()
+            }
+            _ => Err(eyre!("native predecessor authority must match its actual completion provenance")),
+        }
+    }
+
     pub(super) fn admitted_release(&self) -> Result<&EdgeAdmittedReleaseV1> {
         match &self.initial_state {
             EdgeInitialStateV1::AdmittedRelease(release) => Ok(release),
@@ -603,7 +641,8 @@ impl SignedNativeEdgeCaptureV1 {
         })
     }
 
-    pub(super) fn verify(
+    /// Keep independently authenticated guest/lease authority required for runtime joins.
+    pub(super) fn verify_retained_join(
         &self,
         hosts: &ResetHostPairV1,
         retained_inventory_sha256: &str,
@@ -611,7 +650,28 @@ impl SignedNativeEdgeCaptureV1 {
         authorization_nonce: &str,
         next_genesis_hash: &str,
     ) -> Result<()> {
+        let actual = NativeEdgeRetainedAuthorityV1 {
+            retained_inventory_sha256: retained_inventory_sha256.into(),
+            authorization_sha256: authorization_sha256.into(),
+        };
+        actual.validate()?;
+        self.verify(
+            hosts,
+            self.claims.predecessor_authority.as_ref().map(|_| &actual),
+            authorization_nonce,
+            next_genesis_hash,
+        )
+    }
+
+    pub(super) fn verify(
+        &self,
+        hosts: &ResetHostPairV1,
+        predecessor_authority: Option<&NativeEdgeRetainedAuthorityV1>,
+        authorization_nonce: &str,
+        next_genesis_hash: &str,
+    ) -> Result<()> {
         hosts.validate()?;
+        self.claims.validate_predecessor_authority()?;
         let host = &hosts.native_edge;
         let claims = &self.claims;
         if claims.schema != "iroha.taira.public-reset.native-edge-capture.v1"
@@ -620,8 +680,7 @@ impl SignedNativeEdgeCaptureV1 {
             || claims.owner_uid != host.owner_uid
             || claims.owner_gid != host.owner_gid
             || claims.custody_root != host.custody_root
-            || claims.retained_inventory_sha256 != retained_inventory_sha256
-            || claims.authorization_sha256 != authorization_sha256
+            || claims.predecessor_authority.as_ref() != predecessor_authority
             || claims.authorization_nonce != authorization_nonce
             || claims.next_genesis_hash != next_genesis_hash
             || claims.dispatcher.file.path != host.dispatcher_path
@@ -682,7 +741,7 @@ impl SignedNativeEdgeCaptureV1 {
             } => {
                 let terminal_root = format!(
                     "{}/taira-edge/operations/{}",
-                    host.custody_root, authorization_sha256
+                    host.custody_root, claims.retained_authority()?.authorization_sha256
                 );
                 let proven = matches!(status.as_str(), "sealed" | "cleaned");
                 if !(proven || status == "rolled_back")
@@ -1008,8 +1067,10 @@ pub(super) fn fixture_native_edge_capture(
         owner_uid: host.owner_uid,
         owner_gid: host.owner_gid,
         custody_root: host.custody_root.clone(),
-        retained_inventory_sha256: inventory_sha256.into(),
-        authorization_sha256: authorization_sha256.into(),
+        predecessor_authority: Some(NativeEdgeRetainedAuthorityV1 {
+            retained_inventory_sha256: inventory_sha256.into(),
+            authorization_sha256: authorization_sha256.into(),
+        }),
         authorization_nonce: nonce.into(),
         next_genesis_hash: genesis_hash.into(),
         initial_state: EdgeInitialStateV1::AdmittedRelease(release),

@@ -110,7 +110,7 @@ pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
     require_lower_sha256(&p.inventory_sha256, "predecessor inventory")?;
     require_lower_sha256(&p.authorization_sha256, "predecessor authorization")?;
     super::super::super::validate_nonce(&p.authorization_nonce)?;
-    p.native_edge_capture.verify(
+    p.native_edge_capture.verify_retained_join(
         &plan.hosts,
         &p.inventory_sha256,
         &p.authorization_sha256,
