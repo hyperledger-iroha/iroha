@@ -566,7 +566,7 @@ public enum ValidatorStakingNoritoV1 {
             let publicKey = Data(key.dropFirst())
             // Reuse the canonical algorithm envelope and native key admission. SM2's
             // Norito key includes the signed identifier, unlike fromAccount's SEC1 input.
-            _ = try governanceKagemushaPublicKeyOrderV1(
+            _ = try governancePublicKeyOrderV1(
                 CanonicalNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey), codingPath: []
             )
             if algorithm == .sm2 {

@@ -6,9 +6,9 @@
 //! validate a table's derived indexes, record invariants or cross-table relations.
 //! Verifier, proof-status, validation-fee, contract-alias, contract-subject,
 //! domain-owner, account-identity, account-alias, asset-definition, asset-balance,
-//! escrow, repo-agreement, NFT/RWA and account-rekey adapters check bounded relations.
+//! escrow, repo-agreement, NFT/RWA, account-rekey and trigger action/contract adapters check bounded relations.
 //!
-//! TODO: adapt every other structural group, trigger Set, Musubi semantic source
+//! TODO: adapt every remaining semantic group and Musubi semantic source
 //! and membership pair/frontier. Then retain every canonical cell and history
 //! owner, jointly verify all original owners/modes/predecessors, and integrate
 //! with the sole StatePublication owner. There is deliberately no aggregate
@@ -147,6 +147,46 @@ pub(in crate::state) fn capture_original_table_once(
         TableMaterializer::Single {
             id: "world.rwas", ..
         } => super::super::frozen_nfts_rwas::capture_rwas(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "triggers.data",
+            ..
+        } => super::super::frozen_trigger_actions::capture(
+            block,
+            crate::smartcontracts::triggers::set::ActionTable::Data,
+            limits,
+            max_relation_work,
+        ),
+        TableMaterializer::Single {
+            id: "triggers.pipeline",
+            ..
+        } => super::super::frozen_trigger_actions::capture(
+            block,
+            crate::smartcontracts::triggers::set::ActionTable::Pipeline,
+            limits,
+            max_relation_work,
+        ),
+        TableMaterializer::Single {
+            id: "triggers.time",
+            ..
+        } => super::super::frozen_trigger_actions::capture(
+            block,
+            crate::smartcontracts::triggers::set::ActionTable::Time,
+            limits,
+            max_relation_work,
+        ),
+        TableMaterializer::Single {
+            id: "triggers.by_call",
+            ..
+        } => super::super::frozen_trigger_actions::capture(
+            block,
+            crate::smartcontracts::triggers::set::ActionTable::ByCall,
+            limits,
+            max_relation_work,
+        ),
+        TableMaterializer::Single {
+            id: "triggers.contracts",
+            ..
+        } => super::super::frozen_trigger_contracts::capture(block, limits, max_relation_work),
         // The two membership outputs must eventually come from one original
         // owner together with its frontier, never independent raw callbacks.
         // The same rule applies to all semantic/structural checked groups.

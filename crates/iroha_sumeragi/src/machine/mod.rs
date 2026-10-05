@@ -798,10 +798,7 @@ impl Core {
         let Some(active) = self.config(qc.height) else {
             return false;
         };
-        if qc.epoch != active.epoch.id
-            || !active.epoch.contains(qc.height)
-            || (qc.height == active.epoch.last_height && !qc.attest)
-        {
+        if qc.epoch != active.epoch.id || !active.epoch.contains(qc.height) {
             return false;
         }
         let digest = qc.digest(&*self.crypto);
@@ -827,12 +824,7 @@ impl Core {
 
     /// Verify a TC of the current height under `C_h`, using and filling the cache.
     fn verify_tc_cached(&mut self, tc: &TimeoutCert) -> bool {
-        if self.awaiting
-            || tc.height != self.height
-            || tc.epoch != self.cfg.epoch.id
-            || (tc.height == self.cfg.epoch.last_height
-                && tc.high_pqc.as_ref().is_some_and(|qc| !qc.attest))
-        {
+        if self.awaiting || tc.height != self.height || tc.epoch != self.cfg.epoch.id {
             return false;
         }
         let digest = tc.digest(&*self.crypto);

@@ -167,7 +167,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         self.assertIn("/absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock", readme)
         self.assertNotIn("export RUSTC_BOOTSTRAP=", readme)
         self.assertNotIn("build\nan opt-in Apple artifact", readme)
-        self.assertIn("Every bridge build includes mandatory privacy and KAGEMUSHA support", readme)
+        self.assertIn("Every bridge build includes mandatory privacy support", readme)
         self.assertIn("stock Rust 1.93.1", readme)
         self.assertIn("unset RUSTC_BOOTSTRAP", readme)
         self.assertIn('bridge_local="$PWD/target/norito-bridge-local"', readme)

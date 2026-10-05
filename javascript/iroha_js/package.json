@@ -25,11 +25,6 @@
       "import": "./dist/browser.js",
       "types": "./browser.d.ts"
     },
-    "./kagemusha": {
-      "browser": "./dist/public/kagemusha.js",
-      "import": "./dist/public/kagemusha.js",
-      "types": "./kagemusha.d.ts"
-    },
     "./privacy-capabilities": {
       "browser": "./dist/privacyCapabilities.js",
       "import": "./dist/privacyCapabilities.js",
@@ -157,9 +152,6 @@
       "browser": [
         "./browser.d.ts"
       ],
-      "kagemusha": [
-        "./kagemusha.d.ts"
-      ],
       "privacy-capabilities": [
         "./privacy-capabilities.d.ts"
       ],
@@ -282,7 +274,6 @@
     "README.md",
     "LICENSE",
     "browser.d.ts",
-    "kagemusha.d.ts",
     "address.d.ts",
     "normalizers.d.ts",
     "blake2b.d.ts",

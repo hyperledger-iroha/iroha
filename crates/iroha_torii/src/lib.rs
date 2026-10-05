@@ -99,6 +99,7 @@ pub mod query_load_profiles;
 mod reserve_account_proof;
 #[cfg(feature = "app_api")]
 mod reserve_policy_proof;
+mod resource_names_state;
 /// SCCP v1 public read API.
 mod sccp;
 mod sns_lease;
@@ -37261,6 +37262,8 @@ impl Torii {
             LEDGER_STATE_PROOF => public_get(handler_ledger_state_proof);
             LEDGER_EXECUTED_BLOCK_WIRE => canonical_signature_get(handler_ledger_executed_block_wire);
             LEDGER_BLOCK_PROOF => canonical_signature_get(handler_block_proof);
+            RESOURCE_NAMES_STATE => canonical_signature_get(resource_names_state::handler);
+            AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);
         );
     }
     #[cfg(not(feature = "app_api"))]
@@ -37841,12 +37844,15 @@ impl Torii {
                 .authenticated_operator(app_state),
         );
     }
-    /// Mandatory KAGEMUSHA monetary and recovery routes in every Torii build.
-    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder) {
-        let transaction_max_content_len = self.transaction_max_content_len;
+    /// Mandatory certified multisig execution-record publication in every Torii build.
+    fn add_multisig_execution_evidence_routes(builder: &mut RouterBuilder) {
         mount_catalog_route_rows!(builder, multisig_execution_evidence;
             GET => public_get(multisig_execution_evidence::handler);
         );
+    }
+    /// Mandatory KAGEMUSHA monetary and recovery routes in every Torii build.
+    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder) {
+        let transaction_max_content_len = self.transaction_max_content_len;
         let kagemusha_top_up_body_limit_bytes =
             kagemusha_top_up_body_limit(transaction_max_content_len);
         let kagemusha_redeem_body_limit_bytes =
@@ -37858,8 +37864,6 @@ impl Torii {
             REDEEM => limited_canonical_signed_post(handler_kagemusha_redeem, kagemusha_redeem_body_limit_bytes);
             OPERATION => public_get(handler_kagemusha_operation_status);
             AUTHORITY_STATE => public_get(kagemusha_state::handler);
-            RESOURCE_NAMES_STATE => canonical_signature_get(kagemusha_state::handle_resource_names);
-            AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);
             ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);
             ORDINARY_MINT_ISSUER_PURPOSE => limited_canonical_signature_post(ordinary_mint_issuer_purpose::handler, iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1);
             ORDINARY_MINT_FINALIZED => limited_canonical_signature_post(ordinary_mint_finalized::handler, iroha_torii_shared::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1);
@@ -41571,6 +41575,7 @@ impl Torii {
         // Iroha Connect (feature-gated)
         #[cfg(feature = "connect")]
         self.add_connect_routes(&mut builder);
+        Self::add_multisig_execution_evidence_routes(&mut builder);
         self.add_kagemusha_routes(&mut builder);
         // App-facing JSON API
         #[cfg(feature = "app_api")]

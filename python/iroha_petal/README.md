@@ -3,7 +3,7 @@
 `iroha-petal` is the pure-Python implementation of **Petal Stream**, Iroha's
 animated optical transport (a "streaming QR code" in the Sakura-storm look).
 A sender shows a sequence of square frames; a camera reads them; a payload
-(for KAGEMUSHA, an `IPM1` peer message of up to about 10 KB) is reassembled.
+(for example, a peer message of up to about 10 KB) is reassembled.
 
 The package is a function-by-function port of the Rust reference crate
 [`crates/iroha_petal`](../../crates/iroha_petal) and depends only on the Python

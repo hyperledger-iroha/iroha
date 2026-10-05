@@ -5,7 +5,7 @@
 
 use super::*;
 use iroha_data_model::{asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};
-use iroha_primitives::numeric::NumericSpec;
+use iroha_primitives::numeric::{MAX_DECIMAL_SCALE, NumericSpec};
 
 #[derive(Debug, PartialEq, Eq, crate::json_macros::JsonSerialize)]
 struct RegistrationV1 {
@@ -38,7 +38,7 @@ fn registration(
         .ok_or_else(unavailable)?;
     let scale = specification
         .scale()
-        .filter(|scale| *scale <= iroha_data_model::kagemusha::KAGEMUSHA_ASSET_SCALE_MAX_V1)
+        .filter(|scale| *scale <= MAX_DECIMAL_SCALE)
         .ok_or_else(unavailable)?;
     if committed_height == 0
         || committed_at_ms == 0
@@ -193,6 +193,47 @@ mod tests {
                 9
             )
             .unwrap()
+        );
+    }
+    #[test]
+    fn registration_requires_a_bounded_canonical_decimal_scale() {
+        let (network, asset, incarnation) = inputs();
+        let at_maximum = registration(
+            &network,
+            &asset,
+            Some(incarnation),
+            NumericSpec::fractional(MAX_DECIMAL_SCALE),
+            7,
+            &[8; 32],
+            9,
+        )
+        .unwrap();
+        assert_eq!(at_maximum.scale, MAX_DECIMAL_SCALE);
+        assert_eq!(
+            registration(
+                &network,
+                &asset,
+                Some(incarnation),
+                NumericSpec::integer(),
+                7,
+                &[8; 32],
+                9
+            )
+            .unwrap()
+            .scale,
+            0
+        );
+        assert!(
+            registration(
+                &network,
+                &asset,
+                Some(incarnation),
+                NumericSpec::unconstrained(),
+                7,
+                &[8; 32],
+                9
+            )
+            .is_err()
         );
     }
     #[test]

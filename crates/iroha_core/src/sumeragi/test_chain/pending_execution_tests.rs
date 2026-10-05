@@ -88,16 +88,45 @@ fn original_wire_witness_and_world_tampering_fail_before_durable_staging() {
                         let hash = original.block.as_ref().hash();
                         let wire = original.block.as_ref().encode_wire().unwrap();
                         let key = KeyPair::from_seed(vec![0x91; 32], Algorithm::Ed25519);
-                        original
-                            .block
-                            .as_mut()
-                            .add_signature(iroha_data_model::block::BlockSignature::new(
-                                1,
-                                iroha_crypto::SignatureOf::from_hash(key.private_key(), hash),
-                            ))
-                            .unwrap();
-                        assert_eq!(original.block.as_ref().hash(), hash);
-                        assert_ne!(original.block.as_ref().encode_wire().unwrap(), wire);
+                        let signature = iroha_data_model::block::BlockSignature::new(
+                            1,
+                            iroha_crypto::SignatureOf::from_hash(key.private_key(), hash),
+                        );
+                        // The actual admitted owner cannot be edited or downgraded.
+                        let kept_original = original.block.as_ref().clone();
+                        assert!(
+                            original
+                                .block
+                                .as_ref()
+                                .same_signature_custody(&kept_original)
+                        );
+                        assert!(matches!(
+                            original.block.as_mut().add_signature(signature.clone()),
+                            Err(iroha_crypto::Error::Signing(message))
+                                if message == "admitted block signatures are immutable"
+                        ));
+                        assert_eq!(original.block.as_ref().encode_wire().unwrap(), wire);
+                        // Offer a genuinely reconstructed, untrusted altered wire through
+                        // the existing test-only view. Keep the original custody alive
+                        // through the production witness rejection; it grants no custody
+                        // to this equal-header replacement.
+                        let mut offered =
+                            iroha_data_model::block::decode_framed_signed_block(&wire).unwrap();
+                        assert!(!offered.same_signature_custody(&kept_original));
+                        offered.add_signature(signature).unwrap();
+                        assert_eq!(offered.hash(), hash);
+                        assert_ne!(offered.encode_wire().unwrap(), wire);
+                        *original.block.as_mut() = offered;
+                        assert!(
+                            original
+                                .state
+                                .verify_sumeragi_execution_witness(
+                                    original.block.as_ref(),
+                                    original.witness.wire(),
+                                )
+                                .is_err()
+                        );
+                        assert_eq!(kept_original.encode_wire().unwrap(), wire);
                     }
                     1 => {
                         // Reconstruct altered offered bytes; the exact funded original

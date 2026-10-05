@@ -19,25 +19,27 @@ use norito::codec::{Decode, Encode};
 
 use super::{
     KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1, KAGEMUSHA_WALLET_COMPLETION_RECORD_MAX_BYTES_V1,
-    KAGEMUSHA_WALLET_MARKER_MAX_BYTES_V1, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
-    KAGEMUSHA_WALLET_VERSION_V1, WalletResult, WalletVersionsV1, decode_frame_v1,
+    KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1, KAGEMUSHA_WALLET_MARKER_MAX_BYTES_V1,
+    KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, KAGEMUSHA_WALLET_VERSION_V1, WalletResult,
+    WalletVersionsV1, decode_frame_v1,
     digest::{KagemushaWalletDigestRoleV1 as Role, WalletTranscriptV1, kagemusha_wallet_digest_v1},
     encode_frame_v1,
     identity::{
-        KagemushaWalletCertificateSetV1, KagemushaWalletCredentialV1,
-        KagemushaWalletEnrollmentChallengeV1, kagemusha_wallet_enrollment_id_v1,
-        kagemusha_wallet_id_v1,
+        KagemushaWalletCredentialV1, KagemushaWalletEnrollmentChallengeV1,
+        kagemusha_wallet_enrollment_id_v1, kagemusha_wallet_id_v1,
     },
     invalid_v1, is_zero_v1,
+    keys::KagemushaDevicePublicKeyV1,
     messages::KagemushaWalletPaymentV1,
-    overflow_v1, require_nonzero_v1, require_scheme_v1, require_version_v1,
+    overflow_v1, require_canonical_field_v1, require_nonzero_field_v1, require_nonzero_v1,
+    require_scheme_v1, require_version_v1,
     state::{
-        KagemushaWalletEffectV1, KagemushaWalletOperationKindV1, KagemushaWalletPackageDigestsV1,
-        KagemushaWalletPackageV1, KagemushaWalletProofV1, KagemushaWalletReceiptV1,
-        KagemushaWalletStateCommitmentV1, KagemushaWalletStateV1, KagemushaWalletStatementV1,
+        KagemushaWalletEffectV1, KagemushaWalletLineageSlotV1, KagemushaWalletLineageV1,
+        KagemushaWalletOperationKindV1, KagemushaWalletPackageDigestsV1, KagemushaWalletPackageV1,
+        KagemushaWalletReceiptV1, KagemushaWalletStateCommitmentV1, KagemushaWalletStateV1,
+        KagemushaWalletStatementV1, KagemushaWalletStepProofV1, kagemusha_wallet_proof_digest_v1,
     },
 };
-use crate::kagemusha::KagemushaDevicePublicKeyV1;
 
 #[cfg(test)]
 #[path = "custody_tests.rs"]
@@ -45,12 +47,9 @@ pub(super) mod custody_tests;
 
 const DIGEST_BYTES: usize = 32;
 
-/// Fixed width of an output descriptor's kind input: Send binds three digests; every other
-/// kind binds one digest or none, zero-filled (design C3).
-pub const KAGEMUSHA_WALLET_OUTPUT_KIND_INPUT_BYTES_V1: usize = 3 * DIGEST_BYTES;
-/// Exact `output` transcript bytes: `u8 kind || statement_digest || proof_digest || kind input`.
-pub const KAGEMUSHA_WALLET_OUTPUT_TRANSCRIPT_BYTES_V1: usize =
-    1 + 2 * DIGEST_BYTES + KAGEMUSHA_WALLET_OUTPUT_KIND_INPUT_BYTES_V1;
+/// Exact `output` transcript bytes:
+/// `u8 kind || statement_digest || proof_digest || payment_digest or zero`.
+pub const KAGEMUSHA_WALLET_OUTPUT_TRANSCRIPT_BYTES_V1: usize = 1 + 3 * DIGEST_BYTES;
 
 // ---------------------------------------------------------------------------------------
 // Provider marker (§§3.2, 4.2, design §5.1)
@@ -430,19 +429,20 @@ impl KagemushaWalletMarkerV1 {
 // Output descriptor (§4.1, design §5.2 and C3)
 // ---------------------------------------------------------------------------------------
 
-/// Exact `output` transcript: `u8 kind || statement_digest || proof_digest || kind input`.
+/// Exact `output` transcript:
+/// `u8 kind || statement_digest || proof_digest || payment_digest or zero`.
 #[must_use]
 pub fn kagemusha_wallet_output_transcript_v1(
     kind: KagemushaWalletOperationKindV1,
     statement_digest: &[u8; 32],
     proof_digest: &[u8; 32],
-    kind_input: &[u8; KAGEMUSHA_WALLET_OUTPUT_KIND_INPUT_BYTES_V1],
+    payment_digest: &[u8; 32],
 ) -> Vec<u8> {
     WalletTranscriptV1::with_capacity(KAGEMUSHA_WALLET_OUTPUT_TRANSCRIPT_BYTES_V1)
         .u8(kind.tag())
         .digest(statement_digest)
         .digest(proof_digest)
-        .bytes(kind_input)
+        .digest(payment_digest)
         .finish()
 }
 
@@ -452,58 +452,26 @@ pub fn kagemusha_wallet_output_digest_v1(
     kind: KagemushaWalletOperationKindV1,
     statement_digest: &[u8; 32],
     proof_digest: &[u8; 32],
-    kind_input: &[u8; KAGEMUSHA_WALLET_OUTPUT_KIND_INPUT_BYTES_V1],
+    payment_digest: &[u8; 32],
 ) -> [u8; 32] {
     kagemusha_wallet_digest_v1(
         Role::Output,
-        &kagemusha_wallet_output_transcript_v1(kind, statement_digest, proof_digest, kind_input),
+        &kagemusha_wallet_output_transcript_v1(
+            kind,
+            statement_digest,
+            proof_digest,
+            payment_digest,
+        ),
     )
 }
 
-/// Kind input of `statement`'s output, zero-filled to the fixed width (design C3).
-fn output_kind_input_v1(
-    statement: &KagemushaWalletStatementV1,
-    payment_certificates: Option<&KagemushaWalletCertificateSetV1>,
-) -> WalletResult<[u8; KAGEMUSHA_WALLET_OUTPUT_KIND_INPUT_BYTES_V1]> {
-    let mut input = [0; KAGEMUSHA_WALLET_OUTPUT_KIND_INPUT_BYTES_V1];
-    let (head, tail) = input.split_at_mut(DIGEST_BYTES);
-    match (statement.effect, payment_certificates) {
-        (KagemushaWalletEffectV1::Send { request, .. }, Some(certificates)) => {
-            let (credential, set) = tail.split_at_mut(DIGEST_BYTES);
-            head.copy_from_slice(&request);
-            credential.copy_from_slice(&statement.credential_digest);
-            set.copy_from_slice(&certificates.digest()?);
-        }
-        (KagemushaWalletEffectV1::Send { .. }, None) | (_, Some(_)) => {
-            return Err(invalid_v1("output.certificates"));
-        }
-        (KagemushaWalletEffectV1::Receive { payment, .. }, None) => {
-            head.copy_from_slice(&payment);
-        }
-        (KagemushaWalletEffectV1::ArchiveSent { credited, .. }, None) => {
-            head.copy_from_slice(&credited);
-        }
-        (KagemushaWalletEffectV1::Load { voucher, .. }, None) => head.copy_from_slice(&voucher),
-        (KagemushaWalletEffectV1::Unload { nullifier, .. }, None) => {
-            head.copy_from_slice(&nullifier);
-        }
-        (
-            KagemushaWalletEffectV1::Bootstrap { .. }
-            | KagemushaWalletEffectV1::RefreshPolicy { .. }
-            | KagemushaWalletEffectV1::Retiring,
-            None,
-        ) => {}
-    }
-    Ok(input)
-}
-
-/// Receipt-free descriptor of one transition's released output (§4.1).
+/// Receipt-free descriptor of one transition's released output (§4.1, design §9.2).
 ///
 /// A Send releases its canonical Payment; every other kind releases its package. The digest
-/// covers the statement, the proof and the kind input — for Send, the Request digest, the
-/// payer credential digest and the Payment's certificate-set digest; for Receive, `ArchiveSent`,
-/// Load and Unload, the Payment, Credited, voucher or nullifier digest — so it can be frozen
-/// in the capsule before the receipt exists.
+/// covers the statement, the operation-dependent `proof_digest` and, for Receive, the Payment
+/// digest the receipt binds; every other kind input (the Send Request, the Load voucher, the
+/// Unload nullifier, the `ArchiveSent` Credited digest, the payer credential) is already bound
+/// by the statement. It can therefore be frozen in the capsule before the receipt exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletOutputDescriptorV1"
@@ -516,31 +484,33 @@ pub struct KagemushaWalletOutputDescriptorV1 {
 }
 
 impl KagemushaWalletOutputDescriptorV1 {
-    /// Descriptor of the output of `statement` and `proof`.
-    ///
-    /// `payment_certificates` is the certificate set of the Payment a Send releases and must be
-    /// absent for every other kind.
+    /// Descriptor of the output of `statement` with `proof_digest` and, for Receive, the
+    /// Payment digest.
     ///
     /// # Errors
     ///
-    /// Rejects an invalid statement or proof, and certificates present or absent for the
-    /// wrong kind.
+    /// Rejects an invalid statement, a zero or noncanonical proof digest, a noncanonical Payment
+    /// digest, and a Payment digest present or absent against the operation (present exactly
+    /// for Receive).
     pub fn for_transition(
         statement: &KagemushaWalletStatementV1,
-        proof: &KagemushaWalletProofV1,
-        payment_certificates: Option<&KagemushaWalletCertificateSetV1>,
+        proof_digest: &[u8; 32],
+        payment_digest: &[u8; 32],
     ) -> WalletResult<Self> {
         statement.validate()?;
-        proof.validate()?;
+        require_nonzero_field_v1("output.proof_digest", proof_digest)?;
+        require_canonical_field_v1("output.payment_digest", payment_digest)?;
         let kind = statement.effect.kind();
-        let input = output_kind_input_v1(statement, payment_certificates)?;
+        if (kind == KagemushaWalletOperationKindV1::Receive) == is_zero_v1(payment_digest) {
+            return Err(invalid_v1("output.payment_digest"));
+        }
         Ok(Self {
             kind,
             digest: kagemusha_wallet_output_digest_v1(
                 kind,
                 &statement.statement_digest(),
-                &proof.proof_digest(),
-                &input,
+                proof_digest,
+                payment_digest,
             ),
         })
     }
@@ -659,10 +629,37 @@ impl KagemushaWalletRetainedInputV1 {
     }
 }
 
+/// Retained-input roles a capsule of `kind` must carry as fold witnesses (§4.1, design §9.1):
+/// every consumed input that Λ verifies for the step and the step itself cannot rebuild.
+///
+/// Send retains the Request it consumed: the compact Payment binds the receiver's fee schedule
+/// only by digest, and `Λ_send` checks the fee terms against it (§§3.2, 6.2). Load retains the
+/// voucher's `LoadAuthorization` certificate with the voucher, because `Λ_load` verifies the
+/// voucher signature under it (§3.2) and the voucher names it only by digest.
+const fn required_retained_roles_v1(
+    kind: KagemushaWalletOperationKindV1,
+) -> &'static [KagemushaWalletRetainedInputRoleV1] {
+    use KagemushaWalletRetainedInputRoleV1 as R;
+    match kind {
+        KagemushaWalletOperationKindV1::Receive => {
+            &[R::Request, R::Payment, R::CertificateSet, R::Credential]
+        }
+        KagemushaWalletOperationKindV1::ArchiveSent => &[R::Request, R::Payment, R::Credited],
+        KagemushaWalletOperationKindV1::Send => &[R::Request],
+        KagemushaWalletOperationKindV1::Load => &[R::LoadVoucher, R::CertificateSet],
+        KagemushaWalletOperationKindV1::RefreshPolicy => &[R::PolicyUpdate, R::CertificateSet],
+        KagemushaWalletOperationKindV1::Bootstrap
+        | KagemushaWalletOperationKindV1::Unload
+        | KagemushaWalletOperationKindV1::Retiring => &[],
+    }
+}
+
 /// Private recovery capsule frozen before the receipt is signed (§4.1).
 ///
-/// It holds the actual next state, the proof, the required map nodes, retained input bytes and
-/// the receipt-free output descriptor; the receipt signs its digest `H("capsule", frame)`.
+/// It holds the actual next state, the statement, Ω(pred) for Send, Unload and Retiring, the
+/// step proof σ, the Payment digest a Receive receipt binds, the required map nodes, the
+/// retained input bytes (the fold witnesses, §4.1) and the receipt-free output descriptor;
+/// the receipt signs its digest `H("capsule", frame)`.
 // TODO(G3): the map-opening layout is fixed by the iroha_core_zk map owner with the artifact
 // set; G1 bounds each opening only through the capsule frame cap.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
@@ -686,29 +683,56 @@ pub struct KagemushaWalletRecoveryCapsuleV1 {
     pub successor_state: KagemushaWalletStateV1,
     /// Transition statement.
     pub statement: KagemushaWalletStatementV1,
-    /// Transition proof.
-    pub proof: KagemushaWalletProofV1,
+    /// Ω(pred) recorded at fold time: present exactly for Send, Unload and Retiring.
+    pub predecessor_lineage: KagemushaWalletLineageSlotV1,
+    /// Step proof σ.
+    pub step_proof: KagemushaWalletStepProofV1,
+    /// Full canonical Payment digest of a Receive; zero otherwise.
+    pub payment_digest: [u8; 32],
     /// Required authenticated map nodes and openings.
     pub map_openings: Vec<Vec<u8>>,
-    /// Exact input bytes needed to resume.
+    /// Exact input bytes needed to resume and to fold the step.
     pub retained_inputs: Vec<KagemushaWalletRetainedInputV1>,
     /// Receipt-free output descriptor.
     pub output: KagemushaWalletOutputDescriptorV1,
 }
 
 impl KagemushaWalletRecoveryCapsuleV1 {
-    /// Validate the capsule's self-contained rules.
-    ///
-    /// The output digest of a Send is rebuilt from its Payment by the completion record; every
-    /// other kind's output digest is rebuilt here from the statement and proof.
+    /// Operation-dependent `proof_digest` the receipt and Advance bind (§4.1).
     ///
     /// # Errors
     ///
-    /// Rejects another version, zero identities, an invalid state, statement or proof, a
-    /// statement or state for another scheme, wallet, credential, asset, lifecycle, sequence or
-    /// `next_load`, a kind or operation identity that does not match the statement, a
-    /// predecessor capsule present exactly at Bootstrap, an output descriptor that does not
-    /// rebuild, and empty openings or retained inputs.
+    /// Rejects what [`kagemusha_wallet_proof_digest_v1`] rejects.
+    pub fn proof_digest(&self) -> WalletResult<[u8; 32]> {
+        kagemusha_wallet_proof_digest_v1(
+            self.kind,
+            self.predecessor_lineage.lineage(),
+            &self.step_proof,
+        )
+    }
+
+    /// Ω(pred) carried by the capsule, if the operation consumes it.
+    #[must_use]
+    pub const fn predecessor_lineage(&self) -> Option<&KagemushaWalletLineageV1> {
+        self.predecessor_lineage.lineage()
+    }
+
+    /// Validate the capsule's self-contained rules.
+    ///
+    /// The output digest is rebuilt for every kind from the statement, the `proof_digest` and
+    /// the Payment digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another version, zero identities, an invalid state, statement or σ, a successor
+    /// state whose commitment is not the statement's successor, a statement or state for
+    /// another scheme, wallet, credential, asset, lifecycle, sequence or `next_load`, a kind or
+    /// operation identity that does not match the statement, a
+    /// predecessor capsule present exactly at Bootstrap, an Ω(pred) present or absent against
+    /// the kind or failing the §3.2 consumer equalities or naming another wallet, a successor
+    /// `burned_total` other than Ω(pred)'s, a Payment digest present or absent against the
+    /// kind, an output descriptor that does not rebuild, empty openings or retained inputs,
+    /// and a missing fold-witness role.
     pub fn validate(&self) -> WalletResult<()> {
         require_version_v1("capsule.version", self.version)?;
         require_nonzero_v1("capsule.scheme_id", &self.scheme_id)?;
@@ -718,38 +742,40 @@ impl KagemushaWalletRecoveryCapsuleV1 {
         let statement = &self.statement;
         state.validate()?;
         statement.validate()?;
-        self.proof.validate()?;
+        self.step_proof.validate()?;
         self.output.validate()?;
+        self.predecessor_lineage.validate_for(self.kind)?;
         require_scheme_v1("capsule.scheme_id", &statement.scheme_id, &self.scheme_id)?;
         require_scheme_v1(
             "capsule.successor_state.scheme_id",
-            &state.scheme_id,
+            &state.core.scheme_id,
             &self.scheme_id,
         )?;
+        require_canonical_field_v1("capsule.payment_digest", &self.payment_digest)?;
         for (field, matches) in [
             (
                 "capsule.successor_state.wallet_id",
-                state.wallet_id == self.wallet_id,
+                state.core.wallet_id == self.wallet_id,
             ),
             (
                 "capsule.successor_state.credential_digest",
-                state.credential_digest == statement.credential_digest,
+                state.core.credential_digest == statement.credential_digest,
             ),
             (
                 "capsule.successor_state.asset_digest",
-                state.asset_digest == statement.asset_digest,
+                state.core.asset_digest == statement.asset_digest,
             ),
             (
                 "capsule.successor_state.lifecycle",
-                state.lifecycle == statement.lifecycle,
+                state.core.lifecycle == statement.lifecycle,
             ),
             (
                 "capsule.successor_state.sequence",
-                state.sequence == statement.sequence,
+                state.core.sequence == statement.sequence,
             ),
             (
                 "capsule.successor_state.next_load",
-                state.next_load == statement.next_load,
+                state.core.next_load == statement.next_load,
             ),
             ("capsule.kind", self.kind == statement.effect.kind()),
             ("capsule.output.kind", self.output.kind == self.kind),
@@ -761,15 +787,38 @@ impl KagemushaWalletRecoveryCapsuleV1 {
                 "capsule.predecessor_capsule_digest",
                 (statement.sequence == 0) == is_zero_v1(&self.predecessor_capsule_digest),
             ),
+            (
+                "capsule.payment_digest",
+                (self.kind == KagemushaWalletOperationKindV1::Receive)
+                    != is_zero_v1(&self.payment_digest),
+            ),
         ] {
             if !matches {
                 return Err(invalid_v1(field));
             }
         }
-        if self.kind != KagemushaWalletOperationKindV1::Send
-            && KagemushaWalletOutputDescriptorV1::for_transition(statement, &self.proof, None)?
-                != self.output
-        {
+        // The capsule holds the actual successor state: its computed commitment is the head the
+        // statement and receipt bind (§§3, 4.1).
+        if state.commitment()? != statement.successor {
+            return Err(invalid_v1("capsule.successor_state.commitment"));
+        }
+        if let Some(lineage) = self.predecessor_lineage.lineage() {
+            statement.validate_against_lineage(&lineage.public)?;
+            if lineage.public.wallet_id != self.wallet_id {
+                return Err(invalid_v1("capsule.predecessor_lineage.wallet_id"));
+            }
+            // The successor core carries Ω(pred)'s burned_total, which resynchronizes the core
+            // (§3.2).
+            if state.core.burned_total != statement.lineage_burned_total {
+                return Err(invalid_v1("capsule.successor_state.burned_total"));
+            }
+        }
+        let rebuilt = KagemushaWalletOutputDescriptorV1::for_transition(
+            statement,
+            &self.proof_digest()?,
+            &self.payment_digest,
+        )?;
+        if rebuilt != self.output {
             return Err(invalid_v1("capsule.output.digest"));
         }
         if self.map_openings.iter().any(Vec::is_empty) {
@@ -777,6 +826,11 @@ impl KagemushaWalletRecoveryCapsuleV1 {
         }
         for input in &self.retained_inputs {
             input.validate()?;
+        }
+        for role in required_retained_roles_v1(self.kind) {
+            if !self.retained_inputs.iter().any(|input| input.role == *role) {
+                return Err(invalid_v1("capsule.retained_inputs"));
+            }
         }
         Ok(())
     }
@@ -907,18 +961,21 @@ impl KagemushaWalletCompletionRecordV1 {
         Ok(())
     }
 
-    /// Verify the record against its capsule under `credential` (design §5.2).
+    /// Verify the record against its capsule under `credential` (design §9.3).
     ///
     /// The record is valid iff the receipt verifies over the capsule digest, the output decodes
-    /// as the capsule's kind, its embedded receipt equals the record's, and its receipt-free
-    /// parts rebuild the capsule's output descriptor. Returns the released package's digests.
+    /// as the capsule's kind, its embedded receipt equals the record's, its statement, Ω(pred)
+    /// and σ are the capsule's, its receipt binds the capsule's Payment digest, and its
+    /// receipt-free parts rebuild the capsule's output descriptor. A Send output is the
+    /// compact Payment, whose carried payment key and credential digest must be this
+    /// credential's. Returns the released package's digests.
     ///
     /// # Errors
     ///
     /// Rejects an invalid record or capsule, another capsule, wallet or operation, output bytes
     /// that do not decode as the declared kind or as a valid Payment by this credential, an
-    /// embedded receipt, statement or proof other than the record's and capsule's, an output
-    /// descriptor that does not rebuild, and a receipt that does not verify.
+    /// embedded receipt, statement, Ω(pred) or σ other than the record's and capsule's, an
+    /// output descriptor that does not rebuild, and a receipt that does not verify.
     pub fn verify(
         &self,
         credential: &KagemushaWalletCredentialV1,
@@ -934,35 +991,40 @@ impl KagemushaWalletCompletionRecordV1 {
         if capsule.operation_id != self.operation_id {
             return Err(invalid_v1("completion.operation_id"));
         }
-        let (package, rebuilt) = if capsule.kind == KagemushaWalletOperationKindV1::Send {
+        let package = if capsule.kind == KagemushaWalletOperationKindV1::Send {
             let payment =
                 KagemushaWalletPaymentV1::decode_canonical(&self.output, &capsule.scheme_id)?;
-            if payment.payer_credential != *credential {
+            if payment.payer_payment_key != credential.body.payment_key
+                || payment.payer_credential_digest != credential.credential_digest()
+            {
                 return Err(invalid_v1("completion.credential"));
             }
-            let rebuilt = KagemushaWalletOutputDescriptorV1::for_transition(
-                &payment.send.statement,
-                &payment.send.proof,
-                Some(&payment.certificates),
-            )?;
-            (payment.send, rebuilt)
+            payment.send
         } else {
             let package: KagemushaWalletPackageV1 =
                 decode_frame_v1(&self.output, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?;
+            package.require_versions()?;
             package.validate()?;
-            let rebuilt = KagemushaWalletOutputDescriptorV1::for_transition(
-                &package.statement,
-                &package.proof,
-                None,
-            )?;
-            (package, rebuilt)
+            package
         };
         if package.receipt != self.receipt {
             return Err(invalid_v1("completion.receipt"));
         }
-        if package.statement != capsule.statement || package.proof != capsule.proof {
+        let capsule_lineage = &capsule.predecessor_lineage;
+        if package.statement != capsule.statement
+            || package.step_proof != capsule.step_proof
+            || package.lineage != *capsule_lineage
+        {
             return Err(invalid_v1("completion.output"));
         }
+        if package.receipt.payment_digest != capsule.payment_digest {
+            return Err(invalid_v1("completion.receipt.payment_digest"));
+        }
+        let rebuilt = KagemushaWalletOutputDescriptorV1::for_transition(
+            &package.statement,
+            &package.proof_digest()?,
+            &package.receipt.payment_digest,
+        )?;
         if rebuilt != capsule.output {
             return Err(invalid_v1("completion.output.digest"));
         }
@@ -1011,6 +1073,112 @@ impl KagemushaWalletCompletionRecordV1 {
 }
 
 // ---------------------------------------------------------------------------------------
+// Fold record (§§3.1, 4.1, design §9.5)
+// ---------------------------------------------------------------------------------------
+
+/// Durable record of one self-verified lineage proof Ω of a folded head (§3.1 step 5).
+///
+/// One Λ covers the contiguous run `first_sequence..=sequence`; only the last head of the run
+/// receives Ω and becomes folded. Each head has at most one recorded Ω, and every Lineage
+/// message, Payment and ledger package from that head carries exactly `lineage`. Its digest is
+/// `H("fold", canonical frame)`.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletFoldRecordV1"
+)]
+pub struct KagemushaWalletFoldRecordV1 {
+    /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
+    pub version: u16,
+    /// Scheme.
+    pub scheme_id: [u8; 32],
+    /// Wallet incarnation.
+    pub wallet_id: [u8; 32],
+    /// First step sequence covered by this Λ run.
+    pub first_sequence: u128,
+    /// Sequence of the folded head.
+    pub sequence: u128,
+    /// Folded head commitment.
+    pub head: KagemushaWalletStateCommitmentV1,
+    /// Capsule digest of the folded head.
+    pub capsule_digest: [u8; 32],
+    /// Exact Ω bytes recorded for the head.
+    pub lineage: KagemushaWalletLineageV1,
+}
+
+impl KagemushaWalletFoldRecordV1 {
+    /// Validate the record's self-contained rules.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another version, zero identities, an incomplete head, an invalid Ω or one for
+    /// another head, scheme or wallet, and a run that starts after its head.
+    pub fn validate(&self) -> WalletResult<()> {
+        require_version_v1("fold.version", self.version)?;
+        require_nonzero_v1("fold.scheme_id", &self.scheme_id)?;
+        require_nonzero_v1("fold.wallet_id", &self.wallet_id)?;
+        require_nonzero_v1("fold.capsule_digest", &self.capsule_digest)?;
+        if !self.head.is_complete() {
+            return Err(invalid_v1("fold.head"));
+        }
+        self.lineage.validate()?;
+        let omega = &self.lineage.public;
+        require_scheme_v1("fold.lineage.scheme_id", &omega.scheme_id, &self.scheme_id)?;
+        if omega.wallet_id != self.wallet_id {
+            return Err(invalid_v1("fold.lineage.wallet_id"));
+        }
+        if omega.head != self.head {
+            return Err(invalid_v1("fold.lineage.head"));
+        }
+        if self.first_sequence > self.sequence {
+            return Err(invalid_v1("fold.first_sequence"));
+        }
+        Ok(())
+    }
+
+    /// Lineage digest of the recorded Ω.
+    #[must_use]
+    pub fn lineage_digest(&self) -> [u8; 32] {
+        self.lineage.lineage_digest()
+    }
+
+    /// Fold digest `H("fold", canonical frame)`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects what [`Self::to_canonical_bytes`] rejects.
+    pub fn fold_digest(&self) -> WalletResult<[u8; 32]> {
+        Ok(kagemusha_wallet_digest_v1(
+            Role::Fold,
+            &self.to_canonical_bytes()?,
+        ))
+    }
+
+    /// Validate and encode the bounded canonical frame.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid record or an oversized frame.
+    pub fn to_canonical_bytes(&self) -> WalletResult<Vec<u8>> {
+        self.validate()?;
+        encode_frame_v1(self, KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1)
+    }
+
+    /// Decode one canonical fold record frame for `expected_scheme_id`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects, in order, an oversized frame, a noncanonical frame, another version, another
+    /// scheme, and invalid fields.
+    pub fn decode_canonical(bytes: &[u8], expected_scheme_id: &[u8; 32]) -> WalletResult<Self> {
+        let record: Self = decode_frame_v1(bytes, KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1)?;
+        record.require_versions()?;
+        require_scheme_v1("fold.scheme_id", &record.scheme_id, expected_scheme_id)?;
+        record.validate()?;
+        Ok(record)
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 // Version fields (design §0 decode order)
 // ---------------------------------------------------------------------------------------
 
@@ -1024,7 +1192,8 @@ impl WalletVersionsV1 for KagemushaWalletRecoveryCapsuleV1 {
     fn require_versions(&self) -> WalletResult<()> {
         require_version_v1("capsule.version", self.version)?;
         self.successor_state.require_versions()?;
-        self.statement.require_versions()
+        self.statement.require_versions()?;
+        self.predecessor_lineage.require_versions()
     }
 }
 
@@ -1032,5 +1201,12 @@ impl WalletVersionsV1 for KagemushaWalletCompletionRecordV1 {
     fn require_versions(&self) -> WalletResult<()> {
         require_version_v1("completion.version", self.version)?;
         self.receipt.require_versions()
+    }
+}
+
+impl WalletVersionsV1 for KagemushaWalletFoldRecordV1 {
+    fn require_versions(&self) -> WalletResult<()> {
+        require_version_v1("fold.version", self.version)?;
+        self.lineage.require_versions()
     }
 }

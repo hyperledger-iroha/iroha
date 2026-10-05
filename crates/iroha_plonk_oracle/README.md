@@ -45,11 +45,14 @@ Milestone M0, contract capture (in `tests/`):
   `fixtures/native_prover/kats_v1.json` (see `fixtures/native_prover/README.md`).
   By default it compares params for k = 6..=14; k = 15 and 16 are an ignored
   release test. `IROHA_UPDATE_NATIVE_PROVER_KATS=1` rewrites the file; run that
-  in release because it includes k = 15 and 16. It reads the KAGEMUSHA golden
-  table from `crates/iroha_core_zk/src/prover_golden_tests.rs` at run time;
-  that table should move into the fixture (TODO for the `iroha_core_zk`
-  owner). The KAGEMUSHA hash vectors have no production anchor in
-  `iroha_core_zk` yet (also a TODO there); the confidential ones do.
+  in release because it includes k = 15 and 16. The fixture is the pinned
+  authority for the KAGEMUSHA golden table (`golden_proofs.iroha_core_zk_kagemusha`):
+  nothing regenerates it, so the test carries those eight digests over
+  unchanged (also when rewriting) and checks only their case names and digest
+  format. It reads no other crate's sources. The KAGEMUSHA domain-hash
+  vectors are asserted by their native consumers (`iroha_pasta`,
+  `iroha_plonk_gadgets`, `iroha_kagemusha_proof`); the confidential ones are
+  anchored to `iroha_core_zk` KATs.
 - Oracle baseline: repository HEAD `1de7210a74d6`; last `vendor/halo2-axiom`
   commit `8f41274044c9`. Full hashes are in the fixture's `oracle_baseline`
   section and in `specs/native_prover_migration_inventory.md`.

@@ -2954,14 +2954,14 @@ fn scoped_native_original_reads_match_canonical_media_and_resource_bounds() {
     let document = canonical_document();
     for (descriptor, method, request_bound, response_bound, binary_only) in [
         (
-            route_catalog::kagemusha::RESOURCE_NAMES_STATE,
+            route_catalog::core::RESOURCE_NAMES_STATE,
             "get",
             None,
             NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1,
             false,
         ),
         (
-            route_catalog::kagemusha::AUTHORITY_ORIGINALS,
+            route_catalog::core::AUTHORITY_ORIGINALS,
             "post",
             Some(NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1),
             NATIVE_AUTHORITY_ORIGINALS_MAX_BYTES_V1,
@@ -2997,6 +2997,17 @@ fn scoped_native_original_reads_match_canonical_media_and_resource_bounds() {
         ),
     ] {
         let operation = openapi_operation(&document, descriptor.path(), method);
+        if descriptor.stable_route_id().starts_with("ledger.") {
+            assert_eq!(
+                operation
+                    .get("tags")
+                    .and_then(Value::as_array)
+                    .map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
+                Some(vec!["Ledger"]),
+                "{} is a generic ledger original carrier",
+                descriptor.path()
+            );
+        }
         assert_eq!(
             operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
             Some("read")

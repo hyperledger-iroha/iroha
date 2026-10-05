@@ -3,20 +3,22 @@
 //! A generation owns signing keys; a scheduling authorization owns an epoch and its bounds.
 //! These bodies contain no certificate and therefore cannot authenticate themselves.
 
+mod authorization;
+
+pub use authorization::{
+    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, ValidatorEpochAuthorizationErrorV1,
+    ValidatorEpochAuthorizationV1, ValidatorEpochDecisionV1,
+};
+
 use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_model_base::peer::PeerId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    DeriveJsonDeserialize, DeriveJsonSerialize, NetworkId,
-    block::BlockHeader,
-    isi::kagemusha_v1::{
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1,
-    },
-    nexus::ValidatorCommitteePreparationV1,
-    parameter::system::ConsensusMode,
+    DeriveJsonDeserialize, DeriveJsonSerialize, NetworkId, block::BlockHeader,
+    isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+    nexus::ValidatorCommitteePreparationV1, parameter::system::ConsensusMode,
 };
 
 /// Largest first-release native voting committee.
@@ -73,7 +75,7 @@ pub struct ValidatorEpochContextV1 {
     /// Immutable generation of consensus and paired-Pasta keys.
     pub authority: KagemushaMintFinalityAuthorityGenerationV1,
     /// Exact scheduling epoch, bounds, predecessor, and installed beacon binding.
-    pub authorization: KagemushaMintFinalityEpochAuthorizationV1,
+    pub authorization: ValidatorEpochAuthorizationV1,
     /// Canonically ordered, equal-vote committee and original BLS proofs.
     pub committee: Vec<ValidatorCommitteeMemberV1>,
     /// Fresh boundary-derived leader randomness; genesis uses its signed initial seed.
@@ -163,8 +165,7 @@ impl ValidatorEpochContextV1 {
         }
         if matches!(
             self.authorization.decision,
-            KagemushaMintFinalityEpochDecisionV1::Retain
-                | KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+            ValidatorEpochDecisionV1::Retain | ValidatorEpochDecisionV1::RetainAndCancel
         ) && (self.authority != previous.authority || self.committee != previous.committee)
         {
             return Err("native epoch retention substitutes original credentials".into());

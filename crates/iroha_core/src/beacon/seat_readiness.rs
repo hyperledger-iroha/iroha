@@ -1,11 +1,11 @@
 //! Cryptographic custody evidence for an exact prepared beacon seat.
 
 use iroha_crypto::Hash;
+use iroha_data_model::sumeragi::epoch::BeaconEpochBindingV1;
 use iroha_data_model::{
     consensus::GlobalThresholdBeaconPartialSignatureV1,
     isi::kagemusha_v1::{
-        BeaconEpochBindingV1, KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalitySeatReadinessContextV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySeatReadinessContextV1,
     },
 };
 use thiserror::Error;
@@ -159,9 +159,9 @@ mod tests {
         global_threshold_beacon_roster_hash_v1,
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1;
     use iroha_data_model::{
-        block::consensus::ValidatorPower,
-        isi::kagemusha_v1::{InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1},
+        block::consensus::ValidatorPower, isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
     };
     use iroha_model_base::peer::PeerId;
 

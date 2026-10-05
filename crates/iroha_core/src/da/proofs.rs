@@ -131,15 +131,15 @@ pub fn build_da_commitment_proof(
     block_height: u64,
     index: usize,
 ) -> Option<DaCommitmentProof> {
-    if bundle.version != DaCommitmentBundle::VERSION_V1
-        || bundle.commitments.is_empty()
-        || index >= bundle.commitments.len()
+    if bundle.version() != DaCommitmentBundle::VERSION_V1
+        || bundle.commitments().is_empty()
+        || index >= bundle.commitments().len()
     {
         return None;
     }
-    let bundle_len = bundle_len_u32(bundle.commitments.len()).ok()?;
+    let bundle_len = bundle_len_u32(bundle.commitments().len()).ok()?;
     let mut layer: Vec<Hash> = bundle
-        .commitments
+        .commitments()
         .iter()
         .map(commitment_leaf_hash)
         .collect();
@@ -180,7 +180,7 @@ pub fn build_da_commitment_proof(
     let root = layer.pop()?;
     let index_in_bundle = u32::try_from(index).ok()?;
     Some(DaCommitmentProof {
-        commitment: bundle.commitments[index].clone(),
+        commitment: bundle.commitments()[index].clone(),
         location: DaCommitmentLocation {
             block_height,
             index_in_bundle,
@@ -630,7 +630,7 @@ mod tests {
             let bundle =
                 DaCommitmentBundle::new((1..=width).map(|tag| sample_record(1, tag)).collect());
             let header = header_with_hash(3, bundle.merkle_commitment().expect("commitment"));
-            for index in 0..bundle.commitments.len() {
+            for index in 0..bundle.commitments().len() {
                 let proof = build_da_commitment_proof(&bundle, 3, index).expect("membership proof");
                 verify_da_commitment_proof(&proof, &header, &policy_bundle())
                     .unwrap_or_else(|error| panic!("width {width}, index {index}: {error}"));
@@ -838,8 +838,10 @@ mod tests {
     }
     #[test]
     fn proof_builders_reject_unsupported_bundle_versions() {
-        let mut commitments = DaCommitmentBundle::new(vec![sample_record(1, 1)]);
-        commitments.version = DaCommitmentBundle::VERSION_V1 + 1;
+        let commitments = DaCommitmentBundle::from_untrusted_parts(
+            DaCommitmentBundle::VERSION_V1 + 1,
+            vec![sample_record(1, 1)],
+        );
         assert!(build_da_commitment_proof(&commitments, 3, 0).is_none());
         let mut intents = DaPinIntentBundle::new(vec![sample_pin_intent(1, 1)]);
         intents.version = DaPinIntentBundle::VERSION_V1 + 1;

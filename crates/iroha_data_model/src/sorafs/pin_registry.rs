@@ -254,6 +254,7 @@ fn validate_manifest_root_cid_bytes(
 #[repr(transparent)]
 #[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ManifestDigest")]
+#[norito(decode_fields)]
 pub struct ManifestDigest(#[norito(json = "crate::json_helpers::fixed_bytes")] pub [u8; 32]);
 impl ManifestDigest {
     /// Construct a new manifest digest wrapper.
@@ -390,6 +391,7 @@ impl Default for PinPolicy {
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::StorageClass")]
+#[norito(decode_from_slice)]
 pub enum StorageClass {
     /// Low-latency replicas servicing developer workflows.
     #[default]

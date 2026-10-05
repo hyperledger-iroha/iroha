@@ -15,8 +15,8 @@ use std::num::NonZeroUsize;
 pub(super) struct KagemushaOrdinaryMintCheckpointOwnerV1<'source, 'state> {
     source: &'source KagemushaAuthenticatedOrdinaryNodeFinalizedMintSourceV1<'state>,
     checkpoint: KagemushaMintAuthorityCheckpointV1,
-    current: KagemushaMintFinalityEpochAuthorizationV1,
-    target: KagemushaMintFinalityEpochAuthorizationV1,
+    current: ValidatorEpochAuthorizationV1,
+    target: ValidatorEpochAuthorizationV1,
     frozen: bool,
 }
 impl<'source, 'state> KagemushaOrdinaryMintCheckpointOwnerV1<'source, 'state> {
@@ -32,7 +32,7 @@ impl<'source, 'state> KagemushaOrdinaryMintCheckpointOwnerV1<'source, 'state> {
             .map_err(|e| e.to_string())?;
         let epoch = genesis_epoch(&genesis).map_err(|error| error.to_string())?;
         if epoch.network_id != *view.network_id()
-            || epoch.authorization.decision != KagemushaMintFinalityEpochDecisionV1::Genesis
+            || epoch.authorization.decision != ValidatorEpochDecisionV1::Genesis
         {
             return Err("ordinary Mint checkpoint bootstrap is not actual signed genesis".into());
         }
@@ -231,9 +231,9 @@ impl<'source, 'state> KagemushaOrdinaryMintCheckpointOwnerV1<'source, 'state> {
     }
 }
 fn require_adjacent_epoch(
-    current: &KagemushaMintFinalityEpochAuthorizationV1,
-    next: &KagemushaMintFinalityEpochAuthorizationV1,
-    target: &KagemushaMintFinalityEpochAuthorizationV1,
+    current: &ValidatorEpochAuthorizationV1,
+    next: &ValidatorEpochAuthorizationV1,
+    target: &ValidatorEpochAuthorizationV1,
 ) -> Result<(), String> {
     next.validate_successor(current)
         .map_err(|e| e.to_string())?;
@@ -247,17 +247,11 @@ fn require_adjacent_epoch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-    };
-    fn bodies() -> (
-        KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochAuthorizationV1,
-    ) {
+    use iroha_data_model::sumeragi::epoch::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1};
+    fn bodies() -> (ValidatorEpochAuthorizationV1, ValidatorEpochAuthorizationV1) {
         let f = iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new();
         let epoch = genesis_epoch(f.genesis()).unwrap();
-        let genesis =
-            KagemushaMintFinalityEpochAuthorizationV1::genesis(&epoch.authority, 10).unwrap();
+        let genesis = ValidatorEpochAuthorizationV1::genesis(&epoch.authority, 10).unwrap();
         // Public shape-only successor; it is never wrapped in a checkpoint or source capability.
         let mut next = genesis;
         next.epoch = 1;
@@ -268,7 +262,7 @@ mod tests {
             session_id: [8; 32],
             transcript_hash: [9; 32],
         });
-        next.decision = KagemushaMintFinalityEpochDecisionV1::Retain;
+        next.decision = ValidatorEpochDecisionV1::Retain;
         (genesis, next)
     }
     #[test]
@@ -293,11 +287,11 @@ mod tests {
     #[test]
     fn ordinary_checkpoint_cancellation_is_preserved_and_never_relabelled_genesis() {
         let (current, mut next) = bodies();
-        next.decision = KagemushaMintFinalityEpochDecisionV1::RetainAndCancel;
+        next.decision = ValidatorEpochDecisionV1::RetainAndCancel;
         next.transition_id = [10; 32];
         require_adjacent_epoch(&current, &next, &next).unwrap();
         let mut offered = next;
-        offered.decision = KagemushaMintFinalityEpochDecisionV1::Genesis;
+        offered.decision = ValidatorEpochDecisionV1::Genesis;
         assert!(require_adjacent_epoch(&current, &offered, &next).is_err());
         offered = next;
         offered.authority_generation += 1;

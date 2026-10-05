@@ -54,20 +54,29 @@ enum class KagemushaWalletDigestRoleV1(
     REQUEST_BODY("request-body"),
     REQUEST("request"),
     CREDIT("credit"),
-    DEPENDENCIES("dependencies"),
     STATEMENT("statement"),
+
+    /** Proof digest of a step that consumes Ω(pred): `LE32 len(Ω) || Ω || LE32 len(σ) || σ`. */
     PROOF("proof"),
+
+    /** Proof digest of every other step, the σ-only domain: `LE32 len(σ) || σ`. */
+    STEP_PROOF("step-proof"),
+
+    /** Lineage digest over the exact Ω bytes (public transcript, then transport proof). */
+    LINEAGE("lineage"),
     RECEIPT_BODY("receipt-body"),
     RECEIPT("receipt"),
     PACKAGE("package"),
     PAYMENT("payment"),
-    CREDIT_STATUS_STATEMENT("credit-status-statement"),
+    CREDIT_OPENING("credit-opening"),
+    CREDIT_STATUS("credit-status"),
     CREDITED("credited"),
     OPERATION_ID("operation-id"),
     OUTPUT("output"),
     CAPSULE("capsule"),
     MARKER("marker"),
     COMPLETION("completion"),
+    FOLD("fold"),
     VOUCHER_BODY("voucher-body"),
     VOUCHER("voucher"),
     UNLOAD_NULLIFIER("unload-nullifier"),
@@ -133,6 +142,14 @@ enum class KagemushaWalletMessageKindV1(
     POLICY_DATA(
         6,
         "PolicyData",
+        KagemushaWalletWireV1.MESSAGE_MAX_BYTES,
+        KagemushaWalletWireV1.MESSAGE_TEXT_MAX_BYTES,
+    ),
+
+    /** Ω of the payer's folded head; sent only after an authenticated Offer. */
+    LINEAGE(
+        7,
+        "Lineage",
         KagemushaWalletWireV1.MESSAGE_MAX_BYTES,
         KagemushaWalletWireV1.MESSAGE_TEXT_MAX_BYTES,
     ),
@@ -220,7 +237,12 @@ object KagemushaWalletWireV1 {
     /** Maximum complete envelope frame for Offer and SessionControl. */
     const val SESSION_MAX_BYTES: Int = 2_048
 
-    /** Maximum complete envelope frame for Request, Payment, Credited and PolicyData. */
+    /**
+     * Maximum complete envelope frame for Request, Payment, Credited, PolicyData and Lineage.
+     *
+     * σ and Ω carry no separate byte caps: until the artifact set fixes their exact lengths
+     * (TODO(G3), owner question Q6) they are bounded only by the frame that carries them.
+     */
     const val MESSAGE_MAX_BYTES: Int = 10_000
 
     /** Maximum complete `kgm1:` text for a session-bounded envelope. */
@@ -228,14 +250,6 @@ object KagemushaWalletWireV1 {
 
     /** Maximum complete `kgm1:` text for a message-bounded envelope. */
     const val MESSAGE_TEXT_MAX_BYTES: Int = 13_339
-
-    /** Provisional G1 decode cap for one transition proof (design C2). */
-    // TODO(G3): replace with the measured cap of the frozen relation, together with Rust.
-    const val PROOF_MAX_BYTES: Int = 6_016
-
-    /** Provisional G1 decode cap for one CreditStatus proof (design C2). */
-    // TODO(G3): replace with the measured cap of the frozen relation, together with Rust.
-    const val CREDIT_STATUS_PROOF_MAX_BYTES: Int = 2_000
 
     /** Maximum certificates in one certificate set. */
     const val CERTIFICATE_SET_MAX: Int = 3
@@ -263,6 +277,20 @@ object KagemushaWalletWireV1 {
     private const val FLAGS_OFFSET: Int = 39
     private const val VERSION_FIELD_BYTES: Long = 2L
     private const val TAG_BYTES: Int = 4
+
+    // Top-level field layouts of the bound messages (wire record section 3.4).
+    private const val REQUEST_FIELDS: Int = 5
+    private const val REQUEST_BODY_FIELD: Int = 0
+    private const val REQUEST_SIGNATURE_FIELD: Int = 4
+    private const val REQUEST_BODY_FIELDS: Int = 15
+    private const val REQUEST_BODY_SCHEME_FIELD: Int = 1
+    private const val PAYMENT_FIELDS: Int = 5
+    private const val PAYMENT_REQUEST_FIELD: Int = 1
+    private const val SIGNED_REQUEST_FIELDS: Int = 2
+    private const val SIGNED_REQUEST_BODY_FIELD: Int = 0
+    private const val SIGNED_REQUEST_SIGNATURE_FIELD: Int = 1
+    private const val CREDITED_FIELDS: Int = 3
+    private const val CREDITED_SCHEME_FIELD: Int = 1
 
     private val DIGEST_PREFIX_BYTES: ByteArray = DIGEST_PREFIX.toByteArray(Charsets.US_ASCII)
     private val ENVELOPE_SCHEMA_HASH: ByteArray = SchemaHash.hash16(ENVELOPE_FRAME_NAME)
@@ -443,6 +471,93 @@ object KagemushaWalletWireV1 {
             "KAGEMUSHA wallet V1 ${envelope.kind.label} text exceeds ${envelope.kind.maximumTextBytes} bytes"
         }
         return envelope
+    }
+
+    /**
+     * Require that one exchange's envelopes are structurally bound: [payment] carries exactly the
+     * signed Request of [request], and [credited], when present, is evidence under that Request's
+     * scheme.
+     *
+     * Each frame is first checked by [inspectEnvelope], must have the kind of its parameter and
+     * must split into exactly the record fields of its message (wire record section 3.4: Request
+     * `{body, receiver_credential, fee_schedule, certificates, signature}` with a 15-field body,
+     * compact Payment `{version, request: {body, signature}, payer_payment_key,
+     * payer_credential_digest, send}`, Credited `{version, scheme_id, evidence}`). The comparisons
+     * are over exact canonical field bytes: the Payment's signed Request body and signature are
+     * the Request's, and the Credited `scheme_id` is the Request body's `scheme_id`. A carrier thus
+     * rejects a Payment that belongs to another Request, and Credited evidence under another
+     * scheme, before handing either to the wallet. No digest or signature is checked here and
+     * nothing grants monetary authority.
+     * TODO(G4): the typed decoder also checks the Credited evidence against the held Request and
+     * the retained Payment (its credit, payer wallet and amount, or its opening, and the Payment
+     * digest the evidence binds).
+     *
+     * @throws IllegalArgumentException for any violation.
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun requireExchangeBinding(request: ByteArray, payment: ByteArray, credited: ByteArray? = null) {
+        val requestFields = messageFields(request, KagemushaWalletMessageKindV1.REQUEST, REQUEST_FIELDS)
+        val paymentFields = messageFields(payment, KagemushaWalletMessageKindV1.PAYMENT, PAYMENT_FIELDS)
+        val signedRequest = recordFields(
+            paymentFields[PAYMENT_REQUEST_FIELD],
+            SIGNED_REQUEST_FIELDS,
+            "Payment signed Request",
+        )
+        require(
+            signedRequest[SIGNED_REQUEST_BODY_FIELD].contentEquals(requestFields[REQUEST_BODY_FIELD]) &&
+                signedRequest[SIGNED_REQUEST_SIGNATURE_FIELD].contentEquals(
+                    requestFields[REQUEST_SIGNATURE_FIELD],
+                ),
+        ) { "KAGEMUSHA wallet V1 Payment does not carry this Request" }
+        if (credited != null) {
+            val creditedFields = messageFields(credited, KagemushaWalletMessageKindV1.CREDITED, CREDITED_FIELDS)
+            val requestBody = recordFields(requestFields[REQUEST_BODY_FIELD], REQUEST_BODY_FIELDS, "Request body")
+            require(creditedFields[CREDITED_SCHEME_FIELD].contentEquals(requestBody[REQUEST_BODY_SCHEME_FIELD])) {
+                "KAGEMUSHA wallet V1 Credited does not name this Request's scheme"
+            }
+        }
+    }
+
+    /**
+     * The message of an envelope of [expected] kind, split into exactly [fieldCount] top-level
+     * record fields.
+     */
+    private fun messageFields(
+        frame: ByteArray,
+        expected: KagemushaWalletMessageKindV1,
+        fieldCount: Int,
+    ): List<ByteArray> {
+        val envelope = inspectEnvelope(frame)
+        require(envelope.kind == expected) {
+            "KAGEMUSHA wallet V1 ${envelope.kind.label} envelope is not a ${expected.label}"
+        }
+        // inspectEnvelope checked these spans: [len] version [len] (tag [len] message).
+        val payload = frame.copyOfRange(PAYLOAD_OFFSET, frame.size)
+        var cursor = Varint.decode(payload, 0).nextOffset + VERSION_FIELD_BYTES.toInt()
+        cursor = Varint.decode(payload, cursor).nextOffset + TAG_BYTES
+        val messageStart = Varint.decode(payload, cursor).nextOffset
+        return recordFields(payload.copyOfRange(messageStart, payload.size), fieldCount, expected.label)
+    }
+
+    /**
+     * Exact canonical bytes of the [fieldCount] compact-length fields `[len] field` that make up
+     * [record] completely (Norito `COMPACT_LEN` record layout).
+     */
+    private fun recordFields(record: ByteArray, fieldCount: Int, label: String): List<ByteArray> {
+        val fields = ArrayList<ByteArray>(fieldCount)
+        var offset = 0
+        while (offset < record.size) {
+            require(fields.size < fieldCount) { "KAGEMUSHA wallet V1 $label has more than $fieldCount fields" }
+            val field = Varint.decode(record, offset)
+            require(field.value <= (record.size - field.nextOffset).toLong()) {
+                "KAGEMUSHA wallet V1 $label field exceeds the record"
+            }
+            offset = field.nextOffset + field.value.toInt()
+            fields += record.copyOfRange(field.nextOffset, offset)
+        }
+        require(fields.size == fieldCount) { "KAGEMUSHA wallet V1 $label has ${fields.size} of $fieldCount fields" }
+        return fields
     }
 
     /**

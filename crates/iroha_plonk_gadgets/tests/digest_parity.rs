@@ -2,8 +2,7 @@
 //!
 //! - every `kagemusha_v1_poseidon` vector of
 //!   `fixtures/native_prover/kats_v1.json` (exported from the vendored
-//!   `kagemusha_v1_poseidon::hash` backend), on both fields, with and without
-//!   the folded prefix;
+//!   domain-hash sponge), on both fields, with and without the folded prefix;
 //! - the raw-sponge known answers of `iroha_pasta/tests/poseidon_kat.rs`;
 //! - native `iroha_pasta::poseidon` hashes of edge inputs and a short
 //!   replay-tree chain;

@@ -11,7 +11,7 @@ package org.hyperledger.iroha.sdk.offline.wallet
  * Reason an Android platform answer is not definitive. It is never absence.
  *
  * The kinds mirror the Rust `KagemushaWalletUnavailableV1` of
- * `crates/iroha_core_zk/src/kagemusha_v1_state/wallet_advance_v1/platform.rs` one to one, so the
+ * `crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/platform.rs` one to one, so the
  * bridge maps [kind] and [code] without interpretation. [code] is the OS error for [Kind.IO] and
  * one of the `PLATFORM_*` constants for [Kind.PLATFORM]; it is 0 for every other kind.
  */

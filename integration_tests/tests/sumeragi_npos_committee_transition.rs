@@ -21,7 +21,6 @@ use iroha::{
         NetworkId,
         isi::{
             consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
-            kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
             staking::{
                 ExitPublicLaneValidator, PublicLaneCandidateAuthorization,
                 RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
@@ -37,7 +36,10 @@ use iroha::{
         },
         parameter::system::{SumeragiNposParameters, SumeragiParameter},
         prelude::*,
-        sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
+        sumeragi::{
+            epoch::ValidatorEpochDecisionV1,
+            finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
+        },
         transaction::FeePaymentIntent,
         validation_fee::ValidationFeePolicyRegistryV1,
     },
@@ -265,8 +267,7 @@ async fn prove_retained_successor_after_restart(
         .ok_or_else(|| eyre!("cancelled attempt lacks a fresh E+3 selection"))?;
     ensure!(
         cutoff.height() == CUTOFF
-            && boundary.next.authorization.decision
-                == KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+            && boundary.next.authorization.decision == ValidatorEpochDecisionV1::RetainAndCancel
             && boundary.next.authority == cutoff.commitment().schedule.current.authority
             && boundary.next.committee == cutoff.commitment().schedule.current.committee
             && replacement.target_epoch == 3
@@ -1379,7 +1380,7 @@ async fn execute_rotation_preparation(
         };
     let credentials = ValidatorCommitteeCredentialsV1 {
         authority,
-        beacon: iroha::data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+        beacon: iroha::data_model::sumeragi::epoch::InstalledBeaconEpochBindingV1 {
             session_id: session.session_id,
             transcript_hash: session.transcript_hash,
         },
@@ -1720,7 +1721,7 @@ async fn run_custody_or_activation_scenario(
     );
     if let Some(withheld) = missing {
         ensure!(
-            decision.decision == KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+            decision.decision == ValidatorEpochDecisionV1::RetainAndCancel
                 && decision.authority_generation == 0
                 && snapshot
                     .next
@@ -1759,7 +1760,7 @@ async fn run_custody_or_activation_scenario(
         .await;
     }
     ensure!(
-        decision.decision == KagemushaMintFinalityEpochDecisionV1::Activate
+        decision.decision == ValidatorEpochDecisionV1::Activate
             && decision.authority_generation == 1
             && snapshot
                 .next
@@ -1881,7 +1882,7 @@ async fn run_custody_or_activation_scenario(
         .ok_or_else(|| eyre!("return boundary lacks certified epoch effect"))?;
     let return_decision = &return_snapshot.next.authorization;
     ensure!(
-        return_decision.decision == KagemushaMintFinalityEpochDecisionV1::Activate
+        return_decision.decision == ValidatorEpochDecisionV1::Activate
             && return_decision.epoch == 3
             && return_decision.authority_generation == 2
             && return_decision.transition_id
@@ -2297,7 +2298,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             .ok_or_else(|| eyre!("cutoff lacks an incumbent-certified next epoch"))?;
         let authorization = &cutoff_snapshot.next.authorization;
         ensure!(
-            authorization.decision == KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+            authorization.decision == ValidatorEpochDecisionV1::RetainAndCancel
                 && authorization.epoch == 2
                 && authorization.authority_generation == 0
                 && authorization.transition_id == selected_id

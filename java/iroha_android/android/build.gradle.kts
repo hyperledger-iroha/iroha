@@ -105,9 +105,6 @@ android {
             // the complete root JVM test suite into the Android unit target.
             java.srcDir("../src/test/java/org/hyperledger/iroha/android/testing")
         }
-        getByName("androidTest") {
-            assets.srcDir("../../../fixtures/offline")
-        }
     }
 
     compileOptions {
@@ -144,7 +141,6 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.3.3")
     implementation("androidx.camera:camera-lifecycle:1.3.3")
     implementation("com.google.zxing:core:3.5.3")
-    implementation("com.google.android.gms:play-services-nearby:19.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("androidx.test:runner:1.6.2")

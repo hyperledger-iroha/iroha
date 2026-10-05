@@ -12,13 +12,12 @@ use iroha_data_model::{
         consensus::{SumeragiRootScope, ValidatorPower},
     },
     consensus::{ConsensusKeyId, ConsensusKeyStatus},
-    isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     nexus::{PublicLaneStakeShare, PublicLaneValidatorStatus},
     parameter::{
         Parameter,
         system::{ConsensusMode, SumeragiNposParameters},
     },
-    sumeragi::epoch::ValidatorCommitteeMemberV1,
+    sumeragi::epoch::{ValidatorCommitteeMemberV1, ValidatorEpochAuthorizationV1},
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::NumericSpec;
@@ -273,7 +272,7 @@ fn pulse_fixture() -> (World, ValidatorEpochContextV1, Vec<HashOf<BlockHeader>>)
         .collect::<Vec<_>>();
     let authority =
         crate::kagemusha_v1_test_fixtures::mint_finality_authority(network(), 0, &roster);
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10).unwrap();
+    let authorization = ValidatorEpochAuthorizationV1::genesis(&authority, 10).unwrap();
     let current = ValidatorEpochContextV1 {
         da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         version: 1,
@@ -491,7 +490,7 @@ fn frozen_boundary_refusal_returns_original_pool_and_does_not_need_fresh_incumbe
     assert!(captured.boundary().preparation.is_none());
     assert_eq!(
         captured.boundary().next.authorization.decision,
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain
+        iroha_data_model::sumeragi::epoch::ValidatorEpochDecisionV1::Retain
     );
     drop(captured);
     assert_eq!(budget.reserved_bytes(), 0);

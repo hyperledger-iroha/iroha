@@ -36781,10 +36781,10 @@ impl<'state> StateBlock<'state> {
         self.validate_da_commitment_uniqueness(bundle)?;
         self.da_receipt_cursors
             .read()
-            .validate_bundle(height, &bundle.commitments)
+            .validate_bundle(height, bundle.commitments())
             .map_err(BlockValidationError::DaReceiptCursor)?;
         if let Err(err) =
-            cursors.record_records(&self.nexus.lane_config, &bundle.commitments, height)
+            cursors.record_records(&self.nexus.lane_config, bundle.commitments(), height)
         {
             self.record_da_shard_cursor_bundle_error(&err);
             return Err(BlockValidationError::DaShardCursor(err));
@@ -36796,7 +36796,7 @@ impl<'state> StateBlock<'state> {
         bundle: &iroha_data_model::da::commitment::DaCommitmentBundle,
     ) -> Result<(), BlockValidationError> {
         let commitments = self.da_commitments.read();
-        for record in &bundle.commitments {
+        for record in bundle.commitments() {
             let key = iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
             if commitments.get_committed_by_key(&key).is_some() {
                 return Err(BlockValidationError::DaCommitmentBundle(

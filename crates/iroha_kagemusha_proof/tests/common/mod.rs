@@ -14,7 +14,7 @@ use std::{
 use ff::Field;
 use iroha_kagemusha_proof::{
     Mutation, PrefixMode, ProofFormat, RelationShape, ShapePolicy, SigmaCircuit, SigmaProver,
-    SigmaShape, StateLayout, StepDigests, StepRelation, StepWitness, select_shape,
+    SigmaShape, StateLayout, StepDigests, StepPublic, StepRelation, StepWitness, select_shape,
 };
 use iroha_pasta::{Eq, Fp, PastaCurve, poseidon::PoseidonField};
 use iroha_plonk::{
@@ -26,23 +26,38 @@ use iroha_plonk::{
 };
 use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
 
-/// The M7 relation checks: each step relation accepts an honest witness and
-/// rejects an overdraft, a newer Request policy epoch, an accepted time below
-/// the floor and a `u128` overflow.
-pub const RELATION_CASES: [(StepRelation, Mutation, bool); 6] = [
+/// The relation checks whose rejection is a range check: each step relation
+/// accepts an honest witness; `sigma_send` rejects an overdraft, a balance
+/// that covers `amount + fee` only while ignoring the lineage
+/// `burned_total`, a newer Request policy epoch and an accepted time below
+/// the floor; `sigma_recv` rejects a `u128` overflow. (The M7 relation
+/// checks plus the `burned_total` case.)
+pub const RELATION_CASES: [(StepRelation, Mutation, bool); 7] = [
     (StepRelation::Send, Mutation::None, true),
     (StepRelation::Send, Mutation::Overdraft, false),
+    (StepRelation::Send, Mutation::Burned, false),
     (StepRelation::Send, Mutation::StaleEpoch, false),
     (StepRelation::Send, Mutation::EarlyTime, false),
     (StepRelation::Receive, Mutation::None, true),
     (StepRelation::Receive, Mutation::Overflow, false),
 ];
 
+/// The relation-check cases over every relation shape.
+pub const RELATION_CHECK_CASES: usize = 4 * RELATION_CASES.len();
+
+/// The two-level shape `(k, lanes)` the selector picks at the smallest `k`
+/// (both steps; `tests/shapes.rs` checks it).
+pub const TWO_LEVEL_SMALLEST: (u32, usize) = (10, 4);
+/// The two-level shape `(k, lanes)` the selector picks within the 3.5 KB
+/// budget (both steps; `tests/shapes.rs` checks it).
+pub const TWO_LEVEL_BUDGET: (u32, usize) = (12, 1);
+
 /// The witness seed of the relation checks.
 pub const CHECK_SEED: u64 = 0x4d37;
 
 /// Every relation shape: both prefix modes, both layouts, both steps (the
-/// M7 backends x layouts x steps grid).
+/// M7 backends x layouts x steps grid; the prefix modes are two circuits
+/// computing identical digests).
 pub fn relation_shapes() -> Vec<RelationShape> {
     let mut shapes = Vec::new();
     for prefix in [PrefixMode::Folded, PrefixMode::Absorbed] {
@@ -79,8 +94,19 @@ pub fn check_witness<F: PoseidonField>(
     witness: &StepWitness<F>,
 ) -> CheckReport<F> {
     let public = witness.evaluate(shape.params.relation().layout).public();
+    check_claim(shape, witness, &public)
+}
+
+/// The strict checker report of `witness` under `shape` for the public
+/// outputs `claimed` (a forger's or a consumer's, not necessarily the ones
+/// the circuit computes).
+pub fn check_claim<F: PoseidonField>(
+    shape: &SigmaShape,
+    witness: &StepWitness<F>,
+    claimed: &StepPublic<F>,
+) -> CheckReport<F> {
     let circuit = SigmaCircuit::new(shape.params, witness.clone());
-    check_circuit(&circuit, shape.k, &[public.instance()], CheckMode::Strict)
+    check_circuit(&circuit, shape.k, &[claimed.instance()], CheckMode::Strict)
         .unwrap_or_else(|error| panic!("synthesis: {error}"))
 }
 

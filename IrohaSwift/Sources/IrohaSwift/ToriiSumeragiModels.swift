@@ -38,7 +38,7 @@ private func rejectNativeStatusSignedNumbers(_ data: Data) throws {
 
 private func nativeStatusPublicKey(_ literal: String?, codingPath: [CodingKey]) throws -> String? {
     guard let literal else { return nil }
-    let parsed = try governanceKagemushaPublicKeyOrderV1(literal, codingPath: codingPath)
+    let parsed = try governancePublicKeyOrderV1(literal, codingPath: codingPath)
     guard let algorithm = SigningAlgorithm(noritoDiscriminant: parsed.algorithm) else {
         throw DecodingError.dataCorrupted(.init(codingPath: codingPath, debugDescription: "unsupported public key"))
     }

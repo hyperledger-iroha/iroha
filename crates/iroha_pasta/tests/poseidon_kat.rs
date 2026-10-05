@@ -2,11 +2,11 @@
 //!
 //! The vectors were exported from the vendored stack (vendor/halo2-base
 //! `OptimizedPoseidonSpec::<F, 3, 2>::new::<8, 57, 0>()` with the
-//! snark-verifier `Poseidon` native sponge, the implementation behind
-//! `iroha_core_zk::kagemusha_v1_poseidon`) by a scratch program. `iroha_pasta`
-//! cannot depend on those crates; `iroha_plonk_oracle` re-checks the same
-//! vectors directly. The constant tables are additionally regenerated from the
-//! published RP57 parameters by `iroha_pasta::poseidon::grain`.
+//! snark-verifier `Poseidon` native sponge, the implementation behind the
+//! KAGEMUSHA domain hash) by a scratch program. `iroha_pasta` cannot depend on
+//! those crates; `iroha_plonk_oracle` re-checks the same vectors directly. The
+//! constant tables are additionally regenerated from the published RP57
+//! parameters by `iroha_pasta::poseidon::grain`.
 
 use ff::{Field, PrimeField};
 use iroha_pasta::poseidon::{PoseidonField, PoseidonParams, Sponge, hash, hash_with_domain};
@@ -53,7 +53,7 @@ macro_rules! kat_suite {
             let pre = vec![specials[i]; len];
             assert_eq!(hex(hash(&pre)), expected, "special {i} len = {len}");
         }
-        // kagemusha_v1_poseidon::empty_replay_root.
+        // The empty depth-256 replay root (`kagemusha_v1_poseidon` in kats_v1.json).
         let empty = u64::from_le_bytes(*b"kgmemp_1");
         let node = u64::from_le_bytes(*b"kgmnode1");
         let mut root = hash_with_domain::<F>(empty, &[]);

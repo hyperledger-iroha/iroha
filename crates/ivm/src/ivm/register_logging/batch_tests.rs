@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     PreparedArgumentRecord, PreparedContract, ProgramMetadata, Registers,
-    argument_record::{encode_argument_record_from_json, prepare_argument_record_with_gas_limit},
+    argument_record::prepare_argument_record_with_gas_limit,
     encoding::wide::{encode_halt, encode_ri, encode_sys, encode_syscallx},
     execution_memory::ExecutionMemoryLease,
     execution_packets::{INSTRUCTION_WINDOWS, NativeInvocation, instruction_clocks},
@@ -14,6 +14,7 @@ use crate::{
 };
 use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use iroha_primitives::json::Json;
+use ivm_abi::arguments::encode_argument_record_from_json;
 use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::{
     any::Any,

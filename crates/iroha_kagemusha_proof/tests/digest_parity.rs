@@ -5,9 +5,9 @@
 //!   `fixtures/native_prover/kats_v1.json` (the vendored
 //!   `kagemusha_v1_poseidon::hash` outputs) on both fields;
 //! - every digest the relation computes in circuit (predecessor, successor,
-//!   chain, Request, statement) equals the native reference, for many
-//!   witnesses, every relation shape and both fields, and does not depend
-//!   on the prefix mode or the lane count;
+//!   credit identifier, chain, statement) equals the native reference, for
+//!   many witnesses, every relation shape and both fields, and does not
+//!   depend on the prefix mode or the lane count;
 //! - the statement digest equals the gadgets' `StatementV1::digest`;
 //! - pinned known answers guard the prototype encoding against drift.
 
@@ -23,7 +23,6 @@ use iroha_pasta::{
     Fp, Fq,
     poseidon::{PoseidonField, hash_with_domain},
 };
-use iroha_plonk_gadgets::statement::StatementV1;
 use norito::json::Value;
 
 fn hex_decode(text: &str) -> [u8; 32] {
@@ -137,26 +136,10 @@ fn statement_digests_equal_the_gadget_encoding() {
     for relation in relation_shapes() {
         let shape = smallest_shape(relation);
         let witness = sample_witness::<Fp>(5, relation.step, Mutation::None);
-        let native = witness.evaluate(relation.layout);
-        let state = &witness.predecessor;
-        let effect_len = match relation.step {
-            StepRelation::Send => 13,
-            StepRelation::Receive => 7,
-        };
-        let statement = StatementV1 {
-            relation: relation.step,
-            scheme_id: state.remainder.scheme_id,
-            credential: state.remainder.credential,
-            asset: state.remainder.asset,
-            lifecycle: state.core.lifecycle,
-            sequence: state.core.sequence + 1,
-            next_load: state.core.next_load,
-            predecessor: native.digests.predecessor,
-            predecessor_other: witness.predecessor_other,
-            successor: native.digests.successor,
-            successor_other: witness.successor_other,
-            effect: native.statement[19..19 + effect_len].to_vec(),
-        };
+        let statement = witness
+            .statement(relation.layout)
+            .expect("honest statement");
+        assert_eq!(statement.relation_id, relation.relation_id());
         assert_eq!(
             Some(in_circuit_digests(&shape, &witness).statement),
             statement.digest(),
@@ -177,39 +160,38 @@ fn pinned_known_answers() {
         (StepRelation::Receive, StateLayout::Flat),
     ]
     .map(|(step, layout)| {
-        let digests = sample_witness::<Fp>(0, step, Mutation::None)
-            .evaluate(layout)
-            .digests;
-        let request = digests.request.map(|request| hex(&request));
+        let native = sample_witness::<Fp>(0, step, Mutation::None).evaluate(layout);
+        let credit = native.public().credit_id.map(|credit| hex(&credit));
         println!(
-            "KAT step={step:?} layout={layout:?} statement={} request={request:?}",
-            hex(&digests.statement)
+            "KAT step={step:?} layout={layout:?} statement={} credit={credit:?}",
+            hex(&native.digests.statement)
         );
-        (hex(&digests.statement), request)
+        (hex(&native.digests.statement), credit)
     });
     let expected: [(&str, Option<&str>); 4] = PINNED;
-    for ((statement, request), (pinned_statement, pinned_request)) in answers.iter().zip(expected) {
+    for ((statement, credit), (pinned_statement, pinned_credit)) in answers.iter().zip(expected) {
         assert_eq!(statement, pinned_statement);
-        assert_eq!(request.as_deref(), pinned_request);
+        assert_eq!(credit.as_deref(), pinned_credit);
     }
 }
 
-/// The pinned statement and Request digests of [`pinned_known_answers`].
+/// The pinned statement digests and credit identifiers of
+/// [`pinned_known_answers`].
 const PINNED: [(&str, Option<&str>); 4] = [
     (
-        "db5d9fb21d1a76aab8daf04ed0b780953273b4ce7d83f54e894b0628c6d6123a",
-        Some("46653d643185762e9a9e2dca37239d6f86358eff5f5652a3a7a4b08d5d527518"),
+        "ab700cef455a755933725ad1f01bc49c6c3b6f99f8cbf254710713ef78359839",
+        Some("bc34a43348214e7b69dfd0ba1ee7cfb142947bf425cdc7ee3729e7f8ca92433e"),
     ),
     (
-        "8e170324970a09d693526c55524d581be5225348789f5c3d3dfabdd28f7a911a",
+        "f7ed03fbda3fc02a6f8919b2e68baa0ba9ca7b644d9248956e94125f3839550e",
         None,
     ),
     (
-        "61d2d14e2b416dbfb6ba5d59164aac5afa531890c26879c23947629539d4aa17",
-        Some("46653d643185762e9a9e2dca37239d6f86358eff5f5652a3a7a4b08d5d527518"),
+        "7cfa9c96ddc1a3d7014694f3f8ab46f144ad470f864fc6788cd1d1dc2780ef25",
+        Some("bc34a43348214e7b69dfd0ba1ee7cfb142947bf425cdc7ee3729e7f8ca92433e"),
     ),
     (
-        "eef7e2e3ed2fbb9dab707b3458baa0a5fa550498b8d85cea8897cb4f8404b316",
+        "c47d952f4aff00936b2abc17b76d61c81828992cc72ed8076cbf9abefbe77c24",
         None,
     ),
 ];

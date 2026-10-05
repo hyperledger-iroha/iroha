@@ -42,13 +42,13 @@ impl PreparedDaCommitmentEffects {
         // refer only to original bundle positions: no record, signature, policy
         // graph or full lane configuration is cloned during preparation.
         let (mut query_visible, mut identity_visible, mut active, mut confidential) =
-            match reserve_projection(pending.bundle.commitments.len(), budget) {
+            match reserve_projection(pending.bundle.commitments().len(), budget) {
                 Ok(indexes) => indexes,
                 Err(error) => return Err((pending, error)),
             };
         let policy_context = crate::da::ActiveLaneProofPolicyContext::new(nexus);
         let height = pending.block_height;
-        for (index, record) in pending.bundle.commitments.iter().enumerate() {
+        for (index, record) in pending.bundle.commitments().iter().enumerate() {
             // This sorted lineage belongs to the original canonical MV record,
             // including retired lanes. A local journal cannot suppress a record.
             let visible_incarnation = runtime
@@ -135,7 +135,7 @@ impl PreparedDaCommitmentEffects {
             active
                 .as_slice()
                 .iter()
-                .map(|&index| &pending.bundle.commitments[index]),
+                .map(|&index| &pending.bundle.commitments()[index]),
         );
         let persist = match cursor_result {
             Ok(()) => persist_cursor_journal,
@@ -156,7 +156,7 @@ impl PreparedDaCommitmentEffects {
             active
                 .as_slice()
                 .iter()
-                .map(|&index| &pending.bundle.commitments[index]),
+                .map(|&index| &pending.bundle.commitments()[index]),
         ) {
             warn!(
                 ?error,
@@ -169,7 +169,7 @@ impl PreparedDaCommitmentEffects {
                 .as_mut()
                 .expect("prepared confidential compute");
             for &index in confidential.as_slice() {
-                let record = &pending.bundle.commitments[index];
+                let record = &pending.bundle.commitments()[index];
                 let policy = lane_config
                     .confidential_compute_policy(record.lane_id)
                     .expect(

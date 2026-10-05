@@ -545,8 +545,6 @@ check_source_contract() {
   fi
 
   require_file "$ROOT_DIR/fixtures/offline/kagemusha_v1.json" "shared KAGEMUSHA V1 fixture"
-  require_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/KagemushaWireV1.swift" "Swift KAGEMUSHA V1 codec"
-  require_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/KagemushaDeviceLifecycleBridgeV1.swift" "Swift hardware lifecycle bridge"
   require_file "$ROOT_DIR/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWireV1.kt" "Kotlin KAGEMUSHA V1 codec"
   require_file "$ROOT_DIR/kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaDeviceLifecycleBridgeV1.kt" "Kotlin hardware lifecycle bridge"
 }

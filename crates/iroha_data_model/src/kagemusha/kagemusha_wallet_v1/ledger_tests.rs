@@ -13,9 +13,12 @@ use crate::kagemusha::kagemusha_wallet_v1::{
     },
     kagemusha_wallet_unload_nullifier_v1,
     messages::messages_tests::message_fixture,
-    state::state_tests::{
-        EMPTY_ROOTS, bootstrap_statement, send_effect, signed_package, stand_in_proof,
-        transition_statement,
+    state::{
+        KagemushaWalletLineageSlotV1,
+        state_tests::{
+            bootstrap_statement, field_value, send_effect, signed_package,
+            stand_in_proof, transition_statement,
+        },
     },
 };
 
@@ -430,11 +433,11 @@ fn kagemusha_wallet_v1_load_voucher_sign_verify_and_effect() {
         voucher.require_charge_quote(Some(&quote)),
         "voucher.charge_quote",
     );
-    let state =
-        KagemushaWalletStateV1::bootstrap(f.credential(), &EMPTY_ROOTS, [0x5d; 32]).expect("state");
+    let state = KagemushaWalletStateV1::bootstrap(f.credential(), field_value(0x5d))
+        .expect("state");
     voucher.require_next_for(&state).expect("next voucher");
     let mut later = state;
-    later.next_load = 1;
+    later.core.next_load = 1;
     assert_invalid(voucher.require_next_for(&later), "voucher.ordinal");
 
     // A charged load names its quote and carries its exact terms (design C7).
@@ -741,6 +744,22 @@ fn kagemusha_wallet_v1_close_loads_requires_a_retiring_package() {
         send_effect(),
     ));
     assert_invalid(f.close_loads(active, 7).validate(), "close_loads.lifecycle");
+    // Only a package that commits from a folded head with its Ω(pred) closes loads (§6.3).
+    let receive = f.package(&transition_statement(
+        &f.identity,
+        8,
+        7,
+        KagemushaWalletLifecycleV1::Retiring,
+        KagemushaWalletEffectV1::Receive {
+            credit_id: [0x62; 32],
+            payer_wallet_id: [0x63; 32],
+            amount: 1,
+        },
+    ));
+    assert_invalid(f.close_loads(receive, 7).validate(), "close_loads.effect");
+    let mut no_lineage = f.retiring_package(7);
+    no_lineage.lineage = KagemushaWalletLineageSlotV1::None;
+    assert_invalid(no_lineage.validate(), "lineage.slot");
     let mut digest = close.clone();
     digest.control = f.control(
         f.control_body(KagemushaWalletLedgerControlActionV1::CloseLoads {
@@ -984,6 +1003,24 @@ fn kagemusha_wallet_v1_unload_claim_pays_the_bound_account() {
     let mut effect = claim.clone();
     effect.package = f.retiring_package(0);
     assert_invalid(effect.validate(), "unload_claim.effect");
+    // The package carries Ω of its predecessor and passes the §3.2 consumer checks (§6.1).
+    let mut no_lineage = claim.clone();
+    no_lineage.package.lineage = KagemushaWalletLineageSlotV1::None;
+    assert_invalid(no_lineage.validate(), "lineage.slot");
+    let mut foreign_key = claim.clone();
+    if let KagemushaWalletLineageSlotV1::Present { lineage } = &mut foreign_key.package.lineage {
+        lineage.public.payment_key =
+            identity_fixture(KagemushaWalletEvidenceKindV1::AppleAppAttest, 0x6d)
+                .credential
+                .body
+                .payment_key;
+    }
+    assert_invalid(foreign_key.validate(), "lineage.payment_key");
+    let mut stale_burn = claim.clone();
+    if let KagemushaWalletLineageSlotV1::Present { lineage } = &mut stale_burn.package.lineage {
+        lineage.public.burned_total = 1;
+    }
+    assert_invalid(stale_burn.validate(), "lineage.burned_total");
     let mut certificates = claim.clone();
     certificates.certificates = KagemushaWalletCertificateSetV1::default();
     assert_invalid(certificates.validate(), "certificates.set");
@@ -1004,13 +1041,20 @@ fn kagemusha_wallet_v1_unload_claim_pays_the_bound_account() {
 fn kagemusha_wallet_v1_fee_claim_pays_the_schedule_beneficiary() {
     let m = message_fixture();
     let payment = m.payment(true, 64);
+    let request = m.request(true);
+    let schedule = m.fee_schedule();
+    let payer_set =
+        KagemushaWalletCertificateSetV1::new(vec![m.payer.enrollment_certificate]).expect("set");
     let digests = payment.digests().expect("payment");
     let claim = KagemushaWalletFeeClaimV1 {
         version: KAGEMUSHA_WALLET_VERSION_V1,
         payment: payment.clone(),
         beneficiary: test_account(0x5b),
     };
-    let payout = claim.payout().expect("payout");
+    claim.validate().expect("structure");
+    // The ledger takes the schedule and credentials from its own records by the digests the
+    // Payment binds (§6.2).
+    let payout = claim.payout(&schedule).expect("payout");
     assert_eq!(
         payout,
         KagemushaWalletFeePayoutV1 {
@@ -1022,7 +1066,12 @@ fn kagemusha_wallet_v1_fee_claim_pays_the_schedule_beneficiary() {
             payment: digests.payment,
         }
     );
-    assert_eq!(claim.verify(&m.payer.scheme).expect("verify"), payout);
+    assert_eq!(
+        claim
+            .verify(&m.payer.scheme, &request, &m.payer.credential, &payer_set)
+            .expect("verify"),
+        payout
+    );
     let frame = claim.to_canonical_bytes().expect("frame");
     assert!(frame.len() <= KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1);
     assert_eq!(
@@ -1032,14 +1081,36 @@ fn kagemusha_wallet_v1_fee_claim_pays_the_schedule_beneficiary() {
 
     let mut beneficiary = claim.clone();
     beneficiary.beneficiary = test_account(0x5c);
-    assert_invalid(beneficiary.validate(), "fee_claim.beneficiary");
+    assert_invalid(beneficiary.payout(&schedule), "fee_claim.beneficiary");
+    let mut other_schedule = schedule;
+    other_schedule.body.schedule_id += 1;
+    assert_invalid(claim.payout(&other_schedule), "fee_claim.fee_schedule");
     let free = KagemushaWalletFeeClaimV1 {
         payment: m.payment(false, 64),
         ..claim.clone()
     };
     assert_invalid(free.validate(), "fee_claim.fee_schedule");
+    assert_invalid(
+        free.verify(
+            &m.payer.scheme,
+            &m.request(false),
+            &m.payer.credential,
+            &payer_set,
+        ),
+        "fee_claim.fee_schedule",
+    );
+    assert!(
+        claim
+            .verify(
+                &m.payer.scheme,
+                &m.request(false),
+                &m.payer.credential,
+                &payer_set
+            )
+            .is_err()
+    );
     let mut tampered = claim.clone();
-    tampered.payment.send.proof = stand_in_proof(65);
+    tampered.payment.send.step_proof = stand_in_proof(65);
     assert_signature(tampered.validate(), Role::ReceiptBody);
     let mut version = claim;
     version.version = 2;

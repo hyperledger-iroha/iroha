@@ -321,10 +321,12 @@ impl KagemushaHardwareCredentialV1 {
         {
             return Err(invalid("kagemusha.hardware_credential.profile_binding"));
         }
-        self.governance_signature.verify(
-            &profile.governance_credential_public_key,
-            &self.canonical_signing_bytes()?,
-        )
+        self.governance_signature
+            .verify(
+                &profile.governance_credential_public_key,
+                &self.canonical_signing_bytes()?,
+            )
+            .map_err(KagemushaValidationErrorV1::from)
     }
 }
 

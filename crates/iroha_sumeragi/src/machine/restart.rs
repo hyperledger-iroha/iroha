@@ -507,10 +507,7 @@ fn check_init(
             || configs
                 .get(&tip.height)
                 .and_then(ConfigSlot::ready)
-                .is_none_or(|config| {
-                    qc.epoch != config.epoch.id
-                        || (qc.height == config.epoch.last_height && !qc.attest)
-                })
+                .is_none_or(|config| qc.epoch != config.epoch.id)
             || qc.value() != (tip.block_hash, tip.result))
     {
         return Err(InvalidInit("tip CommitQC does not match the tip"));

@@ -7,8 +7,8 @@ use sha2::{Digest as _, Sha256};
 
 use super::*;
 
-/// Exact role labels of design §1.1 with the C3 additions, in declaration order.
-const ROLE_LABELS: [&str; 59] = [
+/// Exact role labels in declaration order (split lineage: design §1.5).
+const ROLE_LABELS: [&str; 62] = [
     "scheme",
     "relation",
     "provider-contract",
@@ -42,20 +42,23 @@ const ROLE_LABELS: [&str; 59] = [
     "request-body",
     "request",
     "credit",
-    "dependencies",
     "statement",
     "proof",
+    "step-proof",
+    "lineage",
     "receipt-body",
     "receipt",
     "package",
     "payment",
-    "credit-status-statement",
+    "credit-opening",
+    "credit-status",
     "credited",
     "operation-id",
     "output",
     "capsule",
     "marker",
     "completion",
+    "fold",
     "voucher-body",
     "voucher",
     "unload-nullifier",

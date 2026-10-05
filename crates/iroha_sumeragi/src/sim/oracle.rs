@@ -255,7 +255,8 @@ pub fn build_chain(
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: topo.leader(0),
             skipped_leaders: Vec::new(),
-            attest: h == inst.config(h).epoch.last_height,
+            // The application flags no plain payload, at an epoch boundary or elsewhere.
+            attest: false,
         };
         let author = signers
             .iter()
@@ -318,7 +319,7 @@ pub fn build_chain(
             signers: Bitmap::from_indices(committee.n(), indices.iter().copied())
                 .unwrap_or_else(|| Bitmap::new(committee.n())),
             agg_sig: aggregate(&sigs),
-            attest: h == inst.config(h).epoch.last_height,
+            attest: header.attest,
             attestations: if header.attest {
                 indices
                     .iter()
@@ -1061,9 +1062,6 @@ impl World {
             return Err(
                 "block or certificate epoch context differs from authenticated schedule".into(),
             );
-        }
-        if h == instance.config(h).epoch.last_height && !block.header().attest {
-            return Err("boundary execution lacks current-authority attestation".into());
         }
         if qc.kind != VoteKind::Commit || qc.height != h {
             return Err("not a CommitQC of the block's height".to_owned());

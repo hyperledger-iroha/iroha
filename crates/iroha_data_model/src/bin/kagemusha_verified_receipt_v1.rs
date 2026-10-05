@@ -1,8 +1,14 @@
 //! Encode a freshly verified KAGEMUSHA evidence projection as an experimental receipt.
 //!
-//! This tool runs the existing closed-evidence verifier on private copies of pinned
-//! inputs, then packages the verified files under SHA-256 names for Kagami's release
-//! preparer. It does not generate proving keys, observations, or production qualification.
+//! This tool runs a caller-supplied, SHA-256-pinned closed-evidence verifier on private
+//! copies of pinned inputs, then packages the verified files under SHA-256 names for
+//! Kagami's release preparer. It does not generate proving keys, observations, or
+//! production qualification.
+//!
+//! TODO(S20): the repository no longer ships that verifier
+//! (`scripts/verify_kagemusha_v1_release_evidence.py`) or its evidence fixtures; they
+//! were deleted with the old KAGEMUSHA release-evidence tooling. Delete this tool with
+//! the old KAGEMUSHA release types.
 
 use std::{
     collections::BTreeMap,
@@ -1433,116 +1439,6 @@ mod tests {
             .unwrap()
             .insert("role".into(), Value::Bool(true));
         assert!(restore_rust_json_shape(malformed).is_err());
-    }
-
-    #[test]
-    fn signed_structural_projection_decodes_as_exact_experimental_receipt() {
-        let root = tempfile::tempdir().unwrap();
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap();
-        let fixture = repo.join("pytests/scripts/kagemusha_testnet_experiment_evidence_test.py");
-        let script = r#"
-import importlib.util, pathlib, sys
-spec = importlib.util.spec_from_file_location('receipt_fixture', sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
-fixture = module._testnet_fixture(pathlib.Path(sys.argv[2]) / 'evidence')
-projection = module._verify(fixture, testnet_experiment=True)
-sys.stdout.buffer.write(module.VERIFIER.canonical_json_bytes(projection))
-"#;
-        let output = Command::new("python3")
-            .arg("-c")
-            .arg(script)
-            .arg(fixture)
-            .arg(root.path().canonicalize().unwrap())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let projection: Value = norito::json::from_slice(&output.stdout).unwrap();
-        let manifest_pin = parse_digest(projection["manifest_sha256"].as_str().unwrap()).unwrap();
-        let (receipt, inventory) = decode_projection(&output.stdout, manifest_pin).unwrap();
-        assert_eq!(receipt.fuzz_cases, 0);
-        assert_eq!(inventory.len(), 50);
-
-        let fixture_parent = root.path().canonicalize().unwrap().join("evidence");
-        let policy = fixture_parent.join("trusted-observer-policy.json");
-        let mut args = Arguments {
-            python: PathBuf::new(),
-            python_sha256: [0; 32],
-            verifier: PathBuf::new(),
-            verifier_sha256: [0; 32],
-            artifact_contract: PathBuf::new(),
-            artifact_contract_sha256: [0; 32],
-            manifest: fixture_parent.join("kagemusha-evidence.json"),
-            manifest_sha256: manifest_pin,
-            evidence_root: fixture_parent.join("evidence"),
-            observer_policy: policy.clone(),
-            observer_policy_sha256: Sha256::digest(fs::read(&policy).unwrap()).into(),
-            output_dir: root.path().canonicalize().unwrap().join("handoff"),
-        };
-        let sources = collect_handoff_sources(&args, &receipt, &inventory, &output.stdout).unwrap();
-        assert_eq!(sources.artifacts.len(), 50);
-        assert!(sources.evidence.len() >= 4);
-        let artifact_to_substitute = sources.artifacts[&inventory[0].sha256].path.clone();
-        let receipt_bytes = norito::encode_canonical(&receipt).unwrap();
-        let mut inventory_bytes = norito::json::to_json(&inventory).unwrap().into_bytes();
-        inventory_bytes.push(b'\n');
-        write_verified_handoff(
-            &args,
-            &receipt,
-            &inventory,
-            &receipt_bytes,
-            &inventory_bytes,
-            &output.stdout,
-        )
-        .unwrap();
-        assert_eq!(
-            fs::read(args.output_dir.join("receipt.norito")).unwrap(),
-            receipt_bytes
-        );
-        assert_eq!(
-            fs::read(args.output_dir.join("artifact_inventory.json")).unwrap(),
-            inventory_bytes
-        );
-        assert_eq!(
-            fs::read(args.output_dir.join("authority-review-projection.json")).unwrap(),
-            output.stdout
-        );
-        for (digest, source) in sources.artifacts {
-            assert_eq!(
-                fs::read(args.output_dir.join("artifacts").join(hex::encode(digest))).unwrap(),
-                fs::read(source.path).unwrap()
-            );
-        }
-        for (digest, source) in sources.evidence {
-            assert_eq!(
-                fs::read(args.output_dir.join("evidence").join(hex::encode(digest))).unwrap(),
-                fs::read(source.path).unwrap()
-            );
-        }
-        fs::write(&artifact_to_substitute, b"substituted artifact").unwrap();
-        args.output_dir = root.path().canonicalize().unwrap().join("rejected-handoff");
-        assert!(
-            write_verified_handoff(
-                &args,
-                &receipt,
-                &inventory,
-                &receipt_bytes,
-                &inventory_bytes,
-                &output.stdout,
-            )
-            .is_err()
-        );
-        assert!(!args.output_dir.join("receipt.norito").exists());
-        fs::write(&args.manifest, b"substituted manifest").unwrap();
-        assert!(collect_handoff_sources(&args, &receipt, &inventory, &output.stdout).is_err());
     }
 
     #[test]

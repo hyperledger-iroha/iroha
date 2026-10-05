@@ -1109,6 +1109,7 @@ fn committee_operations_fixture() -> Vec<iroha::data_model::nexus::ValidatorComm
         },
         isi::kagemusha_v1::*,
         nexus::*,
+        sumeragi::epoch::InstalledBeaconEpochBindingV1,
     };
     use iroha_model_base::peer::PeerId;
 

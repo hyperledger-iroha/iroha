@@ -25,6 +25,28 @@ pub enum PublicationPreparationError<E> {
     Admission(E),
 }
 
+impl<E: std::fmt::Display> std::fmt::Display for PublicationPreparationError<E> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy(_) => formatter.write_str("publication writer is busy"),
+            Self::Poisoned => formatter.write_str("publication owner is poisoned"),
+            Self::Changed => formatter.write_str("publication owner changed"),
+            Self::Admission(original) => {
+                write!(formatter, "publication admission refused: {original}")
+            }
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for PublicationPreparationError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Admission(original) => Some(original),
+            Self::Busy(_) | Self::Poisoned | Self::Changed => None,
+        }
+    }
+}
+
 /// Successful preparation or the exact original journal and its local refusal.
 /// The error retains custody so a caller can defer without rebuilding execution.
 pub type PublicationPreparationResult<Prepared, Journal, E, Installation> = Result<
@@ -511,3 +533,74 @@ mod admission_tests;
 #[cfg(test)]
 #[path = "publication_original_read_tests.rs"]
 mod original_read_tests;
+
+#[cfg(test)]
+mod error_tests {
+    use std::{convert::Infallible, error::Error, fmt};
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct OriginalAdmission;
+
+    impl fmt::Display for OriginalAdmission {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("original admission")
+        }
+    }
+
+    impl Error for OriginalAdmission {}
+
+    #[test]
+    fn publication_display_preserves_every_existing_local_refusal() {
+        let released = ReleaseNotification::default();
+        let original_wait = released.observe();
+        for (error, expected) in [
+            (
+                PublicationPreparationError::Busy(original_wait.clone()),
+                "publication writer is busy",
+            ),
+            (
+                PublicationPreparationError::Poisoned,
+                "publication owner is poisoned",
+            ),
+            (
+                PublicationPreparationError::Changed,
+                "publication owner changed",
+            ),
+            (
+                PublicationPreparationError::Admission(OriginalAdmission),
+                "publication admission refused: original admission",
+            ),
+        ] {
+            assert_eq!(error.to_string(), expected);
+            if let PublicationPreparationError::Busy(wait) = error {
+                assert_eq!(wait, original_wait);
+            }
+        }
+    }
+
+    #[test]
+    fn publication_error_source_is_the_original_admission_and_infallible_local_errors_are_typed() {
+        let error = PublicationPreparationError::Admission(OriginalAdmission);
+        let PublicationPreparationError::Admission(original) = &error else {
+            unreachable!();
+        };
+        let source = Error::source(&error)
+            .unwrap()
+            .downcast_ref::<OriginalAdmission>()
+            .unwrap();
+        assert!(std::ptr::eq(source, original));
+        assert_eq!(source.to_string(), "original admission");
+        let released = ReleaseNotification::default();
+        for error in [
+            PublicationPreparationError::<Infallible>::Busy(released.observe()),
+            PublicationPreparationError::Poisoned,
+            PublicationPreparationError::Changed,
+        ] {
+            let typed: &(dyn Error + 'static) = &error;
+            assert!(typed.source().is_none());
+            assert!(!typed.to_string().is_empty());
+        }
+    }
+}

@@ -63,8 +63,22 @@
 //! carried witnesses. Spec section 3.2 assigns their transitions to the
 //! native Advance check and to the lineage relation.
 //!
-//! The public statement is the 25-field step encoding
-//! ([`iroha_plonk_gadgets::statement`]) hashed under `kgspstm1`.
+//! The fee schedule digest, the receiver credential (of a Send), the scheme
+//! policy, the certificates and the nonce are Request terms: bound by the
+//! credit identifier, which the receiver recomputes from the Request it
+//! signed. Whether the fee schedule is one the payer's head-committed policy
+//! permits is a lineage-relation check (spec section 3.2); that policy lives
+//! in the remainder, which no step relation opens.
+//!
+//! The public statement is the 29-field step encoding
+//! ([`iroha_plonk_gadgets::statement`]) hashed under `kgwstmt1`: the G1
+//! wallet statement field encoding (`KagemushaWalletStatementV1::field_items`),
+//! including the successor `next_load` and, in the Send effect, the
+//! Request digest limbs after the fee.
+// TODO(G3, design §15): the send chain entry, the core layout and domains, the
+// Retiring lifecycle and the relation identities are still the prototype's;
+// align them with the G1 encodings (`KagemushaWalletSendChainEntryV1`, core and
+// rest field items, `kgwcore1`/`kgwrest1`/`kgwschn1`/`kgwrchn1`).
 //!
 //! # Native reference
 //!
@@ -94,8 +108,9 @@ pub const REQUEST_FIELDS: usize = 24;
 pub const SEND_CHAIN_FIELDS: usize = 8;
 /// Fields of a `recv_chain` entry.
 pub const RECEIVE_CHAIN_FIELDS: usize = 6;
-/// Effect fields of `sigma_send`.
-pub const SEND_EFFECT_FIELDS: usize = 9;
+/// Effect fields of `sigma_send`: credit identifier (2), receiver (2), send
+/// ordinal, amount, fee, Request digest (2), accepted lower and upper time.
+pub const SEND_EFFECT_FIELDS: usize = 11;
 /// Effect fields of `sigma_recv`.
 pub const RECEIVE_EFFECT_FIELDS: usize = 5;
 /// The state version.
@@ -218,17 +233,25 @@ impl StateLayout {
     }
 }
 
-/// The relation identifier of `step` under `layout` (prototype labels): one
-/// per pair, so a verifier allowlist never takes one layout's relation for
-/// the other's.
+/// The 32-byte relation identity of `step` under `layout` (prototype labels
+/// in the low 16 bytes, zero high half): one per pair, so a verifier
+/// allowlist never takes one layout's relation for the other's. It enters
+/// the statement as two 128-bit limbs, like the G1 scheme `relation_id`.
 #[must_use]
-pub const fn relation_id(step: StepRelation, layout: StateLayout) -> u128 {
-    u128::from_le_bytes(match (step, layout) {
+pub const fn relation_id(step: StepRelation, layout: StateLayout) -> [u8; 32] {
+    let label = match (step, layout) {
         (StepRelation::Send, StateLayout::TwoLevel) => *b"kgsp-send-2level",
         (StepRelation::Send, StateLayout::Flat) => *b"kgsp-send-flat-1",
         (StepRelation::Receive, StateLayout::TwoLevel) => *b"kgsp-recv-2level",
         (StepRelation::Receive, StateLayout::Flat) => *b"kgsp-recv-flat-1",
-    })
+    };
+    let mut identity = [0_u8; 32];
+    let mut index = 0;
+    while index < label.len() {
+        identity[index] = label[index];
+        index += 1;
+    }
+    identity
 }
 
 /// The identity of a wallet incarnation (spec section 2.2).
@@ -540,6 +563,9 @@ pub struct SendInputs<F> {
     pub receiver_credential: [u8; 32],
     /// The other Request terms.
     pub request: RequestTerms,
+    /// The digest of the signed Request (G1 `H("request", e || signature)`),
+    /// bound by the Send effect; `sigma_send` does not recompute it (SHA-256).
+    pub request_digest: [u8; 32],
     /// The accepted lower time.
     pub accepted_lower: u64,
     /// The accepted upper time.
@@ -892,6 +918,7 @@ impl<F: PoseidonField> StepWitness<F> {
             credential: core.identity.credential,
             lifecycle: successor.core.lifecycle,
             sequence: successor.core.sequence,
+            next_load: successor.core.next_load,
             predecessor: native.digests.predecessor,
             successor: native.digests.successor,
             enabled_controls: core.controls.enabled,
@@ -931,6 +958,7 @@ impl<F: PoseidonField> StepWitness<F> {
                     amount,
                     fee,
                 ];
+                let [request_lo, request_hi] = limbs::<F>(&send.request_digest);
                 let effect = vec![
                     credit_lo,
                     credit_hi,
@@ -939,15 +967,15 @@ impl<F: PoseidonField> StepWitness<F> {
                     ordinal,
                     amount,
                     fee,
+                    request_lo,
+                    request_hi,
                     F::from(send.accepted_lower),
                     F::from(send.accepted_upper),
                 ];
                 successor_core[core_index::BALANCE] -= amount + fee;
-                successor_core[core_index::BURNED_TOTAL] =
-                    F::from_u128(send.lineage.burned_total);
+                successor_core[core_index::BURNED_TOTAL] = F::from_u128(send.lineage.burned_total);
                 successor_core[core_index::NEXT_SEND] += F::ONE;
-                successor_core[core_index::PENDING_OUTGOING_ROOT] =
-                    send.successor_pending_outgoing;
+                successor_core[core_index::PENDING_OUTGOING_ROOT] = send.successor_pending_outgoing;
                 successor_core[core_index::FEE_CLAIM_ROOT] = send.successor_fee_claim;
                 successor_core[core_index::TIME_FLOOR] = F::from(send.accepted_lower);
                 let lineage = [
@@ -983,9 +1011,11 @@ impl<F: PoseidonField> StepWitness<F> {
         let successor = hash_with_domain(layout.domain(), &successor_preimage);
         let mut statement = [F::ZERO; STATEMENT_FIELDS];
         let pick = |index: usize| core[index];
+        let [relation_lo, relation_hi] = limbs::<F>(&relation_id(relation, layout));
         let header = [
             F::from(STATEMENT_VERSION),
-            F::from_u128(relation_id(relation, layout)),
+            relation_lo,
+            relation_hi,
             pick(core_index::SCHEME),
             pick(core_index::SCHEME + 1),
             pick(core_index::ASSET),
@@ -994,11 +1024,12 @@ impl<F: PoseidonField> StepWitness<F> {
             pick(core_index::CREDENTIAL + 1),
             successor_core[core_index::LIFECYCLE],
             successor_core[core_index::SEQUENCE],
-            predecessor,
-            successor,
+            successor_core[core_index::NEXT_LOAD],
             pick(core_index::ENABLED_CONTROLS),
             lineage[0],
             lineage[1],
+            predecessor,
+            successor,
             F::from(relation.effect_tag()),
         ];
         statement[..header.len()].copy_from_slice(&header);
@@ -1075,7 +1106,10 @@ mod tests {
             limbs::<Fp>(&state.core.identity.wallet_id)
         );
         assert_eq!(
-            [core[core_index::CREDENTIAL], core[core_index::CREDENTIAL + 1]],
+            [
+                core[core_index::CREDENTIAL],
+                core[core_index::CREDENTIAL + 1]
+            ],
             limbs::<Fp>(&state.core.identity.credential)
         );
         assert_eq!(
@@ -1201,7 +1235,9 @@ mod tests {
             hash_with_domain(SEND_CHAIN_DOMAIN, &native.chain_entry)
         );
         assert_eq!(native.chain_entry.len(), SEND_CHAIN_FIELDS);
-        assert_eq!(native.chain_entry[1..3], native.statement[16..18]);
+        assert_eq!(native.chain_entry[1..3], native.statement[18..20]);
+        // The Send effect binds the Request digest limbs after the fee.
+        assert_eq!(native.statement[25..27], limbs::<Fp>(&send.request_digest));
         assert_eq!(
             native.digests.credit,
             hash_with_domain(CREDIT_DOMAIN, &native.request.fields::<Fp>())
@@ -1232,10 +1268,7 @@ mod tests {
             receive.successor_consumed_credit
         );
         assert_eq!(successor.core.burned_total, core.burned_total);
-        assert_eq!(
-            successor.core.accepted_time_floor,
-            core.accepted_time_floor
-        );
+        assert_eq!(successor.core.accepted_time_floor, core.accepted_time_floor);
         assert_eq!(native.chain_entry.len(), RECEIVE_CHAIN_FIELDS);
         assert_eq!(native.public().instance(), vec![native.digests.statement]);
         // The lineage inputs of a Receive statement are zero.

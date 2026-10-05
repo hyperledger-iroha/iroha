@@ -1438,6 +1438,38 @@ fn audited_faucet_handshake_allowlist_requires_exact_name_method_and_path() {
     }
 }
 #[test]
+fn tool_registry_keeps_signed_ledger_original_carriers_outside_mcp() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    for route in [
+        route_catalog::core::RESOURCE_NAMES_STATE,
+        route_catalog::core::AUTHORITY_ORIGINALS,
+    ] {
+        assert!(
+            !route.projections().mcp(),
+            "scoped native read authority must remain outside MCP: {}",
+            route.path()
+        );
+        let method = match route.method() {
+            CatalogHttpMethod::Get => Method::GET,
+            CatalogHttpMethod::Post => Method::POST,
+            other => panic!("ledger original carrier uses an unexpected method: {other:?}"),
+        };
+        assert!(
+            !tools.iter().any(|tool| tool.route_backing().is_some_and(
+                |(_, tool_method, path_template)| {
+                    tool_method == &method && path_template == route.path()
+                }
+            )),
+            "no MCP tool may back a signed ledger original carrier: {} {}",
+            route.method().as_str(),
+            route.path()
+        );
+    }
+}
+#[test]
 fn tool_registry_honors_universal_kagemusha_mcp_projection() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
@@ -1450,8 +1482,6 @@ fn tool_registry_honors_universal_kagemusha_mcp_projection() {
         "the challenged data-only World publication has the catalog's MCP projection"
     );
     for route in [
-        route_catalog::kagemusha::RESOURCE_NAMES_STATE,
-        route_catalog::kagemusha::AUTHORITY_ORIGINALS,
         route_catalog::kagemusha::ORDINARY_WALLET_CURRENT,
         route_catalog::kagemusha::ORDINARY_MINT_ISSUER_PURPOSE,
         route_catalog::kagemusha::ORDINARY_MINT_FINALIZED,

@@ -4,6 +4,13 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Removed the retired KAGEMUSHA surface: the `Kagemusha` namespace, the
+  `./kagemusha` subpath and `kagemusha.d.ts`; the Node and browser
+  `getKagemushaReadiness`, `submitKagemushaTopUp`, `submitKagemushaRedemption`
+  and `getKagemushaOperation` Torii methods with their response types; and the
+  `iroha.kagemusha.v1.top_up` browser allowlist entry and Norito wire-id
+  mapping. `TAIRA_TESTNET_PROFILE` now names the Digital Shekel asset fields
+  `dsAssetDefinitionId`, `dsAssetAlias` and `dsAssetScale`.
 - Unified Torii collection queries (`specs/torii/collection_queries.md`). Every
   collection is a `ToriiCollection` on both `ToriiClient` and
   `ToriiBrowserClient` (`domains`, `accounts`, `assetDefinitions`, `nfts`,
@@ -235,8 +242,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   not change the public Explorer health request.
 - Removed the generic `Shield`, `ZkTransfer`, and `Unshield` transaction surface
   from ABI V1. JavaScript builders, TypeScript declarations, exports, and Norito
-  discriminants now fail closed; typed KAGEMUSHA mint/redemption routes and
-  their underlying proof helpers remain available.
+  discriminants now fail closed.
 - Added a Node-only native authenticated `BlockProofs` verifier. It accepts
   bounded canonical bridge-finality, exact executed-`SignedBlockWire`, and
   proof archives; pins the application-selected chain, height context, and
@@ -246,9 +252,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   native-only operation. Torii exposes
   the finality and `BlockProofs` archives but not yet the exact executed block
   wire required to assemble this verification input from public routes alone.
-- Replaced asset-selected offline readiness discovery with the universal
-  `getKagemushaReadiness()`/`KagemushaReadinessV1` contract. The first-release hard cut
-  removes selector-taking readiness methods, normalizers, types, and exports.
+- Removed asset-selected offline readiness discovery, including its
+  selector-taking readiness methods, normalizers, types, and exports.
 - Bound validation-fee policy and payout-lifecycle proposal fingerprints to
   the canonical proposal operator and exact typed proposal payload. Both native
   exports validate exact JSON and compute canonical `ProposalKind`

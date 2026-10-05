@@ -543,7 +543,8 @@ pub fn payload_mints(payload: &[u8]) -> bool {
 }
 
 /// The simulator's `exec` of a block (§4.1, §4.2): `Invalid` if its header flag differs from
-/// the application's payload-or-boundary flag rule ([`payload_mints`]), otherwise [`reference_exec`].
+/// the application's payload flag rule ([`payload_mints`]; epoch boundaries are flagged by the
+/// same rule as every other height), otherwise [`reference_exec`].
 pub fn block_exec(
     parent_result: &Hash32,
     block: &AvailableBody,
@@ -551,9 +552,7 @@ pub fn block_exec(
 ) -> ExecOutcome {
     if block.header().epoch != epoch.id
         || !epoch.contains(block.header().height)
-        || block.header().attest
-            != (payload_mints(block.payload().as_slice())
-                || block.header().height == epoch.last_height)
+        || block.header().attest != payload_mints(block.payload().as_slice())
     {
         return ExecOutcome::Invalid;
     }

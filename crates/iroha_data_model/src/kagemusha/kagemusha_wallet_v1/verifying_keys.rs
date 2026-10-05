@@ -1,0 +1,334 @@
+//! The σ verifying-key allowlist of a scheme and its `verifying_key_set_digest` (§§3.2, 3.3,
+//! 8; owner answers Q6 and Q11 of 2026-10-05).
+//!
+//! Statements and Ω carry one scheme-level relation identity. Each consumer selects σ's
+//! verifying key from this allowlist by the operation tag and, for Send, by the
+//! enabled-controls mask (`Ω.enabled_controls`); Λ uses the same allowlist. G1 defines the
+//! allowlist, with one entry per selector and its exact σ length, plus the Ω transport
+//! verifying key and its exact proof length. Its digest
+//! `H("verifying-key-set", transcript)` is the `verifying_key_set_digest` that the relation
+//! identity and the signed artifact manifest bind. The σ and Ω byte caps are these exact lengths
+//! (owner answer Q6): under R9 the Ω length plus the largest `σ_send` length fits the Payment
+//! budget [`KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1`]. Until the artifacts freeze, structural
+//! validation of the wire objects enforces only the frame bounds.
+
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+
+use super::{
+    KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1, WalletResult,
+    WalletVersionsV1, decode_frame_v1,
+    digest::{KagemushaWalletDigestRoleV1 as Role, WalletTranscriptV1, kagemusha_wallet_digest_v1},
+    encode_frame_v1,
+    identity::{KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1, KagemushaWalletArtifactManifestBodyV1},
+    invalid_v1, overflow_v1, require_nonzero_v1, require_version_v1,
+    state::{
+        KagemushaWalletLineageV1, KagemushaWalletOperationKindV1, KagemushaWalletPackageV1,
+        KagemushaWalletStepProofV1,
+    },
+};
+
+#[cfg(test)]
+#[path = "verifying_keys_tests.rs"]
+pub(super) mod verifying_keys_tests;
+
+/// Exact transcript bytes of one allowlist entry:
+/// `tag kind || LE32 enabled_controls || verifying_key_digest || LE32 proof_bytes`.
+pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRY_TRANSCRIPT_BYTES_V1: usize = 1 + 4 + 32 + 4;
+/// Maximum σ entries: one per non-Send operation and one per Send enabled-controls mask.
+pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1: usize = 7 + 8;
+/// Maximum standalone canonical frame of one verifying-key allowlist.
+pub const KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1: usize = 2_048;
+
+/// One σ verifying key of the allowlist and its selector (§3.2).
+///
+/// Every operation other than Send has exactly one entry with a zero mask; Send has one entry
+/// per enabled-controls mask the scheme supports, including the empty mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletVerifyingKeyEntryV1"
+)]
+pub struct KagemushaWalletVerifyingKeyEntryV1 {
+    /// Operation tag of the step relation.
+    pub kind: KagemushaWalletOperationKindV1,
+    /// Enabled-controls mask of a Send relation; zero for every other operation.
+    pub enabled_controls: u32,
+    /// Digest of the frozen verifying key.
+    pub verifying_key_digest: [u8; 32],
+    /// Exact σ length in bytes (PIPA-v1 rejects every other length).
+    pub proof_bytes: u32,
+}
+
+impl KagemushaWalletVerifyingKeyEntryV1 {
+    /// Selector `(operation tag, mask)` that orders the allowlist.
+    #[must_use]
+    pub const fn selector(&self) -> (u8, u32) {
+        (self.kind.tag(), self.enabled_controls)
+    }
+
+    fn write(&self, transcript: WalletTranscriptV1) -> WalletTranscriptV1 {
+        transcript
+            .u8(self.kind.tag())
+            .u32(self.enabled_controls)
+            .digest(&self.verifying_key_digest)
+            .u32(self.proof_bytes)
+    }
+
+    fn validate(&self) -> WalletResult<()> {
+        require_nonzero_v1(
+            "verifying_keys.verifying_key_digest",
+            &self.verifying_key_digest,
+        )?;
+        if self.proof_bytes == 0 {
+            return Err(invalid_v1("verifying_keys.proof_bytes"));
+        }
+        let mask_ok = if self.kind == KagemushaWalletOperationKindV1::Send {
+            self.enabled_controls & !KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1 == 0
+        } else {
+            self.enabled_controls == 0
+        };
+        if mask_ok {
+            Ok(())
+        } else {
+            Err(invalid_v1("verifying_keys.enabled_controls"))
+        }
+    }
+}
+
+/// The σ verifying-key allowlist of one scheme and the Ω transport key (§3.2, owner answer
+/// Q11).
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletVerifyingKeyAllowlistV1"
+)]
+pub struct KagemushaWalletVerifyingKeyAllowlistV1 {
+    /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`](super::KAGEMUSHA_WALLET_VERSION_V1).
+    pub version: u16,
+    /// σ entries strictly ascending by `(operation tag, mask)`.
+    pub steps: Vec<KagemushaWalletVerifyingKeyEntryV1>,
+    /// Digest of the frozen Ω transport verifying key.
+    pub lineage_verifying_key_digest: [u8; 32],
+    /// Exact Ω transport-proof length in bytes.
+    pub lineage_proof_bytes: u32,
+}
+
+impl KagemushaWalletVerifyingKeyAllowlistV1 {
+    /// Validate the allowlist.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another version, more than [`KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1`]
+    /// entries, entries not strictly ascending by selector, a missing operation, a nonzero mask
+    /// outside Send or an undefined control bit, a Send without the empty-mask entry, zero
+    /// digests or lengths, and an Ω length plus the largest `σ_send` length above the Payment
+    /// budget (R9) or a σ longer than a message.
+    pub fn validate(&self) -> WalletResult<()> {
+        require_version_v1("verifying_keys.version", self.version)?;
+        if self.steps.len() > KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1 {
+            return Err(invalid_v1("verifying_keys.steps"));
+        }
+        let mut previous: Option<(u8, u32)> = None;
+        for entry in &self.steps {
+            entry.validate()?;
+            if previous.is_some_and(|previous| previous >= entry.selector()) {
+                return Err(invalid_v1("verifying_keys.order"));
+            }
+            previous = Some(entry.selector());
+            let proof_bytes = usize::try_from(entry.proof_bytes)
+                .map_err(|_| overflow_v1("verifying_keys.proof_bytes"))?;
+            if proof_bytes > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
+                return Err(invalid_v1("verifying_keys.proof_bytes"));
+            }
+        }
+        for kind in KagemushaWalletOperationKindV1::ALL {
+            if !self.steps.iter().any(|entry| entry.selector() == (kind.tag(), 0)) {
+                return Err(invalid_v1("verifying_keys.missing"));
+            }
+        }
+        require_nonzero_v1(
+            "verifying_keys.lineage_verifying_key_digest",
+            &self.lineage_verifying_key_digest,
+        )?;
+        if self.lineage_proof_bytes == 0 {
+            return Err(invalid_v1("verifying_keys.lineage_proof_bytes"));
+        }
+        let largest_send = self
+            .steps
+            .iter()
+            .filter(|entry| entry.kind == KagemushaWalletOperationKindV1::Send)
+            .map(|entry| u64::from(entry.proof_bytes))
+            .max()
+            .unwrap_or(0);
+        let joint = largest_send
+            .checked_add(u64::from(self.lineage_proof_bytes))
+            .ok_or_else(|| overflow_v1("verifying_keys.budget"))?;
+        let budget = u64::try_from(KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1)
+            .map_err(|_| overflow_v1("verifying_keys.budget"))?;
+        if joint > budget {
+            return Err(invalid_v1("verifying_keys.budget"));
+        }
+        Ok(())
+    }
+
+    /// Exact `verifying-key-set` transcript: `LE16 version || LE32 count || entries (41 bytes
+    /// each) || lineage_verifying_key_digest || LE32 lineage_proof_bytes`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid allowlist.
+    pub fn transcript(&self) -> WalletResult<Vec<u8>> {
+        self.validate()?;
+        let count = u32::try_from(self.steps.len())
+            .map_err(|_| overflow_v1("verifying_keys.steps"))?;
+        let capacity = 2 + 4 + 32 + 4
+            + self.steps.len() * KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRY_TRANSCRIPT_BYTES_V1;
+        let mut transcript = WalletTranscriptV1::with_capacity(capacity)
+            .u16(self.version)
+            .u32(count);
+        for entry in &self.steps {
+            transcript = entry.write(transcript);
+        }
+        Ok(transcript
+            .digest(&self.lineage_verifying_key_digest)
+            .u32(self.lineage_proof_bytes)
+            .finish())
+    }
+
+    /// `verifying_key_set_digest = H("verifying-key-set", transcript)`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid allowlist.
+    pub fn verifying_key_set_digest(&self) -> WalletResult<[u8; 32]> {
+        Ok(kagemusha_wallet_digest_v1(
+            Role::VerifyingKeySet,
+            &self.transcript()?,
+        ))
+    }
+
+    /// The σ entry of selector `(kind, enabled_controls)`; every operation other than Send
+    /// selects with the empty mask.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid allowlist, a nonzero mask outside Send, and a selector without an
+    /// entry.
+    pub fn entry(
+        &self,
+        kind: KagemushaWalletOperationKindV1,
+        enabled_controls: u32,
+    ) -> WalletResult<&KagemushaWalletVerifyingKeyEntryV1> {
+        self.validate()?;
+        if kind != KagemushaWalletOperationKindV1::Send && enabled_controls != 0 {
+            return Err(invalid_v1("verifying_keys.selector"));
+        }
+        self.steps
+            .iter()
+            .find(|entry| entry.selector() == (kind.tag(), enabled_controls))
+            .ok_or_else(|| invalid_v1("verifying_keys.selector"))
+    }
+
+    /// Require σ to have the exact length of its selector's entry and return the entry's
+    /// verifying-key digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects what [`Self::entry`] rejects, an invalid σ and another length.
+    pub fn check_step_proof(
+        &self,
+        kind: KagemushaWalletOperationKindV1,
+        enabled_controls: u32,
+        step_proof: &KagemushaWalletStepProofV1,
+    ) -> WalletResult<[u8; 32]> {
+        step_proof.validate()?;
+        let entry = self.entry(kind, enabled_controls)?;
+        if u32::try_from(step_proof.bytes.len()).ok() != Some(entry.proof_bytes) {
+            return Err(invalid_v1("step_proof.length"));
+        }
+        Ok(entry.verifying_key_digest)
+    }
+
+    /// Require the Ω transport proof to have the exact allowlisted length.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid allowlist or Ω and another length.
+    pub fn check_lineage(&self, lineage: &KagemushaWalletLineageV1) -> WalletResult<()> {
+        self.validate()?;
+        lineage.validate()?;
+        if u32::try_from(lineage.proof.len()).ok() == Some(self.lineage_proof_bytes) {
+            Ok(())
+        } else {
+            Err(invalid_v1("lineage.proof_length"))
+        }
+    }
+
+    /// Check a package's proof lengths: σ against the entry its verifying-key selector picks
+    /// (operation tag and, for Send, the mask, which the consumer checks equate with
+    /// `Ω.enabled_controls`) and a carried Ω(pred) against the transport length. Returns the
+    /// selected verifying-key digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid package and what [`Self::check_step_proof`] and
+    /// [`Self::check_lineage`] reject.
+    pub fn check_package(&self, package: &KagemushaWalletPackageV1) -> WalletResult<[u8; 32]> {
+        package.validate()?;
+        let (kind, enabled_controls) = package.verifying_key_selector();
+        let digest = self.check_step_proof(kind, enabled_controls, &package.step_proof)?;
+        if let Some(lineage) = package.lineage.lineage() {
+            self.check_lineage(lineage)?;
+        }
+        Ok(digest)
+    }
+
+    /// Validate and encode the bounded canonical frame.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid allowlist or an oversized frame.
+    pub fn to_canonical_bytes(&self) -> WalletResult<Vec<u8>> {
+        self.validate()?;
+        encode_frame_v1(self, KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1)
+    }
+
+    /// Decode one canonical allowlist frame and require the digest `manifest` binds.
+    ///
+    /// # Errors
+    ///
+    /// Rejects, in order, an oversized frame, a noncanonical frame, another version, an invalid
+    /// allowlist, and a digest other than the manifest's `verifying_key_set_digest`.
+    pub fn decode_canonical(
+        bytes: &[u8],
+        manifest: &KagemushaWalletArtifactManifestBodyV1,
+    ) -> WalletResult<Self> {
+        let allowlist: Self =
+            decode_frame_v1(bytes, KAGEMUSHA_WALLET_VERIFYING_KEY_ALLOWLIST_MAX_BYTES_V1)?;
+        allowlist.require_versions()?;
+        allowlist.require_manifest(manifest)?;
+        Ok(allowlist)
+    }
+
+    /// Require this allowlist to be the one `manifest` binds by `verifying_key_set_digest`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid allowlist or manifest body and another digest.
+    pub fn require_manifest(
+        &self,
+        manifest: &KagemushaWalletArtifactManifestBodyV1,
+    ) -> WalletResult<()> {
+        manifest.validate()?;
+        if self.verifying_key_set_digest()? == manifest.verifying_key_set_digest {
+            Ok(())
+        } else {
+            Err(invalid_v1("artifact_manifest.verifying_key_set_digest"))
+        }
+    }
+}
+
+impl WalletVersionsV1 for KagemushaWalletVerifyingKeyAllowlistV1 {
+    fn require_versions(&self) -> WalletResult<()> {
+        require_version_v1("verifying_keys.version", self.version)
+    }
+}

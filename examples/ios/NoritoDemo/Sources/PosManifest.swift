@@ -124,11 +124,13 @@ struct PosManifestStatus: Identifiable {
 
   private static func computeDualStatus(roots: [BackendRootStatus], manifest: PosProvisionManifest, now: Date) -> DualStatus {
     let activeRoles = Set(roots.filter(\.active).map { $0.role })
+    // TODO(S13): rename these roles together with the shared signed fixture
+    // (fixtures/sdk/pos/manifest_v1.json) and the Android retail-wallet sample.
     let required: Set<String> = ["kagemusha_release_signer", "kagemusha_device_attestation_ca"]
     let missing = required.subtracting(activeRoles)
     if missing.isEmpty {
       let remaining = manifest.validUntilMs.date.timeIntervalSince(now)
-      return DualStatus(healthy: true, label: "KAGEMUSHA V1 trust roots for \(formatDuration(milliseconds: remaining * 1000))")
+      return DualStatus(healthy: true, label: "required trust roots active for \(formatDuration(milliseconds: remaining * 1000))")
     }
     return DualStatus(healthy: false, label: "missing \(missing.joined(separator: ", "))")
   }

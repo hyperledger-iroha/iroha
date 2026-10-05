@@ -34,7 +34,6 @@ const REQUIRED_OUTPUTS = [
   "address.js",
   "curveRegistry.js",
   "ivmArtifact.js",
-  "kagemusha.js",
   "smartContractDeploymentSubmit.js",
   "sumeragiTyped.js",
   "toriiClient.js",

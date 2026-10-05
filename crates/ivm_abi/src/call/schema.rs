@@ -1,17 +1,17 @@
 //! Complete flat callable type tapes, without recursive wire containers or references.
 
 use iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor;
-use norito::{Decode, Encode, core::DeserializePayload};
 
 use crate::entrypoint::type_structure::{FlatTypeNodeV1, TypeNodeViewV1};
 use crate::{entrypoint::EntrypointValueKindV1, pointer_abi::PointerType};
 
 mod analysis;
+mod codec;
 mod conversion;
 pub use analysis::{CallNodeLayoutV1, CallSchemaSummaryV1};
 
 /// One node in the sole V1 callable schema's preorder tape.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
 #[norito_schema(name = "ivm_abi::call::CallTypeNodeV1")]
 pub enum CallTypeNodeV1 {
     /// Nominal product; field subtrees immediately follow in declaration order.
@@ -106,40 +106,11 @@ impl FlatTypeNodeV1 for CallTypeNodeV1 {
 
 /// A bounded forest of exact callable types with inline children and no references.
 #[repr(transparent)]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
 #[norito_schema(name = "ivm_abi::call::CallSchemaV1")]
 pub struct CallSchemaV1 {
     /// Complete preorder nodes; empty only for a function without arguments.
     pub nodes: Vec<CallTypeNodeV1>,
-}
-
-// The decode-only twin preserves the sole current layout while validating the
-// entire tape before exposing it. It is neither an alternate wire shape nor a
-// fallback decoder. CNTR also owns the aggregate native decode-allocation budget.
-#[repr(transparent)]
-#[derive(Decode)]
-struct DecodedCallSchemaV1 {
-    nodes: Vec<CallTypeNodeV1>,
-}
-
-impl<'de> DeserializePayload<'de> for CallSchemaV1 {
-    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-        Self::try_deserialize(archived)
-            .unwrap_or_else(|error| panic!("invalid V1 callable schema: {error}"))
-    }
-    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let decoded =
-            <DecodedCallSchemaV1 as DeserializePayload>::try_deserialize(archived.cast())?;
-        let schema = Self {
-            nodes: decoded.nodes,
-        };
-        if schema.analyze().is_none() {
-            return Err(norito::Error::Message(
-                "invalid V1 callable schema".to_owned(),
-            ));
-        }
-        Ok(schema)
-    }
 }
 
 impl CallSchemaV1 {

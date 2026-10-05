@@ -146,7 +146,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
     }
 
     func testStaticCandidateAndFixedPairParitySequence() throws {
-        let small = try makeMessage(count: 20, seed: 1)
+        let small = try makeMessage(count: 80, seed: 1)
         let staticText = try XCTUnwrap(
             IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: small)
         )
@@ -160,7 +160,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
             IrohaPeerQRCodecV1.maximumStaticTextBytes
         )
         let staticEvent = try IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemushaV1,
+            expectedProfile: .kagemushaWalletV1,
             expectedKind: .payment,
             expectedSchemaVersion: 1
         ).ingest(staticText)
@@ -214,16 +214,17 @@ final class IrohaPeerQRV1Tests: XCTestCase {
 
     func testMaximumStreamFrameCountsAndRepeatedHeaderText() throws {
         let message = try makeMessage(
-            count: KagemushaWireV1.maximumPaymentBytes - 48,
+            count: IrohaPeerWireLimitsV1.maximumWalletProfileBytes - 48,
             seed: 6
         )
+        XCTAssertEqual(message.encodedBody.count, 10_000)
         let texts = try IrohaPeerQRCodecV1.animatedFrameTexts(for: message)
         let frames = try texts.map { try IrohaPeerQRCodecV1.decodeFrame($0) }
 
-        XCTAssertEqual(texts.count, 49)
-        XCTAssertEqual(frames.filter { $0.frameKind == .header }.count, 4)
-        XCTAssertEqual(frames.filter { $0.frameKind == .data }.count, 30)
-        XCTAssertEqual(frames.filter { $0.frameKind == .parity }.count, 15)
+        XCTAssertEqual(texts.count, 66)
+        XCTAssertEqual(frames.filter { $0.frameKind == .header }.count, 6)
+        XCTAssertEqual(frames.filter { $0.frameKind == .data }.count, 40)
+        XCTAssertEqual(frames.filter { $0.frameKind == .parity }.count, 20)
         let headerTexts = zip(texts, frames).compactMap { text, frame in
             frame.frameKind == .header ? text : nil
         }
@@ -234,7 +235,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         let message = try makeMessage(count: 600, seed: 12)
         let frames = try indexedFrames(message)
         let session = IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemushaV1,
+            expectedProfile: .kagemushaWalletV1,
             expectedKind: .payment,
             expectedSchemaVersion: 1
         )
@@ -276,7 +277,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
     }
 
     func testDecoderBoundsThreeStreams() throws {
-        let session = IrohaPeerQRScanSessionV1(expectedProfile: .kagemushaV1)
+        let session = IrohaPeerQRScanSessionV1(expectedProfile: .kagemushaWalletV1)
         var firstTexts: [String] = []
         for seed in 1...4 {
             let message = try makeMessage(count: 600, seed: UInt8(seed))
@@ -290,16 +291,16 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         }
         XCTAssertEqual(session.activeStreamCount, 3)
 
-        let kindSession = IrohaPeerQRScanSessionV1(expectedKind: .acknowledgement)
+        let kindSession = IrohaPeerQRScanSessionV1(expectedKind: .credited)
         let paymentText = try XCTUnwrap(
             IrohaPeerQRCodecV1.staticCompleteTextCandidate(
-                for: try makeMessage(count: 20, seed: 89)
+                for: try makeMessage(count: 80, seed: 89)
             )
         )
         XCTAssertThrowsError(try kindSession.ingest(paymentText)) { error in
             XCTAssertEqual(
                 error as? IrohaPeerQRErrorV1,
-                .unexpectedKind(expected: .acknowledgement, actual: .payment)
+                .unexpectedKind(expected: .credited, actual: .payment)
             )
         }
         XCTAssertThrowsError(try kindSession.ingest(paymentText)) { error in
@@ -315,7 +316,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
             idleTimeout: 1,
             absoluteTimeout: 3
         )
-        let message = try makeMessage(count: 20, seed: 91)
+        let message = try makeMessage(count: 80, seed: 91)
         let text = try XCTUnwrap(IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: message))
         let session = IrohaPeerQRScanSessionV1(scanLimits: limits)
         guard case .completed(let completed) = try session.ingest(text, atUptime: 100) else {
@@ -357,7 +358,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
 
         var bounded: [(message: IrohaPeerWireMessageV1, text: String)] = []
         for seed in 100..<113 {
-            let item = try makeMessage(count: 20, seed: UInt8(seed))
+            let item = try makeMessage(count: 80, seed: UInt8(seed))
             bounded.append((
                 item,
                 try XCTUnwrap(IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: item))
@@ -380,7 +381,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
     }
 
     func testInjectedUptimeMustBeFiniteNonnegativeAndMonotonicUntilReset() throws {
-        let message = try makeMessage(count: 20, seed: 92)
+        let message = try makeMessage(count: 80, seed: 92)
         let text = try XCTUnwrap(IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: message))
         for invalid in [-1.0, Double.nan, Double.infinity, -Double.infinity] {
             let session = IrohaPeerQRScanSessionV1()
@@ -522,7 +523,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
     }
 
     func testChecksumCorrectHostileCompleteBodyAndPaddingFailClosed() throws {
-        let small = try makeMessage(count: 20, seed: 62)
+        let small = try makeMessage(count: 80, seed: 62)
         var corruptMessage = small.encoded
         corruptMessage[corruptMessage.count - 1] ^= 1
         let hostileComplete = try IrohaPeerQRFrameV1(
@@ -582,12 +583,12 @@ final class IrohaPeerQRV1Tests: XCTestCase {
             idleTimeout: 1,
             absoluteTimeout: 3
         )
-        let staticMessage = try makeMessage(count: 20, seed: 71)
+        let staticMessage = try makeMessage(count: 80, seed: 71)
         let staticText = try XCTUnwrap(
             IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: staticMessage)
         )
         let staticSession = IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemushaV1,
+            expectedProfile: .kagemushaWalletV1,
             expectedKind: .payment,
             expectedSchemaVersion: 2,
             scanLimits: limits
@@ -618,7 +619,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         })
         XCTAssertGreaterThanOrEqual(headerTexts.count, 2)
         let animatedSession = IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemushaV1,
+            expectedProfile: .kagemushaWalletV1,
             expectedKind: .payment,
             expectedSchemaVersion: 2,
             scanLimits: limits
@@ -642,27 +643,27 @@ final class IrohaPeerQRV1Tests: XCTestCase {
             )
         }
 
-        let kagemushaV1 = try IrohaPeerWireMessageV1(
-            profile: .kagemushaV1,
+        let walletMessage = try IrohaPeerWireMessageV1(
+            profile: .kagemushaWalletV1,
             kind: .payment,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
+            canonicalPayload: irohaPeerWalletStructuralEnvelopeV1(
                 kind: .payment,
                 payload: deterministicBytes(count: 20, seed: 73)
             )
         )
-        let kagemushaV1Text = try XCTUnwrap(
-            IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: kagemushaV1)
+        let walletText = try XCTUnwrap(
+            IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: walletMessage)
         )
         let accepted = try IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemushaV1,
+            expectedProfile: .kagemushaWalletV1,
             expectedKind: .payment,
             expectedSchemaVersion: 1
-        ).ingest(kagemushaV1Text)
+        ).ingest(walletText)
         guard case .completed(let decoded) = accepted else {
-            return XCTFail("Expected configurable KagemushaV1 schema completion")
+            return XCTFail("Expected configurable wallet schema completion")
         }
-        XCTAssertEqual(decoded, kagemushaV1)
+        XCTAssertEqual(decoded, walletMessage)
     }
 
     fileprivate struct FrameLookup: Hashable {
@@ -685,18 +686,21 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         IrohaPeerQRCodecV1.encodeFrame(try XCTUnwrap(frame))
     }
 
+    /// Structural Payment whose canonical wallet envelope is exactly `48 + count` bytes, so each
+    /// count fixes the shard layout; the opaque field is seeded by `seed`.
     private func makeMessage(
         count: Int,
         seed: UInt8,
         schemaVersion: UInt16 = 1
     ) throws -> IrohaPeerWireMessageV1 {
         try IrohaPeerWireMessageV1(
-            profile: .kagemushaV1,
+            profile: .kagemushaWalletV1,
             kind: .payment,
             schemaVersion: schemaVersion,
-            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
+            canonicalPayload: irohaPeerWalletStructuralEnvelopeV1(
                 kind: .payment,
-                payload: deterministicBytes(count: count, seed: seed)
+                frameBytes: 48 + count,
+                filler: { self.deterministicBytes(count: $0, seed: seed) }
             )
         )
     }

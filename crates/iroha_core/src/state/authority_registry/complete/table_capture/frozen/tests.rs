@@ -130,6 +130,11 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
                         | "world.nfts"
                         | "world.rwas"
                         | "world.account_rekey_records"
+                        | "triggers.contracts"
+                        | "triggers.data"
+                        | "triggers.pipeline"
+                        | "triggers.time"
+                        | "triggers.by_call"
                 )
             {
                 continue;
@@ -143,7 +148,8 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
             missing.push(table);
         }
     }
-    assert_eq!(missing.len(), 10);
+    assert_eq!(missing.len(), 5);
+    assert!(!missing.contains(&"triggers.contracts"));
     assert!(!missing.contains(&"world.account_rekey_records"));
     assert!(!missing.contains(&"world.nfts"));
     assert!(!missing.contains(&"world.rwas"));
@@ -157,7 +163,10 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
     assert!(!missing.contains(&"world.accounts"));
     assert!(!missing.contains(&"world.account_aliases"));
     assert!(!missing.contains(&"world.contract_subject_bindings"));
-    assert!(missing.contains(&"triggers.data"));
+    assert!(!missing.contains(&"triggers.data"));
+    assert!(!missing.contains(&"triggers.pipeline"));
+    assert!(!missing.contains(&"triggers.time"));
+    assert!(!missing.contains(&"triggers.by_call"));
     assert!(missing.contains(&"world.musubi_archive_availability"));
     assert!(missing.contains(&"state.transactions.current"));
     assert!(missing.contains(&"state.transactions.rollback"));

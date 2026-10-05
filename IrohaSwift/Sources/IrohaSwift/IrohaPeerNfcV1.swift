@@ -1,9 +1,16 @@
 import Foundation
 
+// TODO(G4): carry the payer's Offer, its optional Lineage (IPM1 kind `lineage`) and
+// SessionControl envelopes over NFC. Until then the receiver obtains the Offer before
+// it builds the Request, over another carrier of the same envelope, and verifies Ω(pred)
+// from the Payment.
+
 /// Transport-neutral NFC V1 constants for exchanging `IPM1` messages.
 ///
 /// V1 has one application identifier, one command set, and no codec negotiation
-/// or fallback.
+/// or fallback. One session carries the KAGEMUSHA wallet Request (hosted by the
+/// receiver), the payer's Payment and the receiver's durable acknowledgement, which
+/// is the wallet's Credited envelope (IPM1 kind `credited`).
 public enum IrohaPeerNfcV1 {
     /// ISO/IEC 7816 application identifier `F0504B45504B524E464301`.
     public static let applicationIdentifierHex = "F0504B45504B524E464301"
@@ -15,7 +22,7 @@ public enum IrohaPeerNfcV1 {
     public static let hashBytes = 32
     public static let maximumChunkBytes = 4_096
     public static let maximumMessageBytes =
-        IrohaPeerWireMessageV1.headerBytes + KagemushaWireV1.maximumPaymentBytes
+        IrohaPeerWireMessageV1.headerBytes + IrohaPeerWireLimitsV1.maximumWalletProfileBytes
     public static let infoBytes = 98
     public static let statusBytes = 174
 
@@ -121,7 +128,7 @@ public struct IrohaPeerNfcLimitsV1: Equatable, Sendable {
 }
 
 /// One immutable application profile for every IPM1 phase in an NFC session.
-/// Receive request, payment, and acknowledgement must all use this profile.
+/// Receive request, payment, and acknowledgement (Credited) must all use this profile.
 public struct IrohaPeerNfcProfilePolicyV1: Equatable, Sendable {
     public let profile: IrohaPeerPayloadProfile
 
@@ -1152,7 +1159,7 @@ public struct IrohaPeerNfcDurableAcknowledgementV1: Equatable, Sendable {
         let decoded = try nfcDecodeMessage(
             acknowledgement,
             expectedProfile: nil,
-            expectedKind: .acknowledgement,
+            expectedKind: .credited,
             limits: limits
         )
         guard context.profilePolicy.accepts(decoded.profile) else {
@@ -1179,7 +1186,7 @@ public struct IrohaPeerNfcDurableAcknowledgementV1: Equatable, Sendable {
             throw IrohaPeerNfcErrorV1.invalidLength
         }
         try nfcRequireHash(paymentWireHash)
-        guard acknowledgement.kind == .acknowledgement else {
+        guard acknowledgement.kind == .credited else {
             throw IrohaPeerNfcErrorV1.invalidKind
         }
         guard !acknowledgement.canonicalPayload.isEmpty,
@@ -1243,7 +1250,7 @@ public struct IrohaPeerNfcDurableAcknowledgementV1: Equatable, Sendable {
         let acknowledgement = try nfcDecodeMessage(
             data.subdata(in: fixedBytes..<data.count),
             expectedProfile: nil,
-            expectedKind: .acknowledgement,
+            expectedKind: .credited,
             limits: limits
         )
         let effectivePolicy = profilePolicy ?? .init(profile: profile)
@@ -1902,7 +1909,7 @@ public struct IrohaPeerNfcSenderCheckpointV1: Equatable, Sendable {
             ackMessage = try nfcDecodeMessage(
                 durableAcknowledgement,
                 expectedProfile: nil,
-                expectedKind: .acknowledgement,
+                expectedKind: .credited,
                 limits: limits
             )
             guard effectivePolicy.accepts(ackMessage!.profile) else {
@@ -2153,7 +2160,7 @@ public struct IrohaPeerNfcTwoTapReducerV1: Sendable {
         let acknowledgement = try nfcDecodeMessage(
             acknowledgementBuffer,
             expectedProfile: nil,
-            expectedKind: .acknowledgement,
+            expectedKind: .credited,
             limits: limits
         )
         guard checkpoint.profilePolicy.accepts(acknowledgement.profile),
