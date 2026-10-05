@@ -2,14 +2,14 @@
 //!
 //! Every case is built from fully valid objects and asserted against its complete-frame bound.
 //! `σ_send` and `σ_recv` are measured (3,296 bytes each) for the §3 core without the blacklist
-//! non-membership, quota and lease checks; Ω and the compressed credit-digest opening are
-//! unmeasured, so this module names explicit placeholders and reports, for each message, its
+//! non-membership, quota and lease checks; Ω is
+//! unmeasured and the indexed credit opening has exactly 32 siblings, so this module names explicit placeholders and reports, for each message, its
 //! fixed overhead and the largest proof that still fits.
 //! The proof bytes are stand-ins; only their lengths matter here. The signed blacklist is not
 //! a peer message (it is downloaded online from the issuer), so it has no envelope case here.
 
 use super::{
-    messages::messages_tests::{MessageFixture, low_bitmap, stand_in_siblings},
+    messages::messages_tests::{MessageFixture, stand_in_siblings},
     vectors_tests::{vector_control, vector_offer, vector_world},
     *,
 };
@@ -28,11 +28,10 @@ const PLACEHOLDER_OMEGA_PROOF_BYTES: usize = 4_000;
 /// Measured `σ_recv`, in bytes: the exact proof length of `sigma_recv` of
 /// `iroha_kagemusha_proof` at the same shape (`k = 12`, one lane).
 const MEASURED_SIGMA_RECV_BYTES: usize = 3_296;
-/// Placeholder count of non-default siblings in a compressed credit-digest opening: the
-/// depth-256 sparse tree of owner answer Q7 carries at most 256, and about `log2` of the number
-/// of recorded credits for random identifiers.
-// TODO(G3): replace with a measured distribution of folded heads' credit counts.
-const PLACEHOLDER_OPENING_SIBLINGS: usize = 32;
+/// Fixed indexed opening width: exactly 32 siblings, independent of the number of credits.
+const PLACEHOLDER_OPENING_SIBLINGS: usize = KAGEMUSHA_WALLET_INDEXED_TREE_DEPTH_V1;
+/// Neighbouring credits in the malformed-width control's otherwise genuine fixture tree.
+const OPENING_NEIGHBOURS: usize = 3;
 /// Largest proof length searched for.
 const SEARCH_LIMIT: usize = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1;
 
@@ -90,7 +89,6 @@ fn credited_with(
         }
         KagemushaWalletCreditedEvidenceV1::Status { status } => {
             status.lineage.proof = bytes_of(proof);
-            status.opening.path_bitmap = low_bitmap(siblings);
             status.opening.siblings = stand_in_siblings(siblings);
         }
     }
@@ -233,7 +231,7 @@ fn measure(f: &MessageFixture) -> Sizes {
         credited_receive: lengths[4],
         credited_receive_overhead: lengths[4] - sigma_recv,
         credited_status: lengths[5],
-        credited_status_overhead: lengths[5] - omega - siblings * per_sibling,
+        credited_status_overhead: lengths[5] - omega,
         credit_status: norito::encode_canonical(&status)
             .expect("credit status frame")
             .len(),
@@ -324,6 +322,17 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
         KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1 - MEASURED_SIGMA_SEND_BYTES
     );
     assert_eq!(sizes.per_sibling, 32);
+    assert_eq!(PLACEHOLDER_OPENING_SIBLINGS, 32);
+    // Extra sibling bytes increase the encoded frame but cannot be admitted as an opening.
+    let f = &vector_world().f;
+    let payment = f.payment(false, 32);
+    let credited = f.credited_status(&payment, PLACEHOLDER_OMEGA_PROOF_BYTES, OPENING_NEIGHBOURS);
+    let bad = credited_with(&credited, PLACEHOLDER_OMEGA_PROOF_BYTES, 33);
+    assert!(
+        KagemushaWalletEnvelopeV1::new(bad)
+            .to_canonical_bytes()
+            .is_err()
+    );
 }
 
 #[test]

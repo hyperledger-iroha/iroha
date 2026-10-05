@@ -18,7 +18,7 @@ use crate::kagemusha::kagemusha_wallet_v1::{
         identity_tests::{IdentityFixture, identity_fixture, raw_output, signing_key},
     },
     poseidon::{
-        KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1, KagemushaWalletSparseTreeV1,
+        KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1, KagemushaWalletIndexedTreeV1,
         kagemusha_wallet_packed_bytes_v1, kagemusha_wallet_poseidon_v1,
     },
 };
@@ -1373,7 +1373,7 @@ fn kagemusha_wallet_v1_step_and_lineage_proofs() {
     assert_eq!(lineage.bytes(), bytes);
     assert_eq!(
         lineage.lineage_digest(),
-        kagemusha_wallet_digest_v1(Role::Lineage, &bytes)
+        kagemusha_wallet_poseidon_bytes_v1(KAGEMUSHA_WALLET_LINEAGE_DOMAIN_V1, &bytes)
     );
 
     let reject = |mutate: &dyn Fn(&mut KagemushaWalletLineageV1), field: &str| {
@@ -1551,12 +1551,12 @@ fn kagemusha_wallet_v1_receipt_sign_verify_and_bindings() {
     expected.extend_from_slice(&[0; 32]);
     assert_eq!(body.transcript(), expected);
     assert_eq!(
-        body.body_digest(),
-        kagemusha_wallet_digest_v1(Role::ReceiptBody, &expected)
+        body.signing_message(),
+        kagemusha_wallet_signing_message_v1(Domain::Receipt, &expected)
     );
     assert_eq!(
         body.signing_message(),
-        kagemusha_wallet_preimage_v1(Role::ReceiptBody, &expected)
+        kagemusha_wallet_signing_message_v1(Domain::Receipt, &expected)
     );
 
     let receipt = KagemushaWalletReceiptV1::sign(
@@ -1576,7 +1576,7 @@ fn kagemusha_wallet_v1_receipt_sign_verify_and_bindings() {
         digest,
         kagemusha_wallet_signed_object_digest_v1(
             Role::Receipt,
-            &body.body_digest(),
+            &body.signing_message(),
             &receipt.signature
         )
     );
@@ -1600,7 +1600,7 @@ fn kagemusha_wallet_v1_receipt_sign_verify_and_bindings() {
     assert!(matches!(
         wrong_key,
         Err(KagemushaWalletValidationErrorV1::InvalidSignature {
-            role: Role::ReceiptBody
+            domain: Domain::Receipt
         })
     ));
     assert!(matches!(
@@ -1927,7 +1927,7 @@ fn kagemusha_wallet_v1_bootstrap_state_core_and_rest() {
     ] {
         assert_eq!(root, empty);
     }
-    assert_eq!(empty, KagemushaWalletSparseTreeV1::new().root());
+    assert_eq!(empty, KagemushaWalletIndexedTreeV1::new().root());
     assert_eq!(core.quota_windows_root, [0; 32]);
     assert_eq!((core.blacklist_version, core.blacklist_root), (0, [0; 32]));
     // The blacklist issue time and maximum age are core fields (owner answer Q5).
@@ -2391,7 +2391,7 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
     assert_eq!(
         consumed.leaf_value().ok(),
         kagemusha_wallet_poseidon_v1(
-            KAGEMUSHA_WALLET_CONSUMED_CREDIT_LEAF_DOMAIN_V1,
+            KAGEMUSHA_WALLET_CONSUMED_CREDIT_VALUE_DOMAIN_V1,
             &[credit, int(2), int(3)]
         )
         .ok()
@@ -2413,7 +2413,7 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
     assert_eq!(
         pending.leaf_value().ok(),
         kagemusha_wallet_poseidon_v1(
-            KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1,
+            KAGEMUSHA_WALLET_PENDING_OUTGOING_VALUE_DOMAIN_V1,
             &descriptor
         )
         .ok()
@@ -2430,7 +2430,7 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
     assert_eq!(load.field_items(), items);
     assert_eq!(
         Some(load.leaf_value()),
-        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_LOAD_RECOVERY_LEAF_DOMAIN_V1, &items).ok()
+        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_LOAD_VALUE_DOMAIN_V1, &items).ok()
     );
     assert_eq!(load.key(), kagemusha_wallet_pair_key_v1(1, 7));
     let redeem = KagemushaWalletRedeemLeafV1 {
@@ -2445,7 +2445,7 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
     assert_eq!(redeem.field_items(), items);
     assert_eq!(
         Some(redeem.leaf_value()),
-        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_REDEEM_RECOVERY_LEAF_DOMAIN_V1, &items).ok()
+        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_REDEEM_VALUE_DOMAIN_V1, &items).ok()
     );
     assert_eq!(redeem.key(), kagemusha_wallet_pair_key_v1(2, 7));
     assert_ne!(load.key(), redeem.key());
@@ -2456,7 +2456,7 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
         ),
         (1, 2)
     );
-    let mut recovery = KagemushaWalletSparseTreeV1::new();
+    let mut recovery = KagemushaWalletIndexedTreeV1::new();
     recovery
         .insert(load.key(), load.leaf_value())
         .expect("load leaf");
@@ -2468,9 +2468,12 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
         (load.key(), load.leaf_value()),
         (redeem.key(), redeem.leaf_value()),
     ] {
-        let opening = recovery.opening(&key).expect("opening");
-        KagemushaWalletSparseTreeV1::verify_membership(&root, &key, &value, &opening)
-            .expect("recovery membership");
+        let (leaf, opening) = recovery.membership(&key).expect("membership");
+        assert_eq!((leaf.key, leaf.value), (key, value));
+        crate::kagemusha::kagemusha_wallet_v1::kagemusha_wallet_indexed_verify_membership_v1(
+            &root, &leaf, &opening,
+        )
+        .expect("recovery membership");
     }
     let fee = KagemushaWalletFeeClaimLeafV1 {
         credit_id: credit,
@@ -2483,7 +2486,7 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
     assert_eq!(fee.key(), credit);
     assert_eq!(
         fee.leaf_value().ok(),
-        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_FEE_CLAIM_LEAF_DOMAIN_V1, &items).ok()
+        kagemusha_wallet_poseidon_v1(KAGEMUSHA_WALLET_FEE_CLAIM_VALUE_DOMAIN_V1, &items).ok()
     );
     let usage = KagemushaWalletQuotaUsageLeafV1 {
         window_kind: KagemushaWalletQuotaWindowKindV1::Monthly,
@@ -2496,7 +2499,7 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
     assert_eq!(
         Some(usage.leaf_value()),
         kagemusha_wallet_poseidon_v1(
-            KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1,
+            KAGEMUSHA_WALLET_QUOTA_USAGE_VALUE_DOMAIN_V1,
             &[int(2), int(10), int(20), int(30)]
         )
         .ok()
@@ -2614,15 +2617,15 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
     assert_eq!(
         domains,
         [
-            KAGEMUSHA_WALLET_CONSUMED_CREDIT_LEAF_DOMAIN_V1,
-            KAGEMUSHA_WALLET_PENDING_OUTGOING_LEAF_DOMAIN_V1,
-            KAGEMUSHA_WALLET_LOAD_RECOVERY_LEAF_DOMAIN_V1,
-            KAGEMUSHA_WALLET_REDEEM_RECOVERY_LEAF_DOMAIN_V1,
-            KAGEMUSHA_WALLET_FEE_CLAIM_LEAF_DOMAIN_V1,
-            KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1,
+            KAGEMUSHA_WALLET_CONSUMED_CREDIT_VALUE_DOMAIN_V1,
+            KAGEMUSHA_WALLET_PENDING_OUTGOING_VALUE_DOMAIN_V1,
+            KAGEMUSHA_WALLET_LOAD_VALUE_DOMAIN_V1,
+            KAGEMUSHA_WALLET_REDEEM_VALUE_DOMAIN_V1,
+            KAGEMUSHA_WALLET_FEE_CLAIM_VALUE_DOMAIN_V1,
+            KAGEMUSHA_WALLET_QUOTA_USAGE_VALUE_DOMAIN_V1,
             KAGEMUSHA_WALLET_SEND_CHAIN_DOMAIN_V1,
             KAGEMUSHA_WALLET_RECV_CHAIN_DOMAIN_V1,
-            KAGEMUSHA_WALLET_CREDIT_DIGEST_LEAF_DOMAIN_V1,
+            KAGEMUSHA_WALLET_CREDIT_DIGEST_VALUE_DOMAIN_V1,
         ]
     );
     // Existing iroha_core_zk Poseidon domains the wallet domains must not reuse.
