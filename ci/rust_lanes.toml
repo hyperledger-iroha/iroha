@@ -10,6 +10,7 @@ daemon_packages = ["irohad", "irohad_lib"]
 [lanes.foundation]
 description = "Foundational codecs, primitives, derives, schemas, and support libraries."
 packages = [
+  "axum-core",
   "build-support",
   "bytes",
   "concread",

@@ -156,13 +156,16 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
 
   func testDigestVectorsRecomputeEveryRole() throws {
     let vectors = try objects(loadFixture(), "digests")
+    // Rust's current ALL table has 55 SHA-256 roles; step-relation values use Poseidon.
     XCTAssertEqual(KagemushaWalletDigestRoleV1.allCases.count, 55)
-    // One vector per role, in the order of the Rust `KagemushaWalletDigestRoleV1::ALL`.
+    XCTAssertEqual(vectors.count, KagemushaWalletDigestRoleV1.allCases.count)
+    XCTAssertEqual(
+      Set(try vectors.map { try string($0, "role") }),
+      Set(KagemushaWalletDigestRoleV1.allCases.map(\.rawValue)))
     XCTAssertEqual(
       try vectors.map { try string($0, "role") },
       KagemushaWalletDigestRoleV1.allCases.map(\.rawValue))
-    // Roles of earlier revisions are gone, not aliased: the pre-split roles and the SHA roles
-    // whose values are now Poseidon σ-field values (owner answers Q1, Q2 and Q9).
+    // Pre-split and superseded SHA-256 roles are gone; current step values use Poseidon.
     for retired in [
       "dependencies", "credit-status-statement", "credit", "proof", "step-proof", "payment",
       "blacklist-leaf", "blacklist-node", "quota-window", "quota-node",
@@ -802,6 +805,16 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
     }
 
     let domains = try objects(encodings, "domains")
+    // The current Rust Poseidon domain uses, in declaration order (poseidon.rs).
+    let expectedUses = [
+      "core", "rest", "statement", "credit_id", "send_chain", "recv_chain",
+      "consumed_credit_leaf", "pending_outgoing_leaf", "load_recovery_leaf",
+      "redeem_recovery_leaf", "fee_claim_leaf", "quota_usage_leaf", "credit_digest_leaf",
+      "sparse_empty_leaf", "sparse_node", "blacklist_leaf", "blacklist_node",
+      "quota_window_leaf", "quota_node", "proof_digest", "step_proof_digest", "payment_digest",
+    ]
+    XCTAssertEqual(domains.count, expectedUses.count)
+    XCTAssertEqual(try domains.map { try string($0, "use") }, expectedUses)
     XCTAssertEqual(try domains.map { try string($0, "ascii") }, Self.poseidonDomains)
     XCTAssertEqual(Set(try domains.map { try string($0, "use") }).count, domains.count)
     for domain in domains {
@@ -857,11 +870,14 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
 
     // Core and rest items: the element rule applied to the state frame `{version, core, rest}`,
     // whose field order is the element order.
-    let stateFrame = try VectorFrame(hexData(string(state, "state_hex")))
+    let stateEncoded = try hexData(string(state, "state_hex"))
+    let stateFrame = try VectorFrame(stateEncoded)
     XCTAssertEqual(
       stateFrame.schema,
       noritoSchemaHash(
         forTypeName: "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletStateV1"))
+    XCTAssertEqual(
+      try XCTUnwrap(noritoDecodeFrame(stateEncoded)).header.flags, NoritoHeader.compactLen)
     let stateFields = try stateFrame.fields(stateFrame.root)
     XCTAssertEqual(stateFields.count, 3)
     guard stateFields.count == 3 else { return }
@@ -903,6 +919,8 @@ final class KagemushaWalletVectorsV1Tests: XCTestCase {
     XCTAssertEqual(Array(core[7..<9]), Array(receive[7..<9]))
     XCTAssertEqual(core[11], receive[10])
     XCTAssertEqual(core[13], receive[11])
+    XCTAssertEqual(core[22], receive[12])
+    XCTAssertEqual(core[10], receive[13])
   }
 
   func testControlledStateBindsEveryPositionToItsField() throws {

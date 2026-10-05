@@ -339,8 +339,13 @@ required, absolute `IROHA_NATIVE_LIBRARY_PATH` directory. Missing libraries
 fail before execution; a missing native capability fails the test. Its results
 are never reused from Gradle's test cache. This host JNI task does not qualify
 Android native artifacts, StrongBox, or physical devices.
-It covers the software key manager and explicit chain-context codecs that
-require the canonical Rust address validator.
+It covers the software key manager, explicit chain-context codecs, and shared
+SoraFS reference validators through the current canonical Kotlin/native API.
+
+The wallet module currently declares managed platform, payment-key and backup-rule
+unit tests. They check the private platform-upcall descriptors and direct adapter
+behavior. The Rust `KagemushaWalletPlatformV1` JNI adapter and native provider-open
+call remain TODO, so the module has no host-JNI test task or native execution claim.
 
 ### Java transaction metadata
 

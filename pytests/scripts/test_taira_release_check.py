@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 # Exact current-source native census. Both scopes retain the closed MV/Concread
 # ownership suite, including funded replacement/snapshot and deletion controls.
+# Prepared signature custody and exact parent activation add six Core controls.
 # Linux additionally selects OpenSSH descriptor custody. All platforms select
 # the same genuine four-peer beacon workload.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -363,6 +364,9 @@ class BeaconGateTests(unittest.TestCase):
 
     def test_partial_publication_refusal_controls_are_required_in_both_scopes(self):
         assert_native_coverage(self, ['native publication custody', 'native witness admission'])
+
+    def test_prepared_signature_custody_and_parent_activation_are_required_in_both_scopes(self):
+        assert_native_coverage(self, ['native publication custody', 'native driver scheduling'])
 
     def test_actual_publication_controls_are_unique_and_focused_in_both_scopes(self):
         assert_native_coverage(self, ['native original publication', 'native pending original execution'])
