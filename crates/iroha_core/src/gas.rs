@@ -33,7 +33,8 @@ use std::{
 // - Transfer/Mint/Burn: ~180/150/150 gas.
 const BASE_REGISTER: u64 = 200;
 const BASE_UNREGISTER: u64 = 150;
-const BASE_TRANSFER: u64 = 180;
+/// Fixed native charge for one asset or NFT transfer, also quoted before VM host dispatch.
+pub(crate) const BASE_TRANSFER: u64 = 180;
 const BASE_MINT: u64 = 150;
 const BASE_BURN: u64 = 150;
 const BASE_SET_KV: u64 = 64;

@@ -231,7 +231,7 @@ public final class ParliamentApiV1Tests {
   }
 
   @Test
-  public void attemptBuilderAdmitsExactlyTheThirteenFirstReleaseProposalKinds() throws Exception {
+  public void attemptBuilderAdmitsExactlyTheTenFirstReleaseProposalKinds() throws Exception {
     for (final String kind : org.hyperledger.iroha.sdk.client.ParliamentApiV1.PROPOSAL_KINDS) {
       final Map<String, Object> request =
           objectValue(
@@ -239,7 +239,7 @@ public final class ParliamentApiV1Tests {
                   proposal(kind), 0));
       assertEquals(kind, objectValue(request.get("proposal")).get("kind"));
     }
-    assertEquals(13, org.hyperledger.iroha.sdk.client.ParliamentApiV1.PROPOSAL_KINDS.size());
+    assertEquals(10, org.hyperledger.iroha.sdk.client.ParliamentApiV1.PROPOSAL_KINDS.size());
 
     final Map<String, Object> fullU64Policy = validProposal("ValidationFeePolicy");
     final Map<String, Object> fullU64PolicyValue =
@@ -256,7 +256,11 @@ public final class ParliamentApiV1Tests {
             "FinalizeReferendum",
             "deploy_contract",
             "runtimeUpgrade",
-            "Unknown")) {
+            "Unknown",
+            "KagemushaVerifierPolicyInstall",
+            "KagemushaVerifierReleaseInstall",
+            "KagemushaVerifierReleaseActivate",
+            "KagemushaVerifierReleaseRetire")) {
       assertThrows(
           IllegalArgumentException.class,
           () ->

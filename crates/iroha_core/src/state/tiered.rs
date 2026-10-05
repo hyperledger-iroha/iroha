@@ -3614,18 +3614,6 @@ mod measured_bytes_impls {
                 ProposalKind::GlobalDataTriggerPermissionGovernance(payload) => {
                     total = total.saturating_add(norito::codec::Encode::encode(payload).len());
                 }
-                ProposalKind::KagemushaVerifierPolicyInstall(payload) => {
-                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
-                }
-                ProposalKind::KagemushaVerifierReleaseInstall(payload) => {
-                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
-                }
-                ProposalKind::KagemushaVerifierReleaseActivate(payload) => {
-                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
-                }
-                ProposalKind::KagemushaVerifierReleaseRetire(payload) => {
-                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
-                }
             }
             total
         }

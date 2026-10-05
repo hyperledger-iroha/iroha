@@ -2,14 +2,22 @@
 
 use super::*;
 use iroha_deploy::bootstrap::InstalledNetworkProfiles;
+use std::io::Write as _;
 
 #[test]
-fn locked_build_selects_both_native_cli_programs_without_gui_or_feature_changes() {
+fn locked_build_selects_native_client_worker_and_daemon_without_gui_or_feature_changes() {
     for profile in ["debug", "release"] {
         let args = build_args(profile);
         assert_eq!(args[0], "build");
         assert!(args.iter().any(|arg| arg == "--locked"));
-        for selected in ["iroha_kagami", "irohad", "kagami", "iroha3d"] {
+        for selected in [
+            "iroha_cli",
+            "iroha_kagami",
+            "irohad",
+            "iroha",
+            "kagami",
+            "iroha3d",
+        ] {
             assert!(args.iter().any(|arg| arg == selected));
         }
         for forbidden in ["mochi", "mochi-ui", "--features", "--no-default-features"] {
@@ -73,7 +81,7 @@ fn source(root: &Path) -> BTreeMap<String, PathBuf> {
 }
 
 #[test]
-fn two_program_package_has_exact_runtime_profile_location_and_sorted_hash_inventory() {
+fn complete_cli_package_has_exact_runtime_profile_location_and_sorted_hash_inventory() {
     let temporary = tempfile::tempdir().unwrap();
     let source = source(temporary.path());
     let package = temporary.path().join("native-cli");
@@ -93,7 +101,13 @@ fn two_program_package_has_exact_runtime_profile_location_and_sorted_hash_invent
         json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest["network_profiles"], profiles.provenance());
     let files = manifest.get("files").unwrap().as_array().unwrap();
-    assert_eq!(files.len(), 3);
+    assert_eq!(files.len(), 4);
+    for program in PROGRAMS {
+        assert!(files.iter().any(|file| {
+            file.get("path").and_then(Value::as_str)
+                == Some(format!("bin/{program}{}", env::consts::EXE_SUFFIX).as_str())
+        }));
+    }
     let mut previous = "";
     for file in files {
         let path = file.get("path").unwrap().as_str().unwrap();
@@ -108,24 +122,77 @@ fn two_program_package_has_exact_runtime_profile_location_and_sorted_hash_invent
 }
 
 #[test]
-fn packaging_refuses_missing_or_indirect_programs_before_creating_the_package() {
+fn cli_development_without_selected_profiles_keeps_installation_authority_absent() {
     let temporary = tempfile::tempdir().unwrap();
-    let source = source(temporary.path());
-    let daemon = source.get("iroha3d").unwrap();
-    fs::remove_file(&daemon).unwrap();
+    let programs = source(temporary.path());
     let package = temporary.path().join("native-cli");
-    assert!(publish(&source, &package, "debug", None).is_err());
-    assert!(!package.exists());
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(source.get("kagami").unwrap(), &daemon).unwrap();
-        assert!(publish(&source, &package, "debug", None).is_err());
-        assert!(!package.exists());
+    publish(&programs, &package, "debug", None).unwrap();
+    assert!(!KagamiBundleLayout::profiles_path(&package).exists());
+    let runtime =
+        InstalledRuntime::from_directory(&KagamiBundleLayout::runtime_directory(&package)).unwrap();
+    assert!(runtime.network_profiles().is_err());
+    let manifest: Value =
+        json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["network_profiles"], Value::Null);
+    let files = manifest["files"].as_array().unwrap();
+    assert_eq!(files.len(), PROGRAMS.len());
+    for program in PROGRAMS {
+        assert!(files.iter().any(|file| {
+            file["path"].as_str()
+                == Some(format!("bin/{program}{}", env::consts::EXE_SUFFIX).as_str())
+        }));
     }
 }
 
 #[test]
-fn exact_cargo_records_refuse_missing_duplicate_test_or_relative_executables() {
+fn copying_programs_refuses_occupied_names_without_changing_their_bytes_or_custody() {
+    for body in [b"".as_slice(), b"existing unpublished output".as_slice()] {
+        let temporary = tempfile::tempdir().unwrap();
+        let programs = source(temporary.path());
+        let destination = temporary.path().join("occupied-program");
+        let mut incumbent = RetainedFile::create_new_private(&destination).unwrap();
+        incumbent.file_mut().write_all(body).unwrap();
+        let incumbent = incumbent.seal().unwrap();
+        let identity = incumbent.snapshot().unwrap();
+        let mut input = RetainedFile::open_regular(programs.get("iroha").unwrap()).unwrap();
+        let snapshot = input.snapshot().unwrap();
+        let expected_hash = digest(&mut input).unwrap();
+        assert!(copy_program(&mut input, snapshot, &expected_hash, &destination).is_err());
+        incumbent.revalidate().unwrap();
+        assert_eq!(incumbent.snapshot().unwrap(), identity);
+        assert_eq!(fs::read(&destination).unwrap(), body);
+        assert_eq!(
+            RetainedFile::open_private(&destination)
+                .unwrap()
+                .snapshot()
+                .unwrap(),
+            identity
+        );
+    }
+}
+
+#[test]
+fn packaging_refuses_missing_or_indirect_programs_before_creating_the_package() {
+    for program in PROGRAMS {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = source(temporary.path());
+        let missing = source.get(program).unwrap();
+        fs::remove_file(missing).unwrap();
+        let package = temporary.path().join("native-cli");
+        assert!(publish(&source, &package, "debug", None).is_err());
+        assert!(!package.exists());
+        #[cfg(unix)]
+        {
+            let substitute = PROGRAMS.into_iter().find(|name| *name != program).unwrap();
+            std::os::unix::fs::symlink(source.get(substitute).unwrap(), missing).unwrap();
+            assert!(publish(&source, &package, "debug", None).is_err());
+            assert!(!package.exists());
+        }
+    }
+}
+
+#[test]
+fn exact_cargo_records_ignore_sdk_library_and_refuse_missing_or_invalid_executables() {
     let record = |name: &str, path: &str, kind: &str| {
         Value::Object(Map::from([
             ("reason".into(), Value::String("compiler-artifact".into())),
@@ -152,17 +219,73 @@ fn exact_cargo_records_refuse_missing_duplicate_test_or_relative_executables() {
     };
     let native_path = std::env::temp_dir().join("exact build/native/kagami");
     let daemon_path = std::env::temp_dir().join("other target/native/iroha3d");
+    let client_path = std::env::temp_dir().join("client target/native/iroha");
     let native = record("kagami", native_path.to_str().unwrap(), "bin");
     let daemon = record("iroha3d", daemon_path.to_str().unwrap(), "bin");
-    let programs = read(vec![native.clone(), daemon.clone()]).unwrap();
+    let client = record("iroha", client_path.to_str().unwrap(), "bin");
+    let sdk_library = Value::Object(Map::from([
+        ("reason".into(), Value::String("compiler-artifact".into())),
+        ("executable".into(), Value::Null),
+        (
+            "target".into(),
+            Value::Object(Map::from([
+                ("name".into(), Value::String("iroha".into())),
+                (
+                    "kind".into(),
+                    Value::Array(vec![Value::String("lib".into())]),
+                ),
+            ])),
+        ),
+    ]));
+    let programs = read(vec![
+        sdk_library.clone(),
+        native.clone(),
+        daemon.clone(),
+        client.clone(),
+    ])
+    .unwrap();
     assert_eq!(programs.get("kagami").unwrap(), &native_path);
+    assert_eq!(programs.get("iroha").unwrap(), &client_path);
     for records in [
         vec![native.clone()],
-        vec![native.clone(), native.clone(), daemon.clone()],
-        vec![native.clone(), record("iroha3d", "relative/iroha3d", "bin")],
+        vec![native.clone(), daemon.clone()],
+        vec![sdk_library, native.clone(), daemon.clone()],
+        vec![
+            native.clone(),
+            daemon.clone(),
+            record("iroha", client_path.to_str().unwrap(), "lib"),
+        ],
+        vec![
+            native.clone(),
+            daemon.clone(),
+            client.clone(),
+            client.clone(),
+        ],
+        vec![
+            native.clone(),
+            native.clone(),
+            daemon.clone(),
+            client.clone(),
+        ],
+        vec![
+            native.clone(),
+            record("iroha3d", "relative/iroha3d", "bin"),
+            client.clone(),
+        ],
+        vec![
+            native.clone(),
+            daemon.clone(),
+            record("iroha", "relative/iroha", "bin"),
+        ],
+        vec![
+            native.clone(),
+            daemon.clone(),
+            record("iroha", client_path.to_str().unwrap(), "test"),
+        ],
         vec![
             native,
             record("iroha3d", daemon_path.to_str().unwrap(), "test"),
+            client,
         ],
     ] {
         assert!(read(records).is_err());
@@ -227,6 +350,7 @@ fn complete_staging_and_source_substitution_never_publish_a_partial_installation
 #[test]
 fn staged_program_profile_manifest_or_inventory_drift_refuses_atomic_publication() {
     for relative in [
+        format!("bin/iroha{}", env::consts::EXE_SUFFIX),
         format!("bin/kagami{}", env::consts::EXE_SUFFIX),
         format!("bin/iroha3d{}", env::consts::EXE_SUFFIX),
         format!("bin/{}", iroha_deploy::bootstrap::NETWORK_PROFILES_FILENAME),

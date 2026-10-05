@@ -18,7 +18,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Rust client | Immutable account contexts, owned async transport, explicit blocking capabilities and typed fee quoting are implemented. | Remaining capability/consumer migration, unified errors and network cancellation/finality/authorization coverage. |
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. Android Keystore alias existence is decided only by keystore2 `getKey` (API 31+); a Keystore error is never read as absence. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
-| Torii collection queries | Seventeen collections and eleven explorer feeds share the [query contract](specs/torii/collection_queries.md) across Rust, Kotlin/Java, Swift, JavaScript, Python, C#, CLI and MCP. Identity-ordered reads seek and stream; authenticated history checkpoints bound deep reads. Global-state collections execute once per read for exact totals and aggregates. History and explorer feeds explicitly reject unsupported controls. Signed query selectors have one feature-independent layout; client network context is explicit. | Current-candidate live multi-dataspace paging and full SDK/native delivery qualification remain open. Swift package tests require the missing NoritoBridge XCFramework; JS and Python native suites require matching authenticated artifacts. See the [completion goals](specs/torii/query_completion_goals.md). |
+| Torii collection queries | Seventeen collections and eleven explorer feeds share the [query contract](specs/torii/collection_queries.md) across Rust, Kotlin/Java, Swift, JavaScript, Python, C#, CLI and MCP. Identity-ordered reads seek and stream; authenticated history checkpoints bound deep reads. Global-state collections execute once per read for exact totals and aggregates. History and explorer feeds explicitly reject unsupported controls. Signed query selectors have one feature-independent layout; client network context is explicit. | Current-candidate live multi-dataspace paging and full SDK/native delivery qualification remain open. The genuine ABI-25 Swift framework, full native Swift package suites, ordinary SwiftPM Release consumers and checked-in iOS demo simulator suite pass; physical-device and signed public-release qualification remain separate. JS and Python native suites require matching authenticated artifacts. See the [completion goals](specs/torii/query_completion_goals.md). |
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
 | IVM/Kotodama | IVM is the sole VM with ABI V1 and program header 1.1; header 1.0 is rejected. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. FASTPQ Metal uses one embedded-bundle admission owner; runtime source/path loading is removed. Ordinary Linux/Windows daemon dependencies include driver-loaded IVM CUDA; genuine bundle absence permits CPU build/startup, and supplied unapproved material is rejected. Original-pool idle-runtime rows and scoped committed/frozen account-rekey, trigger-contract and all four trigger-action captures are integrated; fresh compilation and runtime validation remain pending. | Lifecycle/custody closure, complete State/Kura publication, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. FASTPQ has no approved Metal bundle. IVM CUDA approval is `None`; genuine signed ten-family artifacts, driverless runtime checks and physical qualification remain open. |
 | ZK delivery plan | The [plan](specs/zk_delivery_plan.md) and its [task graph](specs/zk_delivery_graph.json) own the ZK, privacy, authenticated-State and FHE work. Landed as source-checked contracts and inventories: plan and graph checks; the zk-X509 presentation interval with shared vectors; the FASTPQ `air` interface with the shared-backend inventory; the IVM proof-coverage inventory; the first-release history and cutover contract with a pinned history; the FHE ownership inventory; the RAM-LFE V1 policy, receipt, opening, class and query-limit contract with a cleartext reference; the State table and root inventory with the keyed-commitment contract (`specs/sumeragi.md` §16); and the unified resource contract. Two shared crates exist: `iroha_fhe` (exact RNS, NTT, basis-conversion and rounding arithmetic used by BFV, ZK-AMS, Jindo and Bootle-Lantern) and `iroha_measurement` (phase and resource records, with `scripts/zk_resource_harness.py`). | No new proof relation, FHE construction, native ISI or SDK operation exists yet, and nothing consumes the RAM-LFE V1 types. The certified State root is still the World-only accumulator (inventory defects G1-D1 to G1-D11). The resource contract records eleven relations violated today, so a maximum zk-X509 proof transaction cannot be committed under current defaults. AVX2 on a physical x86-64 CPU, Metal/CUDA parity, Linux `RLIMIT_AS` enforcement, a complete X509 proof under the harness and four-validator evidence are unexecuted. |
@@ -106,12 +106,12 @@ after five `durable::tests` failures, and two
 `musubi_publication_service::finality` tests fail. `iroha_core`:
 `sumeragi::node::tests::every_committed_block_contains_work_before_and_after_restart`
 (second transaction not committed within 30 s), three `sumeragi::executor`
-archive, publication and replay tests and four `state` authority-registry and
-reserve-account tests fail. `fastpq_prover`: three lib tests and the
+archive, publication and replay tests and `state` reserve-account tests fail.
+`fastpq_prover`: three lib tests and the
 four-quadrant tree capacity test (124 retained nodes against 127) fail. Four
 `ivm` Metal vector tests fail intermittently in a loaded full run and pass
-alone. Five repository guards are red for committed changes that predate the
-ZK-plan work: the dependency budget, the trusted release-surface digest, the
+alone. Four repository guards are red for committed changes that predate the
+ZK-plan work: the trusted release-surface digest, the
 panic-recovery boundary inventory, the environment-toggle inventory and the
 generated-source registry (`crates/iroha_petal/src/glyph_templates.rs` has no
 owner).
@@ -286,46 +286,40 @@ and require current-source validation. Full current ordinary and merged-source
 qualification remain open. The derive library, strict JSON
 and UI regressions pass, preserving diagnostics.
 SDK Native custody and genuine production proving are mandatory even with SDK
-defaults disabled; assembly tools remain explicit
-`dev-tools` targets, and FASTPQ uses the existing STARK feature. All 21 configured
-CoreZK/Halo2, SDK and downstream boundaries pass locked offline resolution on
-the current post-Journal cut, with 119 manifests, 113 workspace members and all
-141 protected inputs unchanged. Reviewed exact source costs are applied without
-unused allowance. All five post-Journal source guards pass with 464 protected
-inputs unchanged, and all 72 dependency metrics match their reviewed limits.
-Surface/toolchain workspace lint inheritance
-and Surface public Rustdoc are implemented.
-On its recorded coherent source cut, the full default-library run passed
-4,841 Model, 210 ABI and 33 Surface
-tests, including the new distinct-supply Mint/Burn byte oracle, with 24,823
-captured source inputs unchanged. It retains the 135 original Model ignores and
-no filtering. All 13 strict style findings have source repairs; fresh strict
-validation remains pending.
-A subsequent AssetId JSON serializer source change requires fresh Model and
-dependent native validation.
-The recorded default Core ZK frontend pass retains its original source scope.
-A later focused strict attempt stopped before Core ZK with nine dependency
-diagnostics; source repairs need fresh current validation. Current Core ZK,
-toolchain, repaired Privacy regressions and final workspace checks remain open.
-The ABI argument-record and static numeric codecs now have their shared ABI
-owner; consumers import it directly. IVM retains byte decoding, gas and memory
-custody. Direct IVM and SDK consumer validation remains pending.
-The canonical Wallet Selection schema expectation now matches its owner. The
-historical 107-test Wallet registry includes 15 custody controls. Its recorded
-build passes, but dependency source changes prevented runtime validation. The
-applied shared Journal owner contains the whole storage implementation and all
-ten tests. The current finite macOS source inventory contains 191 Wallet and ten
-Journal tests, plus one Windows-only Wallet control, retaining all 15 custody
-controls. Foundation CI routing and all 88 selection controls pass; fresh native
-listing and runtime validation remain required. Feature hygiene passes all 65 tests and its guard
-command; that source-only rerun does not establish a full input-map interval.
-The compiler source guard seals 308 fixture includes and 616 test names, and
-all 43 Python source-reader controls pass with 323 captured inputs unchanged.
-These reader tests do not qualify compiled fixture bytecode. The merge is
-closed; final current-candidate checks and timing remain open. Executable
-metadata freshness
-passes on its recorded source cut. Current workspace and merged-candidate
-qualification remain open.
+defaults disabled; assembly tools remain explicit `dev-tools` targets. FASTPQ
+uses the existing STARK feature. The current manifest inventory has 127 source
+manifests and 121 workspace members, protecting the inactive Wayland patch.
+On the recorded cut, the source-cost ratchet matches all 72 measurements exactly; all 21
+locked offline boundaries, feature hygiene, the legacy-codec guard and all 253
+checker controls pass on their recorded input cuts. Shipping Oracle
+denials and the sole aggregate-model test exception remain intact. Native
+qualification remains separate. The model’s live Pasta field/hash dependency
+and proof crate’s development-only timing dependency account for the reviewed
+cost changes. The unused direct daemon Sumeragi edge is removed; Core retains
+consensus ownership. Subsequent selected input changes require requalification.
+
+ABI argument-record and static numeric encoding belong to `ivm_abi`; consumers
+import the owner directly. IVM retains decoding, gas and memory custody.
+Surface/toolchain inherit workspace lints and Surface APIs are documented.
+Earlier Model/ABI/Surface and Core ZK results retain their recorded source and
+feature scope. Current strict Core ZK, toolchain, direct IVM/SDK, Wallet and
+workspace validation remain open. The 52 failed ordinary Privacy cases remain
+ordinary tests and require current regressions followed by the full suite.
+
+After the reviewed Norito lint repairs, the shared Journal owner passes strict
+lint and all 11 unfiltered ordinary cases on its recorded cut, with no
+ignores and all 1,489 protected source/generated/traversal inputs, invocation and
+executable custody unchanged. Wallet now rejects unknown native journal material
+in its shared retained reader before record decoding, signing or HTTP. Its
+prospective macOS inventory contains 216 cases, retaining all 191 earlier names
+and 15 custody controls; native qualification remains open.
+Foundation CI selection passes all 88 controls. The compiler fixture seal is
+current: 308 includes and 616 test names, with all 43 source-reader controls
+passing on their finite recorded cut. These reader tests do not qualify compiled
+bytecode. Executable metadata freshness passes on its recorded cut; current
+workspace, merged-candidate and timing qualification remain open. The
+[optimization goals](specs/compile_bloat_optimization_goals.md) retain completion
+criteria and separate pinned-runner resource requirements.
 
 Ordinary recursive credential generation is blocked by the Eq circuit requiring
 8,584 advice columns against the 1,024-column limit. The complete-circuit
@@ -367,7 +361,15 @@ passes.
   execution/finalized-State binding and signed release evidence remain open under
   the [ZK goals](specs/zk_first_release_goals.md).
 
-- **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
+- **Parliament:** the [final requirements and launch decision](specs/parliament_private_ballot_design.md)
+  requires PQ private ballots without decryption custodians and with potentially
+  small electorates. No construction satisfying accepted-voter dropout is
+  selected; this is a construction blocker, with no pending owner decision.
+  Binding-governance mainnet launch is no-go until qualification. The fast pause
+  panel is seated per epoch independently of attempts. Current timed-OVN ballots and consensus-mandatory Parliament pulse/
+  custody checks do not satisfy that target; construction and availability
+  isolation remain blockers.
+- **Services:** Musubi publication/paid contracts, standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.
 - **Offline money/devices:** the [single KAGEMUSHA target](specs/kagemusha_single_design_proposal.md)

@@ -10550,6 +10550,14 @@ fn require_reputation_canonical_auth(
     uri: &Uri,
     body: &[u8],
 ) -> Result<(), Response> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     if method != Method::GET {
         return Err(json_error(
             StatusCode::METHOD_NOT_ALLOWED,
@@ -10564,6 +10572,7 @@ fn require_reputation_canonical_auth(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(_)) => Ok(()),
         Ok(None) | Err(_) => Err(reputation_authentication_required_response()),
@@ -13380,6 +13389,14 @@ fn require_moderation_request_auth(
     body: &[u8],
     expected_account: Option<&AccountId>,
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &state.state,
         state.state.network_id_ref(),
@@ -13388,6 +13405,7 @@ fn require_moderation_request_auth(
         uri,
         body,
         expected_account,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(json_error(
@@ -13492,6 +13510,14 @@ fn require_appeal_finance_request_auth(
     uri: &Uri,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &state.state,
         state.state.network_id_ref(),
@@ -13500,6 +13526,7 @@ fn require_appeal_finance_request_auth(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(json_error(
@@ -13525,6 +13552,14 @@ fn require_transparency_source_request_auth(
     uri: &Uri,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &state.state,
         state.state.network_id_ref(),
@@ -13533,6 +13568,7 @@ fn require_transparency_source_request_auth(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(json_error(

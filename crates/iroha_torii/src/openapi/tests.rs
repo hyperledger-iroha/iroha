@@ -507,10 +507,6 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/accounts/{account_id}/history/query"
                     | "/v1/contracts/activity/query"
                     | "/v1/contracts/events/query"
-                    | "/v1/kagemusha/ordinary/current-wallet"
-                    | "/v1/kagemusha/ordinary/mint-issuer-purpose"
-                    | "/v1/kagemusha/ordinary/top-up/credit"
-                    | "/v1/kagemusha/ordinary/top-up/finality"
                     | "/v1/ledger/authority-originals"
                     | "/v1/explorer/accounts/query"
                     | "/v1/explorer/asset-definitions/query"
@@ -767,9 +763,7 @@ fn collect_component_refs(value: &Value, refs: &mut BTreeSet<String>) {
             if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
                 let component = reference
                     .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
-                    .unwrap_or_else(|| {
-                        panic!("KAGEMUSHA schema has a non-component reference: {reference}")
-                    });
+                    .unwrap_or_else(|| panic!("schema has a non-component reference: {reference}"));
                 refs.insert(component.to_owned());
             }
             for value in object.values() {

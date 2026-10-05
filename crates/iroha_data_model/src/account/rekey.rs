@@ -1,6 +1,8 @@
 //! Stable account rekey metadata for tracking alias-backed account continuity.
 use super::{Account, AccountId};
-use crate::{alias_setup::AccountAliasName, nexus::DataSpaceCatalog};
+#[cfg(test)]
+use crate::nexus::DataSpaceCatalog;
+use crate::{alias_setup::AccountAliasName, nexus::DataSpaceCatalogRead};
 use core::fmt;
 use iroha_crypto::PublicKey;
 use iroha_model_base::domain::DomainId;
@@ -123,7 +125,10 @@ impl AccountAlias {
     ///
     /// # Errors
     /// Returns [`ParseError`] when the literal is malformed or the dataspace alias is unknown.
-    pub fn from_literal(input: &str, catalog: &DataSpaceCatalog) -> Result<Self, ParseError> {
+    pub fn from_literal(
+        input: &str,
+        catalog: &impl DataSpaceCatalogRead,
+    ) -> Result<Self, ParseError> {
         let name = input.parse::<AccountAliasName>()?;
         let dataspace = catalog
             .by_alias(name.dataspace.as_ref())
@@ -139,7 +144,7 @@ impl AccountAlias {
     ///
     /// # Errors
     /// Returns [`ParseError`] when the dataspace identifier is not present in the catalog.
-    pub fn to_literal(&self, catalog: &DataSpaceCatalog) -> Result<String, ParseError> {
+    pub fn to_literal(&self, catalog: &impl DataSpaceCatalogRead) -> Result<String, ParseError> {
         let dataspace = catalog
             .by_id(self.dataspace)
             .ok_or_else(|| ParseError::new("unknown dataspace id for account alias"))?;
@@ -154,7 +159,10 @@ impl AccountAlias {
     ///
     /// # Errors
     /// Returns [`ParseError`] when the alias references an unknown dataspace identifier.
-    pub fn domain_id(&self, catalog: &DataSpaceCatalog) -> Result<Option<DomainId>, ParseError> {
+    pub fn domain_id(
+        &self,
+        catalog: &impl DataSpaceCatalogRead,
+    ) -> Result<Option<DomainId>, ParseError> {
         let Some(domain) = self.domain.as_ref() else {
             return Ok(None);
         };

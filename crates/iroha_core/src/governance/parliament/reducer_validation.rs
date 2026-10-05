@@ -37,33 +37,42 @@ impl ParliamentAttemptStateV1 {
                 let proposal_redraw_budget_exhausted =
                     self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1;
                 if let Some(current_body) = self.sealed_body_for_role(body_role) {
-                    return if current_body.instance.status == BodyInstanceStatusV1::NoResult {
-                        Ok(index)
-                    } else {
-                        Ok(index + 1)
-                    };
+                    match current_body.instance.status {
+                        BodyInstanceStatusV1::NoResult => return Ok(index),
+                        BodyInstanceStatusV1::Approved
+                        | BodyInstanceStatusV1::Rejected
+                        | BodyInstanceStatusV1::NoQuorum => return Ok(index + 1),
+                        // A live current-stage body: an exhausted sortition rejected the attempt.
+                        _ => {}
+                    }
                 }
-                let exhausted_sortition_election = self
-                    .active_elections
-                    .get(&body_role)
-                    .and_then(|id| self.elections.get(id))
-                    .is_some_and(|election| {
-                        election.attempt.status == BodyElectionAttemptStatusV1::NoRoster
-                            && (election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
-                                || proposal_redraw_budget_exhausted)
-                            && election.failure_kind.is_some()
-                            && election.failure_height.is_some()
-                    });
-                let exhausted_sortition_capacity = self
-                    .active_sortition_capacity_failures
-                    .get(&body_role)
-                    .and_then(|id| self.sortition_capacity_failures.get(id))
-                    .is_some_and(|failure| {
-                        failure.status == BodyElectionAttemptStatusV1::NoRoster
-                            && (failure.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
-                                || proposal_redraw_budget_exhausted)
-                    });
-                (exhausted_sortition_election || exhausted_sortition_capacity)
+                // Bodies are drawn together, so the body whose sortition exhausted may serve a
+                // later stage than the current one; neither it nor the current body completed.
+                let exhausted_sortition = self.required_bodies[index..].iter().any(|required| {
+                    let exhausted_sortition_election = self
+                        .active_elections
+                        .get(&required.body)
+                        .and_then(|id| self.elections.get(id))
+                        .is_some_and(|election| {
+                            election.attempt.status == BodyElectionAttemptStatusV1::NoRoster
+                                && (election.attempt.sequence
+                                    == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                                    || proposal_redraw_budget_exhausted)
+                                && election.failure_kind.is_some()
+                                && election.failure_height.is_some()
+                        });
+                    let exhausted_sortition_capacity = self
+                        .active_sortition_capacity_failures
+                        .get(&required.body)
+                        .and_then(|id| self.sortition_capacity_failures.get(id))
+                        .is_some_and(|failure| {
+                            failure.status == BodyElectionAttemptStatusV1::NoRoster
+                                && (failure.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+                                    || proposal_redraw_budget_exhausted)
+                        });
+                    exhausted_sortition_election || exhausted_sortition_capacity
+                });
+                exhausted_sortition
                     .then_some(index)
                     .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)
             }
@@ -512,6 +521,25 @@ impl ParliamentAttemptStateV1 {
         if referenced_candidate_snapshots.len() != self.candidate_snapshots.len() {
             return Err(ParliamentReducerErrorV1::InvalidCandidateSnapshot);
         }
+        // `consume_sortition_pulse_batch` draws every request awaiting one slot from a single
+        // snapshot, so a slot whose awaiting requests froze different snapshots could never
+        // be consumed.
+        let mut awaiting_slot_snapshots = BTreeMap::new();
+        for election in self
+            .elections
+            .values()
+            .filter(|election| election.attempt.status == BodyElectionAttemptStatusV1::AwaitingPulse)
+        {
+            let request = election.attempt.request;
+            let slot = ParliamentPulseSlotV1::new(request.beacon_session_id, request.pulse_height);
+            if *awaiting_slot_snapshots
+                .entry(slot)
+                .or_insert(election.candidate_snapshot_index)
+                != election.candidate_snapshot_index
+            {
+                return Err(ParliamentReducerErrorV1::InvalidCandidateSnapshot);
+            }
+        }
         if confirmation_required
             && sortition_sequences
                 .get(&ParliamentBody::ConfirmationJury)
@@ -527,14 +555,26 @@ impl ParliamentAttemptStateV1 {
                 (requirement.body != ParliamentBody::ConfirmationJury).then_some(requirement.body)
             })
             .collect();
+        // A public body records capacity evidence only within a generation that a hidden
+        // body's sub-floor electorate blocked: before the first drawn pulse, the complete
+        // initial generation; after it, a retry generation of every failed body (whose
+        // sequences may differ), which therefore includes the blocking hidden body.
+        let first_drawn_pulse_height = self
+            .elections
+            .values()
+            .filter(|election| election.pulse_id.is_some())
+            .map(|election| election.attempt.request.pulse_height)
+            .min();
         for failure in self.sortition_capacity_failures.values() {
             let requirement = self.requirement_for_body(failure.body)?;
             if requirement.decision_mode != ParliamentDecisionModeV1::HiddenBindingBallot {
+                let after_first_draw =
+                    first_drawn_pulse_height.is_some_and(|height| height < failure.pulse_height);
                 let same_generation_bodies = self
                     .sortition_capacity_failures
                     .values()
                     .filter(|other| {
-                        other.sequence == failure.sequence
+                        (after_first_draw || other.sequence == failure.sequence)
                             && other.request_height == failure.request_height
                             && other.pulse_height == failure.pulse_height
                             && other.beacon_session_id == failure.beacon_session_id
@@ -542,7 +582,16 @@ impl ParliamentAttemptStateV1 {
                     })
                     .map(|other| other.body)
                     .collect::<BTreeSet<_>>();
-                if same_generation_bodies != initial_required_bodies {
+                let blocked_by_hidden_body = if after_first_draw {
+                    same_generation_bodies.iter().any(|body| {
+                        self.requirement_for_body(*body).is_ok_and(|required| {
+                            required.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot
+                        })
+                    })
+                } else {
+                    same_generation_bodies == initial_required_bodies
+                };
+                if !blocked_by_hidden_body {
                     return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
                 }
             }

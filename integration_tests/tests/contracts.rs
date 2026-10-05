@@ -3,7 +3,7 @@
 #[path = "contracts/ivm_proved.rs"]
 mod ivm_proved;
 use eyre::{Result, eyre};
-use integration_tests::sandbox;
+use integration_tests::{manifest::ManifestEncodingBudget, sandbox};
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha::data_model::prelude::*;
 use iroha::data_model::{
@@ -487,7 +487,10 @@ fn contract_probe_call_observation(
     ))
 }
 
-fn contract_probe_genesis_registration(artifact: &[u8]) -> Result<Vec<InstructionBox>> {
+fn contract_probe_genesis_registration(
+    artifact: &[u8],
+    encoding: &ManifestEncodingBudget,
+) -> Result<Vec<InstructionBox>> {
     use iroha_data_model::isi::smart_contract_code::{
         RegisterSmartContractBytes, RegisterSmartContractCode,
     };
@@ -497,7 +500,11 @@ fn contract_probe_genesis_registration(artifact: &[u8]) -> Result<Vec<Instructio
         .map_err(|error| eyre!("verify genesis contract probe artifact: {error}"))?;
     let manifest = verified
         .manifest
-        .try_signed(registrar_key)
+        .try_signed(
+            encoding.context(),
+            encoding.max_frame_bytes(),
+            registrar_key,
+        )
         .map_err(|error| eyre!("sign genesis contract probe manifest: {error}"))?;
     let permission: Permission = CanManageSmartContractCode.into();
     Ok(vec![
@@ -668,6 +675,7 @@ fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
     use iroha_data_model::isi::smart_contract_code::{
         RegisterSmartContractBytes, RegisterSmartContractCode,
     };
+    let encoding = ManifestEncodingBudget::new().expect("admit fixture manifest budget");
     let artifact = contract_state_probe_artifact();
     let verified = ivm::verify_contract_artifact(&artifact).expect("verify probe artifact");
     let registrar_key = &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
@@ -686,7 +694,11 @@ fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
         {
             let scoped_manifest = verified
                 .manifest
-                .try_signed(registrar_key)
+                .try_signed(
+                    encoding.context(),
+                    encoding.max_frame_bytes(),
+                    registrar_key,
+                )
                 .expect("sign manifest");
             RegisterSmartContractCode {
                 artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
@@ -700,7 +712,8 @@ fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
         }
         .into(),
     ];
-    let actual = contract_probe_genesis_registration(&artifact).expect("genesis registration");
+    let actual =
+        contract_probe_genesis_registration(&artifact, &encoding).expect("genesis registration");
     assert_eq!(
         actual, expected,
         "permission must precede exact bytes and signed manifest"
@@ -715,12 +728,14 @@ fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
         .signature
         .verify(
             registrar_key.public_key(),
-            &signed.signature_payload_bytes(),
+            &signed
+                .signature_payload_bytes(encoding.context(), encoding.max_frame_bytes())
+                .expect("bounded canonical signature payload"),
         )
         .expect("canonical manifest signature must verify");
     assert_eq!(signed.code_hash, Some(verified.code_hash));
     assert_eq!(signed.abi_hash, Some(verified.abi_hash));
-    assert!(contract_probe_genesis_registration(b"not a contract artifact").is_err());
+    assert!(contract_probe_genesis_registration(b"not a contract artifact", &encoding).is_err());
 }
 
 #[test]
@@ -1426,9 +1441,14 @@ fn deploy_contract_locally_signed_with_registration(
         );
     }
     if !registered_in_genesis {
+        let encoding = ManifestEncodingBudget::new()?;
         let manifest = verified
             .manifest
-            .try_signed(client.client().key_pair())
+            .try_signed(
+                encoding.context(),
+                encoding.max_frame_bytes(),
+                client.client().key_pair(),
+            )
             .map_err(|error| eyre!("sign contract manifest locally: {error}"))?;
         let total_size = u64::try_from(artifact.len())?;
         let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;
@@ -2930,6 +2950,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
     registered_in_genesis: bool,
     context: &'static str,
 ) -> Result<()> {
+    let encoding = ManifestEncodingBudget::new()?;
     let register_permission: Permission = CanManageSmartContractCode.into();
     let enact_permission: Permission = CanEnactGovernance.into();
     let mut builder = NetworkBuilder::new()
@@ -2995,7 +3016,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
         let artifact = contract_state_probe_artifact();
         builder = builder
             .with_genesis_keypair(iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone());
-        for instruction in contract_probe_genesis_registration(&artifact)? {
+        for instruction in contract_probe_genesis_registration(&artifact, &encoding)? {
             builder = builder.with_genesis_instruction(instruction);
         }
         Some(artifact)
@@ -3060,9 +3081,11 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
     if registered_in_genesis {
         let verified = ivm::verify_contract_artifact(&code_bytes)
             .map_err(|error| eyre!("verify pre-registered probe: {error}"))?;
-        let expected = verified
-            .manifest
-            .try_signed(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)?;
+        let expected = verified.manifest.try_signed(
+            encoding.context(),
+            encoding.max_frame_bytes(),
+            &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+        )?;
         for peer in network.peers() {
             let reader = peer.client();
             let code_hash = verified.code_hash;

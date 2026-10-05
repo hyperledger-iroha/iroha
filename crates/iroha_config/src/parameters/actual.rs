@@ -6459,6 +6459,8 @@ pub struct Kura {
     pub native_context_archive_max_bytes: NonZeroUsize,
     /// Number of recent blocks kept in memory.
     pub blocks_in_memory: NonZeroUsize,
+    /// Total fixed native history-checkpoint slots; Core admits their checked complete layout.
+    pub history_checkpoint_cache_capacity: NonZeroUsize,
     /// Finite requested-allocation limit for State's shared block-hash generations.
     /// Includes unpublished successors and generations retained by readers.
     pub block_hash_history_bytes: Bytes,

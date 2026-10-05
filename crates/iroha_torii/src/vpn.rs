@@ -686,6 +686,14 @@ fn require_signed_request(
     uri: &Uri,
     body: &[u8],
 ) -> Result<AccountId, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &app.state,
         app.state.network_id_ref(),
@@ -694,6 +702,7 @@ fn require_signed_request(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     )? {
         Some(verified) => Ok(verified.account),
         None => Err(not_permitted_error("signed account headers are required")),

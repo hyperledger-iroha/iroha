@@ -266,6 +266,16 @@ fn completed_replay_is_invalidated_by_the_next_original_forward_commit() {
             ),
             next_owner
         );
+        assert_eq!(
+            chain.height(),
+            1,
+            "the independent fixture executor has not advanced"
+        );
+        assert_eq!(
+            worker.state.view().height(),
+            2,
+            "the original replay published its actual parent"
+        );
         let next_qc = chain.commit_qc(3, hash, result, false, Signers::Quorum);
         worker.prepare(&next, &next_qc).unwrap();
         blocks.append(&next, &next_qc).unwrap();

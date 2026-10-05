@@ -25,6 +25,8 @@ use crate::{
     prepared::PreparedContract,
 };
 mod aggregate;
+mod verified_artifact;
+pub use verified_artifact::analyze_verified_artifact_with_memory_budget;
 mod static_state;
 mod static_state_keys;
 mod static_state_literals;
@@ -759,7 +761,9 @@ seiyaku StaticMapAnalysis {
 seiyaku HelperMapAnalysis {
   state StateMap<int, int> Counters;
   fn hidden_write() { Counters[1] = 10; }
-  kotoage fn helper_write() authorize("CanWrite") { hidden_write(); hidden_write(); }
+  kotoage fn helper_write() authorize("CanWrite") { hidden_write(); }
+  // Two live call sites retain the helper edge under single-use inlining.
+  kotoage fn second_helper_write() authorize("CanWrite") { hidden_write(); }
 }
 "#;
         let program = kotodama_lang::compiler::Compiler::new()

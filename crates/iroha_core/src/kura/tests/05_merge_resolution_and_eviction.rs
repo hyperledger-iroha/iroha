@@ -465,6 +465,8 @@ fn strict_init_kura() {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+            history_checkpoint_cache_capacity:
+                iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -494,6 +496,8 @@ fn raw_block_read_preserves_wire_without_promoting_execution_custody() {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+            history_checkpoint_cache_capacity:
+                iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -561,6 +565,8 @@ fn raw_block_reads_do_not_authenticate_reopened_transaction_index() {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+            history_checkpoint_cache_capacity:
+                iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -676,6 +682,8 @@ fn get_block_returns_none_when_data_missing() {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+            history_checkpoint_cache_capacity:
+                iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:

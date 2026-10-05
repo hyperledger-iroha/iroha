@@ -26,6 +26,10 @@ pub struct Kura {
         default = "defaults::kura::BLOCKS_IN_MEMORY"
     )]
     pub blocks_in_memory: NonZeroUsize,
+    /// Total fixed native checkpoint slots in a separate node-cache allocation pool.
+    /// This optional off-chain cache cannot borrow query or consensus memory.
+    #[config(default = "defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY")]
+    pub history_checkpoint_cache_capacity: NonZeroUsize,
     /// Finite requested-allocation limit for State's shared hash-history generations.
     /// Zero is invalid; this policy has no environment override.
     #[config(default = "defaults::kura::BLOCK_HASH_HISTORY_BYTES")]
@@ -61,6 +65,7 @@ impl Kura {
             max_disk_usage_bytes,
             native_context_archive_max_bytes,
             blocks_in_memory,
+            history_checkpoint_cache_capacity,
             block_hash_history_bytes,
             transaction_history_bytes,
             membership_storage,
@@ -72,6 +77,13 @@ impl Kura {
                     output_new_blocks: debug_output_new_blocks,
                 },
         } = self;
+        if history_checkpoint_cache_capacity.get()
+            > defaults::kura::MAX_HISTORY_CHECKPOINT_CACHE_CAPACITY
+        {
+            emitter.emit(Report::new(ParseError::InvalidKuraConfig).attach(
+                "kura.history_checkpoint_cache_capacity must not exceed 65536 native slots",
+            ));
+        }
         if block_hash_history_bytes.get() == 0
             || usize::try_from(block_hash_history_bytes.get()).is_err()
         {
@@ -100,6 +112,7 @@ impl Kura {
             max_disk_usage_bytes,
             native_context_archive_max_bytes,
             blocks_in_memory,
+            history_checkpoint_cache_capacity,
             block_hash_history_bytes,
             transaction_history_bytes,
             membership_storage: actual::KuraMembershipStoragePolicy {
@@ -125,7 +138,10 @@ pub struct KuraMembershipStorage {
 }
 /// File-configured FASTPQ content-store policy with explicit byte/count units.
 #[derive(Debug, Clone, Copy, ReadConfig)]
-#[expect(clippy::struct_field_names, reason = "operator-facing config keys consistently identify maximum resource limits")]
+#[expect(
+    clippy::struct_field_names,
+    reason = "operator-facing config keys consistently identify maximum resource limits"
+)]
 pub struct KuraFastpqArtifacts {
     /// Maximum complete artifact bytes, including the encoded wrapper.
     #[config(default = "defaults::kura::FASTPQ_ARTIFACT_MAX_BYTES")]

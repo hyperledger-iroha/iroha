@@ -1,4 +1,4 @@
-//! Six-file transaction with an absent dispatcher barrier and immutable recovery records.
+//! Five-file guest transaction with an absent dispatcher barrier and immutable recovery records.
 use super::*;
 use std::io::Seek as _;
 
@@ -68,7 +68,7 @@ fn census(root: &Path) -> Result<()> {
     .into_iter()
     .map(str::to_owned)
     .collect();
-    for i in 0..5 {
+    for i in 0..SLUGS.len() {
         for p in [
             "old-guard",
             "new-guard",
@@ -142,7 +142,7 @@ fn verify_custody(
     same(root, &ids.root)?;
     census(root)?;
     same(&root.join("old-dispatcher"), &ids.old_dispatcher)?;
-    for i in 0..5 {
+    for i in 0..SLUGS.len() {
         same(&root.join(format!("old-guard-{i}")), &ids.old_guards[i])?;
     }
     let live = Path::new(&plan.predecessor.dispatcher.path);
@@ -168,7 +168,7 @@ fn verify_custody(
             }
         }
     }
-    for i in 0..5 {
+    for i in 0..SLUGS.len() {
         let live = Path::new(&plan.predecessor.guards[i].path);
         if !exists(live)? {
             need(
@@ -215,7 +215,7 @@ fn verify_custody(
             same(&path, id)?;
         }
     }
-    for i in 0..5 {
+    for i in 0..SLUGS.len() {
         for (prefix, id, successor) in [
             ("new-guard", &ids.new_guards[i], true),
             ("removed-old-guard", &ids.original_guards[i], false),
@@ -413,7 +413,7 @@ fn validate_live(plan: &Plan, new: &[Vec<u8>], successor: bool) -> Result<()> {
             &plan.predecessor.dispatcher
         },
     )?;
-    for index in 0..5 {
+    for index in 0..SLUGS.len() {
         checked(
             Path::new(&plan.predecessor.guards[index].path),
             &guard_pin(plan, new, index, successor),
@@ -702,7 +702,7 @@ pub(super) fn transition(
             &root.join("new-dispatcher"),
             &plan.candidate.executable,
         )?;
-        for index in 0..5 {
+        for index in 0..SLUGS.len() {
             copy_exact(
                 Path::new(&plan.predecessor.guards[index].path),
                 &root.join(format!("old-guard-{index}")),
@@ -716,7 +716,7 @@ pub(super) fn transition(
             old_dispatcher: identity(&root.join("old-dispatcher"))?,
             original_dispatcher: identity(Path::new(&plan.predecessor.dispatcher.path))?,
             new_dispatcher: identity(&root.join("new-dispatcher"))?,
-            old_guards: (0..5)
+            old_guards: (0..SLUGS.len())
                 .map(|i| identity(&root.join(format!("old-guard-{i}"))))
                 .collect::<Result<_>>()?,
             original_guards: plan
@@ -725,7 +725,7 @@ pub(super) fn transition(
                 .iter()
                 .map(|p| identity(Path::new(&p.path)))
                 .collect::<Result<_>>()?,
-            new_guards: (0..5)
+            new_guards: (0..SLUGS.len())
                 .map(|i| identity(&root.join(format!("new-guard-{i}"))))
                 .collect::<Result<_>>()?,
         };
@@ -752,7 +752,7 @@ pub(super) fn transition(
                 &root.join("rollback-dispatcher"),
                 &plan.predecessor.dispatcher,
             )?;
-            for i in 0..5 {
+            for i in 0..SLUGS.len() {
                 copy_exact(
                     &root.join(format!("old-guard-{i}")),
                     &root.join(format!("rollback-guard-{i}")),
@@ -762,7 +762,7 @@ pub(super) fn transition(
             let value = Restoration {
                 plan_sha256: sha256_hex(bytes),
                 dispatcher: identity(&root.join("rollback-dispatcher"))?,
-                guards: (0..5)
+                guards: (0..SLUGS.len())
                     .map(|i| identity(&root.join(format!("rollback-guard-{i}"))))
                     .collect::<Result<_>>()?,
             };
@@ -780,7 +780,7 @@ pub(super) fn transition(
     }
     barrier(plan, root, action == Action::Rollback)?;
     event(root, "barrier.json", bytes)?;
-    for index in 0..5 {
+    for index in 0..SLUGS.len() {
         revalidate()?;
         check_directory(root, &root_hold)?;
         verify_custody(plan, root, new, &ids, restore.as_ref())?;

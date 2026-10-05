@@ -142,6 +142,16 @@ pub(crate) struct PublicReset {
 
 #[derive(clap::Subcommand, Debug)]
 enum PublicResetCommand {
+    /// Initialize the fixed native Mac custodian from independently pinned executable and public key.
+    InitializeNativeEdgeCustody(host::InitializeNativeEdgeCustody),
+    /// Capture the pinned native Python image and supported version without changing services.
+    CaptureNativePython(host::CaptureNativePython),
+    /// Authorize explicit native custody of retained opaque incident journals.
+    AuthorizeNativeEdgeOwner(host::AuthorizeNativeEdgeOwner),
+    /// Derive complete public owner-adoption inputs from pinned native capture and incident files.
+    PrepareNativeEdgeOwner(host::PrepareNativeEdgeOwner),
+    /// Adopt the unchanged native public include under a fresh authenticated owner.
+    AdoptNativeEdgeOwner(host::AdoptNativeEdgeOwner),
     /// Capture the native Mac edge and authorize its same-source Darwin candidate.
     PrepareNativeEdge(native_edge_prepare::PrepareNativeEdge),
     /// Reversibly advance the fixed dispatcher after a sealed occupied deployment.
@@ -374,6 +384,21 @@ impl PublicReset {
     /// Run before client configuration or any ledger signing identity is loaded.
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
+            PublicResetCommand::InitializeNativeEdgeCustody(args) => {
+                return host::initialize_native_edge_custody(args, &mut output);
+            }
+            PublicResetCommand::CaptureNativePython(args) => {
+                return host::capture_native_python(args, &mut output);
+            }
+            PublicResetCommand::PrepareNativeEdgeOwner(args) => {
+                return host::prepare_native_edge_owner(args, &mut output);
+            }
+            PublicResetCommand::AuthorizeNativeEdgeOwner(args) => {
+                return host::authorize_native_edge_owner(args, &mut output);
+            }
+            PublicResetCommand::AdoptNativeEdgeOwner(args) => {
+                return host::adopt_native_edge_owner(args, &mut output);
+            }
             PublicResetCommand::PrepareNativeEdge(args) => {
                 return native_edge_prepare::prepare(args, &mut output);
             }
@@ -1902,7 +1927,6 @@ fn validate_inventory_custody_with_revision<Beacon>(
         ));
     }
 
-    let mut hostnames = BTreeSet::new();
     let mut node_fingerprints = BTreeSet::new();
     let mut build_fingerprint = None;
     let mut config_fingerprint = None;
@@ -1913,9 +1937,6 @@ fn validate_inventory_custody_with_revision<Beacon>(
             &inventory.revision,
             inventory.qualification_scope,
         )?;
-        if !hostnames.insert(validator.endpoint.hostname.clone()) {
-            return Err(eyre!("validator hostnames must be distinct"));
-        }
         if !node_fingerprints.insert(validator.node_fingerprint.clone()) {
             return Err(eyre!("validator node fingerprints must be distinct"));
         }
@@ -1989,18 +2010,9 @@ fn validate_inventory_custody_with_revision<Beacon>(
         ));
     }
     validate_edge(&inventory.edge, &inventory.revision, &inventory.hosts)?;
-    if !hostnames.insert(inventory.edge.endpoint.hostname.clone()) {
-        return Err(eyre!("edge hostname must be distinct from every validator"));
-    }
-    // V1 has one durable host progress record. Its mutation boundaries cover
-    // every validator only when all five roles share the authenticated SSH key.
-    if inventory.validators.iter().any(|validator| {
-        validator.endpoint.host_identity_sha256 != inventory.edge.endpoint.host_identity_sha256
-    }) {
-        return Err(eyre!(
-            "public-reset V1 requires all four validators and the edge on one authenticated SSH host identity"
-        ));
-    }
+    inventory
+        .hosts
+        .validate_roles(&inventory.validators, &inventory.edge)?;
     validate_lower_hex(
         "artifact closure SHA-256",
         &inventory.artifact_closure_sha256,
@@ -6524,6 +6536,13 @@ mod executor_model {
             for validator in &mut no_kvm_core.validators {
                 validator.platform.kvm_api_version = 0;
             }
+            no_kvm_core.hosts.validator_guest.platform.kvm_api_version = 0;
+            no_kvm_core.edge.native_capability = native_edge_protocol::fixture_capability(
+                &no_kvm_core.hosts,
+                no_kvm_core.edge.admitted_release().unwrap().clone(),
+                &no_kvm_core.authorization_nonce,
+                &no_kvm_core.previous_genesis_hash,
+            );
             validate_inventory_structure(&no_kvm_core)
                 .expect("all four core validators may run without KVM");
             for index in 0..full.validators.len() {
@@ -6964,7 +6983,9 @@ mod executor_model {
             let root = directory.path().canonicalize().expect("artifact root");
             let mut materialized = BTreeSet::new();
             let mut materialize = |slug: &str, artifact: &mut ArtifactV1| {
-                let source_name = if matches!(artifact.role.as_str(), "config" | "validator_unit") {
+                let source_name = if artifact.target == host_pair::NATIVE_EDGE_TARGET {
+                    format!("native-{slug}-{}", artifact.role)
+                } else if matches!(artifact.role.as_str(), "config" | "validator_unit") {
                     format!("{slug}-{}", artifact.role)
                 } else {
                     artifact.role.clone()
@@ -6991,6 +7012,17 @@ mod executor_model {
             for artifact in &mut inventory.edge.artifacts {
                 materialize(&inventory.edge.slug, artifact);
             }
+            inventory.hosts.native_edge.dispatcher_sha256 =
+                artifact(&inventory.edge.artifacts, "iroha_cli")
+                    .unwrap()
+                    .sha256
+                    .clone();
+            inventory.edge.native_capability = native_edge_protocol::fixture_capability(
+                &inventory.hosts,
+                inventory.edge.admitted_release().unwrap().clone(),
+                &inventory.authorization_nonce,
+                &inventory.previous_genesis_hash,
+            );
             directory
         }
 
@@ -7024,7 +7056,7 @@ mod executor_model {
                 pinned.len(),
                 "deduplication must retain every host/role/remote-path entry"
             );
-            assert_eq!(hash_counts.len(), 15);
+            assert_eq!(hash_counts.len(), 16);
             assert!(hash_counts.values().all(|count| *count == 1));
             let iroha3d = PathBuf::from(&inventory.validators[0].artifacts[0].local_path);
             assert_eq!(hash_counts.get(&iroha3d), Some(&1));

@@ -1181,7 +1181,7 @@ mod service_source_depth_tests {
                     .iter()
                     .find(|entry| entry.id == ds)
                     .map(|entry| entry.alias.as_str());
-                norito::json!({ "dataspaces": [{ "accounts": [original_account_json.clone()], "dataspace_alias": (alias), "dataspace_id": (ds.as_u64()) }], "uaid": (uaid.to_string()) })
+                norito::json!({ "dataspaces": [{ "accounts": (vec![original_account_json.clone()]), "dataspace_alias": (alias), "dataspace_id": (ds.as_u64()) }], "uaid": (uaid.to_string()) })
             } else {
                 norito::json!({ "dataspaces": [], "uaid": (uaid.to_string()) })
             };

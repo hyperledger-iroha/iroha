@@ -115,7 +115,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_name_map_runtime.rs',
-        '876bb610f2f3886b67c39917863b8635add6ce1c0b4072e1a6e12a962385e8ac',
+        '01b8e4110a6414723339da99b9a3c593cfcffd201168c0493e37fe16d565a9b8',
         (
             AssetSpec('001.ko', 'c0d59dd29744c70955b883227fdd3d48e50bbabe387a71b85a62cc2feea227d3', 269, True),
             AssetSpec('002.ko', '5a82559e5cba3e2df840615c6385f3931602c3e9494bee83f3328c47e442e5ff', 396, True),
@@ -150,7 +150,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs',
-        '7c58ebe622cf90afe197276aed0f090d93f2fe9dcdfcbd08ba7778167c20fc44',
+        'd71004f69298636a82e170f788cd31fe284d63a33778372891994e0e91e72a83',
         (
             AssetSpec('001.ko', 'b224232a52b7ed477fc6573e7f7c0804a493b104c26f5e61d3232497e13e4950', 316, False),
             AssetSpec('002.ko', '301483b79eb9279a9c84bda840ef3e601bcb283c7c50143922cf28498b4aea2b', 606, False),
@@ -171,7 +171,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_lists.rs',
-        '609dd56ab92ec21c71ff644429e2d9d054f1c6f37071cff9c08990de46eafe19',
+        '82067fdae3524d37cb161843aa9db7d93e0a30ca7d3fc687d4a36fc18bfdaa32',
         (
             AssetSpec('001.ko', 'eefd96e03bd7bd00aaa6da1aefa41385f86bcf702f60e4c949de1e905f3a0fac', 575, True),
             AssetSpec('002.ko', '06544f9c17080965311c0537d02d2d8f97b34b20a14183cc08a476fca66da4b8', 412, True),
@@ -305,6 +305,8 @@ SOURCE_REQUIRED_FRAGMENTS = {
         br'Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")',
     ),
     'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs': (
+        b'ivm_abi::arguments::encode_argument_record_from_json(schema, &payload)',
+        b'ivm_abi::numeric_tlv::encode_int(',
         b'vm.public_call_result_word(index)',
         b'common::decode_i64_return_word(&vm, 6 + index)',
         b'.try_runtime_template()',
@@ -318,6 +320,7 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'assert_eq!(writer.state_paths(), ["Rate", "Supply", "Whole"]);',
     ),
     'crates/ivm/tests/kotodama_lists.rs': (
+        b'ivm_abi::arguments::encode_argument_record_from_json(schema, &payload)',
         b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
         b'{{"index":"{index}","operation":"{operation}"}}',
     ),
@@ -340,6 +343,7 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'"module Math { export fn value() -> int { return 7; } }"',
     ),
     'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
+        b'let key = ivm_abi::numeric_tlv::encode_int(',
         b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
         b'use std::str::FromStr;',
         b'WsvHost::new_with_subject(wsv, subject);',
@@ -380,11 +384,14 @@ SOURCE_FORBIDDEN_FRAGMENTS = {
         br'Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")',
     ),
     'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs': (
+        b'ivm::encode_argument_record_from_json(',
+        b'ivm::numeric_tlv::encode_int(',
         b'decode_i64_register(',
         b'vm.register(10',
         b'.runtime_template()',
     ),
     'crates/ivm/tests/kotodama_lists.rs': (
+        b'ivm::encode_argument_record_from_json(',
         b'{{"operation":"{operation}","index":"{index}"}}',
     ),
     'crates/kotodama_toolchain/src/koto_test_driver_tests.rs': (
@@ -396,6 +403,7 @@ SOURCE_FORBIDDEN_FRAGMENTS = {
         b'controller.clone(),\n            HashMap::new(),',
     ),
     'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
+        b'ivm::numeric_tlv::encode_int(',
         b'use std::{collections::HashMap, str::FromStr};',
         b'WsvHost::new_with_subject(wsv, subject, HashMap::new());',
     ),

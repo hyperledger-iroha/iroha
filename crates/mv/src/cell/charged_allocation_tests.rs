@@ -522,3 +522,122 @@ fn first_undo_clone_panic_wakes_existing_busy_waiter_and_retains_original_succes
     drop(registration);
     collect_until(&budget, conservatively_retained);
 }
+
+struct ContendedValue {
+    value: u64,
+    clones: Arc<AtomicUsize>,
+}
+impl Clone for ContendedValue {
+    fn clone(&self) -> Self {
+        self.clones.fetch_add(1, SeqCst);
+        Self {
+            value: self.value,
+            clones: Arc::clone(&self.clones),
+        }
+    }
+}
+
+#[test]
+fn infallible_cell_apis_wait_with_their_original_charge_pair_before_any_clone() {
+    for operation in 0..3 {
+        let pair = pair_bytes::<ContendedValue>();
+        let budget = AllocationBudget::new(2 * pair);
+        let clones = Arc::new(AtomicUsize::new(0));
+        let cell = Arc::new(ChargedCell::new_charged(
+            ContendedValue {
+                value: 10,
+                clones: Arc::clone(&clones),
+            },
+            charges::<ContendedValue>(&budget).unwrap(),
+        ));
+        let predecessor = cell.publication.capture();
+        let current = cell
+            .blocks
+            .try_acquire_writer()
+            .expect("original current blocker");
+        let original_charges = charges::<ContendedValue>(&budget).unwrap();
+        assert_eq!(budget.reserved_bytes(), 2 * pair);
+        let worker_cell = Arc::clone(&cell);
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            match operation {
+                0 => {
+                    let block = worker_cell.block_charged(original_charges);
+                    assert_eq!(block.get().value, 10);
+                    assert_eq!(block.mode(), BlockMode::Ordinary);
+                    drop(block);
+                }
+                1 => {
+                    let block = worker_cell.block_and_revert_charged(original_charges);
+                    assert_eq!(block.get().value, 10);
+                    assert_eq!(block.mode(), BlockMode::Replace);
+                    drop(block);
+                }
+                _ => {
+                    let replacement = worker_cell.current_replacement_charged(original_charges);
+                    assert_eq!(replacement.get().value, 10);
+                    drop(replacement);
+                }
+            }
+            completed_tx
+                .send(())
+                .expect("report the completed original contender");
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut waiting_with_original_undo = false;
+        while !worker.is_finished() && Instant::now() < deadline {
+            if cell.revert.try_acquire_writer().is_none() {
+                waiting_with_original_undo = true;
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let completion_while_blocked = completed_rx.recv_timeout(Duration::from_millis(50));
+        let clones_while_blocked = clones.load(SeqCst);
+        let retained_while_blocked = budget.reserved_bytes();
+        let completed_while_blocked = worker.is_finished();
+        // Always release the actual blocker before any assertion or join. A
+        // failed regression must not strand its own waiting native thread.
+        drop(current);
+        let joined = worker.join();
+        assert!(
+            waiting_with_original_undo,
+            "the actual pair waited for current"
+        );
+        assert!(
+            !completed_while_blocked,
+            "contention must not panic the infallible caller"
+        );
+        assert!(
+            matches!(
+                completion_while_blocked,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "the real current blocker keeps the contender pending, including its original charge pair"
+        );
+        assert_eq!(
+            clones_while_blocked, 0,
+            "no payload clone before both original writers"
+        );
+        assert_eq!(
+            retained_while_blocked,
+            2 * pair,
+            "retain the original unused charge pair while waiting"
+        );
+        joined.expect("infallible native writer contender completes after release");
+        assert_eq!(clones.load(SeqCst), 1);
+        assert_eq!(
+            budget.reserved_bytes(),
+            pair,
+            "only abandoned private generations refund"
+        );
+        assert_eq!(cell.view().value, 10);
+        assert!(cell.predecessor_view().get().is_none());
+        assert!(
+            predecessor.matches(&cell.publication),
+            "waiting/abandonment publishes nothing"
+        );
+        drop(cell);
+        collect_until(&budget, 0);
+    }
+}

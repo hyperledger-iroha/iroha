@@ -20560,6 +20560,8 @@ seiyaku TriggerArguments {
     }
     #[test]
     fn contract_call_enforces_entrypoint_and_hold_before_argument_decode() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
@@ -20622,7 +20624,7 @@ seiyaku GuardedValue {
                 contract_address.dataspace_id().unwrap(),
                 code_hash,
             ),
-            manifest.signed(&ALICE_KEYPAIR),
+            manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"),
         );
         // The invoked contract's subject needs its own exact grant for caller metadata.
         world.account_permissions.insert(
@@ -21049,7 +21051,7 @@ seiyaku GuardedValueRebound {
                 contract_address.dataspace_id().unwrap(),
                 rebound_code_hash,
             ),
-            rebound_manifest.signed(&ALICE_KEYPAIR),
+            rebound_manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"),
         );
         state_tx
             .world
@@ -21195,6 +21197,8 @@ seiyaku GuardedValueRebound {
     }
     #[test]
     fn mixed_batch_observes_ordered_permission_state_and_rolls_back_on_failure() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
@@ -21252,7 +21256,7 @@ seiyaku OrderedBatchGuard {
                 contract_address.dataspace_id().unwrap(),
                 code_hash,
             ),
-            manifest.signed(&ALICE_KEYPAIR),
+            manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"),
         );
         // The invoked contract's subject needs its own exact grant for caller metadata.
         world.account_permissions.insert(
@@ -21468,6 +21472,8 @@ seiyaku OrderedBatchGuard {
     }
     #[test]
     fn resolved_contract_invocation_releases_cache_and_records_vm_error_gas() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
@@ -21506,7 +21512,7 @@ seiyaku MeteredFailure {
                 contract_address.dataspace_id().unwrap(),
                 code_hash,
             ),
-            manifest.signed(&ALICE_KEYPAIR),
+            manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest"),
         );
         world.commit();
         bind_executor_test_contract_after_genesis(&state, &contract_address, &authority, code_hash);

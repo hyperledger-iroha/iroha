@@ -1664,3 +1664,452 @@ fn absence_is_attempt_local_and_never_changes_original_quorum() {
         3
     );
 }
+
+/// One canonical sortition generation of `bodies` with three seats each, requested at
+/// `request_height` for the fixture's ten-block pulse delay.
+fn sortition_generation(
+    governance_attempt_id: GovernanceAttemptId,
+    bodies: &[ParliamentBody],
+    sequence: u32,
+    candidate_snapshot: &[AccountId],
+    request_height: u64,
+    beacon_session_id: BeaconSessionId,
+) -> Vec<ParliamentSortitionRequestRegistrationV1> {
+    bodies
+        .iter()
+        .map(|&body| ParliamentSortitionRequestRegistrationV1 {
+            sequence,
+            request: sortition_request_intent(
+                governance_attempt_id,
+                sequence,
+                body,
+                candidate_snapshot.to_vec(),
+                3,
+                request_height,
+                request_height + 10,
+                beacon_session_id,
+            ),
+        })
+        .collect()
+}
+
+/// A Rules Committee and a Policy Jury drawn together from the first consumed pulse, with
+/// both invitation windows open at height 20 only and `redraws_before` proposal-wide
+/// redraws already spent.
+fn rules_and_policy_invitations_open(
+    redraws_before: u32,
+) -> (ParliamentAttemptStateV1, [BodyElectionAttemptId; 2]) {
+    let bodies = [ParliamentBody::RulesCommittee, ParliamentBody::PolicyJury];
+    let mut state = state(public_requirements(&bodies));
+    state.randomness_redraws_before_attempt = redraws_before;
+    let id = state.attempt.id;
+    state
+        .complete_qualification(id)
+        .expect("enter the Rules stage");
+    let logical = BeaconSessionId::for_network_v1(&network_id());
+    let snapshot = candidates(60, 12);
+    let registrations = sortition_generation(id, &bodies, 0, &snapshot, 10, logical);
+    let mut request_ids: Vec<_> = registrations
+        .iter()
+        .map(|entry| entry.request.id)
+        .collect();
+    request_ids.sort_unstable();
+    state
+        .register_sortition_request_batch(id, registrations, snapshot)
+        .expect("register the initial generation");
+    consume_sortition(&mut state, id, request_ids, logical, 20, pulse_id(61))
+        .expect("consume the first pulse");
+    let elections = bodies.map(|body| BodyElectionAttemptId::derive_v1(id, body, 0));
+    for election_id in elections {
+        state
+            .begin_invitation_acceptance(id, election_id, 20, 1)
+            .expect("open the invitation window");
+    }
+    (state, elections)
+}
+
+/// Record a response from every invited citizen of `election_id` at `height`: primaries
+/// accept when `accept_primaries` holds, and every other invitation is declined.
+fn respond_to_every_invitation(
+    state: &mut ParliamentAttemptStateV1,
+    election_id: BodyElectionAttemptId,
+    accept_primaries: bool,
+    height: u64,
+) {
+    let id = state.attempt.id;
+    let election = state.election(&election_id).expect("drawn election");
+    let responses: Vec<_> = election
+        .primary_assignments()
+        .iter()
+        .map(|assignment| (assignment.member.clone(), accept_primaries))
+        .chain(
+            election
+                .alternate_assignments()
+                .iter()
+                .map(|assignment| (assignment.member.clone(), false)),
+        )
+        .collect();
+    for (member, accept) in responses {
+        state
+            .record_invitation_response(id, election_id, &member, accept, height)
+            .expect("record the invitation response");
+    }
+}
+
+#[test]
+fn no_roster_retry_at_the_redraw_ceiling_is_one_complete_generation() {
+    // Both initially drawn bodies return empty rosters with one proposal-wide redraw left. A
+    // single-body retry would spend that last unit and strand the other failed body: it could
+    // never be redrawn, yet no transition could terminalize the attempt either. A retry
+    // generation therefore covers every failed body for one redraw unit.
+    let (mut state, failed) =
+        rules_and_policy_invitations_open(MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1 - 1);
+    let id = state.attempt.id;
+    for election_id in failed {
+        respond_to_every_invitation(&mut state, election_id, false, 20);
+        state
+            .fail_body_election_no_roster(id, election_id, true, 21)
+            .expect("record the empty roster");
+    }
+    assert_eq!(state.attempt.status, GovernanceAttemptStatusV1::Active);
+    state
+        .validate()
+        .expect("both failed bodies remain retryable");
+
+    let logical = BeaconSessionId::for_network_v1(&network_id());
+    let snapshot = candidates(90, 12);
+    for partial in [
+        [ParliamentBody::RulesCommittee],
+        [ParliamentBody::PolicyJury],
+    ] {
+        let mut stranding = state.clone();
+        assert_eq!(
+            stranding.register_sortition_request_batch(
+                id,
+                sortition_generation(id, &partial, 1, &snapshot, 21, logical),
+                snapshot.clone(),
+            ),
+            Err(ParliamentReducerErrorV1::InvalidAssignmentPlan),
+            "a retry must not strand another failed body"
+        );
+        assert_eq!(stranding, state, "a rejected partial retry must not mutate state");
+    }
+
+    let bodies = [ParliamentBody::RulesCommittee, ParliamentBody::PolicyJury];
+    state
+        .register_sortition_request_batch(
+            id,
+            sortition_generation(id, &bodies, 1, &snapshot, 21, logical),
+            snapshot,
+        )
+        .expect("one generation retries every failed body");
+    assert_eq!(
+        state.randomness_redraws_used_v1(),
+        Ok(MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1)
+    );
+    state
+        .validate()
+        .expect("the generation spending the last redraw unit persists");
+
+    // At the ceiling, the retried generation's objective failure is terminal and persistable.
+    let retried = BodyElectionAttemptId::derive_v1(id, ParliamentBody::RulesCommittee, 1);
+    state
+        .fail_body_election_no_roster(id, retried, false, 32)
+        .expect("the retry pulse never finalized");
+    assert_eq!(state.attempt.status, GovernanceAttemptStatusV1::Rejected);
+    state
+        .validate()
+        .expect("redraw exhaustion is a canonical terminal attempt");
+}
+
+#[test]
+fn sub_floor_retry_generation_records_capacity_evidence_for_every_failed_body() {
+    // A public and a hidden body both fail after the first pulse. A retry whose live electorate
+    // is below the hidden-ballot floor records capacity evidence for the complete generation,
+    // as the initial generation does, and a later adequate generation redraws both bodies.
+    let (mut state, failed) = rules_and_policy_invitations_open(0);
+    let id = state.attempt.id;
+    for election_id in failed {
+        respond_to_every_invitation(&mut state, election_id, false, 20);
+        state
+            .fail_body_election_no_roster(id, election_id, true, 21)
+            .expect("record the empty roster");
+    }
+    let logical = BeaconSessionId::for_network_v1(&network_id());
+    let bodies = [ParliamentBody::RulesCommittee, ParliamentBody::PolicyJury];
+    let small = candidates(90, 2);
+    state
+        .record_hidden_sortition_capacity_failure_batch(
+            id,
+            sortition_generation(id, &bodies, 1, &small, 21, logical),
+            small,
+        )
+        .expect("a sub-floor electorate is typed evidence for the whole generation");
+    assert_eq!(state.attempt.status, GovernanceAttemptStatusV1::Active);
+    for body in bodies {
+        let evidence = BodyElectionAttemptId::derive_v1(id, body, 1);
+        assert_eq!(state.active_sortition_capacity_failures.get(&body), Some(&evidence));
+    }
+    state
+        .validate()
+        .expect("a retry generation's capacity evidence persists");
+
+    let adequate = candidates(100, 12);
+    assert_eq!(
+        state.clone().register_sortition_request_batch(
+            id,
+            sortition_generation(id, &bodies, 2, &adequate, 21, logical),
+            adequate.clone(),
+        ),
+        Err(ParliamentReducerErrorV1::InvalidSortitionPulseSchedule),
+        "capacity evidence is retried only in a later block"
+    );
+    state
+        .register_sortition_request_batch(
+            id,
+            sortition_generation(id, &bodies, 2, &adequate, 22, logical),
+            adequate,
+        )
+        .expect("an adequate electorate redraws every failed body");
+    assert!(state.active_sortition_capacity_failures.is_empty());
+    state
+        .validate()
+        .expect("the redrawn generation persists");
+}
+
+#[test]
+fn later_stage_terminal_no_roster_rejects_a_persistable_attempt() {
+    // The Policy Jury is drawn with the Rules Committee but serves a later stage. When its
+    // roster comes back empty with the proposal-wide redraw budget spent, it can never be
+    // redrawn, so the reducer rejects the attempt while the Rules stage is still in progress.
+    // Persistence must accept that terminal state whether or not the current-stage body sealed.
+    let (open, [rules, policy]) =
+        rules_and_policy_invitations_open(MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1);
+    let id = open.attempt.id;
+
+    let mut deliberating = open.clone();
+    respond_to_every_invitation(&mut deliberating, rules, true, 20);
+    respond_to_every_invitation(&mut deliberating, policy, false, 20);
+    let rules_body = deliberating
+        .seal_body_roster(id, rules, 21)
+        .expect("seal the Rules roster");
+    deliberating
+        .advance_body_phase(id, rules_body, DeliberationPhaseV1::Orientation, 21, 10)
+        .expect("the Rules Committee deliberates");
+    deliberating
+        .validate()
+        .expect("the deliberating attempt persists");
+    let members: Vec<_> = deliberating
+        .body(&rules_body)
+        .expect("sealed Rules body")
+        .assignments()
+        .iter()
+        .map(|seat| seat.member.clone())
+        .collect();
+    assert!(
+        members
+            .iter()
+            .all(|member| deliberating.retains_citizenship_bond(member))
+    );
+    deliberating
+        .fail_body_election_no_roster(id, policy, true, 21)
+        .expect("record the empty Policy roster");
+    assert_eq!(
+        deliberating.attempt.status,
+        GovernanceAttemptStatusV1::Rejected
+    );
+    assert_eq!(deliberating.attempt.stage, GovernanceStageV1::Rules);
+    deliberating
+        .validate()
+        .expect("a later-stage terminal sortition failure is a canonical rejection");
+    assert!(
+        members
+            .iter()
+            .all(|member| !deliberating.retains_citizenship_bond(member)),
+        "the rejected attempt releases the seated Rules members' bonds"
+    );
+
+    let mut unsealed = open;
+    respond_to_every_invitation(&mut unsealed, rules, true, 20);
+    respond_to_every_invitation(&mut unsealed, policy, false, 20);
+    unsealed
+        .fail_body_election_no_roster(id, policy, true, 21)
+        .expect("record the empty Policy roster before the Rules roster seals");
+    assert_eq!(unsealed.attempt.status, GovernanceAttemptStatusV1::Rejected);
+    unsealed
+        .validate()
+        .expect("the rejection persists before the current-stage roster seals");
+}
+
+#[test]
+fn retry_generations_never_share_a_pulse_slot() {
+    // Within one block, a second retry could join the slot an earlier retry registered while
+    // freezing a different snapshot (a citizen registered in between). The pulse batch draws
+    // every request of a slot from one snapshot, so that slot could never be consumed and the
+    // attempt would stay active. Each generation therefore owns a fresh slot.
+    let (mut state, [rules, policy]) = rules_and_policy_invitations_open(0);
+    let id = state.attempt.id;
+    for election_id in [rules, policy] {
+        respond_to_every_invitation(&mut state, election_id, false, 20);
+    }
+    let logical = BeaconSessionId::for_network_v1(&network_id());
+    state
+        .fail_body_election_no_roster(id, rules, true, 21)
+        .expect("record the empty Rules roster");
+    let first_snapshot = candidates(90, 12);
+    state
+        .register_sortition_request_batch(
+            id,
+            sortition_generation(
+                id,
+                &[ParliamentBody::RulesCommittee],
+                1,
+                &first_snapshot,
+                21,
+                logical,
+            ),
+            first_snapshot,
+        )
+        .expect("retry the only failed body");
+    state
+        .fail_body_election_no_roster(id, policy, true, 21)
+        .expect("record the empty Policy roster");
+
+    let grown_snapshot = candidates(110, 12);
+    let policy_retry = |request_height| {
+        sortition_generation(
+            id,
+            &[ParliamentBody::PolicyJury],
+            1,
+            &grown_snapshot,
+            request_height,
+            logical,
+        )
+    };
+    let mut joining = state.clone();
+    assert_eq!(
+        joining.register_sortition_request_batch(id, policy_retry(21), grown_snapshot.clone()),
+        Err(ParliamentReducerErrorV1::InvalidSortitionPulseSchedule),
+        "a retry must not join a slot another generation registered"
+    );
+    assert_eq!(joining, state, "a rejected joining retry must not mutate state");
+
+    // Persistence independently refuses a slot whose awaiting requests froze different
+    // snapshots, since no pulse batch could consume it.
+    let mut diverged = state.clone();
+    let [entry]: [ParliamentSortitionRequestRegistrationV1; 1] = policy_retry(21)
+        .try_into()
+        .expect("one Policy Jury registration");
+    diverged
+        .register_sortition_request(id, entry.sequence, entry.request, grown_snapshot.clone())
+        .expect("the per-request reducer alone admits the shared slot");
+    assert_eq!(
+        diverged.validate(),
+        Err(ParliamentReducerErrorV1::InvalidCandidateSnapshot)
+    );
+
+    state
+        .register_sortition_request_batch(id, policy_retry(22), grown_snapshot)
+        .expect("the next block offers a fresh slot");
+    state
+        .validate()
+        .expect("generations on distinct slots persist");
+    let rules_retry = state
+        .election(&BodyElectionAttemptId::derive_v1(
+            id,
+            ParliamentBody::RulesCommittee,
+            1,
+        ))
+        .expect("Rules retry")
+        .attempt
+        .request
+        .id;
+    consume_sortition(&mut state, id, vec![rules_retry], logical, 31, pulse_id(62))
+        .expect("each slot is consumable on its own");
+}
+
+#[test]
+fn retry_capacity_evidence_may_cover_a_subset_with_mixed_sequences() {
+    // After the first draw, a retry generation holds only the failed bodies, and their
+    // sequences differ when they failed at different times. A sub-floor electorate records
+    // capacity evidence for that whole subset, and persistence must accept it.
+    let bodies = [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::PolicyJury,
+    ];
+    let mut state = state(public_requirements(&bodies));
+    let id = state.attempt.id;
+    state
+        .complete_qualification(id)
+        .expect("enter the Rules stage");
+    let logical = BeaconSessionId::for_network_v1(&network_id());
+    let initial = candidates(60, 12);
+    let registrations = sortition_generation(id, &bodies, 0, &initial, 10, logical);
+    let mut request_ids: Vec<_> = registrations
+        .iter()
+        .map(|entry| entry.request.id)
+        .collect();
+    request_ids.sort_unstable();
+    state
+        .register_sortition_request_batch(id, registrations, initial)
+        .expect("register the initial generation");
+    consume_sortition(&mut state, id, request_ids, logical, 20, pulse_id(63))
+        .expect("consume the first pulse");
+    let [rules, interest, policy] = bodies.map(|body| BodyElectionAttemptId::derive_v1(id, body, 0));
+    for (election_id, window) in [(rules, 1), (interest, 1), (policy, 5)] {
+        state
+            .begin_invitation_acceptance(id, election_id, 20, window)
+            .expect("open the invitation window");
+    }
+    respond_to_every_invitation(&mut state, rules, true, 20);
+    respond_to_every_invitation(&mut state, interest, false, 20);
+    respond_to_every_invitation(&mut state, policy, false, 20);
+    state
+        .seal_body_roster(id, rules, 21)
+        .expect("seal the Rules roster");
+    state
+        .fail_body_election_no_roster(id, interest, true, 21)
+        .expect("record the empty Interest roster");
+    let adequate = candidates(90, 12);
+    state
+        .register_sortition_request_batch(
+            id,
+            sortition_generation(
+                id,
+                &[ParliamentBody::InterestPanel],
+                1,
+                &adequate,
+                21,
+                logical,
+            ),
+            adequate,
+        )
+        .expect("retry the Interest Panel");
+    state
+        .fail_body_election_no_roster(id, policy, true, 25)
+        .expect("record the empty Policy roster after its longer window");
+    state
+        .fail_body_election_no_roster(
+            id,
+            BodyElectionAttemptId::derive_v1(id, ParliamentBody::InterestPanel, 1),
+            false,
+            32,
+        )
+        .expect("the Interest retry pulse never finalized");
+
+    let small = candidates(130, 2);
+    let generation = [(ParliamentBody::InterestPanel, 2), (ParliamentBody::PolicyJury, 1)]
+        .map(|(body, sequence)| ParliamentSortitionRequestRegistrationV1 {
+            sequence,
+            request: sortition_request_intent(id, sequence, body, small.clone(), 3, 32, 42, logical),
+        })
+        .to_vec();
+    state
+        .record_hidden_sortition_capacity_failure_batch(id, generation, small)
+        .expect("a sub-floor electorate records evidence for the failed subset");
+    assert_eq!(state.attempt.status, GovernanceAttemptStatusV1::Active);
+    state
+        .validate()
+        .expect("subset capacity evidence with mixed sequences persists");
+}

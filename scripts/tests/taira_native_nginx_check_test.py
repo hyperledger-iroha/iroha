@@ -131,6 +131,27 @@ def test_real_native_children_check_inherited_context_without_exporting_private_
     _assert_clean(directory)
 
 
+def test_repeated_native_custody_guards_release_only_their_path_check_duplicates(native_request) -> None:
+    request, directory, _ = native_request
+    request = dict(request,publication=dict(kind="create"))
+    def repeated_guard(receipt, request, context):
+        retained = list(context["handles"])
+        snapshots = {opened:context["identity"](os.fstat(opened),stat.S_ISDIR(os.fstat(opened).st_mode))
+                     for opened in retained}
+        for _ in range(200):
+            for name, opened in context["bound"].items():
+                context["revalidate"](context["native"][name],opened)
+            context["revalidate"](context["native"]["directory"],context["directory"],True)
+            if context["handles"] != retained:
+                raise RuntimeError("revalidation_duplicate_retained")
+        if not all(context["identity"](os.fstat(opened),stat.S_ISDIR(os.fstat(opened).st_mode)) == expected
+                   for opened,expected in snapshots.items()):
+            raise RuntimeError("retained_descriptor_identity_changed")
+    result = MODULE.remote_check(request,repeated_guard)
+    assert result["exit_code"] == 0 and result["validation_files_removed"] is True, result
+    _assert_clean(directory)
+
+
 def test_native_rejection_and_lexical_refusal_cleanup_without_private_error_body(native_request) -> None:
     request, directory, original = native_request
     (directory / "reject").touch()

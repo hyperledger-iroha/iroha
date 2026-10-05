@@ -23,6 +23,8 @@ pub(super) fn signed_fee_registry_root_fixture_with_config(
     Vec<u8>,
     Hash,
 ) {
+    let manifest_signing =
+        crate::manifest_signing_test_support::ManifestSigningFixture::new();
     use crate::sumeragi::test_chain::CertifiedTestChain;
     use iroha_data_model::{
         isi::smart_contract_code::{RegisterSmartContractBytes, RegisterSmartContractCode},
@@ -47,7 +49,7 @@ pub(super) fn signed_fee_registry_root_fixture_with_config(
     config.genesis_instructions.push(
         RegisterSmartContractCode {
             artifact_id,
-            manifest: manifest.signed(&signer),
+            manifest: manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &signer).expect("sign bounded fixture manifest"),
         }
         .into(),
     );

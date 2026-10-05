@@ -38,11 +38,13 @@ mod authorization;
 pub mod call;
 pub use authorization::DeploymentAuthorization;
 mod journal;
+mod manifest_encoding;
 mod native;
 mod progress;
 pub use progress::{DeploymentProgress, DeploymentStage};
 mod validation;
 use journal::Journal;
+use manifest_encoding::ManifestEncodingBudget;
 use native::*;
 use validation::{DeploymentReadContext, validate_plan, validate_read_plan};
 
@@ -50,6 +52,8 @@ use validation::{DeploymentReadContext, validate_plan, validate_read_plan};
 pub const RECEIPT_FILE_NAME: &str = "receipt.json";
 /// Maximum immutable artifact bytes accepted by this service.
 pub const MAX_DEPLOYMENT_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+/// Existing retained native transaction ceiling, before canonical hex decoding.
+const MAX_DEPLOYMENT_TRANSACTION_BYTES: usize = 1024 * 1024;
 /// A completed deployment and its exact retained, admission-verified artifact.
 ///
 /// Only the native service constructs this value after authenticated current alias, artifact,
@@ -367,14 +371,30 @@ impl DeploymentService {
             state.dataspace_id,
         )
         .map_err(|error| DeploymentError::InvalidRequest(error.to_string()))?;
+        let mut manifest_budget = ManifestEncodingBudget::new()
+            .map_err(|source| preflight_error("contract manifest encoding admission", source))?;
+        let signer_backing = manifest_budget
+            .reserve_signer(self.config.key_pair.public_key())
+            .map_err(|source| preflight_error("contract manifest signer admission", source))?;
+        let signing_frame = manifest_budget
+            .reserve_frame(&verified.manifest)
+            .map_err(|source| preflight_error("contract manifest frame admission", source))?;
         let manifest = verified
             .manifest
-            .try_signed(&self.config.key_pair)
+            .try_signed(
+                manifest_budget.context(),
+                signing_frame.remaining_bytes(),
+                &self.config.key_pair,
+            )
             .map_err(|error| preflight_error("contract manifest signature", eyre!(error)))?;
+        // The signing API has destroyed its temporary canonical payload.
+        drop(signing_frame);
         let sequence =
             self.sign_native_sequence(request, manifest, verified.code_hash, &state, &address)?;
         let (transactions, quotes) =
             self.quote_transactions(sequence, &request.fee_payment, state.dataspace_id)?;
+        // All native drafts and re-signed graphs have been consumed into encoded records.
+        drop(signer_backing);
         let preflight = DeploymentPreflight {
             network_id: self.config.network_id,
             chain_id: self.config.chain.to_string(),
@@ -409,7 +429,11 @@ impl DeploymentService {
                 transactions,
             },
         };
-        self.validate_plan(&prepared.record)?;
+        validation::validate_plan_with_manifest_budget(
+            &prepared.record,
+            &self.config,
+            &mut manifest_budget,
+        )?;
         Ok(prepared)
     }
     /// Return concrete read-only preflight evidence, including every exact fee quote and hash.

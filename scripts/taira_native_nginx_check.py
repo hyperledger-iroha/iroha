@@ -186,7 +186,7 @@ def validate_plan(value: object) -> dict:
     return value
 
 
-def remote_check(request: dict, operation=None) -> dict:
+def remote_check(request: dict, operation=None, *, existing_publication=False) -> dict:
     """Retain native ownership through both bounded child processes and cleanup."""
     import fcntl
     import stat
@@ -245,10 +245,18 @@ def remote_check(request: dict, operation=None) -> dict:
         return opened
 
     def revalidate(reference, opened, is_directory=False):
-        current = open_bound(reference, is_directory)
-        need(identity(os.fstat(opened), is_directory) == reference["identity"]
-             and identity(os.fstat(current), is_directory) == reference["identity"],
-             "native_identity_changed")
+        current = None
+        try:
+            current = open_bound(reference, is_directory)
+            need(identity(os.fstat(opened), is_directory) == reference["identity"]
+                 and identity(os.fstat(current), is_directory) == reference["identity"],
+                 "native_identity_changed")
+        finally:
+            if current is not None:
+                # This path-check duplicate has no custody role after the CAS;
+                # keep only the caller's actual retained descriptor alive.
+                handles.remove(current)
+                os.close(current)
 
     def stage(name, data):
         opened = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -304,7 +312,11 @@ def remote_check(request: dict, operation=None) -> dict:
         validation_main = str(path(native["directory"]["path"]) / main_name)
         candidate_fd = stage(candidate_name, candidate)
         candidate_identity = identity(os.fstat(candidate_fd))
-        if operation is not None and request["publication"]["kind"] in {"replace", "reconcile"}:
+        need(type(existing_publication) is bool and (not existing_publication or operation is not None),
+             "existing_publication_owner_required")
+        if operation is not None and (existing_publication or request["publication"]["kind"] in {"replace", "reconcile"}
+                                      or request.get("interrupted_journal") is not None
+                                      or request.get("recovery_direction") == "rollback"):
             # An already included public source cannot be injected a second
             # time. The apply owner admits its exact journal/inode under this
             # same lock, then checks the complete native context after exchange.

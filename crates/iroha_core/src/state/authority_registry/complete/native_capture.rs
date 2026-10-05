@@ -240,7 +240,16 @@ mod tests {
             state.kagemusha_v1_runtime_verifier.observe_release(),
             state.state_write_lock.observe_release(),
         ];
+        // Fresh State also admits the empty native AMX participant's exact
+        // current/undo generations, identity and original release controls.
+        let native_amx_bytes = mv::cell::CellInitialization::<
+            crate::sumeragi::amx::RetainedNativeAmx,
+        >::allocation_layouts()
+        .iter()
+        .map(std::alloc::Layout::size)
+        .sum::<usize>();
         let initial_bytes = native_tip_bytes
+            + native_amx_bytes
             + lock_releases.len()
                 * iroha_allocation::release::ReleaseNotification::allocation_layout::<
                     iroha_allocation::AllocationCharge,
@@ -291,6 +300,14 @@ mod tests {
             .iter()
             .map(std::alloc::Layout::size)
             .sum::<usize>();
+        let retired_generations = retired_generations
+            + mv::cell::Cell::<
+                crate::sumeragi::amx::RetainedNativeAmx,
+                iroha_allocation::AllocationCharge,
+            >::allocation_layouts()
+            .iter()
+            .map(std::alloc::Layout::size)
+            .sum::<usize>();
         let retirement_pin = crossbeam_epoch::pin();
         drop(state);
         assert_eq!(captured.root(), root);
@@ -298,7 +315,7 @@ mod tests {
         assert_eq!(
             budget.reserved_bytes(),
             captured_bytes + retired_generations,
-            "the live epoch retains both original native-tip generations after State drops",
+            "the live epoch retains the original native-tip and native-AMX generations after State drops",
         );
         drop(retirement_pin);
         collect_original_ebr_until(&budget, captured_bytes);

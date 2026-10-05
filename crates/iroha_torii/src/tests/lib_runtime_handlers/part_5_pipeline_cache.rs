@@ -330,6 +330,7 @@ fn pipeline_status_cache_pending_blocks_prune_by_ttl_and_capacity() {
 #[tokio::test]
 async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visibility_and_health()
 {
+    use futures::FutureExt as _;
     use iroha_core::execution_attempt::ExecutionAttemptError;
     let (app, tx_hash, chain) = canonical_outcome_test_fixture(false);
     let block = chain.committed(2).block().clone();
@@ -391,13 +392,30 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
     );
     assert_eq!(pending.block_hash, block.hash());
     drop(pending);
-    let error = routing::handle_v1_explorer_health(
-        app.state.clone(),
-        app.kura.clone(),
-        routing::MaybeTelemetry::disabled(),
-    )
-    .await
-    .expect_err("health may not replace resource refusal with a null timestamp");
+    // Off-chain Explorer reads retain their actual query owner, independently
+    // of the execution pool used by status and event-visibility reads above.
+    let reservation = try_acquire_new_query_fanout_memory(&app)
+        .expect("fund original Explorer query working set");
+    let admission = COLLECTION_READ_MEMORY_RESERVATION
+        .scope(reservation, acquire_query_admission(&app, true))
+        .await
+        .expect("admit original Explorer read");
+    let owner = crate::history_producer::HistoryProducerOwner::from_admission(&admission)
+        .expect("retain original Explorer query owner");
+    let cold_pool = owner.cold_frames();
+    let occupied_cold = cold_pool
+        .try_reserve_bytes(cold_pool.limit_bytes() - cold_pool.reserved_bytes())
+        .expect("occupy the original Explorer cold-frame pool");
+    let error = owner
+        .scope(|| {
+            routing::handle_v1_explorer_health(
+                app.state.clone(),
+                routing::MaybeTelemetry::disabled(),
+            )
+            .now_or_never()
+            .expect("health production completes synchronously inside its owner")
+        })
+        .expect_err("health may not replace resource refusal with a null timestamp");
     assert_eq!(
         error.into_response().status(),
         StatusCode::TOO_MANY_REQUESTS
@@ -407,11 +425,12 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
         StatusCode::TOO_MANY_REQUESTS,
         "latest-version read cannot report missing genesis under capacity pressure"
     );
-    let detail = routing::handle_v1_explorer_block_detail(
+    let detail = routing::handle_v1_explorer_block_detail_admitted(
         app.state.clone(),
         routing::MaybeTelemetry::disabled(),
         routing::DataspaceReadVisibility::all_for_tests(),
         "2".to_owned(),
+        admission,
     )
     .await
     .expect_err("capacity cannot authorize hash-only Explorer fallback");
@@ -427,6 +446,7 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
     );
 
     drop(occupied);
+    drop(occupied_cold);
     cache.refresh_pending_blocks(&app.state);
     assert!(cache.pending_blocks.is_empty());
     assert_eq!(
@@ -435,14 +455,17 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
     );
     assert!(ToriiDataspaceReadContext::transaction_event_scope(&app.kura, &event, &pool).is_ok());
     assert_eq!(
-        routing::handle_v1_explorer_health(
-            app.state.clone(),
-            app.kura.clone(),
-            routing::MaybeTelemetry::disabled()
-        )
-        .await
-        .unwrap()
-        .status(),
+        owner
+            .scope(|| {
+                routing::handle_v1_explorer_health(
+                    app.state.clone(),
+                    routing::MaybeTelemetry::disabled(),
+                )
+                .now_or_never()
+                .expect("health retry completes synchronously inside its owner")
+            })
+            .unwrap()
+            .status(),
         StatusCode::OK
     );
 }

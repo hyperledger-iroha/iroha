@@ -6,7 +6,7 @@ use iroha_data_model::transaction::{Executable, IvmBytecode, TransactionBuilder}
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 
-fn retention() -> ivm::ivm_cache::CacheLimitsGuard {
+pub(super) fn retention() -> ivm::ivm_cache::CacheLimitsGuard {
     ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
         capacity: 64,
         max_bytes: 64 * 1024 * 1024,
@@ -14,7 +14,7 @@ fn retention() -> ivm::ivm_cache::CacheLimitsGuard {
     })
 }
 
-fn fixture() -> (State, IvmBytecode, ContractManifest, ContractArtifactId) {
+pub(super) fn fixture() -> (State, IvmBytecode, ContractManifest, ContractArtifactId) {
     let (bytes, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             "seiyaku FundedAccessHints { state StateMap<int, int> Values; kotoage fn write_one() authorize(\"CanWrite\") { Values[1] = 10; } }",

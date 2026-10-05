@@ -12,11 +12,94 @@ and its owned nginx and forwarding journals. Capture does not qualify prior daem
 or reinterpret an installed launcher's program; the current typed runtime input
 must select the independently reviewed actual daemon and unit bindings.
 
+For first-time OS-owner bootstrap, follow the
+[fixed-custodian contract](../../docs/source/taira_release.md) using the actual
+same-source Darwin release CLI from the authenticated source corridor:
+
+```sh
+"$NATIVE_DARWIN_IROHA" taira public-reset initialize-native-edge-custody \
+  --expected-executable-sha256 "$INDEPENDENT_NATIVE_IROHA_SHA256" \
+  --trusted-public-key "$INDEPENDENT_RELEASE_OWNER_PUBLIC_KEY" \
+  --expected-trusted-public-key-sha256 "$INDEPENDENT_PUBLIC_KEY_RECORD_SHA256"
+```
+
+Both hashes must be independently selected; the key file contains only the
+public `TrustedKeyV1` record. Actual OS-home paths and compiled release source
+identity are required, with no path override or overwrite. Matching anchors
+replay read-only after normal use, leaving operational state untouched. The
+receipt remains `qualified: false`; setup does not qualify a deployment.
+
+The native host-pair input requires an explicit `native_python` capability; the
+validator guest requires `native_python: null`. Capture it from the independently
+selected actual Darwin main executable, rather than a PATH entry, symlink or
+framework launcher:
+
+```sh
+"$NATIVE_DARWIN_IROHA" taira public-reset capture-native-python \
+  --executable "$PINNED_NATIVE_PYTHON_MAIN_IMAGE" \
+  --expected-executable-sha256 "$PINNED_NATIVE_PYTHON_MAIN_IMAGE_SHA256" \
+  --output "$FRESH_NATIVE_PYTHON_CAPABILITY_DIRECTORY"
+```
+
+The command retains the image while checking its public hash, full native file
+identity, kernel-observed executing image and Python 3.11+ version. It publishes
+`native-python.json` atomically and prints its exact public file reference. Use
+that canonical object as the native host's `native_python` field before signing
+or preparing the host pair. Captures, candidate authorizations and phase
+checkpoints bind the resulting host-pair digest. The receiver retains and
+revalidates that exact interpreter for every supervised helper invocation.
+
 Use the exact `iroha` executable in a successful maintained release import. The
 import includes `preparation/{result,request,checks,capture}.json`, all mode0400,
 bound into its ten-payload request and completed transfer. Preparation, compiled
 source identity, all four transferred binaries, source receipt and completed
 transfer must join. Six-payload imports do not satisfy this command.
+
+If the incumbent nginx publication predates this owner protocol, adopt it before
+preparing the native edge. The independently selected release owner authorizes
+the exact pinned request; the fixed native dispatcher then acquires and retains
+the authentic host lease and invokes the maintained helper's durable owner
+publication. Existing journals remain opaque retained history. Adoption preserves
+the installed include and does not reload nginx. It creates a canonical,
+explicitly unqualified owner record; it does not decode old journals or qualify a
+reset.
+
+```sh
+"$NATIVE_DARWIN_IROHA" taira public-reset prepare-native-edge-owner \
+  --host-pair "$ADMITTED_HOST_PAIR" \
+  --expected-host-pair-sha256 "$PINNED_HOST_PAIR_RAW_SHA256" \
+  --nginx-plan "$PINNED_NATIVE_CAPTURE_PLAN" \
+  --expected-nginx-plan-sha256 "$PINNED_NATIVE_CAPTURE_PLAN_SHA256" \
+  --opaque-journal "$ADMITTED_INCUMBENT_JOURNAL_BASENAME" \
+  --output "$FRESH_NATIVE_OWNER_INPUT_DIRECTORY"
+
+"$NATIVE_DARWIN_IROHA" taira public-reset authorize-native-edge-owner \
+  --request "$PINNED_NATIVE_OWNER_REQUEST" \
+  --expected-request-sha256 "$PINNED_NATIVE_OWNER_REQUEST_SHA256" \
+  --trusted-public-key "$INDEPENDENT_RELEASE_OWNER_PUBLIC_KEY" \
+  --signing-key-fd 199 --output "$FRESH_NATIVE_OWNER_AUTHORIZATION"
+
+"$FIXED_NATIVE_EDGE_DISPATCHER" taira public-reset adopt-native-edge-owner \
+  --request "$PINNED_NATIVE_OWNER_REQUEST" \
+  --expected-request-sha256 "$PINNED_NATIVE_OWNER_REQUEST_SHA256" \
+  --trusted-public-key "$INDEPENDENT_RELEASE_OWNER_PUBLIC_KEY" \
+  --authorization "$FRESH_NATIVE_OWNER_AUTHORIZATION"
+```
+
+Preparation derives `adoption-plan.json` and `request.json` from actual retained
+native files and publishes their complete private directory atomically. Repeat
+`--opaque-journal` for an independently admitted ordered set of up to 32 journal
+basenames. The receipt reports the actual request path, raw SHA-256 and full
+native identity; the release owner independently approves that request pin.
+Preparation derives the nonce, fifteen-minute admission window and compiled
+helper closure. It verifies the unchanged public include and full native context
+without decoding any opaque journal, publishing an include or reloading nginx.
+The fresh destination must not already exist.
+
+Use the fixed dispatcher admitted by the native host pair and the same-source
+Darwin command implementation. The signing descriptor belongs to the selected
+release owner. These source commands require their native validation gate before
+operational use.
 
 Prepare the native predecessor and candidate on the independently admitted Mac
 using its same-source Darwin CLI before guest capture. The closed request selects

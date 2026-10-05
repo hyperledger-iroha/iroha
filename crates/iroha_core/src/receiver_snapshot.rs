@@ -899,6 +899,7 @@ mod tests {
                         norito::decode_canonical(&encoded).expect("decode witness");
                     assert_eq!(&decoded, witness.wire());
                     assert_eq!(witness.writes.len(), if include_receipts { 8 } else { 6 });
+                    assert_eq!(witness.fastpq_transcripts.len(), 1);
                     let mut ordinary = witness
                         .writes
                         .iter()

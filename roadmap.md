@@ -136,7 +136,7 @@ compared by no state transition, become committed State (F.4).
 
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
-| P1 | Parliament | Governance/crypto/Torii | [18-event pipeline](specs/governance_pipeline.md), atomic policy/confirmation, beacon/ballot/deadline/retry and four-peer rollback; independent review/signed API. |
+| P1 | Parliament | Governance/crypto/Torii | [Final ballot requirements and launch gate](specs/parliament_private_ballot_design.md): deliver a reviewed construction satisfying PQ confidentiality and accepted-voter dropout without decryption custodians; actual small electorates, independent epoch-seated pause panel and Parliament availability isolation; canonical V1 replacement, atomic policy/confirmation, bounded retry and four-peer replay/rollback; independent proof review/signed API before binding-governance mainnet launch. No owner choice remains pending. |
 | P13 | Standalone elections | Governance/circuits/SDKs | [Full statement](specs/zk_audit_matrix.md#election-statement-completion): credentials/nullifiers, weight/re-vote, encryption/custody and sound ballot/tally; V1 keys/fixtures and restore/finality. |
 | P2 | SoraFS promotion | SoraFS/operators | [Reliability](specs/sorafs/first_release_reliability_goals.md), [V1 goals](specs/sorafs/v1_implementation_goals.md) and [closure](specs/sorafs/v1_closure_ledger.md); software signer, live multi-provider/dual-gateway L1, 17 summaries and authenticated L2. Load/resilience observations are optional diagnostics without a fixed deployment duration. |
 | P3 | Governance DAG | DAG/broker | [Two services](specs/sorafs_governance_dag_plan.md), authenticated ingress/signing/CAS, failover/recovery/corruption and five-target SBOM/L1/L2 artifacts. |

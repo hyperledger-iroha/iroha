@@ -2763,6 +2763,9 @@ retired keys' included, never dropped) with the record-provenance rules, install
 store id of §7.4, a fresh random `Init.nonce` per start,
 durable body store, block store (Kura), executor with a speculative-state cache keyed by block
 hash (chained on certified parents), payload builder (queue; `BuildPayload` only peeks,
+a successor request waits until Core has accepted the original parent's `BlockApplied` and its
+exact applied-parent height/view source is live; that first activation preserves the queued
+request, while later source or view withdrawal cancels its original custody;
 transactions leave the queue when a block containing them is applied; `PayloadReady{req}` at most
 once after an `EMPTY` answer to `req`; on `PayloadRejected` it quarantines only transactions that
 make a block `Invalid` on their own, §4.2), serving `ServeBlocks`/`ServePayload`/`FetchPayload`
@@ -2774,6 +2777,43 @@ rows, and Core receives only opaque `BodyAvailable`/`PayloadAuthored` custody. C
 `StoreBody`; O2 makes durability a prerequisite for later signature effects, not an attribute
 asserted by a decoded manifest. One core instance per consensus instance; instances share nothing inside the core and
 are isolated by the driver (O9).
+
+A new request may borrow the exact completed nonempty global payload while its original
+State-funded backing and selected-input table remain live. This requires the same applied
+native parent, State publication generation, height, view, byte limit and execution budget;
+every request first reads and authenticates the physical canonical parent. The actual Queue
+mutation fence captures the original ownership generation before selection and binds every
+selected signed input to that same admission boundary, checks
+that every input is still pending and unexpired, and refuses reuse after any insertion or
+removal. The earliest actual selected-input expiry bounds physical retention; the Worker
+reclaims the original owner on an idle receive timeout after rechecking its actual TimeSource,
+and checks source and Queue withdrawal before every request. These checks acquire one
+nonblocking State view. A genuine busy reader or publisher retains only the original paid
+owner until its actual expiry, preserves the physical release observation when returning a
+refusal, and permits no lend. Completing a State publication revokes the old generation;
+a reader release without publication may retry the same backing. Scope capture borrows the
+view whose physical parent was authenticated. The original allocation pool retains refund
+notifications around the complete build body, so all State views and Queue guards retire
+before a reentrant capacity callback can affect a later selection. Freed credits remain
+available immediately within that original pool. Explicit queue attachment,
+source or request withdrawal, rejection and execution or discard at that height retire the
+retained owner. Mixed lane/Queue payloads cannot borrow completed Queue-only custody. This
+preserves the Core's 200 ms build deadline and never produces an empty block or substitutes
+retained bytes for unavailable native history.
+
+A retained partial global builder must pass those fresh parent and current-scope checks
+before returning its first completed output. Its signed lane merge section must equal the
+current proposal from the actual lane journals, including its time floor; newly mandatory
+lane work withdraws the old plan. Every selected Queue input, including in a mixed payload,
+retains its original admission receipt before encoding. Queue mutation, actual expiry or
+completed State publication withdraws that receipt, so a later request rebuilds from current
+inputs. The Worker checks this non-lending storage lease before unrelated State/native
+refusals and includes its actual earliest expiry in the idle receive timeout. Thus expired
+partial bytes refund even while their physical parent remains unavailable without a new build
+request. A lane-only source borrows no Queue admission or residence deadline. A genuine busy reader or publisher,
+typed resource refusal or unavailable physical parent preserves the same paid partial job
+and permits no output; restoring the unchanged original source can finish the same encoded
+backing without replacement or reencoding.
 
 ### 12.3 Ordering and scheduling guarantees the driver MUST honour
 

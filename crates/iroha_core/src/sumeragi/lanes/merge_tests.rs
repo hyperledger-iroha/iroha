@@ -387,6 +387,55 @@ impl Fixture {
     }
 }
 
+/// Run a borrowed consumer over the original four-validator chain and certified
+/// lane store. The producer below still executes, signs, prepares and publishes
+/// every requested lane block through the actual native custody path.
+pub(crate) fn with_original_lane_merge_fixture(
+    test: impl FnOnce(
+        &CertifiedTestChain,
+        Arc<super::super::registry::LaneStores>,
+        &dyn Fn(u64, u64, Vec<SignedTransaction>) -> Hash32,
+        [SignedTransaction; 2],
+    ) + Send
+    + 'static,
+) {
+    crate::sumeragi::threads::sumeragi_thread_builder("sumeragi-original-lane-merge-test")
+        .spawn(move || {
+            let mut fixture = Fixture::start();
+            let active_from = fixture.record().active_from;
+            assert_eq!(
+                active_from, 3,
+                "the actual signed fixed-lane activation height"
+            );
+            while fixture.chain.height() < active_from {
+                // The real chain helper inserts signed clock work, executes it and
+                // commits its exact three-vote certificate; this creates no empty block.
+                fixture.chain.commit(Vec::new());
+            }
+            assert_eq!(fixture.chain.height(), active_from);
+            assert!(fixture.record().admits_anchor(fixture.chain.height()));
+            let transactions = [
+                fixture.log(
+                    &lane_user(),
+                    "first original lane input",
+                    GENESIS_MS + 1_000,
+                ),
+                fixture.log(&lane_user(), "next original lane input", GENESIS_MS + 1_001),
+            ];
+            let certify =
+                |height, anchor, transactions| fixture.certify(height, anchor, transactions);
+            test(
+                &fixture.chain,
+                Arc::clone(&fixture.stores),
+                &certify,
+                transactions,
+            );
+        })
+        .expect("spawn original lane fixture")
+        .join()
+        .expect("original lane fixture");
+}
+
 #[path = "merge_tests/paid_quantity_source.rs"]
 mod paid_quantity_source;
 

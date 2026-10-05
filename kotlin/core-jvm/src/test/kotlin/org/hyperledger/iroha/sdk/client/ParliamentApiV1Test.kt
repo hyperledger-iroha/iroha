@@ -221,7 +221,7 @@ class ParliamentApiV1Test {
     }
 
     @Test
-    fun attemptBuilderAdmitsExactlyTheFourteenFirstReleaseProposalKinds() {
+    fun attemptBuilderAdmitsExactlyTheTenFirstReleaseProposalKinds() {
         ParliamentApiV1.PROPOSAL_KINDS.forEach { kind ->
             val request = objectValue(
                 ParliamentApiV1.attemptDraftRequestJson(
@@ -231,7 +231,7 @@ class ParliamentApiV1Test {
             )
             assertEquals(kind, (request["proposal"] as Map<*, *>)["kind"])
         }
-        assertEquals(14, ParliamentApiV1.PROPOSAL_KINDS.size)
+        assertEquals(10, ParliamentApiV1.PROPOSAL_KINDS.size)
 
         val fullU64Policy = validProposal("ValidationFeePolicy")
         @Suppress("UNCHECKED_CAST")
@@ -437,59 +437,51 @@ class ParliamentApiV1Test {
     }
 
     @Test
-    fun kagemushaPolicyInstallRequiresExactEmptyPredecessorAndOrderedTrustedSigners() {
-        val accepted = validProposal("KagemushaVerifierPolicyInstall")
-        ParliamentApiV1.Proposal.fromJson(encode(accepted))
-        @Suppress("UNCHECKED_CAST")
-        val payload = accepted["payload"] as MutableMap<String, Any?>
-        @Suppress("UNCHECKED_CAST")
-        val predecessor = payload["expected_predecessor"] as MutableMap<String, Any?>
-        predecessor["active_release_id"] = List(32) { 1 }
-        assertFailsWith<IllegalArgumentException> {
-            ParliamentApiV1.Proposal.fromJson(encode(accepted))
+    fun retiredKagemushaProposalKindsCannotEnterAttemptDrafts() {
+        listOf(
+            "KagemushaVerifierPolicyInstall",
+            "KagemushaVerifierReleaseInstall",
+            "KagemushaVerifierReleaseActivate",
+            "KagemushaVerifierReleaseRetire",
+        ).forEach { kind ->
+            assertTrue(kind !in ParliamentApiV1.PROPOSAL_KINDS)
+            val error = assertFailsWith<IllegalArgumentException>("accepted retired proposal $kind") {
+                ParliamentApiV1.Proposal.fromJson(encode(validProposal(kind)))
+            }
+            assertEquals("proposal.kind is unknown or retired", error.message)
         }
-        predecessor["active_release_id"] = null
+    }
 
-        @Suppress("UNCHECKED_CAST")
-        val policy = payload["authority_policy"] as MutableMap<String, Any?>
+    @Test
+    fun releaseEvidenceRequiresOrderedTrustedSigners() {
+        val payload = releaseProposalPayload("kagemusha_verifier_release_install_v1.json")
+        val policy = releaseNested(releaseNested(payload, "expected_predecessor"), "authority_policy")
+        KagemushaVerifierProposalValidatorV1.install(payload)
+        val authoritySetId = policy["authority_set_id"]
         policy["authority_set_id"] = List(32) { 0 }
-        assertFailsWith<IllegalArgumentException> {
-            ParliamentApiV1.Proposal.fromJson(encode(accepted))
-        }
-        policy["authority_set_id"] = List(32) { 0x41 }
-        policy["threshold"] = 2
-        assertFailsWith<IllegalArgumentException> {
-            ParliamentApiV1.Proposal.fromJson(encode(accepted))
-        }
-        policy["threshold"] = 1
+        assertFailsWith<IllegalArgumentException> { KagemushaVerifierProposalValidatorV1.install(payload) }
+        policy["authority_set_id"] = authoritySetId
+        val threshold = policy["threshold"]
         @Suppress("UNCHECKED_CAST")
         val signers = policy["authorized_signers"] as MutableList<String>
+        policy["threshold"] = signers.size + 1
+        assertFailsWith<IllegalArgumentException> { KagemushaVerifierProposalValidatorV1.install(payload) }
+        policy["threshold"] = threshold
         signers += signers[0]
-        assertFailsWith<IllegalArgumentException> {
-            ParliamentApiV1.Proposal.fromJson(encode(accepted))
-        }
-        signers.clear()
-        signers.addAll(
-            listOf(
-                encodePublicKeyMultihash(0x01, TestEd25519Keys.publicKey(8)),
-                encodePublicKeyMultihash(0x01, TestEd25519Keys.publicKey(9)),
-            ).sortedDescending(),
-        )
-        assertFailsWith<IllegalArgumentException> {
-            ParliamentApiV1.Proposal.fromJson(encode(accepted))
-        }
-        signers.sort()
-        ParliamentApiV1.Proposal.fromJson(encode(accepted))
+        assertFailsWith<IllegalArgumentException> { KagemushaVerifierProposalValidatorV1.install(payload) }
+        signers.removeAt(signers.lastIndex)
+        signers.reverse()
+        assertFailsWith<IllegalArgumentException> { KagemushaVerifierProposalValidatorV1.install(payload) }
+        signers.reverse()
+        KagemushaVerifierProposalValidatorV1.install(payload)
         policy["unexpected"] = true
-        assertFailsWith<IllegalArgumentException> {
-            ParliamentApiV1.Proposal.fromJson(encode(accepted))
-        }
+        assertFailsWith<IllegalArgumentException> { KagemushaVerifierProposalValidatorV1.install(payload) }
     }
 
     @Test
     fun kagemushaReleaseInstallUsesExactNestedFixtureAndRejectsMutations() {
         val fixture = "kagemusha_verifier_release_install_v1.json"
-        ParliamentApiV1.Proposal.fromJson(Files.readAllBytes(fixturePath().resolveSibling(fixture)))
+        KagemushaVerifierProposalValidatorV1.install(releaseProposalPayload(fixture))
 
         // DTO tag coverage does not produce native qualification or signed release evidence.
         for (role in listOf(
@@ -617,7 +609,7 @@ class ParliamentApiV1Test {
     @Test
     fun kagemushaReleaseActivateRequiresSoleInactiveStandby() {
         val fixture = "kagemusha_verifier_release_activate_v1.json"
-        ParliamentApiV1.Proposal.fromJson(Files.readAllBytes(fixturePath().resolveSibling(fixture)))
+        KagemushaVerifierProposalValidatorV1.activate(releaseProposalPayload(fixture))
 
         assertReleaseMutationRejected(fixture, "short successor id") { proposal ->
             proposal["successor_release_id"] = List(31) { 1 }
@@ -653,10 +645,7 @@ class ParliamentApiV1Test {
     @Test
     fun kagemushaReleaseRetireConsumesTheGenuineFixtureAndRejectsStaleOrExtendedTargets() {
         val fixture = "kagemusha_verifier_release_retire_v1.json"
-        val original = Files.readAllBytes(fixturePath().resolveSibling(fixture))
-        val parsed = ParliamentApiV1.Proposal.fromJson(original)
-        assertEquals("KagemushaVerifierReleaseRetire", parsed.kind)
-        assertEquals(objectValue(original), parsed.wire, "the entire native-produced predecessor must be preserved")
+        KagemushaVerifierProposalValidatorV1.retire(releaseProposalPayload(fixture))
         val predecessor = releaseNested(releaseProposalPayload(fixture), "expected_predecessor")
         assertTrue(predecessor["active_release_id"] != null)
         @Suppress("UNCHECKED_CAST")
@@ -688,9 +677,6 @@ class ParliamentApiV1Test {
     @Test
     fun kagemushaReleaseRetireKeepsGenuineActiveAndHistoricalRowsAndRefusesTheirRemoval() {
         val fixture = "kagemusha_verifier_release_retire_v1.json"
-        val original = Files.readAllBytes(fixturePath().resolveSibling(fixture))
-        val parsed = ParliamentApiV1.Proposal.fromJson(original)
-        assertEquals(objectValue(original), parsed.wire)
         val native = releaseProposalPayload(fixture)
         val predecessor = releaseNested(native, "expected_predecessor")
         @Suppress("UNCHECKED_CAST")
@@ -2056,9 +2042,15 @@ class ParliamentApiV1Test {
         val proposal = JsonParser.parse(
             String(Files.readAllBytes(fixturePath().resolveSibling(fixture)), StandardCharsets.UTF_8),
         ) as MutableMap<String, Any?>
-        mutate(releaseNested(proposal, "payload"))
+        val payload = releaseNested(proposal, "payload")
+        mutate(payload)
         assertFailsWith<IllegalArgumentException>("accepted $label") {
-            ParliamentApiV1.Proposal.fromJson(encode(proposal))
+            when (proposal["kind"]) {
+                "KagemushaVerifierReleaseInstall" -> KagemushaVerifierProposalValidatorV1.install(payload)
+                "KagemushaVerifierReleaseActivate" -> KagemushaVerifierProposalValidatorV1.activate(payload)
+                "KagemushaVerifierReleaseRetire" -> KagemushaVerifierProposalValidatorV1.retire(payload)
+                else -> error("unsupported release evidence fixture $fixture")
+            }
         }
     }
 

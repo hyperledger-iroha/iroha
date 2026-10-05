@@ -59,11 +59,7 @@ fn operator_bound_proposal_references_account(
         | ProposalKind::SorafsProviderGovernance(_)
         | ProposalKind::MusubiRegistryGovernance(_)
         | ProposalKind::ContractEmergencyHold(_)
-        | ProposalKind::GlobalDataTriggerPermissionGovernance(_)
-        | ProposalKind::KagemushaVerifierPolicyInstall(_)
-        | ProposalKind::KagemushaVerifierReleaseInstall(_)
-        | ProposalKind::KagemushaVerifierReleaseActivate(_)
-        | ProposalKind::KagemushaVerifierReleaseRetire(_) => false,
+        | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => false,
     }
 }
 

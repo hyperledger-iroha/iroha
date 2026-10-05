@@ -16,11 +16,19 @@ The model covers these consensus bindings:
   branch records `NoRoster`; a retry supersedes the
   complete failed initial generation, freezes a fresh snapshot, uses the exact
   next sequence no earlier than the failure height, and the final permitted
-  sequence rejects the governance attempt. For a hidden body, an empty or
+  sequence rejects the governance attempt. The model's single sortition
+  generation stands for every body whose active generation ended `NoRoster`:
+  the reducer admits a retry batch only when it contains every such body,
+  before and after the first consumed pulse, so one retry never strands
+  another failed body, and each generation owns a fresh pulse slot with one
+  frozen snapshot. For a hidden body, an empty or
   live electorate below three instead records typed `NoRoster` capacity evidence
-  at the request height without revealing or consuming a pulse. A capacity
+  for the whole generation at the request height without revealing or
+  consuming a pulse. A capacity
   retry must use the exact next generation in a later block, and exhaustion of
-  that same bounded sequence rejects the attempt. Independently of each nested
+  that same bounded sequence rejects the attempt. Per-body stages are
+  abstracted: a later-stage body's terminal failure rejects the attempt even
+  while an earlier stage is in progress. Independently of each nested
   retry counter, one proposal-wide redraw budget covers every fresh randomness
   choice: a successor governance attempt's first sortition, every later
   sortition generation (including Confirmation), and every timed-OVN ballot

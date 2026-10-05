@@ -1201,6 +1201,14 @@ pub(crate) async fn execute_collection_response(
     telemetry: &MaybeTelemetry,
     visibility: &DataspaceReadVisibility,
 ) -> Result<Response> {
+    let owner = match app {
+        Some(app) => {
+            let reservation = crate::current_query_fanout_memory_for_state(app)
+                .ok_or_else(|| Error::from(collections::memory::capacity("response owner")))?;
+            Some(crate::history_producer::HistoryProducerOwner::from_reservation(&reservation)?)
+        }
+        None => crate::history_producer::HistoryProducerOwner::current_if_admitted()?,
+    };
     canonicalize_collection_query(state, target, &mut query, telemetry)?;
     let limits = collection_execution_limits(app)?;
     let prepared = collections::prepare(target.spec(), target.scope(), &query, &limits)?;
@@ -1208,11 +1216,39 @@ pub(crate) async fn execute_collection_response(
         app, state, target, &query, telemetry, visibility, &prepared, &limits,
     )
     .await?;
-    row_page_response(prepared.project(page)?, limits.bytes)
+    let page = prepared.project(page)?;
+    match owner {
+        Some(owner) => row_page_response_owned(page, limits.bytes, &owner),
+        // app=None is the explicit standalone engine/benchmark entry point. It has
+        // no query-pool certification; a present invalid admission was rejected above.
+        None => standalone_row_page_response(page, limits.bytes),
+    }
 }
 
 /// Serialize a page as the JSON page envelope.
 pub(crate) fn row_page_response(
+    page: RowPage,
+    bytes: collections::memory::BytePolicy,
+) -> Result<Response> {
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    row_page_response_owned(page, bytes, &owner)
+}
+
+fn row_page_response_owned(
+    page: RowPage,
+    bytes: collections::memory::BytePolicy,
+    owner: &crate::history_producer::HistoryProducerOwner,
+) -> Result<Response> {
+    let page = iroha_torii_shared::list_query::Page {
+        items: page.items,
+        next_cursor: page.next_cursor,
+        total: page.total,
+    };
+    owner.json_with_limit(&page, bytes.response_bytes)
+}
+
+/// Independent bounded engine output; this operation grants no query owner.
+fn standalone_row_page_response(
     page: RowPage,
     bytes: collections::memory::BytePolicy,
 ) -> Result<Response> {
@@ -2135,5 +2171,54 @@ mod tests {
         let page: norito::json::Value = norito::json::from_slice(&body).expect("json");
         let item = page["items"][0].as_object().expect("item");
         assert_eq!(item.keys().collect::<Vec<_>>(), ["id"]);
+    }
+
+    #[test]
+    fn admitted_row_page_refuses_a_missing_original_query_owner() {
+        let page = RowPage {
+            items: Vec::new(),
+            next_cursor: None,
+            total: Some(0),
+        };
+        assert!(row_page_response(page, collections::memory::BytePolicy::canonical()).is_err());
+    }
+
+    #[tokio::test]
+    async fn row_page_original_body_and_extracted_bytes_retain_the_query_owner() {
+        use http_body_util::BodyExt as _;
+        const WORKING: usize = 48 * 1024 * 1024;
+        let pool = crate::ByteWeightedMemoryPool::new(WORKING).unwrap();
+        let memory = crate::QueryFanoutMemoryReservation::from_admitted_fanout(
+            pool.try_acquire_parts([WORKING as u64]).unwrap(),
+            crate::QueryFanoutMemoryEnvelope::for_body_admission(WORKING).unwrap(),
+            pool.generation(),
+        )
+        .unwrap();
+        let owner =
+            crate::history_producer::HistoryProducerOwner::from_reservation(&memory).unwrap();
+        let page = RowPage {
+            items: Vec::new(),
+            next_cursor: None,
+            total: Some(0),
+        };
+        let response = owner
+            .scope(|| row_page_response(page, collections::memory::BytePolicy::canonical()))
+            .unwrap();
+        drop(owner);
+        drop(memory);
+        let (parts, mut body) = response.into_parts();
+        drop(parts);
+        let bytes = body.frame().await.unwrap().unwrap().into_data().unwrap();
+        let clone = bytes.clone();
+        drop(body);
+        drop(bytes);
+        assert!(pool.try_acquire_parts([WORKING as u64]).is_none());
+        assert!(
+            norito::json::from_slice::<norito::json::Value>(&clone)
+                .unwrap()
+                .is_object()
+        );
+        drop(clone);
+        assert!(pool.try_acquire_parts([WORKING as u64]).is_some());
     }
 }

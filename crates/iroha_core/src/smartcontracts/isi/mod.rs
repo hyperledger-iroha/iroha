@@ -595,12 +595,6 @@ define_instruction_handlers! {
     dispatch_instruction::<
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance
     >,
-    dispatch_instruction::<
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1
-    >,
-    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1>,
-    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1>,
-    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,
@@ -1791,6 +1785,8 @@ mod tests {
     }
     #[test]
     async fn register_contract_manifest_is_queryable_with_runtime_authority() -> Result<()> {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::{
             isi::smart_contract_code, permission, prelude as dm, query::smart_contract::prelude,
         };
@@ -1812,7 +1808,7 @@ mod tests {
             code,
         }
         .execute(&alice, &mut stx)?;
-        let manifest = manifest.signed(&ALICE_KEYPAIR);
+        let manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &ALICE_KEYPAIR).expect("sign bounded fixture manifest");
         {
             let scoped_manifest = manifest.clone();
             smart_contract_code::RegisterSmartContractCode {
@@ -1894,6 +1890,8 @@ mod tests {
     }
     #[test]
     async fn register_contract_manifest_rejects_wrong_signer() -> Result<()> {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_crypto::Hash;
         use iroha_data_model::{isi::smart_contract_code, permission, prelude as dm};
         let kura = Kura::blank_kura_for_testing();
@@ -1907,7 +1905,7 @@ mod tests {
         let h = Hash::new(b"dummy_code");
         let (_, mut manifest) = minimal_contract_artifact();
         manifest.code_hash = Some(h);
-        let manifest = manifest.signed(&checked_keypair());
+        let manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &checked_keypair()).expect("sign bounded fixture manifest");
         let token =
             iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
         let perm: permission::Permission = token.into();

@@ -5,6 +5,7 @@ fn exact_byte_vec_with_capacity(bytes: usize) -> Result<Vec<u8>, BoundedEncodeEr
     }
     let layout = std::alloc::Layout::array::<u8>(bytes)
         .map_err(|_| BoundedEncodeError::AllocationFailed { bytes })?;
+    reserve_decode_allocation(layout.size())?;
     // SAFETY: `layout` is non-zero and describes exactly `bytes` byte slots.
     // Null is rejected before ownership; `Vec` deallocates the same layout.
     let allocation = unsafe { std::alloc::alloc(layout) };

@@ -152,8 +152,45 @@ fn access_set_cache_put(key: AccessSetCacheKey, manifest_hash: IrohaHash, set: A
 fn access_set_cache_clear() {
     access_set_cache().write().clear();
 }
-fn manifest_signature_hash(manifest: &ContractManifest) -> IrohaHash {
-    IrohaHash::new(manifest.signature_payload_bytes())
+fn manifest_signature_hash(
+    manifest: &ContractManifest,
+    budget: &AllocationBudget,
+) -> Result<IrohaHash, norito::core::BoundedEncodeError> {
+    use norito::core::{BoundedEncodeError, DecodeBudgetContext};
+
+    // This optional planner borrows the original manifest and streams into a
+    // stack hasher. Its only new native allocation is the cumulative counter,
+    // paid by the exact State execution pool supplied by the caller. The pool
+    // limit also bounds streamed frame bytes; it does not certify source custody.
+    let max_frame_bytes = budget.limit_bytes();
+    let context = DecodeBudgetContext::try_new_owned(
+        norito::DecodeLimits::new(
+            max_frame_bytes,
+            max_frame_bytes,
+            max_frame_bytes,
+            max_frame_bytes,
+            256,
+        ),
+        budget,
+    )
+    .map_err(BoundedEncodeError::Serialization)?;
+    // TODO: Norito's owned-context constructor retains typed AllocationFailed
+    // but erases the original pool refusal/release observation. Do not infer an
+    // execution rejection or a complete allocation certificate from this hash.
+    let mut encoding = Ok(());
+    let hash = IrohaHash::new_from_writer(|writer| {
+        encoding = manifest
+            .signature_payload()
+            .write_canonical(&context, max_frame_bytes, writer);
+        if encoding.is_err() {
+            // Keep the original native error outside the I/O callback instead
+            // of boxing it, and prevent a partial digest from being finalized.
+            return Err(std::io::ErrorKind::InvalidData.into());
+        }
+        Ok(())
+    });
+    encoding?;
+    hash.map_err(|error| BoundedEncodeError::Serialization(error.into()))
 }
 fn prepared_contract_for_access<R>(
     state_ro: &R,
@@ -510,7 +547,14 @@ fn manifest_access_set(
     if contract.code_hash() != artifact_id.code_hash {
         return None;
     }
-    let manifest_hash = cache_enabled.then(|| manifest_signature_hash(manifest));
+    // A refused hash cannot authorize a cached exact hint. The enclosing
+    // planner keeps its existing conservative dependency barrier, without a
+    // negative cache entry or a manufactured transaction rejection.
+    let manifest_hash = if cache_enabled {
+        Some(manifest_signature_hash(manifest, budget).ok()?)
+    } else {
+        None
+    };
     let mut selected_entrypoint_name = None;
     let mut authorization_read_required = false;
     if let Some(entrypoints) = manifest.entrypoints.as_deref() {
@@ -989,7 +1033,7 @@ fn manifest_matches_prepared_contract(
     contract: &ivm::PreparedContract,
     manifest: &ContractManifest,
 ) -> bool {
-    manifest.signature_payload() == contract.manifest().signature_payload()
+    manifest.same_signed_content(contract.manifest())
 }
 fn key_tx_sequence(account: &AccountId) -> AccessKey {
     format!("tx.sequence:{account}")
@@ -3491,6 +3535,8 @@ seiyaku HelperStaticAccess {
   fn hidden_write() { Counters[1] = 10; }
   kotoage fn direct_write() authorize("CanWrite") { Counters[1] = 20; }
   kotoage fn helper_write() authorize("CanWrite") { hidden_write(); }
+  // Two live callers retain the actual private helper edge under single-use inlining.
+  kotoage fn second_helper_write() authorize("CanWrite") { hidden_write(); }
 }
 "#;
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
@@ -4668,6 +4714,8 @@ seiyaku DynamicAccessCounter {
     }
     #[test]
     fn ivm_access_uses_manifest_hints_when_present() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::{
             asset::{AssetDefinitionId, AssetId},
             smart_contract::manifest::{AccessSetHints, MANIFEST_METADATA_KEY},
@@ -4706,7 +4754,7 @@ seiyaku DynamicAccessCounter {
         entrypoint.write_keys = hints.write_keys.clone();
         let (prog, code_hash, manifest) =
             test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
-        let manifest = manifest.signed(&kp);
+        let manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
@@ -4740,6 +4788,8 @@ seiyaku DynamicAccessCounter {
     }
     #[test]
     fn ivm_access_uses_manifest_hints_from_metadata_when_missing_in_wsv() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::{
             asset::{AssetDefinitionId, AssetId},
             smart_contract::manifest::{AccessSetHints, MANIFEST_METADATA_KEY},
@@ -4776,7 +4826,7 @@ seiyaku DynamicAccessCounter {
         entrypoint.write_keys = hints.write_keys.clone();
         let (prog, _code_hash, manifest) =
             test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
-        let manifest = manifest.signed(&kp);
+        let manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         let mut md = iroha_model_base::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
         md.insert("contract_entrypoint".parse().unwrap(), Json::new("main"));
@@ -4858,6 +4908,8 @@ seiyaku DynamicAccessCounter {
 
     #[test]
     fn access_set_cache_invalidates_on_manifest_update() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
         access_set_cache_clear();
@@ -4898,7 +4950,7 @@ seiyaku DynamicAccessCounter {
             error_types: None,
             provenance: None,
         }
-        .signed(&kp);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
@@ -4938,7 +4990,7 @@ seiyaku DynamicAccessCounter {
             error_types: None,
             provenance: None,
         }
-        .signed(&kp);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
@@ -4954,6 +5006,8 @@ seiyaku DynamicAccessCounter {
     }
     #[test]
     fn ivm_access_falls_back_when_manifest_hints_invalid() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
@@ -4992,7 +5046,7 @@ seiyaku DynamicAccessCounter {
             error_types: None,
             provenance: None,
         }
-        .signed(&kp);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
@@ -5016,6 +5070,8 @@ seiyaku DynamicAccessCounter {
     }
     #[test]
     fn ivm_access_rejects_unproven_exact_state_entrypoint_hints() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
         };
@@ -5099,7 +5155,7 @@ seiyaku DynamicAccessCounter {
             error_types: None,
             provenance: None,
         }
-        .signed(&kp);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
@@ -5129,6 +5185,8 @@ seiyaku DynamicAccessCounter {
     }
     #[test]
     fn ivm_access_skips_entrypoint_hints_for_unsafe_syscalls() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::{
             ContractManifest, EntryPointKind, EntrypointDescriptor,
         };
@@ -5189,7 +5247,7 @@ seiyaku DynamicAccessCounter {
             error_types: None,
             provenance: None,
         }
-        .signed(&kp);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
@@ -5214,6 +5272,8 @@ seiyaku DynamicAccessCounter {
     }
     #[test]
     fn ivm_access_rejects_unproven_exact_ledger_entrypoint_hints() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::{
             asset::id::{AssetDefinitionId, AssetId},
             smart_contract::manifest::{ContractManifest, EntryPointKind, EntrypointDescriptor},
@@ -5281,7 +5341,7 @@ seiyaku DynamicAccessCounter {
             error_types: None,
             provenance: None,
         }
-        .signed(&kp);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &kp).expect("sign bounded fixture manifest");
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
@@ -5536,6 +5596,8 @@ seiyaku DynamicAccessCounter {
     }
     #[test]
     fn execute_trigger_uses_retained_entrypoint_hints_without_repreparing() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
         access_set_cache_clear();
@@ -5571,7 +5633,7 @@ seiyaku DynamicAccessCounter {
             entrypoint.write_keys = hints.write_keys.clone();
             let (prog, code_hash, manifest) =
                 test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
-            let manifest = manifest.signed(&iroha_test_samples::ALICE_KEYPAIR);
+            let manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &iroha_test_samples::ALICE_KEYPAIR).expect("sign bounded fixture manifest");
             stx.world.contract_manifests.insert(
                 ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
                 manifest,
@@ -5671,6 +5733,8 @@ seiyaku DynamicAccessCounter {
     }
     #[test]
     fn execute_trigger_without_selector_does_not_use_entrypoint_hints() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
         access_set_cache_clear();
@@ -5706,7 +5770,7 @@ seiyaku DynamicAccessCounter {
             entrypoint.write_keys = hints.write_keys.clone();
             let (prog, code_hash, manifest) =
                 test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
-            let manifest = manifest.signed(&iroha_test_samples::ALICE_KEYPAIR);
+            let manifest = manifest.try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &iroha_test_samples::ALICE_KEYPAIR).expect("sign bounded fixture manifest");
             stx.world.contract_manifests.insert(
                 ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
                 manifest,
@@ -5765,3 +5829,7 @@ seiyaku DynamicAccessCounter {
 #[cfg(test)]
 #[path = "access/static_state_memory_tests.rs"]
 mod static_state_memory_tests;
+
+#[cfg(test)]
+#[path = "access/manifest_signature_hash_tests.rs"]
+mod manifest_signature_hash_tests;

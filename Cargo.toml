@@ -197,6 +197,10 @@ concread = { version = "=0.5.10", default-features = false }
 # Reviewed local overrides of upstream crates. Every entry must stay in the
 # resolved graph; unused mirrors are removed from `vendor/`.
 [patch.crates-io]
+# Admitted response credit follows native buffer/body control deallocation.
+bytes = { path = "vendor/bytes" }
+http-body-util = { path = "vendor/http-body-util" }
+axum-core = { path = "vendor/axum-core" }
 # Allocation custody must follow actual epoch reclamation in the locked EBR owner.
 concread = { path = "vendor/concread" }
 # Quantity admission requires exact fallible native-digit handoff without repacking.
@@ -348,6 +352,9 @@ members = [
     "crates/norito/accelerators/jsonstage1_cuda",
     "crates/norito/accelerators/jsonstage1_metal",
     "vendor/concread",
+    "vendor/bytes",
+    "vendor/http-body-util",
+    "vendor/axum-core",
     "vendor/find_cuda_helper",
     "vendor/cust_raw",
     "mochi/*",

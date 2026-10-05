@@ -1560,7 +1560,9 @@ impl Kura {
                 transaction_entrypoint_index,
                 &resource_inventory,
             ),
-            history_checkpoints: history_checkpoints::HistoryCheckpoints::default(),
+            history_checkpoints: history_checkpoints::HistoryCheckpoints::new(
+                config.history_checkpoint_cache_capacity.get(),
+            ),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),

@@ -385,7 +385,9 @@ use crate::execution_attempt::ExecutionAttemptError;
 pub use block_proofs::{BlockProofLimits, BlockProofResource};
 use block_proofs::{block_proofs_for_entry_from_kura, executed_block_wire_from_kura};
 use canonical_history::committed_block_from_kura;
-pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
+pub use canonical_history::{
+    CanonicalHistoryCursor, CanonicalHistoryReadBudget, CanonicalHistorySource,
+};
 #[cfg(test)]
 pub(crate) use committed_transaction_context::seed_committed_transaction_context;
 pub use da_hydration::DaIndexHydrationError;
@@ -1604,8 +1606,19 @@ macro_rules! build_world_view_from_fields {
         [$($_privacy:ident,)*]
         [$($suffix:ident,)*]
     ) => {
+        build_world_view_from_fields! {
+            $state, $releases, iroha_data_model::nexus::DataSpaceCatalog::default();
+            [$($prefix,)*] [$($_privacy,)*] [$($suffix,)*]
+        }
+    };
+    (
+        $state:expr, $releases:expr, $catalog:expr;
+        [$($prefix:ident,)*]
+        [$($_privacy:ident,)*]
+        [$($suffix:ident,)*]
+    ) => {
         Ok(WorldView {
-            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
+            dataspace_catalog: $catalog,
             $($prefix: view_acquisition::StateFieldReader::try_read_field(&$state.$prefix, &mut $releases.$prefix)?,)*
             privacy_commitments: view_acquisition::StateFieldReader::try_read_field(&$state.privacy_commitments, &mut $releases.privacy_commitments)?,
             $($suffix: view_acquisition::StateFieldReader::try_read_field(&$state.$suffix, &mut $releases.$suffix)?,)*
@@ -10396,11 +10409,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the runtime-upgrade payload when the proposal represents a runtime upgrade.
@@ -10421,11 +10430,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the SCCP v1 governance proposal when the proposal represents SCCP governance.
@@ -10446,11 +10451,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the SoraFS provider-owner action when the proposal represents SoraFS governance.
@@ -10471,11 +10472,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the validation-fee policy payload when present.
@@ -10496,11 +10493,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the validation-fee payout lifecycle payload when present.
@@ -10521,11 +10514,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
     /// Access the exact Musubi Parliament action retained by this proposal.
@@ -10546,11 +10535,7 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
             | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
                 _,
-            )
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierPolicyInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseInstall(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseActivate(_)
-            | iroha_data_model::governance::types::ProposalKind::KagemushaVerifierReleaseRetire(_) => None,
+            ) => None,
         }
     }
 }
@@ -12612,9 +12597,6 @@ pub struct StateBlockFields<'state> {
     /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this block.
     pub kagemusha_v1_runtime_verifier:
         Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
-    /// Single-use Parliament registry-transition authorization retained until publication.
-    kagemusha_registry_transition_authorization:
-        Option<crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1>,
     /// Settlement engine snapshot for this block.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
@@ -13941,13 +13923,6 @@ pub struct StateTransaction<'block, 'state> {
     /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this transaction.
     pub kagemusha_v1_runtime_verifier:
         Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
-    /// Parent block's single-use Parliament registry-transition authorization.
-    block_kagemusha_registry_transition_authorization: &'block mut Option<
-        crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1,
-    >,
-    /// Transaction-local authorization that disappears on failed execution.
-    pending_kagemusha_registry_transition_authorization:
-        Option<crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1>,
     /// Settlement engine snapshot for this transaction.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier snapshot exposed through the display sysvar.
@@ -14152,24 +14127,6 @@ pub struct StateTransaction<'block, 'state> {
     accounts_snapshot_cache: OnceCell<Arc<Vec<AccountId>>>,
 }
 impl<'block, 'state> StateTransaction<'block, 'state> {
-    /// Retain a certified registry transition only in this transaction until apply.
-    pub(crate) fn stage_kagemusha_registry_transition(
-        &mut self,
-        authorization: crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1,
-    ) -> Result<(), &'static str> {
-        if self
-            .pending_kagemusha_registry_transition_authorization
-            .is_some()
-            || self
-                .block_kagemusha_registry_transition_authorization
-                .is_some()
-        {
-            return Err("KAGEMUSHA registry already has a staged Parliament transition");
-        }
-        self.pending_kagemusha_registry_transition_authorization = Some(authorization);
-        Ok(())
-    }
-
     /// Return whether execution is currently inside a scheduled or data-trigger body.
     #[inline]
     pub(crate) const fn is_trigger_execution_active(&self) -> bool {
@@ -25784,6 +25741,8 @@ impl From<&iroha_data_model::parameter::system::SumeragiParameters> for Sumeragi
     }
 }
 include!("state/runtime_configuration.rs");
+mod authorization_read;
+pub use authorization_read::{AuthorizationDataSpaceCatalog, AuthorizationRead};
 mod canonical_runtime;
 mod recorded_carrier_scope;
 #[path = "state/state_block_construction.rs"]
@@ -28502,6 +28461,8 @@ impl State {
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+            history_checkpoint_cache_capacity:
+                iroha_config::parameters::defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -28725,7 +28686,11 @@ impl State {
                 .then_some(pending),
         )
     }
-    /// Create structure to execute a block
+    /// Create a block for synchronous tests and development callers.
+    ///
+    /// Contention waits on its original release observation after all failed
+    /// acquisition owners have retired. Permanent and finite-capacity refusals
+    /// remain errors of this infallible caller; ordinary production uses try_block.
     #[allow(clippy::too_many_lines)]
     #[cfg(any(
         test,
@@ -28734,9 +28699,61 @@ impl State {
         feature = "dev-tools"
     ))]
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
-        self.try_block(curr_block).unwrap_or_else(|error| {
-            panic!("persisted active runtime ABI is incompatible with this node: {error:?}")
-        })
+        struct BlockWaiter(std::thread::Thread);
+        impl iroha_allocation::shared::SharedWake for BlockWaiter {
+            fn wake(&self) {
+                self.0.unpark();
+            }
+        }
+        loop {
+            let release = match self.try_block(curr_block.clone()) {
+                Ok(block) => return block,
+                Err(StateBlockStartError::Storage(StateStorageAdmissionError::World(
+                    mv::storage::AdmittedStorageError::Busy { release, .. },
+                )))
+                | Err(StateBlockStartError::History(BlockHashAdmissionError::Busy(release)))
+                | Err(StateBlockStartError::Membership(
+                    storage_transactions::MembershipAdmissionError::Busy(release),
+                )) => release,
+                Err(error) => panic!("cannot create infallible State block: {error:?}"),
+            };
+            // try_block has retired every failed aggregate sibling. Admit both
+            // exact physical controls from this State's original execution pool;
+            // release observation grants neither credit nor a writer. Cancel and
+            // refund the registration AND wake owner before acquiring on retry.
+            let budget = self.ivm_execution_budget();
+            let wait_bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout()
+                .size()
+                .checked_add(
+                    iroha_allocation::ChargedShared::<BlockWaiter>::allocation_layout().size(),
+                )
+                .expect("State block wait control layouts fit the address space");
+            let mut prepaid = budget
+                .try_reserve_bytes(wait_bytes)
+                .expect("infallible State block wait must fit its original execution pool");
+            let mut registration =
+                iroha_allocation::release::ReleaseRegistration::from_reservation(&mut prepaid)
+                    .expect("allocate the original prepaid State block waiter");
+            let wake = iroha_allocation::ChargedShared::from_reservation(
+                BlockWaiter(std::thread::current()),
+                &mut prepaid,
+            )
+            .unwrap_or_else(|(_, error)| {
+                panic!("allocate the original prepaid State block wake owner: {error:?}")
+            });
+            drop(prepaid);
+            let waker = wake.into_waker();
+            let mut context = std::task::Context::from_waker(&waker);
+            let mut wait = release.wait_for_release(&mut registration);
+            while std::future::Future::poll(std::pin::Pin::new(&mut wait), &mut context)
+                .is_pending()
+            {
+                std::thread::park();
+            }
+            drop(wait);
+            drop(registration);
+            drop(waker);
+        }
     }
     /// Create a block after validating the persisted active runtime ABI.
     ///
@@ -30217,6 +30234,7 @@ impl State {
         height: NonZeroUsize,
         max_work: u64,
         max_bytes: u64,
+        read_budget: &CanonicalHistoryReadBudget,
     ) -> Result<
         crate::smartcontracts::isi::tx::FinalizedExecutionCarrier,
         crate::execution_attempt::ExecutionAttemptError<
@@ -30228,7 +30246,31 @@ impl State {
             height,
             max_work,
             max_bytes,
+            read_budget,
         )
+    }
+
+    /// Read an authenticated canonical summary source in the caller's original cold owner.
+    /// Unlike execution projections this checks only the committed header hash and height.
+    ///
+    /// # Errors
+    /// Preserves original capacity refusal, absent body, corruption and header substitution.
+    pub fn read_canonical_history_block(
+        &self,
+        height: NonZeroUsize,
+        read_budget: &CanonicalHistoryReadBudget,
+    ) -> Result<
+        iroha_data_model::block::SharedSignedBlock,
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
+    > {
+        read_budget.with(|| {
+            self.view()
+                .canonical_history()
+                .with_read_budget(read_budget)
+                .block_with_admission(height, |_, _| Ok(()))
+        })
     }
 
     /// Read one complete finalized execution carrier without holding a World view.
@@ -37489,9 +37531,6 @@ impl<'state> StateBlock<'state> {
             content: fields.content.clone(),
             settlement: fields.settlement.clone(),
             kagemusha_v1_runtime_verifier: Arc::clone(&fields.kagemusha_v1_runtime_verifier),
-            block_kagemusha_registry_transition_authorization: &mut fields
-                .kagemusha_registry_transition_authorization,
-            pending_kagemusha_registry_transition_authorization: None,
             settlement_engine: fields.settlement_engine.clone(),
             chain_id: fields.chain_id.clone(),
             network_id: fields.network_id,
@@ -37743,7 +37782,6 @@ impl<'state> StateBlock<'state> {
             || this.pending_da_commitments.is_some()
             || this.pending_da_pin_intents.is_some()
             || this.pending_autoscale_lifecycle.is_some()
-            || this.kagemusha_registry_transition_authorization.is_some()
             || this.autoscale_sample_history_dirty
             || this.canonical_runtime.is_dirty()
             || !this.pending_nexus_fee_receipt_source_ids.is_empty()
@@ -41428,9 +41466,6 @@ impl StateTransaction<'_, '_> {
             || self.canonical_runtime.touched_value().is_some()
             || !self.fastpq_source_quota.allows_apply()
             || !self.pending_transfer_transcripts.is_empty()
-            || self
-                .pending_kagemusha_registry_transition_authorization
-                .is_some()
         {
             *self.block_execution_output_plan =
                 Some(output_capacity::ExecutionOutputPlanState::Poisoned);
@@ -41483,14 +41518,6 @@ impl StateTransaction<'_, '_> {
             Some("transaction execution-effect owner does not authorize application")
         } else if self.world.execution_deferral.borrow().is_some() {
             Some("transaction execution was locally deferred")
-        } else if self
-            .pending_kagemusha_registry_transition_authorization
-            .is_some()
-            && self
-                .block_kagemusha_registry_transition_authorization
-                .is_some()
-        {
-            Some("transaction already retains a Kagemusha registry transition authorization")
         } else {
             None
         };
@@ -41539,8 +41566,6 @@ impl StateTransaction<'_, '_> {
             pending_lane_lifecycle,
             zk,
             block_zk,
-            block_kagemusha_registry_transition_authorization,
-            pending_kagemusha_registry_transition_authorization,
             block_privacy_budget,
             privacy_budget_after_block,
             block_sccp_verifier_work,
@@ -41597,9 +41622,6 @@ impl StateTransaction<'_, '_> {
         }
         canonical_runtime.apply();
         *block_zk = zk;
-        if let Some(authorization) = pending_kagemusha_registry_transition_authorization {
-            *block_kagemusha_registry_transition_authorization = Some(authorization);
-        }
         *block_privacy_budget = privacy_budget_after_block;
         *block_sccp_verifier_work = sccp_verifier_work_after_block;
         if let Some(lane_id) = current_lane_id {

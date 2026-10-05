@@ -243,6 +243,7 @@ fn vpn_canonical_auth_bridge_passes_exact_target_proof_to_authoritative_verifier
         &uri,
         &body,
         None,
+        crate::history_producer::HistoryProducerOwner::for_test().allocation_context(),
     )
     .expect("authoritative verifier accepts exact inner proof")
     .expect("canonical identity");
@@ -1226,6 +1227,17 @@ fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
     );
 }
 #[test]
+fn retired_kagemusha_routes_are_absent_from_operator_mcp_tools() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    assert!(tools.iter().all(|tool| {
+        tool.route_backing()
+            .is_none_or(|(_, _, path_template)| !path_template.starts_with("/v1/kagemusha/"))
+    }));
+}
+#[test]
 fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
     use iroha_torii_shared::route_catalog::{
         ApiSurface, AuthenticationPolicy, Listener, RouteProjections,
@@ -1449,7 +1461,7 @@ fn tool_registry_keeps_signed_ledger_original_carriers_outside_mcp() {
     }
 }
 #[test]
-fn operator_mcp_registry_keeps_core_tools_and_transaction_route_projection() {
+fn tool_registry_exposes_health_and_generic_transaction_submission() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;

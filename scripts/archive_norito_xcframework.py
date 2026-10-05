@@ -527,8 +527,14 @@ def _pinned_native_tool(name: str) -> Path:
     return tool
 
 
-def _run_native_tool(tool: Path, arguments: list[str]) -> str:
-    developer_dir = os.environ.get("NORITO_BRIDGE_SEAL_DEVELOPER_DIR")
+def _run_native_tool(
+    tool: Path, arguments: list[str], *, developer_dir: Path | None = None,
+) -> str:
+    """Inspect with either sealed producer tools or explicitly selected consumer tools."""
+    developer_dir = (
+        str(developer_dir) if developer_dir is not None
+        else os.environ.get("NORITO_BRIDGE_SEAL_DEVELOPER_DIR")
+    )
     if developer_dir is None:
         fail("NORITO_BRIDGE_SEAL_DEVELOPER_DIR is required for native inspection")
     try:
@@ -556,16 +562,20 @@ def _run_native_tool(tool: Path, arguments: list[str]) -> str:
     return result.stdout
 
 
-def _validate_native_binaries(snapshot: Path, validator: object) -> None:
+def _validate_native_binaries(
+    snapshot: Path, validator: object, *, developer_dir: Path | None = None,
+) -> None:
+    """Check physical architecture and export policy using the selected Apple tools."""
     if sys.platform != "darwin":
         fail("native XCFramework authentication requires a Darwin host")
     lipo = _pinned_native_tool("lipo")
     nm = _pinned_native_tool("nm")
     required_symbols = set(validator.EXPECTED_REQUIRED_SYMBOLS)
     forbidden_symbols = set(validator.EXPECTED_FORBIDDEN_SYMBOLS)
+    tool_arguments = {"developer_dir": developer_dir} if developer_dir is not None else {}
     for identifier, expected in validator.EXPECTED_SLICES.items():
         binary = snapshot / identifier / validator.LIBRARY_NAME
-        architectures = _run_native_tool(lipo, ["-archs", str(binary)]).split()
+        architectures = _run_native_tool(lipo, ["-archs", str(binary)], **tool_arguments).split()
         if (
             len(architectures) != len(set(architectures))
             or set(architectures) != set(expected["architectures"])
@@ -574,7 +584,7 @@ def _validate_native_binaries(snapshot: Path, validator: object) -> None:
                 f"XCFramework native architecture mismatch for {identifier}: "
                 f"expected {expected['architectures']}, found {architectures}"
             )
-        raw_symbols = _run_native_tool(nm, ["-gUj", str(binary)])
+        raw_symbols = _run_native_tool(nm, ["-gUj", str(binary)], **tool_arguments)
         symbols = {
             line.strip().removeprefix("_")
             for line in raw_symbols.splitlines()

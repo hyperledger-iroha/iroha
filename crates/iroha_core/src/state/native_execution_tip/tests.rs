@@ -216,9 +216,12 @@ fn restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix() {
         0,
         "restore retains only sparse identities"
     );
-    assert_eq!(
-        checkpoints.candidates(1, tip_height),
-        [(checkpoint_height, checkpoint)]
+    assert!(
+        checkpoints
+            .candidates(1, tip_height)
+            .iter()
+            .copied()
+            .eq([(checkpoint_height, checkpoint)])
     );
 
     let target = NonZeroUsize::new(usize::try_from(target_height).unwrap()).unwrap();

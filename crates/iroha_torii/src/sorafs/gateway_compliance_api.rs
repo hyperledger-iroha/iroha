@@ -664,6 +664,14 @@ fn authorize_gateway_compliance_request(
     uri: &Uri,
     body: &[u8],
 ) -> Result<(), Response> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     let verified = match crate::app_auth::verify_canonical_network_request(
         &state.state,
         state.state.network_id_ref(),
@@ -672,6 +680,7 @@ fn authorize_gateway_compliance_request(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => verified,
         Ok(None) => {

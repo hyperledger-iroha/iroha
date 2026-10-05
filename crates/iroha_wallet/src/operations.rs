@@ -553,8 +553,12 @@ impl AccountService {
             }
             let (record, transaction) = retained.into_record()?;
             let mut before = observe_transaction(self.client.client(), &transaction)?;
-            if before.status == OperationStatus::Absent && journal.submission_recorded(&record)? {
-                before.status = OperationStatus::Pending;
+            if before.status == OperationStatus::Absent {
+                if journal.submission_recorded(&record)? {
+                    before.status = OperationStatus::Pending;
+                } else if transaction_expired(&transaction)? {
+                    before.status = OperationStatus::Expired;
+                }
             }
             if !submit || before.status != OperationStatus::Absent {
                 return Ok(transfer_report(
@@ -564,6 +568,10 @@ impl AccountService {
                     before.evidence.as_ref(),
                 ));
             }
+            self.client.refresh_capabilities().wrap_err(
+                "wallet transaction submission compatibility; saved operation remains unattempted",
+            )?;
+            self.ensure_deadline()?;
             if transaction_expired(&transaction)? {
                 return Ok(transfer_report(
                     &journal,
@@ -572,10 +580,6 @@ impl AccountService {
                     None,
                 ));
             }
-            self.client.refresh_capabilities().wrap_err(
-                "wallet transaction submission compatibility; saved operation remains unattempted",
-            )?;
-            self.ensure_deadline()?;
             if !journal.record_submission(&record)? {
                 return Ok(transfer_report(
                     &journal,

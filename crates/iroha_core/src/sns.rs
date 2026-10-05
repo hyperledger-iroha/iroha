@@ -27,7 +27,7 @@ use iroha_data_model::{
     alias_setup::{AccountAliasName, AliasAutoRenewConfigV1, AliasAutoRenewStateV1, AliasTargetV1},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     isi::{alias_setup::EnsureAlias, register::RegisterBox},
-    nexus::DataSpaceCatalog,
+    nexus::{DataSpaceCatalog, DataSpaceCatalogRead},
     permission::Permission,
     sns::{
         AuctionKind, ControllerType, NameAuctionStateV1, NameControllerV1, NameRecordV1,
@@ -1047,7 +1047,7 @@ pub(crate) fn process_alias_auto_renewals(
 /// Build the selector used for a full account-alias lease record.
 pub fn selector_for_account_alias(
     alias: &AccountAlias,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
 ) -> Result<NameSelectorV1, iroha_model_base::error::ParseError> {
     Ok(NameSelectorV1 {
         version: NameSelectorV1::VERSION,
@@ -1147,14 +1147,8 @@ fn decode_record_for_selector(
     selector: &NameSelectorV1,
 ) -> Result<NameRecordV1, SnsError> {
     let decode = || {
-        let mut slice = bytes;
-        let record = NameRecordV1::decode(&mut slice)
+        let record: NameRecordV1 = norito::codec::decode_adaptive(bytes)
             .map_err(|error| sns_decode_error(error, "failed to decode an SNS record"))?;
-        if !slice.is_empty() {
-            return Err(SnsError::Internal(
-                "SNS record contains trailing bytes".to_owned(),
-            ));
-        }
         if record.selector != *selector || record.name_hash != selector.name_hash() {
             return Err(SnsError::Internal(
                 "SNS record identity mismatch".to_owned(),
@@ -1399,7 +1393,7 @@ fn seed_alias_manage_permissions_if_missing(
     world: &mut World,
     authority: &AccountId,
     label: &AccountAlias,
-    dataspace_catalog: &DataSpaceCatalog,
+    dataspace_catalog: &impl DataSpaceCatalogRead,
 ) {
     let mut permissions = world
         .account_permissions
@@ -1439,7 +1433,7 @@ fn seed_alias_manage_permissions_if_missing(
 pub fn seed_genesis_alias_bootstrap(
     world: &mut World,
     block: &iroha_data_model::block::SignedBlock,
-    dataspace_catalog: &DataSpaceCatalog,
+    dataspace_catalog: &impl DataSpaceCatalogRead,
 ) -> Result<(), SnsError> {
     use iroha_data_model::{
         block::consensus::{PrivateRootFeePolicy, SumeragiRootScope},
@@ -1502,7 +1496,7 @@ pub fn seed_genesis_alias_bootstrap(
 fn seed_genesis_alias_records(
     world: &mut World,
     block: &iroha_data_model::block::SignedBlock,
-    dataspace_catalog: &DataSpaceCatalog,
+    dataspace_catalog: &impl DataSpaceCatalogRead,
 ) {
     for transaction in block.external_transactions() {
         let authority = transaction.authority();
@@ -2151,7 +2145,7 @@ pub(crate) fn native_payment_for_quote(quote: &LeaseQuote) -> LeasePayment {
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn quote_account_alias_registration(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     owner: &AccountId,
     term_years: u8,
@@ -2172,7 +2166,7 @@ pub fn quote_account_alias_registration(
 /// Quote account-alias registration only when policy and configured fee asset agree exactly.
 pub fn quote_account_alias_registration_with_configured_fee_asset(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     owner: &AccountId,
     term_years: u8,
@@ -2194,7 +2188,7 @@ pub fn quote_account_alias_registration_with_configured_fee_asset(
 #[allow(clippy::too_many_arguments)]
 fn quote_account_alias_registration_inner(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     owner: &AccountId,
     term_years: u8,
@@ -2234,7 +2228,7 @@ fn quote_account_alias_registration_inner(
 #[cfg(test)]
 pub fn quote_account_alias_renewal(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     term_years: u8,
     now_ms: u64,
@@ -2244,7 +2238,7 @@ pub fn quote_account_alias_renewal(
 /// Quote account-alias renewal only when policy and configured fee asset agree exactly.
 pub fn quote_account_alias_renewal_with_configured_fee_asset(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     term_years: u8,
     now_ms: u64,
@@ -2261,7 +2255,7 @@ pub fn quote_account_alias_renewal_with_configured_fee_asset(
 }
 fn quote_account_alias_renewal_inner(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     term_years: u8,
     now_ms: u64,
@@ -2649,7 +2643,7 @@ pub fn active_owner_by_selector(
 /// record state is malformed.
 pub fn active_account_alias_owner(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     now_ms: u64,
 ) -> Result<Option<AccountId>, SnsError> {
@@ -2671,7 +2665,7 @@ pub fn active_account_alias_owner(
 /// Returns [`SnsError`] when authoritative SNS state is malformed or conflicting.
 pub fn resolve_active_account_alias(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     now_ms: u64,
 ) -> Result<Option<AccountId>, SnsError> {
@@ -2691,11 +2685,13 @@ pub fn resolve_active_account_alias(
     if world.account(indexed_owner).is_err() {
         return Ok(None);
     }
-    Ok(Some(indexed_owner.clone()))
+    // The canonical lease already owns exactly this checked controller graph.
+    // Returning it preserves all three-way binding checks without a second copy.
+    Ok(Some(lease_owner))
 }
 fn active_account_id_rekey_suffix_for_alias<'world>(
     world: &'world impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     now_ms: u64,
     work: &mut AccountRekeyLineageWork,
@@ -2743,7 +2739,7 @@ fn active_account_id_rekey_suffix_for_alias<'world>(
 /// Returns [`SnsError`] when the live lease or rekey state is malformed.
 pub fn resolve_active_account_id_rekey_lineage_for_alias(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     account_id: &AccountId,
     now_ms: u64,
@@ -2770,7 +2766,7 @@ pub fn resolve_active_account_id_rekey_lineage_for_alias(
 /// deterministic request work limit, or maps the requested account to conflicting active targets.
 pub fn resolve_active_account_id_rekey_lineage(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     account_id: &AccountId,
     now_ms: u64,
 ) -> Result<Option<AccountId>, SnsError> {
@@ -2875,7 +2871,7 @@ struct ActiveDataspaceResolution {
 }
 fn resolve_active_dataspace_by_id(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     dataspace_id: DataSpaceId,
     now_ms: u64,
 ) -> Result<ActiveDataspaceResolution, SnsError> {
@@ -2900,15 +2896,9 @@ fn resolve_active_dataspace_by_id(
             break;
         }
         let decode_candidate = || {
-            let mut slice = bytes.as_slice();
-            let record = NameRecordV1::decode(&mut slice).map_err(|error| {
+            let record: NameRecordV1 = norito::codec::decode_adaptive(bytes).map_err(|error| {
                 sns_decode_error(error, "failed to decode a dataspace SNS record")
             })?;
-            if !slice.is_empty() {
-                return Err(SnsError::Internal(
-                    "dataspace SNS record contains trailing bytes".to_owned(),
-                ));
-            }
             if record.selector.label.len() > iroha_model_base::name::MAX_NAME_BYTES {
                 return Err(SnsError::Internal(
                     "dataspace SNS record label exceeds the canonical name limit".to_owned(),
@@ -2985,7 +2975,7 @@ fn resolve_active_dataspace_by_id(
 /// authoritative SNS state returns [`SnsError::Internal`].
 pub fn resolve_active_dataspace_id_by_alias(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &str,
     now_ms: u64,
 ) -> Result<DataSpaceId, SnsError> {
@@ -3037,7 +3027,7 @@ pub fn resolve_active_dataspace_id_by_alias(
 /// authoritative SNS state.
 pub fn resolve_active_dataspace_alias_by_id(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     dataspace_id: DataSpaceId,
     now_ms: u64,
 ) -> Result<String, SnsError> {
@@ -3052,7 +3042,7 @@ pub fn resolve_active_dataspace_alias_by_id(
 /// account-alias literal is invalid.
 pub fn active_account_alias_literal(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     now_ms: u64,
 ) -> Result<String, SnsError> {
@@ -3072,7 +3062,7 @@ pub fn active_account_alias_literal(
 /// Returns [`SnsError`] when the dataspace mapping or account-alias literal is invalid.
 pub fn active_account_alias_selector(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     now_ms: u64,
 ) -> Result<NameSelectorV1, SnsError> {
@@ -3091,7 +3081,7 @@ pub fn active_account_alias_selector(
 /// Returns the original SNS error for conflicting, malformed, or locally deferred state.
 pub fn active_dataspace_id_by_alias(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &str,
     now_ms: u64,
 ) -> Result<Option<DataSpaceId>, SnsError> {
@@ -3110,7 +3100,7 @@ pub fn active_dataspace_id_by_alias(
 /// with the static catalog.
 pub fn active_dataspace_metadata_by_alias(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     alias: &str,
     now_ms: u64,
 ) -> Result<Option<DataSpaceMetadata>, SnsError> {
@@ -3143,7 +3133,7 @@ pub fn active_dataspace_metadata_by_alias(
 /// with the static catalog.
 pub fn active_dataspace_owner_by_id(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
+    catalog: &impl DataSpaceCatalogRead,
     dataspace_id: DataSpaceId,
     now_ms: u64,
 ) -> Result<Option<AccountId>, SnsError> {

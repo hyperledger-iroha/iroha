@@ -63,6 +63,7 @@ mod authority_originals;
 mod bridge_attestation;
 mod canonical_history;
 mod game;
+mod history_producer;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
@@ -86,15 +87,19 @@ mod push;
 #[cfg(any(test, feature = "bench"))]
 #[doc(hidden)]
 pub mod query_load_profiles;
+#[cfg(test)]
+mod query_memory_reclamation_tests;
 #[cfg(feature = "app_api")]
 mod reserve_account_proof;
 #[cfg(feature = "app_api")]
 mod reserve_policy_proof;
 mod resource_names_state;
+mod response_memory_custody;
 /// SCCP v1 public read API.
 mod sccp;
 mod sns_lease;
 mod staking_preparation;
+mod stream_control;
 mod stream_token_custody_proof;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
@@ -1205,6 +1210,8 @@ mod deployment_state;
 mod event;
 #[cfg(feature = "app_api")]
 pub mod explorer;
+#[cfg(feature = "app_api")]
+mod explorer_history;
 #[cfg(feature = "app_api")]
 mod explorer_query;
 #[cfg(feature = "app_api")]
@@ -4638,6 +4645,14 @@ async fn enforce_soracloud_signed_mutation_request(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Ok(error.into_response());
+            }
+        };
+
     let path = req.uri().path().to_owned();
     let response_format =
         match utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT)) {
@@ -4679,6 +4694,7 @@ async fn enforce_soracloud_signed_mutation_request(
         &parts.uri,
         body.as_ref(),
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => verified,
         Ok(None) => {
@@ -6175,7 +6191,7 @@ async fn catch_handler_panics(
 /// Attach catalog metadata after Axum has selected a route template.
 ///
 /// `MatchedPath` is a router template (for example
-/// `/v1/explorer/accounts/{account_id}`), never the concrete request URI.
+/// `/v1/operator/auth/credentials/{credential_id}`), never the concrete request URI.
 /// The metadata is copied to the response so outer middleware can observe it
 /// without buffering or reconstructing the consumed request.
 async fn attach_matched_route_metadata(
@@ -7073,6 +7089,14 @@ fn push_authenticate_device_request(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, AxResponse> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error.into_response());
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &app.state,
         app.state.network_id_ref(),
@@ -7081,6 +7105,7 @@ fn push_authenticate_device_request(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(push_error_response(
@@ -7334,6 +7359,14 @@ async fn enforce_canonical_account_body_authentication(
     request: axum::http::Request<Body>,
     next: Next,
 ) -> Response {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state.app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return error.into_response();
+            }
+        };
+
     let (mut parts, body) = request.into_parts();
     let body = if let Some(admitted) = admitted_app_routed_read_body_for_auth(&parts) {
         if admitted.len() > state.max_body_bytes {
@@ -7362,6 +7395,7 @@ async fn enforce_canonical_account_body_authentication(
         &parts.uri,
         body.as_ref(),
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => verified,
         Ok(None) => {
@@ -7385,6 +7419,14 @@ async fn enforce_optional_canonical_account_body_authentication(
     request: axum::http::Request<Body>,
     next: Next,
 ) -> Response {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&state.app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return error.into_response();
+            }
+        };
+
     let (mut parts, body) = request.into_parts();
     let body = if let Some(admitted) = admitted_app_routed_read_body_for_auth(&parts) {
         if admitted.len() > state.max_body_bytes {
@@ -7410,6 +7452,7 @@ async fn enforce_optional_canonical_account_body_authentication(
         &parts.uri,
         body.as_ref(),
         None,
+        authentication_owner.allocation_context(),
     ) {
         Ok(Some(verified)) => ToriiAccountReadVisibility::Signed(verified.account),
         Ok(None) => ToriiAccountReadVisibility::None,
@@ -7702,7 +7745,13 @@ async fn handler_gov_contract_get(
         None,
     )
     .await?;
-    crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
+    let owner = crate::history_producer::HistoryProducerOwner::authentication_read(&app)?;
+    crate::gov::handle_gov_contract_get(
+        app.state.clone(),
+        contract_address,
+        owner.allocation_context(),
+    )
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_ministry_agenda_proposal_draft(
@@ -10717,8 +10766,7 @@ async fn handler_explorer_health(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/health").await?;
     }
-    routing::handle_v1_explorer_health(app.state.clone(), app.kura.clone(), app.telemetry.clone())
-        .await
+    routing::handle_v1_explorer_health(app.state.clone(), app.telemetry.clone()).await
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 #[axum::debug_handler]
@@ -11276,11 +11324,12 @@ async fn handler_explorer_block_detail(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/blocks/{id}").await?;
     }
-    routing::handle_v1_explorer_block_detail(
+    routing::handle_v1_explorer_block_detail_admitted(
         app.state.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
         identifier,
+        acquire_query_admission(&app, true).await?,
     )
     .await
 }
@@ -11313,11 +11362,12 @@ async fn handler_explorer_transaction_detail(
         )
         .await?;
     }
-    match crate::routing::handle_v1_explorer_transaction_detail(
+    match crate::routing::handle_v1_explorer_transaction_detail_admitted(
         app.state.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
         hash,
+        acquire_query_admission(&app, true).await?,
     )
     .await
     {
@@ -11354,12 +11404,13 @@ async fn handler_explorer_instruction_detail(
         )
         .await?;
     }
-    match crate::routing::handle_v1_explorer_instruction_detail(
+    match crate::routing::handle_v1_explorer_instruction_detail_admitted(
         app.state.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
         hash,
         index,
+        acquire_query_admission(&app, true).await?,
     )
     .await
     {
@@ -11396,12 +11447,13 @@ async fn handler_explorer_instruction_contract_view(
         )
         .await?;
     }
-    if let Err(error) = crate::routing::handle_v1_explorer_instruction_detail(
+    if let Err(error) = crate::routing::handle_v1_explorer_instruction_detail_admitted(
         app.state.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
         hash.clone(),
         index,
+        acquire_query_admission(&app, true).await?,
     )
     .await
     {
@@ -15101,6 +15153,14 @@ fn torii_visibility_account_from_headers(
     body: &[u8],
     _endpoint: &'static str,
 ) -> Result<ToriiAccountReadVisibility, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     if torii_signed_visibility_headers_present(headers) {
         let verified = crate::app_auth::verify_canonical_network_request(
             &app.state,
@@ -15110,6 +15170,7 @@ fn torii_visibility_account_from_headers(
             uri,
             body,
             None,
+            authentication_owner.allocation_context(),
         )
         .map_err(|error| Error::AppUnauthorized {
             code: "canonical_authentication_invalid",
@@ -24397,18 +24458,13 @@ async fn handler_explorer_transactions_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/transactions/stream",
-    )?;
+    let visibility =
+        stream_control::ExplorerReadContext::from_headers(&app, &headers, &method, &uri)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_transactions_stream(
             app.state.clone(),
-            app.events.clone(),
             visibility,
+            app.clone(),
         )
         .into_response());
     }
@@ -24424,12 +24480,10 @@ async fn handler_explorer_transactions_stream(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(routing::handle_v1_explorer_transactions_stream(
-        app.state.clone(),
-        app.events.clone(),
-        visibility,
+    Ok(
+        routing::handle_v1_explorer_transactions_stream(app.state.clone(), visibility, app.clone())
+            .into_response(),
     )
-    .into_response())
 }
 #[cfg(feature = "app_api")]
 async fn handler_explorer_blocks_stream(
@@ -24440,18 +24494,13 @@ async fn handler_explorer_blocks_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/blocks/stream",
-    )?;
+    let visibility =
+        stream_control::ExplorerReadContext::from_headers(&app, &headers, &method, &uri)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_blocks_stream(
             app.state.clone(),
-            app.events.clone(),
             visibility,
+            app.clone(),
         )
         .into_response());
     }
@@ -24468,12 +24517,8 @@ async fn handler_explorer_blocks_stream(
         )));
     }
     Ok(
-        routing::handle_v1_explorer_blocks_stream(
-            app.state.clone(),
-            app.events.clone(),
-            visibility,
-        )
-        .into_response(),
+        routing::handle_v1_explorer_blocks_stream(app.state.clone(), visibility, app.clone())
+            .into_response(),
     )
 }
 #[cfg(feature = "app_api")]
@@ -24485,18 +24530,13 @@ async fn handler_explorer_instructions_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/instructions/stream",
-    )?;
+    let visibility =
+        stream_control::ExplorerReadContext::from_headers(&app, &headers, &method, &uri)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_instructions_stream(
             app.state.clone(),
-            app.events.clone(),
             visibility,
+            app.clone(),
         )
         .into_response());
     }
@@ -24512,12 +24552,10 @@ async fn handler_explorer_instructions_stream(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(routing::handle_v1_explorer_instructions_stream(
-        app.state.clone(),
-        app.events.clone(),
-        visibility,
+    Ok(
+        routing::handle_v1_explorer_instructions_stream(app.state.clone(), visibility, app.clone())
+            .into_response(),
     )
-    .into_response())
 }
 #[cfg(feature = "app_api")]
 fn is_expected_ws_disconnect(error: &eyre::Report) -> bool {
@@ -30275,6 +30313,14 @@ fn require_signed_account_request(
     error_code: &'static str,
     error_message: &'static str,
 ) -> Result<AccountId, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     match crate::app_auth::verify_canonical_network_request(
         &app.state,
         app.state.network_id_ref(),
@@ -30283,6 +30329,7 @@ fn require_signed_account_request(
         uri,
         body,
         None,
+        authentication_owner.allocation_context(),
     )? {
         Some(verified) => Ok(verified.account),
         None => Err(Error::AppUnauthorized {
@@ -32122,12 +32169,21 @@ async fn handler_fee_quote(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     let verified = crate::app_auth::verify_fee_quote_canonical_request(
         &app.state,
         &headers,
         &method,
         &uri,
         body.as_ref(),
+        authentication_owner.allocation_context(),
     )?;
     let Some(caller) = verified.as_ref().map(|request| &request.account) else {
         return Ok(torii_canonical_auth_required_response(
@@ -33102,6 +33158,14 @@ fn authenticate_full_ledger_carrier_reader(
     method: &Method,
     uri: &Uri,
 ) -> Result<AccountId, Error> {
+    let authentication_owner =
+        match crate::history_producer::HistoryProducerOwner::authentication_read(&app) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
     let request = crate::app_auth::verify_canonical_network_request(
         &app.state,
         app.state.network_id_ref(),
@@ -33110,6 +33174,7 @@ fn authenticate_full_ledger_carrier_reader(
         uri,
         &[],
         None,
+        authentication_owner.allocation_context(),
     )?
     .ok_or_else(|| Error::AppUnauthorized {
         code: "canonical_authentication_required",
@@ -41057,17 +41122,15 @@ impl Torii {
             )
         })?;
         let route_index = mounted_manifest.route_index();
-        let mut router = router
+        let router = router
             .fallback(handler_route_not_found_or_sorafs_site)
             .layer(axum::middleware::from_fn(enforce_route_timeout));
+        // App admission stays inside authentication but outside body extractors.
         #[cfg(feature = "app_api")]
-        {
-            // App admission stays inside authentication but outside body extractors.
-            router = router.layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                enforce_app_routed_read_http_admission,
-            ));
-        }
+        let router = router.layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            enforce_app_routed_read_http_admission,
+        ));
         // Strict media negotiation belongs inside pre-auth and API-token
         // admission. An unauthenticated or over-capacity caller must receive
         // that primary rejection without first exercising header grammar or

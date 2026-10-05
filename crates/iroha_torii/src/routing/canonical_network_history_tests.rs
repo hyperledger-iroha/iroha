@@ -236,7 +236,7 @@ fn visibility_refusal_is_sticky_until_consuming_finish() {
     let owner = HistoryVisibilityReads::new(Arc::clone(&state));
     assert!(!owner.allows(&restricted, 1, None, source));
     assert!(!owner.allows(&restricted, 1, None, source));
-    assert!(owner.reads.lock().unwrap().blocks.is_empty());
+    assert!(owner.reads.lock().unwrap().block.is_none());
     // A later globally visible row cannot erase the earlier admission refusal.
     assert!(owner.allows(&DataspaceReadVisibility::all_for_tests(), 1, None, source));
     assert!(owner.finish().is_err());

@@ -1178,7 +1178,7 @@ fn try_acquire_new_query_fanout_memory(
                 "query_capacity_exceeded",
                 "cross-dataspace query fanout memory capacity is exhausted",
             )
-        })
+        })?
 }
 /// Queue a bodyless HTTP read before polling its body or decoding its query. The
 /// listener already bounds its raw HTTP head; the separate waiter count bounds
@@ -1219,11 +1219,11 @@ async fn acquire_app_routed_read_http_memory(
     .await
     .map_err(|_| unavailable())?
     .map_err(|_| unavailable())?;
-    Ok(QueryFanoutMemoryReservation::from_admitted_fanout(
+    QueryFanoutMemoryReservation::from_admitted_fanout(
         acquired,
         QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)?,
         app.query_fanout_inflight.generation(),
-    ))
+    )
 }
 fn hold_query_fanout_memory_in_response_body(
     response: Response,
@@ -1235,11 +1235,30 @@ fn hold_query_fanout_memory_in_response_body(
 /// response-body and proxy-snapshot representations without reacquiring it.
 #[derive(Clone)]
 struct QueryFanoutMemoryReservation {
-    /// Held only so the fanout permit is released when the last clone drops.
-    _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+    /// Original native producer counters and finite source/response backing.
+    /// These controls are reclaimed before the final permit returns query credit.
+    producer: Option<iroha_allocation::ChargedShared<history_producer::ProducerBudget>>,
     /// Only acquisition from the query pool grants routed-read admission.
     /// Other native response owners use this token solely for body custody.
     admission: Option<AdmittedQueryFanoutMemory>,
+    /// Last to drop: the native query control and its layout charge precede credit release.
+    _permit: RetainedFanoutPermit,
+}
+
+type AdmittedFanoutPermit = iroha_allocation::shared::Shared<
+    iroha_allocation::AllocationCharge,
+    tokio::sync::OwnedSemaphorePermit,
+>;
+
+#[derive(Clone)]
+enum RetainedFanoutPermit {
+    Query {
+        _permit: AdmittedFanoutPermit,
+    },
+    /// This other native pool retains responses but never grants query production.
+    Response {
+        _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -1254,8 +1273,11 @@ impl QueryFanoutMemoryReservation {
     /// Retain response custody without granting query-pool admission.
     fn new(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         Self {
-            _permit: Arc::new(permit),
+            _permit: RetainedFanoutPermit::Response {
+                _permit: Arc::new(permit),
+            },
             admission: None,
+            producer: None,
         }
     }
 
@@ -1263,14 +1285,38 @@ impl QueryFanoutMemoryReservation {
         permit: tokio::sync::OwnedSemaphorePermit,
         envelope: QueryFanoutMemoryEnvelope,
         pool_generation: u64,
-    ) -> Self {
-        Self {
-            _permit: Arc::new(permit),
+    ) -> Result<Self, Response> {
+        let producer = history_producer::ProducerBudget::from_admitted(envelope, pool_generation)
+            .map_err(IntoResponse::into_response)?;
+        let layout = AdmittedFanoutPermit::layout();
+        let mut reserved = producer
+            .response_metadata()
+            .try_reserve(layout)
+            .map_err(|_| crate::native_projection_response::capacity().into_response())?;
+        let charge = reserved
+            .try_split(layout)
+            .expect("the exact native query control was admitted");
+        // Shared reclaims its original allocation, then drops this layout charge,
+        // and only then destroys the semaphore permit on its native stack. An Arc
+        // containing the permit would refund before its enclosing control freed.
+        let permit = match AdmittedFanoutPermit::try_new(charge, permit) {
+            Ok(permit) => permit,
+            Err((charge, permit, _)) => {
+                drop(charge);
+                drop(reserved);
+                drop(producer);
+                drop(permit);
+                return Err(crate::native_projection_response::capacity().into_response());
+            }
+        };
+        Ok(Self {
+            _permit: RetainedFanoutPermit::Query { _permit: permit },
             admission: Some(AdmittedQueryFanoutMemory {
                 envelope,
                 pool_generation,
             }),
-        }
+            producer: Some(producer),
+        })
     }
 
     fn belongs_to(&self, app: &SharedAppState) -> bool {
@@ -1359,6 +1405,11 @@ fn hold_query_fanout_memory_reservation_in_response_body(
     mut response: Response,
     reservation: QueryFanoutMemoryReservation,
 ) -> Response {
+    if reservation.admission.is_some() {
+        return response_memory_custody::hold(response, reservation);
+    }
+    // Native proof producers already attach their original physical memory token to
+    // EncodedBody-owned Bytes. Body-only custody never promotes those tokens to query admission.
     use http_body_util::BodyExt as _;
     response.extensions_mut().insert(reservation.clone());
     let (parts, body) = response.into_parts();

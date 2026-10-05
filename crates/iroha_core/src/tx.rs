@@ -1232,10 +1232,6 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1,
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
-        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
@@ -8828,15 +8824,6 @@ pub mod tests {
             TypeId::of::<
                 iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
             >(),
-            TypeId::of::<iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1>(
-            ),
-            TypeId::of::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1>(
-            ),
-            TypeId::of::<
-                iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
-            >(),
-            TypeId::of::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1>(
-            ),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle>(),
         ];
@@ -9392,7 +9379,6 @@ pub mod tests {
     #[test]
     fn tx_rejected_when_pipeline_gas_charge_limit_is_required_but_missing() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
         // Minimal state with one domain/account as authority
         let (world, authority_id, kp) = world_with_authority("domain");
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -9401,12 +9387,20 @@ pub mod tests {
         let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
         // Configure pipeline gas allowlist
         let mut pipeline = state.pipeline.clone();
-        pipeline.gas.accepted_assets = vec!["xor#domain".to_string()];
+        pipeline.gas.accepted_assets = vec![
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("domain", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            )
+            .canonical_address(),
+        ];
         state.set_pipeline(pipeline);
+        let chain = crate::block::tests::component_chain(state);
+        let state = chain.state();
         // Bind an executable gas limit but omit the required PipelineGas charge limit.
         let program = minimal_ivm_program_with_max_cycles(1, 1_000);
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9414,18 +9408,24 @@ pub mod tests {
         .sign(kp.private_key());
         // Height one is the fee-exempt genesis bootstrap boundary. Exercise
         // ordinary admission so the signed PipelineGas limit is mandatory.
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+        let header = original_component_successor_header(state);
+        assert_eq!(header.height().get(), 2);
+        assert_eq!(header.prev_block_hash(), Some(chain.genesis().hash()));
         let mut block = state.block(header);
+        let fragments = block.committed_fragment_count();
         let mut ivm_cache = IvmCache::new();
         let accepted = super::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let res =
             execute_component_transaction_for_testing(&mut block, accepted, &mut ivm_cache, None);
-        assert!(matches!(
-            res,
-            Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(_)
-            ))
-        ));
+        assert!(
+            matches!(&res,
+                Err(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted(message)
+                )) if message == "signed fee intent is missing PipelineGas charge limit"
+            ),
+            "ordinary signed admission must reject the missing pipeline gas limit: {res:?}"
+        );
+        assert_eq!(block.committed_fragment_count(), fragments);
     }
     #[test]
     fn signature_limit_rejects_above_bound() {
@@ -9772,6 +9772,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_metadata_conflict_rejected_even_if_state_matches() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::{
             smart_contract::manifest::ContractManifest,
             transaction::{Executable, TransactionBuilder},
@@ -9808,7 +9810,7 @@ pub mod tests {
                 error_types: None,
                 provenance: None,
             }
-            .signed(&fixture.keypair),
+            .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest"),
         );
         tx1.apply();
         let _ = block1.commit_world_overlay_for_testing();
@@ -9836,7 +9838,7 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .signed(&fixture.keypair);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -9868,6 +9870,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_abi_and_code_hash_match() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
@@ -9897,7 +9901,7 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .signed(&fixture.keypair);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -9918,6 +9922,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_hashes() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         let fixture = IvmAdmissionFixture::new();
         let prog = minimal_ivm_contract_program();
@@ -9940,7 +9946,7 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .signed(&fixture.keypair);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -9958,6 +9964,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_code_hash() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         let fixture = IvmAdmissionFixture::new();
         let prog = minimal_ivm_contract_program();
@@ -9980,7 +9988,7 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .signed(&fixture.keypair);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -9998,6 +10006,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_state_conflict_rejected_even_if_metadata_matches() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::{
             smart_contract::manifest::ContractManifest,
             transaction::{Executable, TransactionBuilder},
@@ -10036,7 +10046,7 @@ pub mod tests {
                 error_types: None,
                 provenance: None,
             }
-            .signed(&fixture.keypair),
+            .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest"),
         );
         tx1.apply();
         let _ = block1.commit_world_overlay_for_testing();
@@ -10062,7 +10072,7 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .signed(&fixture.keypair);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -10229,6 +10239,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_lookup_in_state() {
+        let manifest_signing =
+            crate::manifest_signing_test_support::ManifestSigningFixture::new();
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
@@ -10261,7 +10273,7 @@ pub mod tests {
             error_types: None,
             provenance: None,
         }
-        .signed(&fixture.keypair);
+        .try_signed(manifest_signing.context(), manifest_signing.max_frame_bytes(), &fixture.keypair).expect("sign bounded fixture manifest");
         tx1.world.contract_manifests.insert(
             ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             manifest.clone(),
@@ -11534,9 +11546,10 @@ pub mod tests {
         ///
         /// 1. Transaction: Alice sends 50 units to Bob.
         /// 2. Data triggers: each branch (Bob -> Carol -> Dave -> Eve) runs independently to a max depth of 3, forwarding 1 unit per step.
-        #[tokio::test]
-        async fn each_branch_is_assigned_depth() {
-            let mut sandbox = Sandbox::default()
+        fn depth_three_branch_sandbox(
+            profile: Option<iroha_data_model::parameter::FastpqSourcePolicyV1>,
+        ) -> Sandbox {
+            Sandbox::with_genesis_fastpq_source_policy(profile)
                 .with_max_execution_depth(3)
                 // Branches: Bob -> Carol
                 .with_data_trigger_transfer_labeled("bob", 1, "carol", 0)
@@ -11548,7 +11561,36 @@ pub mod tests {
                 .with_data_trigger_transfer_labeled("bob", 1, "carol", 6)
                 // Common path: Carol -> Dave -> Eve
                 .with_data_trigger_transfer("carol", 1, "dave")
-                .with_data_trigger_transfer("dave", 1, "eve");
+                .with_data_trigger_transfer("dave", 1, "eve")
+        }
+        #[tokio::test]
+        async fn each_branch_is_assigned_depth() {
+            // This depth corpus contains one external transfer and 7 * 3 callbacks.
+            // Give that exact finite corpus its own signed genesis source profile.
+            // Production bootstrap ceilings and all source byte ceilings stay unchanged.
+            let parameters = iroha_data_model::parameter::system::Parameters::default();
+            let previous = parameters.block().fastpq_source();
+            let mut intrinsic = previous.intrinsic;
+            intrinsic.max_transcripts = 1 + 7 * 3;
+            intrinsic.max_deltas = intrinsic.max_transcripts;
+            let profile = iroha_data_model::parameter::FastpqSourcePolicyV1::from_sizing(
+                parameters.block().execution_output(),
+                intrinsic,
+                previous.mandatory,
+                iroha_data_model::parameter::FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
+            )
+            .expect("exact 22-transfer depth corpus has a coherent finite source policy");
+            let mut sandbox = depth_three_branch_sandbox(Some(profile));
+            assert_eq!(
+                sandbox
+                    .state
+                    .view()
+                    .world()
+                    .parameters()
+                    .block()
+                    .fastpq_source(),
+                profile
+            );
             sandbox.request_transfer("alice", 50, "bob");
             let mut block = sandbox.block();
             block.assert_balances([
@@ -11574,6 +11616,45 @@ pub mod tests {
                 ("carol", 10),
                 ("dave", 10),
                 ("eve", 17),
+            ]);
+        }
+        #[tokio::test]
+        async fn depth_three_branch_corpus_retains_the_bootstrap_source_limit() {
+            let mut sandbox = depth_three_branch_sandbox(None);
+            let profile = sandbox
+                .state
+                .view()
+                .world()
+                .parameters()
+                .block()
+                .fastpq_source();
+            assert_eq!(
+                profile,
+                iroha_data_model::parameter::FastpqSourcePolicyV1::bootstrap()
+            );
+            sandbox.request_transfer("alice", 50, "bob");
+            let mut block = sandbox.block();
+            let (events, committed) = block.apply();
+            let results = committed.as_ref().output_results().collect::<Vec<_>>();
+            assert_eq!(results.len(), 1);
+            assert!(
+                matches!(results[0].as_ref(),
+                    Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)))
+                        if message == crate::fastpq::source_reservation::admission::SOURCE_INTRINSIC_REJECTION
+                ),
+                "the original finite source limit must refuse the entire 22-transfer corpus: {results:?}"
+            );
+            assert!(
+                events
+                    .iter()
+                    .all(|event| !matches!(event, EventBox::Data(_)))
+            );
+            block.assert_balances([
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
             ]);
         }
         /// All or none of the initial transaction and subsequent data triggers should take effect.
@@ -12261,9 +12342,11 @@ pub mod tests {
                 .contract_code_upload_progress(&authority, &cancelled_artifact_id),
             None
         );
-        // The same required metadata is context, never a code-management capability.
+        // Registered owners may create their own artifacts without a management grant.
+        // Protected deployment still needs the original governance metadata; global
+        // artifact removal independently requires the exact management permission.
         block.world.account_permissions.remove(authority.clone());
-        let missing_management_permission = validate_instruction!(
+        let owner_upload_without_management = validate_instruction!(
             UploadSmartContractCodeChunk {
                 artifact_id: cancelled_artifact_id,
                 total_size: 1,
@@ -12271,13 +12354,48 @@ pub mod tests {
                 chunk_count: 1,
                 chunk: vec![0xCA],
             },
+            governance_metadata.clone()
+        );
+        assert!(
+            owner_upload_without_management.is_ok(),
+            "ordinary owner-scoped staging requires governance context, not global management: {owner_upload_without_management:?}"
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &cancelled_artifact_id),
+            Some(crate::state::SmartContractCodeUploadProgress {
+                descriptor: crate::state::SmartContractCodeUploadDescriptor {
+                    total_size: 1,
+                    chunk_count: 1,
+                },
+                received_chunks: 1,
+            })
+        );
+        validate_instruction!(
+            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload {
+                artifact_id: cancelled_artifact_id,
+            },
+            Metadata::default()
+        )
+        .expect("ordinary owner may still cancel its own staging");
+        let missing_management_permission = validate_instruction!(
+            iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes {
+                artifact_id,
+                reason: None,
+            },
             governance_metadata
         );
-        assert!(matches!(
-            missing_management_permission,
-            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)))
-                if message.contains("CanManageSmartContractCode")
-        ));
+        assert!(
+            matches!(&missing_management_permission,
+                Err(TransactionRejectionReason::Validation(
+                    ValidationFail::InstructionFailed(
+                        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)
+                    )
+                )) if message.as_ref() == "not permitted: CanManageSmartContractCode"
+            ),
+            "global removal must retain its explicit management gate: {missing_management_permission:?}"
+        );
         assert_eq!(
             block
                 .world
@@ -12549,13 +12667,21 @@ pub mod tests {
     }
     #[test]
     fn validate_transaction_without_context_uses_live_autoscale_route() {
-        use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
+        use iroha_crypto::bls_normal_pop_prove;
+        use iroha_data_model::{
+            IntoKeyValue,
+            consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
+            isi::consensus_keys::RegisterConsensusKey,
+            transaction::{Executable, executable::IvmBytecode},
+        };
+        use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
+        use iroha_model_base::peer::PeerId;
         let chain: ChainId = "tx-live-autoscale-route".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        {
+        let elastic_lane = {
             let mut elastic_lane = LaneConfig {
                 id: TestLaneId::new(1),
                 alias: "elastic-lane-1".to_string(),
@@ -12569,7 +12695,6 @@ pub mod tests {
             elastic_lane
                 .metadata
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
-            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             let mut nexus = state.nexus_snapshot();
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lane_id = nonzero!(1_u32);
@@ -12577,18 +12702,143 @@ pub mod tests {
             state
                 .set_nexus_from_config(nexus)
                 .expect("enable pre-genesis autoscale policy");
-            state
-                .apply_autoscale_lane_lifecycle_for_tests(
-                    &iroha_data_model::nexus::LaneLifecyclePlan {
-                        additions: vec![elastic_lane],
-                        retire: Vec::new(),
-                    },
-                )
-                .expect("install the authenticated elastic lane");
+            elastic_lane
+        };
+        // The signed genesis configures only the original base geometry. Install
+        // the managed lane through its actual runtime lifecycle after genesis;
+        // an effective managed lane is never fresh-start configured authority.
+        let nexus = state.nexus_snapshot();
+        let crypto = state.crypto();
+        let zk = state.zk_snapshot();
+        let pipeline = state.pipeline.clone();
+        let fraud_monitoring = state.fraud_monitoring.clone();
+        let governance = state.gov.clone();
+        #[cfg(feature = "telemetry")]
+        let telemetry = state.telemetry.clone();
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(state.world, 0);
+        config.chain_id = chain;
+        config.pipeline = pipeline;
+        config.nexus = Some(nexus.clone());
+        config.zk = Some(zk);
+        config.crypto = Some(crypto.as_ref().clone());
+        config.fraud_monitoring = fraud_monitoring;
+        config.governance = Some(governance);
+        // The exact four global genesis peers also own participant-lane Committee
+        // custody. These signed registrations run the ordinary permission and PoP checks.
+        let mut validators = (0xC1_u8..=0xC4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("genuine participant-lane BLS custody")
+            })
+            .collect::<Vec<_>>();
+        validators.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+        let peers = validators
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(peers.len(), 4);
+        for key in &validators {
+            let id = AccountId::new(key.public_key().clone());
+            let (id, account) = Account::new(id.clone()).build(&id).into_key_value();
+            config.world.accounts.insert(id, account);
         }
-        let chain = crate::block::tests::component_chain(state);
+        config.world.account_permissions_mut_for_testing().insert(
+            AccountId::new(config.genesis_key.public_key().clone()),
+            BTreeSet::from([CanManageConsensusKeys.into()]),
+        );
+        config.validator_keys = Some(validators.clone());
+        config.genesis_instructions = validators
+            .iter()
+            .map(|key| {
+                let id = crate::state::derive_committee_key_id(key.public_key());
+                RegisterConsensusKey {
+                    id: id.clone(),
+                    record: ConsensusKeyRecord {
+                        id,
+                        public_key: key.public_key().clone(),
+                        pop: Some(
+                            bls_normal_pop_prove(key.private_key())
+                                .expect("checked same-key participant-lane proof of possession"),
+                        ),
+                        activation_height: 1,
+                        expiry_height: None,
+                        replaces: None,
+                        status: ConsensusKeyStatus::Active,
+                    },
+                }
+                .into()
+            })
+            .collect();
+        let bindings = validators
+            .iter()
+            .map(
+                |key| crate::governance::manifest::ManifestValidatorBinding {
+                    validator: AccountId::new(key.public_key().clone()),
+                    peer_id: PeerId::new(key.public_key().clone()),
+                    torii_url: None,
+                },
+            )
+            .collect();
+        config.lane_manifests = Some(Arc::new(
+            crate::governance::manifest::test_support::validator_registry(
+                &nexus.lane_catalog,
+                &nexus.governance,
+                BTreeMap::from([(TestLaneId::SINGLE, bindings)]),
+            ),
+        ));
+        let mut prepared = crate::sumeragi::test_chain::CertifiedTestChain::prepare(config)
+            .expect("derive signed routing fixture genesis with materialized base authority");
+        #[cfg(feature = "telemetry")]
+        {
+            Arc::get_mut(&mut prepared.state)
+                .expect("unpublished original routing State")
+                .telemetry = telemetry;
+        }
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::from_prepared(prepared)
+            .expect("original four-peer genesis executes checked Committee registrations");
         let state = chain.state();
+        {
+            let view = state.view();
+            for peer in &peers {
+                for lane in [TestLaneId::SINGLE, TestLaneId::new(1)] {
+                    assert_eq!(
+                        crate::state::peer_consensus_key_gate_for_lane(view.world(), peer, 1, lane,),
+                        crate::state::ConsensusKeyGate::Live,
+                        "the same genuine peer must own both exact lane key roles"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            state.nexus_snapshot().configured_lane_catalog.lanes(),
+            &[LaneConfig::default()]
+        );
+        state
+            .apply_autoscale_lane_lifecycle_for_tests(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![elastic_lane],
+                retire: Vec::new(),
+            })
+            .expect("install the authenticated elastic lane after original genesis");
+        assert!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == TestLaneId::new(1) && lane.claims_autoscale_managed())
+        );
         let next_header = original_component_successor_header(state);
+        let committee = state
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(
+                    TestLaneId::new(1),
+                    TestDataSpaceId::UNIVERSAL,
+                ),
+                next_header.height().get(),
+            )
+            .expect("actual lifecycle pins the original four live Committee peers");
+        assert_eq!(committee.validators(), peers.as_slice());
+        assert_eq!(committee.fault_tolerance(), 1);
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,

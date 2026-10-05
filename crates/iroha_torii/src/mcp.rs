@@ -3148,11 +3148,6 @@ fn custom_advertised_pattern_matches(pattern: &str, value: &str) -> Option<bool>
         ),
         "^(?!0{64}$)[0-9a-f]{64}$" => Some(lower_hex_is_nonzero(value, 64)),
         "^(?!0{128}$)[0-9a-f]{128}$" => Some(lower_hex_is_nonzero(value, 128)),
-        "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$" => Some(
-            value
-                .strip_prefix("/v1/kagemusha/operations/")
-                .is_some_and(|suffix| lower_hex_is_nonzero(suffix, 64)),
-        ),
         "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$" => {
             let mut chars = value.chars();
             let Some(first) = chars.next() else {

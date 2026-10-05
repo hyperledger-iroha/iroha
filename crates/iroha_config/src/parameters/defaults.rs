@@ -958,6 +958,10 @@ pub mod kura {
     pub const NATIVE_CONTEXT_ARCHIVE_MAX_BYTES: NonZeroUsize = nonzero!(16_usize * 1024 * 1024);
     /// Number of blocks cached in memory to accelerate lookups.
     pub const BLOCKS_IN_MEMORY: NonZeroUsize = nonzero!(1024_usize);
+    /// Total fixed native checkpoint slots, split between recent and sparse recency caches.
+    pub const HISTORY_CHECKPOINT_CACHE_CAPACITY: NonZeroUsize = nonzero!(8192_usize);
+    /// Maximum explicitly configured node-local native checkpoint slots.
+    pub const MAX_HISTORY_CHECKPOINT_CACHE_CAPACITY: usize = 65_536;
     /// Requested allocation bytes retained by State's block-hash generations.
     pub const BLOCK_HASH_HISTORY_BYTES: Bytes = Bytes(256 * 1024 * 1024);
     /// Requested allocation bytes retained by State's transaction-membership generations.

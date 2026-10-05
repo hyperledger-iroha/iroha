@@ -28,6 +28,9 @@ android {
     }
 
     sourceSets {
+        getByName("test") {
+            kotlin.srcDir(rootProject.file("test-support/src"))
+        }
         getByName("androidTest") {
             assets.srcDir("../../fixtures/offline")
         }

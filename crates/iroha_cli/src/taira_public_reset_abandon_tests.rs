@@ -13,29 +13,94 @@ fn abandonment_admits_original_signed_revision_without_relaxing_current_dispatch
         );
     }
     let fixture = sample_inventory();
-    let bytes = String::from_utf8(canonical_inventory_bytes(&fixture).unwrap()).unwrap();
     let (mut inventory, _chain_guard) = decode_inventory(
-        bytes
-            .replace(&fixture.revision.commit, ORIGINAL_COMMIT)
-            .as_bytes(),
+        &canonical_inventory_bytes(&fixture).unwrap(),
         "retained target fixture",
     )
     .unwrap();
+    inventory.revision.commit = ORIGINAL_COMMIT.into();
+    inventory.revision.build_id = ORIGINAL_COMMIT.into();
+    for validator in &mut inventory.validators {
+        validator.endpoint.remote_cli = validator
+            .endpoint
+            .remote_cli
+            .replace(&fixture.revision.commit, ORIGINAL_COMMIT);
+        for artifact in &mut validator.artifacts {
+            artifact.source_commit = ORIGINAL_COMMIT.into();
+            artifact.local_path = artifact
+                .local_path
+                .replace(&fixture.revision.commit, ORIGINAL_COMMIT);
+            artifact.remote_path = artifact
+                .remote_path
+                .replace(&fixture.revision.commit, ORIGINAL_COMMIT);
+        }
+    }
+    inventory.edge.endpoint.remote_cli = inventory
+        .edge
+        .endpoint
+        .remote_cli
+        .replace(&fixture.revision.commit, ORIGINAL_COMMIT);
+    for artifact in &mut inventory.edge.artifacts {
+        artifact.source_commit = ORIGINAL_COMMIT.into();
+        artifact.local_path = artifact
+            .local_path
+            .replace(&fixture.revision.commit, ORIGINAL_COMMIT);
+        artifact.remote_path = artifact
+            .remote_path
+            .replace(&fixture.revision.commit, ORIGINAL_COMMIT);
+    }
     let host_key =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRhaXJhLWZpeHR1cmUtaG9zdC1rZXktMDAwMDAwMDAw";
+    let native_host_key =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRhaXJhLWZpeHR1cmUtaG9zdC1rZXktMDAwMDAwMDAx";
+    let native_hostname = inventory.hosts.native_edge.endpoint.hostname.clone();
     let mut known_hosts = String::new();
+    let mut known_lines = BTreeSet::new();
     for endpoint in inventory
         .validators
         .iter_mut()
         .map(|validator| &mut validator.endpoint)
         .chain(std::iter::once(&mut inventory.edge.endpoint))
     {
+        let host_key = if endpoint.hostname == native_hostname {
+            native_host_key
+        } else {
+            host_key
+        };
         let line = format!("{} {host_key}", endpoint.hostname);
         endpoint.known_host_line_sha256 = sha256_hex(line.as_bytes());
         endpoint.host_identity_sha256 = sha256_hex(host_key.as_bytes());
-        known_hosts.push_str(&line);
-        known_hosts.push('\n');
+        if known_lines.insert(line.clone()) {
+            known_hosts.push_str(&line);
+            known_hosts.push('\n');
+        }
     }
+    inventory
+        .hosts
+        .validator_guest
+        .endpoint
+        .known_host_line_sha256 = inventory.validators[0]
+        .endpoint
+        .known_host_line_sha256
+        .clone();
+    inventory
+        .hosts
+        .validator_guest
+        .endpoint
+        .host_identity_sha256 = inventory.validators[0]
+        .endpoint
+        .host_identity_sha256
+        .clone();
+    inventory.hosts.native_edge.endpoint.known_host_line_sha256 =
+        inventory.edge.endpoint.known_host_line_sha256.clone();
+    inventory.hosts.native_edge.endpoint.host_identity_sha256 =
+        inventory.edge.endpoint.host_identity_sha256.clone();
+    inventory.edge.native_capability = native_edge_protocol::fixture_capability(
+        &inventory.hosts,
+        inventory.edge.admitted_release().unwrap().clone(),
+        &inventory.authorization_nonce,
+        &inventory.previous_genesis_hash,
+    );
     inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
     validate_inventory_structure(&inventory)
         .expect("original target keeps the full first-release structural contract");

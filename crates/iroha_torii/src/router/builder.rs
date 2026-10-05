@@ -1194,6 +1194,24 @@ mod tests {
     )
     .with_authentication(AuthenticationPolicy::ManifestConditionalContent);
     const ROUTES: &[RouteDescriptor] = &[READ, WRITE, FEATURED];
+    #[test]
+    fn retired_kagemusha_routes_are_absent_from_every_catalog_projection() {
+        let catalog = RouteCatalog::new(iroha_torii_shared::route_catalog::CATALOGED_ROUTES);
+        for projection in [
+            CatalogProjection::Mounted,
+            CatalogProjection::OpenApi,
+            CatalogProjection::Sdk,
+            CatalogProjection::Mcp,
+        ] {
+            assert!(
+                catalog
+                    .project(projection, EnabledFeatures::none())
+                    .iter()
+                    .all(|route| !route.path().starts_with("/v1/kagemusha/")),
+                "retired KAGEMUSHA transport remains in {projection:?}"
+            );
+        }
+    }
     #[tokio::test]
     async fn ledger_original_carriers_mount_without_optional_features() {
         use iroha_torii_shared::route_catalog::core;

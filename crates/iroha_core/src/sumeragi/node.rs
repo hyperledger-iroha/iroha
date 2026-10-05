@@ -1874,6 +1874,15 @@ mod tests {
                         validator.queue.queued_len(),
                         pending.as_ref().map(Vec::len),
                     );
+                    if let Some(pending) = pending.as_ref() {
+                        for transaction in pending {
+                            let hash = transaction.hash_as_entrypoint();
+                            eprintln!(
+                                "  pending input: {hash:?}, committed: {}",
+                                validator.state.has_committed_entrypoint(hash)
+                            );
+                        }
+                    }
                     for height in 2..=view.height() {
                         let block = validator
                             .state
@@ -1889,6 +1898,14 @@ mod tests {
                             block.network_entrypoint_count(),
                             validator.queue.queued_len()
                         );
+                        for entrypoint in block.external_entrypoints_slice() {
+                            let hash = entrypoint.hash();
+                            eprintln!(
+                                "    stored input: {hash:?}, committed: {}, pending: {}",
+                                validator.state.has_committed_entrypoint(hash),
+                                validator.queue.contains_entrypoint_hash(hash)
+                            );
+                        }
                     }
                 }
                 panic!(
@@ -2261,7 +2278,7 @@ mod tests {
             wait_until(
                 validators,
                 Duration::from_secs(60),
-                "a burst commits",
+                &format!("burst {round} with {size} inputs commits"),
                 || {
                     let view = validators[0].state.view();
                     if let Some(utilization) = crate::sumeragi::lanes::step::utilization_permille(
@@ -2713,7 +2730,7 @@ mod tests {
             wait_until(
                 &validators,
                 Duration::from_secs(30),
-                "transaction committed",
+                &format!("transaction {index} before restart commits"),
                 || committed_everywhere(&validators, hash),
             );
         }

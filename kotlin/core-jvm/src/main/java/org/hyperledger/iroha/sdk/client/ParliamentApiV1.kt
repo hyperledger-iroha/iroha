@@ -396,7 +396,7 @@ object ParliamentApiV1 {
     const val AUTOMATIC_OUTCOME_DIGEST_DOMAIN: String =
         "iroha.governance.parliament.automatic_execution_outcome.digest.v1"
 
-    /** Exact first-release proposal kinds admitted by the generic attempt-draft boundary. */
+    /** Closed first-release proposal-kind inventory in Norito wire-index order. */
     @JvmField
     val PROPOSAL_KINDS: List<String> = listOf(
         "DeployContract",
@@ -409,10 +409,6 @@ object ParliamentApiV1 {
         "ContractLifecycleGovernance",
         "ContractEmergencyHold",
         "GlobalDataTriggerPermissionGovernance",
-        "KagemushaVerifierPolicyInstall",
-        "KagemushaVerifierReleaseInstall",
-        "KagemushaVerifierReleaseActivate",
-        "KagemushaVerifierReleaseRetire",
     )
 
     /** Exact first-release actions admitted by contract-lifecycle governance proposals. */

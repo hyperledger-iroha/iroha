@@ -450,7 +450,12 @@ mod tests {
             issued_at_ms: decision_clock.lower_at_ms,
             expires_at_ms: decision_clock.upper_at_ms + 100,
         };
-        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        // The FI issuer is distinct from the app-attestation authority (seed 61).
+        let issuer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
+        assert_eq!(
+            issuer.public_key(),
+            &f.enrollment_fixture.issuer_policy.issuer_public_key
+        );
         let signed = KagemushaSignedOrdinaryMintDebitDecisionV1 {
             signature: Signature::new(
                 issuer.private_key(),

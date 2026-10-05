@@ -863,6 +863,19 @@ fn ledger_executed_block_wire_cached_loading_is_safe_from_256_kib_callers() {
                     "missing canonical executed-block operation in {variant} OpenAPI",
                 );
             }
+            #[cfg(feature = "app_api")]
+            {
+                for (variant, document) in [("owned", &compiled), ("borrowed", compiled_spec())] {
+                    let paths = document
+                        .get("paths")
+                        .and_then(Value::as_object)
+                        .unwrap_or_else(|| panic!("{variant} OpenAPI paths"));
+                    assert!(
+                        paths.contains_key(route_catalog::core::RESOURCE_NAMES_STATE.path()),
+                        "ledger original carrier missing from {variant} OpenAPI",
+                    );
+                }
+            }
         })
         .expect("spawn adversarial small-stack OpenAPI caller");
     if let Err(payload) = caller.join() {
@@ -1268,8 +1281,63 @@ fn generated_spec_includes_documented_paths() {
             "feature-pruned path contract drift for {path}"
         );
     }
+    for path in
+        openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.9")
+    {
+        assert!(
+            !paths.contains_key(path),
+            "retired KAGEMUSHA transport leaked into OpenAPI: {path}"
+        );
+    }
     assert!(!paths.contains_key("/v1/attestation/issue"));
 }
+#[test]
+fn openapi_authorities_retire_kagemusha_transport_and_proposal_inputs() {
+    for (variant, document) in [
+        ("package-local", canonical_document()),
+        ("compiled", generate_spec()),
+    ] {
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        assert!(
+            paths.keys().all(|path| !path.starts_with("/v1/kagemusha/")),
+            "retired KAGEMUSHA transport remains in {variant} OpenAPI"
+        );
+        assert!(
+            document
+                .get("tags")
+                .and_then(Value::as_array)
+                .expect("tags section")
+                .iter()
+                .all(|tag| tag
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_none_or(|name| !name.eq_ignore_ascii_case("KAGEMUSHA")))
+        );
+        let schemas = component_schemas(&document);
+        for retired in [
+            "KagemushaReadinessV1",
+            "KagemushaOperationStatusV1",
+            "KagemushaAuthorityStateV1",
+            "OrdinaryWalletCurrentOriginalV1",
+            "OrdinaryWalletCurrentRequestV1",
+            "OrdinaryMintIssuerPurposeOriginalV1",
+            "OrdinaryMintIssuerPurposeRequestV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierPolicyInstallV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseInstallV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseActivateV1",
+            "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseRetireV1",
+        ] {
+            assert!(
+                !schemas.contains_key(retired),
+                "retired input/carrier schema remains in {variant}: {retired}"
+            );
+        }
+    }
+}
+
 #[test]
 fn musubi_v1_openapi_matches_the_complete_catalog_and_declares_models() {
     let document = generate_spec();

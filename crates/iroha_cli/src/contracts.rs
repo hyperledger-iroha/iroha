@@ -703,25 +703,85 @@ impl Run for BuildManifestArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
         let verified = verify_contract_from_bytes(&code)?;
-        let mut manifest = verified.manifest;
+        let render = |manifest| {
+            let rendered = norito::json::to_json_pretty(&manifest)?;
+            if let Some(path) = self.out {
+                write_manifest_output(&path, rendered.as_bytes())
+                    .wrap_err_with(|| format!("write manifest to {}", path.display()))?;
+                context.println(format_args!("Wrote manifest to {}", path.display()))?;
+            } else {
+                context.println(rendered)?;
+            }
+            Ok(())
+        };
         if let Some(hex_key) = self.sign_with {
             let private: PrivateKey = hex_key.parse().wrap_err("invalid --sign-with")?;
             let kp =
                 KeyPair::from_private_key(private).wrap_err("derive signing keypair failed")?;
-            manifest = manifest
-                .try_signed(&kp)
-                .wrap_err("sign contract manifest failed")?;
-        }
-        let rendered = norito::json::to_json_pretty(&manifest)?;
-        if let Some(path) = self.out {
-            write_manifest_output(&path, rendered.as_bytes())
-                .wrap_err_with(|| format!("write manifest to {}", path.display()))?;
-            context.println(format_args!("Wrote manifest to {}", path.display()))?;
+            let max_frame_bytes = usize::try_from(
+                iroha_data_model::parameter::system::TransactionParameters::default()
+                    .ivm_bytecode_size
+                    .get(),
+            )?;
+            with_signed_contract_manifest(verified.manifest, &kp, max_frame_bytes, |manifest, _| {
+                render(manifest)
+            })
         } else {
-            context.println(rendered)?;
+            render(verified.manifest)
         }
-        Ok(())
     }
+}
+/// Keep the original frame, signer and counter backing through the manifest's consumption.
+/// The artifact already owns the source graph; the callback must consume the signed manifest
+/// before this finite signing grant is released.
+fn with_signed_contract_manifest(
+    manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
+    key_pair: &KeyPair,
+    max_frame_bytes: usize,
+    consume: impl FnOnce(
+        iroha_data_model::smart_contract::manifest::ContractManifest,
+        &norito::core::DecodeBudgetContext,
+    ) -> Result<()>,
+) -> Result<()> {
+    use norito::core::DecodeBudgetContext;
+
+    if max_frame_bytes == 0 {
+        return Err(eyre!("manifest frame ceiling must be nonzero"));
+    }
+    let signer_bytes = key_pair.public_key().retained_allocation_layout().size();
+    // Admit one signing frame and one verification frame under the same cumulative context.
+    let cumulative_bytes = max_frame_bytes
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(signer_bytes))
+        .ok_or_else(|| eyre!("manifest signing allowance overflow"))?;
+    let pool_bytes = cumulative_bytes
+        .checked_add(DecodeBudgetContext::allocation_layout().size())
+        .ok_or_else(|| eyre!("manifest signing physical allowance overflow"))?;
+    let pool = iroha_core::state::AllocationBudget::new(pool_bytes);
+    let mut grant = pool.try_reserve_bytes(pool_bytes)?;
+    let context = DecodeBudgetContext::from_reservation(
+        norito::DecodeLimits::new(
+            max_frame_bytes,
+            max_frame_bytes,
+            max_frame_bytes,
+            cumulative_bytes,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
+        ),
+        &mut grant,
+    )?;
+    let _signer_backing = grant.try_partition_bytes(signer_bytes)?;
+    let encoded_bytes = context.with(|| {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        norito::core::encoded_frame_len_bounded(&manifest.signature_payload(), max_frame_bytes)
+    })?;
+    let signing_frame = grant.try_partition_bytes(encoded_bytes)?;
+    let signed = manifest
+        .try_signed(&context, signing_frame.remaining_bytes(), key_pair)
+        .wrap_err("sign contract manifest failed")?;
+    // try_signed has freed its temporary frame; the signer remains funded through consumption.
+    drop(signing_frame);
+    consume(signed, &context)
 }
 fn write_manifest_output(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path
@@ -2185,6 +2245,91 @@ mod tests {
         );
     }
     #[test]
+    fn bounded_manifest_signing_verifies_original_and_rejects_changed_content() {
+        let key_pair = fixture_key_pair(0x61);
+        let manifest = verify_contract_from_bytes(&minimal_view_contract_program())
+            .expect("verify source artifact")
+            .manifest;
+        with_signed_contract_manifest(manifest, &key_pair, 4096, |mut signed, context| {
+            let payload = signed.signature_payload_bytes(context, 4096)?;
+            let provenance = signed.provenance.as_ref().expect("signed provenance");
+            assert_eq!(&provenance.signer, key_pair.public_key());
+            provenance.signature.verify(&provenance.signer, &payload)?;
+            drop(payload);
+            signed.seiyaku_name = Some("changed signed source".to_owned());
+            let payload = signed.signature_payload_bytes(context, 4096)?;
+            let provenance = signed.provenance.as_ref().unwrap();
+            assert!(
+                provenance
+                    .signature
+                    .verify(&provenance.signer, &payload)
+                    .is_err()
+            );
+            assert!(context.consumed_allocated_bytes() > 0);
+            Ok(())
+        })
+        .expect("funded manifest consumption");
+    }
+    #[test]
+    fn bounded_manifest_signing_refuses_invalid_grants_before_consumption() {
+        let key_pair = fixture_key_pair(0x62);
+        let manifest = verify_contract_from_bytes(&minimal_view_contract_program())
+            .expect("verify source artifact")
+            .manifest;
+        let error = with_signed_contract_manifest(manifest.clone(), &key_pair, 1, |_, _| {
+            panic!("an oversized signing frame cannot reach its consumer")
+        })
+        .expect_err("reject the undersized complete frame ceiling");
+        assert!(matches!(
+            error.downcast_ref::<norito::Error>(),
+            Some(norito::Error::LengthMismatch)
+        ));
+        for bound in [0, usize::MAX] {
+            assert!(
+                with_signed_contract_manifest(manifest.clone(), &key_pair, bound, |_, _| {
+                    panic!("invalid physical grants cannot reach signing consumption")
+                })
+                .is_err()
+            );
+        }
+    }
+    #[test]
+    fn build_manifest_signing_publishes_the_authenticated_artifact_manifest() {
+        let key_pair = fixture_key_pair(0x63);
+        let mut context = TestContext::new(AccountId::new(key_pair.public_key().clone()));
+        let directory = tempfile::tempdir().expect("manifest output directory");
+        let path = directory.path().join("manifest.json");
+        let program = minimal_view_contract_program();
+        BuildManifestArgs {
+            code_file: None,
+            code_b64: Some(base64::engine::general_purpose::STANDARD.encode(&program)),
+            sign_with: Some(ExposedPrivateKey(key_pair.private_key().clone()).to_string()),
+            out: Some(path.clone()),
+        }
+        .run(&mut context)
+        .expect("build and publish the bounded signed manifest");
+        let bytes = iroha_fs::read_private(&path, 4096).expect("private published manifest");
+        let manifest: iroha_data_model::smart_contract::manifest::ContractManifest =
+            norito::json::from_slice(&bytes).expect("decode published manifest");
+        let verified = verify_contract_from_bytes(&program).expect("verify artifact");
+        assert!(manifest.same_signed_content(&verified.manifest));
+        assert_eq!(
+            &manifest
+                .provenance
+                .as_ref()
+                .expect("published provenance")
+                .signer,
+            key_pair.public_key()
+        );
+        with_signed_contract_manifest(verified.manifest, &key_pair, 4096, |_, context| {
+            let payload = manifest.signature_payload_bytes(context, 4096)?;
+            let provenance = manifest.provenance.as_ref().unwrap();
+            provenance.signature.verify(&provenance.signer, &payload)?;
+            Ok(())
+        })
+        .expect("authenticate the published signature with bounded original backing");
+    }
+    #[test]
     fn simulate_emits_typed_fee_gas_bound_without_legacy_metadata() {
         let key_pair = fixture_key_pair(1);
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -2748,7 +2893,6 @@ mod tests {
             .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
             .expect("bump argument schema")
             .clone();
-        let manifest = verified.manifest.signed(&authority_key_pair);
         let argument_bytes = ivm_abi::arguments::encode_argument_record_from_json(
             &argument_schema,
             &iroha_primitives::json::Json::from(
@@ -2765,32 +2909,52 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        chain.setup_world_at(2_000, |transaction| {
-            let registered_hash = code::register_code_bytes(
-                &authority,
-                DataSpaceId::UNIVERSAL,
-                program.clone(),
-                transaction,
-            )
-            .expect("register contract bytecode");
-            assert_eq!(registered_hash, code_hash);
-            code::register_manifest(&authority, DataSpaceId::UNIVERSAL, manifest, transaction)
-                .expect("register contract manifest");
-            transaction
-                .world
-                .bind_inactive_contract_subject_for_testing(
-                    contract_address.clone(),
-                    authority.clone(),
-                );
-            code::activate_instance(
-                &authority,
-                contract_address.clone(),
-                1,
-                code_hash,
-                transaction,
-            )
-            .expect("activate contract instance");
-        });
+        let max_frame_bytes = usize::try_from(
+            iroha_data_model::parameter::system::TransactionParameters::default()
+                .ivm_bytecode_size
+                .get(),
+        )
+        .expect("configured signing frame bound fits usize");
+        with_signed_contract_manifest(
+            verified.manifest,
+            &authority_key_pair,
+            max_frame_bytes,
+            |manifest, _| {
+                chain.setup_world_at(2_000, |transaction| {
+                    let registered_hash = code::register_code_bytes(
+                        &authority,
+                        DataSpaceId::UNIVERSAL,
+                        program.clone(),
+                        transaction,
+                    )
+                    .expect("register contract bytecode");
+                    assert_eq!(registered_hash, code_hash);
+                    code::register_manifest(
+                        &authority,
+                        DataSpaceId::UNIVERSAL,
+                        manifest,
+                        transaction,
+                    )
+                    .expect("register contract manifest");
+                    transaction
+                        .world
+                        .bind_inactive_contract_subject_for_testing(
+                            contract_address.clone(),
+                            authority.clone(),
+                        );
+                    code::activate_instance(
+                        &authority,
+                        contract_address.clone(),
+                        1,
+                        code_hash,
+                        transaction,
+                    )
+                    .expect("activate contract instance");
+                });
+                Ok(())
+            },
+        )
+        .expect("funded contract fixture signing and registration");
         let state = chain.state();
         let tx = TransactionBuilder::new(
             ctx.config().network_id,

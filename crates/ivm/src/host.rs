@@ -329,11 +329,6 @@ pub fn state_path_gas(path_len: usize) -> u64 {
 pub fn state_value_gas(path_len: usize, value_len: usize) -> u64 {
     state_path_gas(path_len).saturating_add(u64::try_from(value_len).unwrap_or(u64::MAX))
 }
-/// Prepare-time worst-case quote for `STATE_GET` without consulting host state.
-#[must_use]
-pub fn state_get_gas_quote(path_len: usize) -> u64 {
-    state_value_gas(path_len, syscalls::STATE_MAX_VALUE_BYTES)
-}
 const SYSVAR_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
 const SYSVAR_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 const TLV_EQ_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
@@ -982,7 +977,7 @@ pub enum HostSyscallGasFormula {
     GrowHeapPages,
     /// Commit only the append-only output prefix, charging every copied byte.
     CommitOutput,
-    /// Durable-state read quoted for the maximum admissible value.
+    /// Durable-state read reserving available gas before charging the exact value length.
     StateGet,
     /// Durable-state path-only operation.
     StatePath,
@@ -1320,6 +1315,7 @@ pub fn host_syscall_metering_spec(
             HostSyscallQuoteStrategy::AllocationExtent
         }
         HostSyscallGasFormula::ReserveAvailable
+        | HostSyscallGasFormula::StateGet
         | HostSyscallGasFormula::LedgerQueryV1
         | HostSyscallGasFormula::StateScan
         | HostSyscallGasFormula::StateCount => HostSyscallQuoteStrategy::ReserveAvailable,
@@ -2757,7 +2753,7 @@ impl IVMHost for DefaultHost {
                     vm,
                     Self::resolve_code_tlv_addr(vm, vm.register(10)),
                 )?;
-                state_get_gas_quote(path_len)
+                reserve_available_syscall_gas_at_least(vm, state_path_gas(path_len))?
             }
             crate::syscalls::SYSCALL_STATE_LEN => {
                 let path_len = quote_state_path_payload_len_at(
@@ -6217,11 +6213,11 @@ mod tests {
         let path_len = quote_state_path_payload_len_at(&vm, path).expect("quote state path");
         assert_eq!(
             empty.prepare_syscall(syscalls::SYSCALL_STATE_GET, &vm),
-            Ok(state_get_gas_quote(path_len))
+            Ok(available)
         );
         assert_eq!(
             populated.prepare_syscall(syscalls::SYSCALL_STATE_GET, &vm),
-            Ok(state_get_gas_quote(path_len))
+            Ok(available)
         );
         assert_eq!(
             empty.prepare_syscall(syscalls::SYSCALL_STATE_LEN, &vm),

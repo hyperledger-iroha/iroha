@@ -37,6 +37,7 @@ pub use encoder::Encoder;
 mod encode_frames;
 mod encode_writers;
 mod fixed_frame;
+mod heap_payload;
 mod nominal_text;
 use encode_frames::write_frame_to_writer_with_flags;
 #[doc(hidden)]
@@ -495,18 +496,22 @@ struct ActiveDecodeBudgetLayer {
     budget: DecodeBudgetLayer,
     base_depth: usize,
 }
-/// Cloneable handle used to propagate an active decode budget without moving a
-/// thread-local guard between threads.
+/// Cloneable cumulative codec accounting context for synchronous physical work.
 /// The context owns one original layer; cloning shares its cumulative counters
 /// without allocating a one-element collection. Active scope layers borrow stack
 /// nodes; the shared counter control remains an independent owned allocation.
+/// Limits provide accounting only: an actual execution or query owner must separately
+/// admit and retain the physical source, graph, destination and counter backing.
 #[derive(Clone)]
-pub(crate) struct DecodeBudgetContext {
+pub struct DecodeBudgetContext {
     layer: ActiveDecodeBudgetLayer,
     depth: usize,
 }
 impl DecodeBudgetContext {
-    pub(crate) fn new(limits: DecodeLimits) -> Self {
+    /// Create cumulative accounting without granting physical allocation authority.
+    /// Physical producers fund the original counter control with [`Self::try_new_owned`]
+    /// or [`Self::from_reservation`].
+    pub fn new(limits: DecodeLimits) -> Self {
         let depth = DECODE_NESTING_DEPTH.with(Cell::get);
         Self {
             layer: ActiveDecodeBudgetLayer {
@@ -516,12 +521,73 @@ impl DecodeBudgetContext {
             depth,
         }
     }
+
+    /// Exact native shared-counter layout required by an owned context.
+    pub fn allocation_layout() -> Layout {
+        iroha_allocation::ChargedShared::<DecodeBudgetCounters>::allocation_layout()
+    }
+
+    /// Admit the original cumulative counter backing before allocating it.
+    /// Clones retain the same physical pool and counters; they grant no new credit.
+    ///
+    /// # Errors
+    /// Refuses when the original pool cannot own the counter layout or allocation fails.
+    pub fn try_new_owned(
+        limits: DecodeLimits,
+        pool: &iroha_allocation::AllocationBudget,
+    ) -> Result<Self, Error> {
+        let layout = Self::allocation_layout();
+        let refused = || Error::AllocationFailed {
+            bytes: limit_to_u64(layout.size()),
+        };
+        let mut reservation = pool.try_reserve(layout).map_err(|_| refused())?;
+        Self::from_reservation(limits, &mut reservation).map_err(|_| refused())
+    }
+
+    /// Construct the cumulative counter backing from its original prepaid reservation.
+    /// No new pool admission occurs. Clones retain the same counters and physical charge.
+    ///
+    /// # Errors
+    /// A short original remainder is unchanged and returns its exact typed shortage.
+    /// Physical allocation refusal refunds only the split control charge; the unused
+    /// remainder stays with the original reservation.
+    pub fn from_reservation(
+        limits: DecodeLimits,
+        reservation: &mut iroha_allocation::AllocationReservation,
+    ) -> Result<Self, iroha_allocation::PrepaidSharedError> {
+        let counters = iroha_allocation::ChargedShared::from_reservation(
+            DecodeBudgetCounters::default(),
+            reservation,
+        )
+        .map_err(|(_, error)| error)?;
+        let counters = CounterOwner::Prepared(counters);
+        decode_attempt::note_fresh_budget(&counters);
+        let depth = DECODE_NESTING_DEPTH.with(Cell::get);
+        Ok(Self {
+            layer: ActiveDecodeBudgetLayer {
+                budget: DecodeBudgetLayer { limits, counters },
+                base_depth: depth,
+            },
+            depth,
+        })
+    }
+
+    /// Cumulative native allocation charges retained across all scopes and clones.
+    pub fn consumed_allocated_bytes(&self) -> u64 {
+        self.layer
+            .budget
+            .counters
+            .total_allocated_bytes
+            .load(Ordering::Relaxed)
+    }
 }
 thread_local! {
     static DECODE_NESTING_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 impl DecodeBudgetContext {
-    pub(crate) fn with<R>(&self, body: impl FnOnce() -> R) -> R {
+    /// Install this original context only for a synchronous physical operation.
+    /// Prior thread state is restored on return and unwind; no guard escapes the closure.
+    pub fn with<R>(&self, body: impl FnOnce() -> R) -> R {
         budget_scope::with_layers(core::slice::from_ref(&self.layer), self.depth, body)
     }
 }
@@ -1911,12 +1977,44 @@ pub fn write_varint_len_to_vec(out: &mut Vec<u8>, value: u64) {
     let used = encode_varint(value, &mut buf);
     out.extend_from_slice(&buf[..used]);
 }
+fn write_sequence_payload(
+    writer: &mut Encoder<'_>,
+    value: &dyn SerializePayload,
+    flags: u8,
+) -> Result<(), Error> {
+    let encoded_len = encoded_payload_len(value)?;
+    write_len_with_flags(
+        writer,
+        u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
+        flags,
+    )?;
+    write_counted_payload(value, writer, encoded_len)
+}
+
 fn encode_seq_payloads<T, I>(writer: &mut Encoder<'_>, items: I) -> Result<(), Error>
 where
     T: SerializePayload,
     I: IntoIterator,
     I::IntoIter: ExactSizeIterator,
     I::Item: std::borrow::Borrow<T>,
+{
+    encode_seq_payloads_with(writer, items, |item, writer, flags| {
+        let value: &T = std::borrow::Borrow::borrow(&item);
+        write_sequence_payload(writer, value, flags)
+    })
+}
+
+// All sequence producers share the same count, active-prefix flags and actual
+// iterator-cardinality checks, including codec-owned measured heap tie payloads.
+fn encode_seq_payloads_with<'writer, I, F>(
+    writer: &mut Encoder<'writer>,
+    items: I,
+    mut write_payload: F,
+) -> Result<(), Error>
+where
+    I: IntoIterator,
+    I::IntoIter: ExactSizeIterator,
+    F: FnMut(I::Item, &mut Encoder<'writer>, u8) -> Result<(), Error>,
 {
     let iter = items.into_iter();
     let len = iter.len();
@@ -1930,14 +2028,7 @@ where
         if count == len {
             return Err(Error::LengthMismatch);
         }
-        let value: &T = std::borrow::Borrow::borrow(&item);
-        let encoded_len = encoded_payload_len(value)?;
-        write_len_with_flags(
-            writer,
-            u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
-            flags,
-        )?;
-        write_counted_payload(value, writer, encoded_len)?;
+        write_payload(item, writer, flags)?;
         count += 1;
     }
     (count == len).then_some(()).ok_or(Error::LengthMismatch)
@@ -2857,13 +2948,14 @@ where
             .len()
             .checked_mul(core::mem::size_of::<(&K, &V)>())
             .ok_or(Error::LengthMismatch)?;
+        reserve_decode_allocation(allocation_bytes)?;
         entries
             .try_reserve_exact(self.len())
             .map_err(|_| Error::AllocationFailed {
                 bytes: limit_to_u64(allocation_bytes),
             })?;
         entries.extend(self.iter());
-        entries.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
+        entries.sort_unstable_by(|(ka, _), (kb, _)| ka.cmp(kb));
         encode_map_payloads(writer, entries.len(), entries.iter().copied())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -2946,13 +3038,14 @@ where
             .len()
             .checked_mul(core::mem::size_of::<&T>())
             .ok_or(Error::LengthMismatch)?;
+        reserve_decode_allocation(allocation_bytes)?;
         items
             .try_reserve_exact(self.len())
             .map_err(|_| Error::AllocationFailed {
                 bytes: limit_to_u64(allocation_bytes),
             })?;
         items.extend(self.iter());
-        items.sort();
+        items.sort_unstable();
         encode_seq_payloads::<T, _>(writer, items.iter().copied())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -5729,19 +5822,7 @@ where
     T: SerializePayload + Ord,
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        let mut items = Vec::new();
-        let allocation_bytes = self
-            .len()
-            .checked_mul(core::mem::size_of::<&T>())
-            .ok_or(Error::LengthMismatch)?;
-        items
-            .try_reserve_exact(self.len())
-            .map_err(|_| Error::AllocationFailed {
-                bytes: limit_to_u64(allocation_bytes),
-            })?;
-        items.extend(self.iter());
-        items.sort();
-        encode_seq_payloads::<T, _>(writer, items.iter().copied())
+        heap_payload::serialize(self, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.iter())
@@ -7600,3 +7681,7 @@ mod tests;
 #[cfg(test)]
 #[path = "core/budget_context_tests.rs"]
 mod budget_context_tests;
+
+#[cfg(test)]
+#[path = "core/history_owned_serialization_tests.rs"]
+mod history_owned_serialization_tests;

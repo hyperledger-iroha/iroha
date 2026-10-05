@@ -318,7 +318,7 @@ fn private_fixture() -> (CertifiedTestChain, KeyPair) {
 
 #[test]
 fn native_pin_outbox_rejects_actual_private_root_for_advance_and_check() {
-    let (mut chain, key) = private_fixture();
+    let (chain, key) = private_fixture();
     let authority = AccountId::new(key.public_key().clone());
     let advance = AdvanceMusubiPinOutboxV1 {
         network_id: chain.network_id(),
@@ -345,16 +345,71 @@ fn native_pin_outbox_rejects_actual_private_root_for_advance_and_check() {
     for instruction in [InstructionBox::from(advance), check.into()] {
         let original = chain.sign(
             &key,
-            [instruction],
+            [instruction.clone()],
             chain.committed(chain.height()).block_time_ms() + 1,
         );
-        assert!(!chain.commit(vec![original])[0]);
-        let committed = chain.committed(chain.height());
-        let result = &committed.block().network_output_at(0).unwrap().1.result;
+        let accepted =
+            crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(&original));
+        let next_header = header(&chain);
+        {
+            let view = chain.state().view();
+            let routing = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view)
+                .expect("actual private-root routing snapshot");
+            assert!(
+                routing
+                    .inputs(view.world())
+                    .execution_route(&accepted, next_header.height().get())
+                    .expect("actual private-root routing read")
+                    .is_none(),
+                "global pin-outbox work has no admitted private-root route"
+            );
+        }
+        // Routing refuses this signed work before assembly. Exercise the independent
+        // native origin boundary on the same actual private State and signed input.
+        let before_height = chain.height();
+        let mut block = chain.state().block(next_header);
+        let mut transaction = block.transaction();
+        bind(&mut transaction, &original);
+        transaction.current_direct_musubi_pin_outbox_origin =
+            capture_pin_outbox_operation_origin(&mut transaction, &original, &instruction, true)
+                .expect("bounded original signed origin");
+        assert!(
+            transaction
+                .current_direct_musubi_pin_outbox_origin
+                .is_some()
+        );
+        let result = if let Some(advance) = instruction
+            .as_any()
+            .downcast_ref::<AdvanceMusubiPinOutboxV1>()
+        {
+            advance.clone().execute(&authority, &mut transaction)
+        } else {
+            instruction
+                .as_any()
+                .downcast_ref::<CheckMusubiPinOutboxV1>()
+                .expect("native Check fixture")
+                .clone()
+                .execute(&authority, &mut transaction)
+        };
         assert!(
             format!("{result:?}").contains("Musubi pin-outbox requires the original Global root"),
             "{result:?}"
         );
+        assert!(
+            transaction
+                .current_direct_musubi_pin_outbox_origin
+                .is_none()
+        );
+        assert!(
+            transaction
+                .world
+                .musubi_pin_outbox_high_waters
+                .get(&authority)
+                .is_none()
+        );
+        drop(transaction);
+        drop(block);
+        assert_eq!(chain.height(), before_height);
         assert!(
             chain
                 .state()

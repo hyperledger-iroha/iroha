@@ -138,8 +138,14 @@ impl ValidatorEpochContextV1 {
     /// Rejects an invalid context or a canonical encoding failure.
     pub fn context_id(&self) -> Result<[u8; 32], String> {
         self.validate()?;
-        let bytes = norito::encode_canonical(self).map_err(|error| error.to_string())?;
-        Ok(Hash::new_from_chunks(&[EPOCH_DOMAIN, &[0], &bytes]).into())
+        Hash::new_from_writer(|out| {
+            use std::io::Write as _;
+            out.write_all(EPOCH_DOMAIN)?;
+            out.write_all(&[0])?;
+            norito::core::write_canonical_to_writer(self, out).map_err(std::io::Error::other)
+        })
+        .map(Into::into)
+        .map_err(|error| error.to_string())
     }
 
     /// Validate one contiguous successor, preserving exact original credentials on retention.

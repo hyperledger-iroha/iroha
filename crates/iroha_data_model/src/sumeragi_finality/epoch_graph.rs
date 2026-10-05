@@ -96,7 +96,7 @@ pub fn core_epoch(context: &ValidatorEpochContextV1) -> Result<EpochConfig, Sche
 /// source and its signatures. Do not retain this workspace across proof walks or State views.
 /// It cannot be serialized, cloned or populated with an unchecked decoded context.
 pub struct EpochValidationScope {
-    entries: Vec<ValidatedEpoch>,
+    entries: [Option<ValidatedEpoch>; 2],
     #[cfg(test)]
     validations: usize,
 }
@@ -114,7 +114,7 @@ impl EpochValidationScope {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: [None, None],
             #[cfg(test)]
             validations: 0,
         }
@@ -134,12 +134,18 @@ impl EpochValidationScope {
         &mut self,
         context: &ValidatorEpochContextV1,
     ) -> Result<EpochConfig, String> {
-        if let Some(entry) = self.entries.iter().find(|entry| entry.context == *context) {
+        if let Some(entry) = self
+            .entries
+            .iter()
+            .flatten()
+            .find(|entry| entry.context == *context)
+        {
             return Ok(entry.core);
         }
         // context_id validates every original BLS proof and paired-Pasta key before hashing.
-        // Successful validation bounds both rosters to 31 and every credential's byte width,
-        // so cloning here has a fixed bound. Invalid inputs never enter retained ownership.
+        // Invalid inputs never enter retained ownership. A native roundtrip admits the exact
+        // frame and every decoded allocation under the caller's original cumulative context;
+        // an ordinary graph clone would allocate outside that owner.
         let context_id = context.context_id()?;
         let core = EpochConfig {
             da_layout: context.da_layout,
@@ -153,13 +159,15 @@ impl EpochValidationScope {
             last_height: context.authorization.last_height,
             leader_seed: Hash32(context.leader_seed),
         };
-        if self.entries.len() == 2 {
-            self.entries.remove(0);
+        // This cache is optional pure validation reuse. Capacity refusal declines insertion;
+        // it never changes the validated epoch, tip, signatures or consensus identity.
+        let encoded = norito::core::to_bytes_bounded(context, usize::MAX);
+        if let Ok(encoded) = encoded
+            && let Ok(context) = norito::decode_canonical::<ValidatorEpochContextV1>(&encoded)
+        {
+            self.entries[0] = self.entries[1].take();
+            self.entries[1] = Some(ValidatedEpoch { context, core });
         }
-        self.entries.push(ValidatedEpoch {
-            context: context.clone(),
-            core,
-        });
         #[cfg(test)]
         {
             self.validations += 1;
